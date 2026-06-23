@@ -7,11 +7,11 @@
 //! expected substring is contained (case-sensitive) in the corresponding
 //! diagnostic's fully-rendered text.
 //!
-//! M0–M9 (`m0_assign_primitives/`, `m1_binder_inference/`, `m2_objects/`,
+//! M0–M10 (`m0_assign_primitives/`, `m1_binder_inference/`, `m2_objects/`,
 //! `m3_functions/`, `m4_unions/`, `m5_named_recursive/`, `m6_reporting/`,
-//! `m7_narrowing/`, `m8_discriminated/`, `m9_generics/`) are enabled. The
-//! `MILESTONE_DIRS` table is the extension point: flip a row to turn a milestone's
-//! fixtures on as it lands (mvp-plan §5).
+//! `m7_narrowing/`, `m8_discriminated/`, `m9_generics/`, `m10_inference/`) are
+//! enabled. The `MILESTONE_DIRS` table is the extension point: flip a row to turn a
+//! milestone's fixtures on as it lands (mvp-plan §5).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -32,6 +32,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("m7_narrowing", true),
     ("m8_discriminated", true),
     ("m9_generics", true),
+    ("m10_inference", true),
 ];
 
 /// An expectation parsed from a single inline marker.

@@ -163,6 +163,7 @@ use crate::binder::scope::ScopeId;
 use crate::binder::symbol::{DeclId, SymbolId};
 use crate::binder::{bind_module, Binder};
 use crate::check::flow::{narrow, NarrowOp, TypeofTag};
+use crate::check::infer;
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::{Reason, Relater, Relation};
 use crate::span::Span;
@@ -2224,6 +2225,60 @@ fn instantiate_generic_callee(
     Some(substitute(pass.interner, sig.fn_ty, &map))
 }
 
+/// Instantiate a **generic call WITHOUT explicit type arguments** (`identity(5)`,
+/// M10) by **inferring** its type arguments from the (already-inferred) argument
+/// types, returning the instantiated function `TypeId`, or `None` when this is not
+/// such a call (the callee is not a registered generic `function`). The caller then
+/// runs the **same** arity/argument/return checks against the instantiated
+/// signature — inference only decides the type arguments; assignability is still
+/// verified by the relation engine.
+///
+/// Resolution mirrors [`instantiate_generic_callee`]: the callee must be a plain
+/// identifier resolving (through the scope graph) to a value `DeclId` registered in
+/// [`Pass::generic_fns`]. Its template signature's parameter types (which contain
+/// the `TypeParam`s) are matched against the argument types by the generative
+/// inference engine ([`crate::check::infer`]), which fixes each type parameter from
+/// its candidates (no candidate → `unknown`; one → it; ≥ 2 → their union). The
+/// resulting `TypeParamId → TypeId` map is then substituted into the template by the
+/// existing M9 [`substitute`].
+///
+/// The caller guarantees this is only reached when there are **no** explicit type
+/// arguments (the M9 path is tried first), so explicit-type-arg calls keep the M9
+/// behaviour unchanged. A type parameter the arguments do not constrain falls back
+/// to `unknown` — sound: `unknown` cannot mask a downstream error the way `any`
+/// would.
+fn infer_generic_callee(
+    pass: &mut Pass,
+    scope: ScopeId,
+    call: &CallExpression<'_>,
+    arg_types: &[(TypeId, Span)],
+) -> Option<TypeId> {
+    // The callee must be a plain identifier naming a generic function declaration.
+    let Expression::Identifier(ident) = &call.callee else {
+        return None;
+    };
+    let decl_id = pass
+        .binder
+        .graph
+        .resolve(scope, ident.name.as_str())
+        .and_then(|symbol_id| pass.binder.symbols.get(symbol_id))
+        .and_then(|s| s.value)?;
+    let sig = pass.generic_fns.get(&decl_id)?.clone();
+
+    // The template signature's parameter types — the inference targets (they carry
+    // the type parameters to be solved). Snapshot before the mutable inference call.
+    let param_types: Vec<TypeId> = match pass.interner.store().function_type(sig.fn_ty) {
+        Some(func) => func.params.iter().map(|p| p.ty).collect(),
+        None => return None,
+    };
+    let args: Vec<TypeId> = arg_types.iter().map(|(ty, _)| *ty).collect();
+
+    // Run the generative inference engine to fix the type arguments, then
+    // instantiate the template by the same M9 substitution.
+    let map = infer::infer_type_arguments(pass.interner, &sig.params, &param_types, &args);
+    Some(substitute(pass.interner, sig.fn_ty, &map))
+}
+
 /// Infer the type of a call expression in `scope` and check it.
 ///
 /// The callee is inferred first (resolving its name / descending into a callee
@@ -2270,8 +2325,24 @@ fn infer_call(
         // A spread or an out-of-subset argument is not paired against a parameter.
     }
 
-    // The instantiated signature wins; otherwise the inferred callee type.
-    let callee_ty = match instantiated_callee.or(inferred_callee.map(|(ty, _)| ty)) {
+    // M10: a **generic call WITHOUT explicit type arguments** (`identity(5)`) infers
+    // its type arguments from the argument types, then instantiates the signature by
+    // the *same* M9 substitution. Only attempted when the M9 explicit-args path did
+    // not already instantiate (so explicit type args keep the M9 behaviour) and the
+    // callee is a registered generic function. A non-generic call yields `None` and
+    // falls through to the inferred-callee type unchanged.
+    let inferred_generic_callee = if instantiated_callee.is_none() {
+        infer_generic_callee(pass, scope, call, &arg_types)
+    } else {
+        None
+    };
+
+    // Precedence: the M9 explicit instantiation, then the M10 inferred
+    // instantiation, then the plainly-inferred callee type.
+    let callee_ty = match instantiated_callee
+        .or(inferred_generic_callee)
+        .or(inferred_callee.map(|(ty, _)| ty))
+    {
         Some(ty) => ty,
         None => return Some((wk.error, call_span)),
     };
