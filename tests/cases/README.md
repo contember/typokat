@@ -70,8 +70,11 @@ slots into a known later phase without rework:
 - `TK2355` *function must return a value* — needs control-flow reachability (with narrowing).
 - `TK2454` *used before assigned* — needs definite-assignment flow analysis.
 - `TK2451` *cannot redeclare* — binder check, deferred; fixtures use unique names.
-- **narrowing**: `typeof` / truthiness / `null`/`undefined` equality are implemented in **M7**
-  (post-MVP); `in`-operator and discriminated-union / `switch` narrowing remain deferred (M8+).
+- **narrowing**: `typeof` / truthiness / `null`/`undefined` equality (**M7**) and
+  discriminated-union (literal discriminant) / `in`-operator / `switch` narrowing + literal type
+  annotations (**M8**) are implemented. Still deferred: assertion functions / type predicates
+  (`x is T`) and narrowing through unstructured flow (early `return`/`throw`, loops — needs the
+  flow-node CFG).
 - **generics**, **classes**, **modules/imports**, and **`lib.d.ts` globals** (`Array`, `console`,
   string methods, …) are out of scope for now — fixtures avoid the standard library entirely.
 
@@ -91,3 +94,4 @@ default): `null`/`undefined` are distinct types, not assignable to others.
 | `m5_named_recursive/` | M5 — `type`/`interface`, mutually recursive types (cycle fixpoint) |
 | `m6_reporting/` | M6 — nested reason chains in diagnostics |
 | `m7_narrowing/` | M7 — control-flow narrowing (`typeof`, truthiness, `null`/`undefined` equality) |
+| `m8_discriminated/` | M8 — literal types, discriminated-union / `in` / `switch` narrowing |
