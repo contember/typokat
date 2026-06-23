@@ -24,10 +24,15 @@ pub enum DiagnosticCode {
     TK2322,
     /// Property does not exist on type (member access).
     TK2339,
+    /// Property is private (accessed outside its declaring class) — M13.
+    TK2341,
     /// Argument type is not assignable to the parameter type (call argument).
     TK2345,
     /// Object literal may only specify known properties (excess property).
     TK2353,
+    /// Property is protected (accessed outside the class and its subclasses) —
+    /// M13.
+    TK2445,
     /// Wrong number of call arguments (arity).
     TK2554,
     /// Property is missing in type but required.
@@ -41,8 +46,10 @@ impl DiagnosticCode {
             DiagnosticCode::TK2304 => "TK2304",
             DiagnosticCode::TK2322 => "TK2322",
             DiagnosticCode::TK2339 => "TK2339",
+            DiagnosticCode::TK2341 => "TK2341",
             DiagnosticCode::TK2345 => "TK2345",
             DiagnosticCode::TK2353 => "TK2353",
+            DiagnosticCode::TK2445 => "TK2445",
             DiagnosticCode::TK2554 => "TK2554",
             DiagnosticCode::TK2741 => "TK2741",
         }
@@ -110,6 +117,33 @@ impl Diagnostic {
             code: DiagnosticCode::TK2339,
             severity: Severity::Error,
             message: format!("Property '{name}' does not exist on type '{tgt}'"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2341` "property is private" error (M13): a `private` member
+    /// accessed outside its declaring class. The primary span is the property name.
+    pub fn property_is_private(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2341,
+            severity: Severity::Error,
+            message: format!("Property '{name}' is private and only accessible within class."),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2445` "property is protected" error (M13): a `protected`
+    /// member accessed outside the declaring class and its subclasses. The primary
+    /// span is the property name.
+    pub fn property_is_protected(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2445,
+            severity: Severity::Error,
+            message: format!(
+                "Property '{name}' is protected and only accessible within class and its subclasses."
+            ),
             span,
             elaboration: Vec::new(),
         }
@@ -526,11 +560,7 @@ mod tests {
     use crate::types::Interner;
 
     fn prop(name: &str, ty: TypeId) -> PropertyType {
-        PropertyType {
-            name: name.to_string(),
-            ty,
-            optional: false,
-        }
+        PropertyType::public(name, ty)
     }
 
     /// A single `Leaf` head — the M0–M5 scalar mismatch — renders **no**

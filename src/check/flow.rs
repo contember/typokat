@@ -452,11 +452,7 @@ mod tests {
     fn object_a(interner: &mut Interner) -> TypeId {
         let wk = interner.well_known();
         interner.intern_object(ObjectType {
-            properties: vec![PropertyType {
-                name: "a".to_string(),
-                ty: wk.number,
-                optional: false,
-            }],
+            properties: vec![PropertyType::public("a", wk.number)],
         })
     }
 
@@ -565,16 +561,8 @@ mod tests {
         let wk = interner.well_known();
         interner.intern_object(ObjectType {
             properties: vec![
-                PropertyType {
-                    name: disc.to_string(),
-                    ty: disc_ty,
-                    optional: false,
-                },
-                PropertyType {
-                    name: extra.to_string(),
-                    ty: wk.number,
-                    optional: false,
-                },
+                PropertyType::public(disc, disc_ty),
+                PropertyType::public(extra, wk.number),
             ],
         })
     }
@@ -635,11 +623,7 @@ mod tests {
 
         // A member that lacks `kind` entirely survives both branches.
         let no_disc = interner.intern_object(ObjectType {
-            properties: vec![PropertyType {
-                name: "other".to_string(),
-                ty: wk.number,
-                optional: false,
-            }],
+            properties: vec![PropertyType::public("other", wk.number)],
         });
         let shape2 = interner.union(vec![circle, no_disc]);
         assert_eq!(
@@ -662,18 +646,10 @@ mod tests {
         let wk = interner.well_known();
         // `{ a: number }` and `{ b: string }`.
         let with_a = interner.intern_object(ObjectType {
-            properties: vec![PropertyType {
-                name: "a".to_string(),
-                ty: wk.number,
-                optional: false,
-            }],
+            properties: vec![PropertyType::public("a", wk.number)],
         });
         let with_b = interner.intern_object(ObjectType {
-            properties: vec![PropertyType {
-                name: "b".to_string(),
-                ty: wk.string,
-                optional: false,
-            }],
+            properties: vec![PropertyType::public("b", wk.string)],
         });
         let box_ty = interner.union(vec![with_a, with_b]);
 

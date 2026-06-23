@@ -137,15 +137,91 @@ impl LiteralValue {
     }
 }
 
+/// A stable identity for one **class declaration** (M13). Allocated per declared
+/// `class` by the checker and stamped onto every member that class declares (its
+/// [`PropertyType::declaring_class`]), so a `private`/`protected` member can be
+/// matched to its *origin* — the declaration it came from. Two structurally
+/// identical classes get distinct ids, which is what makes a class with a
+/// non-public member **nominal**: `class Secret { private x }` and a structurally
+/// equal `class Other { private x }` carry different `ClassId`s on their `x`, so
+/// the relation engine (and hash-consing) keep them distinct types.
+///
+/// A `u32` arena index, mirroring [`TypeParamId`] — cheap to copy/compare and part
+/// of a property's structural identity (hashed + compared in the interner).
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub struct ClassId(pub u32);
+
+impl ClassId {
+    #[inline]
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// The access modifier of a class member (M13): `public` (the default),
+/// `private`, or `protected`. Read from the member's AST `accessibility`
+/// (`PropertyDefinition`/`MethodDefinition`). It is part of a property's
+/// **structural identity** (hashed + compared in the interner) together with the
+/// [`PropertyType::declaring_class`], so a `private x: number` and a public
+/// `x: number` of the same name/type are *different* members — the basis for the
+/// access-control checks (`TK2341`/`TK2445`) and the nominal relation rule.
+///
+/// `Public` is the default and produces no diagnostics; only `Private` and
+/// `Protected` drive access control and nominal typing.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
+pub enum Visibility {
+    /// `public` (or unannotated) — the structural default, no access control.
+    #[default]
+    Public,
+    /// `private` — accessible only within the declaring class's body (`TK2341`).
+    Private,
+    /// `protected` — accessible within the declaring class and its subclasses
+    /// (`TK2445`).
+    Protected,
+}
+
 /// A member of an object type.
 ///
 /// M2 properties are all required (`optional` is always `false`); the field is
 /// kept so optional members (`a?: T`) slot in later without a struct change.
+///
+/// M13 adds the member's **visibility** (`public`/`private`/`protected`) and the
+/// **declaring class** it originated from. Both are part of the property's
+/// structural identity (hashed + compared by the interner): a `private x` and a
+/// public `x` of the same name/type are distinct members, and a `private`/
+/// `protected` member from one class differs from a same-named one from another
+/// (distinct [`ClassId`]). An ordinary structural object literal / interface
+/// member is `Public` with no declaring class (`None`), so M0–M12 behaviour is
+/// unchanged — those members hash and compare exactly as before.
 #[derive(Clone, Debug)]
 pub struct PropertyType {
     pub name: String,
     pub ty: TypeId,
     pub optional: bool,
+    /// The member's access modifier (M13). `Public` for object-literal /
+    /// interface members and unannotated class members.
+    pub visibility: Visibility,
+    /// The class this member was declared in (M13), or `None` for a member that
+    /// did not come from a class declaration (object literals, interfaces, type
+    /// aliases). Together with [`visibility`](PropertyType::visibility) this is the
+    /// *origin* the nominal relation rule keys on for `private`/`protected`
+    /// members.
+    pub declaring_class: Option<ClassId>,
+}
+
+impl PropertyType {
+    /// Build a plain **public** structural property `name: ty` with no declaring
+    /// class — the M0–M12 shape. Object-literal, interface, and substitution code
+    /// construct members through here so the M13 fields default consistently.
+    pub fn public(name: impl Into<String>, ty: TypeId) -> Self {
+        PropertyType {
+            name: name.into(),
+            ty,
+            optional: false,
+            visibility: Visibility::Public,
+            declaring_class: None,
+        }
+    }
 }
 
 /// Structural object type (object literal types, interfaces). Interned via

@@ -81,6 +81,15 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
                 prop.name.hash(&mut h);
                 prop.optional.hash(&mut h);
                 prop.ty.0.hash(&mut h);
+                // M13: visibility + declaring class are part of a member's
+                // identity, so a `private x` and a public `x` of the same name/type
+                // hash differently, and a `private`/`protected` member from one
+                // class differs from a same-named one from another. This is what
+                // gives a class with a non-public member its **nominal** identity
+                // (distinct interned `TypeId`) and keeps the relation cache sound
+                // (distinct origins ⇒ distinct ids ⇒ distinct cache keys).
+                (prop.visibility as u8).hash(&mut h);
+                prop.declaring_class.map(|c| c.0).hash(&mut h);
             }
         }
         StructuralKey::Function { params, ret } => {

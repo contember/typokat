@@ -11,6 +11,6 @@ pub mod store;
 pub mod substitute;
 
 pub use intern::{Interner, WellKnown};
-pub use repr::{IntrinsicKind, LiteralValue, TypeParamId};
+pub use repr::{ClassId, IntrinsicKind, LiteralValue, TypeParamId, Visibility};
 pub use store::TypeId;
 pub use substitute::{substitute, Substitution};

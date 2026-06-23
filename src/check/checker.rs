@@ -205,8 +205,8 @@ use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::{Reason, Relater, Relation};
 use crate::span::Span;
 use crate::types::repr::{
-    FunctionType, IntrinsicKind, LiteralValue, ObjectType, ParameterType, PropertyType, TypeParamId,
-    TypeTag,
+    ClassId, FunctionType, IntrinsicKind, LiteralValue, ObjectType, ParameterType, PropertyType,
+    TypeParamId, TypeTag, Visibility,
 };
 use crate::types::store::{Store, TypeId};
 use crate::types::{substitute, Interner, WellKnown};
@@ -215,9 +215,9 @@ use oxc_ast::ast::{
     BinaryExpression, BinaryOperator, BindingPattern, BlockStatement, CallExpression, Class,
     ClassElement, Expression, FormalParameters, Function, FunctionBody, IfStatement,
     LogicalExpression, MethodDefinitionKind, NewExpression, ObjectExpression, ObjectPropertyKind,
-    Program, Statement, StaticMemberExpression, SwitchStatement, TSLiteral, TSSignature, TSType,
-    TSTypeName, TSTypeParameterDeclaration, TSTypeParameterInstantiation, UnaryExpression,
-    UnaryOperator, VariableDeclarationKind, VariableDeclarator,
+    Program, Statement, StaticMemberExpression, SwitchStatement, TSAccessibility, TSLiteral,
+    TSSignature, TSType, TSTypeName, TSTypeParameterDeclaration, TSTypeParameterInstantiation,
+    UnaryExpression, UnaryOperator, VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
@@ -309,18 +309,22 @@ enum TypeDecl<'ast> {
         param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
         resolving: bool,
     },
-    /// A `class` (M11). `reserved` is its **instance type** id: an object id
-    /// allocated empty via `Interner::reserve_object`, filled with the class's fields
-    /// and methods once they are lowered. Reserving up front lets a field reference
-    /// the class's own type (`next: Node | null`) or a sibling, exactly like an
-    /// interface. The instance type is a plain (nominal) object — member access and
-    /// the structural relation reuse the M2 object rules. The constructor signature is
+    /// A `class` (M11, extended for M13). `reserved` is its **instance type** id: an
+    /// object id allocated empty via `Interner::reserve_object`, filled with the
+    /// class's fields and methods once they are lowered. Reserving up front lets a
+    /// field reference the class's own type (`next: Node | null`) or a sibling,
+    /// exactly like an interface. The instance type is a (nominal) object — member
+    /// access and the structural relation reuse the M2 object rules; M13 adds member
+    /// **visibility** + **declaring class** to those members (a class with a
+    /// `private`/`protected` member becomes nominal). The constructor signature is
     /// **not** an instance member; it is built in the fill step and registered under
-    /// the class's *value* `DeclId` (see [`Pass::class_ctors`]). Generic classes,
-    /// inheritance, and access modifiers are all deferred (no nominal/private typing
-    /// in this slice).
+    /// the class's *value* `DeclId` (see [`Pass::class_ctors`]). `class_id` is this
+    /// class's stable [`ClassId`], stamped onto every member it declares (the origin
+    /// the access-control + nominal rules key on). Generic classes are still
+    /// deferred.
     Class {
         reserved: TypeId,
+        class_id: ClassId,
         class: &'ast Class<'ast>,
     },
 }
@@ -362,6 +366,17 @@ struct ClassInfo {
     /// The class's instance type (its fields + methods, a nominal object). For a
     /// derived class this is the composed (base + own) type (M12).
     instance: TypeId,
+    /// The class's **static side** (M13): an object type holding the `static` fields
+    /// and `static` methods (as function-typed properties). This is what the class
+    /// **value** (`C` used as a value, the base of `C.staticMember`) resolves to; an
+    /// instance member is *not* on it (cross-access → `TK2339`) and a static member
+    /// is *not* on the instance type (also `TK2339`). For a derived class this is the
+    /// composition of the base's static side with the class's own static members
+    /// (own overriding on a name conflict), mirroring the instance side.
+    static_side: TypeId,
+    /// This class's stable [`ClassId`] (M13) — the origin stamped onto its members
+    /// and the key the access-control + nominal rules use.
+    class_id: ClassId,
     /// The **base** class's constructor signature (M12), for checking `super(args)`
     /// inside this class's constructor. `None` when the class has no `extends`.
     super_ctor: Option<TypeId>,
@@ -417,6 +432,13 @@ struct Pass<'a, 'ast> {
     /// parameter across the whole module (the named-unique-id representation — see
     /// [`crate::types::repr::TypeParamId`]).
     next_type_param: u32,
+    /// The **parent class** of each class (M13), keyed by [`ClassId`] → its base
+    /// class's `ClassId`. Built in [`fill_class`] from a resolvable `extends` clause;
+    /// a class with no (resolvable) base has no entry. Walked by
+    /// [`is_class_or_subclass`] to decide `protected` access (the accessing context's
+    /// class must be the declaring class **or** a subclass of it). Keying on the
+    /// stable `ClassId` keeps the chain independent of interned-type identity.
+    class_parents: FxHashMap<ClassId, ClassId>,
     /// Generic value signatures (M9), keyed by the value-space `DeclId` of a generic
     /// `function` declaration. A call `identity<number>(5)` looks the callee's
     /// `DeclId` up here, substitutes the type arguments into the template signature,
@@ -449,6 +471,18 @@ struct Pass<'a, 'ast> {
     /// arrow/lexical-`this` semantics — and the fixtures never rely on a function's
     /// own `this`).
     current_this: Option<TypeId>,
+    /// The **current class context** (M13): the [`ClassId`] of the class whose member
+    /// body is being checked, or `None` outside any class member. Set via
+    /// save/restore by [`check_class`] alongside [`current_this`](Pass::current_this),
+    /// it is the *accessing context* the access-control checks key on at a member
+    /// access `obj.m`: a `private` member is reachable only when `current_class` **is**
+    /// the member's declaring class; a `protected` member when `current_class` is the
+    /// declaring class **or a subclass** of it (walking [`class_parents`]). It must
+    /// NOT leak — an access outside any class member has `current_class == None`, so a
+    /// non-public member is correctly rejected there. Like `current_this`, a nested
+    /// function/arrow keeps the enclosing class (restored only at class-member
+    /// boundaries — lexical, matching `this`).
+    current_class: Option<ClassId>,
     /// The **current base-constructor signature** (M12): the constructor signature of
     /// the *base* class of the class whose member body is being checked, or `None`
     /// when that class has no `extends` (or outside any class member). Set via
@@ -487,8 +521,16 @@ pub fn check_program<'ast>(
     // lazily; interface ids are available immediately. M9: each declaration's type
     // parameters get fresh ids here too (advancing `next_type_param`).
     let mut next_type_param: u32 = 0;
-    let (type_decls, type_resolved) =
-        reserve_type_decls(interner, &binder, program, &mut next_type_param);
+    // M13: allocate one stable `ClassId` per declared class (in source order),
+    // advancing this counter as `reserve_type_decls` walks the declarations.
+    let mut next_class_id: u32 = 0;
+    let (type_decls, type_resolved) = reserve_type_decls(
+        interner,
+        &binder,
+        program,
+        &mut next_type_param,
+        &mut next_class_id,
+    );
 
     // M12: per-class fill state, indexed parallel to `type_decls`. A class index
     // starts `Pending` (its instance type / constructor are built on demand, base
@@ -508,6 +550,7 @@ pub fn check_program<'ast>(
         type_resolved,
         type_param_scopes: Vec::new(),
         next_type_param,
+        class_parents: FxHashMap::default(),
         generic_fns: FxHashMap::default(),
         class_ctors: FxHashMap::default(),
         class_fill,
@@ -516,6 +559,7 @@ pub fn check_program<'ast>(
         diagnostics: Vec::new(),
         narrowed: FxHashMap::default(),
         current_this: None,
+        current_class: None,
         current_super_ctor: None,
     };
 
@@ -568,6 +612,7 @@ fn reserve_type_decls<'ast>(
     binder: &Binder,
     program: &'ast Program<'ast>,
     next_type_param: &mut u32,
+    next_class_id: &mut u32,
 ) -> (Vec<TypeDecl<'ast>>, Vec<Option<TypeId>>) {
     let count = binder.type_decl_count as usize;
     // Placeholders so the tables are indexable by every type `DeclId`; a
@@ -614,6 +659,10 @@ fn reserve_type_decls<'ast>(
             // declared no type name (the binder skipped it), so it is skipped here too.
             Statement::ClassDeclaration(class) if class.id.is_some() => {
                 let reserved = interner.reserve_object();
+                // M13: a fresh stable `ClassId` for this declaration (source order),
+                // stamped onto its members in `fill_class`.
+                let class_id = ClassId(*next_class_id);
+                *next_class_id += 1;
                 if let Some(id) = &class.id {
                     if let Some(decl_id) = type_decl_id(binder, binder.module, id.name.as_str()) {
                         if let Some(slot) = resolved.get_mut(decl_id.index()) {
@@ -621,7 +670,11 @@ fn reserve_type_decls<'ast>(
                         }
                     }
                 }
-                decls.push(TypeDecl::Class { reserved, class });
+                decls.push(TypeDecl::Class {
+                    reserved,
+                    class_id,
+                    class,
+                });
             }
             _ => {}
         }
@@ -740,7 +793,12 @@ fn ensure_class_filled(pass: &mut Pass, scope: ScopeId, index: usize) {
         // Out of range / not a class: nothing to fill.
         None => return,
     }
-    let TypeDecl::Class { reserved, class } = pass.type_decls[index] else {
+    let TypeDecl::Class {
+        reserved,
+        class_id,
+        class,
+    } = pass.type_decls[index]
+    else {
         return;
     };
 
@@ -750,7 +808,7 @@ fn ensure_class_filled(pass: &mut Pass, scope: ScopeId, index: usize) {
         *slot = ClassFillState::Filling;
     }
 
-    fill_class(pass, scope, reserved, class);
+    fill_class(pass, scope, reserved, class_id, class);
 
     if let Some(slot) = pass.class_fill.get_mut(index) {
         *slot = ClassFillState::Done;
@@ -789,36 +847,55 @@ fn resolve_base_class(pass: &mut Pass, scope: ScopeId, class: &Class<'_>) -> Opt
     pass.class_ctors.get(&decl_id).copied()
 }
 
-/// Build a class's instance type and constructor signature (M11, extended for M12
-/// inheritance), filling the reserved instance-type object in place and registering
-/// its [`ClassInfo`] under the class's value `DeclId`. **Types only** —
-/// method/constructor bodies are checked later in the walk ([`check_class`]).
+/// Build a class's instance type, **static side**, and constructor signature (M11,
+/// extended for M12 inheritance and M13 modifiers/`static`), filling the reserved
+/// instance-type object in place and registering its [`ClassInfo`] under the class's
+/// value `DeclId`. **Types only** — method/constructor bodies are checked later in
+/// the walk ([`check_class`]).
 ///
-/// The instance type's members are the class's **own fields** (each
-/// `PropertyDefinition` with a type annotation) plus its **own methods** (each
+/// The instance type's members are the class's **non-static** fields (each
+/// `PropertyDefinition` with a type annotation) plus its **non-static** methods (each
 /// `MethodDefinition` of kind `method`) as **function-typed properties** — so member
 /// access (`p.x`, `p.method`) and the structural relation reuse the M2 object rules
-/// unchanged. The constructor (kind `Constructor`) is **not** an instance member; its
-/// parameters become the constructor signature (zero parameters when there is no
-/// explicit `constructor`).
+/// unchanged. M13 partitions out the **static** fields/methods into a separate
+/// **static-side** object type (registered as [`ClassInfo::static_side`]); the class
+/// value resolves to it, so `C.staticMember` lands on the static side while an
+/// instance member does not (cross-access → `TK2339`). The constructor (kind
+/// `Constructor`) is on neither side; its parameters become the constructor signature
+/// (zero parameters when there is no explicit `constructor`).
+///
+/// M13 (modifiers): every member this class declares is stamped with its
+/// `accessibility` ([`Visibility`]) and this class's [`ClassId`] (`class_id`) — the
+/// *origin* the access-control (`TK2341`/`TK2445`) and nominal relation rules key on.
+/// A `private`/`protected` member therefore makes the class **nominal** (the member's
+/// visibility + origin are part of its interned identity). Inherited base members keep
+/// the base's stamp (so an inherited `protected` member is still attributed to the
+/// base), exactly as built when the base was filled.
 ///
 /// M12 (`extends`): the instance type is the **composition** of the base's members
 /// with the class's own — the base's members first, then the class's own members
-/// **overriding** the base's on a name conflict ([`compose_members`]). Because the
-/// composed object is a width-superset of the base, subclass→base assignability falls
-/// out of the existing structural relation (no nominal handling). A derived class with
-/// **no own `constructor`** inherits the base's constructor signature (so
-/// `new Derived(...)` checks against it); a class **with** its own constructor uses
-/// that. [`super_ctor`](ClassInfo::super_ctor) records the base's constructor for
-/// `super(args)` checking in the derived constructor body.
+/// **overriding** the base's on a name conflict ([`compose_members`]); the static side
+/// is composed the same way from the base's static side. Because the composed object
+/// is a width-superset of the base, subclass→base assignability falls out of the
+/// existing structural relation. A derived class with **no own `constructor`** inherits
+/// the base's constructor signature (so `new Derived(...)` checks against it); a class
+/// **with** its own constructor uses that. [`super_ctor`](ClassInfo::super_ctor)
+/// records the base's constructor for `super(args)` checking in the derived
+/// constructor body, and [`class_parents`](Pass::class_parents) records the base's
+/// `ClassId` for the `protected` subclass walk.
 ///
-/// DEFERRED (out of M11/M12 scope, skipped without error): `static`/getter/setter/
-/// accessor members, parameter properties (`constructor(private x: number)`), access
-/// modifiers' nominal typing, `implements`, method-**override compatibility**
-/// (`TK2416`), `super.method()` (super property access), and generic classes. A field
-/// without a type annotation, or a member whose type cannot be lowered, is skipped —
-/// the instance type keeps the members it can express (matching `lower_interface_members`).
-fn fill_class(pass: &mut Pass, scope: ScopeId, reserved: TypeId, class: &Class<'_>) {
+/// DEFERRED (out of scope, skipped without error): getter/setter/accessor members,
+/// parameter properties (`constructor(private x: number)`), `readonly`, `implements`,
+/// method-**override compatibility** (`TK2416`), `super.method()` (super property
+/// access), and generic classes. A field without a type annotation, or a member whose
+/// type cannot be lowered, is skipped — each side keeps the members it can express.
+fn fill_class(
+    pass: &mut Pass,
+    scope: ScopeId,
+    reserved: TypeId,
+    class_id: ClassId,
+    class: &Class<'_>,
+) {
     let void_ty = pass.interner.well_known().void;
 
     // M12: resolve the base class (filling it first) so its members + constructor are
@@ -826,17 +903,27 @@ fn fill_class(pass: &mut Pass, scope: ScopeId, reserved: TypeId, class: &Class<'
     // out-of-subset / cyclic base — composition then proceeds with no base part).
     let base = resolve_base_class(pass, scope, class);
 
-    // The class's **own** members (fields + methods), before composing with the base.
-    let mut own_properties: Vec<PropertyType> = Vec::new();
+    // M13: record the base's `ClassId` as this class's parent (for the `protected`
+    // subclass walk). A class with no resolvable base has no parent entry.
+    if let Some(base_info) = base {
+        pass.class_parents.insert(class_id, base_info.class_id);
+    }
+
+    // The class's **own** instance members and **own** static members, before
+    // composing with the base. Each is stamped with its visibility + this class's
+    // `ClassId` (M13).
+    let mut own_instance: Vec<PropertyType> = Vec::new();
+    let mut own_static: Vec<PropertyType> = Vec::new();
     // The constructor's parameters, if an explicit `constructor` is present.
     let mut ctor_params: Option<Vec<ParameterType>> = None;
 
     for element in &class.body.body {
         match element {
-            // A field `x: T` becomes an instance property. Static fields, computed
-            // keys, and un-annotated fields are out of subset / not expressible.
+            // A field `x: T` becomes a property — on the static side when `static`,
+            // otherwise on the instance. Computed keys / un-annotated fields are out
+            // of subset / not expressible.
             ClassElement::PropertyDefinition(prop) => {
-                if prop.r#static || prop.computed {
+                if prop.computed {
                     continue;
                 }
                 let Some(name) = prop.key.static_name() else {
@@ -848,24 +935,32 @@ fn fill_class(pass: &mut Pass, scope: ScopeId, reserved: TypeId, class: &Class<'
                 let Some(ty) = lower_annotation(pass, scope, &annotation.type_annotation) else {
                     continue;
                 };
-                own_properties.push(PropertyType {
+                let member = PropertyType {
                     name: name.into_owned(),
                     ty,
                     optional: false,
-                });
+                    visibility: lower_visibility(prop.accessibility),
+                    declaring_class: Some(class_id),
+                };
+                if prop.r#static {
+                    own_static.push(member);
+                } else {
+                    own_instance.push(member);
+                }
             }
             // A method/constructor. A constructor records its parameter signature; a
-            // plain `method` becomes a function-typed instance property. Getters/
-            // setters/static methods are out of the M11 subset.
+            // plain `method` becomes a function-typed property (static or instance).
+            // Getters/setters are deferred.
             ClassElement::MethodDefinition(method) => {
-                if method.r#static || method.computed {
+                if method.computed {
                     continue;
                 }
                 match method.kind {
                     MethodDefinitionKind::Constructor => {
                         // The constructor signature: its parameters (used by `new`).
                         // A field/sibling-class reference in a parameter annotation
-                        // resolves from `scope`.
+                        // resolves from `scope`. A `static` keyword on a constructor
+                        // is not valid TS; treat any constructor as the constructor.
                         ctor_params =
                             Some(lower_signature_parameters(pass, scope, &method.value.params));
                     }
@@ -876,11 +971,18 @@ fn fill_class(pass: &mut Pass, scope: ScopeId, reserved: TypeId, class: &Class<'
                         let Some(ty) = lower_method_signature(pass, scope, &method.value) else {
                             continue;
                         };
-                        own_properties.push(PropertyType {
+                        let member = PropertyType {
                             name: name.into_owned(),
                             ty,
                             optional: false,
-                        });
+                            visibility: lower_visibility(method.accessibility),
+                            declaring_class: Some(class_id),
+                        };
+                        if method.r#static {
+                            own_static.push(member);
+                        } else {
+                            own_instance.push(member);
+                        }
                     }
                     // Getters/setters are deferred.
                     MethodDefinitionKind::Get | MethodDefinitionKind::Set => {}
@@ -892,14 +994,26 @@ fn fill_class(pass: &mut Pass, scope: ScopeId, reserved: TypeId, class: &Class<'
     }
 
     // M12: compose the base's members with the class's own (own overriding base on a
-    // name conflict). Snapshot the base's instance-type properties into an owned Vec
-    // first — the immutable store borrow must not overlap the `&mut` `fill_object`
-    // below. A class with no resolvable base contributes no base members (plain M11).
-    let base_properties: Vec<PropertyType> = base
+    // name conflict), for BOTH the instance side and the static side. Snapshot the
+    // base's properties into owned Vecs first — the immutable store borrow must not
+    // overlap the `&mut` `fill_object`/`intern_object` below. A class with no
+    // resolvable base contributes no base members (plain M11).
+    let base_instance: Vec<PropertyType> = base
         .and_then(|info| pass.interner.store().object_type(info.instance))
         .map(|obj| obj.properties.clone())
         .unwrap_or_default();
-    let properties = compose_members(base_properties, own_properties);
+    let base_static: Vec<PropertyType> = base
+        .and_then(|info| pass.interner.store().object_type(info.static_side))
+        .map(|obj| obj.properties.clone())
+        .unwrap_or_default();
+    let properties = compose_members(base_instance, own_instance);
+
+    // M13: build the static-side object type (the class value's type). Composed from
+    // the base's static side and the class's own static members.
+    let static_properties = compose_members(base_static, own_static);
+    let static_side = pass.interner.intern_object(ObjectType {
+        properties: static_properties,
+    });
 
     // Fill the reserved instance type with the composed (base + own) members.
     pass.interner
@@ -938,15 +1052,28 @@ fn fill_class(pass: &mut Pass, scope: ScopeId, reserved: TypeId, class: &Class<'
                 ClassInfo {
                     ctor,
                     instance: reserved,
+                    static_side,
+                    class_id,
                     super_ctor,
                 },
             );
-            // Bind the class's value-slot type to the instance type too — defensive,
-            // so a bare reference to the class *name as a value* (out of the `new`
-            // path) does not resolve to the error type and cascade. `new` uses
-            // `class_ctors`; member access on a value-typed class is out of subset.
-            pass.decl_types.set(decl_id, reserved);
+            // M13: bind the class's value-slot type to the **static side**, so a
+            // reference to the class *name as a value* — and the base of
+            // `C.staticMember` — resolves to the static-side object type. `new` still
+            // uses `class_ctors` (the constructor signature), unaffected. An instance
+            // member is not on the static side, so `C.instanceMember` is `TK2339`.
+            pass.decl_types.set(decl_id, static_side);
         }
+    }
+}
+
+/// Lower an AST `accessibility` modifier ([`TSAccessibility`]) to a [`Visibility`]
+/// (M13). An absent modifier (`None`) is `public` (the default — no diagnostics).
+fn lower_visibility(accessibility: Option<TSAccessibility>) -> Visibility {
+    match accessibility {
+        Some(TSAccessibility::Private) => Visibility::Private,
+        Some(TSAccessibility::Protected) => Visibility::Protected,
+        Some(TSAccessibility::Public) | None => Visibility::Public,
     }
 }
 
@@ -1283,11 +1410,7 @@ fn lower_interface_members(
         let Some(ty) = lower_annotation(pass, scope, &annotation.type_annotation) else {
             continue;
         };
-        properties.push(PropertyType {
-            name: name.into_owned(),
-            ty,
-            optional: false,
-        });
+        properties.push(PropertyType::public(name.into_owned(), ty));
     }
     ObjectType { properties }
 }
@@ -2107,7 +2230,16 @@ fn check_function_declaration(pass: &mut Pass, scope: ScopeId, func: &Function<'
 /// A method/constructor body is checked via [`infer_function`] — the same machine as
 /// a free function (parameters into the method scope, return obligations) — whose
 /// returned function *type* is discarded here (only the body-check side effects
-/// matter; the instance-type property was built from the annotation in `fill_class`).
+/// matter; the property type was built from the annotation in `fill_class`).
+///
+/// M13: a **static** member's body (a `static` method body, or a static field
+/// initializer) is checked **too** — statics are real members now, so leaving their
+/// bodies unchecked would be a false negative (a bad return / unresolved name / wrong
+/// call inside a static body would be silently accepted). A static body's `this` is
+/// the **static side** (the class value, [`ClassInfo::static_side`]), not an instance;
+/// it is bound per static member and restored after, so it does not leak into a
+/// following instance member. `current_class` stays the class throughout, so
+/// same-class static member access is allowed.
 ///
 /// M12: the **base constructor signature** ([`ClassInfo::super_ctor`]) is bound to
 /// [`Pass::current_super_ctor`] for the same duration (same save/restore), so a
@@ -2125,46 +2257,77 @@ fn check_class(pass: &mut Pass, scope: ScopeId, class: &Class<'_>) {
         .and_then(|decl_id| pass.class_ctors.get(&decl_id))
         .copied();
 
-    // Save/restore `this` and the base-constructor signature around the class so
-    // neither leaks (and a nested class's own values do not clobber an enclosing one
-    // permanently).
+    // Save/restore `this`, the class context, and the base-constructor signature
+    // around the class so none leak (and a nested class's own values do not clobber an
+    // enclosing one permanently).
     let saved_this = pass.current_this;
+    let saved_class = pass.current_class;
     let saved_super_ctor = pass.current_super_ctor;
     if let Some(info) = info {
         pass.current_this = Some(info.instance);
+        // M13: the accessing context for access control is this class's `ClassId`, so
+        // `this.privateMember` / a same-class `other.privateMember` resolve, and an
+        // inherited `protected` member is reachable via the subclass walk.
+        pass.current_class = Some(info.class_id);
         // `super_ctor` is itself `Option`: a derived class's base ctor, or `None` for
         // a class with no `extends` (then `super(...)` inside has no signature).
         pass.current_super_ctor = info.super_ctor;
     }
 
+    // M13: the **static side** type — the `this` inside a `static` member body /
+    // static field initializer (where `this` is the class value, not an instance).
+    // `None` when the class is unrecognized (then a static body keeps the enclosing
+    // `this`, the same defensive choice as for instance bodies above).
+    let static_this = info.map(|info| info.static_side);
+
     for element in &class.body.body {
         let ClassElement::MethodDefinition(method) = element else {
-            // Field initializers, static blocks, accessors: their nested functions
-            // (if any) were bound by the binder; a field initializer expression is
-            // walked here so it is checked (and resolves `this`). Static/computed
-            // initializers are out of subset.
+            // A field initializer expression is walked here so it is checked (and
+            // resolves `this`). M13: a **static** field initializer is checked too,
+            // with `this` bound to the static side (the class value). Static blocks /
+            // accessors remain out of subset.
             if let ClassElement::PropertyDefinition(prop) = element {
-                if !prop.r#static {
-                    if let Some(init) = &prop.value {
-                        infer_expr(pass, scope, init);
+                if let Some(init) = &prop.value {
+                    // A static initializer's `this` is the class value; an instance
+                    // initializer's is the instance. `current_class` is unchanged
+                    // (same-class access is allowed in both).
+                    let saved_member_this = pass.current_this;
+                    if prop.r#static {
+                        if let Some(static_this) = static_this {
+                            pass.current_this = Some(static_this);
+                        }
                     }
+                    infer_expr(pass, scope, init);
+                    pass.current_this = saved_member_this;
                 }
             }
             continue;
         };
-        // Static methods are out of the M11 subset; their `this` is the constructor,
-        // not the instance — skip body checking rather than bind the wrong `this`.
-        if method.r#static {
-            continue;
-        }
         // Check the method/constructor body via the shared function machine. The
-        // returned function type is discarded (the instance property type was already
-        // built in `fill_class`); we keep only the body-checking side effects (return
-        // obligations, nested-construct resolution) under the bound `this`.
-        let _ = infer_function(pass, scope, &method.value);
+        // returned function type is discarded (the property type was already built in
+        // `fill_class`); we keep only the body-checking side effects (return
+        // obligations, nested-construct resolution, name resolution) under the bound
+        // `this`.
+        //
+        // M13: a **static** method body is checked exactly like an instance method,
+        // except `this` is bound to the **static side** (`this` inside a static method
+        // is the class value, not an instance). `current_class` stays the class, so
+        // same-class static access is allowed; it is saved/restored per static member
+        // so a static body does not leak its `this` to a following instance member.
+        if method.r#static {
+            let saved_member_this = pass.current_this;
+            if let Some(static_this) = static_this {
+                pass.current_this = Some(static_this);
+            }
+            let _ = infer_function(pass, scope, &method.value);
+            pass.current_this = saved_member_this;
+        } else {
+            let _ = infer_function(pass, scope, &method.value);
+        }
     }
 
     pass.current_this = saved_this;
+    pass.current_class = saved_class;
     pass.current_super_ctor = saved_super_ctor;
 }
 
@@ -2428,11 +2591,7 @@ fn lower_object_annotation(
         let name = sig.key.static_name()?;
         let annotation = sig.type_annotation.as_ref()?;
         let ty = lower_annotation(pass, scope, &annotation.type_annotation)?;
-        properties.push(PropertyType {
-            name: name.into_owned(),
-            ty,
-            optional: false,
-        });
+        properties.push(PropertyType::public(name.into_owned(), ty));
     }
     Some(pass.interner.intern_object(ObjectType { properties }))
 }
@@ -2660,11 +2819,7 @@ fn infer_object_literal(pass: &mut Pass, scope: ScopeId, obj: &ObjectExpression<
             continue;
         };
         let widened = widen(pass.interner, value_ty);
-        properties.push(PropertyType {
-            name: name.into_owned(),
-            ty: widened,
-            optional: false,
-        });
+        properties.push(PropertyType::public(name.into_owned(), widened));
     }
     pass.interner.intern_object(ObjectType { properties })
 }
@@ -2700,18 +2855,112 @@ fn infer_member_access(
         ));
     }
 
-    match pass.interner.store().object_type(base_ty) {
-        Some(obj) => match obj.property(prop_name) {
-            Some(prop) => Some((prop.ty, prop_span)),
-            None => {
-                let tgt = render_type(pass.interner.store(), base_ty, /* widen */ false);
-                pass.diagnostics.push(Diagnostic::property_does_not_exist(
-                    prop_span, prop_name, &tgt,
-                ));
-                Some((wk.error, prop_span))
+    // Snapshot the looked-up property's type + visibility + origin before any
+    // mutable borrow (a diagnostic needs `&mut pass`). `None` = the property is not
+    // on this object type.
+    let found = pass
+        .interner
+        .store()
+        .object_type(base_ty)
+        .and_then(|obj| obj.property(prop_name))
+        .map(|prop| (prop.ty, prop.visibility, prop.declaring_class));
+
+    match found {
+        Some((prop_ty, visibility, declaring_class)) => {
+            // M13 access control: a `private`/`protected` member is reachable only
+            // from the right class context (`current_class`). The member is present
+            // on the type, so an access violation is `TK2341`/`TK2445` (NOT a
+            // property-does-not-exist), and the access still yields the member's real
+            // type (matching tsc — access control does not change the type, so there
+            // is no cascade).
+            check_member_access_control(
+                pass,
+                prop_name,
+                prop_span,
+                visibility,
+                declaring_class,
+            );
+            Some((prop_ty, prop_span))
+        }
+        None => {
+            // Not on the type. For a class value base, this also covers
+            // `C.instanceMember`; for an instance base, `instance.staticMember` —
+            // both are `TK2339`, since each member lives on the other side.
+            let tgt = render_type(pass.interner.store(), base_ty, /* widen */ false);
+            pass.diagnostics.push(Diagnostic::property_does_not_exist(
+                prop_span, prop_name, &tgt,
+            ));
+            Some((wk.error, prop_span))
+        }
+    }
+}
+
+/// Apply M13 access control to a member access `obj.m` whose member was found on the
+/// base type. A `public` member is always reachable. A `private` member is reachable
+/// only when the accessing context ([`Pass::current_class`]) **is** the member's
+/// declaring class (else `TK2341`). A `protected` member is reachable when the
+/// context is the declaring class **or a subclass** of it (else `TK2445`).
+///
+/// The rule keys on the **declaring class**, not the instance, so same-class access to
+/// *another* instance's `private` member is allowed (the context matches the origin).
+/// An access outside any class member (`current_class == None`) matches no origin, so
+/// a non-public member is correctly rejected there. A member with no declaring class
+/// (an ordinary object/interface member — always `Public`) never reaches the
+/// non-public arms.
+fn check_member_access_control(
+    pass: &mut Pass,
+    prop_name: &str,
+    prop_span: Span,
+    visibility: Visibility,
+    declaring_class: Option<ClassId>,
+) {
+    match visibility {
+        Visibility::Public => {}
+        Visibility::Private => {
+            // Reachable only inside the exact declaring class's body.
+            let allowed = matches!(
+                (pass.current_class, declaring_class),
+                (Some(ctx), Some(owner)) if ctx == owner
+            );
+            if !allowed {
+                pass.diagnostics
+                    .push(Diagnostic::property_is_private(prop_span, prop_name));
             }
-        },
-        None => Some((wk.error, prop_span)),
+        }
+        Visibility::Protected => {
+            // Reachable inside the declaring class or any subclass of it.
+            let allowed = match (pass.current_class, declaring_class) {
+                (Some(ctx), Some(owner)) => is_class_or_subclass(pass, ctx, owner),
+                _ => false,
+            };
+            if !allowed {
+                pass.diagnostics
+                    .push(Diagnostic::property_is_protected(prop_span, prop_name));
+            }
+        }
+    }
+}
+
+/// Whether `class_id` **is** `ancestor` or a **subclass** of it (M13), by walking the
+/// [`Pass::class_parents`] chain upward from `class_id`. Used to decide `protected`
+/// access: the accessing context's class must be the declaring class or a descendant.
+/// The walk is bounded by a visited set so a malformed `extends` cycle terminates
+/// (cyclic hierarchies are invalid TS but must not hang).
+fn is_class_or_subclass(pass: &Pass, class_id: ClassId, ancestor: ClassId) -> bool {
+    let mut current = class_id;
+    let mut visited: rustc_hash::FxHashSet<ClassId> = rustc_hash::FxHashSet::default();
+    loop {
+        if current == ancestor {
+            return true;
+        }
+        if !visited.insert(current) {
+            // Re-entered a class already seen — a cyclic hierarchy; stop.
+            return false;
+        }
+        match pass.class_parents.get(&current).copied() {
+            Some(parent) => current = parent,
+            None => return false,
+        }
     }
 }
 
@@ -4484,6 +4733,316 @@ function free() {
 ";
         // No base ctor in scope → no diagnostic, no crash (super arg `1` is still
         // walked).
+        assert!(diags(src).is_empty(), "got {:?}", diags(src));
+    }
+}
+
+#[cfg(test)]
+mod modifiers_tests {
+    //! M13 end-to-end tests for access modifiers (`private`/`protected` — access
+    //! control + nominal typing) and `static` members. These drive the whole
+    //! pipeline (parse → bind → check) and assert the *set* of `(line, code)`
+    //! diagnostics, pinning the invariants the reviewer should scrutinize: access
+    //! control keys on the current-class context (inside vs outside vs subclass), the
+    //! nominal relation breaks structural assignability for a `private`/`protected`
+    //! member (and a same-class instance still passes), and the static/instance
+    //! partition routes members to the right side (cross-access → `TK2339`).
+    //!
+    //! The per-fixture acceptance lives in the conformance corpus (`m13_modifiers/`);
+    //! the unit-level nominal-relation pins live in `relate::relation::tests`. These
+    //! guard the checker-side context tracking + partition directly.
+
+    use crate::driver::check_source;
+
+    /// Run the checker and return the sorted `(1-based line, code)` of every
+    /// diagnostic, keyed on its primary-span start line.
+    fn diags(source: &str) -> Vec<(u32, String)> {
+        let out = check_source(source);
+        assert!(
+            out.parse_errors.is_empty(),
+            "unexpected parse error(s): {:?}",
+            out.parse_errors
+        );
+        let index = crate::span::LineIndex::new(source);
+        let mut v: Vec<(u32, String)> = out
+            .diagnostics
+            .iter()
+            .map(|d| (index.line_of(d.span.start), d.code.as_str().to_string()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Access control: a `private` member is reachable inside its declaring class but
+    /// `TK2341` outside it (and even inside a *subclass*); a `protected` member is
+    /// reachable inside the class and its subclasses but `TK2445` outside.
+    #[test]
+    fn private_and_protected_access_control() {
+        let src = "\
+class Account {
+  private balance: number;
+  protected owner: string;
+  constructor(b: number, o: string) {
+    this.balance = b;
+    this.owner = o;
+  }
+  check(): number {
+    return this.balance;
+  }
+}
+const acc = new Account(100, \"a\");
+const b = acc.balance;
+const o = acc.owner;
+class Sub extends Account {
+  constructor() {
+    super(1, \"a\");
+  }
+  readOwner(): string {
+    return this.owner;
+  }
+  readBalance(): number {
+    return this.balance;
+  }
+}
+";
+        // Inside `Account` (line 9) ok; outside: private (13) TK2341, protected (14)
+        // TK2445; inside subclass: protected ok (20), private (23) TK2341.
+        assert_eq!(
+            diags(src),
+            vec![
+                (13, "TK2341".to_string()),
+                (14, "TK2445".to_string()),
+                (23, "TK2341".to_string())
+            ]
+        );
+    }
+
+    /// Same-class access to **another instance's** `private` member is allowed (the
+    /// rule keys on the declaring class, not the instance).
+    #[test]
+    fn same_class_private_access_to_other_instance_is_allowed() {
+        let src = "\
+class Box {
+  private v: number;
+  constructor(v: number) {
+    this.v = v;
+  }
+  eq(other: Box): boolean {
+    return this.v === other.v;
+  }
+}
+";
+        // `other.v` (line 7) is a private access inside the *declaring* class → ok.
+        assert!(diags(src).is_empty(), "got {:?}", diags(src));
+    }
+
+    /// Nominal typing: a structurally-identical object literal is NOT assignable to a
+    /// class with a `private` member, a different class with a same-named private
+    /// member is NOT assignable, but the class's own instance IS.
+    #[test]
+    fn private_member_makes_class_nominal() {
+        let src = "\
+class Secret {
+  private x: number;
+  constructor() {
+    this.x = 1;
+  }
+}
+const a: Secret = new Secret();
+const b: Secret = { x: 1 };
+class Other {
+  private x: number;
+  constructor() {
+    this.x = 1;
+  }
+}
+const c: Secret = new Other();
+";
+        // Own instance (line 7) ok; object literal (8) and a different class (15) are
+        // not assignable → TK2322 each.
+        assert_eq!(
+            diags(src),
+            vec![(8, "TK2322".to_string()), (15, "TK2322".to_string())]
+        );
+    }
+
+    /// A `protected` member is nominal too: a structurally-identical public object is
+    /// not assignable, but the class's own instance is.
+    #[test]
+    fn protected_member_makes_class_nominal() {
+        let src = "\
+class Secret {
+  protected x: number;
+  constructor() {
+    this.x = 1;
+  }
+}
+const a: Secret = new Secret();
+const b: Secret = { x: 1 };
+";
+        assert_eq!(diags(src), vec![(8, "TK2322".to_string())]);
+    }
+
+    /// Static/instance partition: a static member lives on the class value (the
+    /// static side) and an instance member on instances; cross-access is `TK2339` in
+    /// both directions, and a static field's type is checked on the class value.
+    #[test]
+    fn static_and_instance_member_partition() {
+        let src = "\
+class Counter {
+  static total: number;
+  static reset(): void {}
+  value: number;
+  constructor() {
+    this.value = 0;
+  }
+}
+const t: number = Counter.total;
+Counter.reset();
+const bad: string = Counter.total;
+const c = new Counter();
+const v: number = c.value;
+const x = c.total;
+const z = Counter.value;
+";
+        // `Counter.total` (9) + `Counter.reset()` (10) + `c.value` (13) ok;
+        // `Counter.total` mistyped to string (11) TK2322; `c.total` (14) — static not
+        // on instance → TK2339; `Counter.value` (15) — instance not on static side →
+        // TK2339.
+        assert_eq!(
+            diags(src),
+            vec![
+                (11, "TK2322".to_string()),
+                (14, "TK2339".to_string()),
+                (15, "TK2339".to_string())
+            ]
+        );
+    }
+
+    /// A `private`/`protected` member accessed where there is **no class context**
+    /// (e.g. a free function) is still rejected — `current_class == None` matches no
+    /// origin (no false negative).
+    #[test]
+    fn non_public_access_outside_any_class_is_rejected() {
+        let src = "\
+class Account {
+  private balance: number;
+  protected owner: string;
+  constructor(b: number, o: string) {
+    this.balance = b;
+    this.owner = o;
+  }
+}
+function leak(a: Account) {
+  const p = a.balance;
+  const q = a.owner;
+  return 0;
+}
+";
+        // Inside a free function (no class context): private (10) TK2341, protected
+        // (11) TK2445.
+        assert_eq!(
+            diags(src),
+            vec![(10, "TK2341".to_string()), (11, "TK2445".to_string())]
+        );
+    }
+
+    /// A **static** member's body is type-checked (statics are real members in M13):
+    /// a static method's bad `return`, an unresolved name in a static body, a wrong
+    /// static-call argument, and a static field initializer's unresolved name are all
+    /// flagged — while the well-typed static body and the instance body stay clean.
+    /// This guards the false negative the review caught (static bodies were skipped).
+    #[test]
+    fn static_member_bodies_are_checked() {
+        let src = "\
+function helper(x: number): void {}
+class C {
+  static label: number = missingName;
+  value: number;
+  constructor() {
+    this.value = 0;
+  }
+  inst(): number {
+    return 1;
+  }
+  static good(): number {
+    return 1;
+  }
+  static badReturn(): number {
+    return \"s\";
+  }
+  static useMissing(): void {
+    const z = nope;
+  }
+  static callBad(): void {
+    helper(\"s\");
+  }
+}
+";
+        // static field init unresolved (3) TK2304; static bad return (15) TK2322;
+        // static unresolved name (18) TK2304; static wrong-arg call (21) TK2345. The
+        // well-typed static + instance bodies are clean.
+        assert_eq!(
+            diags(src),
+            vec![
+                (3, "TK2304".to_string()),
+                (15, "TK2322".to_string()),
+                (18, "TK2304".to_string()),
+                (21, "TK2345".to_string()),
+            ]
+        );
+    }
+
+    /// A static body's `this` is the **static side** and does not leak into a
+    /// following instance member: a static method may reach a static field via
+    /// `this`, and the next instance method still resolves an instance field via
+    /// `this` (no cross-contamination). Pins the per-member `this` save/restore.
+    #[test]
+    fn static_this_is_static_side_and_does_not_leak() {
+        let src = "\
+class C {
+  static total: number = 0;
+  value: number;
+  constructor() {
+    this.value = 0;
+  }
+  static readTotal(): number {
+    return this.total;
+  }
+  readValue(): number {
+    return this.value;
+  }
+}
+";
+        // `this.total` inside the static method (static side) and `this.value` inside
+        // the instance method (instance side) both resolve → clean.
+        assert!(diags(src).is_empty(), "got {:?}", diags(src));
+    }
+
+    /// Deferred modifiers do not crash and produce no new diagnostics: `readonly`,
+    /// `public` (the default), getters, and a parameter property must complete the
+    /// run. Only `private`/`protected`/`static` are handled; the rest are inert.
+    #[test]
+    fn deferred_modifiers_do_not_crash() {
+        let src = "\
+class C {
+  public a: number;
+  readonly b: number;
+  private c: number;
+  constructor(a: number, b: number, c: number) {
+    this.a = a;
+    this.b = b;
+    this.c = c;
+  }
+  get d(): number {
+    return this.a;
+  }
+}
+const x = new C(1, 2, 3);
+const y: number = x.a;
+";
+        // `public a` is the default (no access error); `x.a` (15) is reachable. The
+        // run completes without panicking. `readonly`/getters are inert.
         assert!(diags(src).is_empty(), "got {:?}", diags(src));
     }
 }

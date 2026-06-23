@@ -13,7 +13,7 @@
 //! in now so M2–M6 add rules, not infrastructure.
 
 use crate::relate::cache::{RelationCache, RelationKey};
-use crate::types::repr::{IntrinsicKind, TypeTag};
+use crate::types::repr::{IntrinsicKind, PropertyType, TypeTag, Visibility};
 use crate::types::store::{Store, TypeId};
 use crate::types::WellKnown;
 use rustc_hash::FxHashSet;
@@ -387,6 +387,26 @@ impl<'a> Relater<'a> {
                 // Width + depth: present in source — its type must relate to the
                 // target property's type (recurse, so nested mismatches nest).
                 Some(src_prop) => {
+                    // M13 — nominal rule: a `private`/`protected` **target** member
+                    // requires the source's same-named member to share its *origin*
+                    // (same visibility AND same declaring class). This is what makes
+                    // a class with a non-public member nominal: a structurally equal
+                    // object literal (public, no origin) or another class's
+                    // same-named non-public member does NOT satisfy it, so the
+                    // relation FAILS here rather than reporting a depth mismatch.
+                    // Soundness-critical: a non-matching origin must make the
+                    // relation fail (no false negative). A public target member
+                    // imposes no origin requirement (pure structural), so M0–M12
+                    // objects are unaffected.
+                    //
+                    // The failure is a plain object-level `Leaf` (the member's *type*
+                    // is fine — only its visibility/origin differs), so it maps to
+                    // `TK2322` with no misleading "number is not assignable to
+                    // number" depth elaboration. Object-target messages are asserted
+                    // code-only in the corpus, so the headline form is unconstrained.
+                    if !nominal_origin_ok(tgt_prop, src_prop) {
+                        return Relation::No(ReasonChain::leaf(src, tgt));
+                    }
                     if let Relation::No(child) =
                         self.relate(src_prop.ty, tgt_prop.ty, kind, assumed)
                     {
@@ -608,17 +628,53 @@ impl<'a> Relater<'a> {
     }
 }
 
+/// Whether the source member satisfies the target member's **nominal origin**
+/// requirement (M13). A `public` target member imposes none (pure structural
+/// width/depth). A `private`/`protected` target member requires the source's
+/// same-named member to have the **same visibility AND the same declaring class**
+/// — i.e. to be the *very same* declared member. This is the soundness-critical
+/// gate: when it returns `false`, the relation must fail (a structurally-identical
+/// object literal, or another class's same-named non-public member, is not
+/// assignable to a class with a `private`/`protected` member).
+fn nominal_origin_ok(tgt_prop: &PropertyType, src_prop: &PropertyType) -> bool {
+    match tgt_prop.visibility {
+        // Public target member: structural only — no origin constraint.
+        Visibility::Public => true,
+        // Non-public target member: the source member must share its exact origin
+        // (same visibility and same declaring class). A class's own instances pass
+        // trivially (the identity fast path in `relate` short-circuits same-id
+        // types before this is ever reached); everything else must match here.
+        Visibility::Private | Visibility::Protected => {
+            src_prop.visibility == tgt_prop.visibility
+                && src_prop.declaring_class == tgt_prop.declaring_class
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::repr::{LiteralValue, ObjectType, PropertyType};
+    use crate::types::repr::{ClassId, LiteralValue, ObjectType, PropertyType};
     use crate::types::Interner;
 
     fn prop(name: &str, ty: TypeId) -> PropertyType {
+        PropertyType::public(name, ty)
+    }
+
+    /// Build a member `name: ty` with an explicit visibility + declaring class
+    /// (M13), for the nominal-relation tests.
+    fn nominal_prop(
+        name: &str,
+        ty: TypeId,
+        visibility: Visibility,
+        declaring_class: Option<ClassId>,
+    ) -> PropertyType {
         PropertyType {
             name: name.to_string(),
             ty,
             optional: false,
+            visibility,
+            declaring_class,
         }
     }
 
@@ -670,6 +726,116 @@ mod tests {
             },
             Relation::Yes => panic!("expected a depth mismatch failure"),
         }
+    }
+
+    /// M13 — nominal class typing via a `private`/`protected` member. A
+    /// `private`/`protected` **target** member breaks pure structural
+    /// assignability: a structurally-identical public object is NOT assignable, and
+    /// a same-named non-public member from a *different* declaring class is NOT
+    /// assignable; only the class's own instances (same interned id) are. This pins
+    /// the soundness-critical rule (a non-matching origin must FAIL the relation).
+    #[test]
+    fn nominal_private_member_breaks_structural_assignability() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let secret = ClassId(0);
+        let other = ClassId(1);
+
+        // `class Secret { private x: number }` (its instance type, nominal object).
+        let secret_ty = interner.intern_object(ObjectType {
+            properties: vec![nominal_prop(
+                "x",
+                wk.number,
+                Visibility::Private,
+                Some(secret),
+            )],
+        });
+        // A structurally identical *public* object literal `{ x: number }`.
+        let public_obj = interner.intern_object(ObjectType {
+            properties: vec![prop("x", wk.number)],
+        });
+        // `class Other { private x: number }` — same shape, DIFFERENT origin.
+        let other_ty = interner.intern_object(ObjectType {
+            properties: vec![nominal_prop(
+                "x",
+                wk.number,
+                Visibility::Private,
+                Some(other),
+            )],
+        });
+
+        // The three are distinct interned ids (origin/visibility are part of
+        // identity), so the relation cache keys them apart.
+        assert_ne!(secret_ty, public_obj, "private member ⇒ distinct from public");
+        assert_ne!(secret_ty, other_ty, "different declaring class ⇒ distinct");
+
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+
+        // Same class (same id): assignable via the identity fast path.
+        assert!(
+            rel.is_assignable(secret_ty, secret_ty).is_yes(),
+            "a class's own instance type is assignable to itself"
+        );
+
+        // Public `{ x: number }` is NOT assignable to `Secret` (the private member
+        // has no public counterpart) — an object-level `Leaf` failure (the member
+        // type is fine; only the visibility/origin differs).
+        match rel.is_assignable(public_obj, secret_ty) {
+            Relation::No(chain) => {
+                assert!(
+                    matches!(chain.head(), Reason::Leaf { .. }),
+                    "expected an object-level Leaf failure, got {:?}",
+                    chain.head()
+                );
+                // The root pins the two object types.
+                assert_eq!(chain.root(), (public_obj, secret_ty));
+            }
+            Relation::Yes => panic!("a public object must NOT be assignable to a private-member class"),
+        }
+
+        // `Other` (different origin) is NOT assignable to `Secret`.
+        assert!(
+            !rel.is_assignable(other_ty, secret_ty).is_yes(),
+            "a different class's private member must not satisfy Secret's"
+        );
+
+        // Symmetry: `Secret` is also not assignable to `Other` (origin differs).
+        assert!(
+            !rel.is_assignable(secret_ty, other_ty).is_yes(),
+            "Secret's private member must not satisfy Other's"
+        );
+    }
+
+    /// M13 — a `protected` target member is nominal exactly like `private`: a
+    /// structurally-identical public object is not assignable, while the class's own
+    /// instance is. Separated from the `private` test so each uses a clean interner.
+    #[test]
+    fn nominal_protected_member_breaks_structural_assignability() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let owner = ClassId(0);
+
+        let prot_ty = interner.intern_object(ObjectType {
+            properties: vec![nominal_prop(
+                "owner",
+                wk.string,
+                Visibility::Protected,
+                Some(owner),
+            )],
+        });
+        let public_obj = interner.intern_object(ObjectType {
+            properties: vec![prop("owner", wk.string)],
+        });
+
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+
+        assert!(rel.is_assignable(prot_ty, prot_ty).is_yes(), "own instance ok");
+        assert!(
+            !rel.is_assignable(public_obj, prot_ty).is_yes(),
+            "a public object must NOT be assignable to a protected-member class"
+        );
     }
 
     /// Nested depth: a mismatch one level deep nests under the outer property

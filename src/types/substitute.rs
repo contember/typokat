@@ -98,24 +98,20 @@ impl<'a> Substitution<'a> {
         let Some(object) = interner.store().object_type(ty) else {
             return ty;
         };
-        let props: Vec<(String, bool, TypeId)> = object
-            .properties
-            .iter()
-            .map(|p| (p.name.clone(), p.optional, p.ty))
-            .collect();
+        // M13: carry the member's visibility + declaring class through unchanged —
+        // substitution rewrites a member's *type*, never its access modifier or
+        // origin (so a substituted generic class member, were generic classes in
+        // scope, would keep its nominal identity).
+        let props: Vec<PropertyType> = object.properties.clone();
 
         self.in_progress.insert(ty);
         let mut changed = false;
         let properties: Vec<PropertyType> = props
             .into_iter()
-            .map(|(name, optional, prop_ty)| {
-                let new_ty = self.apply(interner, prop_ty);
-                changed |= new_ty != prop_ty;
-                PropertyType {
-                    name,
-                    ty: new_ty,
-                    optional,
-                }
+            .map(|p| {
+                let new_ty = self.apply(interner, p.ty);
+                changed |= new_ty != p.ty;
+                PropertyType { ty: new_ty, ..p }
             })
             .collect();
         self.in_progress.remove(&ty);
@@ -224,11 +220,7 @@ mod tests {
     use crate::types::repr::{ObjectType, PropertyType};
 
     fn prop(name: &str, ty: TypeId) -> PropertyType {
-        PropertyType {
-            name: name.to_string(),
-            ty,
-            optional: false,
-        }
+        PropertyType::public(name, ty)
     }
 
     /// A bare type parameter is replaced by its argument; an unmapped parameter is

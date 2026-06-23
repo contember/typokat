@@ -364,11 +364,7 @@ mod tests {
     };
 
     fn prop(name: &str, ty: TypeId) -> PropertyType {
-        PropertyType {
-            name: name.to_string(),
-            ty,
-            optional: false,
-        }
+        PropertyType::public(name, ty)
     }
 
     /// A bare scalar argument matched against a type parameter fixes that parameter

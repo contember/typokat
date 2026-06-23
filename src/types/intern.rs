@@ -347,7 +347,16 @@ impl Interner {
 fn object_props_eq(a: &[PropertyType], b: &[PropertyType]) -> bool {
     a.len() == b.len()
         && a.iter().zip(b).all(|(x, y)| {
-            x.name == y.name && x.optional == y.optional && x.ty == y.ty
+            // M13: visibility + declaring class are part of a member's identity, so
+            // two members that differ only in access modifier or origin do not
+            // dedup (matching the hash above). This keeps a `private x` distinct
+            // from a public `x`, and a non-public member of one class distinct from
+            // a same-named one of another — the basis of nominal class typing.
+            x.name == y.name
+                && x.optional == y.optional
+                && x.ty == y.ty
+                && x.visibility == y.visibility
+                && x.declaring_class == y.declaring_class
         })
 }
 
@@ -376,13 +385,9 @@ mod tests {
     use super::*;
     use crate::types::repr::{LiteralValue, ObjectType, PropertyType};
 
-    /// Build a required property `name: ty`.
+    /// Build a required public property `name: ty`.
     fn prop(name: &str, ty: TypeId) -> PropertyType {
-        PropertyType {
-            name: name.to_string(),
-            ty,
-            optional: false,
-        }
+        PropertyType::public(name, ty)
     }
 
     /// Hash-consing: structurally identical types share one `TypeId`

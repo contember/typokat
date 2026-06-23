@@ -85,6 +85,9 @@ slots into a known later phase without rework:
   access control + nominal typing) + `static` members (**M13**) are implemented; `readonly`,
   getters/setters, abstract, method-override compatibility (`TK2416`), and generic classes
   remain deferred (`readonly` needs member-assignment-target checking, itself deferred).
+  Nominal typing currently constrains only the foreign→private direction (a private/protected
+  type rejects a structurally-identical *other* type); widening a private-bearing instance to its
+  public structural shape is not yet rejected (a one-directional divergence from tsc TS2322).
 - **modules/imports** and **`lib.d.ts` globals** (`Array`, `console`, string methods, …) are out
   of scope for now — fixtures avoid the standard library entirely.
 
