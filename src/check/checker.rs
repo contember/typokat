@@ -241,7 +241,8 @@ use oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, AssignmentOperator, AssignmentTarget,
     BinaryExpression, BinaryOperator, BindingPattern, BlockStatement, CallExpression, Class,
     ClassElement, Expression, FormalParameters, Function, FunctionBody, IfStatement,
-    LogicalExpression, MethodDefinitionKind, NewExpression, ObjectExpression, ObjectPropertyKind,
+    LogicalExpression, MethodDefinition, MethodDefinitionKind, NewExpression, ObjectExpression,
+    ObjectPropertyKind,
     Program, Statement, StaticMemberExpression, SwitchStatement, TSAccessibility, TSLiteral,
     TSSignature, TSType, TSTypeName, TSTypeParameterDeclaration, TSTypeParameterInstantiation,
     UnaryExpression, UnaryOperator, VariableDeclarationKind, VariableDeclarator,
@@ -407,6 +408,13 @@ struct ClassInfo {
     /// The **base** class's constructor signature (M12), for checking `super(args)`
     /// inside this class's constructor. `None` when the class has no `extends`.
     super_ctor: Option<TypeId>,
+    /// Whether this class was declared `abstract` (M15). Read from the AST
+    /// (`class.r#abstract`) in [`fill_class`] and consulted by [`infer_new`]:
+    /// `new C(...)` on an `abstract` `C` is `TK2511`. **Only the directly-named
+    /// class's flag matters** — a concrete subclass of an abstract class is *not*
+    /// abstract (its own flag is `false`), so it instantiates fine. The flag is not
+    /// part of the instance type's structural identity; it gates `new`, nothing else.
+    is_abstract: bool,
 }
 
 /// A class's fill progress (M12), tracked per [`TypeDecl`] index so a derived class
@@ -923,11 +931,20 @@ fn resolve_base_class(pass: &mut Pass, scope: ScopeId, class: &Class<'_>) -> Opt
 /// constructor body, and [`class_parents`](Pass::class_parents) records the base's
 /// `ClassId` for the `protected` subclass walk.
 ///
-/// DEFERRED (out of scope, skipped without error): getter/setter/accessor members,
-/// parameter properties (`constructor(private x: number)`), `readonly`, `implements`,
-/// method-**override compatibility** (`TK2416`), `super.method()` (super property
-/// access), and generic classes. A field without a type annotation, or a member whose
-/// type cannot be lowered, is skipped — each side keeps the members it can express.
+/// M15 (getters/setters + `abstract`): a `get`/`set` accessor becomes ONE instance
+/// property — its type is the getter's return type (else the setter's parameter type)
+/// and it is `readonly` when get-only ([`record_accessor`]/[`build_accessor_members`]),
+/// so member read/assignment reuse the M2/M14 paths unchanged. An `abstract method(): T;`
+/// (no body) is built as a function-typed property by the ordinary `Method` arm (its body
+/// is simply absent). The class's `abstract` keyword is recorded on its [`ClassInfo`]
+/// ([`ClassInfo::is_abstract`]) and enforced at `new` ([`infer_new`] → `TK2511`).
+///
+/// DEFERRED (out of scope, skipped without error): set-only / differing-get-set-type /
+/// `static` accessors, parameter properties (`constructor(private x: number)`),
+/// `implements`, method-**override compatibility** (`TK2416`), the abstract-member-not-
+/// implemented completeness check (`TK2515`), `super.method()` (super property access),
+/// and generic classes. A field without a type annotation, or a member whose type cannot
+/// be lowered, is skipped — each side keeps the members it can express.
 fn fill_class(
     pass: &mut Pass,
     scope: ScopeId,
@@ -955,6 +972,13 @@ fn fill_class(
     let mut own_static: Vec<PropertyType> = Vec::new();
     // The constructor's parameters, if an explicit `constructor` is present.
     let mut ctor_params: Option<Vec<ParameterType>> = None;
+    // M15: getters/setters, accumulated per name and combined into ONE accessor
+    // property after the loop. A getter contributes the property's type (its return
+    // type) and a setter contributes it (its parameter type); a get without a set is
+    // `readonly` (behaves like a read-only property → assigning it is `TK2540`). See
+    // [`build_accessor_members`]. Keyed in declaration order so a same-named get + set
+    // collapse to a single member.
+    let mut accessors: Vec<AccessorBuild> = Vec::new();
 
     for element in &class.body.body {
         match element {
@@ -984,6 +1008,8 @@ fn fill_class(
                     // It does not affect assignability (the relation ignores it); it
                     // only gates assignment targets (`TK2540`).
                     readonly: prop.readonly,
+                    // M15: a data field is not an accessor.
+                    is_accessor: false,
                 };
                 if prop.r#static {
                     own_static.push(member);
@@ -991,9 +1017,11 @@ fn fill_class(
                     own_instance.push(member);
                 }
             }
-            // A method/constructor. A constructor records its parameter signature; a
-            // plain `method` becomes a function-typed property (static or instance).
-            // Getters/setters are deferred.
+            // A method/constructor/accessor. A constructor records its parameter
+            // signature; a plain `method` (including an `abstract method(): T;` with no
+            // body, M15) becomes a function-typed property (static or instance); a
+            // getter/setter (M15) is accumulated per name and combined into one accessor
+            // property after the loop.
             ClassElement::MethodDefinition(method) => {
                 if method.computed {
                     continue;
@@ -1023,6 +1051,8 @@ fn fill_class(
                             // A method is never `readonly` (the modifier is a no-op
                             // on methods); only data members carry it.
                             readonly: false,
+                            // M15: a plain (or abstract) method is not an accessor.
+                            is_accessor: false,
                         };
                         if method.r#static {
                             own_static.push(member);
@@ -1030,13 +1060,33 @@ fn fill_class(
                             own_instance.push(member);
                         }
                     }
-                    // Getters/setters are deferred.
-                    MethodDefinitionKind::Get | MethodDefinitionKind::Set => {}
+                    // M15: a getter/setter accessor. `static` accessors are deferred,
+                    // so only instance accessors build a property (a deferred static
+                    // accessor's body is still walked by `check_class`, harmlessly).
+                    // The getter's return type / setter's parameter type are recorded
+                    // per name and combined into one accessor property after the loop.
+                    MethodDefinitionKind::Get | MethodDefinitionKind::Set => {
+                        if method.r#static {
+                            continue;
+                        }
+                        let Some(name) = method.key.static_name() else {
+                            continue;
+                        };
+                        record_accessor(pass, scope, &mut accessors, name.as_ref(), method);
+                    }
                 }
             }
             // Static blocks, accessor properties, index signatures: out of subset.
             _ => {}
         }
+    }
+
+    // M15: turn each accumulated getter/setter into ONE accessor property (type from
+    // the getter's return / setter's parameter; `readonly` for a get-only accessor) and
+    // add it to the class's own **instance** members. Accessors are always instance-side
+    // here (static accessors are deferred, skipped above).
+    for member in build_accessor_members(class_id, accessors) {
+        own_instance.push(member);
     }
 
     // M12: compose the base's members with the class's own (own overriding base on a
@@ -1101,6 +1151,8 @@ fn fill_class(
                     static_side,
                     class_id,
                     super_ctor,
+                    // M15: only this class's own `abstract` keyword matters for `new`.
+                    is_abstract: class.r#abstract,
                 },
             );
             // M13: bind the class's value-slot type to the **static side**, so a
@@ -1111,6 +1163,132 @@ fn fill_class(
             pass.decl_types.set(decl_id, static_side);
         }
     }
+}
+
+/// One accessor (`get`/`set`) being assembled in [`fill_class`] (M15). A getter and a
+/// same-named setter are combined into **one** property: the getter contributes the
+/// property's type (its return type), the setter contributes it (its parameter type),
+/// and a getter **with no setter** is `readonly` (a get-only accessor behaves like a
+/// read-only property → assigning it is `TK2540`, reusing the M14 `readonly` flag).
+///
+/// The accessibility is taken from whichever accessor is seen (a getter's wins if both
+/// are present); valid TS keeps them consistent, and the fixtures use no modifier.
+struct AccessorBuild {
+    name: String,
+    /// The getter's return type, if a `get` accessor of this name was seen and its
+    /// return annotation lowered. `None` for a set-only (deferred) or unlowerable
+    /// getter. This is the accessor property's type.
+    getter_ret: Option<TypeId>,
+    /// Whether a `set` accessor of this name was seen. Drives `readonly`: a getter with
+    /// **no** setter is a read-only property. (The setter's parameter *type* is not
+    /// retained — with the getter's type taken as the property type and set-only
+    /// deferred, only the setter's *presence* matters here.)
+    has_setter: bool,
+    /// The accessor's access modifier (getter's preferred when both present).
+    visibility: Visibility,
+}
+
+/// Record one getter/setter into the per-name accessor accumulator (M15). A getter
+/// records its **return type** (the accessor property's type); a setter records only
+/// that a setter exists (so a get-only accessor is `readonly`). A second accessor of the
+/// same name (the matching get/set) merges into the existing entry, so a `get`+`set` pair
+/// collapses to a single property. An unlowerable getter return type is recorded as
+/// `None` (a `None`-typed accessor builds no property); a differing get/set type is
+/// deferred (the getter's type is taken).
+fn record_accessor(
+    pass: &mut Pass,
+    scope: ScopeId,
+    accessors: &mut Vec<AccessorBuild>,
+    name: &str,
+    method: &MethodDefinition<'_>,
+) {
+    // A getter's return type is the accessor property's type, lowered from `scope`
+    // (where field/sibling-class type names live). A setter contributes no type here —
+    // only its presence (which makes the property writable / not `readonly`).
+    let getter_ret = match method.kind {
+        MethodDefinitionKind::Get => method
+            .value
+            .return_type
+            .as_ref()
+            .and_then(|ann| lower_annotation(pass, scope, &ann.type_annotation)),
+        _ => None,
+    };
+    let visibility = lower_visibility(method.accessibility);
+
+    // The index of this name's entry (the matching get/set), creating a fresh entry
+    // when none exists yet. Resolving an index — rather than holding a `&mut` from
+    // `find` — keeps the "create then update" path borrow-clean (no `unwrap`/`expect`).
+    let index = match accessors.iter().position(|a| a.name == name) {
+        Some(index) => index,
+        None => {
+            accessors.push(AccessorBuild {
+                name: name.to_string(),
+                getter_ret: None,
+                has_setter: false,
+                visibility,
+            });
+            accessors.len() - 1
+        }
+    };
+
+    // Update the entry in place. The index is in range (just found or just pushed); a
+    // defensive `get_mut` still avoids any panic.
+    let Some(entry) = accessors.get_mut(index) else {
+        return;
+    };
+    match method.kind {
+        MethodDefinitionKind::Get => {
+            entry.getter_ret = getter_ret;
+            // A getter's accessibility takes precedence when both are present.
+            entry.visibility = visibility;
+        }
+        MethodDefinitionKind::Set => entry.has_setter = true,
+        MethodDefinitionKind::Method | MethodDefinitionKind::Constructor => {}
+    }
+}
+
+/// Build the **accessor properties** for a class from its accumulated getters/setters
+/// (M15), stamping each with the class's [`ClassId`]. Each accessor becomes **one**
+/// property:
+///
+///  - **type** = the getter's return type (a getter must exist — see below);
+///  - **`readonly`** = a getter exists **and** there is no setter (get-only → behaves
+///    like a read-only property, reusing the M14 flag); a get+set pair is writable.
+///
+/// A **set-only** accessor (no getter) is **deferred**: it builds no property (so the
+/// name is simply absent from the instance type — its body is still walked by
+/// `check_class`). The spec's "else the setter's parameter type" type fallback is part of
+/// that deferral and not taken here. An accessor whose getter return type could not be
+/// lowered (out of subset) is skipped too. The result reuses the ordinary
+/// [`PropertyType`], so member read resolves the property type and member assignment
+/// reuses the M14 path (`TK2322`/`TK2540`) with no accessor-specific machinery.
+fn build_accessor_members(class_id: ClassId, accessors: Vec<AccessorBuild>) -> Vec<PropertyType> {
+    let mut members: Vec<PropertyType> = Vec::with_capacity(accessors.len());
+    for accessor in accessors {
+        // The property type is the getter's return type. A get-only or get+set accessor
+        // has one; a set-only accessor (no getter) is deferred → build nothing. An
+        // unlowerable getter return type also yields no property (skip rather than guess).
+        let ty = match accessor.getter_ret {
+            Some(ty) => ty,
+            None => continue,
+        };
+        // A getter exists; it is `readonly` exactly when there is no setter (get-only).
+        let readonly = !accessor.has_setter;
+        members.push(PropertyType {
+            name: accessor.name,
+            ty,
+            optional: false,
+            visibility: accessor.visibility,
+            declaring_class: Some(class_id),
+            readonly,
+            // M15: mark this as an accessor so a get-only accessor (`readonly: true`) is
+            // distinguished from a `readonly` data field — the constructor carve-out in
+            // `check_member_assignment` applies to fields only, so a get-only accessor is
+            // `TK2540` even inside its declaring constructor (matching tsc).
+            is_accessor: true,
+        });
+    }
+    members
 }
 
 /// Lower an AST `accessibility` modifier ([`TSAccessibility`]) to a [`Visibility`]
@@ -2291,6 +2469,13 @@ fn check_function_declaration(pass: &mut Pass, scope: ScopeId, func: &Function<'
 /// [`Pass::current_super_ctor`] for the same duration (same save/restore), so a
 /// `super(args)` call inside the derived constructor body is checked against it
 /// ([`infer_call`]). It is `None` for a class with no `extends`, and never leaks.
+///
+/// M15: a **getter/setter** body is a `MethodDefinition` like any method, so it is
+/// checked here through the same [`infer_function`] path — the getter body's `return`
+/// is checked against its declared return type (`TK2322`), the setter's parameter binds
+/// in its own scope, and `this` is the instance type — with no accessor-specific code.
+/// An **abstract method** (`abstract m(): T;`) has no body; `infer_function` simply walks
+/// nothing for it (its property type was already built in `fill_class`).
 fn check_class(pass: &mut Pass, scope: ScopeId, class: &Class<'_>) {
     // The class's `new`-info, looked up via its value slot. Absent only for an
     // anonymous class (out of subset) or an unrecognized declaration — then `this`
@@ -2336,8 +2521,9 @@ fn check_class(pass: &mut Pass, scope: ScopeId, class: &Class<'_>) {
         let ClassElement::MethodDefinition(method) = element else {
             // A field initializer expression is walked here so it is checked (and
             // resolves `this`). M13: a **static** field initializer is checked too,
-            // with `this` bound to the static side (the class value). Static blocks /
-            // accessors remain out of subset.
+            // with `this` bound to the static side (the class value). Static blocks and
+            // `accessor`-property declarations remain out of subset. (M15 `get`/`set`
+            // accessors are `MethodDefinition`s, so they take the arm below.)
             if let ClassElement::PropertyDefinition(prop) = element {
                 if let Some(init) = &prop.value {
                     // A static initializer's `this` is the class value; an instance
@@ -2585,17 +2771,24 @@ fn check_member_assignment(
 
     // Look up the property on the base **object** type. A non-object base (union,
     // intrinsic) has no property table here → skip (element-access / union targets are
-    // deferred). Snapshot the property's type + `readonly` + origin before any `&mut`
-    // borrow for a diagnostic.
+    // deferred). Snapshot the property's type + `readonly` + `is_accessor` + origin
+    // before any `&mut` borrow for a diagnostic.
     let found = pass
         .interner
         .store()
         .object_type(base_ty)
         .and_then(|obj| obj.property(member.property.name.as_str()))
-        .map(|prop| (prop.ty, prop.readonly, prop.declaring_class));
+        .map(|prop| {
+            (
+                prop.ty,
+                prop.readonly,
+                prop.is_accessor,
+                prop.declaring_class,
+            )
+        });
 
     // Property not on the type → deferred (no `TK2339` on an assignment target).
-    let Some((prop_ty, readonly, declaring_class)) = found else {
+    let Some((prop_ty, readonly, is_accessor, declaring_class)) = found else {
         return;
     };
 
@@ -2604,11 +2797,17 @@ fn check_member_assignment(
         return;
     }
 
-    // M14 — `readonly` gate: a `readonly` member may be assigned **only** as `this.prop`
-    // inside the **declaring class's constructor**. Anywhere else (another method, a
-    // static body, external code, or via a non-`this` base) it is `TK2540`.
+    // M14/M15 — `readonly` gate: a `readonly` member may be assigned **only** as
+    // `this.prop` inside the **declaring class's constructor**. Anywhere else (another
+    // method, a static body, external code, or via a non-`this` base) it is `TK2540`.
+    //
+    // M15: that constructor carve-out applies to a `readonly` **data field** only — a
+    // get-only **accessor** is read-only *everywhere*, including its own constructor
+    // (tsc `TS2540`). So the carve-out is additionally gated on `!is_accessor`: a
+    // get-only accessor is `TK2540` regardless of constructor context.
     if readonly {
-        let in_declaring_ctor = pass.current_in_ctor
+        let in_declaring_ctor = !is_accessor
+            && pass.current_in_ctor
             && matches!(
                 (pass.current_class, declaring_class),
                 (Some(ctx), Some(owner)) if ctx == owner
@@ -3513,6 +3712,11 @@ fn check_call_arguments(
 /// an unresolved name emits `TK2304` once) and the result is the error type (no
 /// `new`-specific diagnostic, no cascade). `new` with explicit type arguments
 /// (generic classes) is deferred — the type arguments are ignored here.
+///
+/// M15: if the directly-named class is `abstract` ([`ClassInfo::is_abstract`]), the
+/// `new` is `TK2511` (`Cannot create an instance of an abstract class`). **Only the
+/// named class's own flag matters** — a concrete subclass of an abstract class is not
+/// itself abstract, so it instantiates fine.
 fn infer_new(
     pass: &mut Pass,
     scope: ScopeId,
@@ -3550,6 +3754,17 @@ fn infer_new(
     let Some(info) = class_info else {
         return Some((wk.error, new_span));
     };
+
+    // M15: an `abstract` class cannot be instantiated → `TK2511`. **Only the directly-
+    // named class's flag matters** (`info.is_abstract`): a concrete subclass of an
+    // abstract class has its own flag `false`, so `new Concrete(...)` is fine even though
+    // its base is abstract. The argument/arity checks below still run (matching tsc,
+    // which reports both the abstract-instantiation error and any bad arguments); the
+    // expression's type is still the instance type, so downstream uses do not cascade.
+    if info.is_abstract {
+        pass.diagnostics
+            .push(Diagnostic::abstract_instantiation(new_span));
+    }
 
     // The constructor signature's parameter types (zero for an implicit constructor).
     let param_types: Vec<TypeId> = match pass.interner.store().function_type(info.ctor) {
@@ -5449,5 +5664,218 @@ const c = new C(1);
         // `this.x += 1` (8) — compound on a `readonly` target is deferred (no TK2540, no
         // TK2322); `this.y += 1` (9) likewise. The program is clean.
         assert!(diags(src).is_empty(), "got {:?}", diags(src));
+    }
+}
+
+#[cfg(test)]
+mod accessor_abstract_tests {
+    //! M15 end-to-end tests for **getters/setters** and **`abstract` classes**. These
+    //! drive the whole pipeline (parse → bind → check) and assert the *set* of
+    //! `(line, code)` diagnostics, pinning the invariants the reviewer should scrutinize:
+    //!
+    //!  - a `get`/`set` accessor is **one** property of the getter's return type, and it
+    //!    is **writable** (assigning a wrong type is `TK2322`, a right one is clean);
+    //!  - a **get-only** accessor is `readonly` → assigning it is `TK2540`, while reading
+    //!    it yields the getter's type;
+    //!  - `new` on an **`abstract`** class is `TK2511`, but a **concrete subclass** of an
+    //!    abstract class instantiates fine (only the named class's flag matters);
+    //!  - an **abstract method** (no body) is part of the instance type and is satisfied
+    //!    by a concrete subclass's implementation (its return type still checked).
+    //!
+    //! The per-fixture acceptance lives in `m15_accessors/`.
+
+    use crate::driver::check_source;
+
+    /// Run the checker and return the sorted `(1-based line, code)` of every diagnostic,
+    /// keyed on its primary-span start line.
+    fn diags(source: &str) -> Vec<(u32, String)> {
+        let out = check_source(source);
+        assert!(
+            out.parse_errors.is_empty(),
+            "unexpected parse error(s): {:?}",
+            out.parse_errors
+        );
+        let index = crate::span::LineIndex::new(source);
+        let mut v: Vec<(u32, String)> = out
+            .diagnostics
+            .iter()
+            .map(|d| (index.line_of(d.span.start), d.code.as_str().to_string()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// A `get`+`set` accessor is a single property of the **getter's return type**, and it
+    /// is **writable**: a read is the getter's type (a wrong-typed `const` is `TK2322`), a
+    /// type-correct assignment is clean, and a wrong-typed assignment is `TK2322`.
+    #[test]
+    fn get_set_accessor_is_writable_property_of_getter_type() {
+        let src = "\
+class Temperature {
+  private _c: number;
+  constructor(c: number) {
+    this._c = c;
+  }
+  get celsius(): number {
+    return this._c;
+  }
+  set celsius(v: number) {
+    this._c = v;
+  }
+}
+const t = new Temperature(20);
+const c: number = t.celsius;
+const bad: string = t.celsius;
+t.celsius = 25;
+t.celsius = \"hot\";
+";
+        // Read OK (14); wrong-typed read (15) TK2322; assign OK (16); wrong assign (17)
+        // TK2322. The accessor bodies are clean (getter returns `number`, setter binds `v`).
+        assert_eq!(
+            diags(src),
+            vec![(15, "TK2322".to_string()), (17, "TK2322".to_string())]
+        );
+    }
+
+    /// A **get-only** accessor (no setter) behaves like a `readonly` property: it reads as
+    /// the getter's type, but assigning it is `TK2540`.
+    #[test]
+    fn get_only_accessor_is_readonly() {
+        let src = "\
+class Temperature {
+  private _c: number;
+  constructor(c: number) {
+    this._c = c;
+  }
+  get fahrenheit(): number {
+    return this._c;
+  }
+}
+const t = new Temperature(20);
+const f: number = t.fahrenheit;
+t.fahrenheit = 100;
+";
+        // Read OK (11); assigning the get-only accessor (12) is TK2540.
+        assert_eq!(diags(src), vec![(12, "TK2540".to_string())]);
+    }
+
+    /// A get-only **accessor** is read-only **everywhere, including its declaring class's
+    /// constructor** (`TK2540`) — the M14 constructor carve-out is for `readonly` *fields*
+    /// only. The sibling `readonly` data field written in the same constructor stays clean,
+    /// pinning that the field behaviour is unchanged (no M14 regression).
+    #[test]
+    fn get_only_accessor_in_constructor_is_tk2540_field_stays_clean() {
+        let src = "\
+class C {
+  private _n: number;
+  readonly id: number;
+  constructor(n: number) {
+    this._n = n;
+    this.id = n;
+    this.value = n;
+  }
+  get value(): number {
+    return this._n;
+  }
+}
+";
+        // `this._n = n` (5) ok; `this.id = n` (6) ok — a `readonly` FIELD is assignable in
+        // its declaring constructor (M14 carve-out, unchanged); `this.value = n` (7) is
+        // TK2540 — a get-only ACCESSOR is read-only even inside the constructor.
+        assert_eq!(diags(src), vec![(7, "TK2540".to_string())]);
+    }
+
+    /// `new` on an `abstract` class is `TK2511`; a **concrete subclass** of it instantiates
+    /// fine, and the abstract method it implements is part of the instance type (read OK,
+    /// wrong-typed read `TK2322`).
+    #[test]
+    fn abstract_new_errors_concrete_subclass_ok() {
+        let src = "\
+abstract class Shape {
+  abstract area(): number;
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+}
+const s = new Shape(\"x\");
+class Circle extends Shape {
+  radius: number;
+  constructor(r: number) {
+    super(\"circle\");
+    this.radius = r;
+  }
+  area(): number {
+    return this.radius;
+  }
+}
+const c = new Circle(5);
+const a: number = c.area();
+const n: string = c.name;
+const w: string = c.area();
+";
+        // `new Shape(...)` (8) TK2511; `new Circle(5)` (19) ok; `c.area()`/`c.name` ok;
+        // wrong-typed `const w: string = c.area()` (22) TK2322.
+        assert_eq!(
+            diags(src),
+            vec![(8, "TK2511".to_string()), (22, "TK2322".to_string())]
+        );
+    }
+
+    /// Only the **directly-named** class's `abstract` flag gates `new`: a concrete class
+    /// extending an abstract base is instantiable, and a *further* abstract subclass of a
+    /// concrete class is itself not instantiable. Confirms the flag is per-declaration, not
+    /// inherited.
+    #[test]
+    fn abstractness_is_per_named_class_not_inherited() {
+        let src = "\
+abstract class A {
+  constructor() {}
+}
+class B extends A {
+  constructor() {
+    super();
+  }
+}
+abstract class C extends B {
+  constructor() {
+    super();
+  }
+}
+const a = new A();
+const b = new B();
+const c = new C();
+";
+        // `new A()` (14) TK2511 (abstract); `new B()` (15) ok (concrete subclass of an
+        // abstract base); `new C()` (16) TK2511 (C is itself abstract though its base B is
+        // concrete).
+        assert_eq!(
+            diags(src),
+            vec![(14, "TK2511".to_string()), (16, "TK2511".to_string())]
+        );
+    }
+
+    /// A getter body is checked like a method: a `return` whose type is not assignable to
+    /// the getter's declared return type is `TK2322` (primary span = the returned
+    /// expression). A type-correct setter body is clean.
+    #[test]
+    fn accessor_bodies_are_checked() {
+        let src = "\
+class C {
+  private _n: number;
+  constructor(n: number) {
+    this._n = n;
+  }
+  get bad(): string {
+    return this._n;
+  }
+  set ok(v: number) {
+    this._n = v;
+  }
+}
+";
+        // The getter `bad` returns `number` but is declared `: string` → TK2322 on the
+        // returned expression (line 7). The setter body is clean.
+        assert_eq!(diags(src), vec![(7, "TK2322".to_string())]);
     }
 }

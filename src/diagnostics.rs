@@ -33,6 +33,8 @@ pub enum DiagnosticCode {
     /// Property is protected (accessed outside the class and its subclasses) —
     /// M13.
     TK2445,
+    /// Cannot create an instance of an abstract class — M15.
+    TK2511,
     /// Cannot assign to a read-only property — M14.
     TK2540,
     /// Wrong number of call arguments (arity).
@@ -52,6 +54,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2345 => "TK2345",
             DiagnosticCode::TK2353 => "TK2353",
             DiagnosticCode::TK2445 => "TK2445",
+            DiagnosticCode::TK2511 => "TK2511",
             DiagnosticCode::TK2540 => "TK2540",
             DiagnosticCode::TK2554 => "TK2554",
             DiagnosticCode::TK2741 => "TK2741",
@@ -147,6 +150,21 @@ impl Diagnostic {
             message: format!(
                 "Property '{name}' is protected and only accessible within class and its subclasses."
             ),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2511` "cannot create an instance of an abstract class" error
+    /// (M15): a `new C(...)` whose directly-named class `C` is declared `abstract`.
+    /// The primary span is the `new` expression. Only the named class's own
+    /// abstractness matters — a concrete subclass of an abstract class instantiates
+    /// fine.
+    pub fn abstract_instantiation(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2511,
+            severity: Severity::Error,
+            message: "Cannot create an instance of an abstract class".to_string(),
             span,
             elaboration: Vec::new(),
         }

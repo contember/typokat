@@ -355,12 +355,15 @@ fn object_props_eq(a: &[PropertyType], b: &[PropertyType]) -> bool {
             // M14: `readonly` is part of the identity too (so a `readonly x` and a
             // mutable `x` do not dedup), matching the hash — even though the relation
             // engine ignores `readonly` for assignability.
+            // M15: `is_accessor` likewise (so a get-only accessor and a same-shape
+            // `readonly` field do not dedup), matching the hash; also relation-ignored.
             x.name == y.name
                 && x.optional == y.optional
                 && x.ty == y.ty
                 && x.visibility == y.visibility
                 && x.declaring_class == y.declaring_class
                 && x.readonly == y.readonly
+                && x.is_accessor == y.is_accessor
         })
 }
 

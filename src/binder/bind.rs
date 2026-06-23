@@ -323,16 +323,23 @@ fn bind_class_declaration(state: &mut BindState, scope: ScopeId, class: &Class<'
 /// to nothing; its arguments are walked for nested functions). So inheritance is
 /// handled entirely in the checker.
 ///
-/// DEFERRED (still out of scope): `static`/getter/setter/accessor members, parameter
-/// properties, and `implements`. Those element kinds are skipped here (no binding);
-/// their sub-expressions in the subset are still safe.
+/// M15: `get`/`set` accessors are `MethodDefinition`s, so they already get a function
+/// scope here (the loop binds **every** `MethodDefinition`) — a setter's parameter and
+/// an accessor body resolve exactly like a method's, with no binder change. An
+/// `abstract method(): T;` is also a `MethodDefinition` (with no body); `bind_function`
+/// handles the absent body. `abstract` on the class itself declares no name and is
+/// recorded by the checker, so it needs nothing here either.
+///
+/// DEFERRED (still out of scope): parameter properties and `implements`. Those element
+/// kinds are skipped here (no binding); their sub-expressions in the subset are still
+/// safe.
 fn bind_class(state: &mut BindState, parent: ScopeId, class: &Class<'_>) {
     for element in &class.body.body {
         match element {
-            // A method or constructor: bind its `Function` value (own scope +
-            // parameters + body). Getters/setters are also `MethodDefinition`s but
-            // are out of subset; binding their function scope is harmless (the
-            // checker simply does not treat them as instance members).
+            // A method/constructor/accessor: bind its `Function` value (own scope +
+            // parameters + body). A `get`/`set` accessor (M15) is bound the same way, so
+            // its body and a setter's parameter resolve; an `abstract` method has no body
+            // (handled by `bind_function`).
             ClassElement::MethodDefinition(method) => {
                 bind_function(state, parent, &method.value);
             }

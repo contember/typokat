@@ -5,6 +5,8 @@ class Temperature {
   private _c: number;
   constructor(c: number) {
     this._c = c;
+    this.fahrenheit = c; // error[TK2540]: Cannot assign to 'fahrenheit' because it is a read-only property
+    // ^ a get-only accessor is read-only even inside the constructor (unlike a readonly field)
   }
   get celsius(): number {
     return this._c;

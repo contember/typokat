@@ -202,6 +202,11 @@ pub enum Visibility {
 /// assignment *targets*: assigning to a `readonly` member is `TK2540` (except in
 /// the declaring class's constructor). An object-literal / interface member is
 /// non-readonly.
+///
+/// M15 adds the [`is_accessor`](PropertyType::is_accessor) flag, treated identically
+/// at the type-store level (folded into the identity, ignored by the relation), to
+/// distinguish a get-only accessor (read-only **everywhere**) from a `readonly` data
+/// field (read-only except in its declaring constructor).
 #[derive(Clone, Debug)]
 pub struct PropertyType {
     pub name: String,
@@ -224,6 +229,20 @@ pub struct PropertyType {
     /// `TK2540` unless it is `this.prop` inside the declaring class's constructor.
     /// `false` for object-literal / interface / unannotated members and methods.
     pub readonly: bool,
+    /// Whether this member is a **get/set accessor** rather than a data field (M15).
+    /// A **get-only** accessor is modelled as `readonly: true` so member-assignment
+    /// reuses the M14 `readonly` machinery — but, unlike a `readonly` *field*, an
+    /// accessor is read-only **everywhere, including its declaring class's
+    /// constructor** (tsc `TS2540`). This flag distinguishes the two so the
+    /// constructor carve-out (`this.prop` assignable in the declaring constructor)
+    /// applies to `readonly` fields **only**, never to a get-only accessor.
+    ///
+    /// Like [`readonly`](PropertyType::readonly) it is part of the property's
+    /// structural identity (hashed + compared by the interner) so it survives
+    /// interning, and the **relation engine ignores it** for assignability (an
+    /// accessor property and a same-typed data field relate freely, both ways).
+    /// `false` for every data field and for object-literal / interface members.
+    pub is_accessor: bool,
 }
 
 impl PropertyType {
@@ -239,6 +258,7 @@ impl PropertyType {
             visibility: Visibility::Public,
             declaring_class: None,
             readonly: false,
+            is_accessor: false,
         }
     }
 }

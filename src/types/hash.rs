@@ -97,6 +97,12 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
                 // engine ignores it — but keeping it in the identity is what lets the
                 // assignment-target check read it back off the interned type.
                 prop.readonly.hash(&mut h);
+                // M15: `is_accessor` is folded in identically (preserved through
+                // interning, ignored by the relation), so a get-only accessor is
+                // distinct from a same-shape `readonly` field and the assignment-target
+                // check can tell them apart (accessor = read-only everywhere; readonly
+                // field = assignable in its declaring constructor).
+                prop.is_accessor.hash(&mut h);
             }
         }
         StructuralKey::Function { params, ret } => {

@@ -676,6 +676,7 @@ mod tests {
             visibility,
             declaring_class,
             readonly: false,
+            is_accessor: false,
         }
     }
 
@@ -859,6 +860,7 @@ mod tests {
                 visibility: Visibility::Public,
                 declaring_class: None,
                 readonly: true,
+                is_accessor: false,
             }],
         });
         let mutable_obj = interner.intern_object(ObjectType {
@@ -882,6 +884,66 @@ mod tests {
         assert!(
             rel.is_assignable(mutable_obj, readonly_obj).is_yes(),
             "{{ x }} must be assignable to {{ readonly x }}"
+        );
+    }
+
+    /// M15 — `is_accessor` mirrors `readonly`: it is part of a member's structural
+    /// identity (so a get-only-accessor property and a same-typed `readonly` data field
+    /// are distinct interned ids) but is **ignored** by the relation engine — an accessor
+    /// property and a plain field relate freely, both ways. This pins that the assignment
+    /// distinction (accessor read-only everywhere vs. field assignable in its ctor) lives
+    /// purely in the checker, never leaking into assignability.
+    #[test]
+    fn is_accessor_does_not_affect_assignability() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // A get-only accessor models as `readonly: true, is_accessor: true`.
+        let accessor_obj = interner.intern_object(ObjectType {
+            properties: vec![PropertyType {
+                name: "x".to_string(),
+                ty: wk.number,
+                optional: false,
+                visibility: Visibility::Public,
+                declaring_class: None,
+                readonly: true,
+                is_accessor: true,
+            }],
+        });
+        // A `readonly` data field: same shape but `is_accessor: false`.
+        let readonly_field_obj = interner.intern_object(ObjectType {
+            properties: vec![PropertyType {
+                name: "x".to_string(),
+                ty: wk.number,
+                optional: false,
+                visibility: Visibility::Public,
+                declaring_class: None,
+                readonly: true,
+                is_accessor: false,
+            }],
+        });
+        let mutable_obj = interner.intern_object(ObjectType {
+            properties: vec![prop("x", wk.number)],
+        });
+
+        // `is_accessor` is part of identity, so the accessor object differs from the
+        // same-shape `readonly` field object (and from a plain field object).
+        assert_ne!(
+            accessor_obj, readonly_field_obj,
+            "`is_accessor` is part of structural identity ⇒ distinct interned ids"
+        );
+
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+
+        // ...yet the accessor relates freely with a plain field, both directions.
+        assert!(
+            rel.is_assignable(accessor_obj, mutable_obj).is_yes(),
+            "accessor `{{ x }}` must be assignable to field `{{ x }}`"
+        );
+        assert!(
+            rel.is_assignable(mutable_obj, accessor_obj).is_yes(),
+            "field `{{ x }}` must be assignable to accessor `{{ x }}`"
         );
     }
 
