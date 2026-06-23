@@ -78,9 +78,10 @@ slots into a known later phase without rework:
 - **generics**: explicit type arguments + instantiation (**M9**) and type-argument **inference**
   (**M10**) are implemented; **constraints** (`extends`, M11) follow. Type parameters use a named
   representation for now; de Bruijn indices (§3.1) are the pre-VM (Phase 3) target.
-- **classes**: fields + constructor + methods + `this` + `new` + structural instance types land
-  in **M11**; inheritance (`extends`), access modifiers (`private`/`protected`/`readonly`),
-  `static`, getters/setters, abstract, and generic classes remain deferred.
+- **classes**: fields + constructor + methods + `this` + `new` + structural instances (**M11**)
+  and inheritance (`extends`, `super`) (**M12**) are implemented; access modifiers
+  (`private`/`protected`/`readonly`), `static`, getters/setters, abstract, method-override
+  compatibility (`TK2416`), and generic classes remain deferred.
 - **modules/imports** and **`lib.d.ts` globals** (`Array`, `console`, string methods, …) are out
   of scope for now — fixtures avoid the standard library entirely.
 
@@ -104,3 +105,4 @@ default): `null`/`undefined` are distinct types, not assignable to others.
 | `m9_generics/` | M9 — generic functions / interfaces / aliases, explicit type args, instantiation |
 | `m10_inference/` | M10 — type-argument inference from call arguments |
 | `m11_classes/` | M11 — class fields / constructor / methods / `this` / `new`, structural instances |
+| `m12_inheritance/` | M12 — class inheritance (`extends`, `super`), inherited members + constructor |
