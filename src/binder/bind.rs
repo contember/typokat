@@ -28,18 +28,29 @@
 //!    span start, so the checker can descend into the body with the parameters in
 //!    scope and resolve `return x`.
 //!
+//! M11 scope, on top of M5's type declarations:
+//!
+//!  - **Class declarations.** A `class C { … }` declares `C` in **both** the type
+//!    space (its instance type — up front in [`bind_type_declarations`], so a field
+//!    can reference the class's own type or a sibling) and the value space (its
+//!    constructor — in [`bind_class_declaration`]). Each method/constructor is a
+//!    [`Function`], so it gets its own [`ScopeKind::Function`] scope with parameters
+//!    bound, exactly like a free function; field initializers are walked for nested
+//!    functions. Inheritance, `static`/accessor members, and parameter properties
+//!    are out of the M11 subset (see [`bind_class`]).
+//!
 //! The walk recurses through expression positions and statement bodies so that
 //! nested functions (an arrow inside a `const`, a function expression in a call
 //! argument, …) each get a scope. Destructuring patterns, namespace declarations,
-//! classes, and control-flow statements are out of the M5 subset and contribute
-//! no bindings (their sub-expressions are still walked for nested functions where
-//! the AST shape is in the subset).
+//! and control-flow statements outside the subset contribute no bindings (their
+//! sub-expressions are still walked for nested functions where the AST shape is in
+//! the subset).
 
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{DeclId, Symbol, SymbolId, SymbolTable};
 use oxc_ast::ast::{
-    ArrowFunctionExpression, BindingPattern, BlockStatement, Expression, Function, FunctionBody,
-    Program, Statement, SwitchStatement, VariableDeclarator,
+    ArrowFunctionExpression, BindingPattern, BlockStatement, Class, ClassElement, Expression,
+    Function, FunctionBody, Program, Statement, SwitchStatement, VariableDeclarator,
 };
 use rustc_hash::FxHashMap;
 
@@ -159,6 +170,17 @@ fn bind_type_declarations(state: &mut BindState, scope: ScopeId, statements: &[S
                 let decl_id = state.fresh_type_decl();
                 declare_type(state, scope, iface.id.name.as_str(), decl_id);
             }
+            // M11: a `class` declares a **type-space** name (its instance type), so a
+            // self/sibling field reference (`next: Node | null`) resolves. The
+            // *value*-space name (the constructor) is declared in `bind_statement`
+            // alongside the rest of the value bindings. A class with no name is out
+            // of subset (an anonymous class expression statement); skip it.
+            Statement::ClassDeclaration(class) => {
+                if let Some(id) = &class.id {
+                    let decl_id = state.fresh_type_decl();
+                    declare_type(state, scope, id.name.as_str(), decl_id);
+                }
+            }
             _ => {}
         }
     }
@@ -182,6 +204,12 @@ fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
         }
         Statement::FunctionDeclaration(func) => {
             bind_function_declaration(state, scope, func);
+        }
+        // M11: a `class` declares its name in the value space (the constructor) and
+        // binds its body (each method/constructor gets its own function scope with
+        // its parameters, and property initializers are walked for nested functions).
+        Statement::ClassDeclaration(class) => {
+            bind_class_declaration(state, scope, class);
         }
         Statement::ExpressionStatement(expr_stmt) => {
             bind_expression(state, scope, &expr_stmt.expression);
@@ -269,6 +297,52 @@ fn bind_function_declaration(state: &mut BindState, scope: ScopeId, func: &Funct
     bind_function(state, scope, func);
 }
 
+/// Bind a class declaration (M11): declare its name in the **value** space (the
+/// constructor side — its type side is declared up front in
+/// [`bind_type_declarations`]), then bind the class body. A class with no name is
+/// out of the M11 subset (an anonymous class) — its body is still bound so any
+/// nested function is given a scope.
+fn bind_class_declaration(state: &mut BindState, scope: ScopeId, class: &Class<'_>) {
+    if let Some(id) = &class.id {
+        let decl_id = state.fresh_decl();
+        declare_value(state, scope, id.name.as_str(), decl_id);
+    }
+    bind_class(state, scope, class);
+}
+
+/// Bind a class's body (M11): each method/constructor is a [`Function`] value, so
+/// it gets its own [`ScopeKind::Function`] scope with its parameters bound (via
+/// [`bind_function`]) — the checker descends into the method body with the
+/// parameters resolvable, exactly like a free function. Each property
+/// initializer expression is walked for nested functions.
+///
+/// DEFERRED (M11 out of scope): `extends`/heritage, `static`/getter/setter/accessor
+/// members, parameter properties, and `implements`. Those element kinds are
+/// skipped here (no binding); their sub-expressions in the subset are still safe.
+fn bind_class(state: &mut BindState, parent: ScopeId, class: &Class<'_>) {
+    for element in &class.body.body {
+        match element {
+            // A method or constructor: bind its `Function` value (own scope +
+            // parameters + body). Getters/setters are also `MethodDefinition`s but
+            // are out of subset; binding their function scope is harmless (the
+            // checker simply does not treat them as instance members).
+            ClassElement::MethodDefinition(method) => {
+                bind_function(state, parent, &method.value);
+            }
+            // A field: walk its initializer for nested functions (the field's type
+            // itself is an annotation, which holds no value bindings).
+            ClassElement::PropertyDefinition(prop) => {
+                if let Some(init) = &prop.value {
+                    bind_expression(state, parent, init);
+                }
+            }
+            // Static blocks, accessor properties, and index signatures are out of
+            // the M11 subset — no value bindings.
+            _ => {}
+        }
+    }
+}
+
 /// Bind a function/arrow's own scope: create a [`ScopeKind::Function`] scope
 /// under `parent`, declare each parameter as a value symbol in it, record the
 /// scope under the function node's span start, and recurse into the body.
@@ -326,6 +400,21 @@ fn bind_expression(state: &mut BindState, scope: ScopeId, expr: &Expression<'_>)
     match expr {
         Expression::FunctionExpression(func) => bind_function(state, scope, func),
         Expression::ArrowFunctionExpression(arrow) => bind_arrow(state, scope, arrow),
+        // M11: a class expression (`const C = class { … }`) binds its body so a
+        // method gets a function scope. Class *expressions* are out of the M11
+        // fixture subset (their instance type is not named), but binding keeps the
+        // walk uniform and never panics.
+        Expression::ClassExpression(class) => bind_class(state, scope, class),
+        // M11: `new C(args)` — bind the callee and each argument for nested
+        // functions, mirroring the call-expression arm.
+        Expression::NewExpression(new_expr) => {
+            bind_expression(state, scope, &new_expr.callee);
+            for arg in &new_expr.arguments {
+                if let Some(arg_expr) = arg.as_expression() {
+                    bind_expression(state, scope, arg_expr);
+                }
+            }
+        }
         Expression::CallExpression(call) => {
             bind_expression(state, scope, &call.callee);
             for arg in &call.arguments {
