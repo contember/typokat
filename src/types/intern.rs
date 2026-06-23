@@ -168,6 +168,38 @@ impl Interner {
         id
     }
 
+    /// Reserve a **nominal** object type id with an empty body, returning the new
+    /// id WITHOUT hash-consing it (M5 interfaces).
+    ///
+    /// This is the first half of the two-phase reserve-then-fill that makes
+    /// recursive/mutually-recursive interfaces lowerable (mvp-plan M5, §3, §6.3):
+    /// the id exists *before* the body is resolved, so a member annotation can
+    /// reference the interface itself (`interface List { tail: List | null }`) or a
+    /// sibling. The body is supplied later via [`Interner::fill_object`].
+    ///
+    /// Unlike [`Interner::intern_object`], a reserved interface is **not** added to
+    /// the dedup index: an `interface` is nominal — two interface declarations with
+    /// the same members are distinct types and each gets its own id — and, equally
+    /// important, structurally hashing a self-referential object would not
+    /// terminate (the hash would chase the cycle). Nominal ids therefore never go
+    /// through `structural_hash`. (Aliases that resolve to a non-recursive
+    /// structural type are still interned normally, so they keep sharing ids.)
+    pub fn reserve_object(&mut self) -> TypeId {
+        self.store
+            .push_object(ObjectType::default(), TypeFlags::EMPTY)
+    }
+
+    /// Fill the body of a previously [reserved](Interner::reserve_object) object
+    /// type in place (M5 interfaces, phase 2). The property list is sorted into
+    /// canonical (name-sorted) order — matching `intern_object` — so the renderer
+    /// and the relation engine see members in the same order they would for a
+    /// structural object. The id is **not** added to the dedup index (it stays
+    /// nominal); a no-op if `id` is not an object row.
+    pub fn fill_object(&mut self, id: TypeId, mut object: ObjectType) {
+        object.properties.sort_by(|a, b| a.name.cmp(&b.name));
+        self.store.set_object(id, object);
+    }
+
     /// Intern a function type, returning the shared id.
     ///
     /// Unlike object types, parameters are **positional** and are *not* sorted:

@@ -168,6 +168,22 @@ impl Store {
         self.push(TypeTag::Object, flags, payload)
     }
 
+    /// Replace the body of an existing `Object` row in place (M5 nominal-interface
+    /// reserve-then-fill — `Interner::fill_object`). The `tag`/`flags`/`payload`
+    /// columns are untouched, so the type's `TypeId` and identity are preserved;
+    /// only the cold side-table entry the payload points at is overwritten. A no-op
+    /// if `id` is not an `Object` row (defensive — never expected, the interner
+    /// only calls this on ids it reserved as objects).
+    pub(crate) fn set_object(&mut self, id: TypeId, object: ObjectType) {
+        if self.tag(id) != TypeTag::Object {
+            return;
+        }
+        let payload = self.payload(id) as usize;
+        if let Some(slot) = self.objects.get_mut(payload) {
+            *slot = object;
+        }
+    }
+
     /// Append a function row (function into the side-table, index into payload).
     /// Internal — `Interner` owns dedup. Parameters are stored positionally (the
     /// caller does not sort them).

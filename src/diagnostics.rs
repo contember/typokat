@@ -174,7 +174,24 @@ impl Diagnostic {
 /// **source** side of an assignability message is shown — assignability *logic*
 /// uses the literal type, but the *message* widens it (mvp-plan M0 spec). The
 /// target side renders with `widen = false`.
+///
+/// Rendering is **cycle-safe** (M5): a recursive named type (`interface List {
+/// tail: List | null }`) would otherwise expand forever. An object type already
+/// being rendered higher in the stack is printed as `...` instead of re-expanded.
+/// Object/named-type targets are asserted code-only in the corpus, so the exact
+/// placeholder text is unconstrained — it only has to terminate.
 pub fn render_type(store: &Store, id: TypeId, widen: bool) -> String {
+    let mut rendering: Vec<TypeId> = Vec::new();
+    render_type_inner(store, id, widen, &mut rendering)
+}
+
+/// Cycle-safe core of [`render_type`]. `rendering` holds the object ids currently
+/// being expanded on the call stack; re-entering one emits `...` to break the
+/// cycle. Only object types can be self-referential (interfaces are the only
+/// nominal types), so the guard is keyed on object ids — but it is threaded
+/// through every recursive arm so a cycle reached *via* a union/function member is
+/// also broken.
+fn render_type_inner(store: &Store, id: TypeId, widen: bool, rendering: &mut Vec<TypeId>) -> String {
     match store.tag(id) {
         TypeTag::Intrinsic => store
             .intrinsic_kind(id)
@@ -194,19 +211,29 @@ pub fn render_type(store: &Store, id: TypeId, widen: bool) -> String {
         // order, `; `-separated (README "Type display format"). Property *types*
         // never widen (they are already the object type's members); only a
         // top-level *literal source* widens, which never recurses into here.
-        TypeTag::Object => match store.object_type(id) {
-            Some(obj) if obj.properties.is_empty() => "{}".to_string(),
-            Some(obj) => {
-                let members: Vec<String> = obj
-                    .properties
-                    .iter()
-                    .map(|p| format!("{}: {}", p.name, render_type(store, p.ty, false)))
-                    .collect();
-                format!("{{ {} }}", members.join("; "))
+        TypeTag::Object => {
+            // Break a cycle: a recursive object already being rendered is `...`.
+            if rendering.contains(&id) {
+                return "...".to_string();
             }
-            // Defensive fallback; an object always has a side-table entry.
-            None => "<unsupported>".to_string(),
-        },
+            match store.object_type(id) {
+                Some(obj) if obj.properties.is_empty() => "{}".to_string(),
+                Some(obj) => {
+                    rendering.push(id);
+                    let members: Vec<String> = obj
+                        .properties
+                        .iter()
+                        .map(|p| {
+                            format!("{}: {}", p.name, render_type_inner(store, p.ty, false, rendering))
+                        })
+                        .collect();
+                    rendering.pop();
+                    format!("{{ {} }}", members.join("; "))
+                }
+                // Defensive fallback; an object always has a side-table entry.
+                None => "<unsupported>".to_string(),
+            }
+        }
         // Function: `(x: number) => string` — parameters as `name: type`,
         // `, `-separated, always parenthesized, then ` => ` and the return type
         // (README "Type display format"). Parameter and return types never widen
@@ -216,9 +243,11 @@ pub fn render_type(store: &Store, id: TypeId, widen: bool) -> String {
                 let params: Vec<String> = func
                     .params
                     .iter()
-                    .map(|p| format!("{}: {}", p.name, render_type(store, p.ty, false)))
+                    .map(|p| {
+                        format!("{}: {}", p.name, render_type_inner(store, p.ty, false, rendering))
+                    })
                     .collect();
-                let ret = render_type(store, func.ret, false);
+                let ret = render_type_inner(store, func.ret, false, rendering);
                 format!("({}) => {}", params.join(", "), ret)
             }
             // Defensive fallback; a function always has a side-table entry.
@@ -233,7 +262,7 @@ pub fn render_type(store: &Store, id: TypeId, widen: bool) -> String {
             Some(members) => {
                 let parts: Vec<String> = members
                     .iter()
-                    .map(|&m| render_type(store, m, false))
+                    .map(|&m| render_type_inner(store, m, false, rendering))
                     .collect();
                 parts.join(" | ")
             }

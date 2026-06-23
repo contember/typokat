@@ -5,6 +5,18 @@
 //! declaration; the checker later keys its `DeclId → TypeId` table on it
 //! (architecture §4.1: the declared/inferred type lives with the declaration).
 //!
+//! M5 scope, on top of M3's value bindings:
+//!
+//!  - **Type declarations.** A `type X = …` and a single-declaration
+//!    `interface X { … }` declare `X` in the **type space** (`Symbol.ty`), using a
+//!    separate `DeclId` numbering space (`type_decl_count`) so a name can occupy
+//!    both the value and type slots without their `DeclId`s colliding. The checker
+//!    keys a `type DeclId → TypeId` table on it. Type-declaration names are bound
+//!    **before** any body is walked (declared up front in [`bind_module`]), so a
+//!    body can reference itself or a sibling — the two-phase reserve-then-fill the
+//!    recursive-type fixture relies on lives in the checker, but the *names* must
+//!    already resolve, which is what the up-front type-space declarations give it.
+//!
 //! M3 scope, on top of M1's top-level variable bindings:
 //!
 //!  - **Function declarations.** A `function foo(...) {...}` declares `foo` in the
@@ -18,10 +30,10 @@
 //!
 //! The walk recurses through expression positions and statement bodies so that
 //! nested functions (an arrow inside a `const`, a function expression in a call
-//! argument, …) each get a scope. Destructuring patterns, type/namespace
-//! declarations, classes, and control-flow statements are out of the M3 subset
-//! and contribute no bindings (their sub-expressions are still walked for nested
-//! functions where the AST shape is in the subset).
+//! argument, …) each get a scope. Destructuring patterns, namespace declarations,
+//! classes, and control-flow statements are out of the M5 subset and contribute
+//! no bindings (their sub-expressions are still walked for nested functions where
+//! the AST shape is in the subset).
 
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{DeclId, Symbol, SymbolId, SymbolTable};
@@ -42,6 +54,13 @@ pub struct Binder {
     /// `0..decl_count`). Includes variable bindings, function declaration names,
     /// and function parameters.
     pub decl_count: u32,
+    /// Number of **type** declarations assigned a `DeclId` (type-space `DeclId`s
+    /// run `0..type_decl_count`). This is a **separate numbering space** from the
+    /// value `DeclId`s above: the type slot's `DeclId` keys the checker's
+    /// `type DeclId → TypeId` table, while the value slot's keeps keying the value
+    /// `DeclId → TypeId` table. Keeping them separate lets one name occupy both
+    /// slots (`namespace`/`interface`/`class` merging, §4.1) without collision.
+    pub type_decl_count: u32,
     /// Maps a function/arrow node's span start to the [`ScopeKind::Function`]
     /// scope holding its parameters. The checker uses this to descend into the
     /// body with parameters resolvable. Span starts are unique per node within a
@@ -56,13 +75,22 @@ struct BindState {
     fn_scopes: FxHashMap<u32, ScopeId>,
     /// Running `DeclId` counter for value declarations.
     next_decl: u32,
+    /// Running `DeclId` counter for **type** declarations (separate space).
+    next_type_decl: u32,
 }
 
 impl BindState {
-    /// Allocate the next `DeclId`.
+    /// Allocate the next value-space `DeclId`.
     fn fresh_decl(&mut self) -> DeclId {
         let id = DeclId(self.next_decl);
         self.next_decl += 1;
+        id
+    }
+
+    /// Allocate the next type-space `DeclId` (separate numbering space).
+    fn fresh_type_decl(&mut self) -> DeclId {
+        let id = DeclId(self.next_type_decl);
+        self.next_type_decl += 1;
         id
     }
 }
@@ -83,7 +111,15 @@ pub fn bind_module(program: &Program<'_>) -> Binder {
         symbols,
         fn_scopes: FxHashMap::default(),
         next_decl: 0,
+        next_type_decl: 0,
     };
+
+    // Declare every top-level **type** name (type aliases + interfaces) up front,
+    // before walking value declarations and bodies. Forward and mutual references
+    // (`interface Ping { pong: Pong }` / `interface Pong { ping: Ping }`) then
+    // resolve regardless of textual order — the precondition for the checker's
+    // two-phase reserve-then-fill of recursive types (mvp-plan M5, §6.3).
+    bind_type_declarations(&mut state, module, &program.body);
 
     bind_statements(&mut state, module, &program.body);
 
@@ -92,7 +128,29 @@ pub fn bind_module(program: &Program<'_>) -> Binder {
         symbols: state.symbols,
         module,
         decl_count: state.next_decl,
+        type_decl_count: state.next_type_decl,
         fn_scopes: state.fn_scopes,
+    }
+}
+
+/// Declare every top-level `type`/`interface` name into the **type space** of
+/// `scope`, each with a fresh type-space `DeclId`. Run before any body walk so a
+/// type body can reference itself or a (later-declared) sibling. Bodies are not
+/// inspected here — only the names are introduced (the checker reserves the
+/// `TypeId` and fills the body in its own two-phase pass).
+fn bind_type_declarations(state: &mut BindState, scope: ScopeId, statements: &[Statement<'_>]) {
+    for stmt in statements {
+        match stmt {
+            Statement::TSTypeAliasDeclaration(alias) => {
+                let decl_id = state.fresh_type_decl();
+                declare_type(state, scope, alias.id.name.as_str(), decl_id);
+            }
+            Statement::TSInterfaceDeclaration(iface) => {
+                let decl_id = state.fresh_type_decl();
+                declare_type(state, scope, iface.id.name.as_str(), decl_id);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -251,6 +309,24 @@ fn declare_value(state: &mut BindState, scope: ScopeId, name: &str, decl_id: Dec
     }
     let mut symbol = Symbol::new(name);
     symbol.value = Some(decl_id);
+    let symbol_id: SymbolId = state.symbols.push(symbol);
+    state.graph.declare(scope, name, symbol_id);
+}
+
+/// Declare a **type-space** binding `name` in `scope`, merging into an existing
+/// symbol if the name is already present so the type slot lives under the same id
+/// as any value slot (architecture §4.1). Declaration merging across two type
+/// declarations (`interface`+`interface`, `TK2451`) is deferred (mvp-plan M5
+/// scope); the later binding wins, and M5 fixtures use unique type names.
+fn declare_type(state: &mut BindState, scope: ScopeId, name: &str, decl_id: DeclId) {
+    if let Some(existing) = state.graph.get(scope).and_then(|s| s.lookup_local(name)) {
+        if let Some(symbol) = state.symbols.get_mut(existing) {
+            symbol.ty = Some(decl_id);
+        }
+        return;
+    }
+    let mut symbol = Symbol::new(name);
+    symbol.ty = Some(decl_id);
     let symbol_id: SymbolId = state.symbols.push(symbol);
     state.graph.declare(scope, name, symbol_id);
 }

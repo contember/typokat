@@ -47,8 +47,10 @@ pub struct Symbol {
     /// Value-space declaration (`const`/`let`/`var`/`function`/`class` value
     /// side). The only slot M1 fills.
     pub value: Option<DeclId>,
-    /// Type-space declaration (`interface`/`type`/`class` type side).
-    /// TODO(M2/M5): filled by the type-declaration binder.
+    /// Type-space declaration (`interface`/`type`/`class` type side). Filled by
+    /// the type-declaration binder (M5). The `DeclId` here is from the **type**
+    /// numbering space (`Binder::type_decl_count`), distinct from the value slot's,
+    /// and keys the checker's `type DeclId → TypeId` table.
     pub ty: Option<DeclId>,
     /// Namespace-space declaration (`namespace`/module).
     /// TODO(post-MVP): filled by the namespace binder.

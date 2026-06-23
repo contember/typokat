@@ -176,11 +176,33 @@ impl<'a> Relater<'a> {
     /// Is `src` assignable to `tgt`? Entry point used by the checker for
     /// annotation-vs-initializer checks (`TK2322`).
     pub fn is_assignable(&mut self, src: TypeId, tgt: TypeId) -> Relation {
-        self.relate(src, tgt, RelationKind::Assignable)
+        // The outermost frame has no enclosing assumptions; `assumed` collects any
+        // assume-true dependencies its subtree consumes (see `relate`). Whatever
+        // survives here would be an assumption about a key with no enclosing
+        // frame — impossible by construction, so it is simply dropped.
+        let mut assumed = FxHashSet::default();
+        self.relate(src, tgt, RelationKind::Assignable, &mut assumed)
     }
 
     /// Core relation driver: cache + cycle stack around the structural rules.
-    fn relate(&mut self, src: TypeId, tgt: TypeId, kind: RelationKind) -> Relation {
+    ///
+    /// `assumed` is the **provisional-assumption channel** (architecture §6.3): it
+    /// accumulates the in-flight keys this computation depended on via the
+    /// assume-true short-circuit. A `Yes` that rests on an assumption about an
+    /// **ancestor** key (one still on the stack above this frame) is *provisional* —
+    /// sound only under that assumption — and must NOT be committed to the durable
+    /// cache, or a later INDEPENDENT query would read a spurious `true` and drop a
+    /// real error. Each frame discharges the assumption about its **own** key (the
+    /// fixpoint resolves at the cycle root, so a verdict that depended only on
+    /// re-entry to its own key is genuine) and propagates any remaining ancestor
+    /// assumptions to its caller.
+    fn relate(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
         // Identity fast path: `T` relates to `T` under every relation.
         if src == tgt {
             return Relation::Yes;
@@ -188,38 +210,77 @@ impl<'a> Relater<'a> {
 
         let key = RelationKey::new(src, tgt, kind);
 
-        // Cache: a previously-decided durable relation. A cached success is
-        // returned directly; a cached *failure* recomputes the reason chain on
-        // the (rare) repeated-failure path so the checker still sees the precise
-        // missing-vs-mismatch cause — the cache stores only the bool verdict
-        // (architecture §6.1), not the reason.
-        if let Some(verdict) = self.cache.get(key) {
-            if verdict {
-                return Relation::Yes;
-            }
-            return self.relate_uncached(src, tgt, kind);
-        }
-
-        // Cycle stack: re-entry on an in-flight relation is assumed true
-        // (architecture §6.3). Resolved at the end of the outermost call.
+        // Cycle stack FIRST (architecture §6.3): re-entry on an in-flight relation
+        // is assumed true and continues, resolving the fixpoint as the stack
+        // unwinds. Checking the stack *before* the cache is what makes recursive
+        // types terminate even on the rebuild path below: a relation cached as a
+        // failure is recomputed (to rebuild its reason chain) **under** a stack
+        // push, so a self-referential failure re-enters the same key, finds it in
+        // flight, and terminates rather than recomputing forever (M5 — §6.3). The
+        // assumed key is recorded so the caller's verdict is treated as provisional
+        // until that key is discharged at its own root.
         if self.stack.contains(&key) {
+            assumed.insert(key);
             return Relation::Yes;
         }
+
+        // Cache: a previously-decided durable relation. Only **sound** verdicts are
+        // ever stored (a genuine `false`, or a `true` that rested on no outstanding
+        // assumption — see the commit below), so a cached hit is ground truth. A
+        // cached success returns directly; a cached *failure* falls through to a
+        // stack-guarded recompute so the checker still sees the precise
+        // missing-vs-mismatch reason (the cache stores only the bool verdict —
+        // architecture §6.1 — not the reason).
+        let cached = self.cache.get(key);
+        if cached == Some(true) {
+            return Relation::Yes;
+        }
+
         self.stack.insert(key);
-
-        let result = self.relate_uncached(src, tgt, kind);
-
+        // This frame's own assumption accumulator. Children record the ancestor
+        // keys (including, possibly, this frame's own key) they assumed true.
+        let mut frame_assumed: FxHashSet<RelationKey> = FxHashSet::default();
+        let result = self.relate_uncached(src, tgt, kind, &mut frame_assumed);
         self.stack.remove(&key);
-        // Cache the boolean verdict only; the reason chain is rebuilt cheaply on
-        // the rare repeated-failure path (see the cache-hit branch above).
-        self.cache.insert(key, result.is_yes());
+
+        // Discharge the assumption about our OWN key: the fixpoint is resolved at
+        // this root, so a dependency that was only on re-entry to `key` is genuine.
+        frame_assumed.remove(&key);
+        // Anything left is an assumption about a key still in flight ABOVE us — this
+        // verdict is provisional. Surface those to the caller so its cacheability
+        // accounts for them too.
+        let provisional = !frame_assumed.is_empty();
+        assumed.extend(frame_assumed.iter().copied());
+
+        // Commit only sound verdicts on first decision:
+        //   * a `false` is ALWAYS genuine — the assume-true rule only ever
+        //     manufactures a spurious `true`, never a spurious `false`, so a `No`
+        //     never depends on an assumption and is always cacheable;
+        //   * a `true` is cacheable only when it rested on no outstanding ancestor
+        //     assumption (otherwise it is provisional and would poison the cache).
+        // A recompute of an already-cached failure must not re-insert.
+        if cached.is_none() {
+            if !result.is_yes() {
+                self.cache.insert(key, false);
+            } else if !provisional {
+                self.cache.insert(key, true);
+            }
+        }
         result
     }
 
     /// The structural rules, run when the cache and cycle stack don't decide it.
     /// M0 scope: the intrinsic lattice and literal → base widening. M2 adds the
-    /// object property-wise rule (width + depth).
-    fn relate_uncached(&mut self, src: TypeId, tgt: TypeId, kind: RelationKind) -> Relation {
+    /// object property-wise rule (width + depth). `assumed` is threaded through
+    /// every recursive `relate` so provisional (assume-true) dependencies bubble up
+    /// to the cache-commit site in [`Relater::relate`].
+    fn relate_uncached(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
         let wk = self.well_known;
 
         // `any` relates to everything in both directions (architecture §6,
@@ -242,10 +303,10 @@ impl<'a> Relater<'a> {
         // never spuriously match an intrinsic. The `src`-union case is tried first
         // so a union-to-union relation decomposes member-by-member on the source.
         if self.store.tag(src) == TypeTag::Union {
-            return self.relate_union_source(src, tgt, kind);
+            return self.relate_union_source(src, tgt, kind, assumed);
         }
         if self.store.tag(tgt) == TypeTag::Union {
-            return self.relate_union_target(src, tgt, kind);
+            return self.relate_union_target(src, tgt, kind, assumed);
         }
 
         // `unknown` is the top type: everything is assignable TO it.
@@ -283,13 +344,13 @@ impl<'a> Relater<'a> {
         // (extra `src` props are fine); depth recurses. This is the only rule
         // that can fail with a *structured* (non-leaf) reason.
         if self.store.tag(src) == TypeTag::Object && self.store.tag(tgt) == TypeTag::Object {
-            return self.relate_objects(src, tgt, kind);
+            return self.relate_objects(src, tgt, kind, assumed);
         }
 
         // Function structural rule (mvp-plan §6.5, M3): parameters are
         // contravariant, the return is covariant, with matching arity.
         if self.store.tag(src) == TypeTag::Function && self.store.tag(tgt) == TypeTag::Function {
-            return self.relate_functions(src, tgt, kind);
+            return self.relate_functions(src, tgt, kind, assumed);
         }
 
         // Otherwise: not assignable. Build the leaf reason on this failing path.
@@ -302,7 +363,13 @@ impl<'a> Relater<'a> {
     /// the nested reason when the property is present but its type does not
     /// relate. First-failure ordering keeps the verdict deterministic and matches
     /// how the M2 corpus pairs one cause per failing assignment.
-    fn relate_objects(&mut self, src: TypeId, tgt: TypeId, kind: RelationKind) -> Relation {
+    fn relate_objects(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
         // Both ids are object-tagged here; the side-tables always resolve. The
         // `else` arms are defensive (an object tag without a payload is a store
         // invariant violation, never expected) and produce a leaf rather than
@@ -319,7 +386,9 @@ impl<'a> Relater<'a> {
                 // Width + depth: present in source — its type must relate to the
                 // target property's type (recurse, so nested mismatches nest).
                 Some(src_prop) => {
-                    if let Relation::No(child) = self.relate(src_prop.ty, tgt_prop.ty, kind) {
+                    if let Relation::No(child) =
+                        self.relate(src_prop.ty, tgt_prop.ty, kind, assumed)
+                    {
                         return Relation::No(ReasonChain::of(Reason::Property {
                             name: tgt_prop.name.clone(),
                             src,
@@ -364,7 +433,13 @@ impl<'a> Relater<'a> {
     /// under `strictFunctionTypes` for function-typed values. The first failing
     /// obligation (arity, then parameters left-to-right, then return) is returned
     /// as a precise, nestable reason for M6.
-    fn relate_functions(&mut self, src: TypeId, tgt: TypeId, kind: RelationKind) -> Relation {
+    fn relate_functions(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
         // Both ids are function-tagged here; the side-tables always resolve. The
         // `else` arms are defensive (a function tag without a payload is a store
         // invariant violation, never expected) and produce a leaf rather than
@@ -403,7 +478,7 @@ impl<'a> Relater<'a> {
         // Parameters: CONTRAVARIANT — the target parameter must be assignable to
         // the source parameter (`tgt_param → src_param`).
         for (index, (src_param, tgt_param)) in param_pairs.into_iter().enumerate() {
-            if let Relation::No(child) = self.relate(tgt_param, src_param, kind) {
+            if let Relation::No(child) = self.relate(tgt_param, src_param, kind, assumed) {
                 return Relation::No(ReasonChain::of(Reason::Parameter {
                     index,
                     src,
@@ -421,7 +496,7 @@ impl<'a> Relater<'a> {
         // `() => void`). This is the standard TS rule for void-returning
         // function-typed values.
         if tgt_ret != self.well_known.void {
-            if let Relation::No(child) = self.relate(src_ret, tgt_ret, kind) {
+            if let Relation::No(child) = self.relate(src_ret, tgt_ret, kind, assumed) {
                 return Relation::No(ReasonChain::of(Reason::ReturnType {
                     src,
                     tgt,
@@ -437,7 +512,13 @@ impl<'a> Relater<'a> {
     /// `tgt` iff **every** member is. The first failing member (in canonical
     /// order) is wrapped as a `UnionSourceMember` reason carrying the member's own
     /// nested cause, so M6 can render "…because `<member>` is not assignable…".
-    fn relate_union_source(&mut self, src: TypeId, tgt: TypeId, kind: RelationKind) -> Relation {
+    fn relate_union_source(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
         // Snapshot the member ids so the immutable borrow of the store does not
         // overlap the recursive `self.relate` calls below (which also borrow it).
         // An ill-formed union tag without a side-table entry is a store invariant
@@ -447,8 +528,10 @@ impl<'a> Relater<'a> {
         };
         let members: Vec<TypeId> = members.to_vec();
 
+        // "Every member relates" (AND): each member's assumptions genuinely
+        // contribute to the union's Yes, so they all flow up through `assumed`.
         for member in members {
-            if let Relation::No(child) = self.relate(member, tgt, kind) {
+            if let Relation::No(child) = self.relate(member, tgt, kind, assumed) {
                 return Relation::No(ReasonChain::of(Reason::UnionSourceMember {
                     member,
                     src,
@@ -464,15 +547,29 @@ impl<'a> Relater<'a> {
     /// `tgt` iff it is assignable to **some** member. On failure no single member
     /// is "the cause", so a flat `NoUnionMember` reason over the whole union is
     /// returned (the per-member sub-failures are intentionally not retained).
-    fn relate_union_target(&mut self, src: TypeId, tgt: TypeId, kind: RelationKind) -> Relation {
+    fn relate_union_target(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
         // Snapshot the member ids (see `relate_union_source` for the borrow note).
         let Some(members) = self.store.union_members(tgt) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
         let members: Vec<TypeId> = members.to_vec();
 
+        // "Some member relates" (OR): only the **accepted** member's assumptions
+        // contribute to the union's Yes. A rejected member may have recorded
+        // assume-true dependencies in its subtree that are irrelevant to the
+        // verdict (we did not use that member), so each attempt gets its own local
+        // accumulator and only the winning one is merged up. On overall failure no
+        // assumptions are merged (a `No` is genuine — it never rests on one).
         for member in members {
-            if self.relate(src, member, kind).is_yes() {
+            let mut member_assumed: FxHashSet<RelationKey> = FxHashSet::default();
+            if self.relate(src, member, kind, &mut member_assumed).is_yes() {
+                assumed.extend(member_assumed);
                 return Relation::Yes;
             }
         }
@@ -832,5 +929,194 @@ mod tests {
         let second = rel.is_assignable(lit_num, wk.string).is_yes();
         assert_eq!(first, second);
         assert!(!first);
+    }
+
+    /// M5 — relating recursive types **terminates** via the assume-true cycle
+    /// stack (§6.3). This guards the cycle fixpoint: a stack overflow here is the
+    /// failure mode the recursive-type fixture must never hit. It covers the three
+    /// paths that each loop forever without the fix:
+    ///
+    ///  1. a recursive interface relating to **itself**,
+    ///  2. a recursive interface relating to a **structural copy** of itself,
+    ///  3. a **failing** recursive relation queried **twice** — the second query
+    ///     hits the cached-false rebuild path, which must recompute under stack
+    ///     protection rather than recurse on the cached failure forever.
+    #[test]
+    fn recursive_relation_terminates() {
+        use crate::types::repr::ObjectType;
+
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // `interface List { head: number; tail: List | null }` — a nominal,
+        // self-referential object built reserve-then-fill (its `tail` references
+        // its own id, never an inlined expansion).
+        let list = interner.reserve_object();
+        let list_or_null = interner.union(vec![list, wk.null]);
+        interner.fill_object(
+            list,
+            ObjectType {
+                properties: vec![prop("head", wk.number), prop("tail", list_or_null)],
+            },
+        );
+
+        // A *structural* copy with the same shape but its own id (built the same
+        // way so it too is self-referential).
+        let copy = interner.reserve_object();
+        let copy_or_null = interner.union(vec![copy, wk.null]);
+        interner.fill_object(
+            copy,
+            ObjectType {
+                properties: vec![prop("head", wk.number), prop("tail", copy_or_null)],
+            },
+        );
+
+        // Two mutually-shaped recursive interfaces that DISAGREE at a leaf:
+        // `A { self: A; tag: number }` vs `B { self: B; tag: string }`. Relating
+        // `A <: B` re-enters `(A, B)` via `self` (assumed true) but fails on `tag`.
+        let a = interner.reserve_object();
+        let b = interner.reserve_object();
+        interner.fill_object(
+            a,
+            ObjectType {
+                properties: vec![prop("self", a), prop("tag", wk.number)],
+            },
+        );
+        interner.fill_object(
+            b,
+            ObjectType {
+                properties: vec![prop("self", b), prop("tag", wk.string)],
+            },
+        );
+
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+
+        // 1. Recursive interface relates to itself (identity short-circuit, but the
+        //    union member `List | null` still gets relate'd through the cycle for
+        //    `List <: List | null`).
+        assert!(rel.is_assignable(list, list).is_yes(), "List <: List");
+        assert!(
+            rel.is_assignable(list_or_null, list_or_null).is_yes(),
+            "List | null <: List | null"
+        );
+
+        // 2. Recursive interface relates to a structural copy — must terminate and
+        //    succeed (each side's `tail` re-enters the in-flight `(List, copy)`).
+        assert!(
+            rel.is_assignable(list, copy).is_yes(),
+            "List <: structural copy must terminate as success"
+        );
+        assert!(
+            rel.is_assignable(copy, list).is_yes(),
+            "structural copy <: List must terminate as success"
+        );
+
+        // 3. The failing recursive relation, queried TWICE. The first decides
+        //    false (and caches the bool); the second recomputes the reason on the
+        //    cached-false path — which must run under stack protection and
+        //    terminate, not loop. The leaf cause is the `tag` mismatch.
+        let first = rel.is_assignable(a, b);
+        assert!(!first.is_yes(), "A is not assignable to B (tag mismatch)");
+        let second = rel.is_assignable(a, b);
+        assert!(
+            !second.is_yes(),
+            "repeat query of a failing recursive relation must terminate with the same verdict"
+        );
+        // The rebuilt reason still points at the offending `tag` property.
+        match second {
+            Relation::No(chain) => match chain.head() {
+                Reason::Property { name, .. } => assert_eq!(name, "tag"),
+                other => panic!("expected the `tag` Property failure, got {other:?}"),
+            },
+            Relation::Yes => unreachable!(),
+        }
+    }
+
+    /// M5 soundness — a recursive **false** verdict must be **order-independent**:
+    /// it must not depend on whether an enclosing assume-true query ran first
+    /// (architecture §6.3). This is the cache-poisoning hazard: relating `CA <: AA`
+    /// decides the nested `CB <: AB` *provisionally* true under the in-flight
+    /// `(CA, AA)` assumption; if that provisional `true` were committed to the
+    /// durable cache, a later INDEPENDENT `CB <: AB` query would read it as ground
+    /// truth and drop a real error. The fix never caches a verdict that rested on an
+    /// assumption about an ancestor key, so the standalone verdict is identical
+    /// either way.
+    #[test]
+    fn recursive_false_verdict_is_order_independent() {
+        use crate::types::repr::ObjectType;
+
+        // Build the four mutually-recursive interfaces once; reused for both orders.
+        // AA { peer: AB; tag: number }   AB { back: AA; leaf: number }
+        // CA { peer: CB; tag: string }   CB { back: CA; leaf: number }  (tag differs)
+        fn build(interner: &mut Interner) -> (TypeId, TypeId, TypeId, TypeId) {
+            let wk = interner.well_known();
+            let (aa, ab, ca, cb) = (
+                interner.reserve_object(),
+                interner.reserve_object(),
+                interner.reserve_object(),
+                interner.reserve_object(),
+            );
+            interner.fill_object(
+                aa,
+                ObjectType {
+                    properties: vec![prop("peer", ab), prop("tag", wk.number)],
+                },
+            );
+            interner.fill_object(
+                ab,
+                ObjectType {
+                    properties: vec![prop("back", aa), prop("leaf", wk.number)],
+                },
+            );
+            interner.fill_object(
+                ca,
+                ObjectType {
+                    properties: vec![prop("peer", cb), prop("tag", wk.string)],
+                },
+            );
+            interner.fill_object(
+                cb,
+                ObjectType {
+                    properties: vec![prop("back", ca), prop("leaf", wk.number)],
+                },
+            );
+            (aa, ab, ca, cb)
+        }
+
+        // Order A: query `CA <: AA` FIRST (which provisionally relates `CB <: AB`
+        // under the `(CA, AA)` assumption), THEN the standalone `CB <: AB`.
+        let order_a_cb_ab = {
+            let mut interner = Interner::with_intrinsics();
+            let wk = interner.well_known();
+            let (aa, ab, ca, cb) = build(&mut interner);
+            let store = interner.store();
+            let mut rel = Relater::new(store, wk);
+            // The enclosing query: genuinely false (top-level `tag` mismatch).
+            assert!(!rel.is_assignable(ca, aa).is_yes(), "CA <: AA is false (tag)");
+            // The standalone nested query MUST still be false.
+            rel.is_assignable(cb, ab).is_yes()
+        };
+
+        // Order B: the standalone `CB <: AB` query alone, no enclosing query.
+        let order_b_cb_ab = {
+            let mut interner = Interner::with_intrinsics();
+            let wk = interner.well_known();
+            let (_aa, ab, _ca, cb) = build(&mut interner);
+            let store = interner.store();
+            let mut rel = Relater::new(store, wk);
+            rel.is_assignable(cb, ab).is_yes()
+        };
+
+        // The verdict is the same either way, and it is FALSE: `CB <: AB` requires
+        // `CB.back (CA) <: AB.back (AA)`, which fails on the `tag` leaf.
+        assert_eq!(
+            order_a_cb_ab, order_b_cb_ab,
+            "a recursive false verdict must not depend on an enclosing assume-true query"
+        );
+        assert!(
+            !order_b_cb_ab,
+            "CB is not assignable to AB (the recursive `tag` mismatch must be reported)"
+        );
     }
 }

@@ -1,4 +1,25 @@
-//! The statement-level checker (architecture §5, mvp-plan §5 — M0–M4 rows).
+//! The statement-level checker (architecture §5, mvp-plan §5 — M0–M5 rows).
+//!
+//! M5 scope, on top of M0–M4:
+//!
+//!  - **`type` aliases** (`TSTypeAliasDeclaration`) are **transparent**: a
+//!    reference to `type Num = number` resolves to `number`; `type Pair = { … }`
+//!    resolves to the (structurally interned) object type. The alias name lives in
+//!    the binder's type slot; the checker maps its type `DeclId` to the resolved
+//!    target `TypeId`.
+//!  - **`interface` declarations** (`TSInterfaceDeclaration`, single declaration —
+//!    no merging) are **nominal** named object types: each gets its own object id
+//!    (never structurally hash-consed), so member access and the structural
+//!    relation reuse the M2 object rules.
+//!  - **Type references** in annotations (`TSTypeReference` — `Point`, `Num`,
+//!    `List`) resolve through the binder's type slot to the referenced `TypeId`.
+//!  - **Recursive & mutually-recursive types** are made lowerable by a **two-phase
+//!    reserve-then-fill** of the type environment ([`build_type_env`]): every type
+//!    declaration's `TypeId` is reserved *before* any body is resolved, so a body
+//!    can reference itself (`interface List { tail: List | null }`) or a sibling
+//!    (`Ping`/`Pong`). A named reference is stored as the referenced **id** — never
+//!    expanded inline — so lowering terminates, and the relation engine's
+//!    assume-true cycle stack (§6.3) makes relating recursive types terminate too.
 //!
 //! M4 scope, on top of M0–M3:
 //!
@@ -69,7 +90,7 @@ use oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, AssignmentOperator, AssignmentTarget,
     BindingPattern, CallExpression, Expression, FormalParameters, Function, FunctionBody,
     ObjectExpression, ObjectPropertyKind, Program, Statement, StaticMemberExpression, TSSignature,
-    TSType, VariableDeclarationKind, VariableDeclarator,
+    TSType, TSTypeName, VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_span::GetSpan;
 
@@ -120,29 +141,77 @@ impl DeclTypes {
     }
 }
 
+/// How a top-level type declaration lowers (M5), indexed by its type-space
+/// `DeclId`. Collected up front so every declaration's `TypeId` is reserved before
+/// any body is resolved — the reserve-then-fill that makes recursive/mutual
+/// references lowerable (mvp-plan M5, §6.3). The `'ast` borrows the AST bodies.
+enum TypeDecl<'ast> {
+    /// An `interface` — a **nominal** named object type. `reserved` is its id
+    /// (allocated empty via `Interner::reserve_object`, filled once the members are
+    /// lowered); `members` is the interface body, lowered in the fill step.
+    Interface {
+        reserved: TypeId,
+        members: &'ast [TSSignature<'ast>],
+    },
+    /// A `type` alias — **transparent**. `annotation` is the aliased type, lowered
+    /// on demand to the target id; `resolving` guards a recursive alias (out of the
+    /// M5 subset — broken by yielding the error type rather than looping).
+    Alias {
+        annotation: &'ast TSType<'ast>,
+        resolving: bool,
+    },
+}
+
 /// The phase-1 working set threaded through the walk: everything the inference
-/// pass writes to. Bundled into one struct so the many recursive `infer_*`
-/// helpers take a single `&mut` rather than a long, churn-prone argument list.
-struct Pass<'a> {
+/// pass writes to. Bundled into one struct so the many recursive `infer_*`/
+/// `lower_*` helpers take a single `&mut` rather than a long, churn-prone argument
+/// list.
+struct Pass<'a, 'ast> {
     interner: &'a mut Interner,
     binder: &'a Binder,
+    /// Named-type declarations (M5), indexed by type-space `DeclId`. Reserve-then-
+    /// fill populates this in phase 0; a `TSTypeReference` resolves through the
+    /// binder's type slot to a `DeclId`, then to a `TypeId` via `type_resolved`.
+    type_decls: Vec<TypeDecl<'ast>>,
+    /// Resolved named types (M5), indexed by type-space `DeclId`. An interface's
+    /// entry is its reserved id; an alias's is filled on first resolution. `None`
+    /// means unresolved (out of subset / recursive alias → error type). A
+    /// `TSTypeReference` reads a stored id here — **never** an inlined copy of the
+    /// referenced structure, which is what keeps lowering terminating.
+    type_resolved: Vec<Option<TypeId>>,
     decl_types: DeclTypes,
     obligations: Vec<AssignObligation>,
     diagnostics: Vec<Diagnostic>,
 }
 
 /// Check a parsed program and return the diagnostics it produces.
-pub fn check_program(interner: &mut Interner, program: &Program<'_>) -> Vec<Diagnostic> {
+pub fn check_program<'ast>(
+    interner: &mut Interner,
+    program: &'ast Program<'ast>,
+) -> Vec<Diagnostic> {
     let binder = bind_module(program);
     let decl_types = DeclTypes::new(binder.decl_count);
+
+    // Reserve a nominal id for every interface and record every type-declaration
+    // body, indexed by its type-space `DeclId`, BEFORE any body is lowered (the
+    // reserve half of reserve-then-fill — mvp-plan M5, §6.3). Aliases are resolved
+    // lazily; interface ids are available immediately.
+    let (type_decls, type_resolved) = reserve_type_decls(interner, &binder, program);
 
     let mut pass = Pass {
         interner,
         binder: &binder,
+        type_decls,
+        type_resolved,
         decl_types,
         obligations: Vec::new(),
         diagnostics: Vec::new(),
     };
+
+    // --- Phase 0 (fill): resolve every alias and fill every interface body. From
+    // here on `type_resolved` is complete, so a `TSTypeReference` in the walk is a
+    // plain id lookup. ---
+    fill_type_decls(&mut pass, binder.module);
 
     // --- Phase 1: bind-resolved walk over the module body. ---
     check_statements(&mut pass, binder.module, &program.body);
@@ -167,6 +236,196 @@ pub fn check_program(interner: &mut Interner, program: &Program<'_>) -> Vec<Diag
     }
 
     diagnostics
+}
+
+// ===========================================================================
+// M5: named types — reserve-then-fill (mvp-plan M5, §3, §6.3).
+// ===========================================================================
+
+/// Phase 0a — **reserve**. Walk the top-level type declarations and, indexed by
+/// the binder's type-space `DeclId`, record each one's lowering plan. Every
+/// `interface` gets a fresh nominal object id reserved up front (empty body); each
+/// `type` alias records its annotation for lazy resolution.
+///
+/// Reserving the interface ids *before* any body is resolved is what lets a body
+/// reference itself or a sibling: `interface List { tail: List | null }` and the
+/// mutual `Ping`/`Pong` lower because `List`/`Pong` already have ids by the time
+/// their members are lowered. Returns the per-`DeclId` decl table and a parallel
+/// `resolved` table (interfaces pre-seeded with their reserved id; aliases `None`).
+fn reserve_type_decls<'ast>(
+    interner: &mut Interner,
+    binder: &Binder,
+    program: &'ast Program<'ast>,
+) -> (Vec<TypeDecl<'ast>>, Vec<Option<TypeId>>) {
+    let count = binder.type_decl_count as usize;
+    // Placeholders so the tables are indexable by every type `DeclId`; a
+    // declaration the binder counted but we don't recognise stays an unresolved
+    // alias of a never-resolving annotation (defensive — not expected).
+    let mut decls: Vec<TypeDecl<'ast>> = Vec::with_capacity(count);
+    let mut resolved: Vec<Option<TypeId>> = vec![None; count];
+
+    // Build by walking declarations in source order; the binder assigned type
+    // `DeclId`s in that same order (`bind_type_declarations`), so pushing in order
+    // keeps the decl table index-aligned with the `DeclId`s.
+    for stmt in &program.body {
+        match stmt {
+            Statement::TSInterfaceDeclaration(iface) => {
+                let reserved = interner.reserve_object();
+                if let Some(decl_id) = type_decl_id(binder, binder.module, iface.id.name.as_str()) {
+                    if let Some(slot) = resolved.get_mut(decl_id.index()) {
+                        *slot = Some(reserved);
+                    }
+                }
+                decls.push(TypeDecl::Interface {
+                    reserved,
+                    members: &iface.body.body,
+                });
+            }
+            Statement::TSTypeAliasDeclaration(alias) => {
+                decls.push(TypeDecl::Alias {
+                    annotation: &alias.type_annotation,
+                    resolving: false,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    (decls, resolved)
+}
+
+/// Phase 0b — **fill**. Force every alias to resolve and fill every interface body
+/// in place. After this returns, `pass.type_resolved` is complete, so every
+/// `TSTypeReference` encountered in the obligation walk is a plain id lookup.
+fn fill_type_decls(pass: &mut Pass, scope: ScopeId) {
+    let count = pass.type_decls.len();
+
+    // Resolve aliases first so an interface body referencing an alias sees a
+    // resolved id (interface ids are already reserved). Resolution is on-demand
+    // and idempotent, so touching every alias resolves the whole alias DAG.
+    for index in 0..count {
+        if matches!(pass.type_decls[index], TypeDecl::Alias { .. }) {
+            resolve_type_decl(pass, scope, DeclId(index as u32));
+        }
+    }
+
+    // Fill each interface's reserved id with its lowered members. Members are
+    // lowered with the full resolver available; a self/sibling reference resolves
+    // to a reserved/resolved id (stored, never inlined).
+    for index in 0..count {
+        let TypeDecl::Interface { reserved, members } = pass.type_decls[index] else {
+            continue;
+        };
+        let object = lower_interface_members(pass, scope, members);
+        pass.interner.fill_object(reserved, object);
+    }
+}
+
+/// Resolve a single type declaration to its `TypeId`, memoizing the result in
+/// `pass.type_resolved`. Interfaces are already seeded (their reserved id);
+/// aliases are lowered on first request. A recursive alias (an alias whose body,
+/// directly or transitively, references itself) is detected by the `resolving`
+/// flag and broken by yielding the error type — recursive *aliases* are out of the
+/// M5 subset (recursion comes via interfaces), so this never loops.
+fn resolve_type_decl(pass: &mut Pass, scope: ScopeId, decl_id: DeclId) -> TypeId {
+    let error_ty = pass.interner.well_known().error;
+
+    // Already resolved (interface reserved id, or a previously-resolved alias).
+    if let Some(existing) = pass.type_resolved.get(decl_id.index()).copied().flatten() {
+        return existing;
+    }
+
+    let index = decl_id.index();
+    let annotation = match pass.type_decls.get(index) {
+        Some(TypeDecl::Alias { annotation, resolving: false }) => *annotation,
+        // A reference re-entered while this alias is mid-resolution: a recursive
+        // alias (out of subset). Break the cycle with the error type.
+        Some(TypeDecl::Alias { resolving: true, .. }) => return error_ty,
+        // An interface with no seeded id, or an out-of-range id: defensive.
+        _ => return error_ty,
+    };
+
+    // Mark in-progress so a transitive self-reference is caught above.
+    if let Some(TypeDecl::Alias { resolving, .. }) = pass.type_decls.get_mut(index) {
+        *resolving = true;
+    }
+
+    let target = lower_annotation(pass, scope, annotation).unwrap_or(error_ty);
+
+    if let Some(TypeDecl::Alias { resolving, .. }) = pass.type_decls.get_mut(index) {
+        *resolving = false;
+    }
+    if let Some(slot) = pass.type_resolved.get_mut(index) {
+        *slot = Some(target);
+    }
+    target
+}
+
+/// Resolve a `TSTypeReference`'s name through the binder's type slot to a
+/// `TypeId`. A name that resolves to a type declaration yields its (reserved or
+/// lazily-resolved) id; an unresolved type name is out of the M5 subset and yields
+/// `None` (the caller aborts the enclosing lowering, matching object/union/
+/// function lowering). Qualified names (`A.B`) and type arguments (`List<T>`) are
+/// out of the M5 subset → `None`.
+fn resolve_type_reference(
+    pass: &mut Pass,
+    scope: ScopeId,
+    type_name: &TSTypeName<'_>,
+    has_type_arguments: bool,
+) -> Option<TypeId> {
+    if has_type_arguments {
+        return None;
+    }
+    let TSTypeName::IdentifierReference(ident) = type_name else {
+        return None;
+    };
+    let decl_id = type_decl_id(pass.binder, scope, ident.name.as_str())?;
+    Some(resolve_type_decl(pass, scope, decl_id))
+}
+
+/// The type-space `DeclId` a name resolves to from `scope` (binder type slot), if
+/// any. Walks the scope graph like value resolution, then reads the `ty` slot.
+fn type_decl_id(binder: &Binder, scope: ScopeId, name: &str) -> Option<DeclId> {
+    let symbol_id = binder.graph.resolve(scope, name)?;
+    binder.symbols.get(symbol_id).and_then(|s| s.ty)
+}
+
+/// Lower an interface body's members to a nominal `ObjectType` (M5). Mirrors
+/// [`lower_object_annotation`] but returns the `ObjectType` (the caller fills the
+/// reserved nominal id rather than interning a fresh structural object). A member
+/// that is not a plain required property signature, or whose type cannot be
+/// lowered, is skipped — the interface keeps the members it can express (a partial
+/// interface is more useful than none, and the unsupported members are out of the
+/// M5 subset).
+fn lower_interface_members(
+    pass: &mut Pass,
+    scope: ScopeId,
+    members: &[TSSignature<'_>],
+) -> ObjectType {
+    let mut properties: Vec<PropertyType> = Vec::with_capacity(members.len());
+    for member in members {
+        let TSSignature::TSPropertySignature(sig) = member else {
+            continue;
+        };
+        if sig.optional {
+            continue;
+        }
+        let Some(name) = sig.key.static_name() else {
+            continue;
+        };
+        let Some(annotation) = sig.type_annotation.as_ref() else {
+            continue;
+        };
+        let Some(ty) = lower_annotation(pass, scope, &annotation.type_annotation) else {
+            continue;
+        };
+        properties.push(PropertyType {
+            name: name.into_owned(),
+            ty,
+            optional: false,
+        });
+    }
+    ObjectType { properties }
 }
 
 /// Map a relation failure to a diagnostic according to the obligation's kind.
@@ -279,10 +538,10 @@ fn check_declarator(
         .as_ref()
         .and_then(|init| infer_expr(pass, scope, init));
 
-    let annotation = declarator
-        .type_annotation
-        .as_ref()
-        .and_then(|ann| lower_annotation(pass.interner, &ann.type_annotation));
+    let annotation = match declarator.type_annotation.as_ref() {
+        Some(ann) => lower_annotation(pass, scope, &ann.type_annotation),
+        None => None,
+    };
 
     // The declared type the symbol resolves to: annotation wins; otherwise the
     // (possibly widened) initializer type.
@@ -437,12 +696,17 @@ fn binding_decl_id(binder: &Binder, scope: ScopeId, pattern: &BindingPattern<'_>
     binder.symbols.get(symbol_id).and_then(|s| s.value)
 }
 
-/// Lower an annotation type to its `TypeId`. M3 supports intrinsic keywords,
-/// object type literals, and function types (`(x: number) => string`); union /
-/// reference annotations land in later milestones and leave the annotation side
-/// absent.
-fn lower_annotation(interner: &mut Interner, ts_type: &TSType<'_>) -> Option<TypeId> {
-    let wk = interner.well_known();
+/// Lower an annotation type to its `TypeId`. Supports intrinsic keywords, object
+/// type literals, function types (`(x: number) => string`), unions, and (M5) type
+/// **references** (`Point`, `Num`, `List`) resolved through the binder's type slot.
+///
+/// Reference resolution returns a **stored id** for the referenced declaration
+/// (the interface's reserved nominal id, or the alias's resolved target) — never
+/// an inlined copy of the referenced structure. That is what makes lowering a
+/// recursive type terminate: `tail: List | null` stores the union of `List`'s id
+/// and `null`, not an expansion of `List` (mvp-plan M5, §3, §6.3).
+fn lower_annotation(pass: &mut Pass, scope: ScopeId, ts_type: &TSType<'_>) -> Option<TypeId> {
+    let wk = pass.interner.well_known();
     let id = match ts_type {
         TSType::TSAnyKeyword(_) => wk.any,
         TSType::TSUnknownKeyword(_) => wk.unknown,
@@ -453,19 +717,29 @@ fn lower_annotation(interner: &mut Interner, ts_type: &TSType<'_>) -> Option<Typ
         TSType::TSBooleanKeyword(_) => wk.boolean,
         TSType::TSNumberKeyword(_) => wk.number,
         TSType::TSStringKeyword(_) => wk.string,
-        TSType::TSTypeLiteral(lit) => return lower_object_annotation(interner, &lit.members),
+        TSType::TSTypeLiteral(lit) => return lower_object_annotation(pass, scope, &lit.members),
         TSType::TSFunctionType(func) => {
             return lower_function_annotation(
-                interner,
+                pass,
+                scope,
                 &func.params,
                 &func.return_type.type_annotation,
             );
         }
-        TSType::TSUnionType(union) => return lower_union_annotation(interner, &union.types),
+        TSType::TSUnionType(union) => return lower_union_annotation(pass, scope, &union.types),
         TSType::TSParenthesizedType(paren) => {
-            return lower_annotation(interner, &paren.type_annotation);
+            return lower_annotation(pass, scope, &paren.type_annotation);
         }
-        // TODO(M5+): reference annotations (type aliases / interfaces).
+        // M5: a type reference (`Point`, `Num`, `List`) resolves through the
+        // binder's type slot. Type arguments / qualified names are out of subset.
+        TSType::TSTypeReference(reference) => {
+            return resolve_type_reference(
+                pass,
+                scope,
+                &reference.type_name,
+                reference.type_arguments.is_some(),
+            );
+        }
         _ => return None,
     };
     Some(id)
@@ -477,18 +751,27 @@ fn lower_annotation(interner: &mut Interner, ts_type: &TSType<'_>) -> Option<Typ
 /// §3.3). A member whose type cannot be lowered (out of subset) aborts the whole
 /// annotation (`None`), matching the object/function lowering — dropping a member
 /// silently would mis-state the union.
-fn lower_union_annotation(interner: &mut Interner, members: &[TSType<'_>]) -> Option<TypeId> {
+fn lower_union_annotation(
+    pass: &mut Pass,
+    scope: ScopeId,
+    members: &[TSType<'_>],
+) -> Option<TypeId> {
     let mut lowered: Vec<TypeId> = Vec::with_capacity(members.len());
     for member in members {
-        lowered.push(lower_annotation(interner, member)?);
+        lowered.push(lower_annotation(pass, scope, member)?);
     }
-    Some(interner.union(lowered))
+    Some(pass.interner.union(lowered))
 }
 
-/// Lower an object type literal's members to an interned object `TypeId`.
-/// Unchanged from M2. A member whose type cannot be lowered (or an
+/// Lower an object type literal's members to an interned (structural) object
+/// `TypeId`. Object **type literals** stay structurally hash-consed (only nominal
+/// interfaces bypass interning). A member whose type cannot be lowered (or an
 /// optional/index/call/method/construct signature) aborts the lowering (`None`).
-fn lower_object_annotation(interner: &mut Interner, members: &[TSSignature<'_>]) -> Option<TypeId> {
+fn lower_object_annotation(
+    pass: &mut Pass,
+    scope: ScopeId,
+    members: &[TSSignature<'_>],
+) -> Option<TypeId> {
     let mut properties: Vec<PropertyType> = Vec::with_capacity(members.len());
     for member in members {
         let TSSignature::TSPropertySignature(sig) = member else {
@@ -499,14 +782,14 @@ fn lower_object_annotation(interner: &mut Interner, members: &[TSSignature<'_>])
         }
         let name = sig.key.static_name()?;
         let annotation = sig.type_annotation.as_ref()?;
-        let ty = lower_annotation(interner, &annotation.type_annotation)?;
+        let ty = lower_annotation(pass, scope, &annotation.type_annotation)?;
         properties.push(PropertyType {
             name: name.into_owned(),
             ty,
             optional: false,
         });
     }
-    Some(interner.intern_object(ObjectType { properties }))
+    Some(pass.interner.intern_object(ObjectType { properties }))
 }
 
 /// Lower a function type annotation's parameters and return type to an interned
@@ -515,7 +798,8 @@ fn lower_object_annotation(interner: &mut Interner, members: &[TSSignature<'_>])
 /// any optional/rest parameter, aborts the lowering (`None`) — these are out of
 /// the M3 subset and dropping them silently would mis-state the type.
 fn lower_function_annotation(
-    interner: &mut Interner,
+    pass: &mut Pass,
+    scope: ScopeId,
     params: &FormalParameters<'_>,
     return_type: &TSType<'_>,
 ) -> Option<TypeId> {
@@ -532,15 +816,15 @@ fn lower_function_annotation(
         }
         let name = parameter_name(&param.pattern)?;
         let annotation = param.type_annotation.as_ref()?;
-        let ty = lower_annotation(interner, &annotation.type_annotation)?;
+        let ty = lower_annotation(pass, scope, &annotation.type_annotation)?;
         lowered.push(ParameterType {
             name,
             ty,
             optional: false,
         });
     }
-    let ret = lower_annotation(interner, return_type)?;
-    Some(interner.intern_function(FunctionType {
+    let ret = lower_annotation(pass, scope, return_type)?;
+    Some(pass.interner.intern_function(FunctionType {
         params: lowered,
         ret,
     }))
@@ -808,13 +1092,14 @@ fn infer_call(
 /// Infer a `function` declaration/expression's type and check its body.
 fn infer_function(pass: &mut Pass, enclosing: ScopeId, func: &Function<'_>) -> TypeId {
     let fn_scope = pass.binder.fn_scopes.get(&func.span.start).copied();
-    let params = lower_parameters(pass, fn_scope, &func.params);
+    let params = lower_parameters(pass, enclosing, fn_scope, &func.params);
 
-    // Declared return type from the annotation, if any.
-    let declared_ret = func
-        .return_type
-        .as_ref()
-        .and_then(|ann| lower_annotation(pass.interner, &ann.type_annotation));
+    // Declared return type from the annotation, if any. Type references in the
+    // signature resolve from the enclosing scope (where the type names live).
+    let declared_ret = match func.return_type.as_ref() {
+        Some(ann) => lower_annotation(pass, enclosing, &ann.type_annotation),
+        None => None,
+    };
 
     // Descend into the body (in the function scope) to check returns against a
     // declared return type and/or infer the return type from `return` statements.
@@ -837,12 +1122,12 @@ fn infer_arrow(
     arrow: &ArrowFunctionExpression<'_>,
 ) -> TypeId {
     let fn_scope = pass.binder.fn_scopes.get(&arrow.span.start).copied();
-    let params = lower_parameters(pass, fn_scope, &arrow.params);
+    let params = lower_parameters(pass, enclosing, fn_scope, &arrow.params);
 
-    let declared_ret = arrow
-        .return_type
-        .as_ref()
-        .and_then(|ann| lower_annotation(pass.interner, &ann.type_annotation));
+    let declared_ret = match arrow.return_type.as_ref() {
+        Some(ann) => lower_annotation(pass, enclosing, &ann.type_annotation),
+        None => None,
+    };
 
     let body_scope = fn_scope.unwrap_or(enclosing);
 
@@ -881,6 +1166,7 @@ fn infer_arrow(
 /// type (no diagnostic), matching M0/M1 leniency. Parameters are positional.
 fn lower_parameters(
     pass: &mut Pass,
+    enclosing: ScopeId,
     fn_scope: Option<ScopeId>,
     params: &FormalParameters<'_>,
 ) -> Vec<ParameterType> {
@@ -888,12 +1174,12 @@ fn lower_parameters(
     let mut lowered: Vec<ParameterType> = Vec::with_capacity(params.items.len());
     for param in &params.items {
         let name = parameter_name(&param.pattern).unwrap_or_default();
-        // Annotated type, or the error type for an un-annotated parameter.
-        let ty = param
-            .type_annotation
-            .as_ref()
-            .and_then(|ann| lower_annotation(pass.interner, &ann.type_annotation))
-            .unwrap_or(error_ty);
+        // Annotated type, or the error type for an un-annotated parameter. Type
+        // references in the annotation resolve from the enclosing scope.
+        let ty = match param.type_annotation.as_ref() {
+            Some(ann) => lower_annotation(pass, enclosing, &ann.type_annotation).unwrap_or(error_ty),
+            None => error_ty,
+        };
 
         // Bind the parameter's type into the function scope so the body resolves
         // it (the binder declared the parameter symbol + DeclId).
