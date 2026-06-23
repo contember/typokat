@@ -75,10 +75,9 @@ slots into a known later phase without rework:
   annotations (**M8**) are implemented. Still deferred: assertion functions / type predicates
   (`x is T`) and narrowing through unstructured flow (early `return`/`throw`, loops — needs the
   flow-node CFG).
-- **generics**: generic functions / interfaces / aliases with **explicit** type arguments +
-  instantiation land in **M9**; type-argument **inference** (M10) and **constraints** (`extends`,
-  M11) follow. Type parameters use a named representation for now; de Bruijn indices (§3.1) are
-  the pre-VM (Phase 3) target.
+- **generics**: explicit type arguments + instantiation (**M9**) and type-argument **inference**
+  (**M10**) are implemented; **constraints** (`extends`, M11) follow. Type parameters use a named
+  representation for now; de Bruijn indices (§3.1) are the pre-VM (Phase 3) target.
 - **classes**, **modules/imports**, and **`lib.d.ts` globals** (`Array`, `console`, string
   methods, …) are out of scope for now — fixtures avoid the standard library entirely.
 
@@ -100,3 +99,4 @@ default): `null`/`undefined` are distinct types, not assignable to others.
 | `m7_narrowing/` | M7 — control-flow narrowing (`typeof`, truthiness, `null`/`undefined` equality) |
 | `m8_discriminated/` | M8 — literal types, discriminated-union / `in` / `switch` narrowing |
 | `m9_generics/` | M9 — generic functions / interfaces / aliases, explicit type args, instantiation |
+| `m10_inference/` | M10 — type-argument inference from call arguments |
