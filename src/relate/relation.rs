@@ -54,6 +54,29 @@ pub enum Reason {
         tgt: TypeId,
         because: Box<Reason>,
     },
+    /// Two function types have **different arity** (M3 has no optional/rest
+    /// params, so arity must match exactly). `src`/`tgt` are the two function
+    /// types. The checker maps this to `TK2322`.
+    ParameterCount { src: TypeId, tgt: TypeId },
+    /// A parameter is **contravariantly incompatible**: the target's parameter is
+    /// not assignable to the source's parameter at position `index`, wrapping the
+    /// inner reason (built in the contravariant `tgt_param → src_param`
+    /// direction). `src`/`tgt` are the two function types. The checker maps this
+    /// to `TK2322`.
+    Parameter {
+        index: usize,
+        src: TypeId,
+        tgt: TypeId,
+        because: Box<Reason>,
+    },
+    /// The **return types are covariantly incompatible**: the source return type
+    /// is not assignable to the target return type, wrapping the inner reason.
+    /// `src`/`tgt` are the two function types. The checker maps this to `TK2322`.
+    ReturnType {
+        src: TypeId,
+        tgt: TypeId,
+        because: Box<Reason>,
+    },
 }
 
 /// A non-empty chain of reasons explaining a relation failure, outermost first.
@@ -89,6 +112,9 @@ impl ReasonChain {
             Reason::Leaf { src, tgt } => (*src, *tgt),
             Reason::MissingProperty { src, tgt, .. } => (*src, *tgt),
             Reason::Property { src, tgt, .. } => (*src, *tgt),
+            Reason::ParameterCount { src, tgt } => (*src, *tgt),
+            Reason::Parameter { src, tgt, .. } => (*src, *tgt),
+            Reason::ReturnType { src, tgt, .. } => (*src, *tgt),
         }
     }
 }
@@ -224,6 +250,12 @@ impl<'a> Relater<'a> {
             return self.relate_objects(src, tgt, kind);
         }
 
+        // Function structural rule (mvp-plan §6.5, M3): parameters are
+        // contravariant, the return is covariant, with matching arity.
+        if self.store.tag(src) == TypeTag::Function && self.store.tag(tgt) == TypeTag::Function {
+            return self.relate_functions(src, tgt, kind);
+        }
+
         // Otherwise: not assignable. Build the leaf reason on this failing path.
         Relation::No(ReasonChain::leaf(src, tgt))
     }
@@ -268,6 +300,97 @@ impl<'a> Relater<'a> {
                         tgt,
                     }));
                 }
+            }
+        }
+
+        Relation::Yes
+    }
+
+    /// Function assignability (mvp-plan §6.5, architecture §6.5). `src` is
+    /// assignable to `tgt` iff:
+    ///
+    ///  - **arity is satisfiable** — the source takes **no more** parameters than
+    ///    the target (a source with fewer parameters just ignores the extra
+    ///    arguments; M3 has no optional/rest params, so a *surplus source*
+    ///    parameter is the only arity failure), and
+    ///  - each **parameter is contravariant** over the common positions
+    ///    `0..src.len()` — the *target's* parameter type is assignable to the
+    ///    *source's* parameter type (`tgt_param → src_param`); extra target
+    ///    parameters are ignored, and
+    ///  - the **return type is covariant** — the *source's* return type is
+    ///    assignable to the *target's* return type (`src_ret → tgt_ret`), **except**
+    ///    that a `void` target return accepts any source return type (a
+    ///    value-returning function is assignable to a void-returning function
+    ///    type; the value is discarded).
+    ///
+    /// typokat is contravariant on parameters everywhere (it picks soundness over
+    /// tsc's method bivariance — methods are not in the MVP subset), matching tsc
+    /// under `strictFunctionTypes` for function-typed values. The first failing
+    /// obligation (arity, then parameters left-to-right, then return) is returned
+    /// as a precise, nestable reason for M6.
+    fn relate_functions(&mut self, src: TypeId, tgt: TypeId, kind: RelationKind) -> Relation {
+        // Both ids are function-tagged here; the side-tables always resolve. The
+        // `else` arms are defensive (a function tag without a payload is a store
+        // invariant violation, never expected) and produce a leaf rather than
+        // panicking.
+        let Some(src_fn) = self.store.function_type(src) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let Some(tgt_fn) = self.store.function_type(tgt) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+
+        // Arity: a source with FEWER parameters than the target is fine — the
+        // target's callers may pass extra arguments the source simply ignores
+        // (`() => void` is assignable to `(x: number) => void`). It is a failure
+        // only when the source needs MORE parameters than the target supplies
+        // (M3 has no optional/rest params, so a surplus source parameter is
+        // genuinely unsatisfiable). The contravariant check below runs over the
+        // common positions `0..src.len()`; any extra *target* parameters are
+        // ignored.
+        if src_fn.params.len() > tgt_fn.params.len() {
+            return Relation::No(ReasonChain::of(Reason::ParameterCount { src, tgt }));
+        }
+
+        // Collect the per-position parameter type ids and the return ids up front
+        // so the immutable borrow of the store does not overlap the recursive
+        // `self.relate` calls below (which also borrow the store). `zip` truncates
+        // to the shorter (source) list, i.e. the common positions `0..src.len()`.
+        let param_pairs: Vec<(TypeId, TypeId)> = src_fn
+            .params
+            .iter()
+            .zip(&tgt_fn.params)
+            .map(|(s, t)| (s.ty, t.ty))
+            .collect();
+        let (src_ret, tgt_ret) = (src_fn.ret, tgt_fn.ret);
+
+        // Parameters: CONTRAVARIANT — the target parameter must be assignable to
+        // the source parameter (`tgt_param → src_param`).
+        for (index, (src_param, tgt_param)) in param_pairs.into_iter().enumerate() {
+            if let Relation::No(child) = self.relate(tgt_param, src_param, kind) {
+                return Relation::No(ReasonChain::of(Reason::Parameter {
+                    index,
+                    src,
+                    tgt,
+                    because: Box::new(child.head),
+                }));
+            }
+        }
+
+        // Return: COVARIANT — the source return must be assignable to the target
+        // return (`src_ret → tgt_ret`). Exception: a target return type of `void`
+        // accepts **any** source return type — a value-returning function is
+        // assignable to a void-returning function type, since the extra value is
+        // simply discarded by the caller (`() => 1` is assignable to
+        // `() => void`). This is the standard TS rule for void-returning
+        // function-typed values.
+        if tgt_ret != self.well_known.void {
+            if let Relation::No(child) = self.relate(src_ret, tgt_ret, kind) {
+                return Relation::No(ReasonChain::of(Reason::ReturnType {
+                    src,
+                    tgt,
+                    because: Box::new(child.head),
+                }));
             }
         }
 
@@ -407,6 +530,137 @@ mod tests {
             },
             Relation::Yes => panic!("expected nested depth failure"),
         }
+    }
+
+    /// M3 function assignability: parameters CONTRAVARIANT (over the common
+    /// positions), return COVARIANT, fewer-source-params allowed, surplus-source-
+    /// params rejected, and a `void` target return accepting any source return
+    /// (mvp-plan §6.5). Exercised independently of the parser so a
+    /// variance/arity/void regression is caught here.
+    #[test]
+    fn function_variance_arity_and_void_return() {
+        use crate::types::repr::{FunctionType, ParameterType};
+
+        fn param(name: &str, ty: TypeId) -> ParameterType {
+            ParameterType {
+                name: name.to_string(),
+                ty,
+                optional: false,
+            }
+        }
+
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // Reference: `(x: number) => number`.
+        let num_to_num = interner.intern_function(FunctionType {
+            params: vec![param("x", wk.number)],
+            ret: wk.number,
+        });
+        // `(x: unknown) => number`.
+        let unknown_to_num = interner.intern_function(FunctionType {
+            params: vec![param("x", wk.unknown)],
+            ret: wk.number,
+        });
+        // `(x: string) => number`.
+        let str_to_num = interner.intern_function(FunctionType {
+            params: vec![param("x", wk.string)],
+            ret: wk.number,
+        });
+        // `() => number` (FEWER params than `num_to_num`).
+        let nullary_to_num = interner.intern_function(FunctionType {
+            params: vec![],
+            ret: wk.number,
+        });
+        // `(x: number) => string` (incompatible return).
+        let num_to_str = interner.intern_function(FunctionType {
+            params: vec![param("x", wk.number)],
+            ret: wk.string,
+        });
+        // `(x: number, y: number) => number` (MORE params than `num_to_num`).
+        let two_to_num = interner.intern_function(FunctionType {
+            params: vec![param("x", wk.number), param("y", wk.number)],
+            ret: wk.number,
+        });
+        // `() => void` and `() => number` for the void-return rule.
+        let nullary_to_void = interner.intern_function(FunctionType {
+            params: vec![],
+            ret: wk.void,
+        });
+        let nullary_to_num_only = interner.intern_function(FunctionType {
+            params: vec![],
+            ret: wk.number,
+        });
+
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+
+        // CONTRAVARIANT params: `(x: unknown) => number` IS assignable to
+        // `(x: number) => number`, because the target param `number` is
+        // assignable to the source param `unknown` (tgt → src).
+        assert!(
+            rel.is_assignable(unknown_to_num, num_to_num).is_yes(),
+            "contravariant: wider param (unknown) accepts a narrower target param (number)"
+        );
+
+        // `(x: string) => number` is NOT assignable to `(x: number) => number`:
+        // the target param `number` is not assignable to the source param
+        // `string`.
+        match rel.is_assignable(str_to_num, num_to_num) {
+            Relation::No(chain) => match chain.head() {
+                Reason::Parameter { index, because, .. } => {
+                    assert_eq!(*index, 0);
+                    // The contravariant child compares `number` (tgt) → `string`
+                    // (src) and fails as a leaf.
+                    assert!(matches!(**because, Reason::Leaf { .. }));
+                }
+                other => panic!("expected a Parameter reason, got {other:?}"),
+            },
+            Relation::Yes => panic!("expected a contravariant parameter failure"),
+        }
+
+        // COVARIANT return: `(x: number) => string` is NOT assignable to
+        // `(x: number) => number` — the source return `string` is not assignable
+        // to the target return `number`.
+        match rel.is_assignable(num_to_str, num_to_num) {
+            Relation::No(chain) => match chain.head() {
+                Reason::ReturnType { because, .. } => {
+                    assert!(matches!(**because, Reason::Leaf { .. }));
+                }
+                other => panic!("expected a ReturnType reason, got {other:?}"),
+            },
+            Relation::Yes => panic!("expected a covariant return failure"),
+        }
+
+        // FEWER source params: `() => number` IS assignable to
+        // `(x: number) => number` — the source ignores the extra argument.
+        assert!(
+            rel.is_assignable(nullary_to_num, num_to_num).is_yes(),
+            "a source with fewer parameters is assignable (extra args ignored)"
+        );
+
+        // MORE source params: `(x: number, y: number) => number` is NOT assignable
+        // to `(x: number) => number` — the target cannot supply the surplus
+        // parameter.
+        match rel.is_assignable(two_to_num, num_to_num) {
+            Relation::No(chain) => {
+                assert!(matches!(chain.head(), Reason::ParameterCount { .. }));
+            }
+            Relation::Yes => panic!("expected a surplus-source-parameter arity failure"),
+        }
+
+        // VOID target return: `() => number` IS assignable to `() => void` — the
+        // returned value is discarded.
+        assert!(
+            rel.is_assignable(nullary_to_num_only, nullary_to_void).is_yes(),
+            "a value-returning function is assignable to a void-returning function type"
+        );
+        // `() => void` is assignable to itself (identity), and a void source is
+        // fine for a void target.
+        assert!(rel.is_assignable(nullary_to_void, nullary_to_void).is_yes());
+
+        // Identity short-circuits.
+        assert!(rel.is_assignable(num_to_num, num_to_num).is_yes());
     }
 
     /// Exhaustively check the M0 intrinsic-lattice + literal-widening rules so a

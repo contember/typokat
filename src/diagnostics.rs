@@ -23,11 +23,14 @@ pub enum DiagnosticCode {
     TK2322,
     /// Property does not exist on type (member access).
     TK2339,
+    /// Argument type is not assignable to the parameter type (call argument).
+    TK2345,
     /// Object literal may only specify known properties (excess property).
     TK2353,
+    /// Wrong number of call arguments (arity).
+    TK2554,
     /// Property is missing in type but required.
     TK2741,
-    // TODO(M3): TK2345 / TK2554
 }
 
 impl DiagnosticCode {
@@ -37,7 +40,9 @@ impl DiagnosticCode {
             DiagnosticCode::TK2304 => "TK2304",
             DiagnosticCode::TK2322 => "TK2322",
             DiagnosticCode::TK2339 => "TK2339",
+            DiagnosticCode::TK2345 => "TK2345",
             DiagnosticCode::TK2353 => "TK2353",
+            DiagnosticCode::TK2554 => "TK2554",
             DiagnosticCode::TK2741 => "TK2741",
         }
     }
@@ -122,6 +127,31 @@ impl Diagnostic {
         }
     }
 
+    /// Construct a `TK2345` "argument not assignable" error: a call argument of
+    /// type `src` is not assignable to the parameter type `tgt`. The primary span
+    /// is the offending argument.
+    pub fn argument_not_assignable(span: Span, src: &str, tgt: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2345,
+            severity: Severity::Error,
+            message: format!(
+                "Argument of type '{src}' is not assignable to parameter of type '{tgt}'"
+            ),
+            span,
+        }
+    }
+
+    /// Construct a `TK2554` arity error: a call passed `got` arguments but the
+    /// callee expects `expected`. The primary span is the call expression.
+    pub fn wrong_argument_count(span: Span, expected: usize, got: usize) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2554,
+            severity: Severity::Error,
+            message: format!("Expected {expected} arguments, but got {got}"),
+            span,
+        }
+    }
+
     /// Whether this diagnostic counts as an error (drives the process exit code).
     pub fn is_error(&self) -> bool {
         matches!(self.severity, Severity::Error)
@@ -177,9 +207,25 @@ pub fn render_type(store: &Store, id: TypeId, widen: bool) -> String {
             // Defensive fallback; an object always has a side-table entry.
             None => "<unsupported>".to_string(),
         },
-        // TODO(M3/M4): function `(x: number) => string`, union (canonical order).
-        // Not reachable in M2.
-        TypeTag::Function | TypeTag::Union => "<unsupported>".to_string(),
+        // Function: `(x: number) => string` — parameters as `name: type`,
+        // `, `-separated, always parenthesized, then ` => ` and the return type
+        // (README "Type display format"). Parameter and return types never widen
+        // (only a top-level literal *source* widens, which never recurses here).
+        TypeTag::Function => match store.function_type(id) {
+            Some(func) => {
+                let params: Vec<String> = func
+                    .params
+                    .iter()
+                    .map(|p| format!("{}: {}", p.name, render_type(store, p.ty, false)))
+                    .collect();
+                let ret = render_type(store, func.ret, false);
+                format!("({}) => {}", params.join(", "), ret)
+            }
+            // Defensive fallback; a function always has a side-table entry.
+            None => "<unsupported>".to_string(),
+        },
+        // TODO(M4): union (canonical order). Not reachable in M3.
+        TypeTag::Union => "<unsupported>".to_string(),
     }
 }
 

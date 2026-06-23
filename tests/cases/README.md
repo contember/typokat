@@ -47,7 +47,9 @@ Stable across runs → safe to assert in messages:
 
 - intrinsics/keywords: `number string boolean null undefined void never unknown any`
 - literals: `1`, `"x"`, `true`
-- object: `{ a: number; b: string }` (members in declaration order, `; ` separated)
+- object: `{ a: number; b: string }` (members in **canonical name-sorted** order —
+  see "union" below — `; ` separated; object-target messages in the corpus are
+  asserted code-only, so the exact order is never matched against a fixed layout)
 - function: `(x: number) => string` (param names included, always parenthesized)
 
 **Not** stable → never assert in messages (use code-only markers):

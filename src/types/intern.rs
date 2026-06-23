@@ -10,7 +10,10 @@
 //! cheap constants throughout the checker and relation engine.
 
 use crate::types::hash::{structural_hash, StructuralKey};
-use crate::types::repr::{IntrinsicKind, LiteralValue, ObjectType, PropertyType, TypeFlags, TypeTag};
+use crate::types::repr::{
+    FunctionType, IntrinsicKind, LiteralValue, ObjectType, ParameterType, PropertyType, TypeFlags,
+    TypeTag,
+};
 use crate::types::store::{Store, TypeId};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -165,12 +168,36 @@ impl Interner {
         id
     }
 
+    /// Intern a function type, returning the shared id.
+    ///
+    /// Unlike object types, parameters are **positional** and are *not* sorted:
+    /// parameter order is part of a function type's identity (mvp-plan §6.5; only
+    /// object properties are canonicalized by name). Two function types hash-cons
+    /// to the same `TypeId` only when their parameter lists match in order and
+    /// their return types are the same interned id.
+    pub fn intern_function(&mut self, function: FunctionType) -> TypeId {
+        let key = StructuralKey::Function {
+            params: &function.params,
+            ret: function.ret,
+        };
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store.function_type(id).is_some_and(|existing| {
+                existing.ret == function.ret
+                    && function_params_eq(&existing.params, &function.params)
+            })
+        }) {
+            return existing;
+        }
+        let id = self.store.push_function(function, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
     // TODO(M4): pub fn union(&mut self, members: &mut Vec<TypeId>) -> TypeId
     //   Canonicalize before interning (architecture §3.3): flatten nested
     //   unions, sort by TypeId, dedup, normalize `X | never -> X`, collapse a
     //   1-member union to the member, then hash-cons like the helpers above.
-    //
-    // TODO(M3): pub fn intern_function(&mut self, f: FunctionType) -> TypeId
 
     /// Look up an existing id in the dedup bucket for `hash`, accepting the first
     /// candidate for which `eq` confirms a real structural match.
@@ -189,6 +216,17 @@ impl Interner {
 /// which is itself canonical thanks to hash-consing, so nested object equality is
 /// decided cheaply by id without recursing.
 fn object_props_eq(a: &[PropertyType], b: &[PropertyType]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            x.name == y.name && x.optional == y.optional && x.ty == y.ty
+        })
+}
+
+/// Positional equality of two parameter lists — the dedup-bucket tie-break for
+/// function types. Parameters are compared in order (not sorted); types compare
+/// by `TypeId` (canonical via hash-consing), so nested function/object equality
+/// is decided by id without recursing.
+fn function_params_eq(a: &[ParameterType], b: &[ParameterType]) -> bool {
     a.len() == b.len()
         && a.iter().zip(b).all(|(x, y)| {
             x.name == y.name && x.optional == y.optional && x.ty == y.ty
@@ -308,6 +346,73 @@ mod tests {
             properties: vec![prop("a", ba)], // ba == ab
         });
         assert_eq!(outer1, outer2, "nested object identity must propagate");
+    }
+
+    /// Build a required parameter `name: ty`.
+    fn param(name: &str, ty: TypeId) -> crate::types::repr::ParameterType {
+        crate::types::repr::ParameterType {
+            name: name.to_string(),
+            ty,
+            optional: false,
+        }
+    }
+
+    /// Function hash-consing (M3): structurally identical function types share one
+    /// `TypeId`, while a different parameter type, return type, or arity does not.
+    /// Parameters are **positional**, so two functions whose parameter *types*
+    /// appear in a different order remain distinct.
+    #[test]
+    fn function_interning_dedups_by_signature() {
+        use crate::types::repr::FunctionType;
+
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // `(x: number) => string`
+        let f1 = interner.intern_function(FunctionType {
+            params: vec![param("x", wk.number)],
+            ret: wk.string,
+        });
+        // The exact same signature interns to the same id.
+        let f1_again = interner.intern_function(FunctionType {
+            params: vec![param("x", wk.number)],
+            ret: wk.string,
+        });
+        assert_eq!(f1, f1_again, "identical function signatures must share an id");
+
+        // A different return type is a distinct function type.
+        let f_ret = interner.intern_function(FunctionType {
+            params: vec![param("x", wk.number)],
+            ret: wk.number,
+        });
+        assert_ne!(f1, f_ret, "differing return types must not dedup");
+
+        // A different parameter type is a distinct function type.
+        let f_param = interner.intern_function(FunctionType {
+            params: vec![param("x", wk.string)],
+            ret: wk.string,
+        });
+        assert_ne!(f1, f_param, "differing parameter types must not dedup");
+
+        // Different arity is distinct.
+        let f_arity = interner.intern_function(FunctionType {
+            params: vec![param("x", wk.number), param("y", wk.string)],
+            ret: wk.string,
+        });
+        assert_ne!(f1, f_arity, "differing arity must not dedup");
+
+        // Parameters are positional: `(a: number, b: string)` and
+        // `(a: string, b: number)` are the same arity with the same *set* of
+        // parameter types but in a different order — they must NOT dedup.
+        let ab = interner.intern_function(FunctionType {
+            params: vec![param("a", wk.number), param("b", wk.string)],
+            ret: wk.void,
+        });
+        let ba = interner.intern_function(FunctionType {
+            params: vec![param("a", wk.string), param("b", wk.number)],
+            ret: wk.void,
+        });
+        assert_ne!(ab, ba, "parameter order is part of function identity");
     }
 
     /// The well-known intrinsic ids are assigned in `IntrinsicKind::ALL` order

@@ -16,7 +16,8 @@
 //!   documented placeholder and the `Store` keeps a (currently unused) column
 //!   for it. Phase 4 fills this in without changing call sites.
 
-use crate::types::repr::{IntrinsicKind, LiteralValue, PropertyType, TypeTag};
+use crate::types::repr::{IntrinsicKind, LiteralValue, ParameterType, PropertyType, TypeTag};
+use crate::types::store::TypeId;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
@@ -33,8 +34,15 @@ pub enum StructuralKey<'a> {
     /// An object type, keyed over its **canonical** property list (sorted by name
     /// by the interner before hashing) so `{ a; b }` and `{ b; a }` collide.
     Object(&'a [PropertyType]),
+    /// A function type, keyed over its **positional** parameter list (never
+    /// sorted) and return type. Two function types collide only when their
+    /// parameters match in order (name, optionality, type) and their return types
+    /// are the same interned id.
+    Function {
+        params: &'a [ParameterType],
+        ret: TypeId,
+    },
     // TODO(M4): Union(&'a [TypeId])  — over already-canonicalized members
-    // TODO(M3): Function(&'a FunctionType)
 }
 
 /// Live structural hash used for hash-consing (FxHash for speed). This is the
@@ -64,6 +72,21 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
                 prop.optional.hash(&mut h);
                 prop.ty.0.hash(&mut h);
             }
+        }
+        StructuralKey::Function { params, ret } => {
+            TypeTag::Function.hash_discriminant(&mut h);
+            // Arity first so a shorter parameter list cannot collide with a
+            // prefix of a longer one under the streaming hasher.
+            params.len().hash(&mut h);
+            for param in *params {
+                // Parameters are positional (never sorted): hash in order so two
+                // function types with the same parameter *types* in a different
+                // order remain distinct.
+                param.name.hash(&mut h);
+                param.optional.hash(&mut h);
+                param.ty.0.hash(&mut h);
+            }
+            ret.0.hash(&mut h);
         }
     }
     h.finish()

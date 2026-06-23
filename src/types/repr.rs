@@ -152,27 +152,39 @@ pub struct PropertyType {
 pub struct ObjectType {
     /// Members in **canonical order** (sorted by name). The interner sorts before
     /// hash-consing (mvp-plan §3.3) so `{ a; b }` and `{ b; a }` collapse to one
-    /// `TypeId`; the stored order must therefore be the canonical one, not source
-    /// order. The renderer prints this order — `; `-separated (README "Type
-    /// display format"); object-target messages in the M2 corpus are code-only,
-    /// so this ordering is not asserted. FLAG: this trades the README's stated
-    /// "declaration order" display for the plan's hash-consing guarantee; the two
-    /// are incompatible for differently-ordered literals.
+    /// `TypeId`; the stored order is therefore the canonical (name-sorted) one,
+    /// not source order. The renderer prints this canonical order — `; `-separated
+    /// (README "Type display format"); object-target messages in the corpus are
+    /// asserted code-only, so the exact ordering is never matched against a fixed
+    /// layout.
     pub properties: Vec<PropertyType>,
 }
 
 impl ObjectType {
     /// Look up a property by name, returning its declared type. `O(n)` linear
-    /// scan — object types in the subset are small, and this keeps the property
-    /// list a plain `Vec` (declaration order is load-bearing for display).
+    /// scan — object types in the subset are small, and a plain `Vec` keeps the
+    /// canonical (name-sorted) order the renderer prints.
     pub fn property(&self, name: &str) -> Option<&PropertyType> {
         self.properties.iter().find(|p| p.name == name)
     }
 }
 
-/// A single function parameter. Defined now for M3.
+/// A single function parameter (M3).
+///
+/// `optional` is always `false` in the M3 subset (optional/rest params are
+/// deferred); the field is kept so they slot in later without a struct change.
+/// The `name` is retained for the renderer — function types display their
+/// parameter names (`(x: number) => string`, README "Type display format").
+///
+/// FLAG: keeping the name in the interned function type means two function types
+/// that differ only in a parameter *name* (`(a: number) => void` vs
+/// `(b: number) => void`) are *not* deduplicated, which diverges from strict TS
+/// structural identity (parameter names are not part of a function type's
+/// identity). This is intentional and reversible: the README mandates that the
+/// renderer print the source parameter names, and no fixture relies on
+/// name-insensitive function identity. The relation engine ignores names (it
+/// matches parameters positionally), so assignability is unaffected.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // TODO(M3)
 pub struct ParameterType {
     pub name: String,
     pub ty: TypeId,
@@ -180,11 +192,17 @@ pub struct ParameterType {
 }
 
 /// Structural function type (`(x: number) => string`).
-/// TODO(M3): relation engine compares contravariantly on params, covariantly on
-/// return (mvp-plan §4.4 / architecture §6.5 — soundness over tsc bivariance).
-#[derive(Clone, Debug, Default)]
-#[allow(dead_code)] // TODO(M3)
+///
+/// Parameters are stored **positionally** (source order, never sorted — only
+/// object properties are canonicalized by name). The relation engine compares
+/// them contravariantly and the return type covariantly with matching arity
+/// (mvp-plan §6.5 / architecture §6.5 — soundness over tsc bivariance for
+/// function-typed values). Interned via `Interner::intern_function`.
+///
+/// No `Default`: `ret` is a real `TypeId` (a function always has a return type —
+/// `void` when none is written), and `TypeId` has no meaningful default.
+#[derive(Clone, Debug)]
 pub struct FunctionType {
     pub params: Vec<ParameterType>,
-    pub ret: Option<TypeId>,
+    pub ret: TypeId,
 }

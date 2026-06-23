@@ -41,14 +41,13 @@ pub struct Store {
     literals: Vec<LiteralValue>,
     /// Object types (M2). Addressed by the `payload` of an `Object`-tagged row.
     objects: Vec<ObjectType>,
-    // The cold side-tables below are reserved foundation state: the SoA layout
-    // is fixed from day 1 (mvp-plan §1.3) so later milestones add `push_*`
-    // helpers without restructuring the arena. They have no readers yet.
+    // The union side-table below is reserved foundation state: the SoA layout is
+    // fixed from day 1 (mvp-plan §1.3) so later milestones add `push_*` helpers
+    // without restructuring the arena. It has no readers yet.
     /// TODO(M4): union members (already canonicalized: sorted, deduped, flat).
     #[allow(dead_code)]
     unions: Vec<Box<[TypeId]>>,
-    /// TODO(M3): function types.
-    #[allow(dead_code)]
+    /// Function types (M3). Addressed by the `payload` of a `Function`-tagged row.
     functions: Vec<FunctionType>,
 
     /// Reserved cross-run identity column (architecture §3.2). NOT populated in
@@ -117,6 +116,14 @@ impl Store {
         self.objects.get(self.payload(id) as usize)
     }
 
+    /// The `FunctionType` of a function type, or `None` if `id` is not a function.
+    pub fn function_type(&self, id: TypeId) -> Option<&FunctionType> {
+        if self.tag(id) != TypeTag::Function {
+            return None;
+        }
+        self.functions.get(self.payload(id) as usize)
+    }
+
     // --- raw append helpers (used only by the interner) ---
 
     /// Push a row with the given hot attributes and return its id. Internal;
@@ -153,6 +160,15 @@ impl Store {
         self.push(TypeTag::Object, flags, payload)
     }
 
-    // TODO(M3/M4): push_function / push_union helpers that write the cold
-    // side-table then the hot row, mirroring push_object.
+    /// Append a function row (function into the side-table, index into payload).
+    /// Internal — `Interner` owns dedup. Parameters are stored positionally (the
+    /// caller does not sort them).
+    pub(crate) fn push_function(&mut self, function: FunctionType, flags: TypeFlags) -> TypeId {
+        let payload = self.functions.len() as u32;
+        self.functions.push(function);
+        self.push(TypeTag::Function, flags, payload)
+    }
+
+    // TODO(M4): push_union helper that writes the cold side-table then the hot
+    // row, mirroring push_object.
 }

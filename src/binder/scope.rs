@@ -27,10 +27,9 @@ impl ScopeId {
 /// as the subset grows.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum ScopeKind {
-    /// The top-level module scope — the only kind M1 constructs.
+    /// The top-level module scope.
     Module,
-    /// A function body scope.
-    #[allow(dead_code)] // TODO(M3): constructed when checking function bodies.
+    /// A function/arrow body scope, holding the function's parameters (M3).
     Function,
     /// A lexical block `{ … }`.
     #[allow(dead_code)] // TODO(M7): needed for flow/narrowing.
