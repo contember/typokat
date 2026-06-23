@@ -336,21 +336,54 @@ struct GenericSig {
     fn_ty: TypeId,
 }
 
-/// A class's `new`-relevant types (M11), keyed by the class's **value-space**
-/// `DeclId`. `new ClassName(args)` looks the class up via its value slot, checks the
-/// arguments against [`ctor`](ClassInfo::ctor) (the constructor signature — a
-/// function type whose parameters are the constructor's, defaulting to zero when
-/// there is no explicit `constructor`), exactly like an M3 call, and yields
-/// [`instance`](ClassInfo::instance) (the class's instance type) as the expression
-/// type. The constructor's return type is irrelevant to `new`; only its parameters
-/// drive the arity/argument checks, so `ctor`'s return is `void` by construction.
+/// A class's `new`-relevant types (M11, extended for M12 inheritance), keyed by the
+/// class's **value-space** `DeclId`. `new ClassName(args)` looks the class up via its
+/// value slot, checks the arguments against [`ctor`](ClassInfo::ctor) (the
+/// constructor signature — a function type whose parameters are the constructor's,
+/// defaulting to zero when there is no explicit `constructor`), exactly like an M3
+/// call, and yields [`instance`](ClassInfo::instance) (the class's instance type) as
+/// the expression type. The constructor's return type is irrelevant to `new`; only
+/// its parameters drive the arity/argument checks, so `ctor`'s return is `void` by
+/// construction.
+///
+/// M12: with `extends`, [`instance`](ClassInfo::instance) is the **composed** type
+/// (the base's members plus the subclass's own, the subclass overriding on a name
+/// conflict — see [`fill_class`]). A derived class with **no own `constructor`**
+/// inherits the base's signature, so [`ctor`](ClassInfo::ctor) is then the base's
+/// constructor (driving `new Derived(...)`). [`super_ctor`](ClassInfo::super_ctor) is
+/// the **base** class's constructor signature, used to check a `super(args)` call
+/// inside this class's constructor body; it is `None` for a class with no `extends`.
 #[derive(Copy, Clone)]
 struct ClassInfo {
     /// The constructor signature as a function type (its parameters are the
-    /// constructor's; the return is `void` and unused — `new` yields `instance`).
+    /// constructor's; the return is `void` and unused — `new` yields `instance`). For
+    /// a derived class with no own `constructor`, this is the base's signature (M12).
     ctor: TypeId,
-    /// The class's instance type (its fields + methods, a nominal object).
+    /// The class's instance type (its fields + methods, a nominal object). For a
+    /// derived class this is the composed (base + own) type (M12).
     instance: TypeId,
+    /// The **base** class's constructor signature (M12), for checking `super(args)`
+    /// inside this class's constructor. `None` when the class has no `extends`.
+    super_ctor: Option<TypeId>,
+}
+
+/// A class's fill progress (M12), tracked per [`TypeDecl`] index so a derived class
+/// can fill its base **on demand and exactly once**, in any declaration order, while
+/// an `extends` cycle terminates.
+///
+///  - `Pending` — not filled yet (the initial state for every class index).
+///  - `Filling` — fill is in progress. Re-entering a `Filling` class (only possible
+///    via an `extends` **cycle**, `class A extends B {}` / `class B extends A {}`)
+///    does **not** recurse: the cycle is broken by treating the base's contribution
+///    as empty/absent, so lowering terminates without a panic or infinite loop.
+///  - `Done` — the class's instance type + constructor are built and registered.
+///
+/// A non-class index is `Done` from the start (nothing to fill).
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum ClassFillState {
+    Pending,
+    Filling,
+    Done,
 }
 
 /// The phase-1 working set threaded through the walk: everything the inference
@@ -394,6 +427,14 @@ struct Pass<'a, 'ast> {
     /// built; read by `new ClassName(args)` ([`infer_new`]) to check the arguments
     /// and yield the instance type.
     class_ctors: FxHashMap<DeclId, ClassInfo>,
+    /// Per-class fill state (M12), indexed by `TypeDecl` index (parallel to
+    /// [`type_decls`](Pass::type_decls)). A class entry tracks whether its instance
+    /// type / constructor have been built yet, so a derived class can fill its **base
+    /// first on demand** ([`ensure_class_filled`]) regardless of declaration order,
+    /// and an `extends` **cycle** is broken (a class re-entered while `Filling`
+    /// composes against the base's members built so far rather than looping). A
+    /// non-class index stays `Done` (nothing to fill).
+    class_fill: Vec<ClassFillState>,
     decl_types: DeclTypes,
     obligations: Vec<AssignObligation>,
     diagnostics: Vec<Diagnostic>,
@@ -408,6 +449,17 @@ struct Pass<'a, 'ast> {
     /// arrow/lexical-`this` semantics — and the fixtures never rely on a function's
     /// own `this`).
     current_this: Option<TypeId>,
+    /// The **current base-constructor signature** (M12): the constructor signature of
+    /// the *base* class of the class whose member body is being checked, or `None`
+    /// when that class has no `extends` (or outside any class member). Set via
+    /// save/restore by [`check_class`] alongside [`current_this`](Pass::current_this),
+    /// so a `super(args)` call inside the derived constructor ([`infer_call`]) is
+    /// checked against the base constructor's arity (`TK2554`) and argument types
+    /// (`TK2345`). It must NOT leak: a `super(...)` outside a derived class member has
+    /// no signature and is ignored (no crash). Like `current_this`, a nested
+    /// function/arrow keeps the enclosing value (it is restored only at class-member
+    /// boundaries).
+    current_super_ctor: Option<TypeId>,
     /// **Narrowing environment** (M7, architecture §5): the current control-flow
     /// narrowing overlay, mapping a **`SymbolId`** to its narrowed `TypeId`. It is
     /// consulted *first* when resolving an identifier's type (see
@@ -438,6 +490,17 @@ pub fn check_program<'ast>(
     let (type_decls, type_resolved) =
         reserve_type_decls(interner, &binder, program, &mut next_type_param);
 
+    // M12: per-class fill state, indexed parallel to `type_decls`. A class index
+    // starts `Pending` (its instance type / constructor are built on demand, base
+    // first); a non-class index is `Done` (nothing to fill).
+    let class_fill: Vec<ClassFillState> = type_decls
+        .iter()
+        .map(|decl| match decl {
+            TypeDecl::Class { .. } => ClassFillState::Pending,
+            _ => ClassFillState::Done,
+        })
+        .collect();
+
     let mut pass = Pass {
         interner,
         binder: &binder,
@@ -447,11 +510,13 @@ pub fn check_program<'ast>(
         next_type_param,
         generic_fns: FxHashMap::default(),
         class_ctors: FxHashMap::default(),
+        class_fill,
         decl_types,
         obligations: Vec::new(),
         diagnostics: Vec::new(),
         narrowed: FxHashMap::default(),
         current_this: None,
+        current_super_ctor: None,
     };
 
     // --- Phase 0 (fill): resolve every alias and fill every interface body. From
@@ -639,43 +704,130 @@ fn fill_type_decls(pass: &mut Pass, scope: ScopeId) {
         }
     }
 
-    // M11: fill each class's reserved **instance type** with its fields + methods,
-    // and register its constructor signature under the class's *value* `DeclId`. Done
-    // after interfaces/aliases so a field/method/constructor annotation referencing a
-    // named type resolves to a filled id; a self/sibling class reference resolves to a
-    // reserved class id (stored, never inlined — so a recursive field like
-    // `next: Node | null` lowers). Method/constructor **bodies** are checked later, in
-    // the statement walk ([`check_class`]) where `this` is set and obligations are
-    // collected; this step builds **types only**.
+    // M11/M12: fill each class's reserved **instance type** with its fields + methods
+    // (M12: composed with its base's members), and register its constructor signature
+    // under the class's *value* `DeclId`. Done after interfaces/aliases so a
+    // field/method/constructor annotation referencing a named type resolves to a
+    // filled id; a self/sibling class reference resolves to a reserved class id
+    // (stored, never inlined — so a recursive field like `next: Node | null` lowers).
+    //
+    // M12: a derived class needs its base filled first. [`ensure_class_filled`] fills
+    // the base on demand (in any declaration order) and is idempotent + cycle-guarded,
+    // so iterating every class index fills the whole `extends` DAG exactly once.
+    // Method/constructor **bodies** are checked later, in the statement walk
+    // ([`check_class`]) where `this`/`super` are set and obligations are collected;
+    // this step builds **types only**.
     for index in 0..count {
-        let TypeDecl::Class { reserved, class } = pass.type_decls[index] else {
-            continue;
-        };
-        fill_class(pass, scope, reserved, class);
+        if matches!(pass.type_decls[index], TypeDecl::Class { .. }) {
+            ensure_class_filled(pass, scope, index);
+        }
     }
 }
 
-/// Build a class's instance type and constructor signature (M11, fill step), filling
-/// the reserved instance-type object in place and registering its [`ClassInfo`] under
-/// the class's value `DeclId`. **Types only** — method/constructor bodies are checked
-/// later in the walk ([`check_class`]).
+/// Fill a class's instance type + constructor (M12), filling its **base first** on
+/// demand and recording its [`ClassInfo`]. Idempotent (a `Done` class returns
+/// immediately) and **cycle-guarded** (a class re-entered while `Filling` — only
+/// reachable via an `extends` cycle — does not recurse; see [`ClassFillState`]), so
+/// it can be called in any order and any number of times. `index` is the class's
+/// position in [`Pass::type_decls`].
+fn ensure_class_filled(pass: &mut Pass, scope: ScopeId, index: usize) {
+    match pass.class_fill.get(index).copied() {
+        // Already filled, or filling (an `extends` cycle re-entered this class) — do
+        // not recurse. The in-progress class composes against whatever its base has
+        // contributed so far (nothing, on a direct cycle), which terminates lowering.
+        Some(ClassFillState::Done) | Some(ClassFillState::Filling) => return,
+        Some(ClassFillState::Pending) => {}
+        // Out of range / not a class: nothing to fill.
+        None => return,
+    }
+    let TypeDecl::Class { reserved, class } = pass.type_decls[index] else {
+        return;
+    };
+
+    // Mark in-progress before resolving the base, so a cyclic `extends` is caught by
+    // the `Filling` guard above rather than looping.
+    if let Some(slot) = pass.class_fill.get_mut(index) {
+        *slot = ClassFillState::Filling;
+    }
+
+    fill_class(pass, scope, reserved, class);
+
+    if let Some(slot) = pass.class_fill.get_mut(index) {
+        *slot = ClassFillState::Done;
+    }
+}
+
+/// Resolve a class's **base class** [`ClassInfo`] from its `extends` clause (M12),
+/// filling the base first (on demand) so its instance type / constructor are ready to
+/// compose against.
 ///
-/// The instance type's members are the class's **fields** (each `PropertyDefinition`
-/// with a type annotation) plus its **methods** (each `MethodDefinition` of kind
-/// `method`) as **function-typed properties** — so member access (`p.x`, `p.method`)
-/// and the structural relation reuse the M2 object rules unchanged. The constructor
-/// (kind `Constructor`) is **not** an instance member; its parameters become the
-/// constructor signature (zero parameters when there is no explicit `constructor`).
+/// The base is the `super_class` expression when it is a plain identifier resolving
+/// (through the scope graph's value slot) to a known class. Returns `None` when the
+/// class has no `extends`, the clause is not a plain identifier (out of subset — e.g.
+/// `extends mixin(Base)`), the name does not resolve to a class, or the base is
+/// re-entered mid-fill (an `extends` cycle — the base's [`ClassInfo`] is not yet
+/// registered, so composition proceeds with no base contribution, breaking the cycle
+/// without a panic).
+fn resolve_base_class(pass: &mut Pass, scope: ScopeId, class: &Class<'_>) -> Option<ClassInfo> {
+    let Expression::Identifier(ident) = class.super_class.as_ref()? else {
+        return None;
+    };
+    let base_name = ident.name.as_str();
+
+    // Fill the base first (on demand), so its instance type + constructor exist before
+    // we compose. The index is the base name's type-space `DeclId` position in
+    // `type_decls` (the binder numbered type `DeclId`s in source order, and
+    // `reserve_type_decls` pushed `type_decls` in that same order — so the type
+    // `DeclId`'s index *is* the `type_decls` index).
+    if let Some(type_id) = type_decl_id(pass.binder, scope, base_name) {
+        ensure_class_filled(pass, scope, type_id.index());
+    }
+
+    // Read the base's `ClassInfo` via its *value* slot (where classes register their
+    // `new`-info). Absent when the name is not a class or the base is mid-fill (cycle).
+    let decl_id = value_decl_id(pass.binder, scope, base_name)?;
+    pass.class_ctors.get(&decl_id).copied()
+}
+
+/// Build a class's instance type and constructor signature (M11, extended for M12
+/// inheritance), filling the reserved instance-type object in place and registering
+/// its [`ClassInfo`] under the class's value `DeclId`. **Types only** —
+/// method/constructor bodies are checked later in the walk ([`check_class`]).
 ///
-/// DEFERRED (out of M11 scope, skipped without error): `static`/getter/setter/accessor
-/// members, parameter properties (`constructor(private x: number)`), access
-/// modifiers' nominal typing, `extends`/`implements`, and generic classes. A field
+/// The instance type's members are the class's **own fields** (each
+/// `PropertyDefinition` with a type annotation) plus its **own methods** (each
+/// `MethodDefinition` of kind `method`) as **function-typed properties** — so member
+/// access (`p.x`, `p.method`) and the structural relation reuse the M2 object rules
+/// unchanged. The constructor (kind `Constructor`) is **not** an instance member; its
+/// parameters become the constructor signature (zero parameters when there is no
+/// explicit `constructor`).
+///
+/// M12 (`extends`): the instance type is the **composition** of the base's members
+/// with the class's own — the base's members first, then the class's own members
+/// **overriding** the base's on a name conflict ([`compose_members`]). Because the
+/// composed object is a width-superset of the base, subclass→base assignability falls
+/// out of the existing structural relation (no nominal handling). A derived class with
+/// **no own `constructor`** inherits the base's constructor signature (so
+/// `new Derived(...)` checks against it); a class **with** its own constructor uses
+/// that. [`super_ctor`](ClassInfo::super_ctor) records the base's constructor for
+/// `super(args)` checking in the derived constructor body.
+///
+/// DEFERRED (out of M11/M12 scope, skipped without error): `static`/getter/setter/
+/// accessor members, parameter properties (`constructor(private x: number)`), access
+/// modifiers' nominal typing, `implements`, method-**override compatibility**
+/// (`TK2416`), `super.method()` (super property access), and generic classes. A field
 /// without a type annotation, or a member whose type cannot be lowered, is skipped —
 /// the instance type keeps the members it can express (matching `lower_interface_members`).
 fn fill_class(pass: &mut Pass, scope: ScopeId, reserved: TypeId, class: &Class<'_>) {
     let void_ty = pass.interner.well_known().void;
 
-    let mut properties: Vec<PropertyType> = Vec::new();
+    // M12: resolve the base class (filling it first) so its members + constructor are
+    // available to compose against. `None` for a class with no `extends` (or an
+    // out-of-subset / cyclic base — composition then proceeds with no base part).
+    let base = resolve_base_class(pass, scope, class);
+
+    // The class's **own** members (fields + methods), before composing with the base.
+    let mut own_properties: Vec<PropertyType> = Vec::new();
     // The constructor's parameters, if an explicit `constructor` is present.
     let mut ctor_params: Option<Vec<ParameterType>> = None;
 
@@ -696,7 +848,7 @@ fn fill_class(pass: &mut Pass, scope: ScopeId, reserved: TypeId, class: &Class<'
                 let Some(ty) = lower_annotation(pass, scope, &annotation.type_annotation) else {
                     continue;
                 };
-                properties.push(PropertyType {
+                own_properties.push(PropertyType {
                     name: name.into_owned(),
                     ty,
                     optional: false,
@@ -724,7 +876,7 @@ fn fill_class(pass: &mut Pass, scope: ScopeId, reserved: TypeId, class: &Class<'
                         let Some(ty) = lower_method_signature(pass, scope, &method.value) else {
                             continue;
                         };
-                        properties.push(PropertyType {
+                        own_properties.push(PropertyType {
                             name: name.into_owned(),
                             ty,
                             optional: false,
@@ -739,18 +891,43 @@ fn fill_class(pass: &mut Pass, scope: ScopeId, reserved: TypeId, class: &Class<'
         }
     }
 
-    // Fill the reserved instance type with the collected fields + methods.
+    // M12: compose the base's members with the class's own (own overriding base on a
+    // name conflict). Snapshot the base's instance-type properties into an owned Vec
+    // first — the immutable store borrow must not overlap the `&mut` `fill_object`
+    // below. A class with no resolvable base contributes no base members (plain M11).
+    let base_properties: Vec<PropertyType> = base
+        .and_then(|info| pass.interner.store().object_type(info.instance))
+        .map(|obj| obj.properties.clone())
+        .unwrap_or_default();
+    let properties = compose_members(base_properties, own_properties);
+
+    // Fill the reserved instance type with the composed (base + own) members.
     pass.interner
         .fill_object(reserved, ObjectType { properties });
 
-    // The constructor signature: an explicit constructor's parameters, else zero
-    // parameters (the implicit default constructor). The return is `void` (unused —
-    // `new` yields the instance type), built through the normal function interner so
-    // the call path can read its parameters back out.
-    let ctor = pass.interner.intern_function(FunctionType {
-        params: ctor_params.unwrap_or_default(),
-        ret: void_ty,
-    });
+    // The constructor signature. With an explicit constructor, its parameters. With
+    // none, M12: **inherit the base's constructor** (so `new Derived(...)` checks
+    // against the base signature); for a class with no base either, the implicit
+    // zero-parameter constructor. The return is `void` (unused — `new` yields the
+    // instance type), built through the normal function interner so the call path can
+    // read its parameters back out.
+    let ctor = match ctor_params {
+        Some(params) => pass.interner.intern_function(FunctionType {
+            params,
+            ret: void_ty,
+        }),
+        None => match base {
+            Some(base_info) => base_info.ctor,
+            None => pass.interner.intern_function(FunctionType {
+                params: Vec::new(),
+                ret: void_ty,
+            }),
+        },
+    };
+
+    // The base's constructor signature (M12), for checking `super(args)` in this
+    // class's constructor body. `None` for a class with no resolvable base.
+    let super_ctor = base.map(|base_info| base_info.ctor);
 
     // Register the class's `new`-info under its VALUE-space `DeclId` (the constructor
     // side), so `new ClassName(args)` resolves it via the value slot.
@@ -761,6 +938,7 @@ fn fill_class(pass: &mut Pass, scope: ScopeId, reserved: TypeId, class: &Class<'
                 ClassInfo {
                     ctor,
                     instance: reserved,
+                    super_ctor,
                 },
             );
             // Bind the class's value-slot type to the instance type too — defensive,
@@ -770,6 +948,32 @@ fn fill_class(pass: &mut Pass, scope: ScopeId, reserved: TypeId, class: &Class<'
             pass.decl_types.set(decl_id, reserved);
         }
     }
+}
+
+/// Compose a derived class's instance members from its **base** members and its
+/// **own** (M12). The base's members come first; each of the class's own members
+/// **overrides** a base member of the same name (the derived type wins) or is appended
+/// when the name is new. This yields a width-superset of the base, so subclass→base
+/// assignability falls out of the structural relation (the base is width-narrower).
+///
+/// The interner re-sorts into canonical (name-sorted) order when the object is filled,
+/// so the order here only affects which entry survives a duplicate name — own over
+/// base, matching TS override semantics. (Override *compatibility* checking, `TK2416`,
+/// is deferred: an incompatible override is accepted, it just replaces the base type.)
+fn compose_members(
+    base_properties: Vec<PropertyType>,
+    own_properties: Vec<PropertyType>,
+) -> Vec<PropertyType> {
+    let mut composed: Vec<PropertyType> = base_properties;
+    for own in own_properties {
+        match composed.iter_mut().find(|p| p.name == own.name) {
+            // Own member overrides the base member of the same name (derived wins).
+            Some(existing) => *existing = own,
+            // A new member: append it.
+            None => composed.push(own),
+        }
+    }
+    composed
 }
 
 /// Lower a method's signature to an interned **function type** for use as the
@@ -1904,23 +2108,33 @@ fn check_function_declaration(pass: &mut Pass, scope: ScopeId, func: &Function<'
 /// a free function (parameters into the method scope, return obligations) — whose
 /// returned function *type* is discarded here (only the body-check side effects
 /// matter; the instance-type property was built from the annotation in `fill_class`).
+///
+/// M12: the **base constructor signature** ([`ClassInfo::super_ctor`]) is bound to
+/// [`Pass::current_super_ctor`] for the same duration (same save/restore), so a
+/// `super(args)` call inside the derived constructor body is checked against it
+/// ([`infer_call`]). It is `None` for a class with no `extends`, and never leaks.
 fn check_class(pass: &mut Pass, scope: ScopeId, class: &Class<'_>) {
-    // The instance type, looked up via the class's value slot. Absent only for an
+    // The class's `new`-info, looked up via its value slot. Absent only for an
     // anonymous class (out of subset) or an unrecognized declaration — then `this`
     // stays whatever it was (a nested class inside a method keeps the outer `this`,
     // which is the closest plan-faithful behaviour for the deferred nested-class case).
-    let instance = class
+    let info = class
         .id
         .as_ref()
         .and_then(|id| value_decl_id(pass.binder, scope, id.name.as_str()))
         .and_then(|decl_id| pass.class_ctors.get(&decl_id))
-        .map(|info| info.instance);
+        .copied();
 
-    // Save/restore `this` around the class so it does not leak (and a nested class's
-    // own `this` does not clobber an enclosing one permanently).
+    // Save/restore `this` and the base-constructor signature around the class so
+    // neither leaks (and a nested class's own values do not clobber an enclosing one
+    // permanently).
     let saved_this = pass.current_this;
-    if let Some(instance) = instance {
-        pass.current_this = Some(instance);
+    let saved_super_ctor = pass.current_super_ctor;
+    if let Some(info) = info {
+        pass.current_this = Some(info.instance);
+        // `super_ctor` is itself `Option`: a derived class's base ctor, or `None` for
+        // a class with no `extends` (then `super(...)` inside has no signature).
+        pass.current_super_ctor = info.super_ctor;
     }
 
     for element in &class.body.body {
@@ -1951,6 +2165,7 @@ fn check_class(pass: &mut Pass, scope: ScopeId, class: &Class<'_>) {
     }
 
     pass.current_this = saved_this;
+    pass.current_super_ctor = saved_super_ctor;
 }
 
 /// Recursive excess-property (freshness) check (mvp-plan §6, README
@@ -2676,6 +2891,13 @@ fn infer_call(
     let wk = pass.interner.well_known();
     let call_span = Span::from_oxc(call.span);
 
+    // M12: a `super(args)` call (callee is `Super`) — check against the **base
+    // constructor** signature in scope, not as an ordinary call. Handled before the
+    // generic/callee machinery (`Super` is not an identifier and has no callee type).
+    if matches!(call.callee, Expression::Super(_)) {
+        return infer_super_call(pass, scope, call, call_span);
+    }
+
     // M9: an **explicit-type-argument generic call** (`identity<number>(5)`) is
     // instantiated by substitution *before* the usual checks. When the callee is a
     // registered generic function and type arguments are present, the instantiated
@@ -2734,6 +2956,58 @@ fn infer_call(
     check_call_arguments(pass, &param_types, &arg_types, call_span);
 
     Some((ret, call_span))
+}
+
+/// Check a `super(args)` constructor call (M12) against the **base** class's
+/// constructor signature in scope ([`Pass::current_super_ctor`], bound by
+/// [`check_class`] for a derived class's member bodies).
+///
+/// The arguments are checked with the **same** machine as a `new`/ordinary call —
+/// arity (`TK2554`) + per-argument assignability (`TK2345`) via
+/// [`check_call_arguments`]. Arguments are always inferred first (so a nested
+/// call/`new`/function inside them is checked and an unresolved name emits `TK2304`),
+/// even when there is no base signature in scope.
+///
+/// A `super(...)` with **no base signature in scope** (a `super` outside a derived
+/// class member, or a class whose base could not be resolved) collects no obligation
+/// and emits no `super`-specific diagnostic — no crash, no false positive. The
+/// expression's value type is unused (`super(...)` is a constructor statement), so it
+/// yields the error type. `super.method()` (super *property* access) is a different
+/// AST shape (a member access on `Super`) and remains deferred.
+fn infer_super_call(
+    pass: &mut Pass,
+    scope: ScopeId,
+    call: &CallExpression<'_>,
+    call_span: Span,
+) -> Option<(TypeId, Span)> {
+    let wk = pass.interner.well_known();
+
+    // Infer every argument up front (skipping spreads — out of subset); this descends
+    // into nested calls/`new`/functions inside the arguments.
+    let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(call.arguments.len());
+    for arg in &call.arguments {
+        if let Some(arg_expr) = arg.as_expression() {
+            if let Some(inferred) = infer_expr(pass, scope, arg_expr) {
+                arg_types.push(inferred);
+            }
+        }
+    }
+
+    // The base constructor signature in scope. Absent → no obligation, no diagnostic.
+    let Some(super_ctor) = pass.current_super_ctor else {
+        return Some((wk.error, call_span));
+    };
+    let param_types: Vec<TypeId> = match pass.interner.store().function_type(super_ctor) {
+        Some(func) => func.params.iter().map(|p| p.ty).collect(),
+        // Defensive: the constructor is always interned as a function in `fill_class`.
+        None => return Some((wk.error, call_span)),
+    };
+
+    // Reuse the shared call-checking path: arity (TK2554) + argument assignability
+    // (TK2345). The `super(...)` expression's value type is unused.
+    check_call_arguments(pass, &param_types, &arg_types, call_span);
+
+    Some((wk.error, call_span))
 }
 
 /// Check a call's arguments against a callee signature's parameter types — the M3
@@ -3952,5 +4226,264 @@ const c = new C();
             "member-assignment target is deferred (no false positive), got {:?}",
             diags(src)
         );
+    }
+}
+
+#[cfg(test)]
+mod inheritance_tests {
+    //! M12 end-to-end tests for class inheritance (`extends`, `super`). These drive
+    //! the whole pipeline (parse → bind → check) and assert the *set* of `(line,
+    //! code)` diagnostics, pinning the invariants the reviewer should scrutinize:
+    //! the composed instance type (inherited + own members, own overriding base),
+    //! subclass→base assignability (and the base→subclass failure direction),
+    //! `super(...)` checked against the base constructor (arity + args), an inherited
+    //! constructor when the derived class declares none, and an `extends` **cycle**
+    //! terminating without a panic.
+    //!
+    //! The per-fixture acceptance lives in the conformance corpus
+    //! (`m12_inheritance/`); these unit pins guard the construction/scoping invariants
+    //! directly.
+
+    use crate::driver::check_source;
+
+    /// Run the checker and return the sorted `(1-based line, code)` of every
+    /// diagnostic, keyed on its primary-span start line (matching the conformance
+    /// harness's line mapping).
+    fn diags(source: &str) -> Vec<(u32, String)> {
+        let out = check_source(source);
+        assert!(
+            out.parse_errors.is_empty(),
+            "unexpected parse error(s): {:?}",
+            out.parse_errors
+        );
+        let index = crate::span::LineIndex::new(source);
+        let mut v: Vec<(u32, String)> = out
+            .diagnostics
+            .iter()
+            .map(|d| (index.line_of(d.span.start), d.code.as_str().to_string()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// The **composed instance type** carries both inherited and own members: an
+    /// inherited field, an inherited method, and an own field all resolve on a derived
+    /// instance, while an unknown property is `TK2339`.
+    #[test]
+    fn composed_instance_type_has_inherited_and_own_members() {
+        let src = "\
+class Animal {
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+  speak(): string {
+    return this.name;
+  }
+}
+class Dog extends Animal {
+  breed: string;
+  constructor(name: string, breed: string) {
+    super(name);
+    this.breed = breed;
+  }
+}
+const d = new Dog(\"Rex\", \"Lab\");
+const n: string = d.name;
+const br: string = d.breed;
+const s: string = d.speak();
+const z = d.missing;
+";
+        // Only the unknown property `d.missing` (line 21) errors — inherited field,
+        // own field, and inherited method all resolve.
+        assert_eq!(diags(src), vec![(21, "TK2339".to_string())]);
+    }
+
+    /// Subclass→base assignability falls out of structural width: `Dog` (a width-
+    /// superset) is assignable to `Animal`, but `Animal` is **not** assignable to
+    /// `Dog` (the required `breed` is missing → `TK2741`). Pins both directions, so a
+    /// false negative in the unsound direction would fail.
+    #[test]
+    fn subclass_to_base_assignable_base_to_subclass_not() {
+        let src = "\
+class Animal {
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+}
+class Dog extends Animal {
+  breed: string;
+  constructor(name: string, breed: string) {
+    super(name);
+    this.breed = breed;
+  }
+}
+const a: Animal = new Dog(\"Rex\", \"Lab\");
+const bad: Dog = new Animal(\"Rex\");
+";
+        // `Dog`→`Animal` (line 14) is clean; `Animal`→`Dog` (line 15) is missing
+        // `breed` → TK2741.
+        assert_eq!(diags(src), vec![(15, "TK2741".to_string())]);
+    }
+
+    /// `super(args)` is checked against the **base constructor** signature: a correct
+    /// call is clean, a wrong arity is `TK2554`, and a wrong argument type is `TK2345`.
+    #[test]
+    fn super_call_checked_against_base_constructor() {
+        let src = "\
+class Base {
+  id: number;
+  constructor(id: number) {
+    this.id = id;
+  }
+}
+class Ok extends Base {
+  constructor() {
+    super(1);
+  }
+}
+class BadArity extends Base {
+  constructor() {
+    super();
+  }
+}
+class BadArg extends Base {
+  constructor() {
+    super(\"s\");
+  }
+}
+";
+        // `super(1)` clean; `super()` (line 14) wrong arity TK2554; `super("s")`
+        // (line 19) wrong argument type TK2345.
+        assert_eq!(
+            diags(src),
+            vec![(14, "TK2554".to_string()), (19, "TK2345".to_string())]
+        );
+    }
+
+    /// A derived class with **no own constructor** inherits the base's signature, so
+    /// `new Derived(...)` is checked against the base constructor: a correct call is
+    /// clean, a missing argument is `TK2554`, and a wrong argument type is `TK2345`.
+    #[test]
+    fn inherited_constructor_drives_new() {
+        let src = "\
+class Base {
+  id: number;
+  constructor(id: number) {
+    this.id = id;
+  }
+}
+class Plain extends Base {}
+const p = new Plain(5);
+const q = new Plain();
+const r = new Plain(\"s\");
+";
+        // `new Plain(5)` clean; `new Plain()` (line 9) wrong arity TK2554;
+        // `new Plain("s")` (line 10) wrong argument type TK2345.
+        assert_eq!(
+            diags(src),
+            vec![(9, "TK2554".to_string()), (10, "TK2345".to_string())]
+        );
+    }
+
+    /// An own member **overrides** an inherited one of the same name: the derived
+    /// type wins. Here `Derived.x: string` overrides `Base.x: number`, so a
+    /// `string`-annotated read is clean and a `number`-annotated read errors —
+    /// proving the override replaced the inherited member.
+    #[test]
+    fn own_member_overrides_inherited() {
+        let src = "\
+class Base {
+  x: number;
+  constructor() {
+    this.x = 0;
+  }
+}
+class Derived extends Base {
+  x: string;
+  constructor() {
+    super();
+    this.x = \"s\";
+  }
+}
+const d = new Derived();
+const ok: string = d.x;
+const bad: number = d.x;
+";
+        // The override makes `d.x` a `string`: `string` read (line 15) clean;
+        // `number` read (line 16) TK2322.
+        assert_eq!(diags(src), vec![(16, "TK2322".to_string())]);
+    }
+
+    /// An `extends` **cycle** (`A extends B`, `B extends A`) must terminate without a
+    /// panic or infinite loop. Correctness of a cyclic hierarchy is undefined (it is
+    /// not valid TS); we only assert the run completes (the cycle guard breaks it).
+    #[test]
+    fn extends_cycle_terminates_without_panic() {
+        let src = "\
+class A extends B {
+  a: number;
+}
+class B extends A {
+  b: number;
+}
+const x = new A();
+const y = new B();
+";
+        // The run completes (no panic / no hang). The exact diagnostic set for a
+        // cyclic hierarchy is intentionally not pinned (undefined / invalid TS).
+        let _ = diags(src);
+    }
+
+    /// A two-level chain composes transitively: a grandchild instance carries
+    /// members from **both** ancestors plus its own, and all resolve.
+    #[test]
+    fn multi_level_inheritance_composes_transitively() {
+        let src = "\
+class A {
+  a: number;
+  constructor() {
+    this.a = 1;
+  }
+}
+class B extends A {
+  b: number;
+  constructor() {
+    super();
+    this.b = 2;
+  }
+}
+class C extends B {
+  c: number;
+  constructor() {
+    super();
+    this.c = 3;
+  }
+}
+const obj = new C();
+const x: number = obj.a;
+const y: number = obj.b;
+const z: number = obj.c;
+const w: A = new C();
+";
+        // All ancestor + own members resolve and `C`→`A` is assignable: clean.
+        assert!(diags(src).is_empty(), "got {:?}", diags(src));
+    }
+
+    /// **No leak**: `super(...)` outside a derived class member (here in a free
+    /// function, where no base constructor is in scope) collects no obligation and
+    /// emits no `super`-specific diagnostic, and does not crash.
+    #[test]
+    fn super_call_outside_derived_member_does_not_crash() {
+        let src = "\
+function free() {
+  super(1);
+  return 0;
+}
+";
+        // No base ctor in scope → no diagnostic, no crash (super arg `1` is still
+        // walked).
+        assert!(diags(src).is_empty(), "got {:?}", diags(src));
     }
 }

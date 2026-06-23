@@ -316,9 +316,16 @@ fn bind_class_declaration(state: &mut BindState, scope: ScopeId, class: &Class<'
 /// parameters resolvable, exactly like a free function. Each property
 /// initializer expression is walked for nested functions.
 ///
-/// DEFERRED (M11 out of scope): `extends`/heritage, `static`/getter/setter/accessor
-/// members, parameter properties, and `implements`. Those element kinds are
-/// skipped here (no binding); their sub-expressions in the subset are still safe.
+/// M12 (`extends`/`super`) needs **no** binder change: the `super_class` clause is a
+/// type/value *reference* resolved later by the checker (it declares no name and holds
+/// no nested function in the subset), and a `super(args)` call inside the constructor
+/// body is reached through the normal `CallExpression` walk (its `Super` callee binds
+/// to nothing; its arguments are walked for nested functions). So inheritance is
+/// handled entirely in the checker.
+///
+/// DEFERRED (still out of scope): `static`/getter/setter/accessor members, parameter
+/// properties, and `implements`. Those element kinds are skipped here (no binding);
+/// their sub-expressions in the subset are still safe.
 fn bind_class(state: &mut BindState, parent: ScopeId, class: &Class<'_>) {
     for element in &class.body.body {
         match element {
