@@ -1,4 +1,35 @@
-//! The statement-level checker (architecture §5, mvp-plan §5 — M0–M5 rows).
+//! The statement-level checker (architecture §5, mvp-plan §5 — M0–M6 rows, plus
+//! the post-MVP M7 narrowing slice).
+//!
+//! M7 scope (post-MVP — control-flow narrowing), on top of M0–M6:
+//!
+//!  - **Control-flow narrowing of a union-typed local/parameter** inside `if`/
+//!    `else` branches, for three guard families: `typeof x === "string" | "number"
+//!    | "boolean"` (and `!==`/`==`/`!=`, either operand order), **truthiness**
+//!    (`if (x)` / `if (!x)`), and **`null`/`undefined` equality** (`x === null` /
+//!    `x !== undefined`, either operand order). A guarded reference uses the
+//!    narrowed type wherever the checker resolves an identifier
+//!    (`resolve_identifier_type`) — assignment sources, member-access bases,
+//!    returned expressions — so the same `TK2322`/`TK2339` that fires on the wide
+//!    union is clean inside the branch.
+//!  - This is the first **structured-control-flow** slice of the §5 flow
+//!    interpreter: a `SymbolId → TypeId` **narrowing environment** (`Pass::narrowed`)
+//!    layered on the in-order statement walk, with an `if`/`else`
+//!    **fork-and-restore** (`check_if`) that checks the then-branch under the
+//!    positive guard fact, the else-branch under its complement, and **restores**
+//!    the pre-`if` environment afterwards (narrowing never escapes the `if`). The
+//!    reusable narrowing *operations* live in `flow.rs`; only the env/driver and the
+//!    guard analysis (`analyze_guard`) live here. Unstructured-flow narrowing
+//!    (early `return`/`throw` join, loops, `switch`), `in`-operator, discriminated
+//!    unions, and assertion functions are deferred to the flow-node CFG (M8+).
+//!  - **Soundness** is keyed on the **specific `SymbolId`** (narrowing `x` never
+//!    touches `y`, a property access, or a shadowed binding), narrowing **resets on
+//!    reassignment**, an **unrecognized guard narrows nothing** (no false
+//!    negatives), and a **function boundary resets** the environment.
+//!  - The binder gives every `{ … }` block its own `ScopeKind::Block` scope (so a
+//!    branch-local `let`/`const` does not leak), and the unified statement walker
+//!    (`check_stmt`) handles `if`/block in both the module top level and function
+//!    bodies.
 //!
 //! M5 scope, on top of M0–M4:
 //!
@@ -76,8 +107,9 @@
 //! held at once. No `unwrap`/`panic` on any path.
 
 use crate::binder::scope::ScopeId;
-use crate::binder::symbol::DeclId;
+use crate::binder::symbol::{DeclId, SymbolId};
 use crate::binder::{bind_module, Binder};
+use crate::check::flow::{narrow, NarrowOp, TypeofTag};
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::{Reason, Relater, Relation};
 use crate::span::Span;
@@ -88,11 +120,13 @@ use crate::types::store::{Store, TypeId};
 use crate::types::{Interner, WellKnown};
 use oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, AssignmentOperator, AssignmentTarget,
-    BindingPattern, CallExpression, Expression, FormalParameters, Function, FunctionBody,
-    ObjectExpression, ObjectPropertyKind, Program, Statement, StaticMemberExpression, TSSignature,
-    TSType, TSTypeName, VariableDeclarationKind, VariableDeclarator,
+    BinaryExpression, BinaryOperator, BindingPattern, BlockStatement, CallExpression, Expression,
+    FormalParameters, Function, FunctionBody, IfStatement, LogicalExpression, ObjectExpression,
+    ObjectPropertyKind, Program, Statement, StaticMemberExpression, TSSignature, TSType, TSTypeName,
+    UnaryExpression, UnaryOperator, VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_span::GetSpan;
+use rustc_hash::FxHashMap;
 
 /// Which diagnostic an assignability obligation produces on failure. The
 /// structural verdict is the same relation query; only the code/message mapping
@@ -182,6 +216,17 @@ struct Pass<'a, 'ast> {
     decl_types: DeclTypes,
     obligations: Vec<AssignObligation>,
     diagnostics: Vec<Diagnostic>,
+    /// **Narrowing environment** (M7, architecture §5): the current control-flow
+    /// narrowing overlay, mapping a **`SymbolId`** to its narrowed `TypeId`. It is
+    /// consulted *first* when resolving an identifier's type (see
+    /// [`resolve_identifier_type`]); an absent entry falls back to the declared/
+    /// inferred type. This is the structured-flow slice of the §5 flow interpreter:
+    /// the entries are installed by the `if`/`else` fork-and-restore around branch
+    /// walks ([`check_if`]) and never escape an `if` (the pre-`if` map is restored
+    /// after both branches). Keying on `SymbolId` — the specific binding — is what
+    /// guarantees narrowing `x` never affects another symbol `y`, a property access,
+    /// or a shadowed binding in a different scope.
+    narrowed: FxHashMap<SymbolId, TypeId>,
 }
 
 /// Check a parsed program and return the diagnostics it produces.
@@ -206,6 +251,7 @@ pub fn check_program<'ast>(
         decl_types,
         obligations: Vec::new(),
         diagnostics: Vec::new(),
+        narrowed: FxHashMap::default(),
     };
 
     // --- Phase 0 (fill): resolve every alias and fill every interface body. From
@@ -498,15 +544,34 @@ fn headline_src(ob: &AssignObligation, head: &Reason) -> TypeId {
     }
 }
 
-/// Check a list of statements in `scope`.
+/// Check a list of statements in `scope` at the **module top level** (no enclosing
+/// function, so no return context). Each statement flows through the unified
+/// statement walker with an empty return context.
 fn check_statements(pass: &mut Pass, scope: ScopeId, statements: &[Statement<'_>]) {
+    let mut no_return: Option<TypeId> = None;
     for stmt in statements {
-        check_statement(pass, scope, stmt);
+        check_stmt(pass, scope, stmt, None, &mut no_return);
     }
 }
 
-/// Check one statement in `scope`.
-fn check_statement(pass: &mut Pass, scope: ScopeId, stmt: &Statement<'_>) {
+/// Check one statement in `scope` — the **unified, flow-sensitive** statement
+/// walker (M7). It handles every statement kind in the subset, threading an
+/// optional return context (`declared_ret` + the accumulating inferred return
+/// `inferred`) so the same code serves both the module top level (empty context)
+/// and a function body. It is the structured-flow driver of the §5 interpreter:
+/// `if`/`else` is the only construct that touches the narrowing environment, via
+/// [`check_if`]'s fork-and-restore.
+///
+/// `inferred` accumulates the first value-return's widened type when no return is
+/// declared (used only by [`check_function_body`]); at module level it is a
+/// throwaway that no `return` ever writes (a top-level `return` is illegal TS).
+fn check_stmt(
+    pass: &mut Pass,
+    scope: ScopeId,
+    stmt: &Statement<'_>,
+    declared_ret: Option<TypeId>,
+    inferred: &mut Option<TypeId>,
+) {
     match stmt {
         Statement::VariableDeclaration(decl) => {
             for declarator in &decl.declarations {
@@ -525,10 +590,331 @@ fn check_statement(pass: &mut Pass, scope: ScopeId, stmt: &Statement<'_>) {
                 infer_expr(pass, scope, &expr_stmt.expression);
             }
         }
-        // Other statements are out of the M3 subset. (`return` is handled inside
-        // the function-body walk, not at the module level.)
+        Statement::ReturnStatement(ret) => {
+            check_return(pass, scope, ret, declared_ret, inferred);
+        }
+        // M7: control-flow narrowing happens here (the fork-and-restore).
+        Statement::IfStatement(if_stmt) => {
+            check_if(pass, scope, if_stmt, declared_ret, inferred);
+        }
+        // A `{ … }` block runs its statements in its own (binder-created) block
+        // scope, inheriting the current narrowing environment.
+        Statement::BlockStatement(block) => {
+            check_block(pass, scope, block, declared_ret, inferred);
+        }
+        // Other statements are out of the M7 subset.
         _ => {}
     }
+}
+
+/// Check a `return <expr>?` statement against the enclosing function's return
+/// context (extracted from the M3 body walk; behaviour unchanged). With a declared
+/// return type, the returned expression is an assignability obligation
+/// (primary span = the expression); without one, the first value-return's widened
+/// type is recorded as the inferred return. A bare `return;` is handled by the
+/// `void` rule in phase 2 and contributes no inferred type.
+fn check_return(
+    pass: &mut Pass,
+    scope: ScopeId,
+    ret: &oxc_ast::ast::ReturnStatement<'_>,
+    declared_ret: Option<TypeId>,
+    inferred: &mut Option<TypeId>,
+) {
+    let Some(arg) = &ret.argument else {
+        return;
+    };
+    let Some((src, src_span)) = infer_expr(pass, scope, arg) else {
+        return;
+    };
+    match declared_ret {
+        // Declared return type: check the returned expression against it.
+        Some(tgt) => {
+            pass.obligations.push(AssignObligation {
+                src,
+                tgt,
+                src_span,
+                kind: ObligationKind::Assignment,
+            });
+        }
+        // No annotation: infer from the first value return, widened.
+        None => {
+            if inferred.is_none() {
+                *inferred = Some(widen(pass.interner, src));
+            }
+        }
+    }
+}
+
+/// Check a `{ … }` block (M7): descend into its own lexical block scope (created by
+/// the binder, keyed by span start) and run its statements there with the current
+/// return context and narrowing environment. A block that the binder did not record
+/// (defensive — never expected) falls back to the enclosing scope.
+fn check_block(
+    pass: &mut Pass,
+    scope: ScopeId,
+    block: &BlockStatement<'_>,
+    declared_ret: Option<TypeId>,
+    inferred: &mut Option<TypeId>,
+) {
+    let block_scope = pass
+        .binder
+        .block_scopes
+        .get(&block.span.start)
+        .copied()
+        .unwrap_or(scope);
+    for stmt in &block.body {
+        check_stmt(pass, block_scope, stmt, declared_ret, inferred);
+    }
+}
+
+// ===========================================================================
+// M7: control-flow narrowing — guard analysis + if/else fork-and-restore.
+// ===========================================================================
+
+/// A recognized guard fact: the **specific symbol** being narrowed plus the
+/// narrowing operation (and the polarity already folded so the then-branch applies
+/// it as written). Pairing a [`NarrowOp`] with a `SymbolId` here — in the checker,
+/// not in the flow operations — is the symbol-keying that keeps a narrowing of `x`
+/// from ever touching another symbol.
+struct GuardFact {
+    /// The value symbol the guard refines (resolved from the condition's operand
+    /// through the scope graph, so it is the exact binding in scope).
+    symbol: SymbolId,
+    /// The narrowing operation to apply.
+    op: NarrowOp,
+    /// The polarity for the **then**-branch (`true` = apply the op as written). The
+    /// else-branch applies the negation. A leading `!` on the condition flips this
+    /// at analysis time so the driver is polarity-agnostic.
+    then_positive: bool,
+}
+
+/// Check an `if`/`else` statement with control-flow narrowing (M7, architecture
+/// §5) — the structured-flow **fork-and-restore**.
+///
+/// The condition is first inferred under the *pre-`if`* (current) environment so
+/// its operands' references resolve and any nested constructs are checked. It is
+/// then analyzed into an optional `GuardFact`. The two branches are checked under
+/// **forked** copies of the narrowing environment:
+///
+///  - the **then**-branch under the env with the positive fact applied,
+///  - the **else**-branch under the env with the negative (complement) fact.
+///
+/// After both branches the pre-`if` environment is **restored**, so no
+/// branch-local narrowing escapes the `if` (this is exactly what makes a
+/// post-branch reference see the wide type again — the `const after` re-error in
+/// the fixtures). An **unrecognized** condition yields no fact, so both branches
+/// run under the unchanged env (no spurious narrowing → no false negatives). A
+/// conservative join is used (the post-`if` env is the pre-`if` env); precise joins
+/// — e.g. both-branches-return — are deferred to the flow-node CFG (M8+).
+fn check_if(
+    pass: &mut Pass,
+    scope: ScopeId,
+    if_stmt: &IfStatement<'_>,
+    declared_ret: Option<TypeId>,
+    inferred: &mut Option<TypeId>,
+) {
+    // Evaluate the condition under the current env (before forking) so references
+    // resolve and nested functions/calls inside it are checked exactly once.
+    infer_expr(pass, scope, &if_stmt.test);
+    let fact = analyze_guard(pass, scope, &if_stmt.test);
+
+    // Snapshot the pre-`if` environment so each branch starts from it and it is
+    // restored afterwards. The map holds only currently-narrowed symbols, so the
+    // clone is small; cloning makes the restore unconditionally correct.
+    let saved = pass.narrowed.clone();
+
+    // --- then-branch: apply the positive fact, walk, restore. ---
+    if let Some(fact) = &fact {
+        apply_guard(pass, fact, fact.then_positive);
+    }
+    check_stmt(pass, scope, &if_stmt.consequent, declared_ret, inferred);
+    pass.narrowed = saved.clone();
+
+    // --- else-branch: apply the negative (complement) fact, walk, restore. ---
+    if let Some(alternate) = &if_stmt.alternate {
+        if let Some(fact) = &fact {
+            apply_guard(pass, fact, !fact.then_positive);
+        }
+        check_stmt(pass, scope, alternate, declared_ret, inferred);
+    }
+    // Restore the pre-`if` env unconditionally: narrowing must not escape the `if`.
+    pass.narrowed = saved;
+}
+
+/// Apply a guard fact to the narrowing environment for one branch: narrow the
+/// guarded symbol's **current** type (its already-narrowed type if an enclosing
+/// `if` narrowed it, else its declared type — so nested `if`s compose) by the
+/// fact's operation under `positive`, and install the result.
+///
+/// `positive` is the branch polarity (the then-branch passes `then_positive`, the
+/// else-branch its negation). A symbol with no resolvable current type (out of
+/// subset) is left untouched.
+fn apply_guard(pass: &mut Pass, fact: &GuardFact, positive: bool) {
+    let current = resolve_identifier_type(pass, fact.symbol);
+    let narrowed = narrow(pass.interner, current, fact.op, positive);
+    pass.narrowed.insert(fact.symbol, narrowed);
+}
+
+/// Analyze a condition expression into a `GuardFact`, or `None` if it is not a
+/// recognized M7 guard (in which case nothing is narrowed — soundness: an
+/// unknown guard must never narrow). Recognizes, over a plain identifier operand:
+///
+///  - **typeof**: `typeof x === "string" | "number" | "boolean"` and `!==`/`==`/
+///    `!=`, with the `typeof …` on either side of the comparison;
+///  - **truthiness**: bare `x`, and `!x` (which flips the polarity);
+///  - **null/undefined equality**: `x === null` / `x === undefined` and `!==`,
+///    with the literal on either side.
+///
+/// A leading `!` flips `then_positive`. Anything else (an unrecognized tag, a
+/// non-identifier operand, a `&&`/`||`, a member-access operand, …) returns `None`.
+fn analyze_guard(pass: &Pass, scope: ScopeId, test: &Expression<'_>) -> Option<GuardFact> {
+    match test {
+        // `!cond` — recurse and flip the then-branch polarity.
+        Expression::UnaryExpression(unary) if unary.operator == UnaryOperator::LogicalNot => {
+            let mut inner = analyze_guard(pass, scope, &unary.argument)?;
+            inner.then_positive = !inner.then_positive;
+            Some(inner)
+        }
+        // A parenthesized condition is transparent.
+        Expression::ParenthesizedExpression(paren) => analyze_guard(pass, scope, &paren.expression),
+        // Bare truthiness `if (x)`.
+        Expression::Identifier(_) => {
+            let symbol = condition_symbol(pass, scope, test)?;
+            Some(GuardFact {
+                symbol,
+                op: NarrowOp::Truthy,
+                then_positive: true,
+            })
+        }
+        // An equality comparison: `typeof x === "tag"`, `x === null`, etc.
+        Expression::BinaryExpression(binary) => analyze_equality_guard(pass, scope, binary),
+        _ => None,
+    }
+}
+
+/// Analyze an equality `BinaryExpression` into a guard fact (M7). Handles strict
+/// (`===`/`!==`) equality for both the typeof and null/undefined forms; for the
+/// typeof form, where `typeof x` is always a string, loose `==`/`!=` behave
+/// identically and are accepted too. The two operands are tried in both orders so
+/// `typeof x === "s"` and `"s" === typeof x` (and `x === null` / `null === x`) are
+/// both recognized.
+fn analyze_equality_guard(
+    pass: &Pass,
+    scope: ScopeId,
+    binary: &BinaryExpression<'_>,
+) -> Option<GuardFact> {
+    // The positive sense of the comparison: `===`/`==` keep the matching branch as
+    // the then-branch; `!==`/`!=` invert it. Non-equality operators are not guards.
+    let eq_positive = match binary.operator {
+        BinaryOperator::StrictEquality | BinaryOperator::Equality => true,
+        BinaryOperator::StrictInequality | BinaryOperator::Inequality => false,
+        _ => return None,
+    };
+    let strict = matches!(
+        binary.operator,
+        BinaryOperator::StrictEquality | BinaryOperator::StrictInequality
+    );
+
+    let left = &binary.left;
+    let right = &binary.right;
+
+    // typeof form: `typeof x === "tag"` (either operand order). Loose `==`/`!=` is
+    // fine here because `typeof` always yields a string.
+    if let Some(fact) = typeof_guard(pass, scope, left, right, eq_positive)
+        .or_else(|| typeof_guard(pass, scope, right, left, eq_positive))
+    {
+        return Some(fact);
+    }
+
+    // null/undefined form: `x === null` (either operand order). Strict only — loose
+    // `== null` also matches `undefined`, a different (deferred) rule, so a loose
+    // null/undefined comparison is treated as an unrecognized guard (narrows
+    // nothing — sound).
+    if strict {
+        if let Some(fact) = nullish_guard(pass, scope, left, right, eq_positive)
+            .or_else(|| nullish_guard(pass, scope, right, left, eq_positive))
+        {
+            return Some(fact);
+        }
+    }
+
+    None
+}
+
+/// Try to read `typeof_side` as `typeof <ident>` and `tag_side` as a recognized
+/// `typeof` tag string literal, producing a typeof guard. `eq_positive` is the
+/// comparison's positive sense (`===`/`==` → `true`); it becomes the then-branch
+/// polarity for "keep the tag".
+fn typeof_guard(
+    pass: &Pass,
+    scope: ScopeId,
+    typeof_side: &Expression<'_>,
+    tag_side: &Expression<'_>,
+    eq_positive: bool,
+) -> Option<GuardFact> {
+    let Expression::UnaryExpression(unary) = typeof_side else {
+        return None;
+    };
+    if unary.operator != UnaryOperator::Typeof {
+        return None;
+    }
+    let symbol = condition_symbol(pass, scope, &unary.argument)?;
+    let Expression::StringLiteral(lit) = tag_side else {
+        return None;
+    };
+    let tag = TypeofTag::from_tag_literal(lit.value.as_str())?;
+    Some(GuardFact {
+        symbol,
+        op: NarrowOp::Typeof(tag),
+        // `typeof x === "string"` then-branch keeps the tag; `!==` flips it.
+        then_positive: eq_positive,
+    })
+}
+
+/// Try to read `ident_side` as a plain identifier and `nullish_side` as the `null`
+/// or `undefined` literal, producing a null/undefined-equality guard. `eq_positive`
+/// is the comparison's positive sense; for `x === null` the then-branch keeps only
+/// `null`, so `then_positive == eq_positive`.
+fn nullish_guard(
+    pass: &Pass,
+    scope: ScopeId,
+    ident_side: &Expression<'_>,
+    nullish_side: &Expression<'_>,
+    eq_positive: bool,
+) -> Option<GuardFact> {
+    let is_undefined = match nullish_side {
+        Expression::NullLiteral(_) => false,
+        // The `undefined` keyword parses as an identifier reference; it is a value
+        // operand here, never a narrowing *target*, so match it by name.
+        Expression::Identifier(ident) if ident.name.as_str() == "undefined" => true,
+        _ => return None,
+    };
+    let symbol = condition_symbol(pass, scope, ident_side)?;
+    Some(GuardFact {
+        symbol,
+        op: NarrowOp::EqNullish { is_undefined },
+        then_positive: eq_positive,
+    })
+}
+
+/// Resolve a condition operand to the value `SymbolId` it narrows, or `None` if it
+/// is not a narrowable plain identifier in scope. A non-identifier operand (member
+/// access, call, literal, the `undefined` keyword, …) is not narrowable — returning
+/// `None` keeps narrowing keyed strictly to a real local/parameter binding.
+fn condition_symbol(pass: &Pass, scope: ScopeId, expr: &Expression<'_>) -> Option<SymbolId> {
+    let Expression::Identifier(ident) = expr else {
+        return None;
+    };
+    // The `undefined` keyword is an identifier reference but not a narrowable
+    // binding; exclude it so `x === undefined` does not treat `undefined` as the
+    // narrowed symbol.
+    if ident.name.as_str() == "undefined" {
+        return None;
+    }
+    let symbol_id = pass.binder.graph.resolve(scope, ident.name.as_str())?;
+    // Only a value binding (a local/parameter) is narrowable.
+    pass.binder.symbols.get(symbol_id)?.value?;
+    Some(symbol_id)
 }
 
 /// Check one variable declarator and record its declared/inferred type.
@@ -643,25 +1029,36 @@ fn check_excess_properties(
 /// Check a reassignment `NAME = <expr>` (a simple `=` to an identifier target) in
 /// `scope`. The RHS must be assignable to the target's declared type → `TK2322`
 /// with the RHS as the primary span. An unresolved target is `TK2304`.
+///
+/// M7 soundness — **any assignment to a narrowed symbol resets its narrowing.**
+/// Assigning to a narrowed symbol drops its narrowing entry (resetting it to the
+/// declared type) so a stale narrowing is never read after the value changed.
+/// (Conservatively resetting to the declared type, rather than re-narrowing to the
+/// assigned value's type, is sound: the declared type is the widest the symbol can
+/// hold, so it can only over-report.) The reset runs for **every** assignment to a
+/// resolvable identifier target — simple (`=`) *and* compound (`+=`, `||=`, …) —
+/// **before** the compound-operator early-return, so a compound assignment to a
+/// narrowed variable cannot leave a stale narrowing in place. (Compound-assignment
+/// *assignability* is unchecked baseline-wide, so the obligation/`TK2322` path stays
+/// gated on a simple `=`; only the narrowing reset is hoisted.) A non-identifier or
+/// unresolvable target has no symbol to reset, so it narrows nothing and never
+/// panics.
 fn check_assignment(pass: &mut Pass, scope: ScopeId, assign: &AssignmentExpression<'_>) {
-    if assign.operator != AssignmentOperator::Assign {
-        return;
-    }
     let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
+        // A non-identifier target (`obj.x = …`, destructuring) is out of subset:
+        // no symbol to reset, and no obligation collected.
         return;
     };
 
     // Infer the RHS first so any reference inside it resolves (and emits TK2304
-    // before we look at the target), and any nested function body is checked.
+    // before we look at the target), and any nested function body is checked. The
+    // RHS is evaluated *before* the assignment, so it still sees the target's
+    // pre-assignment narrowing (e.g. `x = x` reads the narrowed `x`). Done for both
+    // simple and compound forms so the RHS of a compound assignment is still walked.
     let rhs = infer_expr(pass, scope, &assign.right);
 
-    let target_ty = match pass.binder.graph.resolve(scope, target.name.as_str()) {
-        Some(symbol_id) => pass
-            .binder
-            .symbols
-            .get(symbol_id)
-            .and_then(|s| s.value)
-            .and_then(|decl_id| pass.decl_types.get(decl_id)),
+    let symbol_id = match pass.binder.graph.resolve(scope, target.name.as_str()) {
+        Some(symbol_id) => symbol_id,
         None => {
             pass.diagnostics.push(Diagnostic::cannot_find_name(
                 Span::from_oxc(target.span),
@@ -670,6 +1067,28 @@ fn check_assignment(pass: &mut Pass, scope: ScopeId, assign: &AssignmentExpressi
             return;
         }
     };
+
+    // Reset any narrowing on the reassigned symbol FIRST — for every operator
+    // (simple or compound). The value changed, so a prior narrowing is now stale
+    // and must not be read by a later reference. Hoisted above the compound-operator
+    // early-return below so `x += …` / `x ||= …` cannot leave a stale narrowing.
+    pass.narrowed.remove(&symbol_id);
+
+    // Compound assignment (`+=`, `||=`, …): assignability is unchecked baseline-wide
+    // (out of the M7 subset). The narrowing reset above already ran, so it is sound
+    // to stop here without collecting an obligation.
+    if assign.operator != AssignmentOperator::Assign {
+        return;
+    }
+
+    // The target type is always the symbol's *declared* type (you may assign
+    // anything assignable to the declaration, regardless of the current narrowing).
+    let target_ty = pass
+        .binder
+        .symbols
+        .get(symbol_id)
+        .and_then(|s| s.value)
+        .and_then(|decl_id| pass.decl_types.get(decl_id));
 
     if let (Some(tgt), Some((src, src_span))) = (target_ty, rhs) {
         pass.obligations.push(AssignObligation {
@@ -887,18 +1306,7 @@ fn infer_expr(pass: &mut Pass, scope: ScopeId, expr: &Expression<'_>) -> Option<
                 return Some((well_known.undefined, span));
             }
             match pass.binder.graph.resolve(scope, ident.name.as_str()) {
-                Some(symbol_id) => {
-                    let ty = pass
-                        .binder
-                        .symbols
-                        .get(symbol_id)
-                        .and_then(|s| s.value)
-                        .and_then(|decl_id| pass.decl_types.get(decl_id))
-                        // A resolved symbol with no computed type yet (out of
-                        // subset) falls back to the error type — no cascade.
-                        .unwrap_or(well_known.error);
-                    Some((ty, span))
-                }
+                Some(symbol_id) => Some((resolve_identifier_type(pass, symbol_id), span)),
                 None => {
                     pass.diagnostics
                         .push(Diagnostic::cannot_find_name(span, ident.name.as_str()));
@@ -906,9 +1314,106 @@ fn infer_expr(pass: &mut Pass, scope: ScopeId, expr: &Expression<'_>) -> Option<
                 }
             }
         }
+        // M7: condition shapes (`typeof x`, `!x`, `x === null`, …). They are walked
+        // for their operands' side effects (resolving references / descending into
+        // nested constructs); their *value* type is only ever a condition, never an
+        // assignment source in the subset, so a coarse result type is sufficient.
+        Expression::UnaryExpression(unary) => Some(infer_unary(pass, scope, unary)),
+        Expression::BinaryExpression(binary) => Some(infer_binary(pass, scope, binary)),
+        Expression::LogicalExpression(logical) => Some(infer_logical(pass, scope, logical)),
         // TODO(M4+): array literals, etc.
         _ => None,
     }
+}
+
+/// Resolve a value symbol's *current* type, consulting the narrowing environment
+/// first (M7). A `SymbolId` present in [`Pass::narrowed`] uses its narrowed type;
+/// otherwise the declared/inferred type from `decl_types` is used; a resolved
+/// symbol with no computed type yet (out of subset) is the error type (no cascade).
+///
+/// This single seam is where control-flow narrowing takes effect: every identifier
+/// reference — assignment sources, member-access bases, returned expressions, call
+/// arguments — resolves through [`infer_expr`], which calls this. Keying on the
+/// `SymbolId` (not the name, not the `DeclId` of an unrelated binding) is the
+/// soundness guarantee that narrowing applies to exactly the guarded binding.
+fn resolve_identifier_type(pass: &Pass, symbol_id: SymbolId) -> TypeId {
+    if let Some(&narrowed) = pass.narrowed.get(&symbol_id) {
+        return narrowed;
+    }
+    pass.binder
+        .symbols
+        .get(symbol_id)
+        .and_then(|s| s.value)
+        .and_then(|decl_id| pass.decl_types.get(decl_id))
+        .unwrap_or(pass.interner.well_known().error)
+}
+
+/// Infer a unary expression (M7 condition support). Descends into the operand for
+/// its side effects, then returns a coarse result type by operator:
+///
+///  - `typeof x` → `string` (the runtime tag string),
+///  - `!x` → `boolean`,
+///  - everything else (`+`/`-`/`~`/`void`/`delete`) is out of the subset → the
+///    error type (no diagnostic; never an assignment source in the corpus).
+fn infer_unary(pass: &mut Pass, scope: ScopeId, unary: &UnaryExpression<'_>) -> (TypeId, Span) {
+    let wk = pass.interner.well_known();
+    let span = Span::from_oxc(unary.span);
+    // Walk the operand so references inside the condition resolve (and nested
+    // functions are checked).
+    infer_expr(pass, scope, &unary.argument);
+    let ty = match unary.operator {
+        UnaryOperator::Typeof => wk.string,
+        UnaryOperator::LogicalNot => wk.boolean,
+        _ => wk.error,
+    };
+    (ty, span)
+}
+
+/// Infer a binary expression (M7 condition support). Descends into both operands
+/// for their side effects, then returns `boolean` for a comparison/equality
+/// operator (`===`, `!==`, `<`, …) and the error type for any other operator
+/// (arithmetic/bitwise are out of the subset; never an assignment source here).
+fn infer_binary(pass: &mut Pass, scope: ScopeId, binary: &BinaryExpression<'_>) -> (TypeId, Span) {
+    let wk = pass.interner.well_known();
+    let span = Span::from_oxc(binary.span);
+    infer_expr(pass, scope, &binary.left);
+    infer_expr(pass, scope, &binary.right);
+    let ty = if is_comparison_operator(binary.operator) {
+        wk.boolean
+    } else {
+        wk.error
+    };
+    (ty, span)
+}
+
+/// Infer a logical expression (`&&`/`||`/`??`, M7 condition support). Both operands
+/// are walked for side effects; the result type is the error type — `&&`/`||`
+/// condition narrowing is deferred (mvp-plan, README "Deferred checks"), so a
+/// logical expression is treated as an unrecognized guard (it narrows nothing).
+fn infer_logical(pass: &mut Pass, scope: ScopeId, logical: &LogicalExpression<'_>) -> (TypeId, Span) {
+    let wk = pass.interner.well_known();
+    let span = Span::from_oxc(logical.span);
+    infer_expr(pass, scope, &logical.left);
+    infer_expr(pass, scope, &logical.right);
+    (wk.error, span)
+}
+
+/// Whether a binary operator is a comparison/equality operator (its result is
+/// `boolean`). Equality operators (`==`/`!=`/`===`/`!==`) and the relational
+/// operators all qualify; arithmetic/bitwise/`in`/`instanceof` do not (the latter
+/// two are out of the M7 subset).
+fn is_comparison_operator(op: BinaryOperator) -> bool {
+    matches!(
+        op,
+        BinaryOperator::Equality
+            | BinaryOperator::Inequality
+            | BinaryOperator::StrictEquality
+            | BinaryOperator::StrictInequality
+            | BinaryOperator::LessThan
+            | BinaryOperator::LessEqualThan
+            | BinaryOperator::GreaterThan
+            | BinaryOperator::GreaterEqualThan
+    )
 }
 
 /// Infer the type of an object literal in `scope`. Unchanged from M2: member
@@ -1234,73 +1739,19 @@ fn check_function_body(
     let void_ty = pass.interner.well_known().void;
     let mut inferred: Option<TypeId> = None;
 
+    // A function boundary resets narrowing: this body's parameters/locals are
+    // distinct symbols, and a closure may run after any enclosing narrowing no
+    // longer holds, so the body must not inherit the caller's narrowing
+    // environment. Save and restore it around the walk (the enclosing walk — e.g.
+    // a `const f = () => …` initializer mid-`if` — keeps its own narrowing intact).
+    let saved = std::mem::take(&mut pass.narrowed);
+
     for stmt in &body.statements {
-        check_return_in_statement(pass, scope, stmt, declared_ret, &mut inferred);
+        check_stmt(pass, scope, stmt, declared_ret, &mut inferred);
     }
 
+    pass.narrowed = saved;
     inferred.unwrap_or(void_ty)
-}
-
-/// Check `return` statements within a body statement (and descend into nested
-/// expressions for nested function bodies). Nested functions introduce their own
-/// `return` scope and are handled when their own body is walked, so a `return`
-/// inside a nested function does not bind to the outer function here.
-fn check_return_in_statement(
-    pass: &mut Pass,
-    scope: ScopeId,
-    stmt: &Statement<'_>,
-    declared_ret: Option<TypeId>,
-    inferred: &mut Option<TypeId>,
-) {
-    match stmt {
-        Statement::ReturnStatement(ret) => {
-            // A bare `return;` is fine under a `void` return (handled by the
-            // `void` rule in phase 2) and contributes no inferred type, so only a
-            // value return (`return <expr>;`) is processed here.
-            if let Some(arg) = &ret.argument {
-                if let Some((src, src_span)) = infer_expr(pass, scope, arg) {
-                    match declared_ret {
-                        // Declared return type: check the returned expression
-                        // against it (primary span = the expression).
-                        Some(tgt) => {
-                            pass.obligations.push(AssignObligation {
-                                src,
-                                tgt,
-                                src_span,
-                                kind: ObligationKind::Assignment,
-                            });
-                        }
-                        // No annotation: infer from the first value return,
-                        // widened (`return 1` → `number`).
-                        None => {
-                            if inferred.is_none() {
-                                *inferred = Some(widen(pass.interner, src));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // Recurse into other statements so a nested function/call inside the body
-        // is still checked, but `return`s inside a nested function bind to that
-        // function (handled when its body is walked), not to this one.
-        Statement::ExpressionStatement(expr_stmt) => {
-            if let Expression::AssignmentExpression(assign) = &expr_stmt.expression {
-                check_assignment(pass, scope, assign);
-            } else {
-                infer_expr(pass, scope, &expr_stmt.expression);
-            }
-        }
-        Statement::VariableDeclaration(decl) => {
-            for declarator in &decl.declarations {
-                check_declarator(pass, scope, decl.kind, declarator);
-            }
-        }
-        Statement::FunctionDeclaration(func) => {
-            check_function_declaration(pass, scope, func);
-        }
-        _ => {}
-    }
 }
 
 /// The function's return type: a declared annotation always wins; otherwise the
@@ -1347,5 +1798,192 @@ fn intrinsic_id(wk: WellKnown, kind: IntrinsicKind) -> TypeId {
         IntrinsicKind::Boolean => wk.boolean,
         IntrinsicKind::Number => wk.number,
         IntrinsicKind::String => wk.string,
+    }
+}
+
+#[cfg(test)]
+mod narrowing_tests {
+    //! M7 end-to-end soundness tests for control-flow narrowing. These drive the
+    //! whole pipeline (parse → bind → check) and assert the *set* of `(line, code)`
+    //! diagnostics, so they pin the four soundness properties the review hammers:
+    //! narrowing does not escape its branch, never affects another symbol, resets
+    //! on reassignment, and never fires for an unrecognized guard. The
+    //! per-operation narrowing math is unit-tested in `flow.rs`; these guard the
+    //! env/driver (the structured-flow slice).
+
+    use crate::driver::check_source;
+
+    /// Run the checker and return the sorted `(1-based line, code)` of every
+    /// diagnostic, keyed on its primary-span start line (matching the conformance
+    /// harness's line mapping).
+    fn diags(source: &str) -> Vec<(u32, String)> {
+        let out = check_source(source);
+        assert!(
+            out.parse_errors.is_empty(),
+            "unexpected parse error(s): {:?}",
+            out.parse_errors
+        );
+        let index = crate::span::LineIndex::new(source);
+        let mut v: Vec<(u32, String)> = out
+            .diagnostics
+            .iter()
+            .map(|d| (index.line_of(d.span.start), d.code.as_str().to_string()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// The narrowed branch is genuinely clean while the wide references error —
+    /// narrowing both *enables* the in-branch assignment and *does not escape* the
+    /// `if` (the trailing reference re-errors). This is the headline behaviour the
+    /// `typeof.ts` fixture observes.
+    #[test]
+    fn narrowing_clears_in_branch_and_does_not_escape() {
+        let src = "\
+function f(x: string | number) {
+  const wide: string = x;
+  if (typeof x === \"string\") {
+    const s: string = x;
+  } else {
+    const n: number = x;
+  }
+  const after: string = x;
+}
+";
+        // Only the two wide references (lines 2 and 8) error; the narrowed
+        // then/else assignments (lines 4, 6) are clean.
+        assert_eq!(
+            diags(src),
+            vec![(2, "TK2322".to_string()), (8, "TK2322".to_string())]
+        );
+    }
+
+    /// Narrowing `x` must never affect a *different* symbol `y` (symbol-keying).
+    #[test]
+    fn narrowing_does_not_affect_other_symbol() {
+        let src = "\
+function f(x: string | number, y: string | number) {
+  if (typeof x === \"string\") {
+    const sx: string = x;
+    const sy: string = y;
+  }
+}
+";
+        // `x` is narrowed (line 3 clean); `y` is untouched, so line 4 errors.
+        assert_eq!(diags(src), vec![(4, "TK2322".to_string())]);
+    }
+
+    /// Reassigning a narrowed symbol resets it — a later reference sees the wide
+    /// (declared) type again, never the stale narrowing.
+    #[test]
+    fn reassignment_resets_narrowing() {
+        let src = "\
+function f(x: string | number) {
+  if (typeof x === \"string\") {
+    const s1: string = x;
+    x = 1;
+    const s2: string = x;
+  }
+}
+";
+        // Before the reassignment `x` is `string` (line 3 clean); after `x = 1` it
+        // is reset to `string | number`, so line 5 errors.
+        assert_eq!(diags(src), vec![(5, "TK2322".to_string())]);
+    }
+
+    /// An unrecognized guard narrows nothing (no false negatives): both branches
+    /// see the wide type.
+    #[test]
+    fn unknown_guard_does_not_narrow() {
+        let src = "\
+function f(x: string | number, c: boolean) {
+  if (c) {
+    const bad: string = x;
+  } else {
+    const bad2: string = x;
+  }
+}
+";
+        assert_eq!(
+            diags(src),
+            vec![(3, "TK2322".to_string()), (5, "TK2322".to_string())]
+        );
+    }
+
+    /// Nested `if`s compose, and the complement of a typeof guard over a >2-member
+    /// union keeps the remaining members.
+    #[test]
+    fn nested_ifs_compose_over_three_member_union() {
+        let src = "\
+function f(x: string | number | boolean) {
+  if (typeof x !== \"string\") {
+    if (typeof x === \"number\") {
+      const n: number = x;
+    } else {
+      const b: boolean = x;
+    }
+  }
+}
+";
+        // Every in-branch assignment is satisfied by composed narrowing: no errors.
+        assert!(diags(src).is_empty(), "got {:?}", diags(src));
+    }
+
+    /// `!x` truthiness flips the branches; the else of `!z` is the truthy (object)
+    /// one, and the falsy then-branch keeps the nullish member.
+    #[test]
+    fn negated_truthiness_flips_branches() {
+        let src = "\
+function f(z: { a: number } | null) {
+  if (!z) {
+    const bad: { a: number } = z;
+  } else {
+    const ok: { a: number } = z;
+  }
+}
+";
+        // then-branch of `!z` has `z: null` → assignment errors (line 3); else is
+        // the object → clean (line 5).
+        assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
+    }
+
+    /// Narrowing enables otherwise-rejected member access (`TK2339`) and does not
+    /// escape: the pre-`if` access still errors.
+    #[test]
+    fn narrowing_enables_member_access() {
+        let src = "\
+function f(x: { a: number } | null) {
+  const bad = x.a;
+  if (x !== null) {
+    const ok: number = x.a;
+  }
+}
+";
+        // The wide `x.a` (line 2) is `TK2339`; after narrowing out null the access
+        // (line 4) is clean.
+        assert_eq!(diags(src), vec![(2, "TK2339".to_string())]);
+    }
+
+    /// Soundness hardening — a **compound** assignment (`+=`, …) to a narrowed
+    /// variable resets its narrowing too, just like a simple `=`. After `x += "b"`
+    /// inside a `typeof`-guarded branch, `x` must no longer be assumed `string`, so a
+    /// `const s: string = x` errors (the variable is back to `string | number`).
+    /// This guards the defense-in-depth reset hoisted above the compound-operator
+    /// early-return in `check_assignment`: were it stale, this would silently pass.
+    #[test]
+    fn compound_assignment_resets_narrowing() {
+        let src = "\
+function f() {
+  let x: string | number = \"a\";
+  if (typeof x === \"string\") {
+    const s1: string = x;
+    x += \"b\";
+    const s2: string = x;
+  }
+}
+";
+        // Before `x += "b"` the narrowing holds (line 4 clean); the compound
+        // assignment resets it, so line 6 errors against `string | number`.
+        assert_eq!(diags(src), vec![(6, "TK2322".to_string())]);
     }
 }

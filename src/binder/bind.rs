@@ -38,8 +38,8 @@
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{DeclId, Symbol, SymbolId, SymbolTable};
 use oxc_ast::ast::{
-    ArrowFunctionExpression, BindingPattern, Expression, Function, FunctionBody, Program,
-    Statement, VariableDeclarator,
+    ArrowFunctionExpression, BindingPattern, BlockStatement, Expression, Function, FunctionBody,
+    Program, Statement, VariableDeclarator,
 };
 use rustc_hash::FxHashMap;
 
@@ -66,6 +66,12 @@ pub struct Binder {
     /// body with parameters resolvable. Span starts are unique per node within a
     /// file, so they are a stable key shared by the binder and the checker.
     pub fn_scopes: FxHashMap<u32, ScopeId>,
+    /// Maps a `{ … }` block's span start to its [`ScopeKind::Block`] lexical scope
+    /// (M7). Each block gets its own scope so a `let`/`const` declared inside an
+    /// `if`/`else` branch lives in that branch, not the enclosing function scope —
+    /// keeping branch-local names from colliding across branches. Keyed by span
+    /// start, like `fn_scopes`, so the checker descends into the matching scope.
+    pub block_scopes: FxHashMap<u32, ScopeId>,
 }
 
 /// Mutable binder state threaded through the recursive walk.
@@ -73,6 +79,8 @@ struct BindState {
     graph: ScopeGraph,
     symbols: SymbolTable,
     fn_scopes: FxHashMap<u32, ScopeId>,
+    /// Per-block lexical scopes (M7), keyed by block span start.
+    block_scopes: FxHashMap<u32, ScopeId>,
     /// Running `DeclId` counter for value declarations.
     next_decl: u32,
     /// Running `DeclId` counter for **type** declarations (separate space).
@@ -110,6 +118,7 @@ pub fn bind_module(program: &Program<'_>) -> Binder {
         graph,
         symbols,
         fn_scopes: FxHashMap::default(),
+        block_scopes: FxHashMap::default(),
         next_decl: 0,
         next_type_decl: 0,
     };
@@ -130,6 +139,7 @@ pub fn bind_module(program: &Program<'_>) -> Binder {
         decl_count: state.next_decl,
         type_decl_count: state.next_type_decl,
         fn_scopes: state.fn_scopes,
+        block_scopes: state.block_scopes,
     }
 }
 
@@ -181,10 +191,38 @@ fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
                 bind_expression(state, scope, arg);
             }
         }
-        // Other statements declare no names in the M3 subset; their
+        // M7: control-flow statements. The `if` test is bound for nested functions;
+        // each branch statement is bound recursively (a `{ … }` branch gets its own
+        // block scope via the `BlockStatement` arm below).
+        Statement::IfStatement(if_stmt) => {
+            bind_expression(state, scope, &if_stmt.test);
+            bind_statement(state, scope, &if_stmt.consequent);
+            if let Some(alternate) = &if_stmt.alternate {
+                bind_statement(state, scope, alternate);
+            }
+        }
+        // M7: a `{ … }` block opens its own lexical scope (so branch-local
+        // `let`/`const` do not leak into the enclosing scope or collide across
+        // branches). A bare block statement (not an `if` branch) is handled the
+        // same way.
+        Statement::BlockStatement(block) => {
+            bind_block(state, scope, block);
+        }
+        // Other statements declare no names in the M7 subset; their
         // sub-expressions (if any) are not in the subset either.
         _ => {}
     }
+}
+
+/// Bind a `{ … }` block into its own [`ScopeKind::Block`] child scope under
+/// `parent`, recording it under the block's span start so the checker descends into
+/// the matching scope. The block's statements are bound inside the new scope.
+fn bind_block(state: &mut BindState, parent: ScopeId, block: &BlockStatement<'_>) {
+    let block_scope = state
+        .graph
+        .push(Scope::new(ScopeKind::Block, Some(parent)));
+    state.block_scopes.insert(block.span.start, block_scope);
+    bind_statements(state, block_scope, &block.body);
 }
 
 /// Bind a variable declarator: declare its identifier (if a plain identifier) in
