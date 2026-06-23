@@ -39,6 +39,7 @@ fixture (keeps fixtures robust to author miscounting).
 | `TK2341` | Property is private (accessed outside its declaring class) |
 | `TK2345` | Argument type not assignable to parameter type |
 | `TK2445` | Property is protected (accessed outside the class and its subclasses) |
+| `TK2540` | Cannot assign to a read-only property |
 | `TK2353` | Object literal may only specify known properties (excess property) |
 | `TK2554` | Wrong number of arguments (arity) |
 | `TK2741` | Property is missing in type but required |
@@ -82,9 +83,9 @@ slots into a known later phase without rework:
   representation for now; de Bruijn indices (§3.1) are the pre-VM (Phase 3) target.
 - **classes**: fields/constructor/methods/`this`/`new`/structural instances (**M11**),
   inheritance (`extends`, `super`) (**M12**), and access modifiers (`private`/`protected` —
-  access control + nominal typing) + `static` members (**M13**) are implemented; `readonly`,
-  getters/setters, abstract, method-override compatibility (`TK2416`), and generic classes
-  remain deferred (`readonly` needs member-assignment-target checking, itself deferred).
+  access control + nominal typing) + `static` members (**M13**), and member-assignment checking
+  + `readonly` (**M14**) are implemented; getters/setters, abstract, method-override
+  compatibility (`TK2416`), and generic classes remain deferred.
   Nominal typing currently constrains only the foreign→private direction (a private/protected
   type rejects a structurally-identical *other* type); widening a private-bearing instance to its
   public structural shape is not yet rejected (a one-directional divergence from tsc TS2322).
@@ -113,3 +114,4 @@ default): `null`/`undefined` are distinct types, not assignable to others.
 | `m11_classes/` | M11 — class fields / constructor / methods / `this` / `new`, structural instances |
 | `m12_inheritance/` | M12 — class inheritance (`extends`, `super`), inherited members + constructor |
 | `m13_modifiers/` | M13 — access modifiers (`private`/`protected`: access control + nominal), `static` |
+| `m14_readonly/` | M14 — member-assignment checking + `readonly` properties |
