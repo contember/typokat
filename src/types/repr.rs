@@ -134,24 +134,40 @@ impl LiteralValue {
     }
 }
 
-/// A member of an object type. Defined now for M2; not constructed in M0.
+/// A member of an object type.
+///
+/// M2 properties are all required (`optional` is always `false`); the field is
+/// kept so optional members (`a?: T`) slot in later without a struct change.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // TODO(M2): populated by the object/interface checker.
 pub struct PropertyType {
     pub name: String,
     pub ty: TypeId,
     pub optional: bool,
 }
 
-/// Structural object type (object literal types, interfaces).
-/// TODO(M2): interned via `Interner` and compared property-wise by the relation
-/// engine (width + depth).
+/// Structural object type (object literal types, interfaces). Interned via
+/// `Interner::intern_object` (canonicalized: properties sorted by name) and
+/// compared property-wise by the relation engine (width + depth).
 #[derive(Clone, Debug, Default)]
-#[allow(dead_code)] // TODO(M2)
 pub struct ObjectType {
-    /// Members in declaration order (display + iteration order, README "Type
-    /// display format").
+    /// Members in **canonical order** (sorted by name). The interner sorts before
+    /// hash-consing (mvp-plan §3.3) so `{ a; b }` and `{ b; a }` collapse to one
+    /// `TypeId`; the stored order must therefore be the canonical one, not source
+    /// order. The renderer prints this order — `; `-separated (README "Type
+    /// display format"); object-target messages in the M2 corpus are code-only,
+    /// so this ordering is not asserted. FLAG: this trades the README's stated
+    /// "declaration order" display for the plan's hash-consing guarantee; the two
+    /// are incompatible for differently-ordered literals.
     pub properties: Vec<PropertyType>,
+}
+
+impl ObjectType {
+    /// Look up a property by name, returning its declared type. `O(n)` linear
+    /// scan — object types in the subset are small, and this keeps the property
+    /// list a plain `Vec` (declaration order is load-bearing for display).
+    pub fn property(&self, name: &str) -> Option<&PropertyType> {
+        self.properties.iter().find(|p| p.name == name)
+    }
 }
 
 /// A single function parameter. Defined now for M3.

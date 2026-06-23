@@ -1,4 +1,26 @@
-//! The statement-level checker (architecture §5, mvp-plan §5 — M0/M1 rows).
+//! The statement-level checker (architecture §5, mvp-plan §5 — M0/M1/M2 rows).
+//!
+//! M2 scope, on top of M0/M1:
+//!
+//!  - **Object type annotations.** `{ a: number; b: string }` lowers to an
+//!    interned object `TypeId` (recursing into nested object types).
+//!  - **Object literal inference.** `{ a: 1, b: "x" }` infers an object type with
+//!    its member types **widened** (`{ a: number; b: string }`) regardless of
+//!    `const`/`let` (standard TS), recursing into nested literals.
+//!  - **Member access.** `obj.prop` resolves the property type off the object
+//!    type; a missing property is `TK2339` (primary span = the property name). An
+//!    `any`/error base yields the error type (no cascade).
+//!  - **Structural assignability.** The relation engine compares object types
+//!    property-wise (width + depth). The checker maps the failure's outermost
+//!    reason to a code: a **missing required property** → `TK2741` (primary span =
+//!    the source literal/expression); a **property-type mismatch** → `TK2322`.
+//!  - **Excess-property check (freshness).** A **fresh** object literal assigned
+//!    directly to an object-typed target reports each property not in the target
+//!    as `TK2353` (primary span = the offending property). A literal reaching the
+//!    target *through a variable* is not fresh → no excess check. Freshness
+//!    recurses into nested fresh literals. This is separate from the structural
+//!    verdict (a literal `{a,x}` is width-assignable to `{a}`, but freshness
+//!    makes the excess `x` an error).
 //!
 //! M1 scope, on top of M0's annotation-vs-literal check:
 //!
@@ -25,15 +47,17 @@
 use crate::binder::symbol::DeclId;
 use crate::binder::{bind_module, Binder};
 use crate::diagnostics::{render_type, Diagnostic};
-use crate::relate::{Relater, Relation};
+use crate::relate::{Reason, Relater, Relation};
 use crate::span::Span;
-use crate::types::repr::{IntrinsicKind, LiteralValue};
-use crate::types::store::TypeId;
+use crate::types::repr::{IntrinsicKind, LiteralValue, ObjectType, PropertyType};
+use crate::types::store::{Store, TypeId};
 use crate::types::{Interner, WellKnown};
 use oxc_ast::ast::{
     AssignmentExpression, AssignmentOperator, AssignmentTarget, BindingPattern, Expression,
-    Program, Statement, TSType, VariableDeclarationKind, VariableDeclarator,
+    ObjectExpression, ObjectPropertyKind, Program, Statement, StaticMemberExpression, TSSignature,
+    TSType, VariableDeclarationKind, VariableDeclarator,
 };
+use oxc_span::GetSpan;
 
 /// One assignability obligation: `src` must be assignable to `tgt`, and the
 /// resulting diagnostic's primary span is `src_span`. Covers both
@@ -119,14 +143,31 @@ pub fn check_program(interner: &mut Interner, program: &Program<'_>) -> Vec<Diag
     let mut relater = Relater::new(store, well_known);
 
     for ob in &obligations {
-        if let Relation::No(_chain) = relater.is_assignable(ob.src, ob.tgt) {
-            // Source widened (literal → base), target as-is (mvp-plan M0/M1
-            // message spec). The error type never reaches here: it is `any`-like,
-            // so its obligations resolve to `Yes` and the cascade is suppressed.
-            let src = render_type(store, ob.src, /* widen */ true);
-            let tgt = render_type(store, ob.tgt, /* widen */ false);
-            let message = format!("Type '{src}' is not assignable to type '{tgt}'");
-            diagnostics.push(Diagnostic::not_assignable(ob.src_span, message));
+        if let Relation::No(chain) = relater.is_assignable(ob.src, ob.tgt) {
+            // Map the failure's outermost reason to a code (mvp-plan §6 "code
+            // mapping"). The error type never reaches here: it is `any`-like, so
+            // its obligations resolve to `Yes` and the cascade is suppressed.
+            match chain.head() {
+                // A required target property is absent in the source → TK2741,
+                // primary span = the source literal/expression.
+                Reason::MissingProperty { name, tgt, .. } => {
+                    let tgt = render_type(store, *tgt, /* widen */ false);
+                    diagnostics.push(Diagnostic::property_missing(ob.src_span, name, &tgt));
+                }
+                // Everything else (primitive mismatch, or a present-but-wrong
+                // property — possibly nested) → TK2322. The nested reason is built
+                // for M6; M2 renders the flat top-level message. Object targets
+                // are asserted code-only in the corpus, so the rendered object
+                // string need not match a fixed layout.
+                Reason::Leaf { .. } | Reason::Property { .. } => {
+                    // Source widened (literal → base), target as-is (mvp-plan
+                    // M0/M1 message spec).
+                    let src = render_type(store, ob.src, /* widen */ true);
+                    let tgt = render_type(store, ob.tgt, /* widen */ false);
+                    let message = format!("Type '{src}' is not assignable to type '{tgt}'");
+                    diagnostics.push(Diagnostic::not_assignable(ob.src_span, message));
+                }
+            }
         }
     }
 
@@ -164,7 +205,7 @@ fn check_declarator(
     let annotation = declarator
         .type_annotation
         .as_ref()
-        .and_then(|ann| lower_annotation(interner.well_known(), &ann.type_annotation));
+        .and_then(|ann| lower_annotation(interner, &ann.type_annotation));
 
     // The declared type the symbol resolves to: the annotation wins; otherwise
     // the (possibly widened) initializer type.
@@ -185,6 +226,70 @@ fn check_declarator(
             tgt: ann,
             src_span: init_span,
         });
+
+        // Excess-property check (freshness): a fresh object literal assigned
+        // directly to an object-typed target reports properties absent in the
+        // target as TK2353. This is separate from — and runs alongside — the
+        // structural assignability obligation above (a fresh `{a,x}` is
+        // width-assignable to `{a}`, yet `x` is still an excess error). Reads the
+        // now-complete store immutably; all relevant types are already interned.
+        if let Some(init_expr) = declarator.init.as_ref() {
+            check_excess_properties(interner.store(), init_expr, ann, diagnostics);
+        }
+    }
+}
+
+/// Recursive excess-property (freshness) check (mvp-plan §6, README
+/// `excess_property.ts`).
+///
+/// Fires **only** when `expr` is a *fresh* object literal (a syntactic
+/// `ObjectExpression`) assigned to an object-typed target — a literal that
+/// reached the target through a variable is an `Identifier`, not an
+/// `ObjectExpression`, so it is not fresh and is skipped here. Each literal
+/// property whose name is absent in `target_ty` is reported as `TK2353` (primary
+/// span = the offending property). Freshness recurses: a property whose value is
+/// itself a fresh object literal is checked against the corresponding nested
+/// target object type.
+fn check_excess_properties(
+    store: &Store,
+    expr: &Expression<'_>,
+    target_ty: TypeId,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    // Not a fresh literal, or the target is not an object type → no check.
+    let Expression::ObjectExpression(literal) = expr else {
+        return;
+    };
+    let Some(target_obj) = store.object_type(target_ty) else {
+        return;
+    };
+    let target_rendered = render_type(store, target_ty, /* widen */ false);
+
+    for member in &literal.properties {
+        // Only plain `key: value` members with a static name are in the subset;
+        // spreads / computed / accessor members are skipped (not in M2 fixtures).
+        let ObjectPropertyKind::ObjectProperty(prop) = member else {
+            continue;
+        };
+        let Some(name) = prop.key.static_name() else {
+            continue;
+        };
+
+        match target_obj.property(&name) {
+            // Present in the target: recurse into a nested fresh literal so a
+            // deeper excess (`{ a: { b, c } }` vs `{ a: { b } }`) is caught.
+            Some(target_prop) => {
+                check_excess_properties(store, &prop.value, target_prop.ty, diagnostics);
+            }
+            // Absent in the target → excess property.
+            None => {
+                diagnostics.push(Diagnostic::excess_property(
+                    Span::from_oxc(prop.key.span()),
+                    &name,
+                    &target_rendered,
+                ));
+            }
+        }
     }
 }
 
@@ -270,10 +375,15 @@ fn binding_decl_id(binder: &Binder, pattern: &BindingPattern<'_>) -> Option<Decl
     binder.symbols.get(symbol_id).and_then(|s| s.value)
 }
 
-/// Lower an annotation type to its `TypeId`. M1 still supports only the
-/// intrinsic keyword types; object/union/reference/function annotations land in
-/// later milestones and leave the declarator's annotation side absent.
-fn lower_annotation(wk: WellKnown, ts_type: &TSType<'_>) -> Option<TypeId> {
+/// Lower an annotation type to its `TypeId`. M2 supports the intrinsic keyword
+/// types and object type literals (`{ a: number; b: string }`, recursing into
+/// nested object types); union/reference/function annotations land in later
+/// milestones and leave the declarator's annotation side absent.
+///
+/// Takes `&mut Interner` because object lowering interns new object types. The
+/// keyword cases only read the well-known table.
+fn lower_annotation(interner: &mut Interner, ts_type: &TSType<'_>) -> Option<TypeId> {
+    let wk = interner.well_known();
     let id = match ts_type {
         TSType::TSAnyKeyword(_) => wk.any,
         TSType::TSUnknownKeyword(_) => wk.unknown,
@@ -284,10 +394,45 @@ fn lower_annotation(wk: WellKnown, ts_type: &TSType<'_>) -> Option<TypeId> {
         TSType::TSBooleanKeyword(_) => wk.boolean,
         TSType::TSNumberKeyword(_) => wk.number,
         TSType::TSStringKeyword(_) => wk.string,
-        // TODO(M2+): object/union/reference/function annotations.
+        TSType::TSTypeLiteral(lit) => return lower_object_annotation(interner, &lit.members),
+        // TODO(M3+): union/reference/function annotations.
         _ => return None,
     };
     Some(id)
+}
+
+/// Lower an object type literal's members to an interned object `TypeId`.
+///
+/// Each property signature contributes a **required** member (M2 has no optional
+/// types). A member whose type cannot be lowered (out of subset) makes the whole
+/// object annotation un-lowerable (`None`) rather than silently dropping the
+/// member — keeping the annotation honest. Index/call/method/construct
+/// signatures are out of the subset and likewise abort the lowering.
+fn lower_object_annotation(
+    interner: &mut Interner,
+    members: &[TSSignature<'_>],
+) -> Option<TypeId> {
+    let mut properties: Vec<PropertyType> = Vec::with_capacity(members.len());
+    for member in members {
+        let TSSignature::TSPropertySignature(sig) = member else {
+            // Index/call/method/construct signature — out of the M2 subset.
+            return None;
+        };
+        // Optional members are out of the subset; a `?` would change the relation
+        // rule, so abort rather than treat it as required.
+        if sig.optional {
+            return None;
+        }
+        let name = sig.key.static_name()?;
+        let annotation = sig.type_annotation.as_ref()?;
+        let ty = lower_annotation(interner, &annotation.type_annotation)?;
+        properties.push(PropertyType {
+            name: name.into_owned(),
+            ty,
+            optional: false,
+        });
+    }
+    Some(interner.intern_object(ObjectType { properties }))
 }
 
 /// Infer the type of an expression, returning `(TypeId, span)`. The span is the
@@ -295,11 +440,13 @@ fn lower_annotation(wk: WellKnown, ts_type: &TSType<'_>) -> Option<TypeId> {
 ///
 /// Literals are interned as their *literal* type (widening is applied later,
 /// only where a `let`/`var` declaration calls for it). `null` and the
-/// `undefined` keyword map to their intrinsics. An identifier reference resolves
-/// through the scope graph: a resolved name yields its declared type; an
-/// unresolved name emits `TK2304` and yields the **error type** so no cascade
-/// `TK2322` follows. Returns `None` for expression shapes outside the M1 subset
-/// (those positions are simply not checked, matching M0 leniency).
+/// `undefined` keyword map to their intrinsics. An object literal infers an
+/// object type with **widened** member types (M2). Member access resolves the
+/// property type (or `TK2339`). An identifier reference resolves through the
+/// scope graph: a resolved name yields its declared type; an unresolved name
+/// emits `TK2304` and yields the **error type** so no cascade `TK2322` follows.
+/// Returns `None` for expression shapes outside the subset (those positions are
+/// simply not checked, matching M0 leniency).
 fn infer_expr(
     interner: &mut Interner,
     binder: &Binder,
@@ -322,6 +469,13 @@ fn infer_expr(
             Some((id, Span::from_oxc(lit.span)))
         }
         Expression::NullLiteral(lit) => Some((well_known.null, Span::from_oxc(lit.span))),
+        Expression::ObjectExpression(obj) => {
+            let id = infer_object_literal(interner, binder, decl_types, obj, diagnostics);
+            Some((id, Span::from_oxc(obj.span)))
+        }
+        Expression::StaticMemberExpression(member) => {
+            infer_member_access(interner, binder, decl_types, member, diagnostics)
+        }
         Expression::Identifier(ident) => {
             let span = Span::from_oxc(ident.span);
             // The `undefined` keyword parses as an identifier reference; treat it
@@ -348,8 +502,111 @@ fn infer_expr(
                 }
             }
         }
-        // TODO(M2+): object/array literals, member access, calls, etc.
+        // TODO(M3+): array literals, calls, etc.
         _ => None,
+    }
+}
+
+/// Infer the type of an object literal `{ a: 1, b: "x" }` → an interned object
+/// type whose member types are **widened** (`{ a: number; b: string }`).
+///
+/// Object-literal members widen regardless of `const`/`let` (standard TS: a
+/// `const obj = { a: 1 }` still has type `{ a: number }`), so widening is applied
+/// here at member level — `declared_from_init` then leaves the object type alone.
+/// Member inference recurses (`infer_expr`), so a nested object literal yields a
+/// nested object type whose own members are already widened; widening such a
+/// member is a no-op. A member whose value type cannot be inferred (out of
+/// subset) is skipped — the object simply omits it, matching M0/M1 leniency.
+/// Spread / computed / accessor members are likewise skipped (not in the subset).
+fn infer_object_literal(
+    interner: &mut Interner,
+    binder: &Binder,
+    decl_types: &DeclTypes,
+    obj: &ObjectExpression<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> TypeId {
+    let mut properties: Vec<PropertyType> = Vec::with_capacity(obj.properties.len());
+    for member in &obj.properties {
+        let ObjectPropertyKind::ObjectProperty(prop) = member else {
+            // Spread element — out of the M2 subset.
+            continue;
+        };
+        let Some(name) = prop.key.static_name() else {
+            // Computed / non-static key — out of the M2 subset.
+            continue;
+        };
+        let Some((value_ty, _)) = infer_expr(interner, binder, decl_types, &prop.value, diagnostics)
+        else {
+            // Value type out of subset — omit this member.
+            continue;
+        };
+        let widened = widen(interner, value_ty);
+        properties.push(PropertyType {
+            name: name.into_owned(),
+            ty: widened,
+            optional: false,
+        });
+    }
+    interner.intern_object(ObjectType { properties })
+}
+
+/// Infer the type of a member access `obj.prop` (`StaticMemberExpression`).
+///
+/// The base is inferred first; the result is the property's type looked up off
+/// the base object type. A **missing** property is `TK2339` with the property
+/// name as the primary span, and the access yields the **error type** so nothing
+/// cascades. An `any`/error base yields the error type directly (no `TK2339`). A
+/// base that is neither an object nor `any`-like is out of the M2 subset (e.g.
+/// member access on a primitive) and yields the error type without a diagnostic,
+/// matching M0/M1 leniency. Returns `None` only when the base itself is out of
+/// subset (`infer_expr` returned `None`).
+fn infer_member_access(
+    interner: &mut Interner,
+    binder: &Binder,
+    decl_types: &DeclTypes,
+    member: &StaticMemberExpression<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<(TypeId, Span)> {
+    let wk = interner.well_known();
+    let (base_ty, _) = infer_expr(interner, binder, decl_types, &member.object, diagnostics)?;
+    let prop_name = member.property.name.as_str();
+    let prop_span = Span::from_oxc(member.property.span);
+
+    // An `any`/error base relates to everything and suppresses cascades; member
+    // access off it is the error type, no `TK2339`.
+    if base_ty == wk.any || base_ty == wk.error {
+        return Some((wk.error, prop_span));
+    }
+
+    match interner.store().object_type(base_ty) {
+        Some(obj) => match obj.property(prop_name) {
+            // Resolved: the access has the property's type. Its span is the
+            // property name (the primary span for any downstream diagnostic).
+            Some(prop) => Some((prop.ty, prop_span)),
+            // Missing property → TK2339; the access yields the error type so no
+            // cascade `TK2322` follows on this expression.
+            None => {
+                let tgt = render_type(interner.store(), base_ty, /* widen */ false);
+                diagnostics.push(Diagnostic::property_does_not_exist(
+                    prop_span, prop_name, &tgt,
+                ));
+                Some((wk.error, prop_span))
+            }
+        },
+        // Base is not an object type and not `any`-like — out of the M2 subset
+        // (e.g. accessing a member of a primitive). Yield the error type to avoid
+        // a spurious cascade, without emitting a diagnostic.
+        None => Some((wk.error, prop_span)),
+    }
+}
+
+/// Widen a type for object-literal member inference: a literal widens to its base
+/// intrinsic (`1` → `number`); every other type (including object types) passes
+/// through unchanged.
+fn widen(interner: &mut Interner, ty: TypeId) -> TypeId {
+    match interner.store().literal_value(ty) {
+        Some(lit) => intrinsic_id(interner.well_known(), lit.base_kind()),
+        None => ty,
     }
 }
 

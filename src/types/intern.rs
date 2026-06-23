@@ -10,7 +10,7 @@
 //! cheap constants throughout the checker and relation engine.
 
 use crate::types::hash::{structural_hash, StructuralKey};
-use crate::types::repr::{IntrinsicKind, LiteralValue, TypeFlags, TypeTag};
+use crate::types::repr::{IntrinsicKind, LiteralValue, ObjectType, PropertyType, TypeFlags, TypeTag};
 use crate::types::store::{Store, TypeId};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -139,12 +139,37 @@ impl Interner {
         id
     }
 
+    /// Intern an object type, returning the shared id.
+    ///
+    /// Canonicalization (mvp-plan §3.3): the property list is sorted by name
+    /// before hashing/comparison so two object types that differ only in member
+    /// order (`{ a; b }` vs `{ b; a }`) hash-cons to the **same** `TypeId`. The
+    /// caller passes properties in source order; this owns the sort.
+    pub fn intern_object(&mut self, mut object: ObjectType) -> TypeId {
+        // Canonical order: sort by property name. The sort is stable, so the
+        // relative order of any (illegal-in-the-subset) duplicate names is
+        // preserved deterministically.
+        object.properties.sort_by(|a, b| a.name.cmp(&b.name));
+
+        let key = StructuralKey::Object(&object.properties);
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store
+                .object_type(id)
+                .is_some_and(|existing| object_props_eq(&existing.properties, &object.properties))
+        }) {
+            return existing;
+        }
+        let id = self.store.push_object(object, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
     // TODO(M4): pub fn union(&mut self, members: &mut Vec<TypeId>) -> TypeId
     //   Canonicalize before interning (architecture §3.3): flatten nested
     //   unions, sort by TypeId, dedup, normalize `X | never -> X`, collapse a
     //   1-member union to the member, then hash-cons like the helpers above.
     //
-    // TODO(M2): pub fn intern_object(&mut self, obj: ObjectType) -> TypeId
     // TODO(M3): pub fn intern_function(&mut self, f: FunctionType) -> TypeId
 
     /// Look up an existing id in the dedup bucket for `hash`, accepting the first
@@ -159,6 +184,17 @@ impl Interner {
     }
 }
 
+/// Structural equality of two **canonical** (name-sorted) property lists — the
+/// dedup-bucket tie-break for object types. Property types compare by `TypeId`,
+/// which is itself canonical thanks to hash-consing, so nested object equality is
+/// decided cheaply by id without recursing.
+fn object_props_eq(a: &[PropertyType], b: &[PropertyType]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            x.name == y.name && x.optional == y.optional && x.ty == y.ty
+        })
+}
+
 impl TypeTag {
     /// Convenience for assertions/tests: whether this tag is a cold side-table
     /// tag (vs the inline `Intrinsic`). Currently informational.
@@ -171,7 +207,16 @@ impl TypeTag {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::repr::LiteralValue;
+    use crate::types::repr::{LiteralValue, ObjectType, PropertyType};
+
+    /// Build a required property `name: ty`.
+    fn prop(name: &str, ty: TypeId) -> PropertyType {
+        PropertyType {
+            name: name.to_string(),
+            ty,
+            optional: false,
+        }
+    }
 
     /// Hash-consing: structurally identical types share one `TypeId`
     /// (architecture §3, mvp-plan §6 — a correctness-critical invariant).
@@ -203,6 +248,66 @@ mod tests {
         let f1 = interner.intern_literal(LiteralValue::Boolean(false));
         assert_eq!(t1, t2);
         assert_ne!(t1, f1);
+    }
+
+    /// Object hash-consing + canonicalization (mvp-plan §3.3, M2): two object
+    /// types that differ only in member *order* must collapse to one `TypeId`,
+    /// while a genuinely different shape (different property type) must not.
+    #[test]
+    fn object_canonicalization_dedups_by_member_set() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // `{ a: number; b: string }` and `{ b: string; a: number }` — same set,
+        // different source order — hash-cons to the SAME id.
+        let ab = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number), prop("b", wk.string)],
+        });
+        let ba = interner.intern_object(ObjectType {
+            properties: vec![prop("b", wk.string), prop("a", wk.number)],
+        });
+        assert_eq!(ab, ba, "member order must not affect identity");
+
+        // Re-interning the exact same shape returns the same id.
+        let ab_again = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number), prop("b", wk.string)],
+        });
+        assert_eq!(ab, ab_again);
+
+        // A different property *type* is a distinct object type.
+        let ab_diff = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.string), prop("b", wk.string)],
+        });
+        assert_ne!(ab, ab_diff, "differing property types must not dedup");
+
+        // A different property *set* (extra member) is distinct.
+        let abc = interner.intern_object(ObjectType {
+            properties: vec![
+                prop("a", wk.number),
+                prop("b", wk.string),
+                prop("c", wk.boolean),
+            ],
+        });
+        assert_ne!(ab, abc, "differing property sets must not dedup");
+
+        // The canonical stored order is name-sorted regardless of input order.
+        let stored = interner
+            .store()
+            .object_type(ba)
+            .expect("ba is an object type");
+        let names: Vec<&str> = stored.properties.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["a", "b"], "stored order must be canonical (sorted)");
+
+        // Nested object identity flows through: two outer objects whose nested
+        // member is the *same* interned inner id dedup, exercising the by-id
+        // property comparison.
+        let outer1 = interner.intern_object(ObjectType {
+            properties: vec![prop("a", ab)],
+        });
+        let outer2 = interner.intern_object(ObjectType {
+            properties: vec![prop("a", ba)], // ba == ab
+        });
+        assert_eq!(outer1, outer2, "nested object identity must propagate");
     }
 
     /// The well-known intrinsic ids are assigned in `IntrinsicKind::ALL` order

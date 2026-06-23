@@ -30,15 +30,24 @@ pub enum RelationKind {
 }
 
 /// One link in a failure explanation. M0 only ever produces a single
-/// `Leaf { src, tgt }`, but the structure is recursive so M2+ can nest
-/// "...because property `p`: <child reason>" (architecture §6.4).
+/// `Leaf { src, tgt }`; M2 adds the two object-structural causes. The structure
+/// is recursive so the depth case nests "...because property `p`: <child reason>"
+/// (architecture §6.4) — the chain M6 renders.
 #[derive(Clone, Debug)]
 pub enum Reason {
     /// The base mismatch: `src` is not assignable to `tgt`.
     Leaf { src: TypeId, tgt: TypeId },
-    /// A mismatch located at a named property, wrapping the inner reason.
-    /// TODO(M2/M6): produced when an object property fails to relate.
-    #[allow(dead_code)]
+    /// A **required target property is absent in the source** object. `src`/`tgt`
+    /// are the two object types; `name` is the missing property. The checker maps
+    /// this to `TK2741`.
+    MissingProperty {
+        name: String,
+        src: TypeId,
+        tgt: TypeId,
+    },
+    /// A property is **present but its type is incompatible**, wrapping the inner
+    /// reason for that property's types. `src`/`tgt` are the two object types. The
+    /// checker maps this to `TK2322`.
     Property {
         name: String,
         src: TypeId,
@@ -62,11 +71,23 @@ impl ReasonChain {
         }
     }
 
+    /// Wrap an arbitrary head reason (object-structural failures).
+    fn of(head: Reason) -> ReasonChain {
+        ReasonChain { head }
+    }
+
+    /// The outermost reason — the checker inspects its kind to pick the
+    /// diagnostic code (missing property → `TK2741`, otherwise `TK2322`).
+    pub fn head(&self) -> &Reason {
+        &self.head
+    }
+
     /// The (src, tgt) at the root of the failure — what the checker reports as
     /// the primary mismatch.
     pub fn root(&self) -> (TypeId, TypeId) {
         match &self.head {
             Reason::Leaf { src, tgt } => (*src, *tgt),
+            Reason::MissingProperty { src, tgt, .. } => (*src, *tgt),
             Reason::Property { src, tgt, .. } => (*src, *tgt),
         }
     }
@@ -124,9 +145,16 @@ impl<'a> Relater<'a> {
 
         let key = RelationKey::new(src, tgt, kind);
 
-        // Cache: a previously-decided durable relation.
-        if let Some(result) = self.cache.get(key) {
-            return self.materialize(result, src, tgt);
+        // Cache: a previously-decided durable relation. A cached success is
+        // returned directly; a cached *failure* recomputes the reason chain on
+        // the (rare) repeated-failure path so the checker still sees the precise
+        // missing-vs-mismatch cause — the cache stores only the bool verdict
+        // (architecture §6.1), not the reason.
+        if let Some(verdict) = self.cache.get(key) {
+            if verdict {
+                return Relation::Yes;
+            }
+            return self.relate_uncached(src, tgt, kind);
         }
 
         // Cycle stack: re-entry on an in-flight relation is assumed true
@@ -139,26 +167,16 @@ impl<'a> Relater<'a> {
         let result = self.relate_uncached(src, tgt, kind);
 
         self.stack.remove(&key);
-        // Cache the boolean verdict; the reason chain is recomputed cheaply on
-        // the rare repeated-failure path via `materialize`.
+        // Cache the boolean verdict only; the reason chain is rebuilt cheaply on
+        // the rare repeated-failure path (see the cache-hit branch above).
         self.cache.insert(key, result.is_yes());
         result
     }
 
-    /// Reconstruct a `Relation` from a cached boolean verdict. A cached failure
-    /// rebuilds a leaf reason for `(src, tgt)` (M0 reasons are leaves; M2+ will
-    /// extend caching to carry richer reasons if profiling warrants).
-    fn materialize(&self, verdict: bool, src: TypeId, tgt: TypeId) -> Relation {
-        if verdict {
-            Relation::Yes
-        } else {
-            Relation::No(ReasonChain::leaf(src, tgt))
-        }
-    }
-
     /// The structural rules, run when the cache and cycle stack don't decide it.
-    /// M0 scope: the intrinsic lattice and literal → base widening.
-    fn relate_uncached(&mut self, src: TypeId, tgt: TypeId, _kind: RelationKind) -> Relation {
+    /// M0 scope: the intrinsic lattice and literal → base widening. M2 adds the
+    /// object property-wise rule (width + depth).
+    fn relate_uncached(&mut self, src: TypeId, tgt: TypeId, kind: RelationKind) -> Relation {
         let wk = self.well_known;
 
         // `any` relates to everything in both directions (architecture §6,
@@ -197,8 +215,63 @@ impl<'a> Relater<'a> {
             }
         }
 
+        // Object structural rule (mvp-plan §6/§9, M2): `src` is assignable to
+        // `tgt` iff every property of `tgt` is present in `src` with the src
+        // property type assignable to the tgt property type. Width is allowed
+        // (extra `src` props are fine); depth recurses. This is the only rule
+        // that can fail with a *structured* (non-leaf) reason.
+        if self.store.tag(src) == TypeTag::Object && self.store.tag(tgt) == TypeTag::Object {
+            return self.relate_objects(src, tgt, kind);
+        }
+
         // Otherwise: not assignable. Build the leaf reason on this failing path.
         Relation::No(ReasonChain::leaf(src, tgt))
+    }
+
+    /// Property-wise object relation. Returns the **first** failing target
+    /// property (in canonical order) as a precise reason: a `MissingProperty`
+    /// when the source lacks a required target property, or a `Property` wrapping
+    /// the nested reason when the property is present but its type does not
+    /// relate. First-failure ordering keeps the verdict deterministic and matches
+    /// how the M2 corpus pairs one cause per failing assignment.
+    fn relate_objects(&mut self, src: TypeId, tgt: TypeId, kind: RelationKind) -> Relation {
+        // Both ids are object-tagged here; the side-tables always resolve. The
+        // `else` arms are defensive (an object tag without a payload is a store
+        // invariant violation, never expected) and produce a leaf rather than
+        // panicking.
+        let Some(tgt_obj) = self.store.object_type(tgt) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let Some(src_obj) = self.store.object_type(src) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+
+        for tgt_prop in &tgt_obj.properties {
+            match src_obj.property(&tgt_prop.name) {
+                // Width + depth: present in source — its type must relate to the
+                // target property's type (recurse, so nested mismatches nest).
+                Some(src_prop) => {
+                    if let Relation::No(child) = self.relate(src_prop.ty, tgt_prop.ty, kind) {
+                        return Relation::No(ReasonChain::of(Reason::Property {
+                            name: tgt_prop.name.clone(),
+                            src,
+                            tgt,
+                            because: Box::new(child.head),
+                        }));
+                    }
+                }
+                // Required target property absent in the source.
+                None => {
+                    return Relation::No(ReasonChain::of(Reason::MissingProperty {
+                        name: tgt_prop.name.clone(),
+                        src,
+                        tgt,
+                    }));
+                }
+            }
+        }
+
+        Relation::Yes
     }
 
     /// `any` or the error type — both relate to everything.
@@ -235,8 +308,106 @@ impl<'a> Relater<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::repr::LiteralValue;
+    use crate::types::repr::{LiteralValue, ObjectType, PropertyType};
     use crate::types::Interner;
+
+    fn prop(name: &str, ty: TypeId) -> PropertyType {
+        PropertyType {
+            name: name.to_string(),
+            ty,
+            optional: false,
+        }
+    }
+
+    /// The M2 object structural rule: width (extra src props ok), depth (prop
+    /// types checked, recursing), and the precise missing-vs-mismatch reason.
+    #[test]
+    fn object_width_depth_and_reason_kinds() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // { a: number; b: string }
+        let ab = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number), prop("b", wk.string)],
+        });
+        // { a: number } — a width-narrower target.
+        let a_only = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number)],
+        });
+        // { a: string } — same key, incompatible type.
+        let a_str = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.string)],
+        });
+
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+
+        // Width: { a; b } is assignable to { a } (extra `b` ignored).
+        assert!(rel.is_assignable(ab, a_only).is_yes());
+        // Exact identity short-circuits.
+        assert!(rel.is_assignable(ab, ab).is_yes());
+
+        // Missing required property: { a } is NOT assignable to { a; b }.
+        match rel.is_assignable(a_only, ab) {
+            Relation::No(chain) => match chain.head() {
+                Reason::MissingProperty { name, .. } => assert_eq!(name, "b"),
+                other => panic!("expected MissingProperty, got {other:?}"),
+            },
+            Relation::Yes => panic!("expected a missing-property failure"),
+        }
+
+        // Depth mismatch: { a: number } is NOT assignable to { a: string }.
+        match rel.is_assignable(a_only, a_str) {
+            Relation::No(chain) => match chain.head() {
+                Reason::Property { name, because, .. } => {
+                    assert_eq!(name, "a");
+                    assert!(matches!(**because, Reason::Leaf { .. }));
+                }
+                other => panic!("expected Property, got {other:?}"),
+            },
+            Relation::Yes => panic!("expected a depth mismatch failure"),
+        }
+    }
+
+    /// Nested depth: a mismatch one level deep nests under the outer property
+    /// (the chain M6 renders).
+    #[test]
+    fn object_nested_depth_reason_nests() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // inner targets: { b: number } vs source { b: string }
+        let inner_num = interner.intern_object(ObjectType {
+            properties: vec![prop("b", wk.number)],
+        });
+        let inner_str = interner.intern_object(ObjectType {
+            properties: vec![prop("b", wk.string)],
+        });
+        let outer_src = interner.intern_object(ObjectType {
+            properties: vec![prop("a", inner_str)],
+        });
+        let outer_tgt = interner.intern_object(ObjectType {
+            properties: vec![prop("a", inner_num)],
+        });
+
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+
+        match rel.is_assignable(outer_src, outer_tgt) {
+            Relation::No(chain) => match chain.head() {
+                Reason::Property { name, because, .. } => {
+                    assert_eq!(name, "a");
+                    // Inner reason is the property `b` mismatch.
+                    match &**because {
+                        Reason::Property { name, .. } => assert_eq!(name, "b"),
+                        other => panic!("expected nested Property, got {other:?}"),
+                    }
+                }
+                other => panic!("expected outer Property, got {other:?}"),
+            },
+            Relation::Yes => panic!("expected nested depth failure"),
+        }
+    }
 
     /// Exhaustively check the M0 intrinsic-lattice + literal-widening rules so a
     /// regression in the relation engine is caught independent of the parser and

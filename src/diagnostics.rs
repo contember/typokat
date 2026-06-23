@@ -21,7 +21,12 @@ pub enum DiagnosticCode {
     TK2304,
     /// Type X is not assignable to type Y.
     TK2322,
-    // TODO(M2): TK2339 / TK2353 / TK2741
+    /// Property does not exist on type (member access).
+    TK2339,
+    /// Object literal may only specify known properties (excess property).
+    TK2353,
+    /// Property is missing in type but required.
+    TK2741,
     // TODO(M3): TK2345 / TK2554
 }
 
@@ -31,6 +36,9 @@ impl DiagnosticCode {
         match self {
             DiagnosticCode::TK2304 => "TK2304",
             DiagnosticCode::TK2322 => "TK2322",
+            DiagnosticCode::TK2339 => "TK2339",
+            DiagnosticCode::TK2353 => "TK2353",
+            DiagnosticCode::TK2741 => "TK2741",
         }
     }
 }
@@ -77,6 +85,43 @@ impl Diagnostic {
         }
     }
 
+    /// Construct a `TK2339` "property does not exist" error (member access of an
+    /// unknown property). The primary span is the property name. `tgt` is the
+    /// rendered object type the property was looked up on.
+    pub fn property_does_not_exist(span: Span, name: &str, tgt: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2339,
+            severity: Severity::Error,
+            message: format!("Property '{name}' does not exist on type '{tgt}'"),
+            span,
+        }
+    }
+
+    /// Construct a `TK2741` "property is missing" error: a fresh value/literal is
+    /// assigned to an object annotation that requires a property the source
+    /// lacks. The primary span is the source literal/expression. `tgt` is the
+    /// rendered target object type.
+    pub fn property_missing(span: Span, name: &str, tgt: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2741,
+            severity: Severity::Error,
+            message: format!("Property '{name}' is missing in type '{tgt}'"),
+            span,
+        }
+    }
+
+    /// Construct a `TK2353` excess-property error: a fresh object literal
+    /// specifies a property `name` not present in the object-typed target `tgt`.
+    /// The primary span is the offending property.
+    pub fn excess_property(span: Span, name: &str, tgt: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2353,
+            severity: Severity::Error,
+            message: format!("'{name}' does not exist in type '{tgt}'"),
+            span,
+        }
+    }
+
     /// Whether this diagnostic counts as an error (drives the process exit code).
     pub fn is_error(&self) -> bool {
         matches!(self.severity, Severity::Error)
@@ -115,11 +160,26 @@ pub fn render_type(store: &Store, id: TypeId, widen: bool) -> String {
                 None => "unknown".to_string(),
             }
         }
-        // TODO(M2/M3/M4): object `{ a: number; b: string }`, function
-        // `(x: number) => string`, union (canonical order). Not reachable in M0.
-        TypeTag::Object | TypeTag::Function | TypeTag::Union => {
-            "<unsupported>".to_string()
-        }
+        // Object: `{ a: number; b: string }` — members in stored (canonical)
+        // order, `; `-separated (README "Type display format"). Property *types*
+        // never widen (they are already the object type's members); only a
+        // top-level *literal source* widens, which never recurses into here.
+        TypeTag::Object => match store.object_type(id) {
+            Some(obj) if obj.properties.is_empty() => "{}".to_string(),
+            Some(obj) => {
+                let members: Vec<String> = obj
+                    .properties
+                    .iter()
+                    .map(|p| format!("{}: {}", p.name, render_type(store, p.ty, false)))
+                    .collect();
+                format!("{{ {} }}", members.join("; "))
+            }
+            // Defensive fallback; an object always has a side-table entry.
+            None => "<unsupported>".to_string(),
+        },
+        // TODO(M3/M4): function `(x: number) => string`, union (canonical order).
+        // Not reachable in M2.
+        TypeTag::Function | TypeTag::Union => "<unsupported>".to_string(),
     }
 }
 
@@ -156,9 +216,8 @@ pub fn render_to_writer(
         let cs = to_codespan(diag);
         // The only `Error` cases here are a missing file id (we always pass id
         // `()`) or an IO failure; map both to an IO error for the caller.
-        term::emit_to_io_write(writer, &config, &file, &cs).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-        })?;
+        term::emit_to_io_write(writer, &config, &file, &cs)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
     }
     Ok(())
 }

@@ -64,4 +64,10 @@ impl RelationCache {
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+
+    /// Whether the cache holds no decided relations.
+    #[allow(dead_code)] // TODO(§6.2): cache-lifetime instrumentation.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }

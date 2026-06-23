@@ -16,7 +16,7 @@
 //!   documented placeholder and the `Store` keeps a (currently unused) column
 //!   for it. Phase 4 fills this in without changing call sites.
 
-use crate::types::repr::{IntrinsicKind, LiteralValue, TypeTag};
+use crate::types::repr::{IntrinsicKind, LiteralValue, PropertyType, TypeTag};
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
@@ -30,7 +30,9 @@ use std::hash::{Hash, Hasher};
 pub enum StructuralKey<'a> {
     Intrinsic(IntrinsicKind),
     Literal(&'a LiteralValue),
-    // TODO(M2): Object(&'a [PropertyType])
+    /// An object type, keyed over its **canonical** property list (sorted by name
+    /// by the interner before hashing) so `{ a; b }` and `{ b; a }` collide.
+    Object(&'a [PropertyType]),
     // TODO(M4): Union(&'a [TypeId])  — over already-canonicalized members
     // TODO(M3): Function(&'a FunctionType)
 }
@@ -49,6 +51,19 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
         StructuralKey::Literal(value) => {
             TypeTag::Literal.hash_discriminant(&mut h);
             hash_literal(value, &mut h);
+        }
+        StructuralKey::Object(properties) => {
+            TypeTag::Object.hash_discriminant(&mut h);
+            // Length first so prefixes of a longer property list cannot collide
+            // with the shorter one under the streaming hasher.
+            properties.len().hash(&mut h);
+            for prop in *properties {
+                // Properties arrive in canonical (name-sorted) order, so this is
+                // order-independent across two structurally equal object types.
+                prop.name.hash(&mut h);
+                prop.optional.hash(&mut h);
+                prop.ty.0.hash(&mut h);
+            }
         }
     }
     h.finish()
