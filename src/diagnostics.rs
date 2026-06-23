@@ -33,6 +33,8 @@ pub enum DiagnosticCode {
     /// Property is protected (accessed outside the class and its subclasses) —
     /// M13.
     TK2445,
+    /// Cannot assign to a read-only property — M14.
+    TK2540,
     /// Wrong number of call arguments (arity).
     TK2554,
     /// Property is missing in type but required.
@@ -50,6 +52,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2345 => "TK2345",
             DiagnosticCode::TK2353 => "TK2353",
             DiagnosticCode::TK2445 => "TK2445",
+            DiagnosticCode::TK2540 => "TK2540",
             DiagnosticCode::TK2554 => "TK2554",
             DiagnosticCode::TK2741 => "TK2741",
         }
@@ -144,6 +147,20 @@ impl Diagnostic {
             message: format!(
                 "Property '{name}' is protected and only accessible within class and its subclasses."
             ),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2540` "cannot assign to a read-only property" error (M14): an
+    /// assignment whose target is a `readonly` member, outside the one place it is
+    /// allowed (the declaring class's constructor via `this.prop`). The primary span
+    /// is the assignment target (the member expression).
+    pub fn readonly_assignment(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2540,
+            severity: Severity::Error,
+            message: format!("Cannot assign to '{name}' because it is a read-only property"),
             span,
             elaboration: Vec::new(),
         }

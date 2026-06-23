@@ -352,11 +352,15 @@ fn object_props_eq(a: &[PropertyType], b: &[PropertyType]) -> bool {
             // dedup (matching the hash above). This keeps a `private x` distinct
             // from a public `x`, and a non-public member of one class distinct from
             // a same-named one of another — the basis of nominal class typing.
+            // M14: `readonly` is part of the identity too (so a `readonly x` and a
+            // mutable `x` do not dedup), matching the hash — even though the relation
+            // engine ignores `readonly` for assignability.
             x.name == y.name
                 && x.optional == y.optional
                 && x.ty == y.ty
                 && x.visibility == y.visibility
                 && x.declaring_class == y.declaring_class
+                && x.readonly == y.readonly
         })
 }
 

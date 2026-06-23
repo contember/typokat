@@ -90,6 +90,13 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
                 // (distinct origins ⇒ distinct ids ⇒ distinct cache keys).
                 (prop.visibility as u8).hash(&mut h);
                 prop.declaring_class.map(|c| c.0).hash(&mut h);
+                // M14: `readonly` is part of a member's structural identity too, so
+                // a `readonly x` and a mutable `x` of the same name/type hash to
+                // distinct objects (the flag is preserved through interning rather
+                // than dropped). It does NOT affect assignability — the relation
+                // engine ignores it — but keeping it in the identity is what lets the
+                // assignment-target check read it back off the interned type.
+                prop.readonly.hash(&mut h);
             }
         }
         StructuralKey::Function { params, ret } => {

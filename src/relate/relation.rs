@@ -675,6 +675,7 @@ mod tests {
             optional: false,
             visibility,
             declaring_class,
+            readonly: false,
         }
     }
 
@@ -835,6 +836,52 @@ mod tests {
         assert!(
             !rel.is_assignable(public_obj, prot_ty).is_yes(),
             "a public object must NOT be assignable to a protected-member class"
+        );
+    }
+
+    /// M14 — `readonly` is part of a member's structural identity (a `{ readonly x }`
+    /// interns to a *distinct* id from `{ x }`), but it must **NOT** affect
+    /// assignability: a readonly-bearing object and a mutable one relate **both ways**.
+    /// The relation engine deliberately ignores the flag (it gates assignment targets
+    /// only); this pins that it is neither added to the nominal-origin gate nor the
+    /// structural depth check.
+    #[test]
+    fn readonly_does_not_affect_assignability() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // `{ readonly x: number }` and `{ x: number }`.
+        let readonly_obj = interner.intern_object(ObjectType {
+            properties: vec![PropertyType {
+                name: "x".to_string(),
+                ty: wk.number,
+                optional: false,
+                visibility: Visibility::Public,
+                declaring_class: None,
+                readonly: true,
+            }],
+        });
+        let mutable_obj = interner.intern_object(ObjectType {
+            properties: vec![prop("x", wk.number)],
+        });
+
+        // The flag is part of identity, so the two ids differ...
+        assert_ne!(
+            readonly_obj, mutable_obj,
+            "`readonly` is part of structural identity ⇒ distinct interned ids"
+        );
+
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+
+        // ...yet they relate freely in BOTH directions (readonly ignored for relation).
+        assert!(
+            rel.is_assignable(readonly_obj, mutable_obj).is_yes(),
+            "{{ readonly x }} must be assignable to {{ x }}"
+        );
+        assert!(
+            rel.is_assignable(mutable_obj, readonly_obj).is_yes(),
+            "{{ x }} must be assignable to {{ readonly x }}"
         );
     }
 

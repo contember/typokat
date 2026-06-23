@@ -193,6 +193,15 @@ pub enum Visibility {
 /// (distinct [`ClassId`]). An ordinary structural object literal / interface
 /// member is `Public` with no declaring class (`None`), so M0–M12 behaviour is
 /// unchanged — those members hash and compare exactly as before.
+///
+/// M14 adds the [`readonly`](PropertyType::readonly) flag. Like visibility/origin
+/// it is part of the property's **structural identity** (hashed + compared by the
+/// interner), so it is preserved through interning rather than silently dropped —
+/// but, unlike visibility, the **relation engine ignores it** for assignability (a
+/// `readonly x` and a mutable `x` relate freely, both directions). It only gates
+/// assignment *targets*: assigning to a `readonly` member is `TK2540` (except in
+/// the declaring class's constructor). An object-literal / interface member is
+/// non-readonly.
 #[derive(Clone, Debug)]
 pub struct PropertyType {
     pub name: String,
@@ -207,12 +216,21 @@ pub struct PropertyType {
     /// *origin* the nominal relation rule keys on for `private`/`protected`
     /// members.
     pub declaring_class: Option<ClassId>,
+    /// Whether the member was declared `readonly` (M14), read from the AST
+    /// modifier (`readonly x: number`). Part of the property's structural identity
+    /// (hashed + compared by the interner, like [`visibility`](PropertyType::visibility)),
+    /// so it survives interning — but the **relation engine ignores it** for
+    /// assignability. It gates only assignment targets: a `readonly` target is
+    /// `TK2540` unless it is `this.prop` inside the declaring class's constructor.
+    /// `false` for object-literal / interface / unannotated members and methods.
+    pub readonly: bool,
 }
 
 impl PropertyType {
-    /// Build a plain **public** structural property `name: ty` with no declaring
-    /// class — the M0–M12 shape. Object-literal, interface, and substitution code
-    /// construct members through here so the M13 fields default consistently.
+    /// Build a plain **public**, **mutable** structural property `name: ty` with no
+    /// declaring class — the M0–M12 shape. Object-literal, interface, and
+    /// substitution code construct members through here so the M13/M14 fields
+    /// default consistently.
     pub fn public(name: impl Into<String>, ty: TypeId) -> Self {
         PropertyType {
             name: name.into(),
@@ -220,6 +238,7 @@ impl PropertyType {
             optional: false,
             visibility: Visibility::Public,
             declaring_class: None,
+            readonly: false,
         }
     }
 }

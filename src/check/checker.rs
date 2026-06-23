@@ -31,12 +31,39 @@
 //!  - **Structural assignability**: the instance type is an object type, so the
 //!    existing relation makes instances interchangeable with matching object types
 //!    both ways (driving `TK2322`/`TK2741`).
-//!  - **Deferred** (skipped without error/crash): inheritance (`extends`/heritage),
-//!    access modifiers (`private`/`protected`/`public`/`readonly`) and their
-//!    nominal-ish typing, `static` members, getters/setters, `abstract`, generic
-//!    classes, `implements`, parameter properties, method overloads, and
-//!    **member-assignment-target checking** (`this.x = expr` is not checked — the RHS
-//!    is still walked). No new diagnostic codes (reuses TK2322/2339/2345/2554/2741).
+//!  - **Deferred at M11** (subsequently implemented in later slices — listed here as
+//!    the original M11 snapshot): inheritance (`extends`/heritage) and `super` (M12);
+//!    access modifiers (`private`/`protected`) + nominal typing and `static` members
+//!    (M13); **member-assignment-target checking** (`obj.prop = expr`) and `readonly`
+//!    (M14 — see the "M14 scope" block below). Still deferred: getters/setters,
+//!    `abstract`, generic classes, `implements`, parameter properties, method overloads.
+//!
+//! M14 scope (post-MVP — member-assignment targets + `readonly`), on top of M0–M13:
+//!
+//!  - **Member-assignment-target checking** ([`check_member_assignment`]): an
+//!    assignment whose target is a **static member** (`obj.prop = expr`, including
+//!    `this.prop`) now resolves the base's type, looks up the property, and checks the
+//!    RHS is assignable to the property's type → `TK2322` (primary span = the RHS) —
+//!    filling the gap deferred since M11, so the existing M11–M13 constructor/method
+//!    assignments are checked too (and stay clean: they are all type-correct). The
+//!    obligation is **skipped** when the base/property is unresolved or error/`any`-typed
+//!    **or the RHS type is the error type**, mirroring how the M3/M11 return path
+//!    tolerates incomplete expression inference (e.g. an arithmetic `this.count + by`),
+//!    so no spurious error and no regression. Compound assignment (`+=`) on a member
+//!    target stays deferred (unchecked, M7 narrowing-reset behaviour unaffected); so do
+//!    element-access (`obj[k] = …`) and destructuring targets.
+//!  - **`readonly`** ([`crate::types::repr::PropertyType::readonly`]): the `readonly`
+//!    field modifier is read into the member's structural identity (folded into the
+//!    object hash + `object_props_eq`, like visibility), so it is preserved through
+//!    interning — but the **relation engine ignores it** for assignability (a `readonly`
+//!    and a mutable member relate both ways). It gates only assignment **targets**:
+//!    assigning to a `readonly` member is `TK2540`, **except** `this.prop` inside the
+//!    **declaring class's constructor** (tracked by [`Pass::current_in_ctor`] alongside
+//!    [`Pass::current_class`]).
+//!  - **Deferred** (skipped without error/crash): getters/setters, `abstract`, generic
+//!    classes, method-override compatibility (`TK2416`), `readonly` arrays /
+//!    `ReadonlyArray` / deep readonly, element-access/computed/destructuring assignment
+//!    targets, and compound-assignment type checking. New code: `TK2540`.
 //!
 //! M9 scope (post-MVP — generics core: type parameters + explicit type arguments +
 //! instantiation by substitution; type-argument **inference** is M10,
@@ -494,6 +521,17 @@ struct Pass<'a, 'ast> {
     /// function/arrow keeps the enclosing value (it is restored only at class-member
     /// boundaries).
     current_super_ctor: Option<TypeId>,
+    /// Whether the body currently being checked is the **declaring class's
+    /// constructor** (M14). Set to `true` (via save/restore) only while
+    /// [`check_class`] walks the `constructor` body of the class whose context is in
+    /// [`current_class`](Pass::current_class), and `false` for every other member
+    /// body (other methods, field initializers) and outside any class. It is the
+    /// **one place** a `readonly` member may be assigned: an assignment target
+    /// `this.prop` where `prop` is `readonly` is allowed iff `current_in_ctor` is
+    /// `true` **and** `current_class` is `prop`'s declaring class; anywhere else a
+    /// `readonly` target is `TK2540` ([`check_member_assignment`]). Like the other
+    /// member-context fields it never leaks (restored at the constructor's boundary).
+    current_in_ctor: bool,
     /// **Narrowing environment** (M7, architecture §5): the current control-flow
     /// narrowing overlay, mapping a **`SymbolId`** to its narrowed `TypeId`. It is
     /// consulted *first* when resolving an identifier's type (see
@@ -561,6 +599,7 @@ pub fn check_program<'ast>(
         current_this: None,
         current_class: None,
         current_super_ctor: None,
+        current_in_ctor: false,
     };
 
     // --- Phase 0 (fill): resolve every alias and fill every interface body. From
@@ -941,6 +980,10 @@ fn fill_class(
                     optional: false,
                     visibility: lower_visibility(prop.accessibility),
                     declaring_class: Some(class_id),
+                    // M14: carry the `readonly` modifier into the member's identity.
+                    // It does not affect assignability (the relation ignores it); it
+                    // only gates assignment targets (`TK2540`).
+                    readonly: prop.readonly,
                 };
                 if prop.r#static {
                     own_static.push(member);
@@ -977,6 +1020,9 @@ fn fill_class(
                             optional: false,
                             visibility: lower_visibility(method.accessibility),
                             declaring_class: Some(class_id),
+                            // A method is never `readonly` (the modifier is a no-op
+                            // on methods); only data members carry it.
+                            readonly: false,
                         };
                         if method.r#static {
                             own_static.push(member);
@@ -2263,6 +2309,12 @@ fn check_class(pass: &mut Pass, scope: ScopeId, class: &Class<'_>) {
     let saved_this = pass.current_this;
     let saved_class = pass.current_class;
     let saved_super_ctor = pass.current_super_ctor;
+    // M14: a class body is not itself a constructor — reset the in-constructor flag on
+    // entry (it is set `true` per-member only for the `constructor` body below) and
+    // restore it on exit, so a class declared inside an outer constructor body does not
+    // wrongly mark this class's members as constructor-scoped.
+    let saved_in_ctor = pass.current_in_ctor;
+    pass.current_in_ctor = false;
     if let Some(info) = info {
         pass.current_this = Some(info.instance);
         // M13: the accessing context for access control is this class's `ClassId`, so
@@ -2322,13 +2374,21 @@ fn check_class(pass: &mut Pass, scope: ScopeId, class: &Class<'_>) {
             let _ = infer_function(pass, scope, &method.value);
             pass.current_this = saved_member_this;
         } else {
+            // M14: mark the constructor body so a `this.readonly = …` assignment is
+            // allowed there (and only there). A constructor is never `static`; every
+            // other (instance) method body keeps `current_in_ctor == false`. Saved/
+            // restored per member so it does not leak to a following method.
+            let saved_in_ctor = pass.current_in_ctor;
+            pass.current_in_ctor = matches!(method.kind, MethodDefinitionKind::Constructor);
             let _ = infer_function(pass, scope, &method.value);
+            pass.current_in_ctor = saved_in_ctor;
         }
     }
 
     pass.current_this = saved_this;
     pass.current_class = saved_class;
     pass.current_super_ctor = saved_super_ctor;
+    pass.current_in_ctor = saved_in_ctor;
 }
 
 /// Recursive excess-property (freshness) check (mvp-plan §6, README
@@ -2388,15 +2448,26 @@ fn check_excess_properties(
 /// unresolvable target has no symbol to reset, so it narrows nothing and never
 /// panics.
 fn check_assignment(pass: &mut Pass, scope: ScopeId, assign: &AssignmentExpression<'_>) {
-    let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
-        // A non-identifier target (`this.x = …`, `obj.x = …`, destructuring) is out
-        // of subset: there is no symbol to reset and member-assignment-target
-        // checking is **deferred** (M11). Still infer the RHS so it is walked — a
+    let target = match &assign.left {
+        AssignmentTarget::AssignmentTargetIdentifier(target) => target,
+        // M14: a **static member** target (`this.prop = …`, `obj.prop = …`) is now
+        // type-checked — the RHS must be assignable to the property's type
+        // (`TK2322`), and a `readonly` member may not be assigned outside the
+        // declaring class's constructor (`TK2540`). Handled in its own routine.
+        AssignmentTarget::StaticMemberExpression(member) => {
+            check_member_assignment(pass, scope, member, assign);
+            return;
+        }
+        // Other targets (computed/element access `obj[k] = …`, destructuring) stay
+        // **deferred**: there is no symbol to reset and member-assignment checking of
+        // these is out of the M14 subset. Still infer the RHS so it is walked — a
         // nested call/`new`/function inside it is checked, an unresolved name in it
-        // emits `TK2304`, and a binary expression (`this.count + by`) does not choke —
-        // but collect **no** obligation (so no false negative or spurious error).
-        infer_expr(pass, scope, &assign.right);
-        return;
+        // emits `TK2304` — but collect **no** obligation (so no false negative or
+        // spurious error).
+        _ => {
+            infer_expr(pass, scope, &assign.right);
+            return;
+        }
     };
 
     // Infer the RHS first so any reference inside it resolves (and emits TK2304
@@ -2446,6 +2517,140 @@ fn check_assignment(pass: &mut Pass, scope: ScopeId, assign: &AssignmentExpressi
             src_span,
             kind: ObligationKind::Assignment,
         });
+    }
+}
+
+/// Check a **member-assignment target** `obj.prop = expr` / `this.prop = expr` (M14,
+/// filling the gap deferred since M11). The right-hand side must be assignable to the
+/// resolved property's type (`TK2322`, primary span = the RHS), and a `readonly`
+/// property may be assigned **only** inside its declaring class's constructor via
+/// `this.prop` (otherwise `TK2540`).
+///
+/// **Base / property resolution.** The base (`member.object`) and the RHS are inferred
+/// first (so references inside them resolve, nested calls/functions are checked, and an
+/// unresolved name emits `TK2304`). The property is then looked up by name on the base
+/// **object** type — the same lookup `infer_member_access` uses, but kept local so an
+/// assignment target does not also emit read-side `TK2339`/access-control diagnostics
+/// (those stay on the read path; reporting a missing/illegal *assignment* target is out
+/// of the M14 subset). `this.prop` falls out for free: a `ThisExpression` base infers to
+/// the current instance type (or the static side in a static body), so its members
+/// resolve exactly as any object base.
+///
+/// **The error-typed skips (no regression / no false positive).** The assignability
+/// obligation is collected **only** when the base, the property, *and* the RHS are all
+/// well-typed — it is skipped when the base type is the error/`any` type, the base is not
+/// an object type (a union / intrinsic — element-access and union targets are deferred),
+/// the property is not found, the property's type is the error type, **or the RHS type is
+/// the error type**. The RHS skip mirrors how the M3/M11 return path tolerates
+/// incomplete expression inference: an arithmetic RHS like `this.count + by` infers to the
+/// error type (arithmetic is out of the value subset), so collecting an obligation against
+/// it would be meaningless — skipping keeps the existing M11–M13 constructor/method
+/// assignments clean. (Such an RHS is already assignable to anything, so the skip changes
+/// no verdict; it is belt-and-suspenders against any future over-report.)
+///
+/// **Compound assignment** (`+=`, …) on a member target stays **deferred** — the base/RHS
+/// are still walked, but no obligation and no `readonly` check are collected (matching the
+/// identifier-target baseline, where compound assignability is unchecked).
+fn check_member_assignment(
+    pass: &mut Pass,
+    scope: ScopeId,
+    member: &StaticMemberExpression<'_>,
+    assign: &AssignmentExpression<'_>,
+) {
+    let wk = pass.interner.well_known();
+
+    // Walk the base (so its references resolve / nested constructs are checked) and the
+    // RHS (so an unresolved name in it emits `TK2304`, and nested calls/functions are
+    // checked), regardless of operator — both must be walked even when no obligation is
+    // collected below.
+    let base = infer_expr(pass, scope, &member.object);
+    let rhs = infer_expr(pass, scope, &assign.right);
+
+    // Compound assignment (`+=`, `||=`, …): assignability is unchecked baseline-wide and a
+    // `readonly` member-compound-assignment is out of the M14 subset. Stop after walking.
+    if assign.operator != AssignmentOperator::Assign {
+        return;
+    }
+
+    // Resolve the base type. Absent → nothing to check.
+    let Some((base_ty, _)) = base else {
+        return;
+    };
+
+    // Skip when the base is the error/`any` type (an unresolved base, or `any`): there is
+    // no concrete property to check against, and the error type suppresses cascades.
+    if base_ty == wk.error || base_ty == wk.any {
+        return;
+    }
+
+    // Look up the property on the base **object** type. A non-object base (union,
+    // intrinsic) has no property table here → skip (element-access / union targets are
+    // deferred). Snapshot the property's type + `readonly` + origin before any `&mut`
+    // borrow for a diagnostic.
+    let found = pass
+        .interner
+        .store()
+        .object_type(base_ty)
+        .and_then(|obj| obj.property(member.property.name.as_str()))
+        .map(|prop| (prop.ty, prop.readonly, prop.declaring_class));
+
+    // Property not on the type → deferred (no `TK2339` on an assignment target).
+    let Some((prop_ty, readonly, declaring_class)) = found else {
+        return;
+    };
+
+    // A property whose type is the error type carries no real obligation.
+    if prop_ty == wk.error {
+        return;
+    }
+
+    // M14 — `readonly` gate: a `readonly` member may be assigned **only** as `this.prop`
+    // inside the **declaring class's constructor**. Anywhere else (another method, a
+    // static body, external code, or via a non-`this` base) it is `TK2540`.
+    if readonly {
+        let in_declaring_ctor = pass.current_in_ctor
+            && matches!(
+                (pass.current_class, declaring_class),
+                (Some(ctx), Some(owner)) if ctx == owner
+            );
+        if !(base_is_this(&member.object) && in_declaring_ctor) {
+            pass.diagnostics.push(Diagnostic::readonly_assignment(
+                Span::from_oxc(member.span),
+                member.property.name.as_str(),
+            ));
+            // `TK2540` is the assignment error for this target; do not also collect a
+            // type-assignability obligation (the fixtures' readonly RHS types already
+            // match, and tsc surfaces the read-only violation as the assignment error).
+            return;
+        }
+        // Allowed (declaring constructor): fall through to the normal type check, so a
+        // *type-wrong* `this.readonly = …` in the constructor is still `TK2322`.
+    }
+
+    // Type-assignability obligation: the RHS must be assignable to the property's type.
+    // Skipped when the RHS type is the error type (incomplete inference — see the doc
+    // comment); the primary span is the RHS.
+    if let Some((src, src_span)) = rhs {
+        if src != wk.error {
+            pass.obligations.push(AssignObligation {
+                src,
+                tgt: prop_ty,
+                src_span,
+                kind: ObligationKind::Assignment,
+            });
+        }
+    }
+}
+
+/// Whether an assignment-target base expression is the `this` keyword (M14), unwrapping
+/// redundant parentheses (`(this).prop`). Used to gate the `readonly` constructor
+/// allowance, which applies only to `this.prop` — not to `obj.prop` on some other
+/// instance value.
+fn base_is_this(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::ThisExpression(_) => true,
+        Expression::ParenthesizedExpression(paren) => base_is_this(&paren.expression),
+        _ => false,
     }
 }
 
@@ -4452,13 +4657,13 @@ const d = new Derived(1);
         let _ = diags(src);
     }
 
-    /// Member-assignment-target checking is **deferred**: `this.x = <wrong>` in a
-    /// constructor must NOT error (no false positive) and must NOT crash, and the RHS
-    /// is still walked (an unresolved name in it still resolves through the normal
-    /// path). Here a deliberately type-mismatched member assignment produces no
-    /// diagnostic.
+    /// Member-assignment-target checking landed in **M14** (it was deferred through
+    /// M11–M13): `this.x = <wrong>` in a constructor is now `TK2322` — the RHS must be
+    /// assignable to the property's type. A *type-correct* `this.x = <number>` stays
+    /// clean (the M14 `member_assign_tests` module pins both directions); this M11 case
+    /// keeps the mismatch pin here so the gap stays closed.
     #[test]
-    fn member_assignment_target_is_not_checked() {
+    fn member_assignment_target_type_mismatch_is_checked() {
         let src = "\
 class C {
   x: number;
@@ -4468,13 +4673,9 @@ class C {
 }
 const c = new C();
 ";
-        // `this.x = "..."` is a member-assignment target (deferred): no TK2322, no
-        // crash. The program is clean.
-        assert!(
-            diags(src).is_empty(),
-            "member-assignment target is deferred (no false positive), got {:?}",
-            diags(src)
-        );
+        // `this.x = "..."` — string is not assignable to the `number` property → TK2322
+        // on the RHS (line 4). No crash.
+        assert_eq!(diags(src), vec![(4, "TK2322".to_string())]);
     }
 }
 
@@ -5019,9 +5220,10 @@ class C {
         assert!(diags(src).is_empty(), "got {:?}", diags(src));
     }
 
-    /// Deferred modifiers do not crash and produce no new diagnostics: `readonly`,
-    /// `public` (the default), getters, and a parameter property must complete the
-    /// run. Only `private`/`protected`/`static` are handled; the rest are inert.
+    /// Remaining deferred modifiers do not crash and produce no new diagnostics here:
+    /// `public` (the default), getters, and a parameter property must complete the run.
+    /// `readonly` is handled in M14, but a `readonly` field assigned via `this` inside
+    /// the **constructor** (as here, `this.b = b`) is allowed, so this case stays clean.
     #[test]
     fn deferred_modifiers_do_not_crash() {
         let src = "\
@@ -5041,8 +5243,211 @@ class C {
 const x = new C(1, 2, 3);
 const y: number = x.a;
 ";
-        // `public a` is the default (no access error); `x.a` (15) is reachable. The
-        // run completes without panicking. `readonly`/getters are inert.
+        // `public a` is the default (no access error); `x.a` is reachable. The
+        // constructor-scoped `this.b = b` to the `readonly` field is allowed (M14), and
+        // getters are inert. The run completes without panicking and is clean.
+        assert!(diags(src).is_empty(), "got {:?}", diags(src));
+    }
+}
+
+#[cfg(test)]
+mod member_assign_tests {
+    //! M14 end-to-end tests for **member-assignment-target** checking (`obj.prop =
+    //! expr`) and **`readonly`** properties. These drive the whole pipeline (parse →
+    //! bind → check) and assert the *set* of `(line, code)` diagnostics, pinning the
+    //! invariants the reviewer should scrutinize:
+    //!
+    //!  - a member-assignment RHS is checked against the property type (`TK2322`), and a
+    //!    type-correct one is clean — for both a class instance and an object literal;
+    //!  - the existing M11–M13 constructor/method assignments (`this.x = x`, …) stay
+    //!    clean (no regression), and an incomplete (arithmetic) RHS does not false-fire;
+    //!  - a `readonly` property is assignable via `this` inside the declaring class's
+    //!    constructor (ok) but `TK2540` in any other method, via a non-`this` base, or
+    //!    from external code.
+    //!
+    //! The per-fixture acceptance lives in `m14_readonly/`; the unit-level
+    //! "readonly does NOT affect assignability" pins live in `relate::relation::tests`.
+
+    use crate::driver::check_source;
+
+    /// Run the checker and return the sorted `(1-based line, code)` of every
+    /// diagnostic, keyed on its primary-span start line.
+    fn diags(source: &str) -> Vec<(u32, String)> {
+        let out = check_source(source);
+        assert!(
+            out.parse_errors.is_empty(),
+            "unexpected parse error(s): {:?}",
+            out.parse_errors
+        );
+        let index = crate::span::LineIndex::new(source);
+        let mut v: Vec<(u32, String)> = out
+            .diagnostics
+            .iter()
+            .map(|d| (index.line_of(d.span.start), d.code.as_str().to_string()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// A member-assignment RHS is checked against the property type: a type-correct
+    /// assignment (instance and object-literal base) is clean; a mismatched one is
+    /// `TK2322` on the RHS.
+    #[test]
+    fn member_assignment_checks_rhs_against_property_type() {
+        let src = "\
+class Box {
+  v: number;
+  constructor(v: number) {
+    this.v = v;
+  }
+}
+const b = new Box(1);
+b.v = 2;
+b.v = \"s\";
+const o = { a: 1 };
+o.a = 3;
+o.a = \"x\";
+";
+        // `this.v = v` (4) ok; `b.v = 2` (8) ok; `b.v = "s"` (9) TK2322; `o.a = 3` (11)
+        // ok; `o.a = "x"` (12) TK2322.
+        assert_eq!(
+            diags(src),
+            vec![(9, "TK2322".to_string()), (12, "TK2322".to_string())]
+        );
+    }
+
+    /// No regression: the M11–M13 constructor/method assignments (`this.x = x`, etc.)
+    /// stay clean now that member targets are checked — including an **incomplete**
+    /// (arithmetic) RHS (`this.count + by`) that infers to the error type, which must not
+    /// false-fire. This is the central anti-regression pin.
+    #[test]
+    fn existing_constructor_and_method_assignments_stay_clean() {
+        let src = "\
+class Counter {
+  count: number;
+  constructor(start: number) {
+    this.count = start;
+    this.count = 0;
+  }
+  add(by: number): void {
+    this.count = this.count + by;
+  }
+}
+const c = new Counter(1);
+";
+        // Every member-assignment here is type-correct (or has an error-typed RHS that
+        // is skipped); the program is clean.
+        assert!(diags(src).is_empty(), "got {:?}", diags(src));
+    }
+
+    /// `readonly`: assignable via `this` inside the declaring class's constructor (ok),
+    /// but `TK2540` in another method and from external code; a mutable sibling is clean
+    /// everywhere.
+    #[test]
+    fn readonly_constructor_ok_method_and_external_error() {
+        let src = "\
+class Point {
+  readonly x: number;
+  y: number;
+  constructor(x: number, y: number) {
+    this.x = x;
+    this.y = y;
+  }
+  reset(): void {
+    this.x = 0;
+    this.y = 0;
+  }
+}
+const p = new Point(1, 2);
+p.y = 5;
+p.x = 5;
+";
+        // Constructor `this.x = x` (5) ok; method `this.x = 0` (9) TK2540; mutable
+        // `this.y`/`p.y` clean; external `p.x = 5` (15) TK2540.
+        assert_eq!(
+            diags(src),
+            vec![(9, "TK2540".to_string()), (15, "TK2540".to_string())]
+        );
+    }
+
+    /// `readonly` allowance is scoped to the **declaring** class's constructor and to a
+    /// `this.prop` target: assigning a base class's `readonly` member from a subclass
+    /// constructor (via `this`) is `TK2540` (it is not the declaring class), and so is a
+    /// constructor assignment via a **non-`this`** base of the same type.
+    #[test]
+    fn readonly_only_in_declaring_class_constructor_via_this() {
+        let src = "\
+class Base {
+  readonly id: number;
+  constructor(id: number) {
+    this.id = id;
+  }
+}
+class Derived extends Base {
+  constructor() {
+    super(1);
+    this.id = 2;
+  }
+}
+class Other {
+  readonly k: number;
+  constructor(other: Other) {
+    other.k = 1;
+  }
+}
+";
+        // `this.id = id` in `Base`'s ctor (4) ok; reassigning the inherited `readonly`
+        // `id` in `Derived`'s ctor (10) TK2540 (Derived is not the declaring class); a
+        // non-`this` base in `Other`'s ctor (16) TK2540 (not a `this.prop` target).
+        assert_eq!(
+            diags(src),
+            vec![(10, "TK2540".to_string()), (16, "TK2540".to_string())]
+        );
+    }
+
+    /// `readonly` does **not** change assignability: a `{ readonly x }`-bearing instance
+    /// and a plain `{ x }` object relate both ways (no `TK2322`/`TK2741` from the flag
+    /// alone). Drives it end-to-end (the structural-level pin lives in the relation
+    /// tests). A type-correct `readonly` field assigned in the constructor stays clean.
+    #[test]
+    fn readonly_does_not_affect_assignability() {
+        let src = "\
+class R {
+  readonly x: number;
+  constructor(x: number) {
+    this.x = x;
+  }
+}
+const r = new R(1);
+const o: { x: number } = r;
+const back: R = { x: 2 };
+";
+        // instance → `{ x: number }` (8) ok; object literal → `R` (9) ok — `readonly`
+        // does not gate either direction. The whole program is clean.
+        assert!(diags(src).is_empty(), "got {:?}", diags(src));
+    }
+
+    /// Compound assignment to a member target stays **deferred**: `this.x += 1` collects
+    /// no obligation and triggers no `readonly` check (matching the identifier-target
+    /// baseline). The RHS is still walked (an unresolved name in it would still error).
+    #[test]
+    fn compound_member_assignment_is_deferred() {
+        let src = "\
+class C {
+  readonly x: number;
+  y: number;
+  constructor(x: number) {
+    this.x = x;
+  }
+  bump(): void {
+    this.x += 1;
+    this.y += 1;
+  }
+}
+const c = new C(1);
+";
+        // `this.x += 1` (8) — compound on a `readonly` target is deferred (no TK2540, no
+        // TK2322); `this.y += 1` (9) likewise. The program is clean.
         assert!(diags(src).is_empty(), "got {:?}", diags(src));
     }
 }
