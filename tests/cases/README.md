@@ -75,8 +75,12 @@ slots into a known later phase without rework:
   annotations (**M8**) are implemented. Still deferred: assertion functions / type predicates
   (`x is T`) and narrowing through unstructured flow (early `return`/`throw`, loops — needs the
   flow-node CFG).
-- **generics**, **classes**, **modules/imports**, and **`lib.d.ts` globals** (`Array`, `console`,
-  string methods, …) are out of scope for now — fixtures avoid the standard library entirely.
+- **generics**: generic functions / interfaces / aliases with **explicit** type arguments +
+  instantiation land in **M9**; type-argument **inference** (M10) and **constraints** (`extends`,
+  M11) follow. Type parameters use a named representation for now; de Bruijn indices (§3.1) are
+  the pre-VM (Phase 3) target.
+- **classes**, **modules/imports**, and **`lib.d.ts` globals** (`Array`, `console`, string
+  methods, …) are out of scope for now — fixtures avoid the standard library entirely.
 
 Other conventions: an unresolved name (`TK2304`) gets the **error type** (`any`-like), which
 **suppresses cascade** diagnostics on the same expression. `strictNullChecks` is **on** (our
@@ -95,3 +99,4 @@ default): `null`/`undefined` are distinct types, not assignable to others.
 | `m6_reporting/` | M6 — nested reason chains in diagnostics |
 | `m7_narrowing/` | M7 — control-flow narrowing (`typeof`, truthiness, `null`/`undefined` equality) |
 | `m8_discriminated/` | M8 — literal types, discriminated-union / `in` / `switch` narrowing |
+| `m9_generics/` | M9 — generic functions / interfaces / aliases, explicit type args, instantiation |
