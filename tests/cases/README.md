@@ -85,9 +85,9 @@ slots into a known later phase without rework:
 - **classes**: fields/constructor/methods/`this`/`new`/structural instances (**M11**),
   inheritance (`extends`, `super`) (**M12**), and access modifiers (`private`/`protected` —
   access control + nominal typing) + `static` members (**M13**), member-assignment checking
-  + `readonly` (**M14**), and getters/setters + `abstract` classes (**M15**) are implemented;
-  method-override compatibility (`TK2416`), abstract-member-not-implemented (`TK2515`), and
-  generic classes remain deferred.
+  + `readonly` (**M14**), getters/setters + `abstract` classes (**M15**), and generic classes
+  (**M16**) are implemented; method-override compatibility (`TK2416`) and
+  abstract-member-not-implemented (`TK2515`) remain deferred.
   Nominal typing currently constrains only the foreign→private direction (a private/protected
   type rejects a structurally-identical *other* type); widening a private-bearing instance to its
   public structural shape is not yet rejected (a one-directional divergence from tsc TS2322).
@@ -118,3 +118,4 @@ default): `null`/`undefined` are distinct types, not assignable to others.
 | `m13_modifiers/` | M13 — access modifiers (`private`/`protected`: access control + nominal), `static` |
 | `m14_readonly/` | M14 — member-assignment checking + `readonly` properties |
 | `m15_accessors/` | M15 — getters/setters + `abstract` classes |
+| `m16_generic_classes/` | M16 — generic classes (type params, `new C<T>`, inference, `C<T>` as a type) |
