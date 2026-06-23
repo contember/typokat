@@ -1,0 +1,35 @@
+[package]
+name = "typokat"
+version = "0.1.0"
+edition = "2021"
+
+# Single crate for the MVP (mvp-plan §3): a library holding the checker pipeline
+# plus a thin binary front-end. Splitting `src/<module>` into workspace crates in
+# Phase 2 is a mechanical move. The library exists so the conformance harness in
+# `tests/` can drive the pipeline (Rust integration tests cannot reach a binary
+# crate's private modules).
+
+[lib]
+name = "typokat"
+path = "src/lib.rs"
+
+[[bin]]
+name = "typokat"
+path = "src/main.rs"
+
+[dependencies]
+# Frontend: oxc parser stack. The AST is allocated in a bumpalo arena owned
+# by `oxc_allocator::Allocator`; all AST borrows live for that arena's lifetime.
+oxc_parser = "0.137.0"
+oxc_ast = "0.137.0"
+oxc_allocator = "0.137.0"
+oxc_span = "0.137.0"
+
+# FxHashMap / FxHashSet for the interner dedup map and the relation cache/stack.
+rustc-hash = "2.1.2"
+
+# SmallVec for interner dedup buckets (mvp-plan §4.2).
+smallvec = "1.15.2"
+
+# Diagnostic rendering to the terminal (mvp-plan §6).
+codespan-reporting = "0.13.1"
