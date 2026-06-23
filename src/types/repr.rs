@@ -27,6 +27,9 @@ pub enum TypeTag {
     /// A function type. `payload` indexes `Store::functions`.
     /// TODO(M3): constructed by the function checker.
     Function,
+    /// A **type parameter** (`T` in `function f<T>(…)`). `payload` indexes
+    /// `Store::type_params`. Constructed by `Interner::intern_type_param` (M9).
+    TypeParam,
 }
 
 /// The fixed set of intrinsic (keyword) types. The discriminant doubles as the
@@ -189,6 +192,47 @@ pub struct ParameterType {
     pub name: String,
     pub ty: TypeId,
     pub optional: bool,
+}
+
+/// A unique identifier for one type-parameter **declaration site** (the `T` in
+/// `function f<T>(…)`, `interface Box<T>`, `type Pair<A, B>`). Allocated per
+/// declared type parameter by the checker and embedded in the type-parameter
+/// type so substitution can target it.
+///
+/// FLAGGED DEVIATION (architecture §3.1 / `tests/cases/README.md` "generics"):
+/// type parameters use a **named, unique-id** representation, **not de Bruijn
+/// indices**. §3.1 calls for de Bruijn so that alpha-equivalent generics
+/// (`<T>(x: T) => T` vs `<U>(x: U) => U`) hash-cons to the same node, and for the
+/// eventual type-level VM's `infer`. That is a Phase-3 (pre-VM) concern; for M9
+/// (explicit type arguments + instantiation by substitution) named unique ids are
+/// simpler and *sound*: two distinct generic declarations get distinct ids, so a
+/// `TypeParam` never accidentally aliases another declaration's parameter, and
+/// substitution is a straightforward `TypeParamId → TypeId` map. The cost is that
+/// alpha-equivalent generics do **not** share a node — acceptable now (no fixture
+/// relies on it). The migration to de Bruijn, when the VM lands, is localized to
+/// this representation plus the substitution routine.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub struct TypeParamId(pub u32);
+
+impl TypeParamId {
+    #[inline]
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// A type-parameter type (`T`). Identity is its [`TypeParamId`] alone (the `name`
+/// is carried only for rendering — two parameters with the same name but distinct
+/// declaration sites have distinct ids and are distinct types). Interned via
+/// `Interner::intern_type_param`; instantiation replaces it by substitution
+/// (`Interner`/`substitute`, M9).
+#[derive(Clone, Debug)]
+pub struct TypeParamType {
+    /// The unique id of the declaring type parameter — the substitution key.
+    pub id: TypeParamId,
+    /// The source name (`T`), kept for diagnostics/rendering only; never part of
+    /// the type's identity.
+    pub name: String,
 }
 
 /// Structural function type (`(x: number) => string`).

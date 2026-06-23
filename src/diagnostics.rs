@@ -446,6 +446,15 @@ fn render_type_inner(store: &Store, id: TypeId, widen: bool, rendering: &mut Vec
             // Defensive fallback; a union always has a side-table entry.
             None => "<unsupported>".to_string(),
         },
+        // Type parameter (M9): render its source name (`T`). A type parameter only
+        // surfaces in a message for an *uninstantiated* generic (out of the M9
+        // fixtures' explicit-args path, where every parameter is substituted away);
+        // the name is display-only and not part of the type's identity.
+        TypeTag::TypeParam => store
+            .type_param(id)
+            .map(|p| p.name.clone())
+            // Defensive fallback; a type parameter always has a side-table entry.
+            .unwrap_or_else(|| "unknown".to_string()),
     }
 }
 

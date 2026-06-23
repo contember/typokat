@@ -16,7 +16,9 @@
 //!   documented placeholder and the `Store` keeps a (currently unused) column
 //!   for it. Phase 4 fills this in without changing call sites.
 
-use crate::types::repr::{IntrinsicKind, LiteralValue, ParameterType, PropertyType, TypeTag};
+use crate::types::repr::{
+    IntrinsicKind, LiteralValue, ParameterType, PropertyType, TypeParamId, TypeTag,
+};
 use crate::types::store::TypeId;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
@@ -46,6 +48,11 @@ pub enum StructuralKey<'a> {
     /// by `TypeId`, deduped, `never`-free by the interner before hashing) so two
     /// unions with the same member set in any source order collide.
     Union(&'a [TypeId]),
+    /// A **type parameter** (M9), keyed over its [`TypeParamId`] alone. The name
+    /// is **not** part of the key — identity is the declaration site's unique id,
+    /// so re-interning the same parameter collides while two parameters from
+    /// distinct declarations never do (even if they share a source name).
+    TypeParam(TypeParamId),
 }
 
 /// Live structural hash used for hash-consing (FxHash for speed). This is the
@@ -101,6 +108,11 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
                 // order-independent across two structurally equal union types.
                 member.0.hash(&mut h);
             }
+        }
+        StructuralKey::TypeParam(id) => {
+            TypeTag::TypeParam.hash_discriminant(&mut h);
+            // Identity is the declaration-site id only (not the name).
+            id.0.hash(&mut h);
         }
     }
     h.finish()

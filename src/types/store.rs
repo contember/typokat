@@ -12,7 +12,7 @@
 
 use crate::types::hash::StableHash;
 use crate::types::repr::{
-    FunctionType, IntrinsicKind, LiteralValue, ObjectType, TypeFlags, TypeTag,
+    FunctionType, IntrinsicKind, LiteralValue, ObjectType, TypeFlags, TypeParamType, TypeTag,
 };
 
 /// A run-local handle to a type: an index into the SoA arena. Cheap to copy and
@@ -48,6 +48,9 @@ pub struct Store {
     unions: Vec<Box<[TypeId]>>,
     /// Function types (M3). Addressed by the `payload` of a `Function`-tagged row.
     functions: Vec<FunctionType>,
+    /// Type-parameter types (M9). Addressed by the `payload` of a
+    /// `TypeParam`-tagged row. Each entry's identity is its `TypeParamId`.
+    type_params: Vec<TypeParamType>,
 
     /// Reserved cross-run identity column (architecture §3.2). NOT populated in
     /// the MVP (mvp-plan §7.1) — kept so Phase 4 can fill it at intern time
@@ -121,6 +124,15 @@ impl Store {
             return None;
         }
         self.functions.get(self.payload(id) as usize)
+    }
+
+    /// The `TypeParamType` of a type-parameter type, or `None` if `id` is not a
+    /// type parameter (M9).
+    pub fn type_param(&self, id: TypeId) -> Option<&TypeParamType> {
+        if self.tag(id) != TypeTag::TypeParam {
+            return None;
+        }
+        self.type_params.get(self.payload(id) as usize)
     }
 
     /// The members of a union type (canonical: flattened, sorted by `TypeId`,
@@ -201,5 +213,13 @@ impl Store {
         let payload = self.unions.len() as u32;
         self.unions.push(members);
         self.push(TypeTag::Union, flags, payload)
+    }
+
+    /// Append a type-parameter row (M9). Internal — `Interner` owns dedup (by
+    /// `TypeParamId`).
+    pub(crate) fn push_type_param(&mut self, param: TypeParamType, flags: TypeFlags) -> TypeId {
+        let payload = self.type_params.len() as u32;
+        self.type_params.push(param);
+        self.push(TypeTag::TypeParam, flags, payload)
     }
 }

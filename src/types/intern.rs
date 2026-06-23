@@ -12,7 +12,7 @@
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
     FunctionType, IntrinsicKind, LiteralValue, ObjectType, ParameterType, PropertyType, TypeFlags,
-    TypeTag,
+    TypeParamId, TypeParamType, TypeTag,
 };
 use crate::types::store::{Store, TypeId};
 use rustc_hash::FxHashMap;
@@ -224,6 +224,32 @@ impl Interner {
         let id = self.store.push_function(function, TypeFlags::EMPTY);
         self.dedup.entry(hash).or_default().push(id);
         id
+    }
+
+    /// Intern a **type-parameter** type (`T`), returning the shared id (M9).
+    ///
+    /// Identity is the [`TypeParamId`] (the declaration site) alone — the `name`
+    /// is carried for rendering only and never affects hash-consing. Re-interning
+    /// the same parameter therefore returns the same id; two parameters from
+    /// distinct declarations get distinct ids even if they share a source name.
+    /// See [`crate::types::repr::TypeParamId`] for the named-vs-de-Bruijn deviation.
+    pub fn intern_type_param(&mut self, id: TypeParamId, name: impl Into<String>) -> TypeId {
+        let key = StructuralKey::TypeParam(id);
+        let hash = structural_hash(&key);
+        if let Some(existing) =
+            self.lookup(hash, |store, ty| store.type_param(ty).map(|p| p.id) == Some(id))
+        {
+            return existing;
+        }
+        let interned = self.store.push_type_param(
+            TypeParamType {
+                id,
+                name: name.into(),
+            },
+            TypeFlags::EMPTY,
+        );
+        self.dedup.entry(hash).or_default().push(interned);
+        interned
     }
 
     /// Intern a union type from its (un-canonicalized) member ids, returning the
