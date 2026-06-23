@@ -70,9 +70,10 @@ slots into a known later phase without rework:
 - `TK2355` *function must return a value* — needs control-flow reachability (with narrowing).
 - `TK2454` *used before assigned* — needs definite-assignment flow analysis.
 - `TK2451` *cannot redeclare* — binder check, deferred; fixtures use unique names.
-- **narrowing** (`typeof`/truthiness/`in`/discriminants), **generics**, **classes**,
-  **modules/imports**, and **`lib.d.ts` globals** (`Array`, `console`, string methods, …) are
-  all out of MVP scope — fixtures avoid the standard library entirely.
+- **narrowing**: `typeof` / truthiness / `null`/`undefined` equality are implemented in **M7**
+  (post-MVP); `in`-operator and discriminated-union / `switch` narrowing remain deferred (M8+).
+- **generics**, **classes**, **modules/imports**, and **`lib.d.ts` globals** (`Array`, `console`,
+  string methods, …) are out of scope for now — fixtures avoid the standard library entirely.
 
 Other conventions: an unresolved name (`TK2304`) gets the **error type** (`any`-like), which
 **suppresses cascade** diagnostics on the same expression. `strictNullChecks` is **on** (our
@@ -89,3 +90,4 @@ default): `null`/`undefined` are distinct types, not assignable to others.
 | `m4_unions/` | M4 — union assignability, canonicalization, union member access |
 | `m5_named_recursive/` | M5 — `type`/`interface`, mutually recursive types (cycle fixpoint) |
 | `m6_reporting/` | M6 — nested reason chains in diagnostics |
+| `m7_narrowing/` | M7 — control-flow narrowing (`typeof`, truthiness, `null`/`undefined` equality) |
