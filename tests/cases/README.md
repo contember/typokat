@@ -36,7 +36,9 @@ fixture (keeps fixtures robust to author miscounting).
 | `TK2304` | Cannot find name (unresolved identifier) |
 | `TK2322` | Type X is not assignable to type Y (annotation/reassignment/return/property) |
 | `TK2339` | Property does not exist on type |
+| `TK2341` | Property is private (accessed outside its declaring class) |
 | `TK2345` | Argument type not assignable to parameter type |
+| `TK2445` | Property is protected (accessed outside the class and its subclasses) |
 | `TK2353` | Object literal may only specify known properties (excess property) |
 | `TK2554` | Wrong number of arguments (arity) |
 | `TK2741` | Property is missing in type but required |
@@ -78,10 +80,11 @@ slots into a known later phase without rework:
 - **generics**: explicit type arguments + instantiation (**M9**) and type-argument **inference**
   (**M10**) are implemented; **constraints** (`extends`, M11) follow. Type parameters use a named
   representation for now; de Bruijn indices (§3.1) are the pre-VM (Phase 3) target.
-- **classes**: fields + constructor + methods + `this` + `new` + structural instances (**M11**)
-  and inheritance (`extends`, `super`) (**M12**) are implemented; access modifiers
-  (`private`/`protected`/`readonly`), `static`, getters/setters, abstract, method-override
-  compatibility (`TK2416`), and generic classes remain deferred.
+- **classes**: fields/constructor/methods/`this`/`new`/structural instances (**M11**),
+  inheritance (`extends`, `super`) (**M12**), and access modifiers (`private`/`protected` —
+  access control + nominal typing) + `static` members (**M13**) are implemented; `readonly`,
+  getters/setters, abstract, method-override compatibility (`TK2416`), and generic classes
+  remain deferred (`readonly` needs member-assignment-target checking, itself deferred).
 - **modules/imports** and **`lib.d.ts` globals** (`Array`, `console`, string methods, …) are out
   of scope for now — fixtures avoid the standard library entirely.
 
@@ -106,3 +109,4 @@ default): `null`/`undefined` are distinct types, not assignable to others.
 | `m10_inference/` | M10 — type-argument inference from call arguments |
 | `m11_classes/` | M11 — class fields / constructor / methods / `this` / `new`, structural instances |
 | `m12_inheritance/` | M12 — class inheritance (`extends`, `super`), inherited members + constructor |
+| `m13_modifiers/` | M13 — access modifiers (`private`/`protected`: access control + nominal), `static` |
