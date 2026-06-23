@@ -5,6 +5,7 @@
 //! rendered text (mvp-plan §2/§3), so the data model is the source of truth and
 //! the terminal rendering is a separate, presentation-only step.
 
+use crate::relate::Reason;
 use crate::span::Span;
 use crate::types::repr::TypeTag;
 use crate::types::store::{Store, TypeId};
@@ -65,6 +66,15 @@ pub struct Diagnostic {
     pub severity: Severity,
     pub message: String,
     pub span: Span,
+    /// The nested reason-chain elaboration (M6, §6.4): the tsc-style "because…"
+    /// lines rendered *below* the headline `message`, each already prefixed with
+    /// its indentation, leaf last. Empty when there is no sub-reason — in
+    /// particular a single-`Leaf` relation failure, whose headline already *is*
+    /// the leaf, carries no elaboration so the rendered text stays exactly the
+    /// one headline line (no earlier-milestone regression). Threaded into both
+    /// [`Diagnostic::rendered_text`] (the harness substring-matches it) and the
+    /// terminal renderer (codespan notes).
+    elaboration: Vec<String>,
 }
 
 impl Diagnostic {
@@ -76,6 +86,7 @@ impl Diagnostic {
             severity: Severity::Error,
             message,
             span,
+            elaboration: Vec::new(),
         }
     }
 
@@ -87,6 +98,7 @@ impl Diagnostic {
             severity: Severity::Error,
             message: format!("Cannot find name '{name}'"),
             span,
+            elaboration: Vec::new(),
         }
     }
 
@@ -99,6 +111,7 @@ impl Diagnostic {
             severity: Severity::Error,
             message: format!("Property '{name}' does not exist on type '{tgt}'"),
             span,
+            elaboration: Vec::new(),
         }
     }
 
@@ -112,6 +125,7 @@ impl Diagnostic {
             severity: Severity::Error,
             message: format!("Property '{name}' is missing in type '{tgt}'"),
             span,
+            elaboration: Vec::new(),
         }
     }
 
@@ -124,6 +138,7 @@ impl Diagnostic {
             severity: Severity::Error,
             message: format!("'{name}' does not exist in type '{tgt}'"),
             span,
+            elaboration: Vec::new(),
         }
     }
 
@@ -138,6 +153,7 @@ impl Diagnostic {
                 "Argument of type '{src}' is not assignable to parameter of type '{tgt}'"
             ),
             span,
+            elaboration: Vec::new(),
         }
     }
 
@@ -149,7 +165,18 @@ impl Diagnostic {
             severity: Severity::Error,
             message: format!("Expected {expected} arguments, but got {got}"),
             span,
+            elaboration: Vec::new(),
         }
+    }
+
+    /// Attach a rendered reason-chain elaboration (M6, §6.4) to this diagnostic.
+    /// `lines` are the nested "because…" lines (already indented, leaf last) shown
+    /// below the headline `message`. An empty `lines` leaves the diagnostic
+    /// unchanged — single-`Leaf` failures pass an empty list so their rendered
+    /// text stays exactly the one headline line.
+    pub fn with_elaboration(mut self, lines: Vec<String>) -> Self {
+        self.elaboration = lines;
+        self
     }
 
     /// Whether this diagnostic counts as an error (drives the process exit code).
@@ -159,11 +186,161 @@ impl Diagnostic {
 
     /// The fully-rendered diagnostic text the harness substring-matches against
     /// (`tests/cases/README.md`: case-sensitive `contains` over the rendered
-    /// text, "including any nested reason chain"). For M0 this is just
-    /// `code + message`; M6 appends the nested reason chain here.
+    /// text, "including any nested reason chain"). The headline is `code +
+    /// message`; M6 appends the nested reason-chain elaboration (each line on its
+    /// own line, already indented) so the leaf cause is present in the matched
+    /// text. With no elaboration this is exactly the one headline line.
     pub fn rendered_text(&self) -> String {
-        format!("error[{}]: {}", self.code.as_str(), self.message)
+        let mut text = format!("error[{}]: {}", self.code.as_str(), self.message);
+        for line in &self.elaboration {
+            text.push('\n');
+            text.push_str(line);
+        }
+        text
     }
+}
+
+/// Indentation step for one level of reason-chain nesting (two spaces, tsc-style).
+const REASON_INDENT: &str = "  ";
+
+/// Render a relation-failure reason chain (M6, §6.4) into the nested "because…"
+/// elaboration lines shown *below* the diagnostic headline, leaf last.
+///
+/// The headline already states the outermost `(headline_src → tgt)` mismatch
+/// (built by the checker). This renderer therefore emits only the *sub*-reason:
+///
+///  - a **terminal** head (`Leaf`, `MissingProperty`, `NoUnionMember`,
+///    `ParameterCount`) is fully expressed by the headline already, so it yields
+///    **no** lines — this is what keeps a single-`Leaf` failure (the M0–M5 scalar
+///    mismatches) to exactly its one headline line, with no redundant wrapper;
+///  - a **union-source** head descends straight into the offending member's own
+///    reason, because the headline already names that member (`headline_src`);
+///  - a **wrapper** head (`Property`, `Parameter`, `ReturnType`) renders its
+///    "…are incompatible." line and then its nested cause, indented one level,
+///    recursing down to the leaf.
+pub fn render_reason_chain(store: &Store, head: &Reason) -> Vec<String> {
+    match head {
+        // The headline already states this mismatch in full.
+        Reason::Leaf { .. }
+        | Reason::MissingProperty { .. }
+        | Reason::NoUnionMember { .. }
+        | Reason::ParameterCount { .. } => Vec::new(),
+        // The headline names the offending union member (the checker's
+        // `headline_src`), so the elaboration is *that member's* reason — exactly
+        // as if the member's reason were itself the head.
+        Reason::UnionSourceMember { because, .. } => render_reason_chain(store, because),
+        // Structural wrappers: emit the "…are incompatible." line plus the nested
+        // cause, starting one indent level in (the headline sits at level 0).
+        Reason::Property { .. } | Reason::Parameter { .. } | Reason::ReturnType { .. } => {
+            reason_lines(store, head, 1)
+        }
+    }
+}
+
+/// Render `reason` and everything nested beneath it as indented lines, each at
+/// `depth` levels of indentation (the leaf line last). Every `Reason` variant is
+/// handled exhaustively; the recursion descends into the `because` of each
+/// wrapper, so a chain renders as a top-down "Types of property…/Type … is not
+/// assignable…" cascade. Never panics.
+fn reason_lines(store: &Store, reason: &Reason, depth: usize) -> Vec<String> {
+    let indent = REASON_INDENT.repeat(depth);
+    match reason {
+        // The base mismatch. Source widened (literal → base) to match the headline
+        // rendering convention; target as-is.
+        Reason::Leaf { src, tgt } => {
+            let src = render_type(store, *src, /* widen */ true);
+            let tgt = render_type(store, *tgt, /* widen */ false);
+            vec![format!(
+                "{indent}Type '{src}' is not assignable to type '{tgt}'."
+            )]
+        }
+        // A present-but-incompatible property: announce it, then nest its cause.
+        Reason::Property { name, because, .. } => {
+            let mut lines = vec![format!("{indent}Types of property '{name}' are incompatible.")];
+            lines.extend(reason_lines(store, because, depth + 1));
+            lines
+        }
+        // A required target property the source lacks (terminal).
+        Reason::MissingProperty { name, tgt, .. } => {
+            let tgt = render_type(store, *tgt, /* widen */ false);
+            vec![format!("{indent}Property '{name}' is missing in type '{tgt}'.")]
+        }
+        // A contravariantly-incompatible parameter: name it (from the source
+        // signature when available, else by position), then nest its cause.
+        Reason::Parameter {
+            index,
+            src,
+            tgt,
+            because,
+        } => {
+            let src_name = parameter_name_at(store, *src, *index);
+            let tgt_name = parameter_name_at(store, *tgt, *index);
+            let header = match (src_name, tgt_name) {
+                (Some(s), Some(t)) if s == t => {
+                    format!("{indent}Types of parameters '{s}' are incompatible.")
+                }
+                (Some(s), Some(t)) => {
+                    format!("{indent}Types of parameters '{s}' and '{t}' are incompatible.")
+                }
+                _ => format!(
+                    "{indent}Types of parameters at position {} are incompatible.",
+                    index + 1
+                ),
+            };
+            let mut lines = vec![header];
+            lines.extend(reason_lines(store, because, depth + 1));
+            lines
+        }
+        // Covariantly-incompatible return types: announce, then nest the cause.
+        Reason::ReturnType { because, .. } => {
+            let mut lines = vec![format!("{indent}Call signature return types are incompatible.")];
+            lines.extend(reason_lines(store, because, depth + 1));
+            lines
+        }
+        // A union source whose member fails: announce the member, then nest its
+        // cause. (At the chain head this arm is bypassed by `render_reason_chain`,
+        // which descends straight into `because`; this arm renders a union nested
+        // *inside* another reason.)
+        Reason::UnionSourceMember {
+            member,
+            tgt,
+            because,
+            ..
+        } => {
+            let member = render_type(store, *member, /* widen */ true);
+            let tgt = render_type(store, *tgt, /* widen */ false);
+            let mut lines = vec![format!(
+                "{indent}Type '{member}' is not assignable to type '{tgt}'."
+            )];
+            lines.extend(reason_lines(store, because, depth + 1));
+            lines
+        }
+        // A source assignable to no member of a union target (terminal).
+        Reason::NoUnionMember { src, tgt } => {
+            let src = render_type(store, *src, /* widen */ true);
+            let tgt = render_type(store, *tgt, /* widen */ false);
+            vec![format!(
+                "{indent}Type '{src}' is not assignable to type '{tgt}'."
+            )]
+        }
+        // Mismatched arity (terminal). M3 has no optional/rest params, so a
+        // surplus source parameter is genuinely unsatisfiable.
+        Reason::ParameterCount { src, tgt } => {
+            let src = render_type(store, *src, /* widen */ false);
+            let tgt = render_type(store, *tgt, /* widen */ false);
+            vec![format!(
+                "{indent}Type '{src}' provides more parameters than type '{tgt}' expects."
+            )]
+        }
+    }
+}
+
+/// The name of the parameter at `index` of a function-typed id, if `id` is a
+/// function type with that position. Used to phrase a `Parameter` reason; falls
+/// back to `None` (positional phrasing) for anything else.
+fn parameter_name_at(store: &Store, id: TypeId, index: usize) -> Option<String> {
+    let func = store.function_type(id)?;
+    func.params.get(index).map(|p| p.name.clone())
 }
 
 /// Render the display name of a type (the "Type display format" of
@@ -312,13 +489,257 @@ pub fn render_to_writer(
 }
 
 /// Convert our structured diagnostic into a codespan-reporting one. `SimpleFile`
-/// uses `()` as its file id.
+/// uses `()` as its file id. The reason-chain elaboration (M6) is attached as a
+/// trailing note so the nested "because…" cascade shows under the primary label
+/// in the human-facing CLI output, readably indented (already done in the lines).
 fn to_codespan(diag: &Diagnostic) -> CsDiagnostic<()> {
     let base = match diag.severity {
         Severity::Error => CsDiagnostic::error(),
         Severity::Warning => CsDiagnostic::warning(),
     };
-    base.with_code(diag.code.as_str())
+    let cs = base
+        .with_code(diag.code.as_str())
         .with_message(diag.message.clone())
-        .with_labels(vec![Label::primary((), diag.span.range())])
+        .with_labels(vec![Label::primary((), diag.span.range())]);
+    if diag.elaboration.is_empty() {
+        cs
+    } else {
+        cs.with_notes(vec![diag.elaboration.join("\n")])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::repr::{
+        FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType,
+    };
+    use crate::types::Interner;
+
+    fn prop(name: &str, ty: TypeId) -> PropertyType {
+        PropertyType {
+            name: name.to_string(),
+            ty,
+            optional: false,
+        }
+    }
+
+    /// A single `Leaf` head — the M0–M5 scalar mismatch — renders **no**
+    /// elaboration: the headline already states it, so there is no redundant
+    /// "Types of …" wrapper and the rendered diagnostic stays exactly one line.
+    /// This is the no-regression guarantee for the earlier milestones.
+    #[test]
+    fn single_leaf_chain_has_no_elaboration() {
+        let mut interner = Interner::with_intrinsics();
+        let lit_str = interner.intern_literal(LiteralValue::String("x".to_string()));
+        let wk = interner.well_known();
+        let store = interner.store();
+
+        let head = Reason::Leaf {
+            src: lit_str,
+            tgt: wk.number,
+        };
+        let lines = render_reason_chain(store, &head);
+        assert!(
+            lines.is_empty(),
+            "a single-Leaf chain must produce no elaboration lines, got {lines:?}"
+        );
+
+        // And through a diagnostic: the rendered text is the one headline line,
+        // unchanged from M0 (the leaf substring lives in the headline itself).
+        let diag = Diagnostic::not_assignable(
+            Span::new(0, 1),
+            "Type 'string' is not assignable to type 'number'".to_string(),
+        )
+        .with_elaboration(lines);
+        assert_eq!(
+            diag.rendered_text(),
+            "error[TK2322]: Type 'string' is not assignable to type 'number'"
+        );
+        assert!(!diag.rendered_text().contains('\n'));
+    }
+
+    /// A nested `Property → Property → Leaf` chain renders the tsc-style cascade,
+    /// indented one level per depth, with the scalar leaf line **present** and
+    /// last. This is the M6 nested-object (`TK2322`) shape from `nested.ts`.
+    #[test]
+    fn nested_property_chain_renders_leaf_last() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // { a: { b: string } } (src) vs { a: { b: number } } (tgt).
+        let inner_str = interner.intern_object(ObjectType {
+            properties: vec![prop("b", wk.string)],
+        });
+        let inner_num = interner.intern_object(ObjectType {
+            properties: vec![prop("b", wk.number)],
+        });
+        let outer_src = interner.intern_object(ObjectType {
+            properties: vec![prop("a", inner_str)],
+        });
+        let outer_tgt = interner.intern_object(ObjectType {
+            properties: vec![prop("a", inner_num)],
+        });
+        let store = interner.store();
+
+        // The reason chain the relation engine builds for this failure.
+        let head = Reason::Property {
+            name: "a".to_string(),
+            src: outer_src,
+            tgt: outer_tgt,
+            because: Box::new(Reason::Property {
+                name: "b".to_string(),
+                src: inner_str,
+                tgt: inner_num,
+                because: Box::new(Reason::Leaf {
+                    src: wk.string,
+                    tgt: wk.number,
+                }),
+            }),
+        };
+
+        let lines = render_reason_chain(store, &head);
+        assert_eq!(
+            lines,
+            vec![
+                "  Types of property 'a' are incompatible.".to_string(),
+                "    Types of property 'b' are incompatible.".to_string(),
+                "      Type 'string' is not assignable to type 'number'.".to_string(),
+            ]
+        );
+
+        // The leaf substring asserted by the corpus must be in the fully rendered
+        // diagnostic text (headline + elaboration).
+        let rendered = Diagnostic::not_assignable(
+            Span::new(0, 1),
+            "Type '{ a: { b: string } }' is not assignable to type '{ a: { b: number } }'"
+                .to_string(),
+        )
+        .with_elaboration(lines)
+        .rendered_text();
+        assert!(rendered.contains("Type 'string' is not assignable to type 'number'"));
+    }
+
+    /// A `MissingProperty` head is terminal — the headline (`TK2741`) states the
+    /// missing property in full — so it renders no elaboration.
+    #[test]
+    fn missing_property_head_has_no_elaboration() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let a_only = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number)],
+        });
+        let ab = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number), prop("b", wk.string)],
+        });
+        let store = interner.store();
+
+        let head = Reason::MissingProperty {
+            name: "b".to_string(),
+            src: a_only,
+            tgt: ab,
+        };
+        assert!(render_reason_chain(store, &head).is_empty());
+    }
+
+    /// A function `Parameter → Leaf` chain names the parameter (from the source
+    /// signature) and nests its leaf cause underneath.
+    #[test]
+    fn parameter_chain_names_parameter_and_nests_leaf() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        let str_to_num = interner.intern_function(FunctionType {
+            params: vec![ParameterType {
+                name: "x".to_string(),
+                ty: wk.string,
+                optional: false,
+            }],
+            ret: wk.number,
+        });
+        let num_to_num = interner.intern_function(FunctionType {
+            params: vec![ParameterType {
+                name: "x".to_string(),
+                ty: wk.number,
+                optional: false,
+            }],
+            ret: wk.number,
+        });
+        let store = interner.store();
+
+        // Contravariant parameter failure: tgt param `number` not assignable to
+        // src param `string` (the engine builds the leaf in the tgt→src order).
+        let head = Reason::Parameter {
+            index: 0,
+            src: str_to_num,
+            tgt: num_to_num,
+            because: Box::new(Reason::Leaf {
+                src: wk.number,
+                tgt: wk.string,
+            }),
+        };
+        let lines = render_reason_chain(store, &head);
+        assert_eq!(
+            lines,
+            vec![
+                "  Types of parameters 'x' are incompatible.".to_string(),
+                "    Type 'number' is not assignable to type 'string'.".to_string(),
+            ]
+        );
+    }
+
+    /// A union-source head descends straight into the offending member's reason
+    /// (the headline already names that member via the checker's `headline_src`).
+    /// When the member's cause is a scalar leaf, the elaboration is empty.
+    #[test]
+    fn union_source_head_descends_into_member_cause() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let union = interner.union(vec![wk.string, wk.number]);
+        let store = interner.store();
+
+        // `string | number` not assignable to `number`: the `string` member fails
+        // with a scalar leaf. Headline reports `string`; elaboration is empty.
+        let head = Reason::UnionSourceMember {
+            member: wk.string,
+            src: union,
+            tgt: wk.number,
+            because: Box::new(Reason::Leaf {
+                src: wk.string,
+                tgt: wk.number,
+            }),
+        };
+        assert!(render_reason_chain(store, &head).is_empty());
+
+        // But a union member with a *nested* cause renders that cause.
+        let inner_str = interner.intern_object(ObjectType {
+            properties: vec![prop("b", wk.string)],
+        });
+        let inner_num = interner.intern_object(ObjectType {
+            properties: vec![prop("b", wk.number)],
+        });
+        let store = interner.store();
+        let head = Reason::UnionSourceMember {
+            member: inner_str,
+            src: union,
+            tgt: inner_num,
+            because: Box::new(Reason::Property {
+                name: "b".to_string(),
+                src: inner_str,
+                tgt: inner_num,
+                because: Box::new(Reason::Leaf {
+                    src: wk.string,
+                    tgt: wk.number,
+                }),
+            }),
+        };
+        let lines = render_reason_chain(store, &head);
+        assert_eq!(
+            lines,
+            vec![
+                "  Types of property 'b' are incompatible.".to_string(),
+                "    Type 'string' is not assignable to type 'number'.".to_string(),
+            ]
+        );
+    }
 }

@@ -158,8 +158,9 @@ pub struct Relater<'a> {
     cache: RelationCache,
     /// Assume-true-until-disproven stack (architecture §6.3): when a query
     /// re-enters a relation already in flight, we assume it holds and continue,
-    /// resolving the fixpoint as the stack unwinds. M0 has no recursive types so
-    /// this never fires, but it is wired in from day 1.
+    /// resolving the fixpoint as the stack unwinds. It fires as of M5, where
+    /// recursive/mutually-recursive types (`interface List { tail: List | null }`)
+    /// re-enter an in-flight key and rely on this to terminate.
     stack: FxHashSet<RelationKey>,
 }
 

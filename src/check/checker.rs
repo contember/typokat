@@ -78,7 +78,7 @@
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::DeclId;
 use crate::binder::{bind_module, Binder};
-use crate::diagnostics::{render_type, Diagnostic};
+use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::{Reason, Relater, Relation};
 use crate::span::Span;
 use crate::types::repr::{
@@ -434,14 +434,23 @@ fn lower_interface_members(
 /// (primitive mismatch, a present-but-wrong property, or any function-shaped
 /// mismatch — possibly nested) → `TK2322`. The error type never reaches here (it
 /// is `any`-like, so its obligations resolve to `Yes`). `Argument`: any failure →
-/// `TK2345`. Nested reasons are built for M6; the flat top-level message is
-/// rendered here.
+/// `TK2345`.
+///
+/// M6 (§6.4): the **headline** keeps its flat top-level form, and the nested
+/// reason chain is rendered below it as the diagnostic's elaboration via
+/// [`render_reason_chain`]. A single-`Leaf`/missing-property/arity head produces
+/// an **empty** elaboration (the headline already states it in full), so scalar
+/// mismatches render exactly one line — no earlier-milestone regression.
 fn emit_obligation_failure(
     store: &Store,
     ob: &AssignObligation,
     head: &Reason,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    // The nested "because…" cascade shown below the headline. Empty for a head the
+    // headline already expresses in full (e.g. a scalar `Leaf`).
+    let elaboration = render_reason_chain(store, head);
+
     match ob.kind {
         ObligationKind::Assignment => match head {
             Reason::MissingProperty { name, tgt, .. } => {
@@ -462,13 +471,17 @@ fn emit_obligation_failure(
                 let src = render_type(store, headline_src(ob, head), /* widen */ true);
                 let tgt = render_type(store, ob.tgt, /* widen */ false);
                 let message = format!("Type '{src}' is not assignable to type '{tgt}'");
-                diagnostics.push(Diagnostic::not_assignable(ob.src_span, message));
+                diagnostics
+                    .push(Diagnostic::not_assignable(ob.src_span, message).with_elaboration(elaboration));
             }
         },
         ObligationKind::Argument => {
             let src = render_type(store, headline_src(ob, head), /* widen */ true);
             let tgt = render_type(store, ob.tgt, /* widen */ false);
-            diagnostics.push(Diagnostic::argument_not_assignable(ob.src_span, &src, &tgt));
+            diagnostics.push(
+                Diagnostic::argument_not_assignable(ob.src_span, &src, &tgt)
+                    .with_elaboration(elaboration),
+            );
         }
     }
 }
