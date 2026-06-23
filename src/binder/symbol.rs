@@ -7,23 +7,35 @@
 //! built in from day 1 because a clean scope graph only carries it cleanly if
 //! designed for it — retrofitting it is a rewrite (mvp-plan §1.3).
 //!
-//! M0 has no name references in its fixtures, so the binder does not yet run;
-//! these types exist so M1 fills them in without structural change. Marked
-//! `#[allow(dead_code)]` deliberately — TODO(M1) removes the attribute as the
-//! fields gain readers.
+//! M1 only ever fills the **value** slot (`const`/`let`/`var`); the `ty`/`ns`
+//! slots exist so M2+ (`interface`/`type`/`namespace`) fill them without any
+//! structural change.
 
-#![allow(dead_code)] // TODO(M1): binder + name resolution populate/read these.
-
-use crate::types::store::TypeId;
-
-/// Index of a declaration site (an AST node). Resolved against a side table the
-/// binder builds in M1. A newtype so the declaration-space slots are typed.
+/// Index of a declaration site (an AST node). A value declaration's `DeclId`
+/// keys the checker's `DeclId → TypeId` table — the seam where a symbol's
+/// declared/inferred type is looked up (architecture §4.1: the type lives with
+/// the declaration, not the symbol). A newtype so the declaration-space slots
+/// are typed.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct DeclId(pub u32);
 
-/// Index of a symbol within the binder's symbol table.
+impl DeclId {
+    #[inline]
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// Index of a symbol within the binder's [`SymbolTable`].
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct SymbolId(pub u32);
+
+impl SymbolId {
+    #[inline]
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
 
 /// A name with up to three meanings, one per declaration space. tsc models this
 /// with a `SymbolFlags` bitmask; we use explicit slots so the three spaces never
@@ -32,11 +44,14 @@ pub struct SymbolId(pub u32);
 pub struct Symbol {
     /// The bound name.
     pub name: String,
-    /// Value-space declaration (`const`/`let`/`function`/`class` value side).
+    /// Value-space declaration (`const`/`let`/`var`/`function`/`class` value
+    /// side). The only slot M1 fills.
     pub value: Option<DeclId>,
     /// Type-space declaration (`interface`/`type`/`class` type side).
+    /// TODO(M2/M5): filled by the type-declaration binder.
     pub ty: Option<DeclId>,
     /// Namespace-space declaration (`namespace`/module).
+    /// TODO(post-MVP): filled by the namespace binder.
     pub ns: Option<DeclId>,
 }
 
@@ -50,12 +65,33 @@ impl Symbol {
             ns: None,
         }
     }
+}
 
-    /// The resolved type of this symbol's value declaration, once the checker
-    /// has assigned one. TODO(M1): the checker stores inferred/annotated types
-    /// in a parallel table keyed by `DeclId`; this is the lookup seam.
-    pub fn value_type(&self) -> Option<TypeId> {
-        // M1 wires DeclId -> TypeId resolution here.
-        None
+/// The symbol table for a file: symbols addressed by [`SymbolId`]. Scopes
+/// (`scope.rs`) map a name to a `SymbolId` here; the multi-slot `Symbol` then
+/// merges declarations across spaces under that one id (architecture §4.1).
+#[derive(Default)]
+pub struct SymbolTable {
+    symbols: Vec<Symbol>,
+}
+
+impl SymbolTable {
+    pub fn new() -> Self {
+        SymbolTable::default()
+    }
+
+    /// Append a symbol and return its id.
+    pub fn push(&mut self, symbol: Symbol) -> SymbolId {
+        let id = SymbolId(self.symbols.len() as u32);
+        self.symbols.push(symbol);
+        id
+    }
+
+    pub fn get(&self, id: SymbolId) -> Option<&Symbol> {
+        self.symbols.get(id.index())
+    }
+
+    pub fn get_mut(&mut self, id: SymbolId) -> Option<&mut Symbol> {
+        self.symbols.get_mut(id.index())
     }
 }

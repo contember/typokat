@@ -17,9 +17,10 @@ use codespan_reporting::term::{self, Config};
 /// listed; later milestones add variants.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum DiagnosticCode {
+    /// Cannot find name (unresolved identifier).
+    TK2304,
     /// Type X is not assignable to type Y.
     TK2322,
-    // TODO(M1): TK2304 (cannot find name)
     // TODO(M2): TK2339 / TK2353 / TK2741
     // TODO(M3): TK2345 / TK2554
 }
@@ -28,6 +29,7 @@ impl DiagnosticCode {
     /// The rendered code string, e.g. `"TK2322"`.
     pub fn as_str(self) -> &'static str {
         match self {
+            DiagnosticCode::TK2304 => "TK2304",
             DiagnosticCode::TK2322 => "TK2322",
         }
     }
@@ -60,6 +62,17 @@ impl Diagnostic {
             code: DiagnosticCode::TK2322,
             severity: Severity::Error,
             message,
+            span,
+        }
+    }
+
+    /// Construct a `TK2304` "cannot find name" error. The primary span is the
+    /// unresolved identifier reference.
+    pub fn cannot_find_name(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2304,
+            severity: Severity::Error,
+            message: format!("Cannot find name '{name}'"),
             span,
         }
     }

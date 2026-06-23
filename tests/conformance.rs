@@ -7,9 +7,9 @@
 //! expected substring is contained (case-sensitive) in the corresponding
 //! diagnostic's fully-rendered text.
 //!
-//! Only M0 (`m0_assign_primitives/`) is enabled now. The `MILESTONE_DIRS` table
-//! is the extension point: uncomment a row to turn a milestone's fixtures on as
-//! it lands (mvp-plan §5).
+//! M0 (`m0_assign_primitives/`) and M1 (`m1_binder_inference/`) are enabled. The
+//! `MILESTONE_DIRS` table is the extension point: uncomment a row to turn a
+//! milestone's fixtures on as it lands (mvp-plan §5).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -21,7 +21,7 @@ use typokat::span::LineIndex;
 /// Enable later milestones here as they are implemented.
 const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("m0_assign_primitives", true),
-    // ("m1_binder_inference", false), // TODO(M1)
+    ("m1_binder_inference", true),
     // ("m2_objects", false),          // TODO(M2)
     // ("m3_functions", false),        // TODO(M3)
     // ("m4_unions", false),           // TODO(M4)

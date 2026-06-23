@@ -4,11 +4,9 @@
 //! of scopes with parent-walk resolution, giving a unified resolution model and
 //! a basis for later incrementality and per-unit parallel checking.
 //!
-//! M0 does not resolve names (its fixtures have none), so the binder does not
-//! yet build this graph. The structs exist as the M1 foundation. Marked
-//! `#[allow(dead_code)]` deliberately — TODO(M1) gives them readers.
-
-#![allow(dead_code)] // TODO(M1): the binder builds and the checker walks this.
+//! M1 builds only the module scope (its fixtures are all top-level), but the
+//! parent-walk machinery is real from day 1 so nested function/block scopes
+//! (M3+) drop in without restructuring resolution.
 
 use crate::binder::symbol::SymbolId;
 use rustc_hash::FxHashMap;
@@ -17,16 +15,25 @@ use rustc_hash::FxHashMap;
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ScopeId(pub u32);
 
+impl ScopeId {
+    #[inline]
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// What kind of region a scope covers. Drives hoisting and shadowing rules in
-/// M1+. Only the variants M1 needs first are listed; more are added as the
-/// subset grows (functions in M3, blocks for narrowing later).
+/// later milestones. Only the variants needed first are listed; more are added
+/// as the subset grows.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum ScopeKind {
-    /// The top-level module scope.
+    /// The top-level module scope — the only kind M1 constructs.
     Module,
-    /// A function body scope. TODO(M3).
+    /// A function body scope.
+    #[allow(dead_code)] // TODO(M3): constructed when checking function bodies.
     Function,
-    /// A lexical block `{ … }`. TODO(M7: needed for flow/narrowing).
+    /// A lexical block `{ … }`.
+    #[allow(dead_code)] // TODO(M7): needed for flow/narrowing.
     Block,
 }
 
@@ -47,11 +54,17 @@ impl Scope {
             symbols: FxHashMap::default(),
         }
     }
+
+    /// The symbol declared directly in this scope under `name`, if any (no
+    /// parent walk).
+    pub fn lookup_local(&self, name: &str) -> Option<SymbolId> {
+        self.symbols.get(name).copied()
+    }
 }
 
-/// The whole scope graph for a file: scopes plus their symbols.
-/// TODO(M1): `bind.rs` populates this from the AST; the checker resolves against
-/// it via parent-walk.
+/// The whole scope graph for a file: scopes plus the names they declare. The
+/// binder (`bind.rs`) populates it; the checker resolves references against it
+/// via [`ScopeGraph::resolve`].
 #[derive(Default)]
 pub struct ScopeGraph {
     scopes: Vec<Scope>,
@@ -70,6 +83,36 @@ impl ScopeGraph {
     }
 
     pub fn get(&self, id: ScopeId) -> Option<&Scope> {
-        self.scopes.get(id.0 as usize)
+        self.scopes.get(id.index())
+    }
+
+    pub fn get_mut(&mut self, id: ScopeId) -> Option<&mut Scope> {
+        self.scopes.get_mut(id.index())
+    }
+
+    /// Declare `name → symbol` directly in `scope`. Returns the previous
+    /// `SymbolId` if the name was already declared there (redeclaration handling
+    /// is deferred — `TK2451`, mvp-plan; M1 fixtures use unique names).
+    pub fn declare(&mut self, scope: ScopeId, name: impl Into<String>, symbol: SymbolId) -> Option<SymbolId> {
+        match self.get_mut(scope) {
+            Some(s) => s.symbols.insert(name.into(), symbol),
+            None => None,
+        }
+    }
+
+    /// Resolve `name` starting at `scope` and walking parent links until a
+    /// declaration is found (the scope-graph resolution model, architecture §4).
+    /// Returns `None` if no enclosing scope declares the name — the caller then
+    /// reports `TK2304`.
+    pub fn resolve(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
+        let mut current = Some(scope);
+        while let Some(id) = current {
+            let s = self.get(id)?;
+            if let Some(symbol) = s.lookup_local(name) {
+                return Some(symbol);
+            }
+            current = s.parent;
+        }
+        None
     }
 }
