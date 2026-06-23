@@ -1,4 +1,16 @@
-//! The statement-level checker (architecture §5, mvp-plan §5 — M0–M3 rows).
+//! The statement-level checker (architecture §5, mvp-plan §5 — M0–M4 rows).
+//!
+//! M4 scope, on top of M0–M3:
+//!
+//!  - **Union type annotations.** `A | B` lowers each member (recursing) and
+//!    interns the result through [`Interner::union`], which flattens, sorts,
+//!    dedups, drops `never`, and collapses degenerate unions (mvp-plan §3.3).
+//!  - **Union member access.** `u.p` where `u` is a union requires `p` on *every*
+//!    member; the result type is the `union(...)` of the per-member property
+//!    types. A member missing `p` is `TK2339` on the union as a whole.
+//!  - **Union assignability** is decided by the relation engine (a union source
+//!    requires every member to relate; a union target requires some member to);
+//!    the headline of a union-source failure names the specific failing member.
 //!
 //! M3 scope, on top of M0/M1/M2:
 //!
@@ -49,7 +61,7 @@ use crate::diagnostics::{render_type, Diagnostic};
 use crate::relate::{Reason, Relater, Relation};
 use crate::span::Span;
 use crate::types::repr::{
-    FunctionType, IntrinsicKind, LiteralValue, ObjectType, ParameterType, PropertyType,
+    FunctionType, IntrinsicKind, LiteralValue, ObjectType, ParameterType, PropertyType, TypeTag,
 };
 use crate::types::store::{Store, TypeId};
 use crate::types::{Interner, WellKnown};
@@ -181,20 +193,36 @@ fn emit_obligation_failure(
             | Reason::Property { .. }
             | Reason::ParameterCount { .. }
             | Reason::Parameter { .. }
-            | Reason::ReturnType { .. } => {
+            | Reason::ReturnType { .. }
+            | Reason::UnionSourceMember { .. }
+            | Reason::NoUnionMember { .. } => {
                 // Source widened (literal → base), target as-is (mvp-plan
-                // M0/M1 message spec).
-                let src = render_type(store, ob.src, /* widen */ true);
+                // M0/M1 message spec). For a union source the headline names the
+                // specific failing member, not the whole union (matching tsc:
+                // `number | string` → `number` reports `'string'`).
+                let src = render_type(store, headline_src(ob, head), /* widen */ true);
                 let tgt = render_type(store, ob.tgt, /* widen */ false);
                 let message = format!("Type '{src}' is not assignable to type '{tgt}'");
                 diagnostics.push(Diagnostic::not_assignable(ob.src_span, message));
             }
         },
         ObligationKind::Argument => {
-            let src = render_type(store, ob.src, /* widen */ true);
+            let src = render_type(store, headline_src(ob, head), /* widen */ true);
             let tgt = render_type(store, ob.tgt, /* widen */ false);
             diagnostics.push(Diagnostic::argument_not_assignable(ob.src_span, &src, &tgt));
         }
+    }
+}
+
+/// The source type to put in the headline message. Normally the obligation's
+/// source, but for a **union source** failure it is the specific offending member
+/// (`number | string` not assignable to `number` reports the failing `string`,
+/// matching tsc) — the whole-union form is reserved for the nested reason chain
+/// (M6).
+fn headline_src(ob: &AssignObligation, head: &Reason) -> TypeId {
+    match head {
+        Reason::UnionSourceMember { member, .. } => *member,
+        _ => ob.src,
     }
 }
 
@@ -433,10 +461,28 @@ fn lower_annotation(interner: &mut Interner, ts_type: &TSType<'_>) -> Option<Typ
                 &func.return_type.type_annotation,
             );
         }
-        // TODO(M4+): union/reference annotations.
+        TSType::TSUnionType(union) => return lower_union_annotation(interner, &union.types),
+        TSType::TSParenthesizedType(paren) => {
+            return lower_annotation(interner, &paren.type_annotation);
+        }
+        // TODO(M5+): reference annotations (type aliases / interfaces).
         _ => return None,
     };
     Some(id)
+}
+
+/// Lower a union type annotation `A | B | …` to a canonical interned `TypeId`
+/// (M4). Each member is lowered recursively, then `Interner::union` flattens,
+/// sorts, dedups, drops `never`, and collapses degenerate unions (mvp-plan
+/// §3.3). A member whose type cannot be lowered (out of subset) aborts the whole
+/// annotation (`None`), matching the object/function lowering — dropping a member
+/// silently would mis-state the union.
+fn lower_union_annotation(interner: &mut Interner, members: &[TSType<'_>]) -> Option<TypeId> {
+    let mut lowered: Vec<TypeId> = Vec::with_capacity(members.len());
+    for member in members {
+        lowered.push(lower_annotation(interner, member)?);
+    }
+    Some(interner.union(lowered))
 }
 
 /// Lower an object type literal's members to an interned object `TypeId`.
@@ -592,9 +638,14 @@ fn infer_object_literal(pass: &mut Pass, scope: ScopeId, obj: &ObjectExpression<
     pass.interner.intern_object(ObjectType { properties })
 }
 
-/// Infer the type of a member access `obj.prop` in `scope`. Unchanged from M2: a
-/// missing property is `TK2339` and yields the error type (no cascade); an
-/// `any`/error base yields the error type.
+/// Infer the type of a member access `obj.prop` in `scope`. A missing property is
+/// `TK2339` and yields the error type (no cascade); an `any`/error base yields the
+/// error type.
+///
+/// M4 adds the **union** base: `u.p` where `u` is a union requires `p` on *every*
+/// member; the result type is the `union(...)` of the per-member property types.
+/// If any member lacks the property, it is `TK2339` on the union as a whole (and
+/// the result is the error type, suppressing cascade).
 fn infer_member_access(
     pass: &mut Pass,
     scope: ScopeId,
@@ -607,6 +658,15 @@ fn infer_member_access(
 
     if base_ty == wk.any || base_ty == wk.error {
         return Some((wk.error, prop_span));
+    }
+
+    // Union base (M4): the property must exist on every member; its type is the
+    // union of the per-member property types.
+    if pass.interner.store().tag(base_ty) == TypeTag::Union {
+        return Some((
+            union_member_access(pass, base_ty, prop_name, prop_span),
+            prop_span,
+        ));
     }
 
     match pass.interner.store().object_type(base_ty) {
@@ -622,6 +682,53 @@ fn infer_member_access(
         },
         None => Some((wk.error, prop_span)),
     }
+}
+
+/// Resolve `union.prop` (M4): collect each member's type for `prop`, requiring it
+/// on **every** member. The result is the `union(...)` of those per-member types
+/// (canonicalized by the interner). If any member lacks the property, emit a
+/// single `TK2339` against the whole union and return the error type.
+///
+/// A member that is itself `any`/error contributes the error type (its `prop` is
+/// assumed to exist). A member that is neither an object nor `any`/error has no
+/// known property in the MVP subset, so it counts as "missing" → `TK2339`.
+fn union_member_access(
+    pass: &mut Pass,
+    union_ty: TypeId,
+    prop_name: &str,
+    prop_span: Span,
+) -> TypeId {
+    let wk = pass.interner.well_known();
+
+    // Snapshot the member ids: the per-member lookups below are immutable, but
+    // interning the result union needs `&mut`, so the borrow must not be held.
+    let Some(members) = pass.interner.store().union_members(union_ty) else {
+        return wk.error;
+    };
+    let members: Vec<TypeId> = members.to_vec();
+
+    let mut member_prop_types: Vec<TypeId> = Vec::with_capacity(members.len());
+    for member in members {
+        let store = pass.interner.store();
+        if member == wk.any || member == wk.error {
+            member_prop_types.push(wk.error);
+            continue;
+        }
+        match store.object_type(member).and_then(|o| o.property(prop_name)) {
+            Some(prop) => member_prop_types.push(prop.ty),
+            // Missing on this member: the property does not exist on the union.
+            None => {
+                let tgt = render_type(pass.interner.store(), union_ty, /* widen */ false);
+                pass.diagnostics.push(Diagnostic::property_does_not_exist(
+                    prop_span, prop_name, &tgt,
+                ));
+                return wk.error;
+            }
+        }
+    }
+
+    // Present on every member: the result is the union of the per-member types.
+    pass.interner.union(member_prop_types)
 }
 
 /// Infer the type of a call expression in `scope` and check it.

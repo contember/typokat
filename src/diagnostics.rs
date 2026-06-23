@@ -224,8 +224,22 @@ pub fn render_type(store: &Store, id: TypeId, widen: bool) -> String {
             // Defensive fallback; a function always has a side-table entry.
             None => "<unsupported>".to_string(),
         },
-        // TODO(M4): union (canonical order). Not reachable in M3.
-        TypeTag::Union => "<unsupported>".to_string(),
+        // Union: `number | string` — members in stored (canonical, TypeId-sorted)
+        // order, ` | `-separated (README "Type display format"). That order is
+        // intern-order dependent, so union-typed targets are asserted code-only in
+        // the corpus. Members never widen (only a top-level literal *source*
+        // widens, which never recurses here).
+        TypeTag::Union => match store.union_members(id) {
+            Some(members) => {
+                let parts: Vec<String> = members
+                    .iter()
+                    .map(|&m| render_type(store, m, false))
+                    .collect();
+                parts.join(" | ")
+            }
+            // Defensive fallback; a union always has a side-table entry.
+            None => "<unsupported>".to_string(),
+        },
     }
 }
 

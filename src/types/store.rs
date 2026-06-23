@@ -41,11 +41,10 @@ pub struct Store {
     literals: Vec<LiteralValue>,
     /// Object types (M2). Addressed by the `payload` of an `Object`-tagged row.
     objects: Vec<ObjectType>,
-    // The union side-table below is reserved foundation state: the SoA layout is
-    // fixed from day 1 (mvp-plan §1.3) so later milestones add `push_*` helpers
-    // without restructuring the arena. It has no readers yet.
-    /// TODO(M4): union members (already canonicalized: sorted, deduped, flat).
-    #[allow(dead_code)]
+    /// Union members (M4), already canonicalized: flattened, sorted by `TypeId`,
+    /// deduped, with `never` dropped (mvp-plan §3.3). Addressed by the `payload`
+    /// of a `Union`-tagged row. A union row always has at least two members — the
+    /// 0- and 1-member cases collapse in the interner and never reach the store.
     unions: Vec<Box<[TypeId]>>,
     /// Function types (M3). Addressed by the `payload` of a `Function`-tagged row.
     functions: Vec<FunctionType>,
@@ -124,6 +123,15 @@ impl Store {
         self.functions.get(self.payload(id) as usize)
     }
 
+    /// The members of a union type (canonical: flattened, sorted by `TypeId`,
+    /// deduped, `never`-free), or `None` if `id` is not a union.
+    pub fn union_members(&self, id: TypeId) -> Option<&[TypeId]> {
+        if self.tag(id) != TypeTag::Union {
+            return None;
+        }
+        self.unions.get(self.payload(id) as usize).map(|m| &m[..])
+    }
+
     // --- raw append helpers (used only by the interner) ---
 
     /// Push a row with the given hot attributes and return its id. Internal;
@@ -169,6 +177,13 @@ impl Store {
         self.push(TypeTag::Function, flags, payload)
     }
 
-    // TODO(M4): push_union helper that writes the cold side-table then the hot
-    // row, mirroring push_object.
+    /// Append a union row (members into the side-table, index into payload).
+    /// Internal — `Interner` owns canonicalization and dedup; the caller passes
+    /// an already-canonical (flattened, sorted, deduped, `never`-free) member
+    /// slice of length ≥ 2.
+    pub(crate) fn push_union(&mut self, members: Box<[TypeId]>, flags: TypeFlags) -> TypeId {
+        let payload = self.unions.len() as u32;
+        self.unions.push(members);
+        self.push(TypeTag::Union, flags, payload)
+    }
 }

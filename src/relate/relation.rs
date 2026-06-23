@@ -77,6 +77,21 @@ pub enum Reason {
         tgt: TypeId,
         because: Box<Reason>,
     },
+    /// A **union source has a member that is not assignable to the target** (a
+    /// union `src <: tgt` requires *every* member to be assignable). `src` is the
+    /// union, `tgt` the target; `member` is the first offending member, wrapping
+    /// the inner reason for `member <: tgt`. The checker maps this to `TK2322`.
+    UnionSourceMember {
+        member: TypeId,
+        src: TypeId,
+        tgt: TypeId,
+        because: Box<Reason>,
+    },
+    /// A **source is not assignable to any member of a union target** (a `src <:`
+    /// union requires *some* member to accept it). `src` is the source, `tgt` the
+    /// union target. No single member is "the cause", so this is a flat leaf-like
+    /// reason over the whole union. The checker maps this to `TK2322`.
+    NoUnionMember { src: TypeId, tgt: TypeId },
 }
 
 /// A non-empty chain of reasons explaining a relation failure, outermost first.
@@ -115,6 +130,8 @@ impl ReasonChain {
             Reason::ParameterCount { src, tgt } => (*src, *tgt),
             Reason::Parameter { src, tgt, .. } => (*src, *tgt),
             Reason::ReturnType { src, tgt, .. } => (*src, *tgt),
+            Reason::UnionSourceMember { src, tgt, .. } => (*src, *tgt),
+            Reason::NoUnionMember { src, tgt } => (*src, *tgt),
         }
     }
 }
@@ -210,6 +227,25 @@ impl<'a> Relater<'a> {
         // suppressed.
         if self.is_any_like(src) || self.is_any_like(tgt) {
             return Relation::Yes;
+        }
+
+        // Union rules (mvp-plan §6, M4) run BEFORE the intrinsic/object/function
+        // rules. They are checked source-first, then target-first:
+        //
+        //  - if `src` is a union, `src <: tgt` iff **every** member is assignable
+        //    to `tgt` (the union is at least as wide as any one member), and
+        //  - otherwise, if `tgt` is a union, `src <: tgt` iff `src` is assignable
+        //    to **some** member (it lands in one of the alternatives).
+        //
+        // Both fire only when the relevant side is a `Union` node; a union always
+        // has ≥ 2 members (the interner collapses the degenerate cases), so these
+        // never spuriously match an intrinsic. The `src`-union case is tried first
+        // so a union-to-union relation decomposes member-by-member on the source.
+        if self.store.tag(src) == TypeTag::Union {
+            return self.relate_union_source(src, tgt, kind);
+        }
+        if self.store.tag(tgt) == TypeTag::Union {
+            return self.relate_union_target(src, tgt, kind);
         }
 
         // `unknown` is the top type: everything is assignable TO it.
@@ -395,6 +431,52 @@ impl<'a> Relater<'a> {
         }
 
         Relation::Yes
+    }
+
+    /// Union **source** relation (mvp-plan §6, M4): a union `src` is assignable to
+    /// `tgt` iff **every** member is. The first failing member (in canonical
+    /// order) is wrapped as a `UnionSourceMember` reason carrying the member's own
+    /// nested cause, so M6 can render "…because `<member>` is not assignable…".
+    fn relate_union_source(&mut self, src: TypeId, tgt: TypeId, kind: RelationKind) -> Relation {
+        // Snapshot the member ids so the immutable borrow of the store does not
+        // overlap the recursive `self.relate` calls below (which also borrow it).
+        // An ill-formed union tag without a side-table entry is a store invariant
+        // violation; treat it defensively as a leaf rather than panicking.
+        let Some(members) = self.store.union_members(src) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let members: Vec<TypeId> = members.to_vec();
+
+        for member in members {
+            if let Relation::No(child) = self.relate(member, tgt, kind) {
+                return Relation::No(ReasonChain::of(Reason::UnionSourceMember {
+                    member,
+                    src,
+                    tgt,
+                    because: Box::new(child.head),
+                }));
+            }
+        }
+        Relation::Yes
+    }
+
+    /// Union **target** relation (mvp-plan §6, M4): `src` is assignable to a union
+    /// `tgt` iff it is assignable to **some** member. On failure no single member
+    /// is "the cause", so a flat `NoUnionMember` reason over the whole union is
+    /// returned (the per-member sub-failures are intentionally not retained).
+    fn relate_union_target(&mut self, src: TypeId, tgt: TypeId, kind: RelationKind) -> Relation {
+        // Snapshot the member ids (see `relate_union_source` for the borrow note).
+        let Some(members) = self.store.union_members(tgt) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let members: Vec<TypeId> = members.to_vec();
+
+        for member in members {
+            if self.relate(src, member, kind).is_yes() {
+                return Relation::Yes;
+            }
+        }
+        Relation::No(ReasonChain::of(Reason::NoUnionMember { src, tgt }))
     }
 
     /// `any` or the error type — both relate to everything.

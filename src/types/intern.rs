@@ -194,10 +194,81 @@ impl Interner {
         id
     }
 
-    // TODO(M4): pub fn union(&mut self, members: &mut Vec<TypeId>) -> TypeId
-    //   Canonicalize before interning (architecture §3.3): flatten nested
-    //   unions, sort by TypeId, dedup, normalize `X | never -> X`, collapse a
-    //   1-member union to the member, then hash-cons like the helpers above.
+    /// Intern a union type from its (un-canonicalized) member ids, returning the
+    /// shared id of the canonical result.
+    ///
+    /// This is the heart of M4 (architecture §3.3 / mvp-plan §4.2). The members
+    /// are canonicalized before interning so any two unions denoting the same set
+    /// collapse to one `TypeId` (structural equality stays an integer compare):
+    ///
+    ///  1. **flatten** nested unions (`A | (B | C)` → `A | B | C`),
+    ///  2. **absorb** the top type: any `any` member makes the whole union `any`;
+    ///     otherwise any `unknown` member makes it `unknown` (the error type is
+    ///     treated like `any` so cascades stay suppressed),
+    ///  3. **drop** `never` members (`X | never` → `X`; `never` is the identity of
+    ///     union),
+    ///  4. **sort** by `TypeId` and **dedup** (`number | string` ≡ `string |
+    ///     number`; `number | number` → `number`),
+    ///  5. **collapse**: a 0-member union → `never`; a 1-member union → that
+    ///     member (no union node is created).
+    ///
+    /// Only a genuine ≥ 2-member union is hash-consed into the store. The input
+    /// `Vec` is consumed (drained); callers pass it by value.
+    pub fn union(&mut self, mut members: Vec<TypeId>) -> TypeId {
+        let wk = self.well_known;
+
+        // 1. Flatten one level at a time until no member is itself a union. Union
+        //    members are themselves canonical (interned through here), so a single
+        //    expansion pass cannot reintroduce a nested union, but the loop is
+        //    written defensively in case an un-interned union id is ever passed.
+        let mut flat: Vec<TypeId> = Vec::with_capacity(members.len());
+        while let Some(member) = members.pop() {
+            match self.store.union_members(member) {
+                Some(nested) => members.extend_from_slice(nested),
+                None => flat.push(member),
+            }
+        }
+
+        // 2. Absorption: `any`/error absorbs everything; failing that, `unknown`
+        //    does. Either short-circuits the whole union to that top type.
+        if flat.iter().any(|&m| m == wk.any || m == wk.error) {
+            return wk.any;
+        }
+        if flat.contains(&wk.unknown) {
+            return wk.unknown;
+        }
+
+        // 3. Drop `never` members — `never` is the identity element of `|`.
+        flat.retain(|&m| m != wk.never);
+
+        // 4. Sort by TypeId and dedup so member *order* and *multiplicity* do not
+        //    affect identity.
+        flat.sort_unstable();
+        flat.dedup();
+
+        // 5. Collapse the degenerate cases — never create a 0- or 1-member union.
+        match flat.len() {
+            0 => return wk.never,
+            1 => return flat[0],
+            _ => {}
+        }
+
+        // Hash-cons the canonical ≥ 2-member union like the other constructors.
+        let key = StructuralKey::Union(&flat);
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store
+                .union_members(id)
+                .is_some_and(|existing| existing == flat.as_slice())
+        }) {
+            return existing;
+        }
+        let id = self
+            .store
+            .push_union(flat.into_boxed_slice(), TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
 
     /// Look up an existing id in the dedup bucket for `hash`, accepting the first
     /// candidate for which `eq` confirms a real structural match.
@@ -413,6 +484,96 @@ mod tests {
             ret: wk.void,
         });
         assert_ne!(ab, ba, "parameter order is part of function identity");
+    }
+
+    /// Union canonicalization + hash-consing (mvp-plan §3.3, M4 — a
+    /// correctness-critical invariant). Order-independence, dedup, `never`-drop,
+    /// single-member collapse, top-type absorption, and flatten are all asserted
+    /// against the resulting `TypeId`s.
+    #[test]
+    fn union_canonicalization_and_hash_consing() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // Order-independence: `number | string` and `string | number` are the
+        // same canonical `TypeId`.
+        let ns = interner.union(vec![wk.number, wk.string]);
+        let sn = interner.union(vec![wk.string, wk.number]);
+        assert_eq!(ns, sn, "union member order must not affect identity");
+        assert_eq!(
+            interner.store().tag(ns),
+            TypeTag::Union,
+            "a 2-member union must be a union node"
+        );
+        // The stored members are sorted by TypeId.
+        let members = interner
+            .store()
+            .union_members(ns)
+            .expect("ns is a union")
+            .to_vec();
+        let mut sorted = members.clone();
+        sorted.sort_unstable();
+        assert_eq!(members, sorted, "stored members must be TypeId-sorted");
+        assert_eq!(members.len(), 2);
+
+        // Dedup: `number | number` collapses to plain `number` (no union node).
+        let nn = interner.union(vec![wk.number, wk.number]);
+        assert_eq!(nn, wk.number, "a duplicated single member collapses");
+
+        // `never` is dropped: `number | never` → `number`.
+        let n_never = interner.union(vec![wk.number, wk.never]);
+        assert_eq!(n_never, wk.number, "never must be absorbed out of a union");
+
+        // A union of a single distinct member collapses to that member.
+        let single = interner.union(vec![wk.boolean]);
+        assert_eq!(single, wk.boolean, "a 1-member union collapses to the member");
+
+        // An empty union (or one of only `never`s) collapses to `never`.
+        assert_eq!(interner.union(vec![]), wk.never, "empty union → never");
+        assert_eq!(
+            interner.union(vec![wk.never, wk.never]),
+            wk.never,
+            "a union of only never → never"
+        );
+
+        // Absorption: `any` swallows the whole union; `unknown` swallows when no
+        // `any` is present.
+        assert_eq!(
+            interner.union(vec![wk.number, wk.any]),
+            wk.any,
+            "any absorbs the union"
+        );
+        assert_eq!(
+            interner.union(vec![wk.number, wk.unknown]),
+            wk.unknown,
+            "unknown absorbs the union"
+        );
+        // `any` wins over `unknown` when both appear.
+        assert_eq!(
+            interner.union(vec![wk.unknown, wk.any]),
+            wk.any,
+            "any wins over unknown"
+        );
+
+        // Flatten: a nested union is expanded, then canonicalized. `(number |
+        // string) | boolean` ≡ `number | string | boolean` (built directly),
+        // sharing one id.
+        let nsb_nested = interner.union(vec![ns, wk.boolean]);
+        let nsb_flat = interner.union(vec![wk.number, wk.string, wk.boolean]);
+        assert_eq!(nsb_nested, nsb_flat, "nested unions must flatten");
+        assert_eq!(
+            interner
+                .store()
+                .union_members(nsb_flat)
+                .expect("nsb is a union")
+                .len(),
+            3,
+            "flattened union has all three members"
+        );
+
+        // Re-interning the same canonical union returns the same id (hash-cons).
+        let nsb_again = interner.union(vec![wk.boolean, wk.string, wk.number]);
+        assert_eq!(nsb_flat, nsb_again, "identical unions hash-cons to one id");
     }
 
     /// The well-known intrinsic ids are assigned in `IntrinsicKind::ALL` order

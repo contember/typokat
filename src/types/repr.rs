@@ -21,8 +21,8 @@ pub enum TypeTag {
     /// An object/interface type. `payload` indexes `Store::objects`.
     /// TODO(M2): constructed by the object-literal / interface checker.
     Object,
-    /// A union type. `payload` indexes `Store::unions`.
-    /// TODO(M4): constructed + canonicalized by `Interner::union`.
+    /// A union type. `payload` indexes `Store::unions`. Constructed and
+    /// canonicalized by `Interner::union` (M4).
     Union,
     /// A function type. `payload` indexes `Store::functions`.
     /// TODO(M3): constructed by the function checker.

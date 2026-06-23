@@ -24,7 +24,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("m1_binder_inference", true),
     ("m2_objects", true),
     ("m3_functions", true),
-    // ("m4_unions", false),           // TODO(M4)
+    ("m4_unions", true),
     // ("m5_named_recursive", false),  // TODO(M5)
     // ("m6_reporting", false),        // TODO(M6)
 ];

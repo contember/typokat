@@ -42,7 +42,10 @@ pub enum StructuralKey<'a> {
         params: &'a [ParameterType],
         ret: TypeId,
     },
-    // TODO(M4): Union(&'a [TypeId])  — over already-canonicalized members
+    /// A union type, keyed over its **canonical** member list (flattened, sorted
+    /// by `TypeId`, deduped, `never`-free by the interner before hashing) so two
+    /// unions with the same member set in any source order collide.
+    Union(&'a [TypeId]),
 }
 
 /// Live structural hash used for hash-consing (FxHash for speed). This is the
@@ -87,6 +90,17 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
                 param.ty.0.hash(&mut h);
             }
             ret.0.hash(&mut h);
+        }
+        StructuralKey::Union(members) => {
+            TypeTag::Union.hash_discriminant(&mut h);
+            // Arity first so a shorter member list cannot collide with a prefix
+            // of a longer one under the streaming hasher.
+            members.len().hash(&mut h);
+            for member in *members {
+                // Members arrive in canonical (TypeId-sorted) order, so this is
+                // order-independent across two structurally equal union types.
+                member.0.hash(&mut h);
+            }
         }
     }
     h.finish()
