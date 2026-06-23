@@ -1,5 +1,31 @@
 //! The statement-level checker (architecture §5, mvp-plan §5 — M0–M6 rows, plus
-//! the post-MVP M7 narrowing slice).
+//! the post-MVP M7/M8 narrowing slices).
+//!
+//! M8 scope (post-MVP — discriminated-union narrowing + literal types), on top of
+//! M7:
+//!
+//!  - **Literal type annotations** (`TSLiteralType`): `"hello"`, `42`, `true` lower
+//!    to their interned literal `TypeId` ([`lower_literal_type`]), so
+//!    union-of-literals (`"a" | "b"`) and a discriminant property (`kind: "circle"`)
+//!    carry literal types. Literal assignability already exists (M0 widening +
+//!    hash-consed literal identity).
+//!  - **Discriminated-union narrowing**: a guard `x.prop === <literal>` / `!==`
+//!    narrows the union-typed symbol `x` to the members whose `prop` is compatible
+//!    with the literal (then-branch; complement for else / `!==`). The narrowing op
+//!    ([`crate::check::flow::narrow_by_discriminant`]) keys on the **base symbol**
+//!    `x` and a recognized **member-access discriminant** `x.prop`.
+//!  - **`in`-operator narrowing**: `"prop" in x` keeps the members that have `prop`
+//!    in the then-branch, those that can lack it in the else
+//!    ([`crate::check::flow::narrow_by_in_operator`]).
+//!  - **`switch` narrowing**: each `case "lit":` narrows the discriminant `x.prop`
+//!    by `x.prop === "lit"`; `default:` by the complement of all case labels
+//!    ([`check_switch`]), with a per-clause fork-and-restore mirroring [`check_if`].
+//!    Fallthrough is handled conservatively (a clause that may fall through does not
+//!    let the next clause over-narrow).
+//!  - Still deferred to the flow-node CFG (M9+): narrowing through unstructured flow
+//!    (early `return`/`throw` join, loops), assertion functions / type predicates
+//!    (`x is T`), `typeof`-discriminant combined with `in`, non-literal
+//!    discriminants, and exhaustiveness (`never` in `default`).
 //!
 //! M7 scope (post-MVP — control-flow narrowing), on top of M0–M6:
 //!
@@ -19,13 +45,15 @@
 //!    positive guard fact, the else-branch under its complement, and **restores**
 //!    the pre-`if` environment afterwards (narrowing never escapes the `if`). The
 //!    reusable narrowing *operations* live in `flow.rs`; only the env/driver and the
-//!    guard analysis (`analyze_guard`) live here. Unstructured-flow narrowing
-//!    (early `return`/`throw` join, loops, `switch`), `in`-operator, discriminated
-//!    unions, and assertion functions are deferred to the flow-node CFG (M8+).
-//!  - **Soundness** is keyed on the **specific `SymbolId`** (narrowing `x` never
-//!    touches `y`, a property access, or a shadowed binding), narrowing **resets on
-//!    reassignment**, an **unrecognized guard narrows nothing** (no false
-//!    negatives), and a **function boundary resets** the environment.
+//!    guard analysis (`analyze_guard`) live here. (M8 extends this same structured
+//!    driver with discriminated-union / `in` / `switch` narrowing — see the M8
+//!    scope above. Unstructured-flow narrowing — early `return`/`throw` join, loops
+//!    — and assertion functions remain deferred to the flow-node CFG, M9+.)
+//!  - **Soundness** is keyed on the **specific `SymbolId`** (narrowing `x` — and,
+//!    for an M8 discriminant `x.prop`, the *base* symbol `x` — never touches `y`, a
+//!    property access, or a shadowed binding), narrowing **resets on reassignment**,
+//!    an **unrecognized guard/discriminant narrows nothing** (no false negatives),
+//!    and a **function boundary resets** the environment.
 //!  - The binder gives every `{ … }` block its own `ScopeKind::Block` scope (so a
 //!    branch-local `let`/`const` does not leak), and the unified statement walker
 //!    (`check_stmt`) handles `if`/block in both the module top level and function
@@ -122,8 +150,9 @@ use oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, AssignmentOperator, AssignmentTarget,
     BinaryExpression, BinaryOperator, BindingPattern, BlockStatement, CallExpression, Expression,
     FormalParameters, Function, FunctionBody, IfStatement, LogicalExpression, ObjectExpression,
-    ObjectPropertyKind, Program, Statement, StaticMemberExpression, TSSignature, TSType, TSTypeName,
-    UnaryExpression, UnaryOperator, VariableDeclarationKind, VariableDeclarator,
+    ObjectPropertyKind, Program, Statement, StaticMemberExpression, SwitchStatement, TSLiteral,
+    TSSignature, TSType, TSTypeName, UnaryExpression, UnaryOperator, VariableDeclarationKind,
+    VariableDeclarator,
 };
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
@@ -602,7 +631,11 @@ fn check_stmt(
         Statement::BlockStatement(block) => {
             check_block(pass, scope, block, declared_ret, inferred);
         }
-        // Other statements are out of the M7 subset.
+        // M8: `switch` narrows the discriminant per `case` (fork-and-restore).
+        Statement::SwitchStatement(switch) => {
+            check_switch(pass, scope, switch, declared_ret, inferred);
+        }
+        // Other statements are out of the subset.
         _ => {}
     }
 }
@@ -741,6 +774,170 @@ fn check_if(
     pass.narrowed = saved;
 }
 
+/// Check a `switch (x.prop) { case "lit": … }` statement with per-case
+/// discriminated-union narrowing (M8, architecture §5) — a fork-and-restore
+/// mirroring [`check_if`], one fork per `case`/`default` clause.
+///
+/// The discriminant is inferred under the current env (so its operands resolve),
+/// then read as a member-access discriminant `x.prop`. Each clause is checked under
+/// a **forked** narrowing env:
+///
+///  - a `case "lit":` narrows `x` by `x.prop === "lit"` (the discriminant op), and
+///  - `default:` narrows `x` by the **complement** of all the case labels
+///    (`x.prop !== lit1 && … && x.prop !== litN`).
+///
+/// After each clause the pre-`switch` env is restored, so no per-case narrowing
+/// escapes the `switch`. An **unrecognized** discriminant (not `x.prop`), or a
+/// non-literal `case` test, yields no narrowing for that clause (sound — narrows
+/// nothing). **Fallthrough is handled conservatively**: a clause whose body does
+/// not definitely terminate (no trailing `return`/`break`/`throw`) falls into the
+/// next clause, so the next clause's body could see *this* clause's discriminant
+/// value too; in that case the next clause is checked **without** narrowing (the
+/// wide type — sound). The common no-fallthrough pattern (each `case` ends in
+/// `return`/`break`) gets the precise per-case narrowing.
+fn check_switch(
+    pass: &mut Pass,
+    scope: ScopeId,
+    switch: &SwitchStatement<'_>,
+    declared_ret: Option<TypeId>,
+    inferred: &mut Option<TypeId>,
+) {
+    // Evaluate the discriminant under the current env (before forking) so its
+    // references resolve and nested constructs inside it are checked once.
+    infer_expr(pass, scope, &switch.discriminant);
+    let discriminant = member_discriminant(pass, scope, &switch.discriminant);
+
+    // Intern every `case`'s literal label up front (mutable). A `default` clause has
+    // no test (`None`); a non-literal `case` test also yields `None` (it cannot be
+    // narrowed). The labels are reused to build the `default` complement.
+    let labels: Vec<Option<TypeId>> = switch
+        .cases
+        .iter()
+        .map(|case| {
+            case.test
+                .as_ref()
+                .and_then(|test| literal_expr_type(pass, test))
+        })
+        .collect();
+
+    // The non-`default` labels, for the `default` clause's complement.
+    let case_labels: Vec<TypeId> = switch
+        .cases
+        .iter()
+        .zip(&labels)
+        .filter_map(|(case, label)| case.test.as_ref().and(*label))
+        .collect();
+
+    let saved = pass.narrowed.clone();
+
+    // Whether the *previous* clause fell through into this one (so this clause's
+    // body could also see the previous clause's discriminant value → be conservative
+    // and apply no narrowing for it).
+    let mut prev_fell_through = false;
+
+    for (case, label) in switch.cases.iter().zip(&labels) {
+        // Apply this clause's narrowing only when no preceding clause falls through
+        // into it (otherwise the value reaching this body is not pinned to this
+        // clause's label → narrowing would be unsound).
+        if !prev_fell_through {
+            if let Some((symbol, property)) = &discriminant {
+                apply_case_narrowing(pass, *symbol, property, case, *label, &case_labels);
+            }
+        }
+
+        // Check the clause body in the current scope (a block-bodied case opens its
+        // own scope via the `BlockStatement` arm of `check_stmt`).
+        for stmt in &case.consequent {
+            check_stmt(pass, scope, stmt, declared_ret, inferred);
+        }
+
+        // Restore the pre-`switch` env: narrowing must not escape a clause.
+        pass.narrowed = saved.clone();
+
+        // Does this clause fall through into the next? (Conservative — empty or
+        // non-terminating bodies fall through.)
+        prev_fell_through = !clause_terminates(&case.consequent);
+    }
+
+    // Restore unconditionally (covers an empty `switch`).
+    pass.narrowed = saved;
+}
+
+/// Install the narrowing for one `switch` clause into the environment: a `case`
+/// with a literal label narrows `symbol` by `symbol.prop === label` (then-sense);
+/// a `default` (no label) narrows by the complement of every case label
+/// (`symbol.prop !== label` applied for each). A `case` whose test was not a
+/// literal (`label == None` but it *is* a `case`) installs no narrowing (sound).
+fn apply_case_narrowing(
+    pass: &mut Pass,
+    symbol: SymbolId,
+    property: &str,
+    case: &oxc_ast::ast::SwitchCase<'_>,
+    label: Option<TypeId>,
+    case_labels: &[TypeId],
+) {
+    match (&case.test, label) {
+        // `case <literal>:` — narrow to the matching members.
+        (Some(_), Some(lit)) => {
+            let op = NarrowOp::Discriminant {
+                property: property.to_string(),
+                literal: lit,
+            };
+            let current = resolve_identifier_type(pass, symbol);
+            let narrowed = narrow(pass.interner, current, &op, /* positive */ true);
+            pass.narrowed.insert(symbol, narrowed);
+        }
+        // `default:` — narrow to the complement of all case labels by removing each
+        // label's member in turn (`prop !== label1 && … && prop !== labelN`).
+        (None, _) => {
+            let mut current = resolve_identifier_type(pass, symbol);
+            for &lit in case_labels {
+                let op = NarrowOp::Discriminant {
+                    property: property.to_string(),
+                    literal: lit,
+                };
+                current = narrow(pass.interner, current, &op, /* positive */ false);
+            }
+            pass.narrowed.insert(symbol, current);
+        }
+        // A non-literal `case` test: cannot narrow → leave the env unchanged.
+        (Some(_), None) => {}
+    }
+}
+
+/// Whether a `switch` clause body **definitely terminates** (does not fall through
+/// to the next clause). Conservative: a clause terminates only when its last
+/// statement is a `return`/`break`/`throw`, or a block whose last statement is one
+/// of those. An empty body, or any other trailing statement, is treated as
+/// falling through (so the next clause is checked without this clause's narrowing —
+/// sound). This is intentionally simple — full reachability is the flow-node CFG's
+/// job (M9+); here it only gates whether the *next* clause may assume its own label.
+fn clause_terminates(consequent: &[Statement<'_>]) -> bool {
+    match consequent.last() {
+        Some(stmt) => statement_terminates(stmt),
+        None => false,
+    }
+}
+
+/// Whether a single statement is a control-flow terminator for the purposes of the
+/// conservative fallthrough check: a `return`/`break`/`throw`, or a block ending in
+/// one. `continue` is intentionally **not** treated as a terminator (it only
+/// applies inside a loop, never to a `switch` clause's fallthrough). Anything else
+/// (an expression, declaration, `if`, nested `switch`, …) is treated as
+/// non-terminating — conservative, so a clause that might fall through never lets
+/// the next clause over-narrow.
+fn statement_terminates(stmt: &Statement<'_>) -> bool {
+    match stmt {
+        Statement::ReturnStatement(_)
+        | Statement::BreakStatement(_)
+        | Statement::ThrowStatement(_) => true,
+        // A block terminates iff its last statement does (so `case x: { …; break; }`
+        // is recognized as terminating).
+        Statement::BlockStatement(block) => clause_terminates(&block.body),
+        _ => false,
+    }
+}
+
 /// Apply a guard fact to the narrowing environment for one branch: narrow the
 /// guarded symbol's **current** type (its already-narrowed type if an enclosing
 /// `if` narrowed it, else its declared type — so nested `if`s compose) by the
@@ -751,23 +948,28 @@ fn check_if(
 /// subset) is left untouched.
 fn apply_guard(pass: &mut Pass, fact: &GuardFact, positive: bool) {
     let current = resolve_identifier_type(pass, fact.symbol);
-    let narrowed = narrow(pass.interner, current, fact.op, positive);
+    let narrowed = narrow(pass.interner, current, &fact.op, positive);
     pass.narrowed.insert(fact.symbol, narrowed);
 }
 
 /// Analyze a condition expression into a `GuardFact`, or `None` if it is not a
-/// recognized M7 guard (in which case nothing is narrowed — soundness: an
-/// unknown guard must never narrow). Recognizes, over a plain identifier operand:
+/// recognized guard (in which case nothing is narrowed — soundness: an unknown
+/// guard must never narrow). Recognizes, over a plain identifier operand:
 ///
 ///  - **typeof**: `typeof x === "string" | "number" | "boolean"` and `!==`/`==`/
 ///    `!=`, with the `typeof …` on either side of the comparison;
 ///  - **truthiness**: bare `x`, and `!x` (which flips the polarity);
 ///  - **null/undefined equality**: `x === null` / `x === undefined` and `!==`,
-///    with the literal on either side.
+///    with the literal on either side;
+///  - **literal discriminant** (M8): `x.prop === <literal>` / `!==` (strict only,
+///    literal on either side), narrowing the symbol `x`;
+///  - **`in` operator** (M8): `"prop" in x`, narrowing the symbol `x`.
 ///
 /// A leading `!` flips `then_positive`. Anything else (an unrecognized tag, a
-/// non-identifier operand, a `&&`/`||`, a member-access operand, …) returns `None`.
-fn analyze_guard(pass: &Pass, scope: ScopeId, test: &Expression<'_>) -> Option<GuardFact> {
+/// non-identifier operand, a `&&`/`||`, a member-access operand in a position other
+/// than the recognized discriminant, …) returns `None`. Takes `&mut Pass` because
+/// the discriminant form interns the comparison literal.
+fn analyze_guard(pass: &mut Pass, scope: ScopeId, test: &Expression<'_>) -> Option<GuardFact> {
     match test {
         // `!cond` — recurse and flip the then-branch polarity.
         Expression::UnaryExpression(unary) if unary.operator == UnaryOperator::LogicalNot => {
@@ -786,8 +988,15 @@ fn analyze_guard(pass: &Pass, scope: ScopeId, test: &Expression<'_>) -> Option<G
                 then_positive: true,
             })
         }
-        // An equality comparison: `typeof x === "tag"`, `x === null`, etc.
-        Expression::BinaryExpression(binary) => analyze_equality_guard(pass, scope, binary),
+        // A binary comparison: `typeof x === "tag"`, `x === null`, `x.kind === "c"`,
+        // or the `in` operator `"prop" in x`.
+        Expression::BinaryExpression(binary) => {
+            if binary.operator == BinaryOperator::In {
+                in_guard(pass, scope, binary)
+            } else {
+                analyze_equality_guard(pass, scope, binary)
+            }
+        }
         _ => None,
     }
 }
@@ -799,7 +1008,7 @@ fn analyze_guard(pass: &Pass, scope: ScopeId, test: &Expression<'_>) -> Option<G
 /// `typeof x === "s"` and `"s" === typeof x` (and `x === null` / `null === x`) are
 /// both recognized.
 fn analyze_equality_guard(
-    pass: &Pass,
+    pass: &mut Pass,
     scope: ScopeId,
     binary: &BinaryExpression<'_>,
 ) -> Option<GuardFact> {
@@ -819,7 +1028,9 @@ fn analyze_equality_guard(
     let right = &binary.right;
 
     // typeof form: `typeof x === "tag"` (either operand order). Loose `==`/`!=` is
-    // fine here because `typeof` always yields a string.
+    // fine here because `typeof` always yields a string. These borrow `pass`
+    // immutably and return an owned fact, so the discriminant form below can take
+    // `&mut pass` afterwards.
     if let Some(fact) = typeof_guard(pass, scope, left, right, eq_positive)
         .or_else(|| typeof_guard(pass, scope, right, left, eq_positive))
     {
@@ -834,6 +1045,19 @@ fn analyze_equality_guard(
         if let Some(fact) = nullish_guard(pass, scope, left, right, eq_positive)
             .or_else(|| nullish_guard(pass, scope, right, left, eq_positive))
         {
+            return Some(fact);
+        }
+    }
+
+    // Literal-discriminant form (M8): `x.prop === <literal>` (either operand order).
+    // **Strict only**: loose `==` coerces, which complicates "could equal", so a
+    // loose discriminant comparison narrows nothing (sound). Interns the literal, so
+    // this needs `&mut pass`.
+    if strict {
+        if let Some(fact) = discriminant_guard(pass, scope, left, right, eq_positive) {
+            return Some(fact);
+        }
+        if let Some(fact) = discriminant_guard(pass, scope, right, left, eq_positive) {
             return Some(fact);
         }
     }
@@ -895,6 +1119,86 @@ fn nullish_guard(
         op: NarrowOp::EqNullish { is_undefined },
         then_positive: eq_positive,
     })
+}
+
+/// Try to read `member_side` as a discriminant member access `x.prop` (on a
+/// narrowable identifier `x`) and `literal_side` as a literal expression, producing
+/// a literal-discriminant guard fact targeting `x` (M8). `eq_positive` is the
+/// comparison's positive sense (`===` → `true`); it becomes the then-branch
+/// polarity (`kind === "circle"` keeps the matching members in the then-branch).
+/// The comparison literal is interned (hence `&mut pass`).
+fn discriminant_guard(
+    pass: &mut Pass,
+    scope: ScopeId,
+    member_side: &Expression<'_>,
+    literal_side: &Expression<'_>,
+    eq_positive: bool,
+) -> Option<GuardFact> {
+    let (symbol, property) = member_discriminant(pass, scope, member_side)?;
+    let literal = literal_expr_type(pass, literal_side)?;
+    Some(GuardFact {
+        symbol,
+        op: NarrowOp::Discriminant { property, literal },
+        then_positive: eq_positive,
+    })
+}
+
+/// Analyze a `"prop" in x` expression into an `in`-operator guard fact targeting
+/// `x` (M8). The left operand must be a **string-literal** property name and the
+/// right operand a narrowable identifier `x`. The then-branch (`in` holds) keeps
+/// the members that have the property; an enclosing `!` flips it. Anything else
+/// (a non-literal left, a computed/private `in`, a non-identifier right) narrows
+/// nothing.
+fn in_guard(pass: &Pass, scope: ScopeId, binary: &BinaryExpression<'_>) -> Option<GuardFact> {
+    // The property name must be a static string literal: `"a" in x`.
+    let Expression::StringLiteral(name) = &binary.left else {
+        return None;
+    };
+    let symbol = condition_symbol(pass, scope, &binary.right)?;
+    Some(GuardFact {
+        symbol,
+        op: NarrowOp::In {
+            property: name.value.to_string(),
+        },
+        then_positive: true,
+    })
+}
+
+/// Read an expression as a **discriminant member access** `x.prop`: a non-optional
+/// static member access whose object is a narrowable identifier `x`. Returns the
+/// `(SymbolId, property name)` to narrow, or `None` if the shape is not recognized
+/// (a computed/optional member, a non-identifier base, a nested member like
+/// `x.a.b`, …) — in which case nothing is narrowed (sound). Keying on the base
+/// **symbol** is what guarantees `x.prop === lit` narrows `x` and never `prop` or
+/// another symbol.
+fn member_discriminant(
+    pass: &Pass,
+    scope: ScopeId,
+    expr: &Expression<'_>,
+) -> Option<(SymbolId, String)> {
+    let Expression::StaticMemberExpression(member) = expr else {
+        return None;
+    };
+    // Optional chaining (`x?.kind`) changes the value (it can be `undefined`); keep
+    // it out of the recognized discriminant form.
+    if member.optional {
+        return None;
+    }
+    let symbol = condition_symbol(pass, scope, &member.object)?;
+    Some((symbol, member.property.name.to_string()))
+}
+
+/// Intern a literal **value** expression (`"circle"`, `42`, `true`) to its literal
+/// `TypeId`, or `None` if it is not a plain literal (the discriminant form only
+/// narrows against a literal). Mirrors the literal arms of [`infer_expr`].
+fn literal_expr_type(pass: &mut Pass, expr: &Expression<'_>) -> Option<TypeId> {
+    let value = match expr {
+        Expression::StringLiteral(s) => LiteralValue::String(s.value.to_string()),
+        Expression::NumericLiteral(n) => LiteralValue::Number(n.value),
+        Expression::BooleanLiteral(b) => LiteralValue::Boolean(b.value),
+        _ => return None,
+    };
+    Some(pass.interner.intern_literal(value))
 }
 
 /// Resolve a condition operand to the value `SymbolId` it narrows, or `None` if it
@@ -1149,6 +1453,10 @@ fn lower_annotation(pass: &mut Pass, scope: ScopeId, ts_type: &TSType<'_>) -> Op
         TSType::TSBooleanKeyword(_) => wk.boolean,
         TSType::TSNumberKeyword(_) => wk.number,
         TSType::TSStringKeyword(_) => wk.string,
+        // M8: a **literal type** (`"hello"`, `42`, `true`) lowers to its interned
+        // literal id. This is what makes union-of-literals (`"a" | "b"`) and the
+        // discriminant property (`kind: "circle"`) carry literal types.
+        TSType::TSLiteralType(lit) => return lower_literal_type(pass, &lit.literal),
         TSType::TSTypeLiteral(lit) => return lower_object_annotation(pass, scope, &lit.members),
         TSType::TSFunctionType(func) => {
             return lower_function_annotation(
@@ -1193,6 +1501,27 @@ fn lower_union_annotation(
         lowered.push(lower_annotation(pass, scope, member)?);
     }
     Some(pass.interner.union(lowered))
+}
+
+/// Lower a **literal type** (`TSLiteralType`'s literal) to its interned literal
+/// `TypeId` (M8). A string/number/boolean literal interns to the hash-consed
+/// literal id (so it shares identity with the same literal anywhere, which is what
+/// makes literal↔literal assignability and discriminant matching reduce to id
+/// equality). A `bigint`/template/`-1`-style (unary) literal type is out of the M8
+/// subset → `None` (the caller aborts the enclosing annotation, matching the other
+/// lowerings — silently dropping it would mis-state the type).
+fn lower_literal_type(pass: &mut Pass, literal: &TSLiteral<'_>) -> Option<TypeId> {
+    let value = match literal {
+        TSLiteral::StringLiteral(s) => LiteralValue::String(s.value.to_string()),
+        TSLiteral::NumericLiteral(n) => LiteralValue::Number(n.value),
+        TSLiteral::BooleanLiteral(b) => LiteralValue::Boolean(b.value),
+        // `bigint`, template-literal types, and unary (`-1`) literal types are out
+        // of the M8 subset.
+        TSLiteral::BigIntLiteral(_)
+        | TSLiteral::TemplateLiteral(_)
+        | TSLiteral::UnaryExpression(_) => return None,
+    };
+    Some(pass.interner.intern_literal(value))
 }
 
 /// Lower an object type literal's members to an interned (structural) object
@@ -1985,5 +2314,170 @@ function f() {
         // Before `x += "b"` the narrowing holds (line 4 clean); the compound
         // assignment resets it, so line 6 errors against `string | number`.
         assert_eq!(diags(src), vec![(6, "TK2322".to_string())]);
+    }
+
+    // -----------------------------------------------------------------------
+    // M8 — discriminated-union / `in` / `switch` narrowing soundness.
+    // -----------------------------------------------------------------------
+
+    /// Discriminant narrowing (`x.kind === "lit"`) refines inside the branch and
+    /// does **not escape** the `if`: the matching property is accessible in-branch
+    /// but the pre-`if` wide access still errors. Mirrors the `discriminated.ts`
+    /// fixture's headline behaviour as a unit-level soundness pin.
+    #[test]
+    fn discriminant_narrows_in_branch_and_does_not_escape() {
+        let src = "\
+type Shape = { kind: \"circle\"; radius: number } | { kind: \"square\"; side: number };
+function area(s: Shape) {
+  const wide = s.radius;
+  if (s.kind === \"circle\") {
+    const r: number = s.radius;
+  } else {
+    const d: number = s.side;
+  }
+  const after = s.radius;
+}
+";
+        // The two wide `s.radius` accesses (lines 3 and 9) are TK2339; both branch
+        // bodies are clean (then narrows to circle, else to square).
+        assert_eq!(
+            diags(src),
+            vec![(3, "TK2339".to_string()), (9, "TK2339".to_string())]
+        );
+    }
+
+    /// An **unrecognized discriminant narrows nothing** (no false negatives): a
+    /// member access on a different symbol, or a non-literal comparison, leaves the
+    /// union wide in both branches. Here `s.kind === t.kind` is not a literal
+    /// discriminant, so the in-branch `s.radius` still errors.
+    #[test]
+    fn unknown_discriminant_does_not_narrow() {
+        let src = "\
+type Shape = { kind: \"circle\"; radius: number } | { kind: \"square\"; side: number };
+function area(s: Shape, t: Shape) {
+  if (s.kind === t.kind) {
+    const bad = s.radius;
+  }
+}
+";
+        // The discriminant is not `x.prop === <literal>` → no narrowing → line 4
+        // errors with TK2339 (radius not on every member of the wide union).
+        assert_eq!(diags(src), vec![(4, "TK2339".to_string())]);
+    }
+
+    /// Discriminant narrowing keys on the **specific symbol**: `s.kind === "circle"`
+    /// narrows `s`, never a different union-typed symbol `t`.
+    #[test]
+    fn discriminant_narrows_only_its_symbol() {
+        let src = "\
+type Shape = { kind: \"circle\"; radius: number } | { kind: \"square\"; side: number };
+function area(s: Shape, t: Shape) {
+  if (s.kind === \"circle\") {
+    const r: number = s.radius;
+    const bad = t.radius;
+  }
+}
+";
+        // `s` is narrowed to circle (line 4 clean); `t` is untouched, so `t.radius`
+        // (line 5) errors with TK2339.
+        assert_eq!(diags(src), vec![(5, "TK2339".to_string())]);
+    }
+
+    /// `in`-operator narrowing refines both branches and keys on the symbol. The
+    /// pre-`if` wide access errors; each branch sees the narrowed member.
+    #[test]
+    fn in_operator_narrows_both_branches() {
+        let src = "\
+type Box = { a: number } | { b: string };
+function f(x: Box) {
+  const bad = x.a;
+  if (\"a\" in x) {
+    const ok: number = x.a;
+  } else {
+    const ok2: string = x.b;
+  }
+}
+";
+        // Only the wide `x.a` (line 3) errors; the then-branch narrows to `{ a }`
+        // and the else-branch to `{ b }`.
+        assert_eq!(diags(src), vec![(3, "TK2339".to_string())]);
+    }
+
+    /// `switch` narrows the discriminant per `case` and the narrowing does **not
+    /// escape** a clause: a clause accessing the *other* member's property errors.
+    #[test]
+    fn switch_narrows_per_case_and_does_not_escape() {
+        let src = "\
+type Shape = { kind: \"circle\"; radius: number } | { kind: \"square\"; side: number };
+function area(s: Shape): number {
+  switch (s.kind) {
+    case \"circle\": {
+      return s.radius;
+    }
+    case \"square\": {
+      return s.side;
+    }
+  }
+  return 0;
+}
+function bad(s: Shape) {
+  switch (s.kind) {
+    case \"circle\": {
+      const w: number = s.side;
+      break;
+    }
+  }
+}
+";
+        // The circle/square clauses are clean (narrowed); the `bad` switch's circle
+        // clause accesses `s.side` (line 16) → TK2339 (narrowed to circle).
+        assert_eq!(diags(src), vec![(16, "TK2339".to_string())]);
+    }
+
+    /// Conservative fallthrough: a `case` that **falls through** (no terminator)
+    /// into the next clause must not let the next clause over-narrow. With an empty
+    /// `case "circle":` falling into `case "square":`, the `square` clause's value
+    /// could still be a circle, so a `circle`-only access must NOT be assumed — and,
+    /// symmetrically, the wide union access errors. This pins that the per-case
+    /// narrowing is suppressed on fallthrough (soundness, no false negative).
+    #[test]
+    fn switch_fallthrough_is_conservative() {
+        let src = "\
+type Shape = { kind: \"circle\"; radius: number } | { kind: \"square\"; side: number };
+function area(s: Shape) {
+  switch (s.kind) {
+    case \"circle\":
+    case \"square\": {
+      const bad = s.side;
+    }
+  }
+}
+";
+        // `case "circle":` is empty → falls through into `case "square":`, whose
+        // body therefore could see a circle too. Narrowing is suppressed (wide
+        // union), so `s.side` (line 6) errors with TK2339.
+        assert_eq!(diags(src), vec![(6, "TK2339".to_string())]);
+    }
+
+    /// `switch` reassignment reset still holds across clauses: assigning the
+    /// discriminant symbol inside a clause drops its narrowing for later references
+    /// in that clause.
+    #[test]
+    fn switch_clause_respects_reassignment_reset() {
+        let src = "\
+function f(x: string | number) {
+  switch (typeof x) {
+    case \"string\": {
+      x = 1;
+      const s: string = x;
+    }
+  }
+}
+";
+        // The discriminant is `typeof x` (not a member-access discriminant), so the
+        // switch installs no narrowing; `x = 1` then resets any narrowing and `x`
+        // stays `string | number`, so line 5 errors (TK2322). This pins that a
+        // switch clause does not leave a stale narrowing.
+        assert_eq!(diags(src), vec![(5, "TK2322".to_string())]);
     }
 }

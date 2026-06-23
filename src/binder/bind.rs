@@ -39,7 +39,7 @@ use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{DeclId, Symbol, SymbolId, SymbolTable};
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, BlockStatement, Expression, Function, FunctionBody,
-    Program, Statement, VariableDeclarator,
+    Program, Statement, SwitchStatement, VariableDeclarator,
 };
 use rustc_hash::FxHashMap;
 
@@ -208,8 +208,14 @@ fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
         Statement::BlockStatement(block) => {
             bind_block(state, scope, block);
         }
-        // Other statements declare no names in the M7 subset; their
-        // sub-expressions (if any) are not in the subset either.
+        // M8: a `switch` binds its discriminant (for nested functions) and each
+        // clause's statements in the enclosing scope — a block-bodied clause
+        // (`case x: { … }`) opens its own scope via the `BlockStatement` arm above.
+        Statement::SwitchStatement(switch) => {
+            bind_switch(state, scope, switch);
+        }
+        // Other statements declare no names in the subset; their sub-expressions (if
+        // any) are not in the subset either.
         _ => {}
     }
 }
@@ -223,6 +229,22 @@ fn bind_block(state: &mut BindState, parent: ScopeId, block: &BlockStatement<'_>
         .push(Scope::new(ScopeKind::Block, Some(parent)));
     state.block_scopes.insert(block.span.start, block_scope);
     bind_statements(state, block_scope, &block.body);
+}
+
+/// Bind a `switch` statement (M8): bind the discriminant expression (for nested
+/// functions) and every clause's statements into `scope`. A block-bodied clause
+/// (`case x: { … }`) opens its own lexical scope through the `BlockStatement` arm
+/// of [`bind_statement`], so a `let`/`const` declared in that block stays local to
+/// the clause. The `case` *test* expressions are literals in the subset (no nested
+/// functions), but are bound defensively for any in-subset shape.
+fn bind_switch(state: &mut BindState, scope: ScopeId, switch: &SwitchStatement<'_>) {
+    bind_expression(state, scope, &switch.discriminant);
+    for case in &switch.cases {
+        if let Some(test) = &case.test {
+            bind_expression(state, scope, test);
+        }
+        bind_statements(state, scope, &case.consequent);
+    }
 }
 
 /// Bind a variable declarator: declare its identifier (if a plain identifier) in
