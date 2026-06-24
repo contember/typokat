@@ -1173,10 +1173,21 @@ fn collect_class_own_members(
                 let Some(ty) = lower_annotation(pass, scope, &annotation.type_annotation) else {
                     continue;
                 };
+                // M21: an optional field (`name?: T`) is a real member whose effective
+                // type bakes in `| undefined` (interned here, as the relation engine
+                // cannot intern — see [`lower_interface_members`]). A class with only
+                // public fields has a structural instance type, so the optional then
+                // behaves exactly like an optional member on an object type.
+                let ty = if prop.optional {
+                    let undefined = pass.interner.well_known().undefined;
+                    pass.interner.union(vec![ty, undefined])
+                } else {
+                    ty
+                };
                 let member = PropertyType {
                     name: name.into_owned(),
                     ty,
-                    optional: false,
+                    optional: prop.optional,
                     visibility: lower_visibility(prop.accessibility),
                     declaring_class: Some(class_id),
                     // M14: carry the `readonly` modifier into the member's identity.
@@ -1738,9 +1749,6 @@ fn lower_interface_members(
     for member in members {
         match member {
             TSSignature::TSPropertySignature(sig) => {
-                if sig.optional {
-                    continue;
-                }
                 let Some(name) = sig.key.static_name() else {
                     continue;
                 };
@@ -1750,9 +1758,23 @@ fn lower_interface_members(
                 let Some(ty) = lower_annotation(pass, scope, &annotation.type_annotation) else {
                     continue;
                 };
-                object
-                    .properties
-                    .push(PropertyType::public(name.into_owned(), ty));
+                // M21: an optional property (`b?: T`) is a real member whose effective
+                // type bakes in `| undefined` (model `exactOptionalPropertyTypes` OFF).
+                // Unioning here (where `&mut Interner` is available) is what keeps the
+                // relation engine — which borrows `&Store` read-only and cannot intern —
+                // unchanged: a present source value is then related against `T | undefined`
+                // by the existing union-target logic, and a missing optional target is
+                // simply allowed in `relate_objects`. With it stored as a normal member,
+                // `keyof`/indexed-access include the key and excess no longer trips on it.
+                let ty = if sig.optional {
+                    let undefined = pass.interner.well_known().undefined;
+                    pass.interner.union(vec![ty, undefined])
+                } else {
+                    ty
+                };
+                let mut prop = PropertyType::public(name.into_owned(), ty);
+                prop.optional = sig.optional;
+                object.properties.push(prop);
             }
             // M19: an index signature on an interface — lowered into the
             // string/number slot. An unsupported one (non-`string`/`number` key,
@@ -2818,7 +2840,12 @@ fn check_excess_properties(
 
         match target_obj.property(&name) {
             Some(target_prop) => {
-                check_excess_properties(store, &prop.value, target_prop.ty, diagnostics);
+                // M21: an *optional* member's type is `T | undefined` (a union), but
+                // freshness must still recurse THROUGH that container (the M19
+                // "freshness recurses through a new container" rule), so descend into
+                // the union's object part rather than bail on the union.
+                let recurse_ty = excess_recursion_target(store, target_prop.ty);
+                check_excess_properties(store, &prop.value, recurse_ty, diagnostics);
             }
             None => {
                 // M19: the key itself is suppressed when an index signature accepts it
@@ -2849,6 +2876,27 @@ fn check_excess_properties(
                 }
             }
         }
+    }
+}
+
+/// The object type to descend into for a freshness (excess) check on a matched
+/// member. An *optional* member's type is `T | undefined` (a union); freshness must
+/// still recurse through that container (the M19 "freshness recurses through a new
+/// container" rule), so return the union's lone object member. A non-union (or a
+/// union without exactly one object member — e.g. a primitive, or the pre-existing
+/// multi-object-union gap) is returned unchanged, and the recursive call simply
+/// finds no object and stops.
+fn excess_recursion_target(store: &Store, ty: TypeId) -> TypeId {
+    let Some(members) = store.union_members(ty) else {
+        return ty;
+    };
+    let mut objects = members
+        .iter()
+        .copied()
+        .filter(|&m| store.object_type(m).is_some());
+    match (objects.next(), objects.next()) {
+        (Some(obj), None) => obj,
+        _ => ty,
     }
 }
 
@@ -3290,9 +3338,14 @@ fn lower_literal_type(pass: &mut Pass, literal: &TSLiteral<'_>) -> Option<TypeId
 ///
 /// M19: a **string** index signature (`[k: string]: T`) sets `string_index = T`
 /// and a **number** index signature (`[i: number]: T`) sets `number_index = T`;
-/// both coexist with named properties. A member whose type cannot be lowered, an
-/// optional property, or any other unsupported signature (call/method/construct, or
-/// an index sig with an unsupported key) aborts the lowering (`None`).
+/// both coexist with named properties.
+///
+/// M21: an **optional** property (`b?: T`) is a real member with `optional: true`
+/// and an effective type of `T | undefined` (the `| undefined` is interned here).
+///
+/// A member whose type cannot be lowered, or any unsupported signature
+/// (call/method/construct, or an index sig with an unsupported key) aborts the
+/// lowering (`None`).
 fn lower_object_annotation(
     pass: &mut Pass,
     scope: ScopeId,
@@ -3302,15 +3355,23 @@ fn lower_object_annotation(
     for member in members {
         match member {
             TSSignature::TSPropertySignature(sig) => {
-                if sig.optional {
-                    return None;
-                }
                 let name = sig.key.static_name()?;
                 let annotation = sig.type_annotation.as_ref()?;
                 let ty = lower_annotation(pass, scope, &annotation.type_annotation)?;
-                object
-                    .properties
-                    .push(PropertyType::public(name.into_owned(), ty));
+                // M21: an optional member (`b?: T`) lowers like a normal property whose
+                // effective type is `T | undefined` (see [`lower_interface_members`] for
+                // the rationale — the `| undefined` must be interned here, not in the
+                // relation engine). Previously any optional member aborted the whole
+                // annotation (degrading it to the error type); now it is a real member.
+                let ty = if sig.optional {
+                    let undefined = pass.interner.well_known().undefined;
+                    pass.interner.union(vec![ty, undefined])
+                } else {
+                    ty
+                };
+                let mut prop = PropertyType::public(name.into_owned(), ty);
+                prop.optional = sig.optional;
+                object.properties.push(prop);
             }
             // M19: an index signature `[k: string]: T` / `[i: number]: T`.
             TSSignature::TSIndexSignature(sig) => {

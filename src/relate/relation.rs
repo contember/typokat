@@ -490,6 +490,18 @@ impl<'a> Relater<'a> {
                     if !nominal_origin_ok(tgt_prop, src_prop) {
                         return Relation::No(ReasonChain::leaf(src, tgt));
                     }
+                    // M21: presence is independent of the value type. An *optional* source
+                    // property may be ABSENT, so it cannot satisfy a *required* target
+                    // property (which must be present) — regardless of whether their value
+                    // types relate (e.g. a required target of `string | undefined` still
+                    // rejects an optional source, because the source may OMIT it entirely).
+                    // required->optional and both-optional are fine; the value relation
+                    // below handles the rest. Like the nominal rule above, this is an
+                    // object-level structural failure, so it is a plain `Leaf` (not a
+                    // value-depth `Property` — the member's *type* may relate fine).
+                    if src_prop.optional && !tgt_prop.optional {
+                        return Relation::No(ReasonChain::leaf(src, tgt));
+                    }
                     if let Relation::No(child) =
                         self.relate(src_prop.ty, tgt_prop.ty, kind, assumed)
                     {
@@ -501,8 +513,16 @@ impl<'a> Relater<'a> {
                         }));
                     }
                 }
-                // Required target property absent in the source.
+                // Target property absent in the source.
                 None => {
+                    // M21: an *optional* target property may be absent — skip it. Its
+                    // effective type already includes `undefined` (unioned in at
+                    // lowering), so a *present* source value is related normally in the
+                    // `Some(..)` arm above; absence is simply allowed. Only a *required*
+                    // absent target property is a missing-property failure (`TK2741`).
+                    if tgt_prop.optional {
+                        continue;
+                    }
                     return Relation::No(ReasonChain::of(Reason::MissingProperty {
                         name: tgt_prop.name.clone(),
                         src,
@@ -962,6 +982,16 @@ mod tests {
         PropertyType::public(name, ty)
     }
 
+    /// Build an optional member `name?: ty` (M21). The caller passes the *effective*
+    /// type — i.e. already `T | undefined`, as it is unioned in at lowering — exactly
+    /// as the relation engine sees it (it never interns `| undefined` itself).
+    fn optional_prop(name: &str, ty: TypeId) -> PropertyType {
+        PropertyType {
+            optional: true,
+            ..PropertyType::public(name, ty)
+        }
+    }
+
     /// Build a member `name: ty` with an explicit visibility + declaring class
     /// (M13), for the nominal-relation tests.
     fn nominal_prop(
@@ -1031,6 +1061,69 @@ mod tests {
                 other => panic!("expected Property, got {other:?}"),
             },
             Relation::Yes => panic!("expected a depth mismatch failure"),
+        }
+    }
+
+    /// M21 — the optional-property soundness core. With an optional member's
+    /// effective type unioned to `T | undefined` at lowering and `optional: true`,
+    /// the relation must: (1) let a REQUIRED source satisfy an OPTIONAL target — the
+    /// optional target may be absent in the source, so its absence is allowed; and
+    /// (2) reject an OPTIONAL source against a REQUIRED target — the source's value
+    /// is `T | undefined`, whose `undefined` arm fails the required `T`. Pinning both
+    /// directions guards against a dropped error (the worst outcome for a checker).
+    #[test]
+    fn optional_target_absent_ok_optional_source_to_required_fails() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        // The effective type of an optional `a?: number` — `number | undefined`.
+        let num_or_undef = interner.union(vec![wk.number, wk.undefined]);
+
+        // `{ a: number }` — a required member.
+        let required = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number)],
+            ..Default::default()
+        });
+        // `{ a?: number }` — an optional member (effective type `number | undefined`).
+        let optional = interner.intern_object(ObjectType {
+            properties: vec![optional_prop("a", num_or_undef)],
+            ..Default::default()
+        });
+        // `{}` — the empty object (`a` absent).
+        let empty = interner.intern_object(ObjectType::default());
+
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+
+        // (1a) A required `a` satisfies an optional `a` (present source, related
+        // against `number | undefined` via the union-target logic).
+        assert!(
+            rel.is_assignable(required, optional).is_yes(),
+            "a required `a` must satisfy an optional `a`"
+        );
+        // (1b) An ABSENT optional target is allowed — `{}` is assignable to `{ a? }`.
+        assert!(
+            rel.is_assignable(empty, optional).is_yes(),
+            "an absent optional target property must be allowed"
+        );
+
+        // (2) An optional `a` does NOT satisfy a required `a` — presence is independent
+        // of the value type: the source may OMIT `a` entirely, which the required target
+        // forbids. This is an object-level structural failure (a `Leaf`), NOT a
+        // value-depth `Property` failure — the gate fires before the value relation, so
+        // it holds even when the value types would relate (a required `a: number |
+        // undefined` is likewise rejected). Maps to `TK2322` (assignment) / `TK2345`
+        // (argument), like the nominal-origin leaf.
+        match rel.is_assignable(optional, required) {
+            Relation::No(chain) => {
+                assert!(
+                    matches!(chain.head(), Reason::Leaf { .. }),
+                    "expected an object-level Leaf failure, got {:?}",
+                    chain.head()
+                );
+                // The root pins the two object types.
+                assert_eq!(chain.root(), (optional, required));
+            }
+            Relation::Yes => panic!("an optional source must NOT satisfy a required target"),
         }
     }
 
