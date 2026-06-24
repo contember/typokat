@@ -91,8 +91,11 @@ slots into a known later phase without rework:
   Nominal typing currently constrains only the foreign→private direction (a private/protected
   type rejects a structurally-identical *other* type); widening a private-bearing instance to its
   public structural shape is not yet rejected (a one-directional divergence from tsc TS2322).
-- **modules/imports** and **`lib.d.ts` globals** (`Array`, `console`, string methods, …) are out
-  of scope for now — fixtures avoid the standard library entirely.
+- **arrays**: `T[]` / `Array<T>`, array literals, element access, `length`, covariant
+  assignability land in **M17** (built-in, no lib). Array METHODS (`push`/`map`/…), tuples, and
+  `ReadonlyArray` follow.
+- **modules/imports** and the rest of **`lib.d.ts` globals** (`console`, string methods, `Promise`,
+  …) are out of scope for now — fixtures avoid the standard library otherwise.
 
 Other conventions: an unresolved name (`TK2304`) gets the **error type** (`any`-like), which
 **suppresses cascade** diagnostics on the same expression. `strictNullChecks` is **on** (our
@@ -123,3 +126,4 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m14_readonly/` | M14 — member-assignment checking + `readonly` properties |
 | `m15_accessors/` | M15 — getters/setters + `abstract` classes |
 | `m16_generic_classes/` | M16 — generic classes (type params, `new C<T>`, inference, `C<T>` as a type) |
+| `m17_arrays/` | M17 — array types (`T[]` / `Array<T>`, element access, `length`, covariance) |
