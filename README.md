@@ -5,7 +5,7 @@ A from-scratch **TypeScript type checker in Rust**, built to a state-of-the-art 
 diagnostics — structural **and** nominal typing, control-flow narrowing, generics with inference,
 full classes, and the common "real-world" type constructs. It is a **checker, not a compiler**:
 emit, JS runtime semantics, and module resolution are out of scope by design — the goal is to
-preserve the **type model** (see [`ts-checker-architecture.md`](./ts-checker-architecture.md)).
+preserve the **type model** (see [`docs/reference/architecture.md`](./docs/reference/architecture.md)).
 
 > Status: **M0–M22** implemented. ~16k lines of Rust, 170 unit tests + a 63-file conformance
 > corpus (163 expected diagnostics), `clippy -D warnings` clean. Every milestone was
@@ -52,8 +52,9 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 
 ## Architecture
 
-The full design is in [`ts-checker-architecture.md`](./ts-checker-architecture.md); the build plan
-in [`mvp-plan.md`](./mvp-plan.md). The pieces that make it Rust-shaped and fast:
+The full design is in [`docs/reference/architecture.md`](./docs/reference/architecture.md); the build
+plan in [`docs/archive/mvp-plan.md`](./docs/archive/mvp-plan.md). The pieces that make it Rust-shaped
+and fast:
 
 - **Type store** — every type is a `TypeId(u32)` into an arena (no `Rc<RefCell>`), **hash-consed**
   so structural equality is an integer compare, SoA cold side-tables, substitution-aware.

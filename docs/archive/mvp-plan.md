@@ -1,6 +1,6 @@
 # MVP Plan: a runnable typokat checker
 
-> Companion to [`ts-checker-architecture.md`](./ts-checker-architecture.md). This plan turns
+> Companion to [`architecture.md`](../reference/architecture.md). This plan turns
 > the architecture into the **smallest thing that runs end-to-end** — `typokat check f.ts`
 > that parses, binds, checks, and reports real type errors on a tiny TypeScript subset.
 >

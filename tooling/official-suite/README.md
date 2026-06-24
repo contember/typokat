@@ -3,8 +3,8 @@
 Runs typokat against a curated slice of the **official microsoft/TypeScript
 conformance suite** and diffs its diagnostics against tsc's `.errors.txt`
 baselines. It is the project's "cross-check vs real `tsc --strict`" step
-(HANDOFF.md §1, §4) — automated, at scale, and biased to surface **false
-negatives** (dropped errors, the project's #1 fear).
+(`docs/reference/dev-method.md` §1–2) — automated, at scale, and biased to surface
+**false negatives** (dropped errors, the project's #1 fear).
 
 It is a **triage dashboard, not a pass/fail gate**: typokat is a deliberate
 subset of tsc (no `lib.d.ts`, no modules, no emit, only M0–M22 constructs), so a

@@ -9,7 +9,7 @@ compiler*: it parses, binds, and type-checks TS and reports `tsc`-style diagnost
 Error codes mirror tsc (`TK2322` ≡ `TS2322`). Emit, JS runtime semantics, and module
 resolution are out of scope **by design**; the goal is to preserve the type model.
 M0–M22 are implemented. Coverage: [README.md](./README.md). Full design:
-[ts-checker-architecture.md](./ts-checker-architecture.md).
+[docs/reference/architecture.md](docs/reference/architecture.md).
 
 ## Commands
 
@@ -27,7 +27,7 @@ directory — toggle scope via the `MILESTONE_DIRS` table in `tests/conformance.
 ## Architecture (the big picture)
 
 Pipeline in `src/driver.rs`: parse (via `oxc`) → bind → check. Four pillars (details
-in [ts-checker-architecture.md](./ts-checker-architecture.md)):
+in [docs/reference/architecture.md](docs/reference/architecture.md)):
 
 - **Type store** (`src/types/`) — every type is a hash-consed `TypeId(u32)` into an
   arena (no `Rc<RefCell>`), so structural equality is an integer compare.
@@ -50,14 +50,15 @@ deliberate `tsc` divergence is documented in `tests/cases/README.md`.
 
 ## How work is done here (mandatory method)
 
-Milestone-by-milestone, **spec-first** — the process in [HANDOFF.md](./HANDOFF.md) §1
-is what kept the project sound, follow it exactly: write the fixture corpus first (the
-acceptance spec) and commit it on its own, then implement, then run an **independent
-adversarial review** (hunts false negatives, cross-checks against real `tsc --strict`).
-Implementation goes through subagents; the leader supervises and commits. The
-soundness/architecture **invariants you must not break** are in HANDOFF.md §2; the
-roadmap (next: M23 unstructured-flow narrowing, M24 generic constraints, then the
-type-level VM) in §3.
+Milestone-by-milestone, **spec-first** — the process in
+[docs/reference/dev-method.md](docs/reference/dev-method.md) §1 is what kept the project sound,
+follow it exactly: write the fixture corpus first (the acceptance spec) and commit it on its own,
+then implement, then run an **independent adversarial review** (hunts false negatives, cross-checks
+against real `tsc --strict`). Implementation goes through subagents; the leader supervises and
+commits. The soundness/architecture **invariants you must not break** are in
+[docs/reference/invariants.md](docs/reference/invariants.md); the roadmap **is** the
+[docs/backlog/](docs/backlog/README.md) (next: unstructured-flow narrowing, generic constraints,
+then the type-level VM).
 
 ## Testing
 
@@ -72,3 +73,22 @@ Two layers:
    plus a committed regression scoreboard (`run --check` exits 1 on any regression). It
    is a black-box harness (shells out to the prebuilt binary), independent of the
    checker build. Details: [tooling/official-suite/README.md](./tooling/official-suite/README.md).
+
+<!-- AGENT-DOCS:POINTER (managed by the agent-docs skill — edit the body freely,
+     keep the markers) -->
+## Docs
+
+Project docs live in [`docs/`](./docs/) and follow a fixed structure — start at
+[`docs/CLAUDE.md`](./docs/CLAUDE.md) (the operating manual) and
+[`docs/INDEX.md`](./docs/INDEX.md) (the map). In short:
+
+- `docs/reference/` — how the system works now (architecture · dev-method · the binding invariants).
+- `docs/decisions/` — ADRs (the *why*), immutable.
+- `docs/backlog/` — decided work not yet scheduled (**the roadmap**) · `docs/sprints/` — active
+  work-plans · `docs/archive/` — shipped.
+- `docs/ideas/` — proposals, no commitment.
+
+Path is the status (no `status:` fields); when you finish or supersede something,
+move/delete it per `docs/CLAUDE.md`. (`tests/cases/README.md` and
+`tooling/official-suite/README.md` stay with the code — they're test-tooling docs, not `docs/`.)
+<!-- /AGENT-DOCS:POINTER -->

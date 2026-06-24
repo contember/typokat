@@ -1,0 +1,47 @@
+# backlog
+
+Decided work items ("issues") not yet scheduled into a sprint. One self-contained
+file per item: `NN-<slug>.md` (zero-padded, **folder-local** sequence — don't
+renumber, gaps are fine). Copy [`_template.md`](_template.md).
+
+**No `status:` field** — an item is alive because it lives here. It leaves by being
+**deleted** on ship (default; git holds the record) or moved to `../archive/` if it
+documents something a future reader needs. Dependencies go in frontmatter:
+`blocked-by: [./NN-other.md]`.
+
+Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
+unwieldy; numbers stay folder-local.
+
+This **is** the roadmap. Items `01`–`05` are gaps surfaced by the official-suite harness (the `F*`
+findings); `06`–`17` are the milestone roadmap. Architecture §12 governs ordering — the relation
+engine + narrowing come **before** the type-level VM. See
+[`../reference/dev-method.md`](../reference/dev-method.md) for how each item is built.
+
+## Items
+
+**Current-impl bugs (highest value — they over-report, the false-positive direction)**
+- [`01`](01-class-member-collection.md) — class member-collection drops parameter properties + inferred fields (**real bug**).
+- [`02`](02-accessibility-destructuring.md) — accessibility not checked through a destructuring pattern.
+- [`03`](03-readonly-union-access.md) — `readonly` / property not enforced through a union member access.
+- [`04`](04-readonly-cascade-precision.md) — `readonly` assignment suppresses the value-type cascade (minor).
+
+**Near-term completeness**
+- [`05`](05-object-interface-signatures.md) — call/method/construct signatures in object & interface types (candidate milestone).
+- [`06`](06-class-completeness-checks.md) — class-completeness checks `TK2416` + `TK2515` (good warm-up).
+
+**Narrowing + generics (both precede the VM)**
+- [`07`](07-unstructured-flow-narrowing.md) — unstructured-flow narrowing, the flow-node CFG (M23).
+- [`08`](08-generic-constraints.md) — generic constraints `<T extends U>` (M24).
+
+**The type-level VM phase (tree-walked first, VM last)**
+- [`09`](09-conditional-types.md) — conditional types (M25) · blocked-by `08`.
+- [`10`](10-mapped-types.md) — mapped types (M26) · blocked-by `08`.
+- [`11`](11-template-literal-types.md) — template literal types (M27).
+- [`12`](12-utility-types.md) — utility types (M28) · blocked-by `09`, `10`.
+- [`13`](13-bytecode-vm.md) — the bytecode VM (M29) · blocked-by `09`, `10`.
+
+**Long-term: real-world scale + IDE**
+- [`14`](14-libdts-loading.md) — `lib.d.ts` loading · blocked-by `09`, `10`.
+- [`15`](15-modules-imports.md) — modules / imports / module resolution.
+- [`16`](16-parallelism-type-universe.md) — parallelism: shared type universe (Stages 1 & 2) · blocked-by `14`, `15`.
+- [`17`](17-incrementality.md) — incrementality (Phase 4) · blocked-by `16`.
