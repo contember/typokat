@@ -1,0 +1,237 @@
+//! M16 end-to-end tests for **generic classes** (type parameters on a class scope
+//! its instance type + constructor; `new C<args>` / `new C(args)` instantiate by
+//! explicit substitution or constructor-argument inference; `C<args>` is usable as a
+//! type). These drive the whole pipeline (parse → bind → check) and assert the set of
+//! `(line, code)` diagnostics, pinning the M16 invariants the reviewer should
+//! scrutinize: the parameter is substituted into the instance/ctor/members,
+//! `Box<number>` and `Box<string>` are distinct instantiations, the constructor
+//! arguments are checked against the substituted parameters, and inference from the
+//! constructor arguments matches the explicit-argument path. The per-fixture
+//! acceptance lives in the conformance corpus (`m16_generic_classes/`).
+
+use crate::driver::check_source;
+
+/// Run the checker and return the sorted `(1-based line, code)` of every diagnostic,
+/// keyed on its primary-span start line (matching the conformance harness's mapping).
+fn diags(source: &str) -> Vec<(u32, String)> {
+    let out = check_source(source);
+    assert!(
+        out.parse_errors.is_empty(),
+        "unexpected parse error(s): {:?}",
+        out.parse_errors
+    );
+    let index = crate::span::LineIndex::new(source);
+    let mut v: Vec<(u32, String)> = out
+        .diagnostics
+        .iter()
+        .map(|d| (index.line_of(d.span.start), d.code.as_str().to_string()))
+        .collect();
+    v.sort();
+    v
+}
+
+/// Explicit type arguments instantiate the constructor + instance: `new Box<number>(1)`
+/// types the constructor `(v: number)` and the instance `{ value: number; get: () =>
+/// number }`, so `b.get()` is `number`. A wrong target annotation (`bad: string`) is
+/// `TK2322`; a wrong constructor argument (`new Box<number>("s")`) is `TK2345`.
+#[test]
+fn explicit_type_arguments_substitute_ctor_and_members() {
+    let src = "\
+class Box<T> {
+  value: T;
+  constructor(v: T) {
+this.value = v;
+  }
+  get(): T {
+return this.value;
+  }
+}
+const b = new Box<number>(1);
+const n: number = b.get();   // ok
+const bad: string = b.get(); // TK2322
+const e = new Box<number>(\"s\"); // TK2345
+";
+    // `b.get()` is the substituted `number`: line 11 ok, line 12 (string target) TK2322,
+    // line 13 (string arg vs number param) TK2345.
+    assert_eq!(
+        diags(src),
+        vec![(12, "TK2322".to_string()), (13, "TK2345".to_string())]
+    );
+}
+
+/// No type arguments → the parameter is **inferred** from the constructor argument:
+/// `new Box(5)` infers `T = number`, so `inf.get()` is `number` — a `string` target is
+/// `TK2322`, a `number` target is clean.
+#[test]
+fn inferred_type_argument_from_constructor_argument() {
+    let src = "\
+class Box<T> {
+  value: T;
+  constructor(v: T) {
+this.value = v;
+  }
+  get(): T {
+return this.value;
+  }
+}
+const inf = new Box(5);
+const m: number = inf.get();  // ok
+const m2: string = inf.get(); // TK2322
+";
+    // `T` inferred `number` from `5`: line 11 ok, line 12 (string target) TK2322.
+    assert_eq!(diags(src), vec![(12, "TK2322".to_string())]);
+}
+
+/// Two distinct instantiations are distinct types: `Box<number>` is not assignable to
+/// `Box<string>` (their `value`/`get` members differ structurally) → `TK2322`, while a
+/// matching annotation (`Box<number>`) is clean.
+#[test]
+fn distinct_instantiations_are_distinct_types() {
+    let src = "\
+class Box<T> {
+  value: T;
+  constructor(v: T) {
+this.value = v;
+  }
+  get(): T {
+return this.value;
+  }
+}
+const x: Box<number> = new Box<number>(1); // ok
+const y: Box<string> = new Box<number>(1); // TK2322
+";
+    // `Box<number>` ≠ `Box<string>`: only line 11 errors (TK2322).
+    assert_eq!(diags(src), vec![(11, "TK2322".to_string())]);
+}
+
+/// A multi-parameter generic class substitutes each parameter independently:
+/// `Pair<number, string>` types `first: number`, `second: string`. A swapped target
+/// (`bad: string = p.first`) is `TK2322`; swapped constructor arguments fail per-arg
+/// (`TK2345` each).
+#[test]
+fn multi_parameter_substitutes_each_independently() {
+    let src = "\
+class Pair<A, B> {
+  first: A;
+  second: B;
+  constructor(a: A, b: B) {
+this.first = a;
+this.second = b;
+  }
+}
+const p = new Pair<number, string>(1, \"x\");
+const a: number = p.first;   // ok
+const b: string = p.second;  // ok
+const bad: string = p.first; // TK2322
+const e = new Pair<number, string>(\"x\", 1); // TK2345 x2
+";
+    // `p.first` is `number`, `p.second` is `string`: line 12 (string target) TK2322;
+    // line 13 swaps both arguments → two TK2345 (each fails its own parameter).
+    assert_eq!(
+        diags(src),
+        vec![
+            (12, "TK2322".to_string()),
+            (13, "TK2345".to_string()),
+            (13, "TK2345".to_string())
+        ]
+    );
+}
+
+/// A multi-parameter class with **no** explicit type arguments infers each parameter
+/// from its own constructor argument: `new Pair(1, "x")` infers `A = number`,
+/// `B = string`, so `inferred.second` is `string` — a `string` target is clean, a
+/// `number` target is `TK2322`.
+#[test]
+fn multi_parameter_inference_from_arguments() {
+    let src = "\
+class Pair<A, B> {
+  first: A;
+  second: B;
+  constructor(a: A, b: B) {
+this.first = a;
+this.second = b;
+  }
+}
+const inferred = new Pair(1, \"x\");
+const c: string = inferred.second; // ok
+const d: number = inferred.second; // TK2322
+";
+    // `B` inferred `string` from `\"x\"`: line 10 ok, line 11 (number target) TK2322.
+    assert_eq!(diags(src), vec![(11, "TK2322".to_string())]);
+}
+
+/// `C<args>` is usable as a plain **type annotation** (not just at `new`): a
+/// `Box<number>` parameter accepts a `Box<number>` argument and rejects a `Box<string>`
+/// one. This exercises the M9 generic type-reference instantiation over a class's
+/// instance template.
+#[test]
+fn generic_class_used_as_type_annotation() {
+    let src = "\
+class Box<T> {
+  value: T;
+  constructor(v: T) {
+this.value = v;
+  }
+}
+function take(b: Box<number>): number {
+  return b.value;
+}
+const ok = take(new Box<number>(1));   // ok
+const bad = take(new Box<string>(\"s\")); // TK2345
+";
+    // The `Box<string>` argument is not assignable to the `Box<number>` parameter:
+    // line 11 TK2345. The `Box<number>` argument (line 10) is clean.
+    assert_eq!(diags(src), vec![(11, "TK2345".to_string())]);
+}
+
+/// A well-typed generic class with member bodies referencing the type parameter checks
+/// **clean** — `T` resolves in every member body (constructor, getter, setter) under
+/// the parameter frame pushed by `check_class`. No crash, no spurious error.
+#[test]
+fn generic_member_bodies_check_under_parameter_scope() {
+    let src = "\
+class Box<T> {
+  value: T;
+  constructor(v: T) {
+this.value = v;
+  }
+  get(): T {
+return this.value;
+  }
+  set(v: T): void {
+this.value = v;
+  }
+}
+const b = new Box<number>(1);
+const n: number = b.get();
+";
+    // A well-typed generic class checks clean — `T` resolves in every member body.
+    assert!(diags(src).is_empty(), "got {:?}", diags(src));
+}
+
+/// A type parameter does **not leak** past its class: a same-named top-level
+/// `type T = string` is what a reference to `T` resolves to **outside** the class
+/// (so `const s: T = 1` is `TK2322`, number vs string), while **inside** the class
+/// the parameter `T` shadows it (so `value: T` is the parameter, and `new Box<number>`
+/// types `value` as `number`, not `string`). If the parameter leaked, `s: T = 1`
+/// outside would see the parameter and not error. (Pins the `with_type_params` pop in
+/// both `fill_class` and `check_class`, and the M9 shadowing order.)
+#[test]
+fn type_parameter_does_not_leak_and_shadows_inside() {
+    let src = "\
+type T = string;
+class Box<T> {
+  value: T;
+  constructor(v: T) {
+this.value = v;
+  }
+}
+const b = new Box<number>(1);
+const inside: number = b.value; // ok — inside, `T` is the parameter (number here)
+const s: T = 1;                 // TK2322 — outside, `T` is the top-level string alias
+";
+    // Inside the class `T` is the parameter (so `b.value` is `number`, line 9 ok);
+    // outside, `T` resolves to the top-level `string` alias, so `s: T = 1` is line 10
+    // TK2322. A leaked parameter would make line 10 clean instead.
+    assert_eq!(diags(src), vec![(10, "TK2322".to_string())]);
+}
