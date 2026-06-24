@@ -12,7 +12,7 @@
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
     ArrayType, FunctionType, IntrinsicKind, LiteralValue, ObjectType, ParameterType, PropertyType,
-    TypeFlags, TypeParamId, TypeParamType, TypeTag,
+    TupleType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
 };
 use crate::types::store::{Store, TypeId};
 use rustc_hash::FxHashMap;
@@ -268,6 +268,33 @@ impl Interner {
             return existing;
         }
         let id = self.store.push_array(ArrayType { element }, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
+    /// Intern a **tuple** type `[A, B, …]`, returning the shared id (M18).
+    ///
+    /// Identity is the **ordered** element list (hashed via [`StructuralKey::Tuple`]),
+    /// so `[number, string]` hash-conses to one id while `[number, string]`,
+    /// `[string, number]`, and `[number]` are all **distinct** — order *and* arity
+    /// are significant (unlike a union, whose members are sorted + deduped into a
+    /// canonical set; like a function's positional parameters). The elements are
+    /// **never sorted**: the caller passes them in source order and they are stored
+    /// as-is. Each element is itself canonical (interned through this interner), so
+    /// the dedup tie-break is a positional id compare.
+    pub fn intern_tuple(&mut self, elements: Vec<TypeId>) -> TypeId {
+        let key = StructuralKey::Tuple(&elements);
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store
+                .tuple_type(id)
+                .is_some_and(|existing| existing.elements == elements)
+        }) {
+            return existing;
+        }
+        let id = self
+            .store
+            .push_tuple(TupleType { elements }, TypeFlags::EMPTY);
         self.dedup.entry(hash).or_default().push(id);
         id
     }
@@ -714,6 +741,62 @@ mod tests {
             union_arr_a, union_arr_b,
             "(number | string)[] interns consistently via the canonical union element"
         );
+    }
+
+    /// Tuple hash-consing (M18): a tuple's identity is its **ordered** element
+    /// list, so `[number, string]` interns consistently while `[number, string]`,
+    /// `[string, number]` (order differs), and `[number]` (arity differs) are all
+    /// distinct. Order is significant — the list is never sorted (unlike a union).
+    #[test]
+    fn tuple_interning_is_order_significant() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // `[number, string]` interns to one shared id regardless of how many times
+        // built.
+        let ns_a = interner.intern_tuple(vec![wk.number, wk.string]);
+        let ns_b = interner.intern_tuple(vec![wk.number, wk.string]);
+        assert_eq!(ns_a, ns_b, "[number, string] must intern consistently");
+        assert_eq!(
+            interner.store().tag(ns_a),
+            TypeTag::Tuple,
+            "a tuple is a Tuple-tagged row"
+        );
+
+        // Order matters: `[string, number]` is a DISTINCT tuple (NOT sorted into the
+        // same canonical form a union would be).
+        let sn = interner.intern_tuple(vec![wk.string, wk.number]);
+        assert_ne!(ns_a, sn, "[number, string] ≠ [string, number] (order-significant)");
+
+        // Arity matters: `[number]` is distinct from `[number, string]`.
+        let single = interner.intern_tuple(vec![wk.number]);
+        assert_ne!(ns_a, single, "[number, string] ≠ [number] (arity differs)");
+        assert_ne!(sn, single, "[string, number] ≠ [number]");
+
+        // The stored element list preserves source order exactly.
+        let stored = interner
+            .store()
+            .tuple_type(ns_a)
+            .expect("ns_a is a tuple")
+            .elements
+            .clone();
+        assert_eq!(stored, vec![wk.number, wk.string], "stored order is source order");
+
+        // The empty tuple `[]` is a valid distinct tuple (and interns consistently).
+        let empty_a = interner.intern_tuple(vec![]);
+        let empty_b = interner.intern_tuple(vec![]);
+        assert_eq!(empty_a, empty_b, "[] interns consistently");
+        assert_ne!(empty_a, single, "[] ≠ [number]");
+
+        // A tuple is distinct from the array of the same element (different tags).
+        let num_arr = interner.intern_array(wk.number);
+        let num_tuple = interner.intern_tuple(vec![wk.number]);
+        assert_ne!(num_arr, num_tuple, "number[] ≠ [number]");
+
+        // Nesting: a tuple element may itself be a tuple, interned by the inner id.
+        let nested_a = interner.intern_tuple(vec![ns_a, wk.boolean]);
+        let nested_b = interner.intern_tuple(vec![ns_b, wk.boolean]); // ns_b == ns_a
+        assert_eq!(nested_a, nested_b, "nested tuple identity propagates by element id");
     }
 
     /// The well-known intrinsic ids are assigned in `IntrinsicKind::ALL` order

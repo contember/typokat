@@ -94,7 +94,9 @@ slots into a known later phase without rework:
 - **arrays**: `T[]` / `Array<T>`, array literals, element access, `length`, covariant
   assignability (**M17**) and **tuples** `[A, B]` (positional, indexed access, contextual typing)
   (**M18**) are implemented (built-in, no lib). Array METHODS (`push`/`map`/…) and `ReadonlyArray`
-  follow.
+  follow. Tuple/array-literal **contextual typing** is currently declaration-position only — a
+  tuple literal `return`ed or passed as an argument, and array-of-literal-type targets
+  (`const a: 1[] = [1]`), are over-strict (false positive, safe direction); deferred.
 - **modules/imports** and the rest of **`lib.d.ts` globals** (`console`, string methods, `Promise`,
   …) are out of scope for now — fixtures avoid the standard library otherwise.
 

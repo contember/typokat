@@ -293,7 +293,10 @@ pub fn render_reason_chain(store: &Store, head: &Reason) -> Vec<String> {
         Reason::Leaf { .. }
         | Reason::MissingProperty { .. }
         | Reason::NoUnionMember { .. }
-        | Reason::ParameterCount { .. } => Vec::new(),
+        | Reason::ParameterCount { .. }
+        // M18: a tuple length mismatch is terminal — the headline states the two
+        // tuple types and the cause is just "their lengths differ", so no extra line.
+        | Reason::TupleLength { .. } => Vec::new(),
         // The headline names the offending union member (the checker's
         // `headline_src`), so the elaboration is *that member's* reason — exactly
         // as if the member's reason were itself the head.
@@ -309,6 +312,11 @@ pub fn render_reason_chain(store: &Store, head: &Reason) -> Vec<String> {
         // recurses; a union-element descends straight into the offending member (no
         // redundant wrapper) — both via [`element_reason_lines`].
         Reason::ArrayElement { because, .. } => element_reason_lines(store, because, 1),
+        // M18: a tuple-element mismatch — the headline already states the `[…]`/`[…]`
+        // mismatch, so the elaboration is the offending **element's** own cause, one
+        // indent level in (a union element descends straight into its member, like the
+        // array case). The position is implicit in the headline tuples.
+        Reason::TupleElement { because, .. } => element_reason_lines(store, because, 1),
     }
 }
 
@@ -432,6 +440,30 @@ fn reason_lines(store: &Store, reason: &Reason, depth: usize) -> Vec<String> {
         // `render_reason_chain`, which descends straight into `because`; this arm
         // renders an array mismatch nested *inside* another reason.)
         Reason::ArrayElement { src, tgt, because } => {
+            let src = render_type(store, *src, /* widen */ false);
+            let tgt = render_type(store, *tgt, /* widen */ false);
+            let mut lines = vec![format!(
+                "{indent}Type '{src}' is not assignable to type '{tgt}'."
+            )];
+            lines.extend(reason_lines(store, because, depth + 1));
+            lines
+        }
+        // A tuple length mismatch (M18, terminal). The two tuple types render in full;
+        // the cause is that their lengths differ (`[A, B]` vs `[A]`).
+        Reason::TupleLength { src, tgt } => {
+            let src = render_type(store, *src, /* widen */ false);
+            let tgt = render_type(store, *tgt, /* widen */ false);
+            vec![format!(
+                "{indent}Type '{src}' is not assignable to type '{tgt}'."
+            )]
+        }
+        // A tuple whose element at a position fails (M18): announce the two tuple
+        // types, then nest the element's cause. (At the chain head this arm is
+        // bypassed by `render_reason_chain`, which descends straight into `because`;
+        // this arm renders a tuple mismatch nested *inside* another reason.)
+        Reason::TupleElement {
+            src, tgt, because, ..
+        } => {
             let src = render_type(store, *src, /* widen */ false);
             let tgt = render_type(store, *tgt, /* widen */ false);
             let mut lines = vec![format!(
@@ -579,6 +611,23 @@ fn render_type_inner(store: &Store, id: TypeId, widen: bool, rendering: &mut Vec
                 }
             }
             // Defensive fallback; an array always has a side-table entry.
+            None => "<unsupported>".to_string(),
+        },
+        // Tuple (M18): `[A, B]` — elements in source order, `, `-separated, wrapped in
+        // square brackets (README "Type display format"). The empty tuple renders as
+        // `[]`. Elements never widen (only a top-level literal *source* widens, which
+        // never recurses here); no element ever needs parenthesizing (the `[…]`
+        // brackets already delimit each).
+        TypeTag::Tuple => match store.tuple_type(id) {
+            Some(tuple) => {
+                let elems: Vec<String> = tuple
+                    .elements
+                    .iter()
+                    .map(|&e| render_type_inner(store, e, false, rendering))
+                    .collect();
+                format!("[{}]", elems.join(", "))
+            }
+            // Defensive fallback; a tuple always has a side-table entry.
             None => "<unsupported>".to_string(),
         },
     }
@@ -921,6 +970,69 @@ mod tests {
             render_type(interner.store(), func_arr, false),
             "((x: number) => string)[]"
         );
+    }
+
+    /// M18 tuple rendering: `[number, string]` (order preserved, `, `-separated,
+    /// square-bracketed) and the empty tuple `[]`.
+    #[test]
+    fn tuple_type_renders_in_brackets() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        let num_str = interner.intern_tuple(vec![wk.number, wk.string]);
+        assert_eq!(render_type(interner.store(), num_str, false), "[number, string]");
+
+        // Order is preserved (not sorted): [string, number] renders in that order.
+        let str_num = interner.intern_tuple(vec![wk.string, wk.number]);
+        assert_eq!(render_type(interner.store(), str_num, false), "[string, number]");
+
+        // The empty tuple renders as `[]`.
+        let empty = interner.intern_tuple(vec![]);
+        assert_eq!(render_type(interner.store(), empty, false), "[]");
+
+        // A nested tuple element renders inline (the outer brackets delimit it).
+        let nested = interner.intern_tuple(vec![num_str, wk.boolean]);
+        assert_eq!(
+            render_type(interner.store(), nested, false),
+            "[[number, string], boolean]"
+        );
+    }
+
+    /// M18 — a `TupleElement` head renders the offending element's nested cause (the
+    /// headline already states the `[…]`/`[…]` mismatch). A scalar leaf element yields
+    /// exactly one nested line; a `TupleLength` head (terminal) renders **none**.
+    #[test]
+    fn tuple_reason_heads_render_element_cause_and_length_terminal() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let str_num = interner.intern_tuple(vec![wk.string, wk.number]);
+        let num_str = interner.intern_tuple(vec![wk.number, wk.string]);
+        let num_only = interner.intern_tuple(vec![wk.number]);
+        let store = interner.store();
+
+        // [string, number] not assignable to [number, string]: position 0 fails
+        // (string→number) — one nested line.
+        let head = Reason::TupleElement {
+            index: 0,
+            src: str_num,
+            tgt: num_str,
+            because: Box::new(Reason::Leaf {
+                src: wk.string,
+                tgt: wk.number,
+            }),
+        };
+        assert_eq!(
+            render_reason_chain(store, &head),
+            vec!["  Type 'string' is not assignable to type 'number'.".to_string()]
+        );
+
+        // A length mismatch is terminal — the headline states the two tuple types in
+        // full, so no elaboration.
+        let len_head = Reason::TupleLength {
+            src: num_only,
+            tgt: num_str,
+        };
+        assert!(render_reason_chain(store, &len_head).is_empty());
     }
 
     /// M17 — an `ArrayElement` head renders the element's nested cause (the headline

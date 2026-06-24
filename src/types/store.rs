@@ -12,8 +12,8 @@
 
 use crate::types::hash::StableHash;
 use crate::types::repr::{
-    ArrayType, FunctionType, IntrinsicKind, LiteralValue, ObjectType, TypeFlags, TypeParamType,
-    TypeTag,
+    ArrayType, FunctionType, IntrinsicKind, LiteralValue, ObjectType, TupleType, TypeFlags,
+    TypeParamType, TypeTag,
 };
 
 /// A run-local handle to a type: an index into the SoA arena. Cheap to copy and
@@ -56,6 +56,11 @@ pub struct Store {
     /// entry's identity is its element `TypeId` (so `number[]` hash-conses to one id
     /// and `number[]` ≠ `string[]`).
     arrays: Vec<ArrayType>,
+    /// Tuple types (M18). Addressed by the `payload` of a `Tuple`-tagged row. Each
+    /// entry's identity is its **ordered** element list (so `[number, string]`
+    /// hash-conses to one id and `[number, string]` ≠ `[string, number]` ≠
+    /// `[number]`).
+    tuples: Vec<TupleType>,
 
     /// Reserved cross-run identity column (architecture §3.2). NOT populated in
     /// the MVP (mvp-plan §7.1) — kept so Phase 4 can fill it at intern time
@@ -147,6 +152,15 @@ impl Store {
             return None;
         }
         self.arrays.get(self.payload(id) as usize)
+    }
+
+    /// The `TupleType` (its ordered element list) of a tuple type, or `None` if
+    /// `id` is not a tuple (M18).
+    pub fn tuple_type(&self, id: TypeId) -> Option<&TupleType> {
+        if self.tag(id) != TypeTag::Tuple {
+            return None;
+        }
+        self.tuples.get(self.payload(id) as usize)
     }
 
     /// The members of a union type (canonical: flattened, sorted by `TypeId`,
@@ -242,5 +256,13 @@ impl Store {
         let payload = self.arrays.len() as u32;
         self.arrays.push(array);
         self.push(TypeTag::Array, flags, payload)
+    }
+
+    /// Append a tuple row (M18). Internal — `Interner` owns dedup (by the ordered
+    /// element list). The caller passes elements in source order (never sorted).
+    pub(crate) fn push_tuple(&mut self, tuple: TupleType, flags: TypeFlags) -> TypeId {
+        let payload = self.tuples.len() as u32;
+        self.tuples.push(tuple);
+        self.push(TypeTag::Tuple, flags, payload)
     }
 }

@@ -243,8 +243,8 @@ use oxc_ast::ast::{
     CallExpression, Class, ClassElement, ComputedMemberExpression, Expression, FormalParameters,
     Function, FunctionBody, IfStatement, LogicalExpression, MethodDefinition, MethodDefinitionKind,
     NewExpression, ObjectExpression, ObjectPropertyKind, Program, Statement,
-    StaticMemberExpression, SwitchStatement, TSAccessibility, TSLiteral, TSSignature, TSType,
-    TSTypeName, TSTypeParameterDeclaration, TSTypeParameterInstantiation, UnaryExpression,
+    StaticMemberExpression, SwitchStatement, TSAccessibility, TSLiteral, TSSignature, TSTupleElement,
+    TSType, TSTypeName, TSTypeParameterDeclaration, TSTypeParameterInstantiation, UnaryExpression,
     UnaryOperator, VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_span::GetSpan;
@@ -1787,7 +1787,12 @@ fn emit_obligation_failure(
             // M17: an array-element mismatch (`S[]` not assignable to `T[]`) is a
             // `TK2322`; the headline states the two array types, the element's cause
             // nests below it.
-            | Reason::ArrayElement { .. } => {
+            | Reason::ArrayElement { .. }
+            // M18: a tuple length mismatch or a positional element mismatch is a
+            // `TK2322`; the headline states the two tuple types, with any element
+            // cause nested below it.
+            | Reason::TupleLength { .. }
+            | Reason::TupleElement { .. } => {
                 // Source widened (literal → base), target as-is (mvp-plan
                 // M0/M1 message spec). For a union source the headline names the
                 // specific failing member, not the whole union (matching tsc:
@@ -2480,6 +2485,15 @@ fn condition_symbol(pass: &Pass, scope: ScopeId, expr: &Expression<'_>) -> Optio
 /// The declared type is the annotation if present, otherwise the (possibly
 /// widened) initializer type. When both are present, an assignability obligation
 /// is collected and a fresh object literal gets an excess-property check.
+///
+/// M18 — **contextual typing** for an array literal in a **tuple** position: when
+/// the (resolved) annotation is a tuple and the initializer is an array literal, the
+/// literal is typed **positionally as a tuple** (element *i* = the type of literal
+/// element *i*) rather than as the M17 array. Relating that tuple to the annotation
+/// tuple then checks position-by-position (`[1, "x"]` <: `[number, string]` ok;
+/// `["x", 1]` → one `TK2322`) and catches length mismatches (`[1]`, `[1, "x", 2]` →
+/// one `TK2322`). With **no** tuple context an array literal still infers an array
+/// (M17 unchanged). See [`infer_array_literal_as_tuple`].
 fn check_declarator(
     pass: &mut Pass,
     scope: ScopeId,
@@ -2488,17 +2502,22 @@ fn check_declarator(
 ) {
     let decl_id = binding_decl_id(pass.binder, scope, &declarator.id);
 
-    // Infer the initializer first (it may resolve references / emit TK2304 and
-    // descends into any nested function body), independent of the annotation.
-    let initializer = declarator
-        .init
-        .as_ref()
-        .and_then(|init| infer_expr(pass, scope, init));
-
+    // Lower the annotation first (independent of the initializer; emits no
+    // initializer-dependent diagnostics) so it can provide a **tuple context** for an
+    // array-literal initializer (M18 contextual typing).
     let annotation = match declarator.type_annotation.as_ref() {
         Some(ann) => lower_annotation(pass, scope, &ann.type_annotation),
         None => None,
     };
+
+    // Infer the initializer (it may resolve references / emit TK2304 and descends
+    // into any nested function body). M18: in a **tuple** context an array literal is
+    // typed positionally as a tuple; otherwise it infers an array (M17) — and every
+    // other expression is inferred exactly as before.
+    let initializer = declarator
+        .init
+        .as_ref()
+        .and_then(|init| infer_initializer(pass, scope, init, annotation));
 
     // The declared type the symbol resolves to: annotation wins; otherwise the
     // (possibly widened) initializer type.
@@ -3085,6 +3104,13 @@ fn lower_annotation(pass: &mut Pass, scope: ScopeId, ts_type: &TSType<'_>) -> Op
             let element = lower_annotation(pass, scope, &array.element_type)?;
             return Some(pass.interner.intern_array(element));
         }
+        // M18: a tuple type `[A, B]`. Each element is lowered recursively (so nested
+        // tuples / arrays work) and the ordered list is interned. Named/optional/rest
+        // tuple elements are out of the M18 subset and abort the whole annotation
+        // (`None`) — see [`lower_tuple_annotation`].
+        TSType::TSTupleType(tuple) => {
+            return lower_tuple_annotation(pass, scope, &tuple.element_types);
+        }
         // M5/M9: a type reference (`Point`, `Num`, `List`, `Box<number>`, an
         // in-scope type parameter `T`) resolves through the type-parameter scope,
         // the binder's type slot, and (with arguments) generic instantiation.
@@ -3118,6 +3144,36 @@ fn lower_union_annotation(
         lowered.push(lower_annotation(pass, scope, member)?);
     }
     Some(pass.interner.union(lowered))
+}
+
+/// Lower a tuple type annotation `[A, B, …]` to a canonical interned `TypeId`
+/// (M18). Each element is lowered recursively (preserving order — `intern_tuple`
+/// never sorts), so nested tuples (`[[number], string]`) and array elements
+/// (`[number[], string]`) work. The **empty** tuple `[]` lowers to the interned
+/// empty tuple.
+///
+/// Out of the M18 subset, aborting the whole annotation (`None`, matching the
+/// object/union/array lowerings — silently dropping or mis-shaping an element would
+/// mis-state the tuple):
+///
+///  - **optional** (`[number?]`) and **rest** (`[number, ...string[]]`) elements:
+///    [`TSTupleElement::as_ts_type`] returns `None` for these, so the lowering
+///    aborts;
+///  - **named** tuple members (`[x: number, y: string]`): the element *is* a
+///    `TSType::TSNamedTupleMember`, which `lower_annotation` does not handle → `None`.
+fn lower_tuple_annotation(
+    pass: &mut Pass,
+    scope: ScopeId,
+    elements: &[TSTupleElement<'_>],
+) -> Option<TypeId> {
+    let mut lowered: Vec<TypeId> = Vec::with_capacity(elements.len());
+    for element in elements {
+        // A plain positional element exposes its underlying `TSType`; an optional /
+        // rest element does not (`as_ts_type` → `None`) and is out of subset.
+        let ts_type = element.as_ts_type()?;
+        lowered.push(lower_annotation(pass, scope, ts_type)?);
+    }
+    Some(pass.interner.intern_tuple(lowered))
 }
 
 /// Lower a **literal type** (`TSLiteralType`'s literal) to its interned literal
@@ -3437,16 +3493,115 @@ fn infer_array_literal(pass: &mut Pass, scope: ScopeId, array: &ArrayExpression<
     pass.interner.intern_array(element)
 }
 
-/// Infer the type of an element access `a[i]` (M17). When the base `a` is an
-/// **array**, the result is its **element type** — M17 does not strict-check the
-/// index, so **any** index expression yields the element type (`nums[0]`, `nums[i]`
-/// alike). The index is still inferred for its side effects (resolving references /
-/// emitting any `TK2304` inside it), then discarded.
+/// Infer an **initializer** expression, applying M18 contextual typing when a
+/// **tuple** context is available. This is the contextual-typing hook (the key new
+/// M18 mechanism):
 ///
-/// A base that is `any`/error yields the error type (suppressing cascade). A base
-/// that is **not** an array is **out of M17 scope** (index signatures are M18+): no
-/// diagnostic is emitted and the result is the error type, so nothing downstream
-/// over-reports and the checker never crashes.
+///  - if the resolved `context` (the declared/annotation type) is a **tuple** and the
+///    initializer is an **array literal**, the literal is typed **positionally as a
+///    tuple** ([`infer_array_literal_as_tuple`]) so the obligation checks
+///    position-by-position and catches length mismatches;
+///  - otherwise the initializer is inferred exactly as before ([`infer_expr`]) — an
+///    array literal with no tuple context still infers an **array** (M17 unchanged),
+///    and every non-array expression is unaffected.
+///
+/// Returning `None` (an expression shape outside the subset) leaves the position
+/// unchecked, matching [`infer_expr`].
+fn infer_initializer(
+    pass: &mut Pass,
+    scope: ScopeId,
+    init: &Expression<'_>,
+    context: Option<TypeId>,
+) -> Option<(TypeId, Span)> {
+    if let (Expression::ArrayExpression(array), Some(ctx)) = (init, context) {
+        if pass.interner.store().tag(ctx) == TypeTag::Tuple {
+            let id = infer_array_literal_as_tuple(pass, scope, array, ctx);
+            return Some((id, Span::from_oxc(array.span)));
+        }
+    }
+    infer_expr(pass, scope, init)
+}
+
+/// Type an array literal **positionally as a tuple** for an M18 tuple context
+/// `context` (the target tuple): the result is `[T0, T1, …]` where `Ti` is the
+/// (widened) type of the literal's *i*-th element. This is what makes `const t:
+/// [number, string] = [1, "x"]` check position-by-position against the target tuple
+/// (and what makes a wrong-length literal — `[1]`, `[1, "x", 2]` — a length mismatch
+/// rather than an array-vs-tuple mismatch).
+///
+/// Contextual typing is **recursive**: element *i* is itself typed against the target
+/// tuple's element type *i* (via [`infer_initializer`]), so a **nested** array literal
+/// in a nested tuple position is typed as a tuple too (`[[number], string]` accepts
+/// `[[1], "x"]`). When the literal is longer than the target tuple (a length error
+/// reported by the relation), the surplus elements have no contextual type and infer
+/// normally — they cannot pass the length check anyway.
+///
+/// Elements are kept at their **inferred (un-widened) type** — a literal `1` stays
+/// `1`, not `number`. This is the difference from the M17 *array*-literal inference
+/// (which widens before the union): here the tuple is used **only** for the
+/// assignability check against the target tuple, and the existing relation widens
+/// literal→base at each position *when the target permits it* (`1` relates to both `1`
+/// and `number`), so keeping the literal type is what makes a **literal-type** tuple
+/// target accept a matching literal (`[1, 2] = [1, 2]` ok) while still rejecting a
+/// non-matching one (`[1, 2] = [1, 3]` → `3` not assignable to `2`) and a base-type
+/// target (`[number, string] = [1, "x"]` ok via the relation's literal→base
+/// widening). The variable still takes the **annotation's** type, so the un-widened
+/// source tuple is never observed elsewhere. A **spread** or **elision** element is
+/// out of the M18 subset; it is skipped (contributes no element), so a literal
+/// containing one is not mis-shaped — exactly as the M17 array-literal inference
+/// treats it.
+fn infer_array_literal_as_tuple(
+    pass: &mut Pass,
+    scope: ScopeId,
+    array: &ArrayExpression<'_>,
+    context: TypeId,
+) -> TypeId {
+    // Snapshot the target tuple's element types up front (immutable borrow) so the
+    // recursive `infer_initializer` below can take `&mut pass`. Element *i*'s context
+    // is the target tuple's element *i*, when present.
+    let context_elements: Vec<TypeId> = pass
+        .interner
+        .store()
+        .tuple_type(context)
+        .map(|t| t.elements.clone())
+        .unwrap_or_default();
+
+    let mut elements: Vec<TypeId> = Vec::with_capacity(array.elements.len());
+    for (index, element) in array.elements.iter().enumerate() {
+        // Spread (`...xs`) / elision (a hole) are out of subset — skip (matching
+        // `infer_array_literal`); only a plain expression contributes a position.
+        let Some(expr) = element.as_expression() else {
+            continue;
+        };
+        // Contextually type this position against the target tuple's element *i* (if
+        // any), so a nested array-literal-in-tuple-position becomes a tuple too.
+        let elem_context = context_elements.get(index).copied();
+        let Some((elem_ty, _)) = infer_initializer(pass, scope, expr, elem_context) else {
+            continue;
+        };
+        // Do NOT widen: the literal element type relates correctly to BOTH a literal
+        // target (`1` <: `1`) and a base target (`1` <: `number`) via the relation, so
+        // keeping it is what makes a literal-type tuple target work without breaking
+        // the base-type case.
+        elements.push(elem_ty);
+    }
+    pass.interner.intern_tuple(elements)
+}
+
+/// Infer the type of an element access `a[i]` (M17/M18). When the base `a` is an
+/// **array** (M17), the result is its **element type** — M17 does not strict-check
+/// the index, so **any** index expression yields the element type (`nums[0]`,
+/// `nums[i]` alike). When the base is a **tuple** (M18), the result is the element at
+/// the **literal** numeric index (`t[0]` → position 0's type, `t[1]` → position 1's),
+/// read off the constant index. The index is still inferred for its side effects
+/// (resolving references / emitting any `TK2304` inside it).
+///
+/// A base that is `any`/error yields the error type (suppressing cascade). For a
+/// tuple base, an **out-of-range** literal index or a **non-literal** index is out of
+/// the M18 subset → the error type (no diagnostic, no crash; the fixtures use only
+/// in-range literal indices). A base that is **not** an array or tuple is out of
+/// scope: no diagnostic is emitted and the result is the error type, so nothing
+/// downstream over-reports and the checker never crashes.
 fn infer_element_access(
     pass: &mut Pass,
     scope: ScopeId,
@@ -3457,20 +3612,52 @@ fn infer_element_access(
     let span = Span::from_oxc(member.span);
 
     // Walk the index expression for its side effects (reference resolution, nested
-    // diagnostics); its value/type is irrelevant to M17 element access.
+    // diagnostics) before any base-specific handling.
     let _ = infer_expr(pass, scope, &member.expression);
 
     if base_ty == wk.any || base_ty == wk.error {
         return Some((wk.error, span));
     }
 
-    // Array base: the result is the element type (any index).
+    // Array base (M17): the result is the element type (any index).
     if let Some(array) = pass.interner.store().array_type(base_ty) {
         return Some((array.element, span));
     }
 
-    // Non-array base: out of M17 scope (no diagnostic, no crash) → error type.
+    // Tuple base (M18): index by the **literal** numeric index. A non-literal index
+    // or one out of range is out of subset → error type (no diagnostic, no crash).
+    if pass.interner.store().tag(base_ty) == TypeTag::Tuple {
+        let element = literal_index(&member.expression)
+            .and_then(|i| pass.interner.store().tuple_type(base_ty)?.elements.get(i).copied());
+        return Some((element.unwrap_or(wk.error), span));
+    }
+
+    // Non-array/non-tuple base: out of scope (no diagnostic, no crash) → error type.
     Some((wk.error, span))
+}
+
+/// Read a **non-negative integer literal** index from an element-access index
+/// expression (`t[0]`, `t[2]`), as a `usize` array offset, or `None` for any
+/// non-literal / non-integer / negative / out-of-`usize` index. Used by tuple
+/// element access (M18) to resolve `t[k]` to the *k*-th element type. A `NumericLiteral`
+/// whose value is a whole, finite, in-range, non-negative number maps to that index;
+/// everything else (a variable, a fractional/negative literal, `NaN`/∞) is `None`
+/// (out of subset).
+fn literal_index(expr: &Expression<'_>) -> Option<usize> {
+    let Expression::NumericLiteral(lit) = expr else {
+        return None;
+    };
+    let value = lit.value;
+    // Must be a finite, whole, non-negative number that fits a `usize` index.
+    if !value.is_finite() || value.fract() != 0.0 || value < 0.0 {
+        return None;
+    }
+    // `usize::MAX as f64` is exact enough as an upper bound; a tuple long enough to
+    // matter is impossible in practice, so this only rejects absurd indices.
+    if value > usize::MAX as f64 {
+        return None;
+    }
+    Some(value as usize)
 }
 
 /// Infer the type of a member access `obj.prop` in `scope`. A missing property is
@@ -6647,5 +6834,194 @@ const y: number = x[0];
             diags(src).is_empty(),
             "element access on a non-array is out of M17 scope (no diagnostic, no crash)"
         );
+    }
+}
+
+#[cfg(test)]
+mod tuple_tests {
+    //! M18 end-to-end tests for **tuple types** (`[A, B]`, positional assignability,
+    //! length, indexed access, contextual typing, tuple → array). These drive the
+    //! whole pipeline (parse → bind → check) and assert the `(line, code)`
+    //! diagnostics, pinning the invariants the reviewer should scrutinize: the
+    //! **contextual** array-literal-as-tuple path does not regress the M17 array
+    //! inference (a non-tuple-context literal still infers an array), positional +
+    //! length assignability is sound, a tuple failure is a **single** diagnostic, and
+    //! tuple → array holds. The per-fixture acceptance lives in the conformance corpus
+    //! (`m18_tuples/`).
+
+    use crate::driver::check_source;
+
+    /// Run the checker and return the sorted `(1-based line, code)` of every
+    /// diagnostic, keyed on its primary-span start line (matching the conformance
+    /// harness's mapping).
+    fn diags(source: &str) -> Vec<(u32, String)> {
+        let out = check_source(source);
+        assert!(
+            out.parse_errors.is_empty(),
+            "unexpected parse error(s): {:?}",
+            out.parse_errors
+        );
+        let index = crate::span::LineIndex::new(source);
+        let mut v: Vec<(u32, String)> = out
+            .diagnostics
+            .iter()
+            .map(|d| (index.line_of(d.span.start), d.code.as_str().to_string()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// **Contextual typing** — an array literal in a tuple position is typed
+    /// positionally as a tuple: `[1, "x"]` against `[number, string]` is ok, while
+    /// `["x", 1]` produces **one** `TK2322` (position 0 mismatch). This is the key new
+    /// M18 mechanism; the literal element types are checked **position-by-position**,
+    /// not collapsed into an array union.
+    #[test]
+    fn contextual_array_literal_is_typed_as_tuple() {
+        let src = "\
+const t: [number, string] = [1, \"x\"];
+const swapped: [number, string] = [\"x\", 1];
+";
+        // Line 1 ok; line 2 a single position-0 mismatch.
+        assert_eq!(diags(src), vec![(2, "TK2322".to_string())]);
+    }
+
+    /// A **literal-type** tuple target preserves the literal element types under
+    /// contextual typing (they are **not** widened): `[1, 2] = [1, 2]` is ok, while
+    /// `[1, 2] = [1, 3]` is `TK2322` (`3` is not assignable to the literal `2`). This
+    /// is consistent with the scalar literal path (`const x: 1 = 1`) and is the case
+    /// the widening bug regressed.
+    #[test]
+    fn contextual_literal_type_tuple_target() {
+        let src = "\
+const lit: [1, 2] = [1, 2];
+const litBad: [1, 2] = [1, 3];
+";
+        // Line 1 ok (literal elements preserved); line 2 a position-1 literal mismatch.
+        assert_eq!(diags(src), vec![(2, "TK2322".to_string())]);
+    }
+
+    /// A **wrong-length** array literal in a tuple position is a **length** mismatch
+    /// (one `TK2322`), not an array-vs-tuple confusion: `[1]` (too few) and
+    /// `[1, "x", 2]` (too many) each produce exactly one diagnostic.
+    #[test]
+    fn contextual_tuple_length_mismatch_is_single_diagnostic() {
+        let src = "\
+const ok: [number, string] = [1, \"x\"];
+const short: [number, string] = [1];
+const long: [number, string] = [1, \"x\", 2];
+";
+        assert_eq!(
+            diags(src),
+            vec![(2, "TK2322".to_string()), (3, "TK2322".to_string())]
+        );
+    }
+
+    /// Tuple **element access** by a literal index yields that position's type:
+    /// `t[0]` is `number`, `t[1]` is `string`. A `string` target for `t[0]` is
+    /// `TK2322`; a `number` target for `t[0]` and a `string` target for `t[1]` are ok.
+    #[test]
+    fn tuple_element_access_by_literal_index() {
+        let src = "\
+const t: [number, string] = [1, \"x\"];
+const a: number = t[0];
+const b: string = t[1];
+const c: string = t[0];
+const d: number = t[1];
+";
+        // Line 4 (string target, number element 0) and line 5 (number target, string
+        // element 1) mismatch; lines 2, 3 are ok.
+        assert_eq!(
+            diags(src),
+            vec![(4, "TK2322".to_string()), (5, "TK2322".to_string())]
+        );
+    }
+
+    /// An **out-of-range** literal index or a **non-literal** index on a tuple is out
+    /// of the M18 subset → the error type (no diagnostic, no crash), so nothing
+    /// downstream over-reports.
+    #[test]
+    fn tuple_out_of_range_or_dynamic_index_is_deferred() {
+        let src = "\
+const t: [number, string] = [1, \"x\"];
+let i: number = 0;
+const a: string = t[5];
+const b: string = t[i];
+";
+        assert!(
+            diags(src).is_empty(),
+            "out-of-range / dynamic tuple index is deferred (no diagnostic, error type)"
+        );
+    }
+
+    /// A tuple is assignable to the **array** of (a supertype of) its element types:
+    /// `[number, string]` → `(number | string)[]` is ok, while `[number, string]` →
+    /// `number[]` is `TK2322` (the `string` element does not fit).
+    #[test]
+    fn tuple_assignable_to_array_of_element_union() {
+        let src = "\
+const t: [number, string] = [1, \"x\"];
+const arr: (number | string)[] = t;
+const bad: number[] = t;
+";
+        // Line 2 ok (tuple → (number|string)[]); line 3 a TK2322 (string ⊄ number).
+        assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
+    }
+
+    /// **No regression of M17**: an array literal with **no** tuple context still
+    /// infers an **array** (the union of widened element types), not a tuple. So
+    /// `const xs = [1, 2]` is `number[]` (assignable to a `number[]` annotation and
+    /// usable where an array is expected), and a heterogeneous `[1, "x"]` against a
+    /// `number[]` annotation is still the M17 `(number | string)[]` → `number[]`
+    /// `TK2322` — proving the contextual path did not hijack the array inference.
+    #[test]
+    fn no_tuple_context_array_literal_still_infers_array() {
+        let src = "\
+const xs = [1, 2];
+const ys: number[] = xs;
+const direct: number[] = [1, 2];
+const bad: number[] = [1, \"x\"];
+const tupleFromInferred: [number, number] = xs;
+";
+        // Line 4 is the M17 (number | string)[] → number[] mismatch. Line 5: `xs` was
+        // inferred as `number[]` (NOT a tuple), so assigning it to a `[number, number]`
+        // tuple is a TK2322 (array → tuple is not assignable) — this is exactly what
+        // pins that a context-free literal is an array, not a tuple.
+        assert_eq!(
+            diags(src),
+            vec![(4, "TK2322".to_string()), (5, "TK2322".to_string())]
+        );
+    }
+
+    /// Nested tuples check positionally at depth: `[[number], string]` accepts
+    /// `[[1], "x"]` and rejects `[["x"], "x"]` (inner position-0 string ⊄ number),
+    /// a single `TK2322`. Confirms the contextual tuple typing and the positional
+    /// relation both recurse.
+    #[test]
+    fn nested_tuple_checks_positionally() {
+        let src = "\
+const ok: [[number], string] = [[1], \"x\"];
+const bad: [[number], string] = [[\"x\"], \"x\"];
+";
+        assert_eq!(diags(src), vec![(2, "TK2322".to_string())]);
+    }
+
+    /// Tuple **order is significant**: a `[number, string]` value is NOT assignable to
+    /// a `[string, number]` annotation (one `TK2322`), unlike a union which would be
+    /// order-insensitive. Uses an identifier source (no contextual literal typing) so
+    /// the tuple→tuple relation itself is exercised.
+    #[test]
+    fn tuple_order_is_significant_on_assignment() {
+        let src = "\
+let a: [number, string];
+let b: [string, number];
+a = b;
+let c: [number, string];
+let d: [number, string];
+c = d;
+";
+        // Line 3 ([string, number] → [number, string]) mismatches; line 6 (same type)
+        // is clean.
+        assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
     }
 }

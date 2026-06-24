@@ -382,12 +382,17 @@ fn member_matches_typeof(
     match store.tag(member) {
         TypeTag::Intrinsic => store.intrinsic_kind(member) == Some(tag.intrinsic()),
         TypeTag::Literal => store.literal_value(member).map(LiteralValue::base_kind) == Some(tag.intrinsic()),
-        // Objects/functions/unions/type-parameters/arrays never match a primitive
-        // `typeof` tag (a nested union cannot appear as a member after
+        // Objects/functions/unions/type-parameters/arrays/tuples never match a
+        // primitive `typeof` tag (a nested union cannot appear as a member after
         // canonicalization, a type parameter only appears inside an uninstantiated
-        // generic body, and an array's `typeof` is `"object"` — out of the M7 tag
-        // subset; but the arm is exhaustive and defensive either way).
-        TypeTag::Object | TypeTag::Function | TypeTag::Union | TypeTag::TypeParam | TypeTag::Array => false,
+        // generic body, and an array's/tuple's `typeof` is `"object"` — out of the M7
+        // tag subset; but the arm is exhaustive and defensive either way).
+        TypeTag::Object
+        | TypeTag::Function
+        | TypeTag::Union
+        | TypeTag::TypeParam
+        | TypeTag::Array
+        | TypeTag::Tuple => false,
     }
 }
 

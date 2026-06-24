@@ -101,6 +101,23 @@ pub enum Reason {
         tgt: TypeId,
         because: Box<Reason>,
     },
+    /// Two **tuple** types have a **different length** (M18): tuples are
+    /// fixed-length and positional, so `[A, B]` and `[A]` are never assignable.
+    /// `src`/`tgt` are the two tuple types. The checker maps this to `TK2322`. This
+    /// is a terminal reason — the length mismatch is the whole cause.
+    TupleLength { src: TypeId, tgt: TypeId },
+    /// Two **tuple** types have an **incompatible element at a position** (M18): the
+    /// source element at `index` is not assignable to the target element at the same
+    /// position (positional, **first failing position** only — a single nested
+    /// reason, like the object relation, not one-per-element). `src`/`tgt` are the
+    /// two tuple types, wrapping the inner reason for `S[index] <: T[index]`. The
+    /// checker maps this to `TK2322`.
+    TupleElement {
+        index: usize,
+        src: TypeId,
+        tgt: TypeId,
+        because: Box<Reason>,
+    },
 }
 
 /// A non-empty chain of reasons explaining a relation failure, outermost first.
@@ -142,6 +159,8 @@ impl ReasonChain {
             Reason::UnionSourceMember { src, tgt, .. } => (*src, *tgt),
             Reason::NoUnionMember { src, tgt } => (*src, *tgt),
             Reason::ArrayElement { src, tgt, .. } => (*src, *tgt),
+            Reason::TupleLength { src, tgt } => (*src, *tgt),
+            Reason::TupleElement { src, tgt, .. } => (*src, *tgt),
         }
     }
 }
@@ -374,6 +393,27 @@ impl<'a> Relater<'a> {
             return self.relate_arrays(src, tgt, kind, assumed);
         }
 
+        // Tuple structural rule (M18): `[S0, S1, …]` is assignable to `[T0, T1, …]`
+        // iff they have the **same length** AND each `Si` is assignable to `Ti`
+        // (**positional**, like a function's parameters — *not* a set like a union).
+        // Fires only when both sides are tuples; a length mismatch or a positional
+        // element failure is reported as a **single** nested reason (first failing
+        // position), mirroring the object relation's one-cause-per-failure shape.
+        if self.store.tag(src) == TypeTag::Tuple && self.store.tag(tgt) == TypeTag::Tuple {
+            return self.relate_tuples(src, tgt, kind, assumed);
+        }
+
+        // Tuple → array rule (M18): a tuple `[A, B, …]` is assignable to an array
+        // `T[]` iff **every** element is assignable to `T` (the tuple is a
+        // fixed-length array of the appropriate element type). This runs after the
+        // tuple→tuple rule, so it only fires for a tuple **source** against an array
+        // **target** (`[1, 2] <: number[]`, `t <: (number | string)[]`). The reverse
+        // (array → tuple) is generally unsound and deferred — it falls through to the
+        // leaf below.
+        if self.store.tag(src) == TypeTag::Tuple && self.store.tag(tgt) == TypeTag::Array {
+            return self.relate_tuple_to_array(src, tgt, kind, assumed);
+        }
+
         // Otherwise: not assignable. Build the leaf reason on this failing path.
         Relation::No(ReasonChain::leaf(src, tgt))
     }
@@ -582,6 +622,105 @@ impl<'a> Relater<'a> {
                 tgt,
                 because: Box::new(child.head),
             }));
+        }
+        Relation::Yes
+    }
+
+    /// Tuple assignability (M18): `src` (`[S0, S1, …]`) is assignable to `tgt`
+    /// (`[T0, T1, …]`) iff they have the **same length** AND each `Si` is assignable
+    /// to `Ti` (**positional**, *not* a set). A length mismatch is a terminal
+    /// `TupleLength` reason; the **first** failing position (in order) is wrapped as
+    /// a `TupleElement` reason carrying that element's own nested cause — a **single**
+    /// diagnostic per failure (like the object relation's first-failing-property
+    /// rule), not one diagnostic per element. The element relation runs through the
+    /// ordinary [`Relater::relate`], so it is cached and cycle-safe like every other
+    /// recursive relation (a tuple's elements live in the interned type, so the
+    /// cache/stack invariants are unchanged), and nested tuples recurse naturally.
+    fn relate_tuples(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
+        // Both ids are tuple-tagged here; the side-tables always resolve. The `else`
+        // arms are defensive (a tuple tag without a payload is a store invariant
+        // violation, never expected) and produce a leaf rather than panicking.
+        let Some(src_tuple) = self.store.tuple_type(src) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let Some(tgt_tuple) = self.store.tuple_type(tgt) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+
+        // Length must match exactly — tuples are fixed-length and positional (M18
+        // has no optional/rest elements, so a different arity is unsatisfiable).
+        if src_tuple.elements.len() != tgt_tuple.elements.len() {
+            return Relation::No(ReasonChain::of(Reason::TupleLength { src, tgt }));
+        }
+
+        // Snapshot the per-position element ids up front so the immutable borrow of
+        // the store does not overlap the recursive `self.relate` calls below (which
+        // also borrow it). `zip` pairs equal-length lists element-by-element.
+        let element_pairs: Vec<(TypeId, TypeId)> = src_tuple
+            .elements
+            .iter()
+            .zip(&tgt_tuple.elements)
+            .map(|(&s, &t)| (s, t))
+            .collect();
+
+        // Positional: each source element must be assignable to the target element at
+        // the same position. First failing position wins (single nested reason).
+        for (index, (src_elem, tgt_elem)) in element_pairs.into_iter().enumerate() {
+            if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
+                return Relation::No(ReasonChain::of(Reason::TupleElement {
+                    index,
+                    src,
+                    tgt,
+                    because: Box::new(child.head),
+                }));
+            }
+        }
+        Relation::Yes
+    }
+
+    /// Tuple → array assignability (M18): a tuple `src` (`[A, B, …]`) is assignable
+    /// to an array `tgt` (`T[]`) iff **every** element is assignable to the array's
+    /// element type `T`. The first failing element is wrapped as an `ArrayElement`
+    /// reason (reusing the M17 array-element reason — the headline already names the
+    /// two types, and the cause is "an element does not fit `T`"), carrying that
+    /// element's own nested cause. The empty tuple `[]` trivially satisfies any
+    /// `T[]` (no element can fail). The element relation runs through the ordinary
+    /// [`Relater::relate`] (cached + cycle-safe).
+    fn relate_tuple_to_array(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
+        // `src` is tuple-tagged and `tgt` array-tagged here; the side-tables always
+        // resolve. The `else` arms are defensive and produce a leaf.
+        let Some(src_tuple) = self.store.tuple_type(src) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let Some(tgt_arr) = self.store.array_type(tgt) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let tgt_elem = tgt_arr.element;
+        // Snapshot the element ids before the recursive `self.relate` (borrow note as
+        // in `relate_tuples`).
+        let elements: Vec<TypeId> = src_tuple.elements.clone();
+
+        // Every tuple element must be assignable to the array's element type.
+        for src_elem in elements {
+            if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
+                return Relation::No(ReasonChain::of(Reason::ArrayElement {
+                    src,
+                    tgt,
+                    because: Box::new(child.head),
+                }));
+            }
         }
         Relation::Yes
     }
@@ -1244,6 +1383,145 @@ mod tests {
         assert!(
             !rel.is_assignable(wk.number, num_arr).is_yes(),
             "number is NOT assignable to number[]"
+        );
+    }
+
+    /// M18 tuple assignability is **positional** and **same-length**: identical
+    /// tuples succeed; a positional element must be assignable at its index (a literal
+    /// `1` widens to `number`); a length mismatch fails as a terminal `TupleLength`
+    /// reason; an element mismatch fails as a single `TupleElement` reason at the
+    /// **first** failing position (not one per element); and a tuple is not
+    /// assignable to a non-tuple/non-array. Exercised independently of the parser so a
+    /// positional/length regression is caught here.
+    #[test]
+    fn tuple_positional_and_length_assignability() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let lit_one = interner.intern_literal(LiteralValue::Number(1.0));
+        let lit_x = interner.intern_literal(LiteralValue::String("x".to_string()));
+
+        // [number, string], [string, number] (order swapped), [number] (shorter),
+        // and the literal tuples [1, "x"] / ["x", 1].
+        let num_str = interner.intern_tuple(vec![wk.number, wk.string]);
+        let str_num = interner.intern_tuple(vec![wk.string, wk.number]);
+        let num_only = interner.intern_tuple(vec![wk.number]);
+        let lit_num_str = interner.intern_tuple(vec![lit_one, lit_x]);
+        let lit_str_num = interner.intern_tuple(vec![lit_x, lit_one]);
+
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+
+        // Identity.
+        assert!(
+            rel.is_assignable(num_str, num_str).is_yes(),
+            "[number, string] <: [number, string]"
+        );
+
+        // Positional widening: [1, "x"] <: [number, string] (each literal widens at
+        // its position).
+        assert!(
+            rel.is_assignable(lit_num_str, num_str).is_yes(),
+            "[1, \"x\"] <: [number, string] (positional literal widening)"
+        );
+
+        // Positional MISMATCH: ["x", 1] <: [number, string] fails at position 0
+        // (string literal `\"x\"` not assignable to `number`) — a SINGLE TupleElement
+        // reason at the first failing index, not one per element.
+        match rel.is_assignable(lit_str_num, num_str) {
+            Relation::No(chain) => match chain.head() {
+                Reason::TupleElement { index, because, .. } => {
+                    assert_eq!(*index, 0, "first failing position is 0");
+                    assert!(matches!(**because, Reason::Leaf { .. }));
+                }
+                other => panic!("expected a TupleElement reason, got {other:?}"),
+            },
+            Relation::Yes => panic!("[\"x\", 1] must NOT be assignable to [number, string]"),
+        }
+
+        // Order is significant: [string, number] is NOT assignable to
+        // [number, string] (position 0 string→number fails).
+        assert!(
+            !rel.is_assignable(str_num, num_str).is_yes(),
+            "[string, number] is NOT assignable to [number, string] (positional)"
+        );
+
+        // LENGTH mismatch: [number] is NOT assignable to [number, string] — a
+        // terminal TupleLength reason (too few), and the reverse is too many.
+        match rel.is_assignable(num_only, num_str) {
+            Relation::No(chain) => assert!(
+                matches!(chain.head(), Reason::TupleLength { .. }),
+                "expected a TupleLength reason, got {:?}",
+                chain.head()
+            ),
+            Relation::Yes => panic!("[number] must NOT be assignable to [number, string] (length)"),
+        }
+        match rel.is_assignable(num_str, num_only) {
+            Relation::No(chain) => assert!(
+                matches!(chain.head(), Reason::TupleLength { .. }),
+                "expected a TupleLength reason for the too-many direction"
+            ),
+            Relation::Yes => panic!("[number, string] must NOT be assignable to [number] (length)"),
+        }
+
+        // A tuple is not assignable to a scalar.
+        assert!(
+            !rel.is_assignable(num_str, wk.number).is_yes(),
+            "[number, string] is NOT assignable to number"
+        );
+    }
+
+    /// M18 tuple → array: a tuple is assignable to the array of (a supertype of)
+    /// every element. `[number, string]` <: `(number | string)[]` and <: `unknown[]`;
+    /// `[number, string]` is NOT <: `number[]` (the `string` element fails); the empty
+    /// tuple `[]` <: any `T[]`; and array → tuple is NOT assignable (deferred).
+    #[test]
+    fn tuple_to_array_assignability() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        let num_str_tuple = interner.intern_tuple(vec![wk.number, wk.string]);
+        let empty_tuple = interner.intern_tuple(vec![]);
+        let num_union = interner.union(vec![wk.number, wk.string]);
+        let union_arr = interner.intern_array(num_union);
+        let num_arr = interner.intern_array(wk.number);
+        let unknown_arr = interner.intern_array(wk.unknown);
+
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+
+        // [number, string] <: (number | string)[] (each element lands in the union).
+        assert!(
+            rel.is_assignable(num_str_tuple, union_arr).is_yes(),
+            "[number, string] <: (number | string)[]"
+        );
+        // [number, string] <: unknown[] (every element <: unknown).
+        assert!(
+            rel.is_assignable(num_str_tuple, unknown_arr).is_yes(),
+            "[number, string] <: unknown[]"
+        );
+
+        // [number, string] is NOT <: number[] — the `string` element fails, wrapped
+        // as an ArrayElement reason.
+        match rel.is_assignable(num_str_tuple, num_arr) {
+            Relation::No(chain) => assert!(
+                matches!(chain.head(), Reason::ArrayElement { .. }),
+                "expected an ArrayElement reason, got {:?}",
+                chain.head()
+            ),
+            Relation::Yes => panic!("[number, string] must NOT be assignable to number[]"),
+        }
+
+        // The empty tuple [] is assignable to any T[] (no element can fail).
+        assert!(
+            rel.is_assignable(empty_tuple, num_arr).is_yes(),
+            "[] <: number[]"
+        );
+
+        // Array → tuple is NOT assignable (deferred): number[] is not <:
+        // [number, string].
+        assert!(
+            !rel.is_assignable(num_arr, num_str_tuple).is_yes(),
+            "number[] is NOT assignable to [number, string] (array → tuple deferred)"
         );
     }
 

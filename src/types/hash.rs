@@ -57,6 +57,12 @@ pub enum StructuralKey<'a> {
     /// `number[]` collides with `number[]`; `number[]` and `string[]` do not. The
     /// element is itself canonical (interned), so the key is decided by its id.
     Array(TypeId),
+    /// A **tuple** type (`[A, B]` — M18), keyed over its **ordered** element list.
+    /// Order is significant (the list is **not** sorted, unlike a union), so
+    /// `[number, string]` and `[string, number]` hash differently, and so does
+    /// `[number]` (length differs). Each element is itself canonical (interned), so
+    /// the key is decided by the ordered sequence of ids.
+    Tuple(&'a [TypeId]),
 }
 
 /// Live structural hash used for hash-consing (FxHash for speed). This is the
@@ -144,6 +150,19 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
             TypeTag::Array.hash_discriminant(&mut h);
             // Identity is the (canonical) element id alone.
             element.0.hash(&mut h);
+        }
+        StructuralKey::Tuple(elements) => {
+            TypeTag::Tuple.hash_discriminant(&mut h);
+            // Length first so a shorter element list cannot collide with a prefix
+            // of a longer one under the streaming hasher (and so `[number]` differs
+            // from `[number, string]`).
+            elements.len().hash(&mut h);
+            for element in *elements {
+                // Elements are hashed in **source order** (never sorted), so order
+                // is part of identity: `[number, string]` and `[string, number]`
+                // hash differently.
+                element.0.hash(&mut h);
+            }
         }
     }
     h.finish()

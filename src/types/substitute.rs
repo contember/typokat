@@ -78,6 +78,7 @@ impl<'a> Substitution<'a> {
             TypeTag::Function => self.apply_function(interner, ty),
             TypeTag::Union => self.apply_union(interner, ty),
             TypeTag::Array => self.apply_array(interner, ty),
+            TypeTag::Tuple => self.apply_tuple(interner, ty),
         }
     }
 
@@ -221,6 +222,35 @@ impl<'a> Substitution<'a> {
             ty
         }
     }
+
+    /// Substitute through a tuple type (M18), rewriting **each** element positionally
+    /// and re-interning `[A, B]` → `[<arg>, <arg>]` **only when some element changed**
+    /// (otherwise the original id is returned, keeping the no-op path allocation-free).
+    /// The element **order is preserved** (`intern_tuple` never sorts), so a generic
+    /// tuple instantiates positionally. No cycle guard is needed: a tuple's elements
+    /// are *interned* (never self-referential-by-id) types, so the recursion is finite.
+    fn apply_tuple(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
+        let Some(tuple) = interner.store().tuple_type(ty) else {
+            return ty;
+        };
+        let elements: Vec<TypeId> = tuple.elements.clone();
+
+        let mut changed = false;
+        let substituted: Vec<TypeId> = elements
+            .iter()
+            .map(|&e| {
+                let new_e = self.apply(interner, e);
+                changed |= new_e != e;
+                new_e
+            })
+            .collect();
+
+        if changed {
+            interner.intern_tuple(substituted)
+        } else {
+            ty
+        }
+    }
 }
 
 /// Convenience: instantiate `ty` with the given `TypeParamId → TypeId` map in one
@@ -339,6 +369,50 @@ mod tests {
             substitute(&mut interner, arr_u, &map),
             arr_u,
             "U[] (unmapped element) is unchanged"
+        );
+    }
+
+    /// Substitution rewrites each tuple element **positionally** (M18): `[T, U]` →
+    /// `[number, string]`, order preserved; an unmapped element survives; a tuple
+    /// with no mapped element is returned unchanged (no-op path).
+    #[test]
+    fn substitution_rewrites_tuple_elements_positionally() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let t = interner.intern_type_param(TypeParamId(0), "T");
+        let u = interner.intern_type_param(TypeParamId(1), "U");
+
+        // [T, U] and [U, T] (order matters).
+        let tu = interner.intern_tuple(vec![t, u]);
+        let ut = interner.intern_tuple(vec![u, t]);
+        // [string, T] — only T is mapped.
+        let str_t = interner.intern_tuple(vec![wk.string, t]);
+        // [string, boolean] — no mapped element (unchanged under T → number).
+        let str_bool = interner.intern_tuple(vec![wk.string, wk.boolean]);
+
+        let mut map = FxHashMap::default();
+        map.insert(TypeParamId(0), wk.number);
+        map.insert(TypeParamId(1), wk.string);
+
+        // [T, U] → [number, string]; [U, T] → [string, number] (order preserved).
+        let num_str = interner.intern_tuple(vec![wk.number, wk.string]);
+        let str_num = interner.intern_tuple(vec![wk.string, wk.number]);
+        assert_eq!(substitute(&mut interner, tu, &map), num_str, "[T, U] → [number, string]");
+        assert_eq!(
+            substitute(&mut interner, ut, &map),
+            str_num,
+            "[U, T] → [string, number] (positional, order preserved)"
+        );
+
+        // [string, T] → [string, number] (only the mapped element rewritten).
+        let str_num_via = interner.intern_tuple(vec![wk.string, wk.number]);
+        assert_eq!(substitute(&mut interner, str_t, &map), str_num_via);
+
+        // No mapped element → unchanged id (no-op path returns the original).
+        assert_eq!(
+            substitute(&mut interner, str_bool, &map),
+            str_bool,
+            "a tuple with no mapped element is unchanged"
         );
     }
 

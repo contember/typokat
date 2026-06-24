@@ -34,6 +34,11 @@ pub enum TypeTag {
     /// `Store::arrays`. Carries a single **element** `TypeId`; interned/hashed by
     /// that element id. Constructed by `Interner::intern_array` (M17).
     Array,
+    /// A **tuple** type (`[A, B]`). `payload` indexes `Store::tuples`. Carries an
+    /// **ordered** `Vec<TypeId>` of element types; interned/hashed by that ordered
+    /// list (order is significant — unlike a union, `[A, B]` ≠ `[B, A]`).
+    /// Constructed by `Interner::intern_tuple` (M18).
+    Tuple,
 }
 
 /// The fixed set of intrinsic (keyword) types. The discriminant doubles as the
@@ -384,4 +389,24 @@ pub struct FunctionType {
 pub struct ArrayType {
     /// The element type — the `T` of `T[]`. The array's entire structural identity.
     pub element: TypeId,
+}
+
+/// A tuple type (`[A, B]`) — M18. Carries an **ordered** list of element
+/// `TypeId`s; its whole identity is that ordered list, so `[number, string]` is
+/// consistent and `[number, string]` ≠ `[string, number]` ≠ `[number]`. Order is
+/// significant — the elements are **never sorted** (unlike a union's canonical
+/// member set; like a function's positional parameters). Interned via
+/// `Interner::intern_tuple`; the relation engine relates two tuples **positionally**
+/// (same length AND each element pairwise, `S[i]` <: `T[i]`) and a tuple to an
+/// array when every element is assignable to the array element; substitution
+/// rewrites each element so a (future) generic tuple instantiates correctly.
+///
+/// A distinct cold side-table struct (parallel to `ObjectType`/`FunctionType`) so a
+/// tuple row is never confused with a union's member slice elsewhere — they hold the
+/// same shape (`Vec<TypeId>`) but mean different things (ordered vs canonical set).
+#[derive(Clone, Debug, Default)]
+pub struct TupleType {
+    /// The element types in **source order** (`[A, B]` → `[A, B]`). The tuple's
+    /// entire structural identity; never sorted.
+    pub elements: Vec<TypeId>,
 }

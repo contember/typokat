@@ -17,3 +17,7 @@ const long: [number, string] = [1, "x", 2]; // error[TK2322]
 // ^ too many elements
 
 const arr: (number | string)[] = t; // ok — tuple assignable to the array of its element union
+
+const lit: [1, 2] = [1, 2];    // ok — literal element types are preserved under tuple context
+const litBad: [1, 2] = [1, 3]; // error[TK2322]
+// ^ 3 is not assignable to the literal type 2
