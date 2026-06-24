@@ -1,6 +1,6 @@
 # typokat — handoff for the next agent
 
-You are taking over `typokat`, a from-scratch TypeScript type checker in Rust. **M0–M20** are done
+You are taking over `typokat`, a from-scratch TypeScript type checker in Rust. **M0–M21** are done
 (see [`README.md`](./README.md)). This document is how to continue: the **method** to follow, the
 **invariants** you must not break, and a **roadmap** of the next phases. For each phase you pick up,
 **prepare a per-milestone plan the same way it was built so far** (spec first, then implement, then
@@ -98,12 +98,19 @@ Continue the `M`-numbering from M20. For each, **write the fixture corpus first*
 loop. Sketches below are scope hints, not the full spec — you author that.
 
 ### Near-term: close documented gaps (low risk, high value — good to warm up)
-- **M21 — Optional properties (`a?: T`).** Currently *dropped* at object/interface lowering (the M20
-  review surfaced this — it breaks `keyof` and can cause spurious excess). Add an `optional` flag to
-  the property; assignability lets a target optional prop be absent in the source; reading yields
-  `T | undefined` under strict (decide whether to add `TK2532`/`TK18048` "possibly undefined" or
-  defer it); `keyof` includes optional keys; excess respects them. Touches `repr`/`hash`/`intern`/
-  `substitute`/`relate_objects`/lowering. High-value: optional props are everywhere.
+- **M21 — Optional properties (`a?: T`). DONE.** Optional data members on objects/interfaces/class
+  fields. Key design choice (the relation engine borrows `&Store` read-only and **cannot intern**):
+  an optional member's `| undefined` is baked into its type at **lowering** (`union(T, undefined)`,
+  where `&mut Interner` is live) and the member carries `optional: true`. With that, member-read /
+  indexed-access return the (already-union) type, `keyof` uses names, excess sees a real member, and
+  the relate "present" case reuses the union-target logic — the `optional` flag itself governs only
+  **presence**: an absent optional *target* is allowed, and an optional *source* never satisfies a
+  *required* target (presence is independent of value type — caught by review, see §4). Modeled with
+  `exactOptionalPropertyTypes` OFF; no new diagnostic code. Deferred: optional **methods**/accessors
+  (`go?(): T`, tsc `TS2722`), the dedicated possibly-undefined diagnostics (`TS2532`/`TS18048`), and
+  member-access narrowing of optionals (over-reports, safe). One known cosmetic gap: the renderer
+  omits the `?` marker, so an optional-vs-required object message can show identical-looking sides
+  (verdict/code correct; object-target messages are asserted code-only).
 - **M22 — `TK2304` in type position + (optionally) function overloads.** Unresolved type references
   currently degrade silently to the error type — emit `TK2304`. Overloads (multiple call signatures,
   resolve to first match) are a separate, medium milestone if you want it.
@@ -167,7 +174,8 @@ diff against `tsc --strict`. Classify each divergence as false-negative (must fi
 
 ## 5. Your first action
 
-Pick the next milestone (recommended: **M21 optional properties** — closes a real gap and warms you
-into the codebase). Then: write its fixture corpus, update `tests/cases/README.md`, commit the spec,
-dispatch the implementation subagent, dispatch the independent review, fix, and commit. Same loop,
-all the way up.
+Pick the next milestone (recommended: **M22 — `TK2304` in type position** — an unresolved type
+reference currently degrades silently to the error type; emit the diagnostic. A small, well-isolated
+gap to warm into the codebase). Then: write its fixture corpus, update `tests/cases/README.md`,
+commit the spec, dispatch the implementation subagent, dispatch the independent review, fix, and
+commit. Same loop, all the way up.

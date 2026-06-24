@@ -7,8 +7,8 @@ full classes, and the common "real-world" type constructs. It is a **checker, no
 emit, JS runtime semantics, and module resolution are out of scope by design — the goal is to
 preserve the **type model** (see [`ts-checker-architecture.md`](./ts-checker-architecture.md)).
 
-> Status: **M0–M20** implemented. ~16k lines of Rust, 169 unit tests + a 55-file conformance
-> corpus (132 expected diagnostics), `clippy -D warnings` clean. Every milestone was
+> Status: **M0–M21** implemented. ~16k lines of Rust, 170 unit tests + a 60-file conformance
+> corpus (149 expected diagnostics), `clippy -D warnings` clean. Every milestone was
 > cross-checked against real `tsc 6.0.3 --strict`.
 
 ## Quick start
@@ -35,7 +35,7 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 
 | Area | Coverage |
 |---|---|
-| **Foundation** | primitives & intrinsics (`any`/`unknown`/`never`/`void`, strict null), objects (structural, excess/missing/depth), functions (arity, contravariant params, void-return rule), unions (canonicalized), recursive & mutually-recursive named types, literal types |
+| **Foundation** | primitives & intrinsics (`any`/`unknown`/`never`/`void`, strict null), objects (structural, excess/missing/depth, **optional members `a?: T`**), functions (arity, contravariant params, void-return rule), unions (canonicalized), recursive & mutually-recursive named types, literal types |
 | **Narrowing** | `typeof`, truthiness, `null`/`undefined` equality, **discriminated unions**, `in`, `switch` (flow-sensitive, scoped) |
 | **Generics** | type parameters, instantiation, **type-argument inference** from call arguments |
 | **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract`; **generic classes** |
@@ -109,8 +109,11 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
 - **The type-level VM phase** — conditional types (`T extends U ? X : Y`), mapped types, and utility
   types (`Partial`, `Record`, …) are not implemented; they want the bytecode VM (architecture §7).
   Generic `keyof`/`T[K]` over a bare type parameter likewise defers to that phase.
-- **Optional properties** (`a?: T`) are currently dropped at lowering (a safe-direction
-  under-approximation).
+- **Optional properties** (`a?: T`) on objects/interfaces/class fields are implemented (M21): a
+  member may be absent, reads yield `T | undefined`, `keyof`/indexed-access include it. Still
+  deferred: optional **methods**/accessors (`go?(): T`), the dedicated *possibly-undefined*
+  diagnostics (tsc `TS2532`/`TS18048`/`TS2722`), and narrowing an optional through a member-access
+  guard (over-reports `T | undefined`, the safe direction).
 - **No `lib.d.ts`** (so `console`, array methods, `Promise`, … are absent), **no modules/imports**,
   and an **unresolved type name** is silently the error type (no `TK2304` in type position yet).
 - Minor `tsc` divergences, all in the safe (over-report) direction, are logged in
@@ -119,6 +122,6 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
 ## Testing
 
 ```sh
-cargo test                              # 169 unit tests + the conformance corpus
+cargo test                              # 170 unit tests + the conformance corpus
 cargo clippy --all-targets -- -D warnings
 ```
