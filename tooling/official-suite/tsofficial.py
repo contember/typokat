@@ -72,6 +72,8 @@ DEFAULT_DIRS = [
 HERE = os.path.dirname(os.path.abspath(__file__))
 CORPUS = os.path.join(HERE, "corpus")
 REPORT = os.path.join(HERE, "report")
+# Committed (NOT gitignored) regression baseline — deterministic, diff-friendly.
+SCOREBOARD = os.path.join(HERE, "scoreboard.txt")
 
 # --- TS test-case parsing (replicates the bits we need of TestCaseParser) -----
 
@@ -366,39 +368,45 @@ def cmd_run(args):
     if not os.path.exists(binary):
         sys.exit(f"binary not found: {binary} (build it or pass --bin)")
 
-    buckets = Counter()
-    inscope = []  # per-file dicts
     tests = list(corpus_tests())
     if args.limit:
         tests = tests[:args.limit]
     if not tests:
         sys.exit("empty corpus — run `tsofficial.py fetch` first.")
 
+    # One record per test. bucket=None means in-scope (diffed); otherwise the
+    # out-of-scope reason. Out-of-scope records keep zeroed diff fields so the
+    # scoreboard can still track scope changes (IN <-> OOS) as regressions/progress.
+    results = []
     for rel, ts_path, base_path in tests:
         with open(ts_path) as f:
             source = f.read()
         options, units = parse_units(source)
+        rec = {"rel": rel, "bucket": None, "strict": is_strict(options),
+               "matched": 0, "fn": 0, "fp": 0, "expected": 0,
+               "fn_detail": [], "fp_detail": []}
 
         if len(units) > 1:
-            buckets["multifile"] += 1
-            continue
+            rec["bucket"] = "multifile"
+            results.append(rec); continue
         content = units[0][1]
 
         sb = syntax_bucket(content)
         if sb:
-            buckets[f"syntax:{sb}"] += 1
-            continue
+            rec["bucket"] = f"syntax:{sb}"
+            results.append(rec); continue
 
         baseline = None
         if base_path:
             with open(base_path) as f:
                 baseline = f.read()
         expected = parse_baseline(baseline)
+        rec["expected"] = len(expected)
 
         parse_errors, diags = run_typokat(binary, content)
         if parse_errors:
-            buckets["parse-error"] += 1
-            continue
+            rec["bucket"] = "parse-error"
+            results.append(rec); continue
 
         # Self-gate: any TK2304 typokat raised that the baseline does NOT have is a
         # name typokat couldn't resolve but tsc could → lib / module / unknown
@@ -406,21 +414,29 @@ def cmd_run(args):
         exp_2304 = {ln for (ln, c) in expected if c == 2304}
         act_2304 = {ln for (ln, c) in diags if c == 2304}
         if act_2304 - exp_2304:
-            buckets["unresolved"] += 1
-            continue
+            rec["bucket"] = "unresolved"
+            results.append(rec); continue
 
         d = diff(expected, diags)
-        d["rel"] = rel
-        d["strict"] = is_strict(options)
-        d["expected"] = len(expected)
-        inscope.append(d)
+        rec.update(matched=d["matched"], fn=d["fn"], fp=d["fp"],
+                   fn_detail=d["fn_detail"], fp_detail=d["fp_detail"])
+        results.append(rec)
 
-    print_dashboard(binary, tests, buckets, inscope, args)
+    print_dashboard(binary, results)
+
+    if args.save:
+        path = write_scoreboard(results)
+        print(f"  saved baseline → {path}")
+    if args.check:
+        if not compare_scoreboard(results):
+            sys.exit(1)
 
 
-def print_dashboard(binary, tests, buckets, inscope, args):
+def print_dashboard(binary, results):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    n = len(tests)
+    n = len(results)
+    inscope = [r for r in results if r["bucket"] is None]
+    buckets = Counter(r["bucket"] for r in results if r["bucket"] is not None)
     n_oos = sum(buckets.values())
     n_in = len(inscope)
 
@@ -447,10 +463,15 @@ def print_dashboard(binary, tests, buckets, inscope, args):
         matched, fn, fp, exp = agg(rows)
         total = matched + fn
         pct = (100.0 * matched / total) if total else 100.0
+        # File-level exact agreement: a file where typokat matches the baseline
+        # with zero misses AND zero over-reports. The most intuitive "shoda".
+        passed = sum(1 for r in rows if r["fn"] == 0 and r["fp"] == 0)
+        fpct = 100.0 * passed / len(rows)
         print(f"  in-scope diff — {label}: {len(rows)} tests, {exp} expected diagnostics")
-        print(f"    matched:          {matched}  ({pct:.1f}%)")
-        print(f"    FALSE NEGATIVE:   {fn}   <-- tsc errored, typokat silent")
-        print(f"    false positive:   {fp}")
+        print(f"    files matched exactly: {passed}/{len(rows)}  ({fpct:.1f}%)")
+        print(f"    diagnostics matched:   {matched}/{total}  ({pct:.1f}%)")
+        print(f"    FALSE NEGATIVE:        {fn}   <-- tsc errored, typokat silent")
+        print(f"    false positive:        {fp}")
         print()
 
     # Concrete false-negative repros — the bucket the project cares about most.
@@ -474,6 +495,104 @@ def print_dashboard(binary, tests, buckets, inscope, args):
     print(f"  wrote {os.path.join(REPORT, 'latest.json')}")
 
 
+# --- regression scoreboard (committed, deterministic) ------------------------
+
+def _scoreboard_stats(results):
+    inscope = [r for r in results if r["bucket"] is None]
+    clean = [r for r in inscope if r["expected"] == 0]
+    err = [r for r in inscope if r["expected"] > 0]
+    clean_kept = sum(1 for r in clean if r["fp"] == 0)
+    err_exact = sum(1 for r in err if r["fn"] == 0 and r["fp"] == 0)
+    rec_m = sum(r["matched"] for r in err)
+    rec_t = rec_m + sum(r["fn"] for r in err)
+    return inscope, clean, err, clean_kept, err_exact, rec_m, rec_t
+
+
+def write_scoreboard(results):
+    """Write the committed baseline: one sorted line per test, no timestamps or
+    machine paths, so a regression shows up as a single changed line in `git diff`.
+    Out-of-scope tests are recorded too (so scope flips are tracked)."""
+    rows = sorted(results, key=lambda r: r["rel"])
+    inscope, clean, err, clean_kept, err_exact, rec_m, rec_t = _scoreboard_stats(rows)
+    with open(SCOREBOARD, "w") as f:
+        f.write("# typokat × official TS conformance — regression scoreboard\n")
+        f.write(f"# TS @ {PINNED_SHA}\n")
+        f.write(f"# corpus {len(rows)}  in-scope {len(inscope)}  "
+                f"out-of-scope {len(rows) - len(inscope)}\n")
+        f.write(f"# clean-kept {clean_kept}/{len(clean)}  "
+                f"error-exact {err_exact}/{len(err)}  diag-recall {rec_m}/{rec_t}\n")
+        f.write("# cols: status<TAB>matched fn fp expected<TAB>rel  "
+                "(status=IN | OOS:<bucket>; '-' = n/a)\n")
+        for r in rows:
+            if r["bucket"] is None:
+                f.write(f"IN\t{r['matched']} {r['fn']} {r['fp']} {r['expected']}\t{r['rel']}\n")
+            else:
+                f.write(f"OOS:{r['bucket']}\t- - - -\t{r['rel']}\n")
+    return SCOREBOARD
+
+
+def read_scoreboard():
+    out = {}
+    with open(SCOREBOARD) as f:
+        for line in f:
+            if line.startswith("#") or not line.strip():
+                continue
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) != 3:
+                continue
+            status, nums, rel = parts
+            def num(x):
+                return None if x == "-" else int(x)
+            m, fn, fp, exp = (num(x) for x in nums.split())
+            out[rel] = {"status": status, "matched": m, "fn": fn, "fp": fp,
+                        "expected": exp}
+    return out
+
+
+def compare_scoreboard(results):
+    """Diff the current run against the committed baseline. Returns True if there
+    are no regressions. A regression = a previously in-scope file that now matches
+    fewer diagnostics, over-reports more, or fell out of scope."""
+    if not os.path.exists(SCOREBOARD):
+        print("\n  no committed scoreboard.txt yet — run `run --save` to create one.")
+        return True
+    base = read_scoreboard()
+    cur = {r["rel"]: r for r in results}
+    regress, progress = [], []
+    for rel, c in cur.items():
+        b = base.get(rel)
+        if b is None:
+            continue  # new test — not a regression
+        cur_in = c["bucket"] is None
+        base_in = b["status"] == "IN"
+        if base_in and cur_in:
+            if c["matched"] < b["matched"] or c["fp"] > b["fp"]:
+                regress.append((rel, f"matched {b['matched']}→{c['matched']}, "
+                                     f"fp {b['fp']}→{c['fp']}"))
+            elif c["matched"] > b["matched"] or c["fp"] < b["fp"]:
+                progress.append((rel, f"matched {b['matched']}→{c['matched']}, "
+                                      f"fp {b['fp']}→{c['fp']}"))
+        elif base_in and not cur_in:
+            regress.append((rel, f"IN → OOS:{c['bucket']} (lost coverage)"))
+        elif not base_in and cur_in:
+            progress.append((rel, f"{b['status']} → IN (gained coverage)"))
+    missing = [rel for rel in base if rel not in cur]
+
+    print(f"\n  regression check vs scoreboard.txt — "
+          f"regressions: {len(regress)}   progress: {len(progress)}   "
+          f"missing-from-corpus: {len(missing)}")
+    for rel, msg in sorted(regress)[:30]:
+        print(f"    ✗ REGRESS  {rel}  ({msg})")
+    for rel, msg in sorted(progress)[:15]:
+        print(f"    ✓ progress {rel}  ({msg})")
+    if len(progress) > 15:
+        print(f"    … +{len(progress) - 15} more improved")
+    if missing:
+        print(f"    note: {len(missing)} baseline files absent from corpus "
+              f"(re-fetch at the pinned SHA for a complete check)")
+    return len(regress) == 0
+
+
 # --- main --------------------------------------------------------------------
 
 def main():
@@ -493,6 +612,10 @@ def main():
         HERE, "..", "..", "target", "release", "typokat"),
         help="path to the typokat binary (default: target/release/typokat)")
     pr.add_argument("--limit", type=int, help="cap number of tests")
+    pr.add_argument("--save", action="store_true",
+                    help="write/update the committed scoreboard.txt baseline")
+    pr.add_argument("--check", action="store_true",
+                    help="compare against scoreboard.txt; exit 1 on any regression")
     pr.set_defaults(func=cmd_run)
 
     args = p.parse_args()

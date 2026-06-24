@@ -32,6 +32,10 @@ python3 tsofficial.py fetch --dir conformance/controlFlow   # specific subtree(s
 # 2. Diff + dashboard (uses target/release/typokat by default).
 python3 tsofficial.py run
 python3 tsofficial.py run --bin ../../target/debug/typokat
+
+# 3. Regression tracking against the committed baseline.
+python3 tsofficial.py run --check    # exit 1 if anything regressed vs scoreboard.txt
+python3 tsofficial.py run --save     # accept current results as the new baseline
 ```
 
 `fetch` needs `gh` (authenticated) for directory listing and pulls file blobs from
@@ -69,9 +73,41 @@ python3 tsofficial.py run --bin ../../target/debug/typokat
 
 ## Output
 
-A dashboard to stdout plus `report/latest.json` (full per-file detail, diffable
-over time). Promote a clean in-scope slice into a locked gate later by reading that
-JSON — that's the "discover → promote" path.
+A dashboard to stdout plus `report/latest.json` (full per-file detail, with a
+timestamp — gitignored, for ad-hoc inspection).
+
+## Regression tracking — `scoreboard.txt` (committed)
+
+`scoreboard.txt` is the **committed, deterministic** baseline: one sorted line per
+test, no timestamps or machine paths, so a behavior change shows up as a single
+changed line in `git diff`. Header lines carry the headline aggregates (corpus /
+in-scope / clean-kept / error-exact / diag-recall) at the pinned TS SHA.
+
+```
+IN	4 8 0 12	conformance/.../assignmentCompatWithCallSignatures2.ts
+OOS:syntax:enum	- - - -	conformance/.../enumTest.ts
+```
+
+(`status<TAB>matched fn fp expected<TAB>rel`; out-of-scope tests are tracked too,
+so a scope flip IN↔OOS is also a regression/progress signal.)
+
+Workflow:
+
+- `run --save` writes/updates it. Commit it when the change is intended (the git
+  history of this file *is* the score-over-time record).
+- `run --check` re-runs and diffs against it: prints **REGRESS** for any
+  previously in-scope file that now matches fewer diagnostics, over-reports more,
+  or fell out of scope, and **progress** for improvements. **Exit 1 on any
+  regression** — so it can gate CI on *regressions* without the absolute match rate
+  being a gate (matches the "dashboard, not gate" decision: the number is free to
+  be low, it just must not get worse silently).
+
+Because the corpus is reproducible from `fetch` at the pinned SHA, the baseline is
+meaningful on any machine. Re-fetch at the same SHA before `--check`, or the run
+notes how many baseline files were absent.
+
+This is the "discover → promote" path made concrete: as milestones land, `--save`
+ratchets the numbers up; `--check` keeps them from sliding back.
 
 ## Knobs / config (top of `tsofficial.py`)
 
