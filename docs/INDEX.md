@@ -22,12 +22,12 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- _none active_
+- [`sprints/sprint-2026-06-24-impl-bugs.md`](sprints/sprint-2026-06-24-impl-bugs.md) — current-impl bugs F3–F6 (backlog `01`–`04`).
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M22 shipped.** Next up is the [`backlog/`](backlog/README.md): start with the current-impl
-  bugs (`01`–`04`, false-positive direction, highest value), then unstructured-flow narrowing
-  (`07`). Warm-up option: class-completeness checks (`06`).
+- **M0–M22 shipped.** **Active:** [`sprint-2026-06-24-impl-bugs`](sprints/sprint-2026-06-24-impl-bugs.md) —
+  the current-impl bugs F3–F6 (`01`–`04`). Then unstructured-flow narrowing (`07`); warm-up option:
+  class-completeness checks (`06`).
