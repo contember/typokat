@@ -101,10 +101,24 @@ slots into a known later phase without rework:
   indexed-access types (`T[K]`) on concrete object types land in **M20** (evaluated eagerly).
   Generic/deferred `keyof`/`T[K]` (over a type parameter), mapped types, conditional types, and
   utility types (`Partial`, `Record`, …) remain deferred (they want the type-level VM, §7).
-- **optional properties** (`a?: T`) are currently **dropped** at object/interface lowering
-  (pre-existing under-approximation): they don't appear in structural members, so `keyof` misses
-  them and a fresh literal supplying one can spuriously trip the excess check. Safe direction
-  (false positive). A dedicated milestone (optional members + `undefined` unioning) is deferred.
+- **optional properties** (`a?: T`) on object types, interfaces, and class instance fields land in
+  **M21**: lowered as real members (so `keyof`/indexed-access include them and a declared optional no
+  longer trips excess), an optional may be **absent** in a value (no `TK2741`), reading one yields
+  `T | undefined`, and assignability treats an optional member's effective type as `T | undefined`
+  (a required source satisfies an optional target, but an optional source does **not** satisfy a
+  required target). Modeled with `exactOptionalPropertyTypes` **off** (the default): an explicit
+  `undefined` is assignable to an optional member. No new diagnostic code — a "possibly undefined"
+  read flows through the existing `TK2322`/`TK2741`/`TK2353`. Still deferred: optional **methods**/
+  accessors (`go?(): T` — calling needs the possibly-undefined-invocation check, tsc `TS2722`), the
+  dedicated *object is possibly undefined* diagnostics (tsc `TS2532`/`TS18048`/`TS2722`),
+  `exactOptionalPropertyTypes` semantics, and **narrowing of an optional through a member-access
+  guard** (`if (x.b !== undefined) …` — needs the flow-node CFG, so a guarded optional read still
+  over-reports `T | undefined`; safe direction). Optional **tuple** elements (`[number?]`) remain
+  deferred with the rest of M18's tuple gaps.
+  Deliberate message-rendering nuance (verdict unchanged, so not a corpus divergence — optional
+  object-target messages are asserted code-only): where tsc renders a present-but-wrong optional
+  property's target as the bare `T` (e.g. `{ b: 5 }` → "not assignable to type 'string'"), typokat
+  relates against the effective `T | undefined` and may render that union instead.
 - **modules/imports** and the rest of **`lib.d.ts` globals** (`console`, string methods, `Promise`,
   …) are out of scope for now — fixtures avoid the standard library otherwise.
 
@@ -141,3 +155,4 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m18_tuples/` | M18 — tuple types (`[A, B]`, positional assignability, indexed access) |
 | `m19_index_sig/` | M19 — index signatures (`{ [k: string]: T }`, `{ [i: number]: T }`) |
 | `m20_keyof/` | M20 — `keyof T` + indexed-access types (`T[K]`) on concrete object types |
+| `m21_optional/` | M21 — optional properties (`a?: T`) on objects / interfaces / class instance fields |
