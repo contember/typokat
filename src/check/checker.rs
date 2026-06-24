@@ -1052,11 +1052,18 @@ fn fill_class(
     let static_properties = compose_members(base_static, own_static);
     let static_side = pass.interner.intern_object(ObjectType {
         properties: static_properties,
+        // M19: a class's instance/static side carries no index signature in this subset.
+        ..Default::default()
     });
 
     // Fill the reserved instance type with the composed (base + own) members.
-    pass.interner
-        .fill_object(reserved, ObjectType { properties });
+    pass.interner.fill_object(
+        reserved,
+        ObjectType {
+            properties,
+            ..Default::default()
+        },
+    );
 
     // The constructor signature. With an explicit constructor, its parameters. With
     // none, M12: **inherit the base's constructor** (so `new Derived(...)` checks
@@ -1726,26 +1733,37 @@ fn lower_interface_members(
     scope: ScopeId,
     members: &[TSSignature<'_>],
 ) -> ObjectType {
-    let mut properties: Vec<PropertyType> = Vec::with_capacity(members.len());
+    let mut object = ObjectType::default();
     for member in members {
-        let TSSignature::TSPropertySignature(sig) = member else {
-            continue;
-        };
-        if sig.optional {
-            continue;
+        match member {
+            TSSignature::TSPropertySignature(sig) => {
+                if sig.optional {
+                    continue;
+                }
+                let Some(name) = sig.key.static_name() else {
+                    continue;
+                };
+                let Some(annotation) = sig.type_annotation.as_ref() else {
+                    continue;
+                };
+                let Some(ty) = lower_annotation(pass, scope, &annotation.type_annotation) else {
+                    continue;
+                };
+                object
+                    .properties
+                    .push(PropertyType::public(name.into_owned(), ty));
+            }
+            // M19: an index signature on an interface — lowered into the
+            // string/number slot. An unsupported one (non-`string`/`number` key,
+            // un-lowerable value) is **skipped** (lenient, like an out-of-subset
+            // property), so the interface keeps the members it can express.
+            TSSignature::TSIndexSignature(sig) => {
+                let _ = lower_index_signature(pass, scope, sig, &mut object);
+            }
+            _ => continue,
         }
-        let Some(name) = sig.key.static_name() else {
-            continue;
-        };
-        let Some(annotation) = sig.type_annotation.as_ref() else {
-            continue;
-        };
-        let Some(ty) = lower_annotation(pass, scope, &annotation.type_annotation) else {
-            continue;
-        };
-        properties.push(PropertyType::public(name.into_owned(), ty));
     }
-    ObjectType { properties }
+    object
 }
 
 /// Map a relation failure to a diagnostic according to the obligation's kind.
@@ -1792,7 +1810,10 @@ fn emit_obligation_failure(
             // `TK2322`; the headline states the two tuple types, with any element
             // cause nested below it.
             | Reason::TupleLength { .. }
-            | Reason::TupleElement { .. } => {
+            | Reason::TupleElement { .. }
+            // M19: a value not fitting the target's index signature is a `TK2322`;
+            // the headline states the two object types, the value's cause nested below.
+            | Reason::IndexSignature { .. } => {
                 // Source widened (literal → base), target as-is (mvp-plan
                 // M0/M1 message spec). For a union source the headline names the
                 // specific failing member, not the whole union (matching tsc:
@@ -2756,7 +2777,15 @@ fn check_class_member_bodies(
 }
 
 /// Recursive excess-property (freshness) check (mvp-plan §6, README
-/// `excess_property.ts`). Unchanged from M2.
+/// `excess_property.ts`).
+///
+/// M19 — **index-signature suppression**: an index signature accepts arbitrary keys,
+/// so when the target object type has a **string** index signature a property the
+/// target does not name is NOT excess — the `TK2353` is suppressed (otherwise
+/// `{ a: 1, b: 2 }` against `{ [k: string]: number }` would wrongly report `b` as
+/// excess). The suppression is scoped to the **target that actually has the index
+/// signature**: a plain object target (no index signature) still gets the M2 excess
+/// check exactly as before, including at nested levels.
 fn check_excess_properties(
     store: &Store,
     expr: &Expression<'_>,
@@ -2769,6 +2798,13 @@ fn check_excess_properties(
     let Some(target_obj) = store.object_type(target_ty) else {
         return;
     };
+    // M19: an index signature accepts arbitrary keys, so a property the target does
+    // not name is not excess. A **string** index accepts any key; a **number** index
+    // accepts only **numeric-named** keys (`{ 0: "a" }` against `{ [i: number]: T }`).
+    // The index **value** types are snapshotted so the excess check still descends
+    // into a fresh object literal used as an index value (its own freshness check).
+    let string_index = target_obj.string_index;
+    let number_index = target_obj.number_index;
     let target_rendered = render_type(store, target_ty, /* widen */ false);
 
     for member in &literal.properties {
@@ -2784,14 +2820,44 @@ fn check_excess_properties(
                 check_excess_properties(store, &prop.value, target_prop.ty, diagnostics);
             }
             None => {
-                diagnostics.push(Diagnostic::excess_property(
-                    Span::from_oxc(prop.key.span()),
-                    &name,
-                    &target_rendered,
-                ));
+                // M19: the key itself is suppressed when an index signature accepts it
+                // — a string index for any key, a number index for a numeric-named key.
+                // A plain object target (no index signature) still reports excess (M2).
+                // The index value type that governs this key: a numeric key prefers
+                // the number index, else the string index covers it.
+                let index_value = if is_numeric_property_name(&name) {
+                    number_index.or(string_index)
+                } else {
+                    string_index
+                };
+                match index_value {
+                    Some(value_ty) => {
+                        // The key is accepted, BUT a fresh object literal used as the
+                        // value still gets its own excess check against the index value
+                        // type (the helper self-guards: a no-op unless `prop.value` is a
+                        // fresh object literal and `value_ty` is an object type).
+                        check_excess_properties(store, &prop.value, value_ty, diagnostics);
+                    }
+                    None => {
+                        diagnostics.push(Diagnostic::excess_property(
+                            Span::from_oxc(prop.key.span()),
+                            &name,
+                            &target_rendered,
+                        ));
+                    }
+                }
             }
         }
     }
+}
+
+/// Whether a property name is **numeric-keyed** (M19) — governed by a number index
+/// signature. A name that parses as a finite number (`"0"`, `"1"`, …) is numeric;
+/// an ordinary identifier (`"a"`) is not. Mirrors the relation engine's rule for the
+/// excess-property suppression so a numeric-named member is accepted by a number
+/// index signature (matching tsc).
+fn is_numeric_property_name(name: &str) -> bool {
+    name.parse::<f64>().map(|n| n.is_finite()).unwrap_or(false)
 }
 
 /// Check a reassignment `NAME = <expr>` (a simple `=` to an identifier target) in
@@ -3199,27 +3265,74 @@ fn lower_literal_type(pass: &mut Pass, literal: &TSLiteral<'_>) -> Option<TypeId
 
 /// Lower an object type literal's members to an interned (structural) object
 /// `TypeId`. Object **type literals** stay structurally hash-consed (only nominal
-/// interfaces bypass interning). A member whose type cannot be lowered (or an
-/// optional/index/call/method/construct signature) aborts the lowering (`None`).
+/// interfaces bypass interning).
+///
+/// M19: a **string** index signature (`[k: string]: T`) sets `string_index = T`
+/// and a **number** index signature (`[i: number]: T`) sets `number_index = T`;
+/// both coexist with named properties. A member whose type cannot be lowered, an
+/// optional property, or any other unsupported signature (call/method/construct, or
+/// an index sig with an unsupported key) aborts the lowering (`None`).
 fn lower_object_annotation(
     pass: &mut Pass,
     scope: ScopeId,
     members: &[TSSignature<'_>],
 ) -> Option<TypeId> {
-    let mut properties: Vec<PropertyType> = Vec::with_capacity(members.len());
+    let mut object = ObjectType::default();
     for member in members {
-        let TSSignature::TSPropertySignature(sig) = member else {
-            return None;
-        };
-        if sig.optional {
-            return None;
+        match member {
+            TSSignature::TSPropertySignature(sig) => {
+                if sig.optional {
+                    return None;
+                }
+                let name = sig.key.static_name()?;
+                let annotation = sig.type_annotation.as_ref()?;
+                let ty = lower_annotation(pass, scope, &annotation.type_annotation)?;
+                object
+                    .properties
+                    .push(PropertyType::public(name.into_owned(), ty));
+            }
+            // M19: an index signature `[k: string]: T` / `[i: number]: T`.
+            TSSignature::TSIndexSignature(sig) => {
+                lower_index_signature(pass, scope, sig, &mut object)?;
+            }
+            _ => return None,
         }
-        let name = sig.key.static_name()?;
-        let annotation = sig.type_annotation.as_ref()?;
-        let ty = lower_annotation(pass, scope, &annotation.type_annotation)?;
-        properties.push(PropertyType::public(name.into_owned(), ty));
     }
-    Some(pass.interner.intern_object(ObjectType { properties }))
+    Some(pass.interner.intern_object(object))
+}
+
+/// Lower a single index signature (M19) into the appropriate slot of `object`.
+/// `[k: string]: T` sets `string_index`; `[i: number]: T` sets `number_index`. The
+/// **value** type `T` is lowered; the key type itself is fixed (`string`/`number`)
+/// and not stored. Returns `None` — aborting the enclosing annotation, matching the
+/// other lowerings — for anything out of the M19 subset: a non-`string`/`number`
+/// key (symbol/template-literal index sigs are deferred), a value type that cannot
+/// be lowered, or a malformed signature (no/multiple key parameters). `readonly`
+/// index signatures are deferred — the `readonly` flag is ignored here.
+fn lower_index_signature(
+    pass: &mut Pass,
+    scope: ScopeId,
+    sig: &oxc_ast::ast::TSIndexSignature<'_>,
+    object: &mut ObjectType,
+) -> Option<()> {
+    // Exactly one key parameter (`[k: string]`); anything else is malformed.
+    let [param] = sig.parameters.as_slice() else {
+        return None;
+    };
+    let key = lower_annotation(pass, scope, &param.type_annotation.type_annotation)?;
+    let value = lower_annotation(pass, scope, &sig.type_annotation.type_annotation)?;
+    let wk = pass.interner.well_known();
+    if key == wk.string {
+        object.string_index = Some(value);
+        Some(())
+    } else if key == wk.number {
+        object.number_index = Some(value);
+        Some(())
+    } else {
+        // A symbol / template-literal / other index-key type is out of the M19
+        // subset → abort the enclosing annotation.
+        None
+    }
 }
 
 /// Lower a function type annotation's parameters and return type to an interned
@@ -3459,7 +3572,12 @@ fn infer_object_literal(pass: &mut Pass, scope: ScopeId, obj: &ObjectExpression<
         let widened = widen(pass.interner, value_ty);
         properties.push(PropertyType::public(name.into_owned(), widened));
     }
-    pass.interner.intern_object(ObjectType { properties })
+    // M19: an object literal never declares an index signature (it is a set of
+    // named members); the index slots stay `None`.
+    pass.interner.intern_object(ObjectType {
+        properties,
+        ..Default::default()
+    })
 }
 
 /// Infer the type of an array literal `[e1, e2, …]` (M17): `(<elem>)[]` where the
@@ -3612,8 +3730,8 @@ fn infer_element_access(
     let span = Span::from_oxc(member.span);
 
     // Walk the index expression for its side effects (reference resolution, nested
-    // diagnostics) before any base-specific handling.
-    let _ = infer_expr(pass, scope, &member.expression);
+    // diagnostics), capturing its type for index-signature resolution (M19).
+    let key_ty = infer_expr(pass, scope, &member.expression).map(|(ty, _)| ty);
 
     if base_ty == wk.any || base_ty == wk.error {
         return Some((wk.error, span));
@@ -3632,8 +3750,86 @@ fn infer_element_access(
         return Some((element.unwrap_or(wk.error), span));
     }
 
-    // Non-array/non-tuple base: out of scope (no diagnostic, no crash) → error type.
+    // Object base (M19): resolve `obj[key]` through named properties / index sigs.
+    if pass.interner.store().tag(base_ty) == TypeTag::Object {
+        return Some((object_element_access(pass, base_ty, &member.expression, key_ty), span));
+    }
+
+    // Non-array/non-tuple/non-object base: out of scope (no diagnostic, no crash) →
+    // error type.
     Some((wk.error, span))
+}
+
+/// Resolve the result type of an element access `obj[key]` on an **object** base
+/// (M19). In order:
+///
+///  1. a **string-literal** key that names a known property → that property's type
+///     (`dict["a"]` where `a` is declared);
+///  2. a **`number`-typed** key (a numeric literal, or a `number`-typed variable)
+///     when the object has a number index signature → the number value type;
+///  3. otherwise, when the object has a **string** index signature → the string
+///     value type (covers a dynamic string key `dict[key]` and any other key under a
+///     string index);
+///  4. otherwise the error type (no diagnostic — element access on an object outside
+///     these cases is out of the M19 subset, matching the array/tuple leniency).
+///
+/// `key_ty` is the (already-inferred) type of the index expression, or `None` if it
+/// was out of subset.
+fn object_element_access(
+    pass: &mut Pass,
+    base_ty: TypeId,
+    key_expr: &Expression<'_>,
+    key_ty: Option<TypeId>,
+) -> TypeId {
+    let wk = pass.interner.well_known();
+    let store = pass.interner.store();
+    let Some(obj) = store.object_type(base_ty) else {
+        return wk.error;
+    };
+
+    // 1. A string-literal key naming a known property → that property's type.
+    if let Some(name) = string_literal_key(key_expr) {
+        if let Some(prop) = obj.property(&name) {
+            return prop.ty;
+        }
+    }
+
+    // 2. A number-typed key + a number index signature → the number value type.
+    let key_is_number = key_ty.is_some_and(|k| is_number_keyed(store, k));
+    if key_is_number {
+        if let Some(value) = obj.number_index {
+            return value;
+        }
+    }
+
+    // 3. Otherwise a string index signature accepts the key → the string value type.
+    if let Some(value) = obj.string_index {
+        return value;
+    }
+
+    // 4. Out of subset → error type (no diagnostic, no crash).
+    wk.error
+}
+
+/// Read a **string-literal** key from an element-access index expression
+/// (`obj["a"]`), or `None` for any non-string-literal index. Used by object element
+/// access (M19) to resolve a literal key to a named property.
+fn string_literal_key(expr: &Expression<'_>) -> Option<String> {
+    match expr {
+        Expression::StringLiteral(lit) => Some(lit.value.to_string()),
+        _ => None,
+    }
+}
+
+/// Whether a key type is **number-keyed** (M19) — a numeric literal type or the
+/// `number` intrinsic. A number index signature is selected for such a key. (A
+/// numeric-literal key like `nums[0]` has a literal type whose base is `number`; a
+/// `number`-typed variable matches directly.)
+fn is_number_keyed(store: &Store, key: TypeId) -> bool {
+    if let Some(lit) = store.literal_value(key) {
+        return matches!(lit.base_kind(), IntrinsicKind::Number);
+    }
+    store.intrinsic_kind(key) == Some(IntrinsicKind::Number)
 }
 
 /// Read a **non-negative integer literal** index from an element-access index
@@ -3715,6 +3911,16 @@ fn infer_member_access(
         .and_then(|obj| obj.property(prop_name))
         .map(|prop| (prop.ty, prop.visibility, prop.declaring_class));
 
+    // M19: a property access `obj.prop` resolves through a **string** index
+    // signature when there is no named property of that name — `dict.a` on
+    // `{ [k: string]: number }` is `number` (a string-keyed access), not `TK2339`.
+    // Snapshot it before any diagnostic borrow.
+    let string_index_value = pass
+        .interner
+        .store()
+        .object_type(base_ty)
+        .and_then(|obj| obj.string_index);
+
     match found {
         Some((prop_ty, visibility, declaring_class)) => {
             // M13 access control: a `private`/`protected` member is reachable only
@@ -3733,6 +3939,11 @@ fn infer_member_access(
             Some((prop_ty, prop_span))
         }
         None => {
+            // M19: a string index signature accepts any property name — the access
+            // yields its value type rather than `TK2339`.
+            if let Some(value) = string_index_value {
+                return Some((value, prop_span));
+            }
             // Not on the type. For a class value base, this also covers
             // `C.instanceMember`; for an instance base, `instance.staticMember` —
             // both are `TK2339`, since each member lives on the other side.
@@ -7023,5 +7234,149 @@ c = d;
         // Line 3 ([string, number] → [number, string]) mismatches; line 6 (same type)
         // is clean.
         assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
+    }
+}
+
+#[cfg(test)]
+mod index_signature_tests {
+    //! M19 end-to-end tests for **index signatures** (`{ [k: string]: T }`,
+    //! `{ [i: number]: T }`). These drive the whole pipeline (parse → bind → check)
+    //! and assert the `(line, code)` diagnostics, pinning the invariants the reviewer
+    //! should scrutinize: index/property **access** resolves to the index value type,
+    //! object-literal → index-sig **assignability** is value-checked, and the M2
+    //! excess-property check (`TK2353`) is suppressed **only** against an index-sig
+    //! target (a plain object target still reports excess). The per-fixture acceptance
+    //! lives in the conformance corpus (`m19_index_sig/`).
+
+    use crate::driver::check_source;
+
+    /// Run the checker and return the sorted `(1-based line, code)` of every
+    /// diagnostic, keyed on its primary-span start line (matching the conformance
+    /// harness's mapping).
+    fn diags(source: &str) -> Vec<(u32, String)> {
+        let out = check_source(source);
+        assert!(
+            out.parse_errors.is_empty(),
+            "unexpected parse error(s): {:?}",
+            out.parse_errors
+        );
+        let index = crate::span::LineIndex::new(source);
+        let mut v: Vec<(u32, String)> = out
+            .diagnostics
+            .iter()
+            .map(|d| (index.line_of(d.span.start), d.code.as_str().to_string()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Object-literal → string-index-sig **assignability** is value-checked: every
+    /// member value must fit the index value type. All-`number` values are ok; a
+    /// `string` value is **one** `TK2322` (not one per excess key — excess is
+    /// suppressed against an index-sig target).
+    #[test]
+    fn object_literal_to_string_index_is_value_checked() {
+        let src = "\
+const dict: { [k: string]: number } = { a: 1, b: 2 };
+const bad: { [k: string]: number } = { a: 1, b: \"x\" };
+const empty: { [k: string]: number } = {};
+";
+        // Line 1 ok; line 2 one TK2322 (b's value string ≁ number); line 3 ok.
+        assert_eq!(diags(src), vec![(2, "TK2322".to_string())]);
+    }
+
+    /// **Access** through a string index signature yields its value type, both via
+    /// element access `dict["a"]` / dynamic `dict[key]` and via property access
+    /// `dict.a`. The value type is `number`, so binding it to `number` is ok and to
+    /// `string` is `TK2322`.
+    #[test]
+    fn access_through_string_index_yields_value_type() {
+        let src = "\
+const dict: { [k: string]: number } = { a: 1 };
+const v: number = dict[\"a\"];
+const v2: number = dict.a;
+const v3: string = dict[\"a\"];
+let key: string = \"k\";
+const v4: number = dict[key];
+";
+        // Only line 4 fails (number value bound to a string annotation).
+        assert_eq!(diags(src), vec![(4, "TK2322".to_string())]);
+    }
+
+    /// A **number** index signature: numeric-named object-literal members are
+    /// accepted (no excess), and numeric-keyed access yields the value type — here
+    /// `string`, so `nums[0]` is ok against `string` and `TK2322` against `number`.
+    #[test]
+    fn number_index_access_and_assignability() {
+        let src = "\
+const nums: { [i: number]: string } = { 0: \"a\", 1: \"b\" };
+const s: string = nums[0];
+const sBad: number = nums[0];
+";
+        // Line 1 ok (numeric members accepted); line 3 is the value-type mismatch.
+        assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
+    }
+
+    /// The excess-property check (`TK2353`) is suppressed **only** against an
+    /// index-sig target. A plain object target (no index signature) STILL reports
+    /// excess (M2 unchanged) — so the suppression is scoped, not global.
+    #[test]
+    fn excess_suppressed_only_for_index_sig_targets() {
+        let src = "\
+const ok: { [k: string]: number } = { a: 1, b: 2 };
+const bad: { a: number } = { a: 1, x: 0 };
+";
+        // Line 1 has NO excess (index-sig target accepts `b`); line 2 reports the
+        // excess `x` (plain object target — M2 behaviour preserved).
+        assert_eq!(diags(src), vec![(2, "TK2353".to_string())]);
+    }
+
+    /// A property NOT present and NOT covered by a string index signature is still
+    /// `TK2339`: a number index signature does not provide string-keyed property
+    /// access, so `obj.missing` on a number-index-only object is missing.
+    #[test]
+    fn property_not_covered_by_number_index_is_missing() {
+        let src = "\
+const obj: { [i: number]: string } = { 0: \"a\" };
+const x = obj.missing;
+";
+        // `missing` is a string key; a number index signature does not cover it.
+        assert_eq!(diags(src), vec![(2, "TK2339".to_string())]);
+    }
+
+    /// **Freshness descends into an index value** (the M2 excess check is not lost
+    /// under an index signature): a fresh object literal used as a **string** index
+    /// value still gets its own excess check, so a property the value type does not
+    /// name is `TK2353`. The key itself stays suppressed (any key is accepted).
+    #[test]
+    fn fresh_value_under_string_index_still_excess_checked() {
+        let src = "\
+const a: { [k: string]: { v: number } } = { foo: { v: 1, extra: 9 } };
+";
+        // `foo` (the key) is accepted by the index sig, but `extra` is excess against
+        // the value type `{ v: number }` → one TK2353 on `extra`.
+        assert_eq!(diags(src), vec![(1, "TK2353".to_string())]);
+    }
+
+    /// The same freshness descent applies to a **number** index value: a fresh object
+    /// literal at a numeric key is excess-checked against the number index value type.
+    #[test]
+    fn fresh_value_under_number_index_still_excess_checked() {
+        let src = "\
+const a: { [i: number]: { v: number } } = { 0: { v: 1, extra: 9 } };
+";
+        // `0` (numeric key) is accepted, but `extra` is excess against `{ v: number }`.
+        assert_eq!(diags(src), vec![(1, "TK2353".to_string())]);
+    }
+
+    /// Scoping intact: a value that **does** fit the index value type produces no
+    /// excess (the descent only reports a genuinely-excess nested property), and the
+    /// key is never itself reported as excess.
+    #[test]
+    fn fresh_value_matching_index_value_is_clean() {
+        let src = "\
+const a: { [k: string]: { v: number } } = { foo: { v: 1 } };
+";
+        assert!(diags(src).is_empty(), "a matching nested value must be clean");
     }
 }

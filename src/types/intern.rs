@@ -154,12 +154,20 @@ impl Interner {
         // preserved deterministically.
         object.properties.sort_by(|a, b| a.name.cmp(&b.name));
 
-        let key = StructuralKey::Object(&object.properties);
+        let key = StructuralKey::Object {
+            properties: &object.properties,
+            string_index: object.string_index,
+            number_index: object.number_index,
+        };
         let hash = structural_hash(&key);
         if let Some(existing) = self.lookup(hash, |store, id| {
-            store
-                .object_type(id)
-                .is_some_and(|existing| object_props_eq(&existing.properties, &object.properties))
+            store.object_type(id).is_some_and(|existing| {
+                // M19: index signatures are part of identity, so two objects dedup
+                // only when their members AND both index value types match.
+                existing.string_index == object.string_index
+                    && existing.number_index == object.number_index
+                    && object_props_eq(&existing.properties, &object.properties)
+            })
         }) {
             return existing;
         }
@@ -488,21 +496,25 @@ mod tests {
         // different source order — hash-cons to the SAME id.
         let ab = interner.intern_object(ObjectType {
             properties: vec![prop("a", wk.number), prop("b", wk.string)],
+            ..Default::default()
         });
         let ba = interner.intern_object(ObjectType {
             properties: vec![prop("b", wk.string), prop("a", wk.number)],
+            ..Default::default()
         });
         assert_eq!(ab, ba, "member order must not affect identity");
 
         // Re-interning the exact same shape returns the same id.
         let ab_again = interner.intern_object(ObjectType {
             properties: vec![prop("a", wk.number), prop("b", wk.string)],
+            ..Default::default()
         });
         assert_eq!(ab, ab_again);
 
         // A different property *type* is a distinct object type.
         let ab_diff = interner.intern_object(ObjectType {
             properties: vec![prop("a", wk.string), prop("b", wk.string)],
+            ..Default::default()
         });
         assert_ne!(ab, ab_diff, "differing property types must not dedup");
 
@@ -513,6 +525,7 @@ mod tests {
                 prop("b", wk.string),
                 prop("c", wk.boolean),
             ],
+            ..Default::default()
         });
         assert_ne!(ab, abc, "differing property sets must not dedup");
 
@@ -529,11 +542,79 @@ mod tests {
         // property comparison.
         let outer1 = interner.intern_object(ObjectType {
             properties: vec![prop("a", ab)],
+            ..Default::default()
         });
         let outer2 = interner.intern_object(ObjectType {
-            properties: vec![prop("a", ba)], // ba == ab
+            properties: vec![prop("a", ba)], // ba == ab,
+            ..Default::default()
         });
         assert_eq!(outer1, outer2, "nested object identity must propagate");
+    }
+
+    /// M19 — index signatures are part of an object's **structural identity**:
+    /// `{ [k: string]: number }` interns distinctly from `{}`, from
+    /// `{ [k: string]: string }` (different value type), and from
+    /// `{ [i: number]: number }` (different index kind); the same shape interns
+    /// consistently; and a member set coexists with an index signature in the
+    /// identity (`{ a: number }` ≠ `{ a: number; [k: string]: number }`).
+    #[test]
+    fn index_signature_is_part_of_object_identity() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // `{ [k: string]: number }` interns consistently.
+        let str_idx_num_a = interner.intern_object(ObjectType {
+            string_index: Some(wk.number),
+            ..Default::default()
+        });
+        let str_idx_num_b = interner.intern_object(ObjectType {
+            string_index: Some(wk.number),
+            ..Default::default()
+        });
+        assert_eq!(
+            str_idx_num_a, str_idx_num_b,
+            "{{ [k: string]: number }} must intern consistently"
+        );
+
+        // Distinct from the empty object `{}` (presence of the index signature).
+        let empty = interner.intern_object(ObjectType::default());
+        assert_ne!(str_idx_num_a, empty, "{{ [k: string]: number }} ≠ {{}}");
+
+        // Distinct value type: `{ [k: string]: string }`.
+        let str_idx_str = interner.intern_object(ObjectType {
+            string_index: Some(wk.string),
+            ..Default::default()
+        });
+        assert_ne!(
+            str_idx_num_a, str_idx_str,
+            "differing index value type ⇒ distinct identity"
+        );
+
+        // Distinct index kind: `{ [i: number]: number }` (number, not string).
+        let num_idx_num = interner.intern_object(ObjectType {
+            number_index: Some(wk.number),
+            ..Default::default()
+        });
+        assert_ne!(
+            str_idx_num_a, num_idx_num,
+            "string-index ≠ number-index of the same value type"
+        );
+
+        // A named member coexists with the index signature in the identity:
+        // `{ a: number }` ≠ `{ a: number; [k: string]: number }`.
+        let a_only = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number)],
+            ..Default::default()
+        });
+        let a_and_index = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number)],
+            string_index: Some(wk.number),
+            ..Default::default()
+        });
+        assert_ne!(
+            a_only, a_and_index,
+            "adding an index signature changes object identity"
+        );
     }
 
     /// Build a required parameter `name: ty`.

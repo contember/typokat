@@ -464,6 +464,7 @@ mod tests {
         let wk = interner.well_known();
         interner.intern_object(ObjectType {
             properties: vec![PropertyType::public("a", wk.number)],
+            ..Default::default()
         })
     }
 
@@ -575,6 +576,7 @@ mod tests {
                 PropertyType::public(disc, disc_ty),
                 PropertyType::public(extra, wk.number),
             ],
+            ..Default::default()
         })
     }
 
@@ -635,6 +637,7 @@ mod tests {
         // A member that lacks `kind` entirely survives both branches.
         let no_disc = interner.intern_object(ObjectType {
             properties: vec![PropertyType::public("other", wk.number)],
+            ..Default::default()
         });
         let shape2 = interner.union(vec![circle, no_disc]);
         assert_eq!(
@@ -658,9 +661,11 @@ mod tests {
         // `{ a: number }` and `{ b: string }`.
         let with_a = interner.intern_object(ObjectType {
             properties: vec![PropertyType::public("a", wk.number)],
+            ..Default::default()
         });
         let with_b = interner.intern_object(ObjectType {
             properties: vec![PropertyType::public("b", wk.string)],
+            ..Default::default()
         });
         let box_ty = interner.union(vec![with_a, with_b]);
 

@@ -18,3 +18,6 @@ const empty: { [k: string]: number } = {}; // ok — empty object
 const nums: { [i: number]: string } = { 0: "a", 1: "b" }; // ok — number index signature
 const s: string = nums[0];    // ok
 const sBad: number = nums[0]; // error[TK2322]
+
+const nestedExcess: { [k: string]: { v: number } } = { foo: { v: 1, extra: 9 } }; // error[TK2353]: 'extra' does not exist in type
+// ^ a fresh object literal used as an index-sig value still gets its own excess check

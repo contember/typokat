@@ -275,6 +275,15 @@ impl PropertyType {
 /// Structural object type (object literal types, interfaces). Interned via
 /// `Interner::intern_object` (canonicalized: properties sorted by name) and
 /// compared property-wise by the relation engine (width + depth).
+///
+/// M19 adds the two **index signatures** (`{ [k: string]: T }`,
+/// `{ [i: number]: T }`). Each is the **value** type of the corresponding index
+/// kind (the key type itself is fixed — `string` or `number` — and is not stored).
+/// They coexist with named properties and are part of the object's structural
+/// identity (hashed + compared by the interner), so `{ [k: string]: number }`
+/// interns distinctly from `{}` and from `{ [k: string]: string }`. The relation
+/// engine reads them for index-signature assignability; substitution rewrites the
+/// value types so a (future) generic `{ [k: string]: T }` instantiates correctly.
 #[derive(Clone, Debug, Default)]
 pub struct ObjectType {
     /// Members in **canonical order** (sorted by name). The interner sorts before
@@ -285,6 +294,12 @@ pub struct ObjectType {
     /// asserted code-only, so the exact ordering is never matched against a fixed
     /// layout.
     pub properties: Vec<PropertyType>,
+    /// The **value** type of the string index signature `[k: string]: T` (M19), or
+    /// `None` if the object has none. Part of the object's structural identity.
+    pub string_index: Option<TypeId>,
+    /// The **value** type of the number index signature `[i: number]: T` (M19), or
+    /// `None` if the object has none. Part of the object's structural identity.
+    pub number_index: Option<TypeId>,
 }
 
 impl ObjectType {

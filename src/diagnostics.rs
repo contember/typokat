@@ -317,6 +317,11 @@ pub fn render_reason_chain(store: &Store, head: &Reason) -> Vec<String> {
         // indent level in (a union element descends straight into its member, like the
         // array case). The position is implicit in the headline tuples.
         Reason::TupleElement { because, .. } => element_reason_lines(store, because, 1),
+        // M19: an index-signature mismatch — the headline already states the
+        // object/object mismatch, so the elaboration is the offending **value's** own
+        // cause, one indent level in (a union value descends straight into its member,
+        // like the array/tuple cases).
+        Reason::IndexSignature { because, .. } => element_reason_lines(store, because, 1),
     }
 }
 
@@ -472,6 +477,20 @@ fn reason_lines(store: &Store, reason: &Reason, depth: usize) -> Vec<String> {
             lines.extend(reason_lines(store, because, depth + 1));
             lines
         }
+        // An object whose value does not fit the target's index signature (M19):
+        // announce the two object types, then nest the value's cause. (At the chain
+        // head this arm is bypassed by `render_reason_chain`, which descends straight
+        // into `because`; this arm renders an index-sig mismatch nested *inside*
+        // another reason.)
+        Reason::IndexSignature { src, tgt, because } => {
+            let src = render_type(store, *src, /* widen */ false);
+            let tgt = render_type(store, *tgt, /* widen */ false);
+            let mut lines = vec![format!(
+                "{indent}Type '{src}' is not assignable to type '{tgt}'."
+            )];
+            lines.extend(reason_lines(store, because, depth + 1));
+            lines
+        }
     }
 }
 
@@ -534,16 +553,34 @@ fn render_type_inner(store: &Store, id: TypeId, widen: bool, rendering: &mut Vec
                 return "...".to_string();
             }
             match store.object_type(id) {
-                Some(obj) if obj.properties.is_empty() => "{}".to_string(),
+                Some(obj)
+                    if obj.properties.is_empty()
+                        && obj.string_index.is_none()
+                        && obj.number_index.is_none() =>
+                {
+                    "{}".to_string()
+                }
                 Some(obj) => {
                     rendering.push(id);
-                    let members: Vec<String> = obj
-                        .properties
-                        .iter()
-                        .map(|p| {
-                            format!("{}: {}", p.name, render_type_inner(store, p.ty, false, rendering))
-                        })
-                        .collect();
+                    // M19: index signatures render as `[x: string]: T` / `[x: number]: T`,
+                    // listed before the named members (a stable, tsc-like form;
+                    // object-target messages are asserted code-only in the corpus).
+                    let mut members: Vec<String> = Vec::new();
+                    if let Some(v) = obj.string_index {
+                        members.push(format!(
+                            "[x: string]: {}",
+                            render_type_inner(store, v, false, rendering)
+                        ));
+                    }
+                    if let Some(v) = obj.number_index {
+                        members.push(format!(
+                            "[x: number]: {}",
+                            render_type_inner(store, v, false, rendering)
+                        ));
+                    }
+                    members.extend(obj.properties.iter().map(|p| {
+                        format!("{}: {}", p.name, render_type_inner(store, p.ty, false, rendering))
+                    }));
                     rendering.pop();
                     format!("{{ {} }}", members.join("; "))
                 }
@@ -759,15 +796,19 @@ mod tests {
         // { a: { b: string } } (src) vs { a: { b: number } } (tgt).
         let inner_str = interner.intern_object(ObjectType {
             properties: vec![prop("b", wk.string)],
+            ..Default::default()
         });
         let inner_num = interner.intern_object(ObjectType {
             properties: vec![prop("b", wk.number)],
+            ..Default::default()
         });
         let outer_src = interner.intern_object(ObjectType {
             properties: vec![prop("a", inner_str)],
+            ..Default::default()
         });
         let outer_tgt = interner.intern_object(ObjectType {
             properties: vec![prop("a", inner_num)],
+            ..Default::default()
         });
         let store = interner.store();
 
@@ -817,9 +858,11 @@ mod tests {
         let wk = interner.well_known();
         let a_only = interner.intern_object(ObjectType {
             properties: vec![prop("a", wk.number)],
+            ..Default::default()
         });
         let ab = interner.intern_object(ObjectType {
             properties: vec![prop("a", wk.number), prop("b", wk.string)],
+            ..Default::default()
         });
         let store = interner.store();
 
@@ -903,9 +946,11 @@ mod tests {
         // But a union member with a *nested* cause renders that cause.
         let inner_str = interner.intern_object(ObjectType {
             properties: vec![prop("b", wk.string)],
+            ..Default::default()
         });
         let inner_num = interner.intern_object(ObjectType {
             properties: vec![prop("b", wk.number)],
+            ..Default::default()
         });
         let store = interner.store();
         let head = Reason::UnionSourceMember {

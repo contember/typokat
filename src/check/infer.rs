@@ -445,10 +445,12 @@ mod tests {
         // Parameter `{ value: T }`.
         let box_t = interner.intern_object(ObjectType {
             properties: vec![prop("value", t)],
+            ..Default::default()
         });
         // Argument `{ value: number }` (member already widened by the checker).
         let arg = interner.intern_object(ObjectType {
             properties: vec![prop("value", wk.number)],
+            ..Default::default()
         });
 
         let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[box_t], &[arg]);
@@ -533,6 +535,7 @@ mod tests {
         // Parameter `{ value: T }`; argument is a bare `number` (shape mismatch).
         let box_t = interner.intern_object(ObjectType {
             properties: vec![prop("value", t)],
+            ..Default::default()
         });
 
         let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[box_t], &[wk.number]);
@@ -557,6 +560,7 @@ mod tests {
             list,
             ObjectType {
                 properties: vec![prop("head", wk.number), prop("tail", list_or_null)],
+                ..Default::default()
             },
         );
 

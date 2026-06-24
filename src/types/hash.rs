@@ -34,8 +34,16 @@ pub enum StructuralKey<'a> {
     Intrinsic(IntrinsicKind),
     Literal(&'a LiteralValue),
     /// An object type, keyed over its **canonical** property list (sorted by name
-    /// by the interner before hashing) so `{ a; b }` and `{ b; a }` collide.
-    Object(&'a [PropertyType]),
+    /// by the interner before hashing) so `{ a; b }` and `{ b; a }` collide, plus
+    /// its **index signatures** (M19): the string- and number-index value type ids
+    /// are part of the key, so `{ [k: string]: number }` collides only with another
+    /// object having the same members AND the same index signatures (and is distinct
+    /// from `{}` / `{ [k: string]: string }`).
+    Object {
+        properties: &'a [PropertyType],
+        string_index: Option<TypeId>,
+        number_index: Option<TypeId>,
+    },
     /// A function type, keyed over its **positional** parameter list (never
     /// sorted) and return type. Two function types collide only when their
     /// parameters match in order (name, optionality, type) and their return types
@@ -80,8 +88,18 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
             TypeTag::Literal.hash_discriminant(&mut h);
             hash_literal(value, &mut h);
         }
-        StructuralKey::Object(properties) => {
+        StructuralKey::Object {
+            properties,
+            string_index,
+            number_index,
+        } => {
             TypeTag::Object.hash_discriminant(&mut h);
+            // M19: fold the index signatures into the key first (the value-type id,
+            // or a sentinel for absent), so an object with an index signature hashes
+            // distinctly from one without. The ids are canonical (interned), so
+            // hashing them by value is order-stable.
+            string_index.map(|v| v.0).hash(&mut h);
+            number_index.map(|v| v.0).hash(&mut h);
             // Length first so prefixes of a longer property list cannot collide
             // with the shorter one under the streaming hasher.
             properties.len().hash(&mut h);

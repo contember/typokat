@@ -118,6 +118,17 @@ pub enum Reason {
         tgt: TypeId,
         because: Box<Reason>,
     },
+    /// A value does **not fit the target's index signature** (M19): the source has a
+    /// named property (or its own index signature) whose value type is not assignable
+    /// to the target object's string/number index value type. `src`/`tgt` are the two
+    /// object types, wrapping the inner reason for `<value> <: <index value type>`.
+    /// The checker maps this to `TK2322`. A single failing value wins (first one
+    /// found), mirroring the object relation's one-cause-per-failure shape.
+    IndexSignature {
+        src: TypeId,
+        tgt: TypeId,
+        because: Box<Reason>,
+    },
 }
 
 /// A non-empty chain of reasons explaining a relation failure, outermost first.
@@ -161,6 +172,7 @@ impl ReasonChain {
             Reason::ArrayElement { src, tgt, .. } => (*src, *tgt),
             Reason::TupleLength { src, tgt } => (*src, *tgt),
             Reason::TupleElement { src, tgt, .. } => (*src, *tgt),
+            Reason::IndexSignature { src, tgt, .. } => (*src, *tgt),
         }
     }
 }
@@ -424,6 +436,16 @@ impl<'a> Relater<'a> {
     /// the nested reason when the property is present but its type does not
     /// relate. First-failure ordering keeps the verdict deterministic and matches
     /// how the M2 corpus pairs one cause per failing assignment.
+    ///
+    /// M19 — **index signatures**: after the named-property obligations, if the
+    /// **target** has a string index signature, every **named property of the
+    /// source** (any key is a string key) and the source's own string index value
+    /// (if any) must be assignable to the target's string index value type; likewise
+    /// a target number index signature constrains the source's **numeric-named**
+    /// properties and the source's number index value. A single failing value is
+    /// reported as one `IndexSignature` reason (`TK2322`). The target's index
+    /// signatures are checked here; the source having *extra* index signatures the
+    /// target lacks is fine (width).
     fn relate_objects(
         &mut self,
         src: TypeId,
@@ -434,7 +456,8 @@ impl<'a> Relater<'a> {
         // Both ids are object-tagged here; the side-tables always resolve. The
         // `else` arms are defensive (an object tag without a payload is a store
         // invariant violation, never expected) and produce a leaf rather than
-        // panicking.
+        // panicking. These borrows are of `*self.store` (lifetime `'a`), independent
+        // of `&mut self`, so they live across the recursive `self.relate` calls.
         let Some(tgt_obj) = self.store.object_type(tgt) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
@@ -484,6 +507,77 @@ impl<'a> Relater<'a> {
                         name: tgt_prop.name.clone(),
                         src,
                         tgt,
+                    }));
+                }
+            }
+        }
+
+        // M19 — index-signature obligations. Snapshot the target's index value types
+        // and the source's named-property/(index) value types up front so the
+        // recursive `self.relate` below does not overlap the read borrows.
+        let tgt_string_index = tgt_obj.string_index;
+        let tgt_number_index = tgt_obj.number_index;
+        if tgt_string_index.is_none() && tgt_number_index.is_none() {
+            // No index signature on the target — nothing further to check (the M0–M18
+            // structural verdict stands).
+            return Relation::Yes;
+        }
+        // (name, value type) of each source named property, plus the source's own
+        // index value types (the source may itself be an index-sig object — its index
+        // value must fit the target's, like a dictionary assigned to a dictionary).
+        let src_props: Vec<(String, TypeId)> = src_obj
+            .properties
+            .iter()
+            .map(|p| (p.name.clone(), p.ty))
+            .collect();
+        let src_string_index = src_obj.string_index;
+        let src_number_index = src_obj.number_index;
+
+        // String index target: every source named property (any name is a string
+        // key) AND the source's own string index value must be assignable to it.
+        if let Some(tgt_value) = tgt_string_index {
+            for (_, src_value) in &src_props {
+                if let Relation::No(child) = self.relate(*src_value, tgt_value, kind, assumed) {
+                    return Relation::No(ReasonChain::of(Reason::IndexSignature {
+                        src,
+                        tgt,
+                        because: Box::new(child.head),
+                    }));
+                }
+            }
+            if let Some(src_value) = src_string_index {
+                if let Relation::No(child) = self.relate(src_value, tgt_value, kind, assumed) {
+                    return Relation::No(ReasonChain::of(Reason::IndexSignature {
+                        src,
+                        tgt,
+                        because: Box::new(child.head),
+                    }));
+                }
+            }
+        }
+
+        // Number index target: only the source's **numeric-named** properties are
+        // constrained (a number index sig does not govern arbitrary string keys),
+        // plus the source's own number index value.
+        if let Some(tgt_value) = tgt_number_index {
+            for (name, src_value) in &src_props {
+                if !is_numeric_property_name(name) {
+                    continue;
+                }
+                if let Relation::No(child) = self.relate(*src_value, tgt_value, kind, assumed) {
+                    return Relation::No(ReasonChain::of(Reason::IndexSignature {
+                        src,
+                        tgt,
+                        because: Box::new(child.head),
+                    }));
+                }
+            }
+            if let Some(src_value) = src_number_index {
+                if let Relation::No(child) = self.relate(src_value, tgt_value, kind, assumed) {
+                    return Relation::No(ReasonChain::of(Reason::IndexSignature {
+                        src,
+                        tgt,
+                        because: Box::new(child.head),
                     }));
                 }
             }
@@ -832,6 +926,17 @@ impl<'a> Relater<'a> {
 /// gate: when it returns `false`, the relation must fail (a structurally-identical
 /// object literal, or another class's same-named non-public member, is not
 /// assignable to a class with a `private`/`protected` member).
+/// Whether a property name is **numeric-keyed** (M19) — i.e. governed by a number
+/// index signature. A property whose name is a canonical number string (`"0"`,
+/// `"1"`, …) counts as a numeric key, matching TS's rule that a number index
+/// signature constrains numeric-named members. The check is conservative: the name
+/// must parse as a finite `f64` (so `"0"`/`"1"` from a numeric object-literal key
+/// qualify, while ordinary identifiers like `"a"` do not). A non-numeric name is a
+/// pure string key, untouched by a number index signature.
+fn is_numeric_property_name(name: &str) -> bool {
+    name.parse::<f64>().map(|n| n.is_finite()).unwrap_or(false)
+}
+
 fn nominal_origin_ok(tgt_prop: &PropertyType, src_prop: &PropertyType) -> bool {
     match tgt_prop.visibility {
         // Public target member: structural only — no origin constraint.
@@ -886,14 +991,17 @@ mod tests {
         // { a: number; b: string }
         let ab = interner.intern_object(ObjectType {
             properties: vec![prop("a", wk.number), prop("b", wk.string)],
+            ..Default::default()
         });
         // { a: number } — a width-narrower target.
         let a_only = interner.intern_object(ObjectType {
             properties: vec![prop("a", wk.number)],
+            ..Default::default()
         });
         // { a: string } — same key, incompatible type.
         let a_str = interner.intern_object(ObjectType {
             properties: vec![prop("a", wk.string)],
+            ..Default::default()
         });
 
         let store = interner.store();
@@ -947,10 +1055,12 @@ mod tests {
                 Visibility::Private,
                 Some(secret),
             )],
+            ..Default::default()
         });
         // A structurally identical *public* object literal `{ x: number }`.
         let public_obj = interner.intern_object(ObjectType {
             properties: vec![prop("x", wk.number)],
+            ..Default::default()
         });
         // `class Other { private x: number }` — same shape, DIFFERENT origin.
         let other_ty = interner.intern_object(ObjectType {
@@ -960,6 +1070,7 @@ mod tests {
                 Visibility::Private,
                 Some(other),
             )],
+            ..Default::default()
         });
 
         // The three are distinct interned ids (origin/visibility are part of
@@ -1021,9 +1132,11 @@ mod tests {
                 Visibility::Protected,
                 Some(owner),
             )],
+            ..Default::default()
         });
         let public_obj = interner.intern_object(ObjectType {
             properties: vec![prop("owner", wk.string)],
+            ..Default::default()
         });
 
         let store = interner.store();
@@ -1058,9 +1171,11 @@ mod tests {
                 readonly: true,
                 is_accessor: false,
             }],
+            ..Default::default()
         });
         let mutable_obj = interner.intern_object(ObjectType {
             properties: vec![prop("x", wk.number)],
+            ..Default::default()
         });
 
         // The flag is part of identity, so the two ids differ...
@@ -1105,6 +1220,7 @@ mod tests {
                 readonly: true,
                 is_accessor: true,
             }],
+            ..Default::default()
         });
         // A `readonly` data field: same shape but `is_accessor: false`.
         let readonly_field_obj = interner.intern_object(ObjectType {
@@ -1117,9 +1233,11 @@ mod tests {
                 readonly: true,
                 is_accessor: false,
             }],
+            ..Default::default()
         });
         let mutable_obj = interner.intern_object(ObjectType {
             properties: vec![prop("x", wk.number)],
+            ..Default::default()
         });
 
         // `is_accessor` is part of identity, so the accessor object differs from the
@@ -1153,15 +1271,19 @@ mod tests {
         // inner targets: { b: number } vs source { b: string }
         let inner_num = interner.intern_object(ObjectType {
             properties: vec![prop("b", wk.number)],
+            ..Default::default()
         });
         let inner_str = interner.intern_object(ObjectType {
             properties: vec![prop("b", wk.string)],
+            ..Default::default()
         });
         let outer_src = interner.intern_object(ObjectType {
             properties: vec![prop("a", inner_str)],
+            ..Default::default()
         });
         let outer_tgt = interner.intern_object(ObjectType {
             properties: vec![prop("a", inner_num)],
+            ..Default::default()
         });
 
         let store = interner.store();
@@ -1525,6 +1647,125 @@ mod tests {
         );
     }
 
+    /// M19 — index-signature assignability. A plain object is assignable to a
+    /// **string** index-sig target iff **every** named-property value fits the index
+    /// value type (`{ a: number; b: number } <: { [k: string]: number }`; a `string`
+    /// value fails as one `IndexSignature` reason). The **empty** object trivially
+    /// fits. A dictionary is assignable to a dictionary iff its index value fits
+    /// (`{ [k: string]: number } <: { [k: string]: number }` by identity; a string
+    /// dict is NOT assignable to a number dict). A **number** index sig governs only
+    /// numeric-named members. Exercised independently of the parser so a
+    /// soundness/value-check regression is caught here.
+    #[test]
+    fn index_signature_assignability() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // Targets: `{ [k: string]: number }` and `{ [i: number]: string }`.
+        let str_dict_num = interner.intern_object(ObjectType {
+            string_index: Some(wk.number),
+            ..Default::default()
+        });
+        let num_dict_str = interner.intern_object(ObjectType {
+            number_index: Some(wk.string),
+            ..Default::default()
+        });
+
+        // Sources.
+        // `{ a: number; b: number }` — all values fit the string index (number).
+        let ab_num = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number), prop("b", wk.number)],
+            ..Default::default()
+        });
+        // `{ a: number; b: string }` — `b` (string) does NOT fit `number`.
+        let ab_mixed = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number), prop("b", wk.string)],
+            ..Default::default()
+        });
+        // The empty object `{}`.
+        let empty = interner.intern_object(ObjectType::default());
+        // A string dictionary `{ [k: string]: string }`.
+        let str_dict_str = interner.intern_object(ObjectType {
+            string_index: Some(wk.string),
+            ..Default::default()
+        });
+        // A numeric-named member object `{ 0: string }` (its name is numeric).
+        let numeric_member = interner.intern_object(ObjectType {
+            properties: vec![prop("0", wk.string)],
+            ..Default::default()
+        });
+        // A number dictionary whose value is `number` (for the bad-value direction).
+        let num_dict_num = interner.intern_object(ObjectType {
+            number_index: Some(wk.number),
+            ..Default::default()
+        });
+        // An object with a **non-numeric** named member `{ a: string }` — a number
+        // index signature must NOT constrain it (it is a pure string key).
+        let a_str = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.string)],
+            ..Default::default()
+        });
+
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+
+        // OK: every value fits the string index value type.
+        assert!(
+            rel.is_assignable(ab_num, str_dict_num).is_yes(),
+            "{{ a: number; b: number }} <: {{ [k: string]: number }}"
+        );
+        // OK: the empty object trivially fits (no value can fail).
+        assert!(
+            rel.is_assignable(empty, str_dict_num).is_yes(),
+            "{{}} <: {{ [k: string]: number }}"
+        );
+
+        // BAD value: `b: string` is not assignable to the index value type `number`
+        // — one `IndexSignature` reason wrapping the leaf cause.
+        match rel.is_assignable(ab_mixed, str_dict_num) {
+            Relation::No(chain) => match chain.head() {
+                Reason::IndexSignature { because, .. } => {
+                    assert!(matches!(**because, Reason::Leaf { .. }));
+                }
+                other => panic!("expected an IndexSignature reason, got {other:?}"),
+            },
+            Relation::Yes => {
+                panic!("{{ a: number; b: string }} must NOT be assignable to {{ [k: string]: number }}")
+            }
+        }
+
+        // Dictionary → dictionary: identity holds; a string dict is NOT assignable to
+        // a number dict (its index value `string` does not fit `number`).
+        assert!(
+            rel.is_assignable(str_dict_num, str_dict_num).is_yes(),
+            "{{ [k: string]: number }} <: itself"
+        );
+        assert!(
+            !rel.is_assignable(str_dict_str, str_dict_num).is_yes(),
+            "{{ [k: string]: string }} is NOT assignable to {{ [k: string]: number }}"
+        );
+
+        // Number index target governs numeric-named members: `{ 0: string }` fits
+        // `{ [i: number]: string }`.
+        assert!(
+            rel.is_assignable(numeric_member, num_dict_str).is_yes(),
+            "{{ 0: string }} <: {{ [i: number]: string }}"
+        );
+        // ...but the numeric member's `string` value does NOT fit a number→number
+        // dict — `{ 0: string }` is NOT assignable to `{ [i: number]: number }`.
+        assert!(
+            !rel.is_assignable(numeric_member, num_dict_num).is_yes(),
+            "{{ 0: string }} is NOT assignable to {{ [i: number]: number }} (value mismatch)"
+        );
+        // A **non-numeric** named member is untouched by a number index signature:
+        // `{ a: string }` is assignable to `{ [i: number]: number }` (the `a` key is
+        // a pure string key, not governed by the number index).
+        assert!(
+            rel.is_assignable(a_str, num_dict_num).is_yes(),
+            "a non-numeric member is not constrained by a number index signature"
+        );
+    }
+
     /// Exhaustively check the M0 intrinsic-lattice + literal-widening rules so a
     /// regression in the relation engine is caught independent of the parser and
     /// the fixtures.
@@ -1640,6 +1881,7 @@ mod tests {
             list,
             ObjectType {
                 properties: vec![prop("head", wk.number), prop("tail", list_or_null)],
+                ..Default::default()
             },
         );
 
@@ -1651,6 +1893,7 @@ mod tests {
             copy,
             ObjectType {
                 properties: vec![prop("head", wk.number), prop("tail", copy_or_null)],
+                ..Default::default()
             },
         );
 
@@ -1663,12 +1906,14 @@ mod tests {
             a,
             ObjectType {
                 properties: vec![prop("self", a), prop("tag", wk.number)],
+                ..Default::default()
             },
         );
         interner.fill_object(
             b,
             ObjectType {
                 properties: vec![prop("self", b), prop("tag", wk.string)],
+                ..Default::default()
             },
         );
 
@@ -1744,24 +1989,28 @@ mod tests {
                 aa,
                 ObjectType {
                     properties: vec![prop("peer", ab), prop("tag", wk.number)],
+                    ..Default::default()
                 },
             );
             interner.fill_object(
                 ab,
                 ObjectType {
                     properties: vec![prop("back", aa), prop("leaf", wk.number)],
+                    ..Default::default()
                 },
             );
             interner.fill_object(
                 ca,
                 ObjectType {
                     properties: vec![prop("peer", cb), prop("tag", wk.string)],
+                    ..Default::default()
                 },
             );
             interner.fill_object(
                 cb,
                 ObjectType {
                     properties: vec![prop("back", ca), prop("leaf", wk.number)],
+                    ..Default::default()
                 },
             );
             (aa, ab, ca, cb)

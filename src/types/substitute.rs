@@ -105,6 +105,9 @@ impl<'a> Substitution<'a> {
         // origin (so a substituted generic class member, were generic classes in
         // scope, would keep its nominal identity).
         let props: Vec<PropertyType> = object.properties.clone();
+        // M19: snapshot the index-signature value types so they too are rewritten
+        // (a generic `{ [k: string]: T }` instantiates to `{ [k: string]: number }`).
+        let (string_index, number_index) = (object.string_index, object.number_index);
 
         self.in_progress.insert(ty);
         let mut changed = false;
@@ -116,12 +119,27 @@ impl<'a> Substitution<'a> {
                 PropertyType { ty: new_ty, ..p }
             })
             .collect();
+        // M19: rewrite each index signature's value type through the same recursion.
+        let string_index = string_index.map(|v| {
+            let new_v = self.apply(interner, v);
+            changed |= new_v != v;
+            new_v
+        });
+        let number_index = number_index.map(|v| {
+            let new_v = self.apply(interner, v);
+            changed |= new_v != v;
+            new_v
+        });
         self.in_progress.remove(&ty);
 
         // Unchanged → keep the original id (preserves nominal identity); changed →
         // intern the substituted structural object.
         if changed {
-            interner.intern_object(ObjectType { properties })
+            interner.intern_object(ObjectType {
+                properties,
+                string_index,
+                number_index,
+            })
         } else {
             ty
         }
@@ -302,6 +320,7 @@ mod tests {
         // { value: T }
         let box_t = interner.intern_object(ObjectType {
             properties: vec![prop("value", t)],
+            ..Default::default()
         });
         // (x: T) => T
         let fn_t = interner.intern_function(FunctionType {
@@ -321,6 +340,7 @@ mod tests {
         // { value: number }
         let box_num = interner.intern_object(ObjectType {
             properties: vec![prop("value", wk.number)],
+            ..Default::default()
         });
         let fn_num = interner.intern_function(FunctionType {
             params: vec![ParameterType {
@@ -427,14 +447,17 @@ mod tests {
         // { value: { value: T } }
         let inner = interner.intern_object(ObjectType {
             properties: vec![prop("value", t)],
+            ..Default::default()
         });
         let outer = interner.intern_object(ObjectType {
             properties: vec![prop("value", inner)],
+            ..Default::default()
         });
 
         // Instantiate with T → { value: number }.
         let box_num = interner.intern_object(ObjectType {
             properties: vec![prop("value", wk.number)],
+            ..Default::default()
         });
         let mut map = FxHashMap::default();
         map.insert(TypeParamId(0), box_num);
@@ -442,11 +465,13 @@ mod tests {
         // inner = { value: T }  →  { value: { value: number } }
         let inner_subst = interner.intern_object(ObjectType {
             properties: vec![prop("value", box_num)],
+            ..Default::default()
         });
         // outer = { value: inner } = { value: { value: T } }  →
         //         { value: { value: { value: number } } }
         let outer_subst = interner.intern_object(ObjectType {
             properties: vec![prop("value", inner_subst)],
+            ..Default::default()
         });
         assert_eq!(substitute(&mut interner, inner, &map), inner_subst);
         assert_eq!(substitute(&mut interner, outer, &map), outer_subst);
@@ -463,6 +488,7 @@ mod tests {
         let t = interner.intern_type_param(TypeParamId(0), "T");
         let box_t = interner.intern_object(ObjectType {
             properties: vec![prop("value", t)],
+            ..Default::default()
         });
 
         let mut num_map = FxHashMap::default();
@@ -493,6 +519,7 @@ mod tests {
             list,
             ObjectType {
                 properties: vec![prop("head", wk.number), prop("tail", list_or_null)],
+                ..Default::default()
             },
         );
 
