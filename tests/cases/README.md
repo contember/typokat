@@ -101,6 +101,10 @@ slots into a known later phase without rework:
   indexed-access types (`T[K]`) on concrete object types land in **M20** (evaluated eagerly).
   Generic/deferred `keyof`/`T[K]` (over a type parameter), mapped types, conditional types, and
   utility types (`Partial`, `Record`, …) remain deferred (they want the type-level VM, §7).
+- **optional properties** (`a?: T`) are currently **dropped** at object/interface lowering
+  (pre-existing under-approximation): they don't appear in structural members, so `keyof` misses
+  them and a fresh literal supplying one can spuriously trip the excess check. Safe direction
+  (false positive). A dedicated milestone (optional members + `undefined` unioning) is deferred.
 - **modules/imports** and the rest of **`lib.d.ts` globals** (`console`, string methods, `Promise`,
   …) are out of scope for now — fixtures avoid the standard library otherwise.
 

@@ -244,7 +244,8 @@ use oxc_ast::ast::{
     Function, FunctionBody, IfStatement, LogicalExpression, MethodDefinition, MethodDefinitionKind,
     NewExpression, ObjectExpression, ObjectPropertyKind, Program, Statement,
     StaticMemberExpression, SwitchStatement, TSAccessibility, TSLiteral, TSSignature, TSTupleElement,
-    TSType, TSTypeName, TSTypeParameterDeclaration, TSTypeParameterInstantiation, UnaryExpression,
+    TSType, TSTypeName, TSTypeOperatorOperator, TSTypeParameterDeclaration,
+    TSTypeParameterInstantiation, UnaryExpression,
     UnaryOperator, VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_span::GetSpan;
@@ -3189,6 +3190,26 @@ fn lower_annotation(pass: &mut Pass, scope: ScopeId, ts_type: &TSType<'_>) -> Op
                 reference.type_arguments.as_deref(),
             );
         }
+        // M20: `keyof T`. Only the `keyof` operator is in scope (`unique`/`readonly`
+        // operators are not); it is computed eagerly on a concrete object type
+        // ([`keyof_type`]). A generic/deferred `keyof` (over a type parameter) is a
+        // VM-phase feature → error type (no crash).
+        TSType::TSTypeOperatorType(op) => {
+            if op.operator != TSTypeOperatorOperator::Keyof {
+                return None;
+            }
+            let operand = lower_annotation(pass, scope, &op.type_annotation)?;
+            return Some(keyof_type(pass, operand));
+        }
+        // M20: an indexed-access type `T[K]`. Both sides are lowered, then the
+        // member type(s) named by `K` are looked up on `T` eagerly
+        // ([`indexed_access_type`]). Out-of-scope combinations (a non-object `T`, a
+        // missing key, a generic key) yield the error type (no crash).
+        TSType::TSIndexedAccessType(access) => {
+            let object = lower_annotation(pass, scope, &access.object_type)?;
+            let index = lower_annotation(pass, scope, &access.index_type)?;
+            return Some(indexed_access_type(pass, object, index));
+        }
         _ => return None,
     };
     Some(id)
@@ -3333,6 +3354,157 @@ fn lower_index_signature(
         // subset → abort the enclosing annotation.
         None
     }
+}
+
+/// Compute `keyof T` **eagerly** (M20). `T` is the already-lowered operand type.
+///
+/// For a concrete **object** type the result is the `union(...)` of its property
+/// **names** as **string-literal** types (`keyof { x; y }` → `"x" | "y"`), plus
+/// `string` if the object has a string index signature and `number` if it has a
+/// number index signature (`keyof { [k: string]: V }` → `string`). An object with
+/// no members and no index signature yields `never` (an empty union collapses to
+/// `never` via `Interner::union`).
+///
+/// Anything else — a primitive, a union/intersection, a type parameter, an array,
+/// a tuple — is **out of the M20 scope** (generic `keyof` is a type-level-VM
+/// feature) and yields the **error type**: no crash, and the error type suppresses
+/// any cascade where the result is used. The error/`any` operand also yields the
+/// error type (it carries no enumerable keys here).
+fn keyof_type(pass: &mut Pass, operand: TypeId) -> TypeId {
+    let wk = pass.interner.well_known();
+    let store = pass.interner.store();
+    let Some(object) = store.object_type(operand) else {
+        // Non-object (primitive / union / type parameter / array / tuple) → out of
+        // M20 scope. No crash; the error type suppresses cascade.
+        return wk.error;
+    };
+
+    // Snapshot the key components before the mutable interning borrow: property
+    // names become string-literal types, and each index signature contributes its
+    // fixed key intrinsic (`string` / `number`).
+    let names: Vec<String> = object.properties.iter().map(|p| p.name.clone()).collect();
+    let has_string_index = object.string_index.is_some();
+    let has_number_index = object.number_index.is_some();
+
+    let mut members: Vec<TypeId> = Vec::with_capacity(names.len() + 2);
+    for name in names {
+        members.push(pass.interner.intern_literal(LiteralValue::String(name)));
+    }
+    if has_string_index {
+        members.push(wk.string);
+    }
+    if has_number_index {
+        members.push(wk.number);
+    }
+    // `union(...)` canonicalizes/dedups (so `keyof {}` → `never`, and a repeated
+    // key collapses).
+    pass.interner.union(members)
+}
+
+/// Compute an indexed-access type `T[K]` **eagerly** (M20). `object` and `index`
+/// are the already-lowered `T` and `K`.
+///
+/// `K` is resolved by shape:
+///
+///  - a **union** key (`T["a" | "b"]`, or the result of `keyof T`) → the
+///    `union(...)` of `T[member]` over each union member (so `T[keyof T]` yields the
+///    union of all value types; `union` dedups, so `number | number` → `number`);
+///  - a **string-literal** key → the named property's type, else the string index
+///    value type, else the error type;
+///  - a **number-literal** key → the matching tuple **element** (positional) when
+///    `T` is a tuple, else the number index value type, else the error type;
+///  - the `number` intrinsic key → the number index value type, else the error type;
+///  - anything else (a generic key, a non-literal `string`, …) → the error type.
+///
+/// Every out-of-scope / missing-key path returns the **error type** (no crash, no
+/// diagnostic — matching the M19 element-access leniency). An error/`any` object or
+/// key likewise yields the error type.
+fn indexed_access_type(pass: &mut Pass, object: TypeId, index: TypeId) -> TypeId {
+    let wk = pass.interner.well_known();
+
+    if object == wk.error || object == wk.any || index == wk.error || index == wk.any {
+        return wk.error;
+    }
+
+    let store = pass.interner.store();
+
+    // A union key distributes over its members: `T[A | B]` = `T[A] | T[B]`. This is
+    // also how `T[keyof T]` reduces (the key is the union of the property-name
+    // literals).
+    if let Some(union_members) = store.union_members(index) {
+        let members: Vec<TypeId> = union_members.to_vec();
+        let resolved: Vec<TypeId> = members
+            .into_iter()
+            .map(|member| indexed_access_type(pass, object, member))
+            .collect();
+        return pass.interner.union(resolved);
+    }
+
+    indexed_access_single(pass, object, index)
+}
+
+/// Resolve `T[K]` for a **non-union** key `K` (M20). Factored out of
+/// [`indexed_access_type`] so the union case can recurse per member. Returns the
+/// looked-up value type, or the error type for any missing-key / out-of-scope case.
+fn indexed_access_single(pass: &mut Pass, object: TypeId, index: TypeId) -> TypeId {
+    let wk = pass.interner.well_known();
+    let store = pass.interner.store();
+
+    // A string-literal key names a property (or selects the string index value).
+    if let Some(LiteralValue::String(name)) = store.literal_value(index) {
+        let name = name.clone();
+        let store = pass.interner.store();
+        if let Some(obj) = store.object_type(object) {
+            if let Some(prop) = obj.property(&name) {
+                return prop.ty;
+            }
+            if let Some(value) = obj.string_index {
+                return value;
+            }
+        }
+        return wk.error;
+    }
+
+    // A number-literal key: a tuple's positional element, else the number index value.
+    if let Some(LiteralValue::Number(n)) = store.literal_value(index) {
+        // A tuple element, addressed positionally — reuse the same non-negative
+        // whole-number-in-range check the M18 element access uses.
+        if store.tag(object) == TypeTag::Tuple {
+            if let Some(i) = whole_index(*n) {
+                if let Some(&element) = store.tuple_type(object).and_then(|t| t.elements.get(i)) {
+                    return element;
+                }
+            }
+            return wk.error;
+        }
+        if let Some(value) = store.object_type(object).and_then(|o| o.number_index) {
+            return value;
+        }
+        return wk.error;
+    }
+
+    // The bare `number` intrinsic key → the number index value type (or error).
+    if index == wk.number {
+        if let Some(value) = store.object_type(object).and_then(|o| o.number_index) {
+            return value;
+        }
+        return wk.error;
+    }
+
+    // Any other key (a non-literal `string`, a type parameter, …) is out of the M20
+    // scope → error type (no crash).
+    wk.error
+}
+
+/// Map an `f64` literal value to a non-negative `usize` index, or `None` for a
+/// fractional / negative / non-finite / out-of-`usize` value (M20 tuple indexed
+/// access). The literal-type counterpart of [`literal_index`], which reads the
+/// index off an AST expression.
+fn whole_index(value: f64) -> Option<usize> {
+    if !value.is_finite() || value.fract() != 0.0 || value < 0.0 || value > usize::MAX as f64 {
+        return None;
+    }
+    Some(value as usize)
 }
 
 /// Lower a function type annotation's parameters and return type to an interned
@@ -7378,5 +7550,206 @@ const a: { [i: number]: { v: number } } = { 0: { v: 1, extra: 9 } };
 const a: { [k: string]: { v: number } } = { foo: { v: 1 } };
 ";
         assert!(diags(src).is_empty(), "a matching nested value must be clean");
+    }
+}
+
+#[cfg(test)]
+mod keyof_indexed_access_tests {
+    //! M20 end-to-end tests for **`keyof T`** and **indexed-access types `T[K]`**,
+    //! evaluated **eagerly** on concrete object types during annotation lowering.
+    //! These drive the whole pipeline (parse → bind → check) and assert the
+    //! `(line, code)` diagnostics, pinning the invariants the reviewer should
+    //! scrutinize: `keyof` of an object is the string-literal union of its keys (plus
+    //! `string`/`number` for index signatures, `never` when empty); `T[K]` resolves a
+    //! literal / union / `keyof` key to the looked-up property value type(s); and every
+    //! out-of-scope / missing-key / generic case degrades to the error type **without a
+    //! crash** (no diagnostic — matching the M19 element-access leniency). The
+    //! per-fixture acceptance lives in the conformance corpus (`m20_keyof/`).
+
+    use crate::driver::check_source;
+
+    /// Run the checker and return the sorted `(1-based line, code)` of every
+    /// diagnostic, keyed on its primary-span start line (matching the conformance
+    /// harness's mapping).
+    fn diags(source: &str) -> Vec<(u32, String)> {
+        let out = check_source(source);
+        assert!(
+            out.parse_errors.is_empty(),
+            "unexpected parse error(s): {:?}",
+            out.parse_errors
+        );
+        let index = crate::span::LineIndex::new(source);
+        let mut v: Vec<(u32, String)> = out
+            .diagnostics
+            .iter()
+            .map(|d| (index.line_of(d.span.start), d.code.as_str().to_string()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// `keyof T` for an object is the `union(...)` of its property **names** as
+    /// **string-literal** types: `keyof { x; y }` is `"x" | "y"`. A member of that
+    /// union is ok; a string outside it is `TK2322`.
+    #[test]
+    fn keyof_object_is_key_literal_union() {
+        let src = "\
+interface Point { x: number; y: number; }
+let k: keyof Point = \"x\";
+k = \"y\";
+k = \"z\";
+";
+        // Lines 2–3 ok ("x"/"y" are keys); line 4 fails ("z" ∉ "x" | "y").
+        assert_eq!(diags(src), vec![(4, "TK2322".to_string())]);
+    }
+
+    /// `keyof {}` (no members, no index signature) is **`never`** (the empty union
+    /// collapses to `never`). Nothing is assignable to `never`, so binding a string to
+    /// it is `TK2322` — and, crucially, the empty case does not crash.
+    #[test]
+    fn keyof_empty_object_is_never() {
+        let src = "\
+type Empty = {};
+let k: keyof Empty = \"anything\";
+";
+        // `keyof {}` is `never`; the string literal is not assignable to `never`.
+        assert_eq!(diags(src), vec![(2, "TK2322".to_string())]);
+    }
+
+    /// `keyof T` includes the **index-signature key type**: a string index sig
+    /// contributes `string` (`keyof { [k: string]: V }` is `string`), so a string is
+    /// assignable to it and a number is `TK2322`. A number index sig contributes
+    /// `number`.
+    #[test]
+    fn keyof_includes_index_signature_keys() {
+        let src = "\
+type Dict = { [k: string]: number };
+let sk: keyof Dict = \"k\";
+let skBad: keyof Dict = 1;
+type NumDict = { [i: number]: string };
+let nk: keyof NumDict = 0;
+let nkBad: keyof NumDict = \"x\";
+";
+        // `keyof Dict` is `string` (line 3: number ≁ string); `keyof NumDict` is
+        // `number` (line 6: string ≁ number).
+        assert_eq!(
+            diags(src),
+            vec![(3, "TK2322".to_string()), (6, "TK2322".to_string())]
+        );
+    }
+
+    /// An indexed-access type `T["literal"]` is the type of that named property:
+    /// `Rec["a"]` is `number`. Binding `number` is ok; binding `string` is `TK2322`.
+    #[test]
+    fn indexed_access_string_literal_is_property_type() {
+        let src = "\
+interface Rec { a: number; b: string; }
+const r1: Rec[\"a\"] = 1;
+const r2: Rec[\"b\"] = \"s\";
+const rBad: Rec[\"a\"] = \"s\";
+";
+        // Line 4 fails (`Rec["a"]` is `number`, not `string`).
+        assert_eq!(diags(src), vec![(4, "TK2322".to_string())]);
+    }
+
+    /// A **union** key distributes: `T["a" | "b"]` is `T["a"] | T["b"]`. For
+    /// `Rec` that is `number | string`, so a `number` and a `string` both fit, but a
+    /// `boolean` does not (`TK2322`).
+    #[test]
+    fn indexed_access_union_key_distributes() {
+        let src = "\
+interface Rec { a: number; b: string; }
+const u: Rec[\"a\" | \"b\"] = 1;
+const u2: Rec[\"a\" | \"b\"] = \"s\";
+const uBad: Rec[\"a\" | \"b\"] = true;
+";
+        // Lines 2–3 ok (number/string ∈ number | string); line 4 fails (boolean ∉).
+        assert_eq!(diags(src), vec![(4, "TK2322".to_string())]);
+    }
+
+    /// `T[keyof T]` is the union of **all** value types. For `Point` (both props
+    /// `number`) the union dedups to plain `number`, so `"s"` is `TK2322` while `1` is
+    /// ok — exercising the `keyof` → union-key → indexed-access composition end to end.
+    #[test]
+    fn indexed_access_keyof_yields_value_union() {
+        let src = "\
+interface Point { x: number; y: number; }
+const all: Point[keyof Point] = 1;
+const allBad: Point[keyof Point] = \"s\";
+";
+        // `Point[keyof Point]` is `number` (deduped); line 3 fails.
+        assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
+    }
+
+    /// A **missing** key degrades to the error type **without a crash**: `Rec["zzz"]`
+    /// names no property and the object has no string index, so the result is the
+    /// error type (`any`-like), which suppresses cascade — binding it to an unrelated
+    /// type produces **no** diagnostic. The point of the test is "no panic + graceful
+    /// fallback".
+    #[test]
+    fn indexed_access_missing_key_is_error_type_no_crash() {
+        let src = "\
+interface Rec { a: number; }
+const bad: Rec[\"zzz\"] = 1;
+const used: string = bad;
+";
+        // `Rec["zzz"]` is the error type: no diagnostic on its declaration, and it is
+        // freely assignable (error suppresses cascade) — so the whole snippet is clean.
+        assert!(
+            diags(src).is_empty(),
+            "a missing indexed-access key must fall back to the error type silently"
+        );
+    }
+
+    /// `keyof` of a **non-object** (here a primitive) is out of the M20 scope → the
+    /// error type, silently (no diagnostic, no crash). `keyof number` is not the
+    /// object case, so the result is `any`-like and binding anything to it is clean.
+    #[test]
+    fn keyof_non_object_is_error_type_no_crash() {
+        let src = "\
+let k: keyof number = \"anything\";
+";
+        // `keyof number` is out of scope → error type; no diagnostic.
+        assert!(
+            diags(src).is_empty(),
+            "`keyof` of a non-object must fall back to the error type silently"
+        );
+    }
+
+    /// Indexed access into a **tuple** by a numeric-literal key yields the positional
+    /// **element** type (reusing the M18 positional lookup): `T[0]` is the first
+    /// element's type. An out-of-range index falls back to the error type (no crash).
+    #[test]
+    fn indexed_access_tuple_numeric_literal_is_element() {
+        let src = "\
+type T = [number, string];
+const first: T[0] = 1;
+const firstBad: T[0] = \"s\";
+const second: T[1] = \"s\";
+const oob: T[5] = 123;
+";
+        // `T[0]` is `number` (line 3 fails: string ≁ number); `T[1]` is `string`
+        // (line 4 ok); `T[5]` is out of range → error type (line 5 clean).
+        assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
+    }
+
+    /// Generic `keyof T` / `T[K]` over a **type parameter** is out of the M20 scope
+    /// (a type-level-VM feature): `T` lowers to a type-parameter type, not an object,
+    /// so both `keyof T` and `T[K]` fall back to the error type — silently and
+    /// **without a crash** — inside a generic function body.
+    #[test]
+    fn generic_keyof_and_indexed_access_fall_back_no_crash() {
+        let src = "\
+function f<T>(x: T): void {
+  let k: keyof T = x;
+  let v: T[\"a\"] = x;
+}
+";
+        // `keyof T` and `T["a"]` over a type parameter are error types; binding `x: T`
+        // to them is clean (error suppresses cascade). No panic.
+        assert!(
+            diags(src).is_empty(),
+            "generic keyof / indexed access must degrade to the error type silently"
+        );
     }
 }

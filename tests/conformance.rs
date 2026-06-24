@@ -12,8 +12,9 @@
 //! `m7_narrowing/`, `m8_discriminated/`, `m9_generics/`, `m10_inference/`,
 //! `m11_classes/`, `m12_inheritance/`, `m13_modifiers/`, `m14_readonly/`,
 //! `m15_accessors/`, `m16_generic_classes/`, `m17_arrays/`, `m18_tuples/`,
-//! `m19_index_sig/`) are enabled. The `MILESTONE_DIRS` table is the extension
-//! point: flip a row to turn a milestone's fixtures on as it lands (mvp-plan §5).
+//! `m19_index_sig/`, `m20_keyof/`) are enabled. The `MILESTONE_DIRS` table is the
+//! extension point: flip a row to turn a milestone's fixtures on as it lands
+//! (mvp-plan §5).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("m17_arrays", true),
     ("m18_tuples", true),
     ("m19_index_sig", true),
+    ("m20_keyof", true),
 ];
 
 /// An expectation parsed from a single inline marker.
