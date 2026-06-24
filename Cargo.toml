@@ -33,3 +33,8 @@ smallvec = "1.15.2"
 
 # Diagnostic rendering to the terminal (mvp-plan §6).
 codespan-reporting = "0.13.1"
+
+# Data-parallelism for the multi-file driver (architecture §8): each file's whole
+# parse→bind→check pipeline runs on its own worker. The oxc AST is `!Send + !Sync`
+# (pinned to its parsing thread), so the per-file pipeline is the unit of work.
+rayon = "1.12.0"
