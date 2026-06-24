@@ -224,6 +224,13 @@ impl InferenceContext {
             (TypeTag::Union, TypeTag::Union) => {
                 self.infer_unions(interner, source, target, candidates);
             }
+            // M17: both arrays → recurse on the element (so a `T[]` parameter infers
+            // `T` from a `number[]` argument, exactly as the object/function arms do
+            // for their children). The element is itself interned, so this nests for
+            // `T[][]`.
+            (TypeTag::Array, TypeTag::Array) => {
+                self.infer_arrays(interner, source, target, candidates);
+            }
             // Any other pairing (scalar, mismatched shapes, error type, …) yields
             // no candidate — inference simply learns nothing from it. Soundness is
             // preserved: the subsequent relation check still runs against whatever
@@ -258,6 +265,25 @@ impl InferenceContext {
                 self.infer(interner, *source_ty, *target_ty, candidates);
             }
         }
+    }
+
+    /// Both arrays (M17): recurse on the **element** (`number[]` against `T[]`
+    /// infers `T = number`). The element is interned, so the recursion is finite and
+    /// nests naturally for `T[][]`.
+    fn infer_arrays(
+        &mut self,
+        interner: &mut Interner,
+        source: TypeId,
+        target: TypeId,
+        candidates: &mut Candidates,
+    ) {
+        let Some(source_elem) = interner.store().array_type(source).map(|a| a.element) else {
+            return;
+        };
+        let Some(target_elem) = interner.store().array_type(target).map(|a| a.element) else {
+            return;
+        };
+        self.infer(interner, source_elem, target_elem, candidates);
     }
 
     /// Both functions: recurse **positionally** on parameters (up to the shorter

@@ -11,8 +11,8 @@
 
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
-    FunctionType, IntrinsicKind, LiteralValue, ObjectType, ParameterType, PropertyType, TypeFlags,
-    TypeParamId, TypeParamType, TypeTag,
+    ArrayType, FunctionType, IntrinsicKind, LiteralValue, ObjectType, ParameterType, PropertyType,
+    TypeFlags, TypeParamId, TypeParamType, TypeTag,
 };
 use crate::types::store::{Store, TypeId};
 use rustc_hash::FxHashMap;
@@ -250,6 +250,26 @@ impl Interner {
         );
         self.dedup.entry(hash).or_default().push(interned);
         interned
+    }
+
+    /// Intern an **array** type `element[]`, returning the shared id (M17).
+    ///
+    /// Identity is the element id alone (hashed via [`StructuralKey::Array`]), so
+    /// `number[]` hash-conses to one id and `number[]` ≠ `string[]`; re-interning the
+    /// same element returns the same id, and `T[][]` nests by interning the inner
+    /// `T[]` first and using it as the element. The element is itself canonical
+    /// (interned through this interner), so the dedup tie-break is a plain id compare.
+    pub fn intern_array(&mut self, element: TypeId) -> TypeId {
+        let key = StructuralKey::Array(element);
+        let hash = structural_hash(&key);
+        if let Some(existing) =
+            self.lookup(hash, |store, id| store.array_type(id).map(|a| a.element) == Some(element))
+        {
+            return existing;
+        }
+        let id = self.store.push_array(ArrayType { element }, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
     }
 
     /// Intern a union type from its (un-canonicalized) member ids, returning the
@@ -644,6 +664,56 @@ mod tests {
         // Re-interning the same canonical union returns the same id (hash-cons).
         let nsb_again = interner.union(vec![wk.boolean, wk.string, wk.number]);
         assert_eq!(nsb_flat, nsb_again, "identical unions hash-cons to one id");
+    }
+
+    /// Array hash-consing (M17): an array's identity is its element id alone, so
+    /// `number[]` interns consistently, `number[]` ≠ `string[]`, and `number[][]`
+    /// nests (its element is `number[]`). The element is canonical, so the dedup
+    /// tie-break is an id compare.
+    #[test]
+    fn array_interning_dedups_by_element() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // `number[]` interns to one shared id regardless of how many times built.
+        let num_arr_a = interner.intern_array(wk.number);
+        let num_arr_b = interner.intern_array(wk.number);
+        assert_eq!(num_arr_a, num_arr_b, "number[] must intern consistently");
+        assert_eq!(
+            interner.store().tag(num_arr_a),
+            TypeTag::Array,
+            "an array is an Array-tagged row"
+        );
+        assert_eq!(
+            interner.store().array_type(num_arr_a).map(|a| a.element),
+            Some(wk.number),
+            "the stored element is `number`"
+        );
+
+        // A different element is a distinct array type.
+        let str_arr = interner.intern_array(wk.string);
+        assert_ne!(num_arr_a, str_arr, "number[] ≠ string[]");
+
+        // Nesting: `number[][]` has `number[]` as its element and is distinct from
+        // `number[]`.
+        let num_arr_arr = interner.intern_array(num_arr_a);
+        assert_ne!(num_arr_arr, num_arr_a, "number[][] ≠ number[]");
+        assert_eq!(
+            interner.store().array_type(num_arr_arr).map(|a| a.element),
+            Some(num_arr_a),
+            "number[][]'s element is number[]"
+        );
+
+        // An array of a union element interns by that (canonical) union id —
+        // member order in the union does not change the array's identity.
+        let union_ns = interner.union(vec![wk.number, wk.string]);
+        let union_sn = interner.union(vec![wk.string, wk.number]);
+        let union_arr_a = interner.intern_array(union_ns);
+        let union_arr_b = interner.intern_array(union_sn);
+        assert_eq!(
+            union_arr_a, union_arr_b,
+            "(number | string)[] interns consistently via the canonical union element"
+        );
     }
 
     /// The well-known intrinsic ids are assigned in `IntrinsicKind::ALL` order

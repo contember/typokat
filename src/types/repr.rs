@@ -30,6 +30,10 @@ pub enum TypeTag {
     /// A **type parameter** (`T` in `function f<T>(…)`). `payload` indexes
     /// `Store::type_params`. Constructed by `Interner::intern_type_param` (M9).
     TypeParam,
+    /// An **array** type (`T[]` / `Array<T>`). `payload` indexes
+    /// `Store::arrays`. Carries a single **element** `TypeId`; interned/hashed by
+    /// that element id. Constructed by `Interner::intern_array` (M17).
+    Array,
 }
 
 /// The fixed set of intrinsic (keyword) types. The discriminant doubles as the
@@ -364,4 +368,20 @@ pub struct TypeParamType {
 pub struct FunctionType {
     pub params: Vec<ParameterType>,
     pub ret: TypeId,
+}
+
+/// An array type (`T[]` / `Array<T>`) — M17. Carries a single **element**
+/// `TypeId`; its whole identity is that element id, so `number[]` is consistent and
+/// `number[]` ≠ `string[]`. Interned via `Interner::intern_array`; the relation
+/// engine relates two arrays **covariantly** (`S[]` <: `T[]` iff `S` <: `T`, matching
+/// tsc's deliberate array covariance), and substitution rewrites the element so a
+/// generic `T[]` instantiates correctly.
+///
+/// A `Copy` newtype rather than a bare `TypeId` so the cold side-table is a distinct
+/// type (parallel to `ObjectType`/`FunctionType`) and an array row is never confused
+/// with a raw id elsewhere.
+#[derive(Copy, Clone, Debug)]
+pub struct ArrayType {
+    /// The element type — the `T` of `T[]`. The array's entire structural identity.
+    pub element: TypeId,
 }

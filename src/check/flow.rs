@@ -382,12 +382,12 @@ fn member_matches_typeof(
     match store.tag(member) {
         TypeTag::Intrinsic => store.intrinsic_kind(member) == Some(tag.intrinsic()),
         TypeTag::Literal => store.literal_value(member).map(LiteralValue::base_kind) == Some(tag.intrinsic()),
-        // Objects/functions/unions/type-parameters never match a primitive
+        // Objects/functions/unions/type-parameters/arrays never match a primitive
         // `typeof` tag (a nested union cannot appear as a member after
-        // canonicalization, and a type parameter only appears inside an
-        // uninstantiated generic body — but the arm is exhaustive and defensive
-        // either way).
-        TypeTag::Object | TypeTag::Function | TypeTag::Union | TypeTag::TypeParam => false,
+        // canonicalization, a type parameter only appears inside an uninstantiated
+        // generic body, and an array's `typeof` is `"object"` — out of the M7 tag
+        // subset; but the arm is exhaustive and defensive either way).
+        TypeTag::Object | TypeTag::Function | TypeTag::Union | TypeTag::TypeParam | TypeTag::Array => false,
     }
 }
 
@@ -397,7 +397,13 @@ fn member_matches_typeof(
 /// as possibly-falsy so it is **kept** in the falsy branch (sound: never removes a
 /// member that could legitimately be falsy).
 fn is_always_truthy(store: &crate::types::store::Store, member: TypeId) -> bool {
-    matches!(store.tag(member), TypeTag::Object | TypeTag::Function)
+    // M17: an array value is always truthy in JS (like an object/function), so it is
+    // dropped from a falsy branch — a `T[] | null` narrowed by `if (a)` keeps only
+    // `T[]` in the truthy branch and `null` in the falsy one.
+    matches!(
+        store.tag(member),
+        TypeTag::Object | TypeTag::Function | TypeTag::Array
+    )
 }
 
 /// Filter the members of a union `ty` by `keep`, re-interning the survivors through

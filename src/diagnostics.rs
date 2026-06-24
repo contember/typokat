@@ -303,6 +303,32 @@ pub fn render_reason_chain(store: &Store, head: &Reason) -> Vec<String> {
         Reason::Property { .. } | Reason::Parameter { .. } | Reason::ReturnType { .. } => {
             reason_lines(store, head, 1)
         }
+        // An array-element mismatch (M17): the headline already states the
+        // `S[]`/`T[]` mismatch, so the elaboration is the **element's** own cause,
+        // one indent level in. A nested-array element prints its `S[]`/`T[]` line and
+        // recurses; a union-element descends straight into the offending member (no
+        // redundant wrapper) — both via [`element_reason_lines`].
+        Reason::ArrayElement { because, .. } => element_reason_lines(store, because, 1),
+    }
+}
+
+/// Render the **element cause** of an array mismatch (M17) at indentation `depth`.
+/// This is the array-element analogue of the head dispatch in [`render_reason_chain`]:
+/// the enclosing array line (the headline, or an outer array's element line) already
+/// states the `S[]`/`T[]` mismatch, so a **union-member** cause descends straight into
+/// the offending member (avoiding the "member line + identical leaf line" doubling that
+/// the shared [`reason_lines`] union arm produces when nested), while every other cause —
+/// a nested array, a structural wrapper, or a terminal leaf — is rendered by
+/// [`reason_lines`] exactly as anywhere else (so `string[][]` still nests its inner
+/// `string[]`/`number[]` line, then the leaf).
+fn element_reason_lines(store: &Store, cause: &Reason, depth: usize) -> Vec<String> {
+    match cause {
+        // A union element: the offending member is the cause; descend into it so a
+        // scalar member renders one line (its own), not two identical ones.
+        Reason::UnionSourceMember { because, .. } => element_reason_lines(store, because, depth),
+        // Everything else renders normally (a nested `ArrayElement` prints its array
+        // line and recurses; a leaf prints the leaf line).
+        other => reason_lines(store, other, depth),
     }
 }
 
@@ -400,6 +426,19 @@ fn reason_lines(store: &Store, reason: &Reason, depth: usize) -> Vec<String> {
             vec![format!(
                 "{indent}Type '{src}' provides more parameters than type '{tgt}' expects."
             )]
+        }
+        // An array whose element fails (M17): announce the two array types, then
+        // nest the element's cause. (At the chain head this arm is bypassed by
+        // `render_reason_chain`, which descends straight into `because`; this arm
+        // renders an array mismatch nested *inside* another reason.)
+        Reason::ArrayElement { src, tgt, because } => {
+            let src = render_type(store, *src, /* widen */ false);
+            let tgt = render_type(store, *tgt, /* widen */ false);
+            let mut lines = vec![format!(
+                "{indent}Type '{src}' is not assignable to type '{tgt}'."
+            )];
+            lines.extend(reason_lines(store, because, depth + 1));
+            lines
         }
     }
 }
@@ -524,7 +563,34 @@ fn render_type_inner(store: &Store, id: TypeId, widen: bool, rendering: &mut Vec
             .map(|p| p.name.clone())
             // Defensive fallback; a type parameter always has a side-table entry.
             .unwrap_or_else(|| "unknown".to_string()),
+        // Array (M17): `<elem>[]`. The element is parenthesized where the bare
+        // postfix `[]` would otherwise bind ambiguously — a **union** or **function**
+        // element (`(number | string)[]`, `((x: number) => string)[]`) — matching
+        // tsc's display. Intrinsics, literals, objects, type parameters, and nested
+        // arrays need no parentheses. The element never widens (only a top-level
+        // literal *source* widens, which never recurses here).
+        TypeTag::Array => match store.array_type(id) {
+            Some(array) => {
+                let elem = render_type_inner(store, array.element, false, rendering);
+                if array_element_needs_parens(store, array.element) {
+                    format!("({elem})[]")
+                } else {
+                    format!("{elem}[]")
+                }
+            }
+            // Defensive fallback; an array always has a side-table entry.
+            None => "<unsupported>".to_string(),
+        },
     }
+}
+
+/// Whether an array element type must be **parenthesized** before the postfix `[]`
+/// (M17). A union (`number | string`) or function (`(x: number) => string`) element
+/// would bind ambiguously under bare `[]`, so it is wrapped (`(number | string)[]`).
+/// Everything else — intrinsics, literals, objects, type parameters, nested arrays —
+/// renders without parentheses.
+fn array_element_needs_parens(store: &Store, element: TypeId) -> bool {
+    matches!(store.tag(element), TypeTag::Union | TypeTag::Function)
 }
 
 fn render_literal(lit: &crate::types::repr::LiteralValue) -> String {
@@ -812,6 +878,145 @@ mod tests {
             lines,
             vec![
                 "  Types of property 'b' are incompatible.".to_string(),
+                "    Type 'string' is not assignable to type 'number'.".to_string(),
+            ]
+        );
+    }
+
+    /// M17 array rendering: `number[]`, the nested `number[][]`, and the
+    /// parenthesized `(number | string)[]` / `((x: number) => string)[]` element
+    /// forms (a union/function element binds ambiguously under bare `[]`).
+    #[test]
+    fn array_type_renders_with_parenthesized_element() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        let num_arr = interner.intern_array(wk.number);
+        assert_eq!(render_type(interner.store(), num_arr, false), "number[]");
+
+        // Nested: no parentheses for an array element.
+        let num_arr_arr = interner.intern_array(num_arr);
+        assert_eq!(render_type(interner.store(), num_arr_arr, false), "number[][]");
+
+        // A union element IS parenthesized.
+        let union = interner.union(vec![wk.number, wk.string]);
+        let union_arr = interner.intern_array(union);
+        let rendered = render_type(interner.store(), union_arr, false);
+        assert!(
+            rendered == "(number | string)[]" || rendered == "(string | number)[]",
+            "a union element must be parenthesized, got {rendered:?}"
+        );
+
+        // A function element IS parenthesized.
+        let func = interner.intern_function(FunctionType {
+            params: vec![ParameterType {
+                name: "x".to_string(),
+                ty: wk.number,
+                optional: false,
+            }],
+            ret: wk.string,
+        });
+        let func_arr = interner.intern_array(func);
+        assert_eq!(
+            render_type(interner.store(), func_arr, false),
+            "((x: number) => string)[]"
+        );
+    }
+
+    /// M17 — an `ArrayElement` head renders the element's nested cause (the headline
+    /// already states the `S[]`/`T[]` mismatch). A scalar leaf element yields exactly
+    /// one nested line.
+    #[test]
+    fn array_element_head_renders_element_cause() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let str_arr = interner.intern_array(wk.string);
+        let num_arr = interner.intern_array(wk.number);
+        let store = interner.store();
+
+        // string[] not assignable to number[]: the element `string`→`number` fails.
+        let head = Reason::ArrayElement {
+            src: str_arr,
+            tgt: num_arr,
+            because: Box::new(Reason::Leaf {
+                src: wk.string,
+                tgt: wk.number,
+            }),
+        };
+        let lines = render_reason_chain(store, &head);
+        assert_eq!(
+            lines,
+            vec!["  Type 'string' is not assignable to type 'number'.".to_string()]
+        );
+    }
+
+    /// M17 — a **union-element** array mismatch (`(number | string)[]` not assignable
+    /// to `number[]`) renders a **single** nested line (the offending member), not the
+    /// doubled "member line + identical leaf" the shared `reason_lines` union arm would
+    /// produce when nested. This pins the `element_reason_lines` collapse.
+    #[test]
+    fn array_union_element_renders_single_line() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let union = interner.union(vec![wk.number, wk.string]);
+        let union_arr = interner.intern_array(union);
+        let num_arr = interner.intern_array(wk.number);
+        let store = interner.store();
+
+        // `(number | string)[]` not assignable to `number[]`: the element's `string`
+        // member fails (UnionSourceMember → Leaf).
+        let head = Reason::ArrayElement {
+            src: union_arr,
+            tgt: num_arr,
+            because: Box::new(Reason::UnionSourceMember {
+                member: wk.string,
+                src: union,
+                tgt: wk.number,
+                because: Box::new(Reason::Leaf {
+                    src: wk.string,
+                    tgt: wk.number,
+                }),
+            }),
+        };
+        let lines = render_reason_chain(store, &head);
+        assert_eq!(
+            lines,
+            vec!["  Type 'string' is not assignable to type 'number'.".to_string()],
+            "a union-element array mismatch must render a single nested line, not a doubled one"
+        );
+    }
+
+    /// M17 — a **nested-array** mismatch (`string[][]` not assignable to `number[][]`)
+    /// nests each array level: the inner `string[]`/`number[]` line, then the scalar
+    /// leaf, each one indent deeper. Pins that `ArrayElement` is NOT a pure
+    /// head-collapse (it prints intermediate array lines).
+    #[test]
+    fn array_nested_element_nests_each_level() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let str_arr = interner.intern_array(wk.string);
+        let num_arr = interner.intern_array(wk.number);
+        let str_arr_arr = interner.intern_array(str_arr);
+        let num_arr_arr = interner.intern_array(num_arr);
+        let store = interner.store();
+
+        let head = Reason::ArrayElement {
+            src: str_arr_arr,
+            tgt: num_arr_arr,
+            because: Box::new(Reason::ArrayElement {
+                src: str_arr,
+                tgt: num_arr,
+                because: Box::new(Reason::Leaf {
+                    src: wk.string,
+                    tgt: wk.number,
+                }),
+            }),
+        };
+        let lines = render_reason_chain(store, &head);
+        assert_eq!(
+            lines,
+            vec![
+                "  Type 'string[]' is not assignable to type 'number[]'.".to_string(),
                 "    Type 'string' is not assignable to type 'number'.".to_string(),
             ]
         );

@@ -92,6 +92,15 @@ pub enum Reason {
     /// union target. No single member is "the cause", so this is a flat leaf-like
     /// reason over the whole union. The checker maps this to `TK2322`.
     NoUnionMember { src: TypeId, tgt: TypeId },
+    /// Two **array** types have **covariantly-incompatible elements** (M17): the
+    /// source array's element is not assignable to the target array's element.
+    /// `src`/`tgt` are the two array types (`S[]`/`T[]`), wrapping the inner reason
+    /// for `S <: T`. The checker maps this to `TK2322`.
+    ArrayElement {
+        src: TypeId,
+        tgt: TypeId,
+        because: Box<Reason>,
+    },
 }
 
 /// A non-empty chain of reasons explaining a relation failure, outermost first.
@@ -132,6 +141,7 @@ impl ReasonChain {
             Reason::ReturnType { src, tgt, .. } => (*src, *tgt),
             Reason::UnionSourceMember { src, tgt, .. } => (*src, *tgt),
             Reason::NoUnionMember { src, tgt } => (*src, *tgt),
+            Reason::ArrayElement { src, tgt, .. } => (*src, *tgt),
         }
     }
 }
@@ -354,6 +364,16 @@ impl<'a> Relater<'a> {
             return self.relate_functions(src, tgt, kind, assumed);
         }
 
+        // Array structural rule (M17): `S[]` is assignable to `T[]` iff `S` is
+        // assignable to `T` — **covariant** in the element (matching tsc's
+        // deliberate array covariance). Nested arrays recurse through the same rule
+        // (`number[][] <: number[][]` decomposes element-by-element). Only fires when
+        // both sides are arrays; a mismatched array/non-array pairing falls through
+        // to the leaf below.
+        if self.store.tag(src) == TypeTag::Array && self.store.tag(tgt) == TypeTag::Array {
+            return self.relate_arrays(src, tgt, kind, assumed);
+        }
+
         // Otherwise: not assignable. Build the leaf reason on this failing path.
         Relation::No(ReasonChain::leaf(src, tgt))
     }
@@ -526,6 +546,43 @@ impl<'a> Relater<'a> {
             }
         }
 
+        Relation::Yes
+    }
+
+    /// Array assignability (M17): `src` (`S[]`) is assignable to `tgt` (`T[]`) iff
+    /// the source element `S` is assignable to the target element `T` —
+    /// **covariant** (matching tsc's deliberate array covariance). The element
+    /// relation runs through the ordinary [`Relater::relate`], so it is cached and
+    /// cycle-safe like every other recursive relation (an array's element lives in
+    /// the interned type, so the cache/stack invariants are unchanged), and nested
+    /// arrays (`number[][]`) recurse naturally. A failure wraps the element's own
+    /// cause as an `ArrayElement` reason for M6.
+    fn relate_arrays(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
+        // Both ids are array-tagged here; the side-tables always resolve. The `else`
+        // arms are defensive (an array tag without a payload is a store invariant
+        // violation, never expected) and produce a leaf rather than panicking.
+        let Some(src_arr) = self.store.array_type(src) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let Some(tgt_arr) = self.store.array_type(tgt) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let (src_elem, tgt_elem) = (src_arr.element, tgt_arr.element);
+
+        // Covariant: source element must be assignable to target element.
+        if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
+            return Relation::No(ReasonChain::of(Reason::ArrayElement {
+                src,
+                tgt,
+                because: Box::new(child.head),
+            }));
+        }
         Relation::Yes
     }
 
@@ -1116,6 +1173,78 @@ mod tests {
 
         // Identity short-circuits.
         assert!(rel.is_assignable(num_to_num, num_to_num).is_yes());
+    }
+
+    /// M17 array assignability is **covariant** in the element: `S[]` <: `T[]` iff
+    /// `S` <: `T`. `never[]` <: `T[]` (the bottom element); `string[]` is NOT
+    /// assignable to `number[]`; identical arrays succeed; nested arrays recurse; and
+    /// an array is not assignable to a non-array (and vice versa). Exercised
+    /// independently of the parser so a variance/covariance regression is caught here.
+    #[test]
+    fn array_covariant_assignability() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        let num_arr = interner.intern_array(wk.number);
+        let str_arr = interner.intern_array(wk.string);
+        let never_arr = interner.intern_array(wk.never);
+        let unknown_arr = interner.intern_array(wk.unknown);
+        // Nested: number[][] and string[][].
+        let num_arr_arr = interner.intern_array(num_arr);
+        let str_arr_arr = interner.intern_array(str_arr);
+
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+
+        // Identity.
+        assert!(rel.is_assignable(num_arr, num_arr).is_yes(), "number[] <: number[]");
+
+        // Covariant element: never[] <: number[] (never <: number); number[] NOT <:
+        // never[] (number is not <: never).
+        assert!(rel.is_assignable(never_arr, num_arr).is_yes(), "never[] <: number[]");
+        assert!(
+            !rel.is_assignable(num_arr, never_arr).is_yes(),
+            "number[] is NOT assignable to never[]"
+        );
+
+        // Covariant: number[] <: unknown[] (number <: unknown), but not the reverse.
+        assert!(rel.is_assignable(num_arr, unknown_arr).is_yes(), "number[] <: unknown[]");
+        assert!(
+            !rel.is_assignable(unknown_arr, num_arr).is_yes(),
+            "unknown[] is NOT assignable to number[]"
+        );
+
+        // string[] is NOT assignable to number[] — the element fails as a leaf,
+        // wrapped in an `ArrayElement` reason.
+        match rel.is_assignable(str_arr, num_arr) {
+            Relation::No(chain) => match chain.head() {
+                Reason::ArrayElement { because, .. } => {
+                    assert!(matches!(**because, Reason::Leaf { .. }));
+                }
+                other => panic!("expected an ArrayElement reason, got {other:?}"),
+            },
+            Relation::Yes => panic!("string[] must NOT be assignable to number[]"),
+        }
+
+        // Nested recurses: number[][] <: number[][]; string[][] NOT <: number[][].
+        assert!(
+            rel.is_assignable(num_arr_arr, num_arr_arr).is_yes(),
+            "number[][] <: number[][]"
+        );
+        assert!(
+            !rel.is_assignable(str_arr_arr, num_arr_arr).is_yes(),
+            "string[][] is NOT assignable to number[][]"
+        );
+
+        // An array is not assignable to a non-array, nor a non-array to an array.
+        assert!(
+            !rel.is_assignable(num_arr, wk.number).is_yes(),
+            "number[] is NOT assignable to number"
+        );
+        assert!(
+            !rel.is_assignable(wk.number, num_arr).is_yes(),
+            "number is NOT assignable to number[]"
+        );
     }
 
     /// Exhaustively check the M0 intrinsic-lattice + literal-widening rules so a

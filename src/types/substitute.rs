@@ -77,6 +77,7 @@ impl<'a> Substitution<'a> {
             TypeTag::Object => self.apply_object(interner, ty),
             TypeTag::Function => self.apply_function(interner, ty),
             TypeTag::Union => self.apply_union(interner, ty),
+            TypeTag::Array => self.apply_array(interner, ty),
         }
     }
 
@@ -201,6 +202,25 @@ impl<'a> Substitution<'a> {
             ty
         }
     }
+
+    /// Substitute through an array type, rewriting its **element** and re-interning
+    /// `T[]` → `<arg>[]` **only when the element changed** (otherwise the original id
+    /// is returned, keeping the no-op path allocation-free). This is what makes a
+    /// generic `T[]` instantiate correctly (`Box<T> = { items: T[] }` → `number[]`).
+    /// No cycle guard is needed: an array's element is an *interned* (never
+    /// self-referential-by-id) type, so the recursion is finite.
+    fn apply_array(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
+        let Some(array) = interner.store().array_type(ty) else {
+            return ty;
+        };
+        let element = array.element;
+        let new_element = self.apply(interner, element);
+        if new_element != element {
+            interner.intern_array(new_element)
+        } else {
+            ty
+        }
+    }
 }
 
 /// Convenience: instantiate `ty` with the given `TypeParamId → TypeId` map in one
@@ -285,6 +305,41 @@ mod tests {
         assert_eq!(substitute(&mut interner, box_t, &map), box_num);
         assert_eq!(substitute(&mut interner, fn_t, &map), fn_num);
         assert_eq!(substitute(&mut interner, t_or_null, &map), num_or_null);
+    }
+
+    /// Substitution rewrites an array's element (M17): `T[]` → `number[]`, nested
+    /// `T[][]` → `number[][]`, and an unmapped element leaves the array untouched
+    /// (the no-op path returns the original id).
+    #[test]
+    fn substitution_rewrites_array_element() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let t = interner.intern_type_param(TypeParamId(0), "T");
+        let u = interner.intern_type_param(TypeParamId(1), "U");
+
+        // T[] and T[][].
+        let arr_t = interner.intern_array(t);
+        let arr_arr_t = interner.intern_array(arr_t);
+        // U[] (its element is not in the map).
+        let arr_u = interner.intern_array(u);
+
+        let mut map = FxHashMap::default();
+        map.insert(TypeParamId(0), wk.number);
+
+        let arr_num = interner.intern_array(wk.number);
+        let arr_arr_num = interner.intern_array(arr_num);
+
+        assert_eq!(substitute(&mut interner, arr_t, &map), arr_num, "T[] → number[]");
+        assert_eq!(
+            substitute(&mut interner, arr_arr_t, &map),
+            arr_arr_num,
+            "T[][] → number[][]"
+        );
+        assert_eq!(
+            substitute(&mut interner, arr_u, &map),
+            arr_u,
+            "U[] (unmapped element) is unchanged"
+        );
     }
 
     /// Nested substitution flows through `Box<Box<number>>`-style nesting: the

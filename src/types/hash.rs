@@ -53,6 +53,10 @@ pub enum StructuralKey<'a> {
     /// so re-interning the same parameter collides while two parameters from
     /// distinct declarations never do (even if they share a source name).
     TypeParam(TypeParamId),
+    /// An **array** type (`T[]` — M17), keyed over its **element** `TypeId` alone.
+    /// `number[]` collides with `number[]`; `number[]` and `string[]` do not. The
+    /// element is itself canonical (interned), so the key is decided by its id.
+    Array(TypeId),
 }
 
 /// Live structural hash used for hash-consing (FxHash for speed). This is the
@@ -135,6 +139,11 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
             TypeTag::TypeParam.hash_discriminant(&mut h);
             // Identity is the declaration-site id only (not the name).
             id.0.hash(&mut h);
+        }
+        StructuralKey::Array(element) => {
+            TypeTag::Array.hash_discriminant(&mut h);
+            // Identity is the (canonical) element id alone.
+            element.0.hash(&mut h);
         }
     }
     h.finish()

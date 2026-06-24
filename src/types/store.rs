@@ -12,7 +12,8 @@
 
 use crate::types::hash::StableHash;
 use crate::types::repr::{
-    FunctionType, IntrinsicKind, LiteralValue, ObjectType, TypeFlags, TypeParamType, TypeTag,
+    ArrayType, FunctionType, IntrinsicKind, LiteralValue, ObjectType, TypeFlags, TypeParamType,
+    TypeTag,
 };
 
 /// A run-local handle to a type: an index into the SoA arena. Cheap to copy and
@@ -51,6 +52,10 @@ pub struct Store {
     /// Type-parameter types (M9). Addressed by the `payload` of a
     /// `TypeParam`-tagged row. Each entry's identity is its `TypeParamId`.
     type_params: Vec<TypeParamType>,
+    /// Array types (M17). Addressed by the `payload` of an `Array`-tagged row. Each
+    /// entry's identity is its element `TypeId` (so `number[]` hash-conses to one id
+    /// and `number[]` ≠ `string[]`).
+    arrays: Vec<ArrayType>,
 
     /// Reserved cross-run identity column (architecture §3.2). NOT populated in
     /// the MVP (mvp-plan §7.1) — kept so Phase 4 can fill it at intern time
@@ -133,6 +138,15 @@ impl Store {
             return None;
         }
         self.type_params.get(self.payload(id) as usize)
+    }
+
+    /// The `ArrayType` (its element id) of an array type, or `None` if `id` is not
+    /// an array (M17).
+    pub fn array_type(&self, id: TypeId) -> Option<&ArrayType> {
+        if self.tag(id) != TypeTag::Array {
+            return None;
+        }
+        self.arrays.get(self.payload(id) as usize)
     }
 
     /// The members of a union type (canonical: flattened, sorted by `TypeId`,
@@ -221,5 +235,12 @@ impl Store {
         let payload = self.type_params.len() as u32;
         self.type_params.push(param);
         self.push(TypeTag::TypeParam, flags, payload)
+    }
+
+    /// Append an array row (M17). Internal — `Interner` owns dedup (by element id).
+    pub(crate) fn push_array(&mut self, array: ArrayType, flags: TypeFlags) -> TypeId {
+        let payload = self.arrays.len() as u32;
+        self.arrays.push(array);
+        self.push(TypeTag::Array, flags, payload)
     }
 }

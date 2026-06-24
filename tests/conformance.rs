@@ -7,12 +7,13 @@
 //! expected substring is contained (case-sensitive) in the corresponding
 //! diagnostic's fully-rendered text.
 //!
-//! M0–M15 (`m0_assign_primitives/`, `m1_binder_inference/`, `m2_objects/`,
+//! M0–M17 (`m0_assign_primitives/`, `m1_binder_inference/`, `m2_objects/`,
 //! `m3_functions/`, `m4_unions/`, `m5_named_recursive/`, `m6_reporting/`,
 //! `m7_narrowing/`, `m8_discriminated/`, `m9_generics/`, `m10_inference/`,
 //! `m11_classes/`, `m12_inheritance/`, `m13_modifiers/`, `m14_readonly/`,
-//! `m15_accessors/`) are enabled. The `MILESTONE_DIRS` table is the extension point:
-//! flip a row to turn a milestone's fixtures on as it lands (mvp-plan §5).
+//! `m15_accessors/`, `m16_generic_classes/`, `m17_arrays/`) are enabled. The
+//! `MILESTONE_DIRS` table is the extension point: flip a row to turn a milestone's
+//! fixtures on as it lands (mvp-plan §5).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -40,6 +41,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("m14_readonly", true),
     ("m15_accessors", true),
     ("m16_generic_classes", true),
+    ("m17_arrays", true),
 ];
 
 /// An expectation parsed from a single inline marker.

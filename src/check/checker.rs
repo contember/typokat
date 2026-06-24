@@ -238,14 +238,14 @@ use crate::types::repr::{
 use crate::types::store::{Store, TypeId};
 use crate::types::{substitute, Interner, WellKnown};
 use oxc_ast::ast::{
-    ArrowFunctionExpression, AssignmentExpression, AssignmentOperator, AssignmentTarget,
-    BinaryExpression, BinaryOperator, BindingPattern, BlockStatement, CallExpression, Class,
-    ClassElement, Expression, FormalParameters, Function, FunctionBody, IfStatement,
-    LogicalExpression, MethodDefinition, MethodDefinitionKind, NewExpression, ObjectExpression,
-    ObjectPropertyKind,
-    Program, Statement, StaticMemberExpression, SwitchStatement, TSAccessibility, TSLiteral,
-    TSSignature, TSType, TSTypeName, TSTypeParameterDeclaration, TSTypeParameterInstantiation,
-    UnaryExpression, UnaryOperator, VariableDeclarationKind, VariableDeclarator,
+    ArrayExpression, ArrowFunctionExpression, AssignmentExpression, AssignmentOperator,
+    AssignmentTarget, BinaryExpression, BinaryOperator, BindingPattern, BlockStatement,
+    CallExpression, Class, ClassElement, ComputedMemberExpression, Expression, FormalParameters,
+    Function, FunctionBody, IfStatement, LogicalExpression, MethodDefinition, MethodDefinitionKind,
+    NewExpression, ObjectExpression, ObjectPropertyKind, Program, Statement,
+    StaticMemberExpression, SwitchStatement, TSAccessibility, TSLiteral, TSSignature, TSType,
+    TSTypeName, TSTypeParameterDeclaration, TSTypeParameterInstantiation, UnaryExpression,
+    UnaryOperator, VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
@@ -1554,6 +1554,21 @@ fn resolve_type_reference(
         }
     }
 
+    // M17: the built-in `Array<T>`. With no `lib.d.ts`, `Array` is not a declared
+    // type, so it is intercepted here: `Array<T>` (exactly one type argument) lowers
+    // to the same array type as `T[]`. User-shadowing of `Array` is deferred (no
+    // fixture declares a type named `Array`), so the built-in name always wins. A
+    // wrong type-argument count (`Array`, `Array<A, B>`) falls through to the normal
+    // path, where `Array` is unresolved → `None` (no panic, no spurious diagnostic).
+    if name == "Array" {
+        if let Some(args) = type_arguments {
+            if args.params.len() == 1 {
+                let element = lower_annotation(pass, scope, &args.params[0])?;
+                return Some(pass.interner.intern_array(element));
+            }
+        }
+    }
+
     let decl_id = type_decl_id(pass.binder, scope, name)?;
 
     // 2. With type arguments: instantiate the generic declaration by substitution.
@@ -1768,7 +1783,11 @@ fn emit_obligation_failure(
             | Reason::Parameter { .. }
             | Reason::ReturnType { .. }
             | Reason::UnionSourceMember { .. }
-            | Reason::NoUnionMember { .. } => {
+            | Reason::NoUnionMember { .. }
+            // M17: an array-element mismatch (`S[]` not assignable to `T[]`) is a
+            // `TK2322`; the headline states the two array types, the element's cause
+            // nests below it.
+            | Reason::ArrayElement { .. } => {
                 // Source widened (literal → base), target as-is (mvp-plan
                 // M0/M1 message spec). For a union source the headline names the
                 // specific failing member, not the whole union (matching tsc:
@@ -3059,6 +3078,13 @@ fn lower_annotation(pass: &mut Pass, scope: ScopeId, ts_type: &TSType<'_>) -> Op
         TSType::TSParenthesizedType(paren) => {
             return lower_annotation(pass, scope, &paren.type_annotation);
         }
+        // M17: an array type `T[]`. The element is lowered recursively (so `T[][]`
+        // nests), then interned as an array type. A non-lowerable element (out of
+        // subset) aborts the whole annotation (`None`), matching the other lowerings.
+        TSType::TSArrayType(array) => {
+            let element = lower_annotation(pass, scope, &array.element_type)?;
+            return Some(pass.interner.intern_array(element));
+        }
         // M5/M9: a type reference (`Point`, `Num`, `List`, `Box<number>`, an
         // in-scope type parameter `T`) resolves through the type-parameter scope,
         // the binder's type slot, and (with arguments) generic instantiation.
@@ -3253,7 +3279,19 @@ fn infer_expr(pass: &mut Pass, scope: ScopeId, expr: &Expression<'_>) -> Option<
         Expression::UnaryExpression(unary) => Some(infer_unary(pass, scope, unary)),
         Expression::BinaryExpression(binary) => Some(infer_binary(pass, scope, binary)),
         Expression::LogicalExpression(logical) => Some(infer_logical(pass, scope, logical)),
-        // TODO(M4+): array literals, etc.
+        // M17: an array literal `[e1, e2, …]` infers `(<elem>)[]` where the element
+        // type is the union of the (widened) element types (`[1,2,3]` → `number[]`,
+        // `[1,"x"]` → `(number | string)[]`); `[]` → `never[]`.
+        Expression::ArrayExpression(array) => {
+            let id = infer_array_literal(pass, scope, array);
+            Some((id, Span::from_oxc(array.span)))
+        }
+        // M17: element access `a[i]`. If `a` is an array, the result is its element
+        // type (any index yields the element type — M17 does not strict-check the
+        // index). A non-array base is out of M17 scope (no diagnostic, error type).
+        Expression::ComputedMemberExpression(member) => {
+            infer_element_access(pass, scope, member)
+        }
         _ => None,
     }
 }
@@ -3368,6 +3406,73 @@ fn infer_object_literal(pass: &mut Pass, scope: ScopeId, obj: &ObjectExpression<
     pass.interner.intern_object(ObjectType { properties })
 }
 
+/// Infer the type of an array literal `[e1, e2, …]` (M17): `(<elem>)[]` where the
+/// element type is the `union(...)` of the **widened** per-element types
+/// (`[1, 2, 3]` → `number[]`, `[1, "x"]` → `(number | string)[]`). An **empty**
+/// literal `[]` has an empty element union → `never`, giving `never[]` — which is
+/// assignable to any `T[]` (the bottom element under covariance), exactly as a fresh
+/// empty array should be.
+///
+/// Elements are **widened** (a literal `1` → `number`) before the union, matching the
+/// object-literal member inference and tsc's array-literal element typing; a literal
+/// element type would otherwise make `[1, 2, 3]` infer `(1 | 2 | 3)[]` and reject the
+/// `number[]` annotation. A **spread** or **elision** element is out of the M17 subset
+/// — it is skipped (it contributes no element type), so a literal containing one is
+/// not mis-typed; spread support lands with the array-methods milestone.
+fn infer_array_literal(pass: &mut Pass, scope: ScopeId, array: &ArrayExpression<'_>) -> TypeId {
+    let mut element_types: Vec<TypeId> = Vec::with_capacity(array.elements.len());
+    for element in &array.elements {
+        // Spread (`...xs`) / elision (a hole) are out of subset — skip them. Only a
+        // plain expression element contributes to the element type.
+        let Some(expr) = element.as_expression() else {
+            continue;
+        };
+        let Some((elem_ty, _)) = infer_expr(pass, scope, expr) else {
+            continue;
+        };
+        element_types.push(widen(pass.interner, elem_ty));
+    }
+    // Empty (or all-skipped) → empty union → `never`, giving `never[]`.
+    let element = pass.interner.union(element_types);
+    pass.interner.intern_array(element)
+}
+
+/// Infer the type of an element access `a[i]` (M17). When the base `a` is an
+/// **array**, the result is its **element type** — M17 does not strict-check the
+/// index, so **any** index expression yields the element type (`nums[0]`, `nums[i]`
+/// alike). The index is still inferred for its side effects (resolving references /
+/// emitting any `TK2304` inside it), then discarded.
+///
+/// A base that is `any`/error yields the error type (suppressing cascade). A base
+/// that is **not** an array is **out of M17 scope** (index signatures are M18+): no
+/// diagnostic is emitted and the result is the error type, so nothing downstream
+/// over-reports and the checker never crashes.
+fn infer_element_access(
+    pass: &mut Pass,
+    scope: ScopeId,
+    member: &ComputedMemberExpression<'_>,
+) -> Option<(TypeId, Span)> {
+    let wk = pass.interner.well_known();
+    let (base_ty, _) = infer_expr(pass, scope, &member.object)?;
+    let span = Span::from_oxc(member.span);
+
+    // Walk the index expression for its side effects (reference resolution, nested
+    // diagnostics); its value/type is irrelevant to M17 element access.
+    let _ = infer_expr(pass, scope, &member.expression);
+
+    if base_ty == wk.any || base_ty == wk.error {
+        return Some((wk.error, span));
+    }
+
+    // Array base: the result is the element type (any index).
+    if let Some(array) = pass.interner.store().array_type(base_ty) {
+        return Some((array.element, span));
+    }
+
+    // Non-array base: out of M17 scope (no diagnostic, no crash) → error type.
+    Some((wk.error, span))
+}
+
 /// Infer the type of a member access `obj.prop` in `scope`. A missing property is
 /// `TK2339` and yields the error type (no cascade); an `any`/error base yields the
 /// error type.
@@ -3397,6 +3502,20 @@ fn infer_member_access(
             union_member_access(pass, base_ty, prop_name, prop_span),
             prop_span,
         ));
+    }
+
+    // Array base (M17): only `length` is synthesized (→ `number`). Every other array
+    // member (`push`, `map`, `filter`, …) needs `lib.d.ts`, so it is deferred →
+    // `TK2339` (property does not exist), with the array type rendered in the message
+    // (`number[]`). The access yields the error type on the missing path (no cascade).
+    if pass.interner.store().tag(base_ty) == TypeTag::Array {
+        if prop_name == "length" {
+            return Some((wk.number, prop_span));
+        }
+        let tgt = render_type(pass.interner.store(), base_ty, /* widen */ false);
+        pass.diagnostics
+            .push(Diagnostic::property_does_not_exist(prop_span, prop_name, &tgt));
+        return Some((wk.error, prop_span));
     }
 
     // Snapshot the looked-up property's type + visibility + origin before any
@@ -6359,5 +6478,174 @@ const s: T = 1;                 // TK2322 — outside, `T` is the top-level stri
         // outside, `T` resolves to the top-level `string` alias, so `s: T = 1` is line 10
         // TK2322. A leaked parameter would make line 10 clean instead.
         assert_eq!(diags(src), vec![(10, "TK2322".to_string())]);
+    }
+}
+
+#[cfg(test)]
+mod array_tests {
+    //! M17 end-to-end tests for **array types** (`T[]` / `Array<T>`, array literals,
+    //! element access, `length`, covariant assignability). These drive the whole
+    //! pipeline (parse → bind → check) and assert the `(line, code)` diagnostics,
+    //! pinning the invariants the reviewer should scrutinize: array-literal element
+    //! inference is the **union** of the (widened) element types, `[]` infers
+    //! `never[]` (assignable to any `T[]`), element access yields the element type for
+    //! any index, `length` is synthesized (→ `number`) while other members are
+    //! `TK2339`, `Array<T>` is the same type as `T[]`, and assignability is covariant.
+    //! The per-fixture acceptance lives in the conformance corpus (`m17_arrays/`).
+
+    use crate::driver::check_source;
+
+    /// Run the checker and return the sorted `(1-based line, code)` of every
+    /// diagnostic, keyed on its primary-span start line (matching the conformance
+    /// harness's mapping).
+    fn diags(source: &str) -> Vec<(u32, String)> {
+        let out = check_source(source);
+        assert!(
+            out.parse_errors.is_empty(),
+            "unexpected parse error(s): {:?}",
+            out.parse_errors
+        );
+        let index = crate::span::LineIndex::new(source);
+        let mut v: Vec<(u32, String)> = out
+            .diagnostics
+            .iter()
+            .map(|d| (index.line_of(d.span.start), d.code.as_str().to_string()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Array-literal element inference is the **union** of the (widened) element
+    /// types: `[1, 2, 3]` → `number[]` (ok against `number[]`), `[1, "x"]` →
+    /// `(number | string)[]` (NOT assignable to `number[]` → `TK2322`). The literal
+    /// `1` is widened, so a homogeneous numeric literal array is `number[]`, not
+    /// `(1 | 2 | 3)[]`.
+    #[test]
+    fn array_literal_element_inference_is_union() {
+        let src = "\
+const nums: number[] = [1, 2, 3];
+const bad: number[] = [1, \"x\"];
+";
+        // Line 1 ok (number[]); line 2 is (number | string)[] → number[] → TK2322.
+        assert_eq!(diags(src), vec![(2, "TK2322".to_string())]);
+    }
+
+    /// An **empty** array literal `[]` infers `never[]`, which is assignable to any
+    /// `T[]` (the bottom element under covariance) — so it is accepted against a
+    /// `number[]` and a `string[][]` alike, with no diagnostic.
+    #[test]
+    fn empty_array_literal_is_never_array_assignable_anywhere() {
+        let src = "\
+const a: number[] = [];
+const b: string[][] = [];
+";
+        assert!(diags(src).is_empty(), "empty array literal must be assignable to any T[]");
+    }
+
+    /// Element access `a[i]` yields the **element type** for **any** index (M17 does
+    /// not strict-check the index): `nums[0]` and `nums[i]` are both `number`, so a
+    /// `number` target is ok and a `string` target is `TK2322`. The index expression
+    /// is still walked (an unresolved index name would be `TK2304`).
+    #[test]
+    fn element_access_yields_element_type_for_any_index() {
+        let src = "\
+const nums: number[] = [1, 2, 3];
+const n: number = nums[0];
+const s: string = nums[0];
+let i: number = 0;
+const m: number = nums[i];
+const bad: string = nums[i];
+";
+        // Line 3 (string target, number element) and line 6 (same with a var index).
+        assert_eq!(
+            diags(src),
+            vec![(3, "TK2322".to_string()), (6, "TK2322".to_string())]
+        );
+    }
+
+    /// `.length` is synthesized on an array → `number` (so `const len: number =
+    /// nums.length` is clean), while every other array member needs `lib.d.ts` and is
+    /// deferred → `TK2339` (`nums.push`, `nums.map`).
+    #[test]
+    fn length_is_synthesized_other_members_are_deferred() {
+        let src = "\
+const nums: number[] = [1, 2, 3];
+const len: number = nums.length;
+const p = nums.push;
+const mapper = nums.map;
+";
+        // Lines 3 and 4 access deferred array members → TK2339; `length` (line 2) ok.
+        assert_eq!(
+            diags(src),
+            vec![(3, "TK2339".to_string()), (4, "TK2339".to_string())]
+        );
+    }
+
+    /// `Array<T>` is the **same** type as `T[]`: `Array<number>` accepts a numeric
+    /// array, `Array<string>` rejects `[1]` (→ `TK2322`), and an `Array<number>` value
+    /// is assignable to a `number[]` annotation (same interned id), both ways.
+    #[test]
+    fn array_generic_syntax_equals_postfix_syntax() {
+        let src = "\
+const arr: Array<number> = [1, 2];
+const arrBad: Array<string> = [1];
+const post: number[] = arr;
+const generic: Array<number> = post;
+";
+        // Only line 2 errors: Array<string> vs (number)[]. The cross-syntax
+        // assignments (lines 3, 4) are the same type → clean.
+        assert_eq!(diags(src), vec![(2, "TK2322".to_string())]);
+    }
+
+    /// Array assignability is **covariant**: `string[]` is NOT assignable to
+    /// `number[]` (→ `TK2322`), nested `number[][]` accepts `[[1], [2]]` while
+    /// `[["x"]]` is rejected, and a same-element array assigns freely.
+    #[test]
+    fn covariant_assignability_and_nesting() {
+        let src = "\
+let a: number[];
+let b: string[];
+a = b;
+const nested: number[][] = [[1], [2]];
+const nestedBad: number[][] = [[\"x\"]];
+let c: number[];
+let d: number[];
+c = d;
+";
+        // Line 3 (string[] → number[]) and line 5 (string[][] → number[][]).
+        assert_eq!(
+            diags(src),
+            vec![(3, "TK2322".to_string()), (5, "TK2322".to_string())]
+        );
+    }
+
+    /// A `T[]` element inside a **generic** instantiates correctly (substitution
+    /// rewrites the element): `interface Box<T> { items: T[] }` instantiated as
+    /// `Box<number>` has `items: number[]`, so a `number[]` is assignable to it and a
+    /// `string[]` is not (→ `TK2322`).
+    #[test]
+    fn generic_array_element_substitutes() {
+        let src = "\
+interface Box<T> { items: T[]; }
+const ok: Box<number> = { items: [1, 2] };
+const bad: Box<number> = { items: [\"x\"] };
+";
+        // Line 3: items is string[] vs number[] → TK2322.
+        assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
+    }
+
+    /// A non-array base for element access is **out of M17 scope** (index signatures
+    /// are M18+): `x[0]` on a `number` emits **no** diagnostic and yields the error
+    /// type, so nothing downstream over-reports and the checker does not crash.
+    #[test]
+    fn non_array_element_access_is_out_of_scope_no_diagnostic() {
+        let src = "\
+const x: number = 5;
+const y: number = x[0];
+";
+        assert!(
+            diags(src).is_empty(),
+            "element access on a non-array is out of M17 scope (no diagnostic, no crash)"
+        );
     }
 }
