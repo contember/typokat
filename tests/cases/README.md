@@ -123,8 +123,16 @@ slots into a known later phase without rework:
   …) are out of scope for now — fixtures avoid the standard library otherwise.
 
 Other conventions: an unresolved name (`TK2304`) gets the **error type** (`any`-like), which
-**suppresses cascade** diagnostics on the same expression. `strictNullChecks` is **on** (our
-default): `null`/`undefined` are distinct types, not assignable to others.
+**suppresses cascade** diagnostics on the same expression. As of **M22** this applies in **type
+position** too: an unresolved simple-identifier type reference (in any annotation — variable /
+parameter / return / interface or object-type member / type-alias body / union / array / tuple /
+generic name or argument / `keyof` operand) reports `TK2304` and degrades to the error type (so
+`const a: Foo = 5` is only `TK2304`, never also a `TK2322`). Top-level type declarations are
+**hoisted**, so a forward reference resolves (no false `TK2304`). Deferred (silent, documented
+divergences — `TK2304` fires only when the name resolves to *no* space): a value used as a type
+(tsc `TS2749` — the name resolves in the value space), type arguments applied to a type parameter
+(tsc `TS2315`), and **qualified** type names (`A.B` — needs namespaces). `strictNullChecks` is
+**on** (our default): `null`/`undefined` are distinct types, not assignable to others.
 
 Known divergence (over-report, safe direction): on a call/`new` with **several** mismatched
 arguments, typokat reports a `TK2345` for **each** mismatched argument, whereas tsc stops at the
@@ -156,3 +164,4 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m19_index_sig/` | M19 — index signatures (`{ [k: string]: T }`, `{ [i: number]: T }`) |
 | `m20_keyof/` | M20 — `keyof T` + indexed-access types (`T[K]`) on concrete object types |
 | `m21_optional/` | M21 — optional properties (`a?: T`) on objects / interfaces / class instance fields |
+| `m22_unresolved_type/` | M22 — `TK2304` for an unresolved type reference in type position |
