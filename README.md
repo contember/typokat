@@ -7,8 +7,8 @@ full classes, and the common "real-world" type constructs. It is a **checker, no
 emit, JS runtime semantics, and module resolution are out of scope by design — the goal is to
 preserve the **type model** (see [`ts-checker-architecture.md`](./ts-checker-architecture.md)).
 
-> Status: **M0–M21** implemented. ~16k lines of Rust, 170 unit tests + a 60-file conformance
-> corpus (149 expected diagnostics), `clippy -D warnings` clean. Every milestone was
+> Status: **M0–M22** implemented. ~16k lines of Rust, 170 unit tests + a 63-file conformance
+> corpus (163 expected diagnostics), `clippy -D warnings` clean. Every milestone was
 > cross-checked against real `tsc 6.0.3 --strict`.
 
 ## Quick start
@@ -114,8 +114,10 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   deferred: optional **methods**/accessors (`go?(): T`), the dedicated *possibly-undefined*
   diagnostics (tsc `TS2532`/`TS18048`/`TS2722`), and narrowing an optional through a member-access
   guard (over-reports `T | undefined`, the safe direction).
-- **No `lib.d.ts`** (so `console`, array methods, `Promise`, … are absent), **no modules/imports**,
-  and an **unresolved type name** is silently the error type (no `TK2304` in type position yet).
+- **No `lib.d.ts`** (so `console`, array methods, `Promise`, … are absent) and **no modules/imports**.
+  An **unresolved type name** in type position is `TK2304` (M22); still deferred there (distinct tsc
+  codes): a value used as a type (`TS2749`), type args on a type parameter (`TS2315`), a wrong
+  type-argument count such as bare `Array` (`TS2314`), and qualified names `A.B` (`TS2503`).
 - Minor `tsc` divergences, all in the safe (over-report) direction, are logged in
   [`tests/cases/README.md`](./tests/cases/README.md).
 

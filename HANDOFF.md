@@ -1,6 +1,6 @@
 # typokat — handoff for the next agent
 
-You are taking over `typokat`, a from-scratch TypeScript type checker in Rust. **M0–M21** are done
+You are taking over `typokat`, a from-scratch TypeScript type checker in Rust. **M0–M22** are done
 (see [`README.md`](./README.md)). This document is how to continue: the **method** to follow, the
 **invariants** you must not break, and a **roadmap** of the next phases. For each phase you pick up,
 **prepare a per-milestone plan the same way it was built so far** (spec first, then implement, then
@@ -111,11 +111,18 @@ loop. Sketches below are scope hints, not the full spec — you author that.
   member-access narrowing of optionals (over-reports, safe). One known cosmetic gap: the renderer
   omits the `?` marker, so an optional-vs-required object message can show identical-looking sides
   (verdict/code correct; object-target messages are asserted code-only).
-- **M22 — `TK2304` in type position + (optionally) function overloads.** Unresolved type references
-  currently degrade silently to the error type — emit `TK2304`. Overloads (multiple call signatures,
-  resolve to first match) are a separate, medium milestone if you want it.
+- **M22 — `TK2304` in type position. DONE.** An unresolved simple-identifier type reference now
+  reports `TK2304` at the single resolution chokepoint (`resolve_type_reference`), covering every
+  type position via the existing `lower_annotation` recursion; it degrades to the error type, so
+  cascade is suppressed (`const a: Foo = 5` is only `TK2304`). Fires only when the name resolves to
+  *no* space — deferred-silent (distinct tsc codes, see `tests/cases/README.md`): value-as-type
+  (`TS2749`), type-args-on-a-type-parameter (`TS2315`), wrong type-arg count incl. bare `Array`
+  (`TS2314`), qualified names `A.B` (`TS2503`). The review caught an `Array`-builtin regression
+  (bare/wrong-arity wrongly `TK2304` instead of degrading silently), now fixed. **Function
+  overloads** (the optional half) remain deferred — a separate medium milestone (multiple call
+  signatures, resolve to first match).
 - **(later) method-override compatibility `TK2416`, abstract-not-implemented `TK2515`** — small class
-  completeness checks deferred during the class phase.
+  completeness checks deferred during the class phase. Good lighter warm-up before/instead of M23.
 
 ### Mid-term: narrowing completion + generics depth (both precede the VM)
 - **M23 — Unstructured-flow narrowing (the flow-node CFG).** The biggest narrowing gap and the most
@@ -174,8 +181,11 @@ diff against `tsc --strict`. Classify each divergence as false-negative (must fi
 
 ## 5. Your first action
 
-Pick the next milestone (recommended: **M22 — `TK2304` in type position** — an unresolved type
-reference currently degrades silently to the error type; emit the diagnostic. A small, well-isolated
-gap to warm into the codebase). Then: write its fixture corpus, update `tests/cases/README.md`,
-commit the spec, dispatch the implementation subagent, dispatch the independent review, fix, and
-commit. Same loop, all the way up.
+Pick the next milestone. Recommended: **M23 — unstructured-flow narrowing** (the flow-node CFG) —
+the biggest remaining narrowing gap and the most likely to surprise on idiomatic code (`if (x === null)
+return; …` does not narrow after the early `return`; nor do `throw`, loops, `&&`/`||`/ternary). Reuse
+the existing flow-model-agnostic narrowing operations (architecture §5). For a lighter warm-up first,
+the small class-completeness checks **`TK2416`** (method-override compatibility) and **`TK2515`**
+(abstract-member-not-implemented) are well-isolated. Then: write its fixture corpus, update
+`tests/cases/README.md`, commit the spec, dispatch the implementation subagent, dispatch the
+independent review, fix, and commit. Same loop, all the way up.
