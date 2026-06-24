@@ -85,8 +85,9 @@ These were hard-won; regressing them silently drops errors.
   is the one foundational deferral that the **VM phase forces**: `infer` + alpha-equivalent
   hash-consing want de Bruijn. Plan the migration when you start conditional types (it is localized
   to the type-param repr + `substitute`).
-- **Stable structural hash (blake3) is reserved but uncomputed** — needed for incrementality (Phase
-  4). The interner is already shaped for it (`src/types/hash.rs`).
+- **Stable structural hash (blake3) is reserved but uncomputed** — needed for incrementality (Phase 4)
+  and for parallelism Stage 2 (cross-file export identity, architecture §8.2). The interner is already
+  shaped for it (`src/types/hash.rs`).
 - **Per-argument call errors over-report** vs `tsc` (which stops at the first bad arg) — safe
   direction, documented.
 
@@ -153,10 +154,21 @@ loop. Sketches below are scope hints, not the full spec — you author that.
 
 ### Long-term: real-world scale + IDE
 - **`lib.d.ts` loading** — "mandatory core" (§4); needs generics + conditional/mapped (lib leans on
-  them). Unlocks `console`, array methods, `Promise`, etc. — i.e. checking real code. Big.
-- **Modules / imports / module resolution** — whole-repo checking; also where I/O cost dominates.
-- **Phase 4 — incrementality** (Salsa-style; finally compute the blake3 stable hash) **+ parallelism**
-  (rayon for parse/bind; resolve the shared-interner contention — sharded or per-thread arenas).
+  them). Unlocks `console`, array methods, `Promise`, etc. — i.e. checking real code. Big. Also where
+  parallelism **Stage 1** lands (the shared read-only prelude — architecture §8.2).
+- **Modules / imports / module resolution** — whole-repo checking; also where I/O cost dominates. This
+  is parallelism **Stage 2**: cross-file type identity via the stable structural hash, or a shared
+  *growing* interner (the §3.4 knot — architecture §8.2).
+- **Parallelism — per-file driver shipped (Stage 0); type-universe sharing staged (architecture §8).**
+  `driver::check_files` already fans each file's *whole* pipeline (parse→bind→check) across rayon
+  workers, each with its own arena + interner. This shape is **forced, not chosen**: the oxc AST is
+  thread-pinned (`!Send + !Sync` — arena `Vec` is `!Send`, nodes hold `Cell`s), so the unit of
+  parallelism is the per-file pipeline — **not** parse+bind feeding a shared serial checker (that
+  sketch is wrong: the AST can never reach the checker). Lossless today (nothing crosses a file
+  boundary). The remaining work is the shared *type universe* — Stage 1 then Stage 2 above; parse+bind
+  stays per-file-parallel and interner-free forever.
+- **Phase 4 — incrementality** (Salsa-style; finally compute the blake3 stable hash) — the hash is
+  shared work with parallelism Stage 2.
 
 ---
 

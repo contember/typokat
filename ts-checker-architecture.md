@@ -300,10 +300,59 @@ should pass you.
 
 ## 8. Parallelism
 
-- Per-file parsing and binding are mostly independent → rayon, scales well (the tsgo
-  lesson: much of its 10× is shared-memory parallelism, not just native code).
-- The per-unit scope-graph model enables concurrent unit type-checking.
-- Main tension: the shared interner (§3.4). Resolve with sharding or per-thread arenas.
+The win is real (the tsgo lesson: much of its 10× is shared-memory parallelism, not
+just native code), but the *shape* is dictated by a hard constraint the original
+"rayon over parse+bind" sketch missed: **the oxc AST is thread-pinned.**
+
+### 8.1 The thread-pinned-AST constraint (this decides the shape)
+
+`oxc_ast::Program` is **neither `Send` nor `Sync`**: its arena `Vec`s are
+deliberately `!Send` (two threads must never allocate into one arena), and its
+nodes hold `Cell`s (so it is `!Sync`). A parsed AST can therefore be neither
+**moved** to another thread nor **shared** by reference — it is pinned to the
+thread that parsed it.
+
+Consequence: you cannot parse on a worker and then type-check it on a *serial*
+thread against a shared interner (the AST can't travel to the checker), nor share
+`&AST` across a barrier. The only thing a worker can export is **owned, `Send`
+data** it produced by consuming its AST in place. So the unit of parallelism is the
+**whole per-file pipeline** (parse → bind → check), *not* parse+bind alone — each
+file owns its `Allocator` and runs end-to-end on one thread, returning owned
+diagnostics. (The binder helps: `bind_module` is interner-free and `Binder` is
+fully owned, so the parse+bind sub-phase touches no shared state whatsoever.)
+
+### 8.2 The type universe is the real axis — build it in stages
+
+Per-file isolation is free only while files share no types. They eventually will.
+Stage the shared substrate so each step keeps as much parallelism as possible:
+
+- **Stage 0 — per-file own interner (the baseline, in place today).** Each file is a
+  self-contained universe = intrinsics + its own declarations. Sound and *lossless*
+  exactly while there is no cross-file resolution (today: modules out of scope, no
+  `lib.d.ts`). Maximal parallelism, zero sharing — the correct floor, not a stopgap.
+  Implemented as `driver::check_files` (rayon over a `check_source`-per-file).
+- **Stage 1 — shared *read-only* prelude.** `lib.d.ts` + intrinsics form a large,
+  immutable, universally-needed base; re-seeding them into N per-file interners is
+  absurd. Freeze a base `Store` once and share it `&`-immutably across workers —
+  immutable shared data is `Sync`-friendly; the §3.4 enemy is only the *growing*
+  interner. Each file layers a private **delta** arena over the frozen base.
+  Parallelism survives intact. This is the first real cross-unit type-sharing, and
+  it arrives with `lib.d.ts` (mandatory core, §4).
+- **Stage 2 — cross-file *mutable* exports.** `export interface Foo` in A consumed by
+  B: A must emit its **public type surface** (`export name → type`), and B must give
+  those types identity in *its* world. A run-local `TypeId` (§3.2) is meaningless
+  across interners, so this needs the **stable structural hash** (§3.2): serialize an
+  export by content-hash, re-intern in the consumer. The alternative is one shared
+  *growing* interner — the full §3.4 knot (sharded, or per-thread arenas with a
+  deterministic merge at phase boundaries). This is the genuinely hard step, and the
+  one "module resolution out of scope" currently lets us defer.
+
+### 8.3 Invariant across all stages
+
+Parse + bind is **always** per-file-parallel and interner-free (`Binder` is owned; it
+never touches types). Only the *type universe / check phase* climbs the Stage 0→1→2
+ladder. The reserved `stable_hash` column in the type store (§3.2) exists precisely
+for Stage 2; computing it is shared work with incrementality (§11 phase 4).
 
 ---
 
