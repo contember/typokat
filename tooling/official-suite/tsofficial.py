@@ -447,9 +447,16 @@ def print_dashboard(binary, results):
     strict_rows = [r for r in inscope if r["strict"]]
     nonstrict_rows = [r for r in inscope if not r["strict"]]
 
+    # Surface the binary's mtime — a stale prebuilt binary (not rebuilt after a
+    # checker change) silently measures old behavior. Rebuild before trusting.
+    try:
+        import time
+        mt = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(binary)))
+    except OSError:
+        mt = "?"
     print()
     print(f"typokat × official TS conformance — {now}")
-    print(f"  TS @ {PINNED_SHA[:9]}   bin: {binary}")
+    print(f"  TS @ {PINNED_SHA[:9]}   bin: {binary} (built {mt} — rebuild if stale)")
     print(f"  corpus: {n} tests   in-scope: {n_in}   out-of-scope: {n_oos}")
     print()
     print("  out-of-scope buckets (discover):")

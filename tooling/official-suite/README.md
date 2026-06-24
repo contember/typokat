@@ -41,6 +41,11 @@ python3 tsofficial.py run --save     # accept current results as the new baselin
 `fetch` needs `gh` (authenticated) for directory listing and pulls file blobs from
 `raw.githubusercontent.com`. `run` only needs Python 3 and the binary.
 
+> **Build a current binary first.** `run` measures whatever binary you point at — a
+> *stale* `target/release/typokat` (not rebuilt after a checker change) silently
+> reports old behavior. Run `cargo build --release` before a meaningful run; the
+> dashboard prints the binary's build time so staleness is visible.
+
 ## How a test is handled
 
 1. **Unit parsing (line fidelity).** TS strips `// @option: value` directive lines
