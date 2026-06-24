@@ -1552,9 +1552,14 @@ fn resolve_type_decl(pass: &mut Pass, scope: ScopeId, decl_id: DeclId) -> TypeId
 ///  3. **bare named type** (M5): the declaration's (reserved or lazily-resolved)
 ///     id, via the binder's type slot.
 ///
-/// An unresolved type name, or a qualified name (`A.B`, out of subset), yields
-/// `None` (the caller aborts the enclosing lowering, matching object/union/function
-/// lowering).
+/// An **unresolved simple-identifier** type name reports `TK2304` ("Cannot find
+/// name", M22) and degrades to the **error type** (any-like — which suppresses any
+/// cascade, so `const a: Foo = 5` is only `TK2304`, never also `TK2322`); the
+/// diagnostic fires only when the name resolves to *no* space, so a value used as a
+/// type (tsc `TS2749`) and a type parameter applied with arguments (tsc `TS2315`)
+/// stay silent (distinct, deferred). A qualified name (`A.B`, out of subset) still
+/// yields `None` (the caller aborts the enclosing lowering, matching object / union /
+/// function lowering).
 fn resolve_type_reference(
     pass: &mut Pass,
     scope: ScopeId,
@@ -1577,18 +1582,53 @@ fn resolve_type_reference(
     // type, so it is intercepted here: `Array<T>` (exactly one type argument) lowers
     // to the same array type as `T[]`. User-shadowing of `Array` is deferred (no
     // fixture declares a type named `Array`), so the built-in name always wins. A
-    // wrong type-argument count (`Array`, `Array<A, B>`) falls through to the normal
-    // path, where `Array` is unresolved → `None` (no panic, no spurious diagnostic).
+    // wrong type-argument count (`Array`, `Array<A, B>`) degrades to the error type
+    // silently: `Array` IS a recognized built-in, so a bad arity is a deferred
+    // type-argument-count error (tsc TS2314), NOT "cannot find name" — so this branch
+    // must return for EVERY `Array` path rather than fall through to the M22
+    // unresolved-name arm below (which would wrongly emit TK2304).
     if name == "Array" {
-        if let Some(args) = type_arguments {
-            if args.params.len() == 1 {
+        match type_arguments {
+            Some(args) if args.params.len() == 1 => {
                 let element = lower_annotation(pass, scope, &args.params[0])?;
                 return Some(pass.interner.intern_array(element));
             }
+            // `Array` IS a recognized built-in, so a bare `Array` or a wrong type-argument
+            // count is a type-argument-count error (tsc TS2314, deferred) — NOT "cannot find
+            // name". Degrade to the error type silently (matching M17), rather than falling
+            // through to the M22 unresolved-name arm below.
+            _ => return Some(pass.interner.well_known().error),
         }
     }
 
-    let decl_id = type_decl_id(pass.binder, scope, name)?;
+    let decl_id = match type_decl_id(pass.binder, scope, name) {
+        Some(id) => id,
+        None => {
+            // The name resolves to no TYPE. Report TK2304 ONLY when it resolves to nothing
+            // in any space (truly undeclared). A name found in the VALUE space (value used
+            // as a type — tsc TS2749) or an in-scope TYPE PARAMETER used with arguments
+            // (tsc TS2315) is FOUND — those are distinct, deferred diagnostics, not
+            // "cannot find name" — so stay silent. (A qualified name `A.B` returned `None`
+            // at the top of this fn, out of subset — also silent.)
+            let found_in_some_space = pass.binder.graph.resolve(scope, name).is_some()
+                || lookup_type_param(pass, name).is_some();
+            if !found_in_some_space {
+                let span = Span::from_oxc(ident.span);
+                pass.diagnostics
+                    .push(Diagnostic::cannot_find_name(span, name));
+            }
+            // Still lower any type arguments so an unresolved name INSIDE them is reported
+            // too (tsc flags `Lost<AlsoGone>` on BOTH). Results are discarded — the whole
+            // reference degrades to the error type (any-like, which suppresses cascade so
+            // `const a: Foo = 5` is only TK2304, never also TK2322).
+            if let Some(args) = type_arguments {
+                for arg in &args.params {
+                    let _ = lower_annotation(pass, scope, arg);
+                }
+            }
+            return Some(pass.interner.well_known().error);
+        }
+    };
 
     // 2. With type arguments: instantiate the generic declaration by substitution.
     if let Some(args) = type_arguments {
