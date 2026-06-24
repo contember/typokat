@@ -92,8 +92,9 @@ slots into a known later phase without rework:
   type rejects a structurally-identical *other* type); widening a private-bearing instance to its
   public structural shape is not yet rejected (a one-directional divergence from tsc TS2322).
 - **arrays**: `T[]` / `Array<T>`, array literals, element access, `length`, covariant
-  assignability land in **M17** (built-in, no lib). Array METHODS (`push`/`map`/…), tuples, and
-  `ReadonlyArray` follow.
+  assignability (**M17**) and **tuples** `[A, B]` (positional, indexed access, contextual typing)
+  (**M18**) are implemented (built-in, no lib). Array METHODS (`push`/`map`/…) and `ReadonlyArray`
+  follow.
 - **modules/imports** and the rest of **`lib.d.ts` globals** (`console`, string methods, `Promise`,
   …) are out of scope for now — fixtures avoid the standard library otherwise.
 
@@ -127,3 +128,4 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m15_accessors/` | M15 — getters/setters + `abstract` classes |
 | `m16_generic_classes/` | M16 — generic classes (type params, `new C<T>`, inference, `C<T>` as a type) |
 | `m17_arrays/` | M17 — array types (`T[]` / `Array<T>`, element access, `length`, covariance) |
+| `m18_tuples/` | M18 — tuple types (`[A, B]`, positional assignability, indexed access) |
