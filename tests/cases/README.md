@@ -131,7 +131,9 @@ generic name or argument / `keyof` operand) reports `TK2304` and degrades to the
 **hoisted**, so a forward reference resolves (no false `TK2304`). Deferred (silent, documented
 divergences — `TK2304` fires only when the name resolves to *no* space): a value used as a type
 (tsc `TS2749` — the name resolves in the value space), type arguments applied to a type parameter
-(tsc `TS2315`), and **qualified** type names (`A.B` — needs namespaces). `strictNullChecks` is
+(tsc `TS2315`), a wrong **type-argument count** on a recognized type such as bare/over-applied
+`Array` (tsc `TS2314` — `Array` is a known built-in, not "cannot find name"), and **qualified** type
+names (`A.B` — needs namespaces). `strictNullChecks` is
 **on** (our default): `null`/`undefined` are distinct types, not assignable to others.
 
 Known divergence (over-report, safe direction): on a call/`new` with **several** mismatched
