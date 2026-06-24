@@ -13,3 +13,13 @@ opt = req;  // ok — a required `a` satisfies an optional `a`
 both = opt; // ok — both optional
 opt = both; // ok
 req = opt;  // error[TK2322] — an optional `a` may be absent in a required target
+
+// Presence is independent of the value type: an optional source does NOT satisfy a
+// required target even when the target's own property type already admits `undefined`
+// (the source may OMIT the property entirely, which a required target forbids).
+type OptB = { b?: string };
+type ReqMaybe = { b: string | undefined };
+let reqM: ReqMaybe = { b: undefined };
+let optB: OptB = {};
+reqM = optB; // error[TK2322] — `b` may be absent in the source
+optB = reqM; // ok — a present (if undefined) `b` satisfies the optional target
