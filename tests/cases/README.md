@@ -98,6 +98,10 @@ Other conventions: an unresolved name (`TK2304`) gets the **error type** (`any`-
 **suppresses cascade** diagnostics on the same expression. `strictNullChecks` is **on** (our
 default): `null`/`undefined` are distinct types, not assignable to others.
 
+Known divergence (over-report, safe direction): on a call/`new` with **several** mismatched
+arguments, typokat reports a `TK2345` for **each** mismatched argument, whereas tsc stops at the
+first. Fixtures therefore keep at most one mismatched argument per call so the corpus matches both.
+
 ## Milestone index
 
 | Dir | Milestone |

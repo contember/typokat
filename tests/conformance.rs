@@ -39,6 +39,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("m13_modifiers", true),
     ("m14_readonly", true),
     ("m15_accessors", true),
+    ("m16_generic_classes", true),
 ];
 
 /// An expectation parsed from a single inline marker.

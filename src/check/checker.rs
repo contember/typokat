@@ -337,7 +337,7 @@ enum TypeDecl<'ast> {
         param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
         resolving: bool,
     },
-    /// A `class` (M11, extended for M13). `reserved` is its **instance type** id: an
+    /// A `class` (M11, extended for M13/M16). `reserved` is its **instance type** id: an
     /// object id allocated empty via `Interner::reserve_object`, filled with the
     /// class's fields and methods once they are lowered. Reserving up front lets a
     /// field reference the class's own type (`next: Node | null`) or a sibling,
@@ -348,11 +348,24 @@ enum TypeDecl<'ast> {
     /// **not** an instance member; it is built in the fill step and registered under
     /// the class's *value* `DeclId` (see [`Pass::class_ctors`]). `class_id` is this
     /// class's stable [`ClassId`], stamped onto every member it declares (the origin
-    /// the access-control + nominal rules key on). Generic classes are still
-    /// deferred.
+    /// the access-control + nominal rules key on).
+    ///
+    /// M16: a **generic** class (`class Box<T>`) carries an ordered list of
+    /// type-parameter ids ([`params`](TypeDecl::Class::params)), allocated up front like a
+    /// generic interface's. While the class's instance type, static side, constructor,
+    /// methods, and accessors are lowered ([`fill_class`]) those parameters are pushed
+    /// onto [`Pass::type_param_scopes`] (the M9 frame), so a field/return/parameter
+    /// referencing `T` (`value: T`, `get(): T`) lowers to its interned
+    /// [`TypeTag::TypeParam`] type. The reserved instance id then holds a structural
+    /// **template** (`{ value: T; get: () => T }`); a `TSTypeReference` `Box<number>`
+    /// instantiates it by the M9 [`instantiate_type_reference`], and `new Box<number>(…)` /
+    /// `new Box(…)` substitute into the constructor + instance ([`infer_new`]). A
+    /// non-generic class has an empty list and behaves exactly as in M11.
     Class {
         reserved: TypeId,
         class_id: ClassId,
+        params: Vec<TypeParamId>,
+        param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
         class: &'ast Class<'ast>,
     },
 }
@@ -484,6 +497,15 @@ struct Pass<'a, 'ast> {
     /// built; read by `new ClassName(args)` ([`infer_new`]) to check the arguments
     /// and yield the instance type.
     class_ctors: FxHashMap<DeclId, ClassInfo>,
+    /// A **generic** class's ordered type-parameter ids (M16), keyed by the same
+    /// value-space `DeclId` as [`class_ctors`](Pass::class_ctors). Present only for a
+    /// class with type parameters; absent for a non-generic class. Read by `new` to
+    /// instantiate the class's constructor + instance: with explicit type arguments
+    /// (`new Box<number>(…)`) the parameters substitute to the given args; without
+    /// (`new Box(…)`) they are inferred from the constructor arguments via the M10
+    /// engine, then substituted. It is a sibling map rather than a field on the `Copy`
+    /// [`ClassInfo`] so that struct keeps its cheap copy semantics.
+    class_type_params: FxHashMap<DeclId, Vec<TypeParamId>>,
     /// Per-class fill state (M12), indexed by `TypeDecl` index (parallel to
     /// [`type_decls`](Pass::type_decls)). A class entry tracks whether its instance
     /// type / constructor have been built yet, so a derived class can fill its **base
@@ -599,6 +621,7 @@ pub fn check_program<'ast>(
         class_parents: FxHashMap::default(),
         generic_fns: FxHashMap::default(),
         class_ctors: FxHashMap::default(),
+        class_type_params: FxHashMap::default(),
         class_fill,
         decl_types,
         obligations: Vec::new(),
@@ -717,9 +740,15 @@ fn reserve_type_decls<'ast>(
                         }
                     }
                 }
+                // M16: allocate one id per declared type parameter (in source order),
+                // paired with their names later when the class body is lowered with the
+                // parameter frame in scope (`fill_class`) — exactly like an interface.
+                let params = alloc_type_param_ids(class.type_parameters.as_deref(), next_type_param);
                 decls.push(TypeDecl::Class {
                     reserved,
                     class_id,
+                    params,
+                    param_decl: class.type_parameters.as_deref(),
                     class,
                 });
             }
@@ -843,11 +872,16 @@ fn ensure_class_filled(pass: &mut Pass, scope: ScopeId, index: usize) {
     let TypeDecl::Class {
         reserved,
         class_id,
+        ref params,
+        param_decl,
         class,
     } = pass.type_decls[index]
     else {
         return;
     };
+    // M16: snapshot the class's type-parameter ids (the borrow on `type_decls` must not
+    // overlap the `&mut pass` `fill_class` call below).
+    let params = params.clone();
 
     // Mark in-progress before resolving the base, so a cyclic `extends` is caught by
     // the `Filling` guard above rather than looping.
@@ -855,7 +889,7 @@ fn ensure_class_filled(pass: &mut Pass, scope: ScopeId, index: usize) {
         *slot = ClassFillState::Filling;
     }
 
-    fill_class(pass, scope, reserved, class_id, class);
+    fill_class(pass, scope, reserved, class_id, &params, param_decl, class);
 
     if let Some(slot) = pass.class_fill.get_mut(index) {
         *slot = ClassFillState::Done;
@@ -939,17 +973,34 @@ fn resolve_base_class(pass: &mut Pass, scope: ScopeId, class: &Class<'_>) -> Opt
 /// is simply absent). The class's `abstract` keyword is recorded on its [`ClassInfo`]
 /// ([`ClassInfo::is_abstract`]) and enforced at `new` ([`infer_new`] → `TK2511`).
 ///
+/// M16 (generic classes): the class's type parameters (`type_params`/`param_decl`) are
+/// scoped via the M9 [`with_type_params`] frame for the **whole** member-lowering pass, so
+/// a field/method/accessor/constructor annotation referencing `T` lowers to its interned
+/// [`TypeTag::TypeParam`] type. The reserved instance id then holds a structural
+/// **template** (`{ value: T; get: () => T }`) and the constructor signature embeds `T`
+/// too. The type-parameter ids are recorded on the class's [`ClassInfo`] sibling map
+/// ([`Pass::class_type_params`]) so `new Box<number>(…)` / `new Box(…)` can substitute them
+/// into the constructor + instance ([`infer_new`]); a `Box<number>` *type reference*
+/// instantiates the template through the M9 [`instantiate_type_reference`]. A non-generic
+/// class lowers with an empty frame and is unchanged.
+///
 /// DEFERRED (out of scope, skipped without error): set-only / differing-get-set-type /
 /// `static` accessors, parameter properties (`constructor(private x: number)`),
 /// `implements`, method-**override compatibility** (`TK2416`), the abstract-member-not-
 /// implemented completeness check (`TK2515`), `super.method()` (super property access),
-/// and generic classes. A field without a type annotation, or a member whose type cannot
+/// generic **method-level** type parameters on a class, and **generic class inheritance**
+/// with a base's type arguments substituted (`class S extends Box<string>` composes against
+/// `Box`'s *unsubstituted* template, so a `super(...)`/inherited-member check sees the
+/// base's free `T` — no crash, terminates, but over-reports; none of the M16 fixtures
+/// extend a generic base). A field without a type annotation, or a member whose type cannot
 /// be lowered, is skipped — each side keeps the members it can express.
 fn fill_class(
     pass: &mut Pass,
     scope: ScopeId,
     reserved: TypeId,
     class_id: ClassId,
+    type_params: &[TypeParamId],
+    param_decl: Option<&TSTypeParameterDeclaration<'_>>,
     class: &Class<'_>,
 ) {
     let void_ty = pass.interner.well_known().void;
@@ -965,9 +1016,125 @@ fn fill_class(
         pass.class_parents.insert(class_id, base_info.class_id);
     }
 
-    // The class's **own** instance members and **own** static members, before
-    // composing with the base. Each is stamped with its visibility + this class's
-    // `ClassId` (M13).
+    // M16: the class's type-parameter frame (name → interned `TypeParam`). Built before
+    // lowering so a field/method/ctor/accessor annotation referencing `T` resolves to its
+    // parameter type; pushed for the whole member-lowering pass below (an empty frame for
+    // a non-generic class — harmless). The frame must be built BEFORE the closure (it
+    // borrows `&mut pass` to intern the parameter types), then moved into
+    // `with_type_params`.
+    let frame = build_type_param_frame(pass, param_decl, type_params);
+
+    // The class's **own** instance members and **own** static members, plus the
+    // constructor parameters, collected **inside** the type-parameter frame so `T`
+    // resolves (M16). For a non-generic class the empty frame is a no-op and the
+    // collection is exactly the M11–M15 behaviour.
+    let (own_instance, own_static, ctor_params) = with_type_params(pass, frame, |pass| {
+        collect_class_own_members(pass, scope, class_id, class)
+    });
+
+    // M12: compose the base's members with the class's own (own overriding base on a
+    // name conflict), for BOTH the instance side and the static side. Snapshot the
+    // base's properties into owned Vecs first — the immutable store borrow must not
+    // overlap the `&mut` `fill_object`/`intern_object` below. A class with no
+    // resolvable base contributes no base members (plain M11).
+    let base_instance: Vec<PropertyType> = base
+        .and_then(|info| pass.interner.store().object_type(info.instance))
+        .map(|obj| obj.properties.clone())
+        .unwrap_or_default();
+    let base_static: Vec<PropertyType> = base
+        .and_then(|info| pass.interner.store().object_type(info.static_side))
+        .map(|obj| obj.properties.clone())
+        .unwrap_or_default();
+    let properties = compose_members(base_instance, own_instance);
+
+    // M13: build the static-side object type (the class value's type). Composed from
+    // the base's static side and the class's own static members.
+    let static_properties = compose_members(base_static, own_static);
+    let static_side = pass.interner.intern_object(ObjectType {
+        properties: static_properties,
+    });
+
+    // Fill the reserved instance type with the composed (base + own) members.
+    pass.interner
+        .fill_object(reserved, ObjectType { properties });
+
+    // The constructor signature. With an explicit constructor, its parameters. With
+    // none, M12: **inherit the base's constructor** (so `new Derived(...)` checks
+    // against the base signature); for a class with no base either, the implicit
+    // zero-parameter constructor. The return is `void` (unused — `new` yields the
+    // instance type), built through the normal function interner so the call path can
+    // read its parameters back out.
+    let ctor = match ctor_params {
+        Some(params) => pass.interner.intern_function(FunctionType {
+            params,
+            ret: void_ty,
+        }),
+        None => match base {
+            Some(base_info) => base_info.ctor,
+            None => pass.interner.intern_function(FunctionType {
+                params: Vec::new(),
+                ret: void_ty,
+            }),
+        },
+    };
+
+    // The base's constructor signature (M12), for checking `super(args)` in this
+    // class's constructor body. `None` for a class with no resolvable base.
+    let super_ctor = base.map(|base_info| base_info.ctor);
+
+    // Register the class's `new`-info under its VALUE-space `DeclId` (the constructor
+    // side), so `new ClassName(args)` resolves it via the value slot.
+    if let Some(id) = &class.id {
+        if let Some(decl_id) = value_decl_id(pass.binder, scope, id.name.as_str()) {
+            pass.class_ctors.insert(
+                decl_id,
+                ClassInfo {
+                    ctor,
+                    instance: reserved,
+                    static_side,
+                    class_id,
+                    super_ctor,
+                    // M15: only this class's own `abstract` keyword matters for `new`.
+                    is_abstract: class.r#abstract,
+                },
+            );
+            // M16: record the class's type-parameter ids under the same value `DeclId`,
+            // so `new Box<number>(…)` / `new Box(…)` ([`infer_new`]) can substitute them
+            // into the (uninstantiated) constructor signature + instance template. An
+            // empty list for a non-generic class (then `infer_new` skips substitution).
+            // Kept in a sibling map rather than on `ClassInfo` so the latter stays `Copy`.
+            if !type_params.is_empty() {
+                pass.class_type_params.insert(decl_id, type_params.to_vec());
+            }
+            // M13: bind the class's value-slot type to the **static side**, so a
+            // reference to the class *name as a value* — and the base of
+            // `C.staticMember` — resolves to the static-side object type. `new` still
+            // uses `class_ctors` (the constructor signature), unaffected. An instance
+            // member is not on the static side, so `C.instanceMember` is `TK2339`.
+            pass.decl_types.set(decl_id, static_side);
+        }
+    }
+}
+
+/// Collect a class's **own** instance members, **own** static members, and constructor
+/// parameters from its body (M11–M16), stamping each member with its visibility +
+/// declaring [`ClassId`] (M13). Extracted from [`fill_class`] so the caller can run it
+/// **inside** the M16 type-parameter frame ([`with_type_params`]) — every annotation it
+/// lowers (`value: T`, `get(): T`, `constructor(v: T)`) then resolves `T` to the class's
+/// parameter. It does not compose with the base or intern anything; it only produces the
+/// class's own contribution.
+///
+/// A field becomes a property (static-side when `static`); a plain/`abstract` method
+/// becomes a function-typed property; a constructor records its parameter signature; a
+/// `get`/`set` accessor is accumulated per name and combined into ONE instance property
+/// afterward ([`build_accessor_members`], M15). Computed keys, un-annotated fields, and
+/// out-of-subset members are skipped — the class keeps the members it can express.
+fn collect_class_own_members(
+    pass: &mut Pass,
+    scope: ScopeId,
+    class_id: ClassId,
+    class: &Class<'_>,
+) -> (Vec<PropertyType>, Vec<PropertyType>, Option<Vec<ParameterType>>) {
     let mut own_instance: Vec<PropertyType> = Vec::new();
     let mut own_static: Vec<PropertyType> = Vec::new();
     // The constructor's parameters, if an explicit `constructor` is present.
@@ -1089,80 +1256,7 @@ fn fill_class(
         own_instance.push(member);
     }
 
-    // M12: compose the base's members with the class's own (own overriding base on a
-    // name conflict), for BOTH the instance side and the static side. Snapshot the
-    // base's properties into owned Vecs first — the immutable store borrow must not
-    // overlap the `&mut` `fill_object`/`intern_object` below. A class with no
-    // resolvable base contributes no base members (plain M11).
-    let base_instance: Vec<PropertyType> = base
-        .and_then(|info| pass.interner.store().object_type(info.instance))
-        .map(|obj| obj.properties.clone())
-        .unwrap_or_default();
-    let base_static: Vec<PropertyType> = base
-        .and_then(|info| pass.interner.store().object_type(info.static_side))
-        .map(|obj| obj.properties.clone())
-        .unwrap_or_default();
-    let properties = compose_members(base_instance, own_instance);
-
-    // M13: build the static-side object type (the class value's type). Composed from
-    // the base's static side and the class's own static members.
-    let static_properties = compose_members(base_static, own_static);
-    let static_side = pass.interner.intern_object(ObjectType {
-        properties: static_properties,
-    });
-
-    // Fill the reserved instance type with the composed (base + own) members.
-    pass.interner
-        .fill_object(reserved, ObjectType { properties });
-
-    // The constructor signature. With an explicit constructor, its parameters. With
-    // none, M12: **inherit the base's constructor** (so `new Derived(...)` checks
-    // against the base signature); for a class with no base either, the implicit
-    // zero-parameter constructor. The return is `void` (unused — `new` yields the
-    // instance type), built through the normal function interner so the call path can
-    // read its parameters back out.
-    let ctor = match ctor_params {
-        Some(params) => pass.interner.intern_function(FunctionType {
-            params,
-            ret: void_ty,
-        }),
-        None => match base {
-            Some(base_info) => base_info.ctor,
-            None => pass.interner.intern_function(FunctionType {
-                params: Vec::new(),
-                ret: void_ty,
-            }),
-        },
-    };
-
-    // The base's constructor signature (M12), for checking `super(args)` in this
-    // class's constructor body. `None` for a class with no resolvable base.
-    let super_ctor = base.map(|base_info| base_info.ctor);
-
-    // Register the class's `new`-info under its VALUE-space `DeclId` (the constructor
-    // side), so `new ClassName(args)` resolves it via the value slot.
-    if let Some(id) = &class.id {
-        if let Some(decl_id) = value_decl_id(pass.binder, scope, id.name.as_str()) {
-            pass.class_ctors.insert(
-                decl_id,
-                ClassInfo {
-                    ctor,
-                    instance: reserved,
-                    static_side,
-                    class_id,
-                    super_ctor,
-                    // M15: only this class's own `abstract` keyword matters for `new`.
-                    is_abstract: class.r#abstract,
-                },
-            );
-            // M13: bind the class's value-slot type to the **static side**, so a
-            // reference to the class *name as a value* — and the base of
-            // `C.staticMember` — resolves to the static-side object type. `new` still
-            // uses `class_ctors` (the constructor signature), unaffected. An instance
-            // member is not on the static side, so `C.instanceMember` is `TK2339`.
-            pass.decl_types.set(decl_id, static_side);
-        }
-    }
+    (own_instance, own_static, ctor_params)
 }
 
 /// One accessor (`get`/`set`) being assembled in [`fill_class`] (M15). A getter and a
@@ -1527,12 +1621,12 @@ fn instantiate_type_reference(
 /// a non-generic one / an unknown `DeclId`.
 fn type_decl_params(pass: &Pass, decl_id: DeclId) -> Vec<TypeParamId> {
     match pass.type_decls.get(decl_id.index()) {
-        Some(TypeDecl::Interface { params, .. }) | Some(TypeDecl::Alias { params, .. }) => {
-            params.clone()
-        }
-        // A class is non-generic in the M11 subset (generic classes are deferred), so
-        // it has no type parameters.
-        Some(TypeDecl::Class { .. }) | None => Vec::new(),
+        Some(TypeDecl::Interface { params, .. })
+        | Some(TypeDecl::Alias { params, .. })
+        // M16: a generic class carries its type-parameter ids just like an interface,
+        // so `Box<number>` used as a type instantiates the class's instance template.
+        | Some(TypeDecl::Class { params, .. }) => params.clone(),
+        None => Vec::new(),
     }
 }
 
@@ -2488,6 +2582,14 @@ fn check_class(pass: &mut Pass, scope: ScopeId, class: &Class<'_>) {
         .and_then(|decl_id| pass.class_ctors.get(&decl_id))
         .copied();
 
+    // M16: the class's value `DeclId`, used to look up its type parameters so a member
+    // **body** annotation referencing `T` (a parameter / return type) resolves while the
+    // body is checked — exactly as the instance template was lowered in `fill_class`.
+    let value_decl = class
+        .id
+        .as_ref()
+        .and_then(|id| value_decl_id(pass.binder, scope, id.name.as_str()));
+
     // Save/restore `this`, the class context, and the base-constructor signature
     // around the class so none leak (and a nested class's own values do not clobber an
     // enclosing one permanently).
@@ -2517,6 +2619,49 @@ fn check_class(pass: &mut Pass, scope: ScopeId, class: &Class<'_>) {
     // `this`, the same defensive choice as for instance bodies above).
     let static_this = info.map(|info| info.static_side);
 
+    // M16: push the class's type-parameter frame for the whole body-checking pass, so a
+    // method/constructor body annotation referencing `T` (a parameter or return type)
+    // resolves to the same parameter type the instance template embeds. The frame is
+    // rebuilt from the class's stored ids (allocated once in phase 0) paired with the
+    // AST names — re-interning a `TypeParam` is idempotent, so this yields the identical
+    // ids. An empty frame for a non-generic class (harmless). The frame is popped at the
+    // end (a parameter never leaks past the class body).
+    let type_params = value_decl
+        .and_then(|decl_id| pass.class_type_params.get(&decl_id).cloned())
+        .unwrap_or_default();
+    let frame = build_type_param_frame(pass, class.type_parameters.as_deref(), &type_params);
+
+    // M16: check every member body with the type-parameter frame pushed, so a body
+    // annotation referencing `T` resolves. An empty frame for a non-generic class — then
+    // this is exactly the M11–M15 body-checking pass.
+    with_type_params(pass, frame, |pass| {
+        check_class_member_bodies(pass, scope, class, static_this)
+    });
+
+    pass.current_this = saved_this;
+    pass.current_class = saved_class;
+    pass.current_super_ctor = saved_super_ctor;
+    pass.current_in_ctor = saved_in_ctor;
+}
+
+/// Check every member **body** of a class (M11–M16), with `this`/`current_class`/
+/// `current_super_ctor` already bound by the caller ([`check_class`]) and any M16
+/// type-parameter frame already pushed. Extracted so the caller can run it inside
+/// [`with_type_params`] without a deeply-indented closure; it walks the bodies and
+/// collects their obligations/diagnostics, returning nothing.
+///
+/// A field initializer is walked (with a `static` initializer's `this` bound to the
+/// static side, M13); a method/constructor/accessor body is checked via the shared
+/// [`infer_function`] machine, with a `static` method's `this` bound to the static side
+/// and the `constructor` body flagged for the M14 `readonly`-assignment carve-out. Each
+/// per-member `this`/in-constructor override is saved/restored so it does not leak to the
+/// next member.
+fn check_class_member_bodies(
+    pass: &mut Pass,
+    scope: ScopeId,
+    class: &Class<'_>,
+    static_this: Option<TypeId>,
+) {
     for element in &class.body.body {
         let ClassElement::MethodDefinition(method) = element else {
             // A field initializer expression is walked here so it is checked (and
@@ -2570,11 +2715,6 @@ fn check_class(pass: &mut Pass, scope: ScopeId, class: &Class<'_>) {
             pass.current_in_ctor = saved_in_ctor;
         }
     }
-
-    pass.current_this = saved_this;
-    pass.current_class = saved_class;
-    pass.current_super_ctor = saved_super_ctor;
-    pass.current_in_ctor = saved_in_ctor;
 }
 
 /// Recursive excess-property (freshness) check (mvp-plan §6, README
@@ -3697,8 +3837,8 @@ fn check_call_arguments(
     }
 }
 
-/// Infer and check a `new ClassName(args)` expression (M11), yielding the class's
-/// **instance type**.
+/// Infer and check a `new ClassName(args)` expression (M11, extended for M16 generic
+/// classes), yielding the class's **instance type**.
 ///
 /// The callee must be a plain identifier resolving (through the scope graph) to a
 /// value `DeclId` registered in [`Pass::class_ctors`] — i.e. a class. Its constructor
@@ -3710,8 +3850,26 @@ fn check_call_arguments(
 ///
 /// A non-class / unresolved callee is out of scope: the callee is still inferred (so
 /// an unresolved name emits `TK2304` once) and the result is the error type (no
-/// `new`-specific diagnostic, no cascade). `new` with explicit type arguments
-/// (generic classes) is deferred — the type arguments are ignored here.
+/// `new`-specific diagnostic, no cascade).
+///
+/// M16 (generic classes): when the named class is generic (its value `DeclId` has an
+/// entry in [`Pass::class_type_params`]) the constructor signature and instance type are
+/// **instantiated** before the argument checks ([`new_class_substitution`]):
+///
+///  - **explicit type arguments** (`new Box<number>(…)`) substitute `param[i] → arg[i]`
+///    (lowered in `scope`), so the constructor becomes `(v: number)` and the instance
+///    `{ value: number; get: () => number }`. `new Box<number>("s")` then fails the
+///    argument check (`TK2345`);
+///  - **no type arguments** (`new Box(5)`) infer the parameters from the constructor
+///    arguments via the **same** M10 generative engine
+///    ([`crate::check::infer::infer_type_arguments`]) run on the *uninstantiated*
+///    constructor parameter types, then substitute — `T` is inferred `number` from `5`.
+///    An un-inferrable parameter falls back to `unknown` (sound).
+///
+/// The argument checks (`TK2554`/`TK2345`) run against the **instantiated** constructor
+/// parameters; the expression's type is the **instantiated** instance type, so a member
+/// using `T` (`b.get(): T`) reads back as the substituted type downstream. A non-generic
+/// class skips all of this and behaves exactly as in M11.
 ///
 /// M15: if the directly-named class is `abstract` ([`ClassInfo::is_abstract`]), the
 /// `new` is `TK2511` (`Cannot create an instance of an abstract class`). **Only the
@@ -3728,10 +3886,17 @@ fn infer_new(
     // Resolve the class via the callee identifier's value slot, BEFORE inferring the
     // callee expression (so an unresolved name still emits exactly one `TK2304` via
     // the callee inference below, not a doubled diagnostic). A non-identifier callee
-    // (`new (expr)(…)`) is out of subset.
-    let class_info = match &new_expr.callee {
-        Expression::Identifier(ident) => value_decl_id(pass.binder, scope, ident.name.as_str())
-            .and_then(|decl_id| pass.class_ctors.get(&decl_id).copied()),
+    // (`new (expr)(…)`) is out of subset. M16: keep the `DeclId` too, to look up the
+    // class's type parameters for a generic instantiation.
+    let class_resolved: Option<(DeclId, ClassInfo)> = match &new_expr.callee {
+        Expression::Identifier(ident) => {
+            value_decl_id(pass.binder, scope, ident.name.as_str()).and_then(|decl_id| {
+                pass.class_ctors
+                    .get(&decl_id)
+                    .copied()
+                    .map(|info| (decl_id, info))
+            })
+        }
         _ => None,
     };
 
@@ -3751,7 +3916,7 @@ fn infer_new(
     }
 
     // Not a known class — out of scope. No `new`-specific diagnostic; error-typed.
-    let Some(info) = class_info else {
+    let Some((decl_id, info)) = class_resolved else {
         return Some((wk.error, new_span));
     };
 
@@ -3766,18 +3931,94 @@ fn infer_new(
             .push(Diagnostic::abstract_instantiation(new_span));
     }
 
-    // The constructor signature's parameter types (zero for an implicit constructor).
-    let param_types: Vec<TypeId> = match pass.interner.store().function_type(info.ctor) {
+    // M16: instantiate a generic class's constructor + instance before the argument
+    // checks. For a non-generic class this is the identity (`ctor`/`instance` unchanged),
+    // so M11 behaviour is preserved. Explicit type arguments substitute directly; no type
+    // arguments infer the parameters from the constructor argument types (M10 engine).
+    let (ctor, instance) =
+        new_class_substitution(pass, scope, decl_id, &info, new_expr, &arg_types);
+
+    // The (instantiated) constructor signature's parameter types (zero for an implicit
+    // constructor).
+    let param_types: Vec<TypeId> = match pass.interner.store().function_type(ctor) {
         Some(func) => func.params.iter().map(|p| p.ty).collect(),
         // Defensive: the constructor is always interned as a function in `fill_class`.
         None => Vec::new(),
     };
 
     // Reuse the M3 call-checking path: arity (TK2554) + argument assignability
-    // (TK2345). The `new` expression's type is the instance type.
+    // (TK2345). The `new` expression's type is the (instantiated) instance type.
     check_call_arguments(pass, &param_types, &arg_types, new_span);
 
-    Some((info.instance, new_span))
+    Some((instance, new_span))
+}
+
+/// M16: the constructor signature + instance type of a `new ClassName(args)` after
+/// instantiating a **generic** class, or the class's own `ctor`/`instance` unchanged for
+/// a non-generic one (the M11 identity).
+///
+/// A class is generic iff its value `DeclId` has type parameters in
+/// [`Pass::class_type_params`]. The substitution `TypeParamId → TypeId` is built from:
+///
+///  - **explicit type arguments** on the `new` (`new Box<number>(…)`): each argument is
+///    lowered in `scope` and zipped to the class's parameters (graceful on an arity
+///    mismatch — zipped to the shorter list, no panic, no diagnostic, matching the M9
+///    type-reference behaviour); a non-lowerable argument simply leaves that parameter
+///    unmapped (it survives substitution);
+///  - **no type arguments** (`new Box(5)`): the parameters are **inferred** from the
+///    constructor argument types via the M10 generative engine
+///    ([`crate::check::infer::infer_type_arguments`]), run against the *uninstantiated*
+///    constructor parameter types (which embed the type parameters). An un-inferred
+///    parameter falls back to `unknown` (the sound M10 fallback).
+///
+/// The map is then applied (via the M9 [`substitute`]) to **both** the constructor
+/// signature and the instance type, so the argument checks run against the substituted
+/// parameters and the result carries the substituted members. An empty map (a parameter
+/// list that resolved to nothing, or a non-generic class) leaves both ids untouched.
+fn new_class_substitution(
+    pass: &mut Pass,
+    scope: ScopeId,
+    decl_id: DeclId,
+    info: &ClassInfo,
+    new_expr: &NewExpression<'_>,
+    arg_types: &[(TypeId, Span)],
+) -> (TypeId, TypeId) {
+    // Non-generic class: no parameters to substitute — the M11 identity.
+    let Some(type_params) = pass.class_type_params.get(&decl_id).cloned() else {
+        return (info.ctor, info.instance);
+    };
+
+    let map: FxHashMap<TypeParamId, TypeId> = match new_expr.type_arguments.as_deref() {
+        // Explicit type arguments: lower each and zip to the class's parameters.
+        Some(args) => {
+            let mut map = FxHashMap::default();
+            for (&param, arg) in type_params.iter().zip(&args.params) {
+                if let Some(lowered) = lower_annotation(pass, scope, arg) {
+                    map.insert(param, lowered);
+                }
+            }
+            map
+        }
+        // No type arguments: infer from the constructor argument types. The inference
+        // targets are the *uninstantiated* constructor parameter types (they carry the
+        // type parameters). Snapshot them before the mutable inference call.
+        None => {
+            let param_types: Vec<TypeId> =
+                match pass.interner.store().function_type(info.ctor) {
+                    Some(func) => func.params.iter().map(|p| p.ty).collect(),
+                    None => Vec::new(),
+                };
+            let args: Vec<TypeId> = arg_types.iter().map(|(ty, _)| *ty).collect();
+            infer::infer_type_arguments(pass.interner, &type_params, &param_types, &args)
+        }
+    };
+
+    // Apply the substitution to both the constructor signature and the instance type.
+    // An empty map is the identity (`substitute` short-circuits), so this is safe even
+    // when no parameter resolved.
+    let ctor = substitute(pass.interner, info.ctor, &map);
+    let instance = substitute(pass.interner, info.instance, &map);
+    (ctor, instance)
 }
 
 /// Infer a `function` declaration/expression's type and check its body, returning
@@ -5877,5 +6118,246 @@ class C {
         // The getter `bad` returns `number` but is declared `: string` → TK2322 on the
         // returned expression (line 7). The setter body is clean.
         assert_eq!(diags(src), vec![(7, "TK2322".to_string())]);
+    }
+}
+
+#[cfg(test)]
+mod generic_class_tests {
+    //! M16 end-to-end tests for **generic classes** (type parameters on a class scope
+    //! its instance type + constructor; `new C<args>` / `new C(args)` instantiate by
+    //! explicit substitution or constructor-argument inference; `C<args>` is usable as a
+    //! type). These drive the whole pipeline (parse → bind → check) and assert the set of
+    //! `(line, code)` diagnostics, pinning the M16 invariants the reviewer should
+    //! scrutinize: the parameter is substituted into the instance/ctor/members,
+    //! `Box<number>` and `Box<string>` are distinct instantiations, the constructor
+    //! arguments are checked against the substituted parameters, and inference from the
+    //! constructor arguments matches the explicit-argument path. The per-fixture
+    //! acceptance lives in the conformance corpus (`m16_generic_classes/`).
+
+    use crate::driver::check_source;
+
+    /// Run the checker and return the sorted `(1-based line, code)` of every diagnostic,
+    /// keyed on its primary-span start line (matching the conformance harness's mapping).
+    fn diags(source: &str) -> Vec<(u32, String)> {
+        let out = check_source(source);
+        assert!(
+            out.parse_errors.is_empty(),
+            "unexpected parse error(s): {:?}",
+            out.parse_errors
+        );
+        let index = crate::span::LineIndex::new(source);
+        let mut v: Vec<(u32, String)> = out
+            .diagnostics
+            .iter()
+            .map(|d| (index.line_of(d.span.start), d.code.as_str().to_string()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Explicit type arguments instantiate the constructor + instance: `new Box<number>(1)`
+    /// types the constructor `(v: number)` and the instance `{ value: number; get: () =>
+    /// number }`, so `b.get()` is `number`. A wrong target annotation (`bad: string`) is
+    /// `TK2322`; a wrong constructor argument (`new Box<number>("s")`) is `TK2345`.
+    #[test]
+    fn explicit_type_arguments_substitute_ctor_and_members() {
+        let src = "\
+class Box<T> {
+  value: T;
+  constructor(v: T) {
+    this.value = v;
+  }
+  get(): T {
+    return this.value;
+  }
+}
+const b = new Box<number>(1);
+const n: number = b.get();   // ok
+const bad: string = b.get(); // TK2322
+const e = new Box<number>(\"s\"); // TK2345
+";
+        // `b.get()` is the substituted `number`: line 11 ok, line 12 (string target) TK2322,
+        // line 13 (string arg vs number param) TK2345.
+        assert_eq!(
+            diags(src),
+            vec![(12, "TK2322".to_string()), (13, "TK2345".to_string())]
+        );
+    }
+
+    /// No type arguments → the parameter is **inferred** from the constructor argument:
+    /// `new Box(5)` infers `T = number`, so `inf.get()` is `number` — a `string` target is
+    /// `TK2322`, a `number` target is clean.
+    #[test]
+    fn inferred_type_argument_from_constructor_argument() {
+        let src = "\
+class Box<T> {
+  value: T;
+  constructor(v: T) {
+    this.value = v;
+  }
+  get(): T {
+    return this.value;
+  }
+}
+const inf = new Box(5);
+const m: number = inf.get();  // ok
+const m2: string = inf.get(); // TK2322
+";
+        // `T` inferred `number` from `5`: line 11 ok, line 12 (string target) TK2322.
+        assert_eq!(diags(src), vec![(12, "TK2322".to_string())]);
+    }
+
+    /// Two distinct instantiations are distinct types: `Box<number>` is not assignable to
+    /// `Box<string>` (their `value`/`get` members differ structurally) → `TK2322`, while a
+    /// matching annotation (`Box<number>`) is clean.
+    #[test]
+    fn distinct_instantiations_are_distinct_types() {
+        let src = "\
+class Box<T> {
+  value: T;
+  constructor(v: T) {
+    this.value = v;
+  }
+  get(): T {
+    return this.value;
+  }
+}
+const x: Box<number> = new Box<number>(1); // ok
+const y: Box<string> = new Box<number>(1); // TK2322
+";
+        // `Box<number>` ≠ `Box<string>`: only line 11 errors (TK2322).
+        assert_eq!(diags(src), vec![(11, "TK2322".to_string())]);
+    }
+
+    /// A multi-parameter generic class substitutes each parameter independently:
+    /// `Pair<number, string>` types `first: number`, `second: string`. A swapped target
+    /// (`bad: string = p.first`) is `TK2322`; swapped constructor arguments fail per-arg
+    /// (`TK2345` each).
+    #[test]
+    fn multi_parameter_substitutes_each_independently() {
+        let src = "\
+class Pair<A, B> {
+  first: A;
+  second: B;
+  constructor(a: A, b: B) {
+    this.first = a;
+    this.second = b;
+  }
+}
+const p = new Pair<number, string>(1, \"x\");
+const a: number = p.first;   // ok
+const b: string = p.second;  // ok
+const bad: string = p.first; // TK2322
+const e = new Pair<number, string>(\"x\", 1); // TK2345 x2
+";
+        // `p.first` is `number`, `p.second` is `string`: line 12 (string target) TK2322;
+        // line 13 swaps both arguments → two TK2345 (each fails its own parameter).
+        assert_eq!(
+            diags(src),
+            vec![
+                (12, "TK2322".to_string()),
+                (13, "TK2345".to_string()),
+                (13, "TK2345".to_string())
+            ]
+        );
+    }
+
+    /// A multi-parameter class with **no** explicit type arguments infers each parameter
+    /// from its own constructor argument: `new Pair(1, "x")` infers `A = number`,
+    /// `B = string`, so `inferred.second` is `string` — a `string` target is clean, a
+    /// `number` target is `TK2322`.
+    #[test]
+    fn multi_parameter_inference_from_arguments() {
+        let src = "\
+class Pair<A, B> {
+  first: A;
+  second: B;
+  constructor(a: A, b: B) {
+    this.first = a;
+    this.second = b;
+  }
+}
+const inferred = new Pair(1, \"x\");
+const c: string = inferred.second; // ok
+const d: number = inferred.second; // TK2322
+";
+        // `B` inferred `string` from `\"x\"`: line 10 ok, line 11 (number target) TK2322.
+        assert_eq!(diags(src), vec![(11, "TK2322".to_string())]);
+    }
+
+    /// `C<args>` is usable as a plain **type annotation** (not just at `new`): a
+    /// `Box<number>` parameter accepts a `Box<number>` argument and rejects a `Box<string>`
+    /// one. This exercises the M9 generic type-reference instantiation over a class's
+    /// instance template.
+    #[test]
+    fn generic_class_used_as_type_annotation() {
+        let src = "\
+class Box<T> {
+  value: T;
+  constructor(v: T) {
+    this.value = v;
+  }
+}
+function take(b: Box<number>): number {
+  return b.value;
+}
+const ok = take(new Box<number>(1));   // ok
+const bad = take(new Box<string>(\"s\")); // TK2345
+";
+        // The `Box<string>` argument is not assignable to the `Box<number>` parameter:
+        // line 11 TK2345. The `Box<number>` argument (line 10) is clean.
+        assert_eq!(diags(src), vec![(11, "TK2345".to_string())]);
+    }
+
+    /// A well-typed generic class with member bodies referencing the type parameter checks
+    /// **clean** — `T` resolves in every member body (constructor, getter, setter) under
+    /// the parameter frame pushed by `check_class`. No crash, no spurious error.
+    #[test]
+    fn generic_member_bodies_check_under_parameter_scope() {
+        let src = "\
+class Box<T> {
+  value: T;
+  constructor(v: T) {
+    this.value = v;
+  }
+  get(): T {
+    return this.value;
+  }
+  set(v: T): void {
+    this.value = v;
+  }
+}
+const b = new Box<number>(1);
+const n: number = b.get();
+";
+        // A well-typed generic class checks clean — `T` resolves in every member body.
+        assert!(diags(src).is_empty(), "got {:?}", diags(src));
+    }
+
+    /// A type parameter does **not leak** past its class: a same-named top-level
+    /// `type T = string` is what a reference to `T` resolves to **outside** the class
+    /// (so `const s: T = 1` is `TK2322`, number vs string), while **inside** the class
+    /// the parameter `T` shadows it (so `value: T` is the parameter, and `new Box<number>`
+    /// types `value` as `number`, not `string`). If the parameter leaked, `s: T = 1`
+    /// outside would see the parameter and not error. (Pins the `with_type_params` pop in
+    /// both `fill_class` and `check_class`, and the M9 shadowing order.)
+    #[test]
+    fn type_parameter_does_not_leak_and_shadows_inside() {
+        let src = "\
+type T = string;
+class Box<T> {
+  value: T;
+  constructor(v: T) {
+    this.value = v;
+  }
+}
+const b = new Box<number>(1);
+const inside: number = b.value; // ok — inside, `T` is the parameter (number here)
+const s: T = 1;                 // TK2322 — outside, `T` is the top-level string alias
+";
+        // Inside the class `T` is the parameter (so `b.value` is `number`, line 9 ok);
+        // outside, `T` resolves to the top-level `string` alias, so `s: T = 1` is line 10
+        // TK2322. A leaked parameter would make line 10 clean instead.
+        assert_eq!(diags(src), vec![(10, "TK2322".to_string())]);
     }
 }
