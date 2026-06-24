@@ -97,9 +97,10 @@ slots into a known later phase without rework:
   follow. Tuple/array-literal **contextual typing** is currently declaration-position only — a
   tuple literal `return`ed or passed as an argument, and array-of-literal-type targets
   (`const a: 1[] = [1]`), are over-strict (false positive, safe direction); deferred.
-- **index signatures** (`{ [k: string]: T }`, `{ [i: number]: T }`) land in **M19**; `keyof`,
-  indexed-access types (`T[K]`), mapped types, conditional types, and utility types (`Partial`,
-  `Record`, …) remain deferred.
+- **index signatures** (`{ [k: string]: T }`, `{ [i: number]: T }`) land in **M19**; `keyof` +
+  indexed-access types (`T[K]`) on concrete object types land in **M20** (evaluated eagerly).
+  Generic/deferred `keyof`/`T[K]` (over a type parameter), mapped types, conditional types, and
+  utility types (`Partial`, `Record`, …) remain deferred (they want the type-level VM, §7).
 - **modules/imports** and the rest of **`lib.d.ts` globals** (`console`, string methods, `Promise`,
   …) are out of scope for now — fixtures avoid the standard library otherwise.
 
@@ -135,3 +136,4 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m17_arrays/` | M17 — array types (`T[]` / `Array<T>`, element access, `length`, covariance) |
 | `m18_tuples/` | M18 — tuple types (`[A, B]`, positional assignability, indexed access) |
 | `m19_index_sig/` | M19 — index signatures (`{ [k: string]: T }`, `{ [i: number]: T }`) |
+| `m20_keyof/` | M20 — `keyof T` + indexed-access types (`T[K]`) on concrete object types |
