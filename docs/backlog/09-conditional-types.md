@@ -6,7 +6,8 @@ blocked-by: [./08-generic-constraints.md]
 
 # 09 — Conditional types (`T extends U ? X : Y`)
 
-**Summary.** First milestone of the type-level VM phase (do it tree-walked first; the VM comes last —
+**Summary.** First milestone of the type-level evaluation phase (tree-walked — the bytecode VM is a
+deferred, profiling-gated refactor, [ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md);
 architecture §7, §12). This is where the de Bruijn migration likely becomes necessary.
 
 ## Problem

@@ -107,9 +107,11 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
 - **Narrowing through unstructured flow** — `if (x.kind === "a") return; …` does **not** narrow the
   code after the early `return` (only structured `if`/`else`/`switch` narrows). This needs the
   flow-node CFG and is the most likely to surprise on idiomatic code.
-- **The type-level VM phase** — conditional types (`T extends U ? X : Y`), mapped types, and utility
-  types (`Partial`, `Record`, …) are not implemented; they want the bytecode VM (architecture §7).
-  Generic `keyof`/`T[K]` over a bare type parameter likewise defers to that phase.
+- **The type-level evaluation phase** — conditional types (`T extends U ? X : Y`), mapped types, and
+  utility types (`Partial`, `Record`, …) are not implemented; they will be tree-walked with the
+  algorithmic wins folded in (architecture §7). Generic `keyof`/`T[K]` over a bare type parameter
+  likewise defers to that phase. (A bytecode VM is a deferred, profiling-gated refactor, not a
+  planned step — see `docs/decisions/0001-…`.)
 - **Optional properties** (`a?: T`) on objects/interfaces/class fields are implemented (M21): a
   member may be absent, reads yield `T | undefined`, `keyof`/indexed-access include it. Still
   deferred: optional **methods**/accessors (`go?(): T`), the dedicated *possibly-undefined*

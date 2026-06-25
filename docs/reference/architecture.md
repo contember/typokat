@@ -45,11 +45,12 @@ Two key consequences:
 Two pieces are easy to underestimate and are called out explicitly below:
 
 - The **relation engine** (§6) is almost certainly the single largest CPU consumer in the
-  whole checker — larger than the type-level VM. Most time in real repos
+  whole checker — larger than type-level evaluation. Most time in real repos
   (React/Next/Nest/Prisma) goes into repeated `isAssignable(A, B)`, not into conditional
   arithmetic.
-- The **statement checker ↔ type-level VM boundary** (§9) is unmapped territory — no
-  existing rewrite built both layers at once.
+- The **statement checker ↔ type-level evaluator boundary** (§9) is unmapped territory — no
+  existing rewrite built both layers at once. (It only sharpens into a *VM* boundary if the
+  deferred bytecode refactor of §7 is ever undertaken — ADR-0001.)
 
 ---
 
@@ -169,7 +170,7 @@ Responsibilities:
   sacrifice it.
 - Contextual typing and the **inference engine** (see §5.1).
 - Overload resolution.
-- Driving the relation engine (§6) for every assignability question and the type-level VM
+- Driving the relation engine (§6) for every assignability question and the type-level evaluator
   (§7) for every type-level computation.
 
 ### 5.1 Inference is generative, not just relational
@@ -240,19 +241,27 @@ measurement for generics is itself cached (`(GenericId, ParamIndex) → Variance
 
 ---
 
-## 7. Type-level VM — bytecode
+## 7. Type-level evaluation — tree-walked, with the bytecode VM as a deferred refactor
 
-Type-level TypeScript is a purely functional language (no loops, only recursion).
-Tree-walking it is inherently slow; a VM gives order-of-magnitude speedup (confirmed in
-spirit by `tyvm` and `TypeRunner`). This is for conditional/mapped/`infer`, template
-literals, and arithmetic.
+Type-level TypeScript is a purely functional language (no loops, only recursion). It is
+evaluated by a **tree-walked evaluator** (built with the conditional/mapped/template/utility
+milestones, backlog `09`–`12`). Its performance comes from four *algorithmic* properties folded
+into the tree-walker — **memoization, accumulator reuse, an explicit work-stack, and arithmetic
+intrinsics (§7.2)** — which carry the order-of-magnitude wins and are *required*, not optional.
 
-**Scope note:** the VM is the *bonus*, not the main win. On ordinary application code the
-big levers are arena layout, hash-consing, and the relation cache (§6) — see §10. The VM
-shines specifically on type-level-heavy code (deep conditional/mapped DSLs, tuple
-arithmetic).
+A **bytecode VM** (IR → bytecode → stack VM, §7.1) is a **potential later refactor**, not a planned
+pillar — undertaken only if profiling on real type-level-heavy code shows the *interpreter dispatch
+loop itself* (not the algorithm, not relation/instantiation) is the bottleneck. The rationale and
+evidence for that demotion are **[ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)**;
+the rest of §7 is the design reference *if* that refactor is ever justified.
 
-### 7.1 Pipeline
+**Scope note:** even at its best the VM is a *bonus*, not the main win. On ordinary application code
+the big levers are arena layout, hash-consing, and the relation cache (§6) — see §10. The order-of-
+magnitude wheelhouse is a narrow slice — type-level *programs* (parsers, tuple arithmetic, deep
+recursive transforms) — and on that slice the algorithmic wins (§7.2), not bytecode dispatch, are
+what move the needle; bytecode adds a constant-factor on top.
+
+### 7.1 Pipeline (the refactor's shape, if undertaken)
 
 ```
 type-level AST  →  IR  →  bytecode (disk-cacheable)  →  stack VM
@@ -263,36 +272,39 @@ The first two stages are the expensive ones and run once per file; bytecode is c
 dependencies are unchanged — tracking that graph is as hard as Salsa, it just looks
 easier. Cross-run validity relies on the stable structural hash (§3.2), not on `TypeId`.
 
-### 7.2 Recursion and tail calls — the go/no-go of this layer
+### 7.2 The four algorithmic wins — these belong in the *tree-walker*, not a VM
 
-Iteration = recursion, so without this the VM never leaves toy examples. Four required
-minima:
+Iteration = recursion, so a naive recursive evaluator never leaves toy examples. The four required
+minima below carry the order-of-magnitude wins — and **three of the four are pure tree-walker work,
+orthogonal to bytecode** (ADR-0001). Build them into the evaluator as items `09`–`12` land:
 
-1. **Tail-position analysis over IR** → a recursive self-call rewrites into a loop with
-   frame reuse (`goto` to subroutine start with rewritten args). Fragility warning: an
-   enclosing conditional whose result is further processed pushes the call out of tail
-   position (exactly the bug tsc is finicky about). You can be *more correct* than tsc if
-   you build this as clean data-flow over IR.
-2. **Tuple / accumulator reuse** (tail-rest): grow `[...Acc, X]` in place instead of
-   copying each iteration. Turns O(n²) accumulator building into O(n). Often a bigger win
-   than frame elimination because allocations dominate.
-3. **Memoization for non-tail (tree) recursion**: `(subroutine, args) → result`. Tree
-   recursion (`Flatten<L> & Flatten<R>`) can't be tail-called; memoize + depth limit +
-   cycle detection.
-4. **Explicit heap frame-stack**, not host (Rust) recursion on `Call`. Otherwise you
-   overflow the native stack before the logical type-level limit.
+1. **Memoization for non-tail (tree) recursion**: `(subroutine, args) → result`, keyed on hash-
+   consed argument `TypeId`s. Tree recursion (`Flatten<L> & Flatten<R>`) can't be tail-called;
+   memoize + depth limit + cycle detection. The single biggest lever — *no VM required*.
+2. **Tuple / accumulator reuse** (tail-rest): grow `[...Acc, X]` in place instead of copying each
+   iteration. Turns O(n²) accumulator building into O(n). Often a bigger win than frame elimination
+   because allocations dominate — *no VM required*.
+3. **Explicit heap work-stack (trampoline)**, not host (Rust) recursion on `Call`. Otherwise you
+   overflow the native stack before the logical type-level limit — *no VM required*.
+4. **Tail-position analysis** → a recursive self-call rewrites into a loop with frame reuse. This is
+   the one item that benefits from an IR: a clean data-flow pass over IR can be *more correct* than
+   tsc (an enclosing conditional whose result is further processed pushes the call out of tail
+   position — exactly the bug tsc is finicky about). Achievable over the tree with an explicit
+   work-stack; cleanest if/when the bytecode refactor (§7.1) materialises.
 
-### 7.3 Specialized instructions
+### 7.3 Specialized arithmetic (intrinsics — also tree-walker work)
 
 Arithmetic, which type-level TS "hacks" via tuple lengths and template strings (extremely
-expensive), gets native VM instructions (`Add`, `Sub`, `Lte`…) — the `tyvm` lesson: the
-cheapest recursion is the one you replace with a constant-time op.
+expensive), is computed natively (`Add`, `Sub`, `Lte`…) — the `tyvm` lesson: the cheapest recursion
+is the one you replace with a constant-time op. These are **intrinsic type functions** the evaluator
+intercepts; they need no bytecode, only pattern recognition. As VM opcodes they're marginally
+faster, but the order-of-magnitude is in *not recursing at all*, which the tree-walker captures.
 
 ### 7.4 Instantiation limits
 
 Type-level code is shared over npm, so divergence here hurts more than in statement
 checking. **Stay as close to tsc's limits and fragilities as possible** (~50 ordinary
-recursion, ~1000 tail), even if your VM could do more — paradoxically the layer where you
+recursion, ~1000 tail), even if your evaluator could do more — paradoxically the layer where you
 are technically strongest is the one where deviating pays least. Code that passes tsc
 should pass you.
 
@@ -391,9 +403,15 @@ Realistic estimate vs **tsgo**:
 
 | Code class | Expected speedup over tsgo | Source of the win |
 |---|---|---|
-| Type-level heavy (conditional/mapped DSL, arithmetic) | **order of magnitude** | VM vs tree-walking (different algorithmic class) |
+| Type-level heavy (conditional/mapped DSL, arithmetic) | **order of magnitude** | memoization + accumulator reuse + arith intrinsics (§7.2) — a different algorithmic class, *in the tree-walker*; a bytecode VM adds only a constant factor on top (ADR-0001) |
 | Ordinary app code (subtyping + narrowing dominate) | **~1.5–3×** | layout: SoA, pointer-free arenas, no GC pauses, relation cache |
 | Whole large repo | weighted average, pulled down by the type-level share | — |
+
+Caveat on the first row: the order-of-magnitude applies to a *narrow* slice — type-level
+*programs* (parsers, tuple arithmetic, deep recursive transforms). Instantiation-heavy code that
+merely *looks* type-level (Zod-class validators: `.extend`/`.omit` chains) is dominated by
+instantiation count + structural relation checks, which the relation engine (§6) and lean
+instantiation address — **not** the evaluator. See ADR-0001.
 
 That is a defensible **SOTA architecture** — measurably faster than tsgo, dramatically so
 on type-level code. But "faster tsc" is SOTA in *engineering*; SOTA in *type systems*
@@ -408,9 +426,10 @@ design targets the former.
    undocumented (the spec *is* checker.ts). No architecture sidesteps it — only grinding
    does. It's 10× the work of infra and is the real reason existing rewrites are
    unfinished, not speed.
-2. **The VM ↔ interpreter boundary is unmapped.** When to hand a computation to the VM, how
-   to return the result into the structural world, sharing `TypeId` across the boundary.
-   No attempt has both layers — `tyvm` has only the top, the others only the bottom.
+2. **The VM ↔ interpreter boundary is unmapped** — *now off the critical path* (ADR-0001 defers the
+   VM): when to hand a computation to the VM, how to return the result into the structural world,
+   sharing `TypeId` across the boundary. No attempt has both layers — `tyvm` has only the top, the
+   others only the bottom. This risk only re-arms if the bytecode refactor is ever undertaken.
 3. **Relation cache lifetime** (§6.2) is subtle: get it wrong and you either leak memory on
    narrowed ephemerals or lose the hit rate that makes the engine fast.
 4. **Bytecode cache invalidation** (§7.1) is not free incrementality; tracking transitive
@@ -428,12 +447,16 @@ design targets the former.
    a usable checker on a real repo as early as possible. Completability is decided here.
 3. **Phase 2 — Scope hardening.** Variance, declaration merging (multi-slot), contextual
    typing, overloads, reporting mode (§6.4). Catching up on model coverage (the §11.1 wall).
-4. **Phase 3 — Type-level VM.** Once the core stands, carve type-level eval out of the
-   interpreter into the bytecode VM. This is where the order-of-magnitude type-level
-   speedup arrives.
+4. **Phase 3 — Type-level evaluator (tree-walked).** Once the core stands, build conditional/
+   mapped/template/utility evaluation with the four algorithmic wins folded in (§7.2: memoization,
+   accumulator reuse, explicit work-stack, arith intrinsics). This is where the order-of-magnitude
+   type-level speedup arrives — *in the tree-walker*. A bytecode VM (§7.1) is a **deferred,
+   profiling-gated refactor**, not part of this phase (ADR-0001).
 5. **Phase 4 — Incrementality (IDE).** Salsa-style layer over the binder with durability
-   (lib/deps = HIGH, workspace = LOW). Per-file VM cache as a complement.
+   (lib/deps = HIGH, workspace = LOW). A per-file bytecode cache is a complement *if* the VM
+   refactor ever happens.
 
-Plan rule: **the relation engine and narrowing come before the VM.** The VM is the
-sexiest piece but the smallest share of real-world cost; the relation engine is the
-largest. If time runs out, cut the VM before you widen scope.
+Plan rule: **the relation engine and narrowing come before the type-level evaluator, and the
+evaluator's speed lives in its algorithms, not in a VM.** The bytecode VM is the sexiest piece but
+the smallest share of real-world cost and the least-mapped risk (§11.2); it stays a
+profiling-gated option. If time runs out, it is the first thing cut.

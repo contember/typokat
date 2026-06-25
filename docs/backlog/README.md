@@ -14,7 +14,9 @@ unwieldy; numbers stay folder-local.
 
 This **is** the roadmap. Items `01`–`05` are gaps surfaced by the official-suite harness (the `F*`
 findings); `06`–`17` are the milestone roadmap. Architecture §12 governs ordering — the relation
-engine + narrowing come **before** the type-level VM. See
+engine + narrowing come **before** type-level evaluation, whose speed lives in the tree-walker's
+algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor — see
+[ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). See
 [`../reference/dev-method.md`](../reference/dev-method.md) for how each item is built.
 
 ## Items
@@ -29,16 +31,16 @@ engine + narrowing come **before** the type-level VM. See
 - [`05`](05-object-interface-signatures.md) — call/method/construct signatures in object & interface types (candidate milestone).
 - [`06`](06-class-completeness-checks.md) — class-completeness checks `TK2416` + `TK2515` (good warm-up).
 
-**Narrowing + generics (both precede the VM)**
+**Narrowing + generics (both precede type-level evaluation)**
 - [`07`](07-unstructured-flow-narrowing.md) — unstructured-flow narrowing, the flow-node CFG (M23).
 - [`08`](08-generic-constraints.md) — generic constraints `<T extends U>` (M24).
 
-**The type-level VM phase (tree-walked first, VM last)**
+**The type-level evaluation phase (tree-walked; bytecode VM deferred — ADR-0001)**
 - [`09`](09-conditional-types.md) — conditional types (M25) · blocked-by `08`.
 - [`10`](10-mapped-types.md) — mapped types (M26) · blocked-by `08`.
 - [`11`](11-template-literal-types.md) — template literal types (M27).
 - [`12`](12-utility-types.md) — utility types (M28) · blocked-by `09`, `10`.
-- [`13`](13-bytecode-vm.md) — the bytecode VM (M29) · blocked-by `09`, `10`.
+- [`13`](13-bytecode-vm.md) — type-level evaluator performance: algorithmic wins in the tree-walker; bytecode VM only if profiling demands it · blocked-by `09`, `10`.
 
 **Long-term: real-world scale + IDE**
 - [`14`](14-libdts-loading.md) — `lib.d.ts` loading · blocked-by `09`, `10`.

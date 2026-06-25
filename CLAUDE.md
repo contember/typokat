@@ -58,7 +58,8 @@ against real `tsc --strict`). Implementation goes through subagents; the leader 
 commits. The soundness/architecture **invariants you must not break** are in
 [docs/reference/invariants.md](docs/reference/invariants.md); the roadmap **is** the
 [docs/backlog/](docs/backlog/README.md) (next: unstructured-flow narrowing, generic constraints,
-then the type-level VM).
+then the type-level evaluation phase — tree-walked; the bytecode VM is a deferred, profiling-gated
+refactor, ADR-0001).
 
 ## Testing
 

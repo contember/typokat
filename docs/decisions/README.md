@@ -13,3 +13,4 @@ a commit message suffices.
 ## Log
 
 <!-- newest last; one line each: NNNN — title — status (date) -->
+- [`0001`](0001-type-level-vm-is-a-deferred-evaluator-optimization.md) — the bytecode VM is a deferred evaluator optimization, not a planned pillar — accepted (2026-06-25)

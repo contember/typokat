@@ -87,7 +87,9 @@ gaps it surfaced are filed as backlog items (the `F*` findings — see
 
 The roadmap **is** the [`../backlog/`](../backlog/README.md): each milestone and each known gap is
 its own item, ordered roughly by value and dependency. Architecture §12 governs ordering — the
-relation engine + narrowing come **before** the type-level VM, never the reverse.
+relation engine + narrowing come **before** type-level evaluation, never the reverse; that
+evaluation is tree-walked, with the bytecode VM a deferred, profiling-gated refactor
+([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)).
 
 Recommended next: the current-impl bugs first (`01`–`04` — highest value, they over-report in the
 false-positive direction), then **unstructured-flow narrowing** (`07`, the biggest remaining

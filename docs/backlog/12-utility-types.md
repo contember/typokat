@@ -6,8 +6,8 @@ blocked-by: [./09-conditional-types.md, ./10-mapped-types.md]
 
 # 12 — Utility types (`Partial`, `Record`, `Pick`, …)
 
-**Summary.** Type-level VM phase. Most fall out of mapped/conditional types once those exist; a few
-are built-in.
+**Summary.** Type-level evaluation phase (tree-walked; bytecode VM deferred — ADR-0001). Most fall
+out of mapped/conditional types once those exist; a few are built-in.
 
 ## Problem
 

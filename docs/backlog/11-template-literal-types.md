@@ -6,8 +6,8 @@ blocked-by: []
 
 # 11 — Template literal types (`` `${A}-${B}` ``)
 
-**Summary.** Type-level VM phase (tree-walked first). Template literal types over string literal
-unions.
+**Summary.** Type-level evaluation phase (tree-walked; bytecode VM deferred — ADR-0001). Template
+literal types over string literal unions.
 
 ## Problem
 

@@ -6,8 +6,8 @@ blocked-by: [./08-generic-constraints.md]
 
 # 10 — Mapped types (`{ [K in keyof T]: … }`)
 
-**Summary.** Type-level VM phase (tree-walked first). Homomorphic mapped types with modifier and
-key-remapping support.
+**Summary.** Type-level evaluation phase (tree-walked; bytecode VM deferred — ADR-0001). Homomorphic
+mapped types with modifier and key-remapping support.
 
 ## Problem
 
