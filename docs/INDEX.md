@@ -6,7 +6,7 @@ decisions → reference → archive.
 
 ## Folders
 
-- [`reference/`](reference/README.md) — how the system works now (architecture, dev method, invariants).
+- [`reference/`](reference/README.md) — how the system works now (architecture, dev method, invariants, scope map).
 - [`ideas/`](ideas/README.md) — proposals, no commitment.
 - [`decisions/`](decisions/README.md) — ADRs (the *why*), immutable.
 - [`backlog/`](backlog/README.md) — decided work, not yet scheduled (the roadmap).
