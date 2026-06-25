@@ -206,6 +206,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     };
                     let mut prop = PropertyType::public(name.into_owned(), ty);
                     prop.optional = sig.optional;
+                    // F5/backlog-03: carry the `readonly` modifier onto object-type-literal
+                    // members (`{ readonly k: T }`). Previously dropped, so assigning to such a
+                    // member was silently allowed. Part of the property's structural identity
+                    // (hashed by the interner) but ignored by the relation engine for
+                    // assignability; it gates the assignment target only (`TK2540`).
+                    prop.readonly = sig.readonly;
                     object.properties.push(prop);
                 }
                 // M19: an index signature `[k: string]: T` / `[i: number]: T`.

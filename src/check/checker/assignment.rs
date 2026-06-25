@@ -170,15 +170,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return;
         }
 
-        // Look up the property on the base **object** type. A non-object base (union,
-        // intrinsic) has no property table here → skip (element-access / union targets are
-        // deferred). Snapshot the property's type + `readonly` + `is_accessor` + origin
-        // before any `&mut` borrow for a diagnostic.
-        let found = self
+        // Look up the property on the base **object** type. Snapshot the property's
+        // type + `readonly` + `is_accessor` + origin before any `&mut` borrow for a
+        // diagnostic.
+        let prop_name = member.property.name.as_str();
+        let object_found = self
             .interner
             .store()
             .object_type(base_ty)
-            .and_then(|obj| obj.property(member.property.name.as_str()))
+            .and_then(|obj| obj.property(prop_name))
             .map(|prop| {
                 (
                     prop.ty,
@@ -188,7 +188,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 )
             });
 
-        // Property not on the type → deferred (no `TK2339` on an assignment target).
+        // F5/backlog-03 (part b): a **union** base has no `object_type`, so the object
+        // lookup above misses it and the assignment was silently skipped (no readonly
+        // check, no type check). Resolve the property across the union members instead —
+        // mirroring the read-side `union_member_access` model — when the object path found
+        // nothing.
+        let found = match object_found {
+            Some(found) => Some(found),
+            None => self.union_member_assignment_target(base_ty, prop_name),
+        };
+
+        // Property not on the type (or missing on some union member) → deferred (no
+        // `TK2339` on an assignment target).
         let Some((prop_ty, readonly, is_accessor, declaring_class)) = found else {
             return;
         };
@@ -240,6 +251,47 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 });
             }
         }
+    }
+
+    /// Resolve a property assignment target across a **union** base (F5/backlog-03 part b),
+    /// mirroring the read-side [`union_member_access`](super::Pass::union_member_access)
+    /// model. The property must be present on **every** member (else the target is deferred
+    /// — `None`, no `TK2339` on an assignment target, matching the object path). When it is:
+    ///
+    /// - the **readonly** flag for the target is `true` if the property is `readonly` on
+    ///   **any** member (matching tsc — a union property is read-only if any constituent
+    ///   makes it so), so assigning to it is `TK2540`;
+    /// - the target **type** is the union of the members' property types (interned), so a
+    ///   wrong-typed RHS is `TK2322`.
+    ///
+    /// `is_accessor`/`declaring_class` are reported as `false`/`None`: the `readonly`
+    /// gate's constructor carve-out only applies to a `this.prop` base, and a union base is
+    /// never `this`, so these never affect the verdict — the gate emits `TK2540` whenever
+    /// `readonly` holds. Returns the same `(ty, readonly, is_accessor, declaring_class)`
+    /// snapshot the object path produces.
+    fn union_member_assignment_target(
+        &mut self,
+        base_ty: TypeId,
+        prop_name: &str,
+    ) -> Option<(TypeId, bool, bool, Option<crate::types::repr::ClassId>)> {
+        // Snapshot the member ids: the per-member lookups are immutable, but interning the
+        // result union below needs `&mut`, so the borrow must not be held across it.
+        let members: Vec<TypeId> = self.interner.store().union_members(base_ty)?.to_vec();
+
+        let mut member_prop_types: Vec<TypeId> = Vec::with_capacity(members.len());
+        let mut any_readonly = false;
+        for member in members {
+            let prop = self
+                .interner
+                .store()
+                .object_type(member)
+                .and_then(|o| o.property(prop_name))?;
+            member_prop_types.push(prop.ty);
+            any_readonly |= prop.readonly;
+        }
+
+        let prop_ty = self.interner.union(member_prop_types);
+        Some((prop_ty, any_readonly, false, None))
     }
 
 }

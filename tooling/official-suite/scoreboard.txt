@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
 # corpus 874  in-scope 494  out-of-scope 380
-# clean-kept 163/210  error-exact 16/284  diag-recall 192/1658
+# clean-kept 163/210  error-exact 16/284  diag-recall 197/1658
 # cols: status<TAB>matched fn fp expected<TAB>rel  (status=IN | OOS:<bucket>; '-' = n/a)
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -453,7 +453,7 @@ OOS:syntax:mapped-type	- - - -	conformance/types/intersection/intersectionTypeIn
 OOS:unresolved	- - - -	conformance/types/intersection/intersectionTypeInference3.ts
 IN	0 8 0 8	conformance/types/intersection/intersectionTypeMembers.ts
 IN	0 2 0 2	conformance/types/intersection/intersectionTypeOverloading.ts
-IN	0 4 0 4	conformance/types/intersection/intersectionTypeReadonly.ts
+IN	1 3 0 4	conformance/types/intersection/intersectionTypeReadonly.ts
 OOS:syntax:mapped-type	- - - -	conformance/types/intersection/intersectionWithIndexSignatures.ts
 OOS:syntax:conditional-type	- - - -	conformance/types/intersection/intersectionWithUnionConstraint.ts
 OOS:multifile	- - - -	conformance/types/intersection/intersectionsAndEmptyObjects.ts
@@ -873,7 +873,7 @@ IN	0 1 2 1	conformance/types/union/unionTypeFromArrayLiteral.ts
 OOS:unresolved	- - - -	conformance/types/union/unionTypeIndexSignature.ts
 IN	3 2 9 5	conformance/types/union/unionTypeMembers.ts
 IN	2 14 0 16	conformance/types/union/unionTypePropertyAccessibility.ts
-IN	0 5 0 5	conformance/types/union/unionTypeReadonly.ts
+IN	4 1 0 5	conformance/types/union/unionTypeReadonly.ts
 IN	0 0 0 0	conformance/types/union/unionTypeReduction.ts
 IN	0 1 2 1	conformance/types/union/unionTypeReduction2.ts
 OOS:unresolved	- - - -	conformance/types/union/unionTypeWithIndexSignature.ts

@@ -53,7 +53,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // commit that lands its fix. See tests/cases/README.md ("Bug-fix corpora").
     ("f3_class_member_collection", true),
     ("f4_destructuring_access", true),
-    ("f5_union_readonly", false),
+    ("f5_union_readonly", true),
 ];
 
 /// An expectation parsed from a single inline marker.
