@@ -180,3 +180,4 @@ finding ID.
 | Dir | Finding / backlog | Fix |
 |---|---|---|
 | `f3_class_member_collection/` | F3 / `01` | parameter properties + initializer-inferred class fields become real members |
+| `f4_destructuring_access/` | F4 / `02` | private/protected access control runs through object-destructuring patterns |
