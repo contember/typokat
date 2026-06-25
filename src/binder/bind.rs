@@ -330,9 +330,14 @@ fn bind_class_declaration(state: &mut BindState, scope: ScopeId, class: &Class<'
 /// handles the absent body. `abstract` on the class itself declares no name and is
 /// recorded by the checker, so it needs nothing here either.
 ///
-/// DEFERRED (still out of scope): parameter properties and `implements`. Those element
-/// kinds are skipped here (no binding); their sub-expressions in the subset are still
-/// safe.
+/// F3 / backlog 01: constructor **parameter properties** (`constructor(private x: T)`) need
+/// **no** binder change — the constructor is a `MethodDefinition`, so `bind_function` already
+/// binds its parameters (and body) like any method's; the *member* a parameter property
+/// declares is synthesized later by the checker ([`collect_class_own_members`]) and accessed
+/// through the instance type (`this.x`), not via a name bound here.
+///
+/// DEFERRED (still out of scope): `implements`. That element kind is skipped here (no
+/// binding); its sub-expressions in the subset are still safe.
 fn bind_class(state: &mut BindState, parent: ScopeId, class: &Class<'_>) {
     for element in &class.body.body {
         match element {

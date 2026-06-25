@@ -51,7 +51,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Bug-fix corpora (official-suite findings F3–F6 / backlog 01–04). Each is
     // committed `false` as a behavior-neutral spec, then flipped `true` by the
     // commit that lands its fix. See tests/cases/README.md ("Bug-fix corpora").
-    ("f3_class_member_collection", false),
+    ("f3_class_member_collection", true),
 ];
 
 /// An expectation parsed from a single inline marker.

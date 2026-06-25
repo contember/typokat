@@ -13,7 +13,7 @@ use oxc_ast::ast::{
     Function, MethodDefinition, MethodDefinitionKind, TSAccessibility, TSTypeParameterDeclaration,
 };
 use super::context::*;
-use super::calls::parameter_name;
+use super::calls::{parameter_name, widen};
 use super::decls::type_decl_id;
 use super::decls::value_decl_id;
 
@@ -172,16 +172,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// instantiates the template through the M9 [`instantiate_type_reference`]. A non-generic
     /// class lowers with an empty frame and is unchanged.
     ///
+    /// F3 / backlog 01: constructor **parameter properties** (`constructor(private x: number)`)
+    /// now declare instance members (param's modifier + annotated type) on top of remaining
+    /// constructor parameters, and a field with **no annotation but an initializer**
+    /// (`g = 2`, `f = () => 1`) declares a member whose type is **inferred** from the
+    /// initializer (widened when non-`readonly`). See [`collect_class_own_members`].
+    ///
     /// DEFERRED (out of scope, skipped without error): set-only / differing-get-set-type /
-    /// `static` accessors, parameter properties (`constructor(private x: number)`),
-    /// `implements`, method-**override compatibility** (`TK2416`), the abstract-member-not-
-    /// implemented completeness check (`TK2515`), `super.method()` (super property access),
-    /// generic **method-level** type parameters on a class, and **generic class inheritance**
-    /// with a base's type arguments substituted (`class S extends Box<string>` composes against
-    /// `Box`'s *unsubstituted* template, so a `super(...)`/inherited-member check sees the
-    /// base's free `T` — no crash, terminates, but over-reports; none of the M16 fixtures
-    /// extend a generic base). A field without a type annotation, or a member whose type cannot
-    /// be lowered, is skipped — each side keeps the members it can express.
+    /// `static` accessors, `implements`, method-**override compatibility** (`TK2416`), the
+    /// abstract-member-not-implemented completeness check (`TK2515`), `super.method()` (super
+    /// property access), generic **method-level** type parameters on a class, and **generic
+    /// class inheritance** with a base's type arguments substituted (`class S extends Box<string>`
+    /// composes against `Box`'s *unsubstituted* template, so a `super(...)`/inherited-member
+    /// check sees the base's free `T` — no crash, terminates, but over-reports; none of the M16
+    /// fixtures extend a generic base). A field with neither annotation nor initializer, a
+    /// computed key, or a member whose type cannot be lowered, is skipped — each side keeps
+    /// the members it can express.
     fn fill_class(
         &mut self,
         scope: ScopeId,
@@ -319,11 +325,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// parameter. It does not compose with the base or intern anything; it only produces the
     /// class's own contribution.
     ///
-    /// A field becomes a property (static-side when `static`); a plain/`abstract` method
-    /// becomes a function-typed property; a constructor records its parameter signature; a
-    /// `get`/`set` accessor is accumulated per name and combined into ONE instance property
-    /// afterward ([`build_accessor_members`], M15). Computed keys, un-annotated fields, and
-    /// out-of-subset members are skipped — the class keeps the members it can express.
+    /// A field becomes a property (static-side when `static`) — typed from its annotation,
+    /// or, when un-annotated with an initializer, **inferred** from the initializer (F3 —
+    /// widened when non-`readonly`); a plain/`abstract` method becomes a function-typed
+    /// property; a constructor records its parameter signature AND emits an instance member
+    /// for each **parameter property** (a param with an accessibility / `readonly` modifier,
+    /// F3); a `get`/`set` accessor is accumulated per name and combined into ONE instance
+    /// property afterward ([`build_accessor_members`], M15). Computed keys, a field with
+    /// neither annotation nor initializer, and out-of-subset members are skipped — the class
+    /// keeps the members it can express.
     fn collect_class_own_members(
         &mut self,
         scope: ScopeId,
@@ -345,8 +355,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         for element in &class.body.body {
             match element {
                 // A field `x: T` becomes a property — on the static side when `static`,
-                // otherwise on the instance. Computed keys / un-annotated fields are out
-                // of subset / not expressible.
+                // otherwise on the instance. An **annotated** field takes its declared
+                // type; a field with **no annotation but an initializer** (`f = () => 1`,
+                // `g = 2`) takes its type **inferred from the initializer** (F3 / backlog
+                // 01). Computed keys, and a field with neither annotation nor initializer,
+                // are skipped (out of subset / not expressible).
                 ClassElement::PropertyDefinition(prop) => {
                     if prop.computed {
                         continue;
@@ -354,10 +367,67 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     let Some(name) = prop.key.static_name() else {
                         continue;
                     };
-                    let Some(annotation) = prop.type_annotation.as_ref() else {
-                        continue;
-                    };
-                    let Some(ty) = self.lower_annotation(scope, &annotation.type_annotation) else {
+                    let Some(ty) = (match prop.type_annotation.as_ref() {
+                        // Annotated: lower the declared type (M11). `None` (unlowerable /
+                        // out of subset) keeps the field skipped.
+                        Some(annotation) => self.lower_annotation(scope, &annotation.type_annotation),
+                        // F3: no annotation — infer the type from the initializer when one
+                        // is present. A field with neither annotation nor initializer stays
+                        // skipped (deferred). The initializer is inferred for its TYPE ONLY:
+                        // the member-body walk ([`check_class_member_bodies`]) re-walks it later
+                        // (with the real `this`) and is the sole emitter, so BOTH emission
+                        // channels this inference can feed — immediate `diagnostics` AND deferred
+                        // `obligations` (an initializer can contain `this.x = …` assignments /
+                        // return obligations) — are snapshot+restored here, else they double-
+                        // report in phase 2. A non-`readonly` field **widens** its literal
+                        // initializer (`g = 2` → `number`, `s = "hi"` → `string`), matching
+                        // tsc; a `readonly` field keeps the literal.
+                        //
+                        // F3 (WU1 review fix): an initializer may reference `this`
+                        // (`b = this.a`, `c = this.m()`). `fill_class` has not yet filled the
+                        // reserved instance type at collection time, so we bind `this` to an
+                        // object of the members collected **so far** (instance- or static-side
+                        // per the field's `static`) for the duration of this type-only
+                        // inference. A backward `this.x` then infers `x`'s real type instead of
+                        // collapsing to `any`. This is inherently **cycle-free**: a self /
+                        // forward reference (`g = this.g`, `a = this.b; b = this.a`) is not in
+                        // the members-so-far, so `this.<self>` resolves to `TK2339` → the error
+                        // type (truncated away) — no recursion, no hang. (Methods aren't body-
+                        // inferred here; `this.m()` reads `m`'s lowered signature, so there is
+                        // no recursion into another field's initializer either.)
+                        None => prop.value.as_ref().and_then(|init| {
+                            let members_so_far = if prop.r#static {
+                                own_static.clone()
+                            } else {
+                                own_instance.clone()
+                            };
+                            let this_ty = self.interner.intern_object(ObjectType {
+                                properties: members_so_far,
+                                ..Default::default()
+                            });
+                            let saved_this = self.current_this;
+                            // Same `current_class` as the body walk would use, so access
+                            // control over `this.private` behaves identically (its diagnostics
+                            // are truncated here regardless).
+                            let saved_class = self.current_class;
+                            self.current_this = Some(this_ty);
+                            self.current_class = Some(class_id);
+                            let saved_diags = self.diagnostics.len();
+                            let saved_obls = self.obligations.len();
+                            let inferred = self.infer_expr(scope, init).map(|(ty, _)| ty);
+                            self.diagnostics.truncate(saved_diags);
+                            self.obligations.truncate(saved_obls);
+                            self.current_this = saved_this;
+                            self.current_class = saved_class;
+                            inferred.map(|ty| {
+                                if prop.readonly {
+                                    ty
+                                } else {
+                                    widen(self.interner, ty)
+                                }
+                            })
+                        }),
+                    }) else {
                         continue;
                     };
                     // M21: an optional field (`name?: T`) is a real member whose effective
@@ -407,6 +477,43 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                             // is not valid TS; treat any constructor as the constructor.
                             ctor_params =
                                 Some(self.lower_signature_parameters(scope, &method.value.params));
+                            // F3 / backlog 01: a constructor PARAMETER PROPERTY — a param
+                            // carrying an accessibility (`public`/`private`/`protected`) or
+                            // `readonly` modifier — ALSO declares an instance member with
+                            // that modifier and the param's annotated type, IN ADDITION to
+                            // remaining a constructor parameter (handled above). A param with
+                            // no such modifier stays a plain parameter (no member). The
+                            // member type lowers the param's annotation the same way the
+                            // signature does (the error type when absent/unlowerable).
+                            for param in &method.value.params.items {
+                                if param.accessibility.is_none() && !param.readonly {
+                                    continue;
+                                }
+                                let Some(name) = parameter_name(&param.pattern) else {
+                                    continue;
+                                };
+                                let error_ty = self.interner.well_known().error;
+                                let ty = match param.type_annotation.as_ref() {
+                                    Some(ann) => self
+                                        .lower_annotation(scope, &ann.type_annotation)
+                                        .unwrap_or(error_ty),
+                                    None => error_ty,
+                                };
+                                own_instance.push(PropertyType {
+                                    name,
+                                    ty,
+                                    optional: false,
+                                    // A private/protected parameter property makes the class
+                                    // nominal, exactly like an annotated private/protected
+                                    // field (same `visibility` + `declaring_class` identity).
+                                    visibility: lower_visibility(param.accessibility),
+                                    declaring_class: Some(class_id),
+                                    // M14: a `readonly` parameter property gates assignment
+                                    // (`TK2540`) but not assignability (the relation ignores it).
+                                    readonly: param.readonly,
+                                    is_accessor: false,
+                                });
+                            }
                         }
                         MethodDefinitionKind::Method => {
                             let Some(name) = method.key.static_name() else {

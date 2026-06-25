@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
 # corpus 874  in-scope 494  out-of-scope 380
-# clean-kept 152/210  error-exact 15/284  diag-recall 185/1658
+# clean-kept 163/210  error-exact 16/284  diag-recall 189/1658
 # cols: status<TAB>matched fn fp expected<TAB>rel  (status=IN | OOS:<bucket>; '-' = n/a)
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -56,24 +56,24 @@ IN	0 0 0 0	conformance/classes/members/inheritanceAndOverriding/derivedClassWith
 IN	2 3 2 5	conformance/classes/members/inheritanceAndOverriding/derivedClassWithPrivateStaticShadowingPublicStatic.ts
 IN	5 2 0 7	conformance/classes/members/inheritanceAndOverriding/derivedGenericClassWithAny.ts
 OOS:multifile	- - - -	conformance/classes/members/instanceAndStaticMembers/superInStaticMembers1.ts
-IN	0 0 1 0	conformance/classes/members/instanceAndStaticMembers/thisAndSuperInStaticMembers1.ts
-IN	0 0 1 0	conformance/classes/members/instanceAndStaticMembers/thisAndSuperInStaticMembers2.ts
-IN	0 0 1 0	conformance/classes/members/instanceAndStaticMembers/thisAndSuperInStaticMembers3.ts
-IN	0 0 1 0	conformance/classes/members/instanceAndStaticMembers/thisAndSuperInStaticMembers4.ts
-IN	1 0 6 1	conformance/classes/members/instanceAndStaticMembers/typeOfThisInInstanceMember.ts
-IN	0 6 6 6	conformance/classes/members/instanceAndStaticMembers/typeOfThisInInstanceMember2.ts
+IN	0 0 0 0	conformance/classes/members/instanceAndStaticMembers/thisAndSuperInStaticMembers1.ts
+IN	0 0 0 0	conformance/classes/members/instanceAndStaticMembers/thisAndSuperInStaticMembers2.ts
+IN	0 0 0 0	conformance/classes/members/instanceAndStaticMembers/thisAndSuperInStaticMembers3.ts
+IN	0 0 0 0	conformance/classes/members/instanceAndStaticMembers/thisAndSuperInStaticMembers4.ts
+IN	1 0 4 1	conformance/classes/members/instanceAndStaticMembers/typeOfThisInInstanceMember.ts
+IN	0 6 4 6	conformance/classes/members/instanceAndStaticMembers/typeOfThisInInstanceMember2.ts
 IN	0 0 4 0	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers.ts
 OOS:syntax:decorator	- - - -	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers10.ts
 OOS:syntax:decorator	- - - -	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers11.ts
 IN	0 0 0 0	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers12.ts
 IN	0 0 0 0	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers13.ts
 IN	0 0 0 0	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers2.ts
-IN	0 0 3 0	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers3.ts
-IN	0 0 3 0	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers4.ts
+IN	0 0 0 0	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers3.ts
+IN	0 0 0 0	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers4.ts
 IN	0 0 0 0	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers5.ts
 IN	0 1 0 1	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers6.ts
-IN	0 0 3 0	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers7.ts
-IN	0 0 5 0	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers8.ts
+IN	0 0 0 0	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers7.ts
+IN	0 0 0 0	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers8.ts
 IN	0 0 0 0	conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers9.ts
 IN	0 1 1 1	conformance/classes/members/instanceAndStaticMembers/typeOfThisInstanceMemberNarrowedWithLoopAntecedent.ts
 OOS:unresolved	- - - -	conformance/classes/members/privateNames/privateNameAccessors.ts
@@ -178,7 +178,7 @@ OOS:parse-error	- - - -	conformance/classes/members/privateNames/privateNamesAnd
 IN	0 0 0 0	conformance/classes/members/privateNames/privateNamesAndMethods.ts
 IN	0 2 0 2	conformance/classes/members/privateNames/privateNamesAndStaticFields.ts
 IN	0 0 0 0	conformance/classes/members/privateNames/privateNamesAndStaticMethods.ts
-IN	4 2 4 6	conformance/classes/members/privateNames/privateNamesAndkeyof.ts
+IN	4 2 2 6	conformance/classes/members/privateNames/privateNamesAndkeyof.ts
 OOS:syntax:asserts	- - - -	conformance/classes/members/privateNames/privateNamesAssertion.ts
 IN	0 1 0 1	conformance/classes/members/privateNames/privateNamesConstructorChain-1.ts
 IN	0 1 0 1	conformance/classes/members/privateNames/privateNamesConstructorChain-2.ts
@@ -205,18 +205,18 @@ OOS:unresolved	- - - -	conformance/classes/propertyMemberDeclarations/abstractPr
 OOS:parse-error	- - - -	conformance/classes/propertyMemberDeclarations/abstractPropertyInitializer.ts
 OOS:parse-error	- - - -	conformance/classes/propertyMemberDeclarations/accessibilityModifiers.ts
 IN	0 1 0 1	conformance/classes/propertyMemberDeclarations/accessorsOverrideMethod.ts
-IN	0 2 1 2	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty.ts
+IN	0 2 0 2	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty.ts
 IN	0 1 0 1	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty10.ts
 OOS:unresolved	- - - -	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty2.ts
-IN	0 1 1 1	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty3.ts
-IN	0 1 1 1	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty4.ts
+IN	0 1 0 1	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty3.ts
+IN	0 1 0 1	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty4.ts
 IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty5.ts
-IN	0 2 1 2	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty6.ts
+IN	0 2 0 2	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty6.ts
 OOS:parse-error	- - - -	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty7.ts
 OOS:syntax:conditional-type	- - - -	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty8.ts
 OOS:syntax:module	- - - -	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty9.ts
-IN	0 5 14 5	conformance/classes/propertyMemberDeclarations/assignParameterPropertyToPropertyDeclarationES2022.ts
-IN	0 5 14 5	conformance/classes/propertyMemberDeclarations/assignParameterPropertyToPropertyDeclarationESNext.ts
+IN	0 5 0 5	conformance/classes/propertyMemberDeclarations/assignParameterPropertyToPropertyDeclarationES2022.ts
+IN	0 5 0 5	conformance/classes/propertyMemberDeclarations/assignParameterPropertyToPropertyDeclarationESNext.ts
 IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/autoAccessor1.ts
 IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/autoAccessor10.ts
 IN	0 3 0 3	conformance/classes/propertyMemberDeclarations/autoAccessor11.ts
@@ -235,12 +235,12 @@ OOS:multifile	- - - -	conformance/classes/propertyMemberDeclarations/autoAccesso
 OOS:parse-error	- - - -	conformance/classes/propertyMemberDeclarations/canFollowGetSetKeyword.ts
 IN	1 2 0 3	conformance/classes/propertyMemberDeclarations/constructorParameterShadowsOuterScopes.ts
 OOS:unresolved	- - - -	conformance/classes/propertyMemberDeclarations/constructorParameterShadowsOuterScopes2.ts
-IN	0 0 4 0	conformance/classes/propertyMemberDeclarations/defineProperty.ts
+IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/defineProperty.ts
 OOS:parse-error	- - - -	conformance/classes/propertyMemberDeclarations/derivedUninitializedPropertyDeclaration.ts
 OOS:syntax:module	- - - -	conformance/classes/propertyMemberDeclarations/initializationOrdering1.ts
 IN	6 4 0 10	conformance/classes/propertyMemberDeclarations/initializerReferencingConstructorLocals.ts
 OOS:unresolved	- - - -	conformance/classes/propertyMemberDeclarations/initializerReferencingConstructorParameters.ts
-IN	0 0 3 0	conformance/classes/propertyMemberDeclarations/instanceMemberInitialization.ts
+IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/instanceMemberInitialization.ts
 IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/instanceMemberWithComputedPropertyName.ts
 IN	0 1 0 1	conformance/classes/propertyMemberDeclarations/instanceMemberWithComputedPropertyName2.ts
 IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/memberAccessorDeclarations/accessorWithES5.ts
@@ -264,19 +264,19 @@ IN	0 7 0 7	conformance/classes/propertyMemberDeclarations/propertyAndAccessorWit
 IN	0 4 0 4	conformance/classes/propertyMemberDeclarations/propertyAndFunctionWithSameName.ts
 OOS:parse-error	- - - -	conformance/classes/propertyMemberDeclarations/propertyNamedConstructor.ts
 OOS:parse-error	- - - -	conformance/classes/propertyMemberDeclarations/propertyNamedPrototype.ts
-IN	0 2 1 2	conformance/classes/propertyMemberDeclarations/propertyOverridesAccessors.ts
+IN	0 2 0 2	conformance/classes/propertyMemberDeclarations/propertyOverridesAccessors.ts
 OOS:unresolved	- - - -	conformance/classes/propertyMemberDeclarations/propertyOverridesAccessors2.ts
 OOS:unresolved	- - - -	conformance/classes/propertyMemberDeclarations/propertyOverridesAccessors3.ts
 IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/propertyOverridesAccessors4.ts
 IN	0 1 0 1	conformance/classes/propertyMemberDeclarations/propertyOverridesAccessors5.ts
 IN	0 1 0 1	conformance/classes/propertyMemberDeclarations/propertyOverridesAccessors6.ts
 IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/propertyOverridesMethod.ts
-IN	0 1 1 1	conformance/classes/propertyMemberDeclarations/redeclaredProperty.ts
-IN	0 1 1 1	conformance/classes/propertyMemberDeclarations/redefinedPararameterProperty.ts
+IN	0 1 0 1	conformance/classes/propertyMemberDeclarations/redeclaredProperty.ts
+IN	0 1 0 1	conformance/classes/propertyMemberDeclarations/redefinedPararameterProperty.ts
 IN	0 1 0 1	conformance/classes/propertyMemberDeclarations/staticAndNonStaticPropertiesSameName.ts
 IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/staticAutoAccessors.ts
 IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/staticAutoAccessorsWithDecorators.ts
-IN	0 0 1 0	conformance/classes/propertyMemberDeclarations/staticMemberInitialization.ts
+IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/staticMemberInitialization.ts
 IN	0 1 0 1	conformance/classes/propertyMemberDeclarations/staticPropertyAndFunctionWithSameName.ts
 OOS:syntax:module	- - - -	conformance/classes/propertyMemberDeclarations/staticPropertyNameConflicts.ts
 OOS:multifile	- - - -	conformance/classes/propertyMemberDeclarations/staticPropertyNameConflictsInAmbientContext.ts
@@ -476,7 +476,7 @@ OOS:syntax:enum	- - - -	conformance/types/literal/literalTypes2.ts
 IN	0 0 0 0	conformance/types/literal/literalTypes3.ts
 OOS:syntax:as-const	- - - -	conformance/types/literal/literalTypesAndDestructuring.ts
 IN	0 0 0 0	conformance/types/literal/literalTypesAndTypeAssertions.ts
-IN	0 1 0 1	conformance/types/literal/literalTypesWidenInParameterPosition.ts
+IN	1 0 0 1	conformance/types/literal/literalTypesWidenInParameterPosition.ts
 IN	0 0 2 0	conformance/types/literal/numericLiteralTypes1.ts
 IN	0 0 2 0	conformance/types/literal/numericLiteralTypes2.ts
 IN	16 12 0 28	conformance/types/literal/numericLiteralTypes3.ts
@@ -511,9 +511,9 @@ OOS:syntax:module	- - - -	conformance/types/literal/templateLiteralTypesPatterns
 OOS:syntax:template-lit-type	- - - -	conformance/types/literal/templateLiteralTypesPatternsPrefixSuffixAssignability.ts
 IN	0 1 1 1	conformance/types/members/augmentedTypeAssignmentCompatIndexSignature.ts
 IN	0 0 0 0	conformance/types/members/augmentedTypeBracketAccessIndexSignature.ts
-IN	3 5 7 8	conformance/types/members/classWithPrivateProperty.ts
-IN	0 0 7 0	conformance/types/members/classWithProtectedProperty.ts
-IN	0 0 7 0	conformance/types/members/classWithPublicProperty.ts
+IN	6 2 4 8	conformance/types/members/classWithPrivateProperty.ts
+IN	0 0 4 0	conformance/types/members/classWithProtectedProperty.ts
+IN	0 0 4 0	conformance/types/members/classWithPublicProperty.ts
 IN	0 12 0 12	conformance/types/members/duplicateNumericIndexers.ts
 IN	0 16 0 16	conformance/types/members/duplicatePropertyNames.ts
 OOS:syntax:module	- - - -	conformance/types/members/duplicateStringIndexers.ts
