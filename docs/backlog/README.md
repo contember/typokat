@@ -12,20 +12,15 @@ documents something a future reader needs. Dependencies go in frontmatter:
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.
 
-This **is** the roadmap. Items `01`–`05` are gaps surfaced by the official-suite harness (the `F*`
-findings); `06`–`17` are the milestone roadmap. Architecture §12 governs ordering — the relation
+This **is** the roadmap. Item `05` is a gap surfaced by the official-suite harness (an `F*`
+finding; `01`–`04` shipped — see [`../archive/`](../archive/README.md)); `06`–`17` are the
+milestone roadmap. Architecture §12 governs ordering — the relation
 engine + narrowing come **before** type-level evaluation, whose speed lives in the tree-walker's
 algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor — see
 [ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). See
 [`../reference/dev-method.md`](../reference/dev-method.md) for how each item is built.
 
 ## Items
-
-**Current-impl bugs (highest value — they over-report, the false-positive direction)**
-- [`01`](01-class-member-collection.md) — class member-collection drops parameter properties + inferred fields (**real bug**).
-- [`02`](02-accessibility-destructuring.md) — accessibility not checked through a destructuring pattern.
-- [`03`](03-readonly-union-access.md) — `readonly` / property not enforced through a union member access.
-- [`04`](04-readonly-cascade-precision.md) — `readonly` assignment suppresses the value-type cascade (minor).
 
 **Near-term completeness**
 - [`05`](05-object-interface-signatures.md) — call/method/construct signatures in object & interface types (candidate milestone).

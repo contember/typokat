@@ -20,4 +20,3 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-06-24-impl-bugs.md`](sprint-2026-06-24-impl-bugs.md) — fix the current-impl bugs F3–F6 (backlog `01`–`04`).

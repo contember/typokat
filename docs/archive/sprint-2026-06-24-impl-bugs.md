@@ -1,10 +1,35 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME — shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU1 → <sha>,
-> WU2 → <sha>, … Verification: <the gate command + numbers>. Backlog closed:
-> <ids deleted/rescoped>. Deferred: <honest notes>.
--->
+> **OUTCOME — shipped 2026-06-25.** Three of the four planned current-impl bugs fixed (F3–F5 /
+> backlog 01–03); **WU4 / item 04 dropped as a non-bug** (below). Each WU ran the full
+> spec → impl → independent adversarial review → fix → commit loop; every review hunted false
+> negatives and cross-checked tsc 6.0.3 — and two of the three caught a real defect before commit.
+>
+> **Commit map:**
+> - sprint plan → `46c7175`
+> - WU1 (F3 class member collection): spec `4f2a839` → impl `96bb85d` (review caught a `this`-init
+>   `any` false-negative **and** an obligations-channel double-report; both fixed before commit)
+> - WU2 (F4 destructuring access): spec `1b78df3` → impl `5c3d106` (review PASS)
+> - WU3 (F5 object+union readonly): spec `7017ce5` → impl `3886a8b` (review PASS; hash-identity
+>   change cleared of false positives)
+> - this OUTCOME + backlog cleanup → (this commit)
+>
+> **Verification:** `cargo test` 172 unit + conformance green; `cargo clippy --all-targets -D warnings`
+> clean; official-suite `run --check` **0 regressions** on every WU, scoreboard re-saved per WU.
+> Net: clean-kept **152→163**, diag-recall **185→197**, error-exact 15→16. All fixture expectations
+> cross-checked against tsc 6.0.3.
+>
+> **Backlog closed:** 01, 02, 03 deleted (shipped). **04 deleted as a non-bug** — its premise was
+> wrong: tsc 6.0.3 never emits both TK2540 and TK2322 for one readonly assignment (outside a ctor,
+> readonly blocks → TK2540 only; inside the declaring ctor, readonly is allowed → TK2322 only), and
+> typokat already matches this exactly (`assignment.rs` readonly gate). Implementing the requested
+> "cascade" would have *introduced* a divergence; spec-first + tsc-cross-check caught it before code.
+>
+> **Discovered (WU3):** item 03's bug was broader than "union" — object-type & interface members
+> dropped `readonly` entirely (`lower_object_annotation` / `lower_interface_members`), and the headline
+> repro canonicalizes to that plain-object case. Fixed both the object-readonly and genuine-union paths.
+>
+> **Deferred (safe-direction false negatives, documented in each review):** nested/array/
+> assignment-target destructuring + `for-of`/`catch` (WU2); property-missing-on-some-union-member,
+> intersection bases, element-access targets, accessor signatures in type literals (WU3).
 
 # Sprint — current-impl bugs F3–F6 (2026-06-24)
 
@@ -181,3 +206,10 @@ commit loop; the leader writes every spec and makes every commit.
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
      trim to a one-line pointer ("→ ADR-0007"). -->
+
+- WU4 / item 04 is a non-bug at HEAD (tsc never emits TK2540+TK2322 together; typokat already
+  matches). → graduated to OUTCOME; item 04 deleted.
+- WU3 / item 03 was broader than "union" — object-type & interface `readonly` was dropped in
+  lowering; the headline repro canonicalizes to that plain-object case. → graduated to OUTCOME.
+- WU1 review caught two pre-commit defects (this-init `any` FN; obligations double-report). → fixed,
+  graduated to the WU1 commit message + OUTCOME.
