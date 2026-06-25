@@ -167,3 +167,16 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m20_keyof/` | M20 — `keyof T` + indexed-access types (`T[K]`) on concrete object types |
 | `m21_optional/` | M21 — optional properties (`a?: T`) on objects / interfaces / class instance fields |
 | `m22_unresolved_type/` | M22 — `TK2304` for an unresolved type reference in type position |
+
+## Bug-fix corpora (official-suite findings)
+
+Fixes to **already-shipped** milestones get their own dir rather than extending an
+enabled milestone dir — so the spec can be committed on its own (per
+`docs/reference/dev-method.md` §1) without changing test results, then enabled by
+the commit that lands the fix. Each is registered in `MILESTONE_DIRS`
+(`tests/conformance.rs`) as `false` until its fix ships. Named by the official-suite
+finding ID.
+
+| Dir | Finding / backlog | Fix |
+|---|---|---|
+| `f3_class_member_collection/` | F3 / `01` | parameter properties + initializer-inferred class fields become real members |
