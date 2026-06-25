@@ -10,8 +10,10 @@ use crate::types::repr::{
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
     Class, ClassElement, Expression, FormalParameters,
-    Function, MethodDefinition, MethodDefinitionKind, TSAccessibility, TSTypeParameterDeclaration,
+    Function, MethodDefinition, MethodDefinitionKind, ObjectPattern, TSAccessibility,
+    TSTypeParameterDeclaration,
 };
+use oxc_span::GetSpan;
 use super::context::*;
 use super::calls::{parameter_name, widen};
 use super::decls::type_decl_id;
@@ -901,6 +903,83 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
             }
         }
+    }
+
+    /// Run M13 access control (`TK2341`/`TK2445`) for every **named** member reached
+    /// through an **object**-destructuring pattern (`let { priv } = k;`,
+    /// `function f({ priv }: K) {}`). `source` is the statically-known type the pattern
+    /// destructures (the initializer's inferred type for a variable declaration, the
+    /// parameter's annotation for a function parameter).
+    ///
+    /// For each property the checked name is the pattern **key** (so a rename
+    /// `{ priv: a }` still checks `priv`, mirroring `obj.priv`); the access context is the
+    /// enclosing [`Pass::current_class`], so in-class / subclass destructuring stays clean
+    /// exactly like a member access. The member is resolved on the source — an object type
+    /// directly, a union by requiring it on every member — and the access check runs only
+    /// when the property is **found**. A missing property is left silent (no `TK2339` for
+    /// destructuring — that property-existence case is deferred and would over-report).
+    ///
+    /// Out of scope (skipped, no check, no crash): the `...rest` element, computed /
+    /// non-static keys, and any nested / array / default-valued sub-pattern (only the
+    /// access check is run; binding the destructured names' types is a separate feature).
+    pub(in crate::check::checker) fn check_object_pattern_access(
+        &mut self,
+        pattern: &ObjectPattern<'_>,
+        source: TypeId,
+    ) {
+        for property in &pattern.properties {
+            // The checked name is the pattern KEY (`{ priv: a }` checks `priv`). A
+            // computed / non-static key yields `None` and is skipped.
+            let Some(name) = property.key.static_name() else {
+                continue;
+            };
+            // Resolve the member's visibility + origin on the source type, then run the
+            // shared access check. `None` = not found → stay silent (no TK2339 here).
+            if let Some((visibility, declaring_class)) = self.pattern_member_access(source, &name) {
+                let span = Span::from_oxc(property.key.span());
+                self.check_member_access_control(&name, span, visibility, declaring_class);
+            }
+        }
+    }
+
+    /// Look a destructured member `name` up on `source` for access control, returning its
+    /// `(visibility, declaring_class)` if it is **present**. An object type is looked up
+    /// directly; a union requires the member on **every** constituent (a member absent on
+    /// any constituent is "not found" → `None`, so no check and — per the deferral — no
+    /// `TK2339`). A constituent's `any`/error contributes no nominal origin, so its
+    /// presence is assumed without forcing a visibility. The union case is not exercised by
+    /// the f4 fixtures (a class-instance source); it only guarantees the walk doesn't crash.
+    fn pattern_member_access(
+        &self,
+        source: TypeId,
+        name: &str,
+    ) -> Option<(Visibility, Option<ClassId>)> {
+        let store = self.interner.store();
+        if let Some(members) = store.union_members(source) {
+            // Require the property on every constituent; report the first non-public
+            // origin found so the union still gates a private/protected member.
+            let wk = self.interner.well_known();
+            let mut result: Option<(Visibility, Option<ClassId>)> = None;
+            for &member in members {
+                if member == wk.any || member == wk.error {
+                    continue;
+                }
+                match store.object_type(member).and_then(|o| o.property(name)) {
+                    Some(prop) => {
+                        if result.is_none() || matches!(prop.visibility, Visibility::Private | Visibility::Protected) {
+                            result = Some((prop.visibility, prop.declaring_class));
+                        }
+                    }
+                    // Missing on this constituent → not on the union.
+                    None => return None,
+                }
+            }
+            return result;
+        }
+        store
+            .object_type(source)
+            .and_then(|obj| obj.property(name))
+            .map(|prop| (prop.visibility, prop.declaring_class))
     }
 
     /// Whether `class_id` **is** `ancestor` or a **subclass** of it (M13), by walking the

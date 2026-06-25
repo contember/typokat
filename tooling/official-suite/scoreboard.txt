@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
 # corpus 874  in-scope 494  out-of-scope 380
-# clean-kept 163/210  error-exact 16/284  diag-recall 189/1658
+# clean-kept 163/210  error-exact 16/284  diag-recall 192/1658
 # cols: status<TAB>matched fn fp expected<TAB>rel  (status=IN | OOS:<bucket>; '-' = n/a)
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -9,7 +9,7 @@ IN	0 0 2 0	conformance/classes/members/accessibility/classPropertyIsPublicByDefa
 IN	0 0 0 0	conformance/classes/members/accessibility/privateClassPropertyAccessibleWithinClass.ts
 IN	0 0 3 0	conformance/classes/members/accessibility/privateClassPropertyAccessibleWithinNestedClass.ts
 OOS:parse-error	- - - -	conformance/classes/members/accessibility/privateInstanceMemberAccessibility.ts
-IN	0 10 0 10	conformance/classes/members/accessibility/privateProtectedMembersAreNotAccessibleDestructuring.ts
+IN	3 7 0 10	conformance/classes/members/accessibility/privateProtectedMembersAreNotAccessibleDestructuring.ts
 IN	2 0 0 2	conformance/classes/members/accessibility/privateStaticMemberAccessibility.ts
 OOS:syntax:module	- - - -	conformance/classes/members/accessibility/privateStaticNotAccessibleInClodule.ts
 OOS:syntax:module	- - - -	conformance/classes/members/accessibility/privateStaticNotAccessibleInClodule2.ts

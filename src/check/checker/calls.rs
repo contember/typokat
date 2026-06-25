@@ -620,6 +620,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 None => error_ty,
             };
 
+            // F4 — access control through an **object** destructuring parameter
+            // (`function f({ priv }: K) {}`). Run M13's private/protected check for each
+            // destructured member against the parameter's annotation type. Only the access
+            // check runs (binding the names' types is deferred); the check is skipped for an
+            // un-annotated parameter (the error type is any-like → no member origin) and for
+            // every non-object pattern kind. The annotation resolves in the *enclosing*
+            // scope, and `current_class` is the enclosing class context (so an in-class /
+            // subclass parameter destructure stays clean, like a member access).
+            if let BindingPattern::ObjectPattern(object) = &param.pattern {
+                if param.type_annotation.is_some() {
+                    self.check_object_pattern_access(object, ty);
+                }
+            }
+
             // Bind the parameter's type into the function scope so the body resolves
             // it (the binder declared the parameter symbol + DeclId).
             if let Some(scope) = fn_scope {

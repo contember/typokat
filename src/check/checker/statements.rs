@@ -5,7 +5,7 @@ use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::Reason;
 use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
-    BlockStatement, Expression,
+    BindingPattern, BlockStatement, Expression,
     Function, Statement, VariableDeclarationKind, VariableDeclarator,
 };
 use super::context::*;
@@ -185,6 +185,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .init
             .as_ref()
             .and_then(|init| self.infer_initializer(scope, init, annotation));
+
+        // F4 — access control through an **object** destructuring binding
+        // (`let { priv } = k;`). Run M13's private/protected check for each destructured
+        // member against the source type — the initializer's inferred type (binding the
+        // names' types is deferred; only the access check runs). Other pattern kinds
+        // (identifier, array, nested, rest, defaults) are out of scope and skipped.
+        if let BindingPattern::ObjectPattern(object) = &declarator.id {
+            if let Some((source, _)) = &initializer {
+                self.check_object_pattern_access(object, *source);
+            }
+        }
 
         // The declared type the symbol resolves to: annotation wins; otherwise the
         // (possibly widened) initializer type.
