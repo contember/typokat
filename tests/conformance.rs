@@ -53,7 +53,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // commit that lands its fix. See tests/cases/README.md ("Bug-fix corpora").
     ("f1_object_interface_methods", true),
     ("f1_object_interface_call", true),
-    ("f1_object_interface_construct", false),
+    ("f1_object_interface_construct", true),
     ("f3_class_member_collection", true),
     ("f4_destructuring_access", true),
     ("f5_union_readonly", true),

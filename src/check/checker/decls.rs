@@ -351,7 +351,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// (M9). Returns the interned [`TypeTag::TypeParam`] id if the name is a type
     /// parameter currently in scope, so it shadows a same-named named type **inside**
     /// the generic. `None` falls through to the binder's type slot.
-    fn lookup_type_param(&self, name: &str) -> Option<TypeId> {
+    pub(in crate::check::checker) fn lookup_type_param(&self, name: &str) -> Option<TypeId> {
         self.type_param_scopes
             .iter()
             .rev()
@@ -373,6 +373,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let mut object = ObjectType::default();
         let overloaded_method_names = self.overloaded_method_names(members);
         let call_signatures_overloaded = self.call_signatures_overloaded(members);
+        let construct_signatures_overloaded = self.construct_signatures_overloaded(members);
         for member in members {
             match member {
                 TSSignature::TSPropertySignature(sig) => {
@@ -438,7 +439,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         object.call_signatures.push(signature);
                     }
                 }
-                _ => continue,
+                TSSignature::TSConstructSignatureDeclaration(sig) => {
+                    if construct_signatures_overloaded {
+                        continue;
+                    }
+                    if let Some(signature) = self.lower_construct_signature(scope, sig) {
+                        object.construct_signatures.push(signature);
+                    }
+                }
             }
         }
         object

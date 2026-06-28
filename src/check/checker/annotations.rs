@@ -2,15 +2,16 @@
 
 use super::calls::parameter_name;
 use super::context::*;
+use super::decls::type_decl_id;
 use crate::binder::scope::ScopeId;
 use crate::types::repr::{
     FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TypeTag,
 };
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
-    FormalParameters, TSCallSignatureDeclaration, TSLiteral, TSMethodSignature,
-    TSMethodSignatureKind, TSSignature, TSTupleElement, TSType, TSTypeAnnotation,
-    TSTypeOperatorOperator,
+    FormalParameters, TSCallSignatureDeclaration, TSConstructSignatureDeclaration,
+    TSConstructorType, TSLiteral, TSMethodSignature, TSMethodSignatureKind, TSSignature,
+    TSTupleElement, TSType, TSTypeAnnotation, TSTypeName, TSTypeOperatorOperator,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -52,6 +53,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     &func.return_type.type_annotation,
                 );
             }
+            TSType::TSConstructorType(ctor) => return self.lower_constructor_type(scope, ctor),
             TSType::TSUnionType(union) => return self.lower_union_annotation(scope, &union.types),
             TSType::TSParenthesizedType(paren) => {
                 return self.lower_annotation(scope, &paren.type_annotation);
@@ -196,6 +198,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let mut object = ObjectType::default();
         let overloaded_method_names = self.overloaded_method_names(members);
         let call_signatures_overloaded = self.call_signatures_overloaded(members);
+        let construct_signatures_overloaded = self.construct_signatures_overloaded(members);
         for member in members {
             match member {
                 TSSignature::TSPropertySignature(sig) => {
@@ -245,7 +248,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     let signature = self.lower_call_signature(scope, sig)?;
                     object.call_signatures.push(signature);
                 }
-                _ => return None,
+                TSSignature::TSConstructSignatureDeclaration(sig) => {
+                    if construct_signatures_overloaded {
+                        return None;
+                    }
+                    let signature = self.lower_construct_signature(scope, sig)?;
+                    object.construct_signatures.push(signature);
+                }
             }
         }
         Some(self.interner.intern_object(object))
@@ -293,6 +302,206 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return None;
         }
         self.lower_strict_signature_function_type(scope, &sig.params, sig.return_type.as_deref())
+    }
+
+    /// Lower a single object/interface construct signature to an interned function type.
+    ///
+    /// WU3 accepts only a required, non-generic, non-rest signature whose declared
+    /// instance/return type is representable. Optional/rest/default params and generic
+    /// construct signatures are out of subset and do not create represented
+    /// constructability.
+    pub(in crate::check::checker) fn lower_construct_signature(
+        &mut self,
+        scope: ScopeId,
+        sig: &TSConstructSignatureDeclaration<'_>,
+    ) -> Option<TypeId> {
+        if sig.type_parameters.is_some() {
+            return None;
+        }
+        let return_type = sig.return_type.as_deref()?;
+        if !self.signature_annotations_are_locally_resolvable(scope, &sig.params, return_type) {
+            return None;
+        }
+        self.lower_strict_construct_function_type(scope, &sig.params, return_type)
+    }
+
+    /// Lower a constructor-type annotation (`new (x: T) => U`) to an object carrying
+    /// a single construct signature, making it equivalent to `{ new (x: T): U }` in
+    /// relation while preserving named object members for the object-literal form.
+    fn lower_constructor_type(
+        &mut self,
+        scope: ScopeId,
+        ctor: &TSConstructorType<'_>,
+    ) -> Option<TypeId> {
+        if ctor.r#abstract || ctor.type_parameters.is_some() {
+            return None;
+        }
+        if !self.signature_annotations_are_locally_resolvable(scope, &ctor.params, &ctor.return_type)
+        {
+            return None;
+        }
+        let signature =
+            self.lower_strict_construct_function_type(scope, &ctor.params, &ctor.return_type)?;
+        Some(self.interner.intern_object(ObjectType {
+            construct_signatures: vec![signature],
+            ..Default::default()
+        }))
+    }
+
+    fn lower_strict_construct_function_type(
+        &mut self,
+        scope: ScopeId,
+        params: &FormalParameters<'_>,
+        return_type: &TSTypeAnnotation<'_>,
+    ) -> Option<TypeId> {
+        self.signature_params_in_subset(params)?;
+        let mut lowered: Vec<ParameterType> = Vec::with_capacity(params.items.len());
+        for param in &params.items {
+            let name = parameter_name(&param.pattern)?;
+            let annotation = param.type_annotation.as_ref()?;
+            let ty = self.lower_annotation(scope, &annotation.type_annotation)?;
+            lowered.push(ParameterType {
+                name,
+                ty,
+                optional: false,
+            });
+        }
+        let ret = self.lower_annotation(scope, &return_type.type_annotation)?;
+        Some(self.interner.intern_function(FunctionType {
+            params: lowered,
+            ret,
+        }))
+    }
+
+    fn signature_annotations_are_locally_resolvable(
+        &self,
+        scope: ScopeId,
+        params: &FormalParameters<'_>,
+        return_type: &TSTypeAnnotation<'_>,
+    ) -> bool {
+        let params_ok = params.items.iter().all(|param| {
+            param
+                .type_annotation
+                .as_ref()
+                .is_some_and(|ann| {
+                    self.annotation_type_refs_are_locally_resolvable(scope, &ann.type_annotation)
+                })
+        });
+        params_ok
+            && self.annotation_type_refs_are_locally_resolvable(scope, &return_type.type_annotation)
+    }
+
+    fn annotation_type_refs_are_locally_resolvable(&self, scope: ScopeId, ty: &TSType<'_>) -> bool {
+        match ty {
+            TSType::TSAnyKeyword(_)
+            | TSType::TSUnknownKeyword(_)
+            | TSType::TSNeverKeyword(_)
+            | TSType::TSVoidKeyword(_)
+            | TSType::TSNullKeyword(_)
+            | TSType::TSUndefinedKeyword(_)
+            | TSType::TSBooleanKeyword(_)
+            | TSType::TSNumberKeyword(_)
+            | TSType::TSStringKeyword(_)
+            | TSType::TSLiteralType(_) => true,
+            TSType::TSTypeReference(reference) => {
+                let TSTypeName::IdentifierReference(ident) = &reference.type_name else {
+                    return false;
+                };
+                let name = ident.name.as_str();
+                if name == "Array" {
+                    let Some(args) = reference.type_arguments.as_deref() else {
+                        return false;
+                    };
+                    let [arg] = args.params.as_slice() else {
+                        return false;
+                    };
+                    return self.annotation_type_refs_are_locally_resolvable(scope, arg);
+                }
+                let found = self.lookup_type_param(name).is_some()
+                    || type_decl_id(self.binder, scope, name).is_some();
+                found
+                    && reference.type_arguments.as_ref().is_none_or(|args| {
+                        args.params
+                            .iter()
+                            .all(|arg| self.annotation_type_refs_are_locally_resolvable(scope, arg))
+                    })
+            }
+            TSType::TSTypeLiteral(lit) => lit.members.iter().all(|member| match member {
+                TSSignature::TSPropertySignature(sig) => sig
+                    .type_annotation
+                    .as_ref()
+                    .is_some_and(|ann| {
+                        self.annotation_type_refs_are_locally_resolvable(
+                            scope,
+                            &ann.type_annotation,
+                        )
+                    }),
+                TSSignature::TSIndexSignature(sig) => {
+                    sig.parameters.iter().all(|param| {
+                        self.annotation_type_refs_are_locally_resolvable(
+                            scope,
+                            &param.type_annotation.type_annotation,
+                        )
+                    }) && self.annotation_type_refs_are_locally_resolvable(
+                        scope,
+                        &sig.type_annotation.type_annotation,
+                    )
+                }
+                TSSignature::TSMethodSignature(sig) => sig.return_type.as_ref().is_some_and(|ret| {
+                    self.signature_annotations_are_locally_resolvable(scope, &sig.params, ret)
+                }),
+                TSSignature::TSCallSignatureDeclaration(sig) => {
+                    sig.return_type.as_ref().is_some_and(|ret| {
+                        self.signature_annotations_are_locally_resolvable(scope, &sig.params, ret)
+                    })
+                }
+                TSSignature::TSConstructSignatureDeclaration(sig) => {
+                    sig.return_type.as_ref().is_some_and(|ret| {
+                        self.signature_annotations_are_locally_resolvable(scope, &sig.params, ret)
+                    })
+                }
+            }),
+            TSType::TSFunctionType(func) => {
+                self.signature_annotations_are_locally_resolvable(
+                    scope,
+                    &func.params,
+                    &func.return_type,
+                )
+            }
+            TSType::TSConstructorType(ctor) => {
+                !ctor.r#abstract
+                    && ctor.type_parameters.is_none()
+                    && self.signature_annotations_are_locally_resolvable(
+                        scope,
+                        &ctor.params,
+                        &ctor.return_type,
+                    )
+            }
+            TSType::TSUnionType(union) => union
+                .types
+                .iter()
+                .all(|member| self.annotation_type_refs_are_locally_resolvable(scope, member)),
+            TSType::TSParenthesizedType(paren) => {
+                self.annotation_type_refs_are_locally_resolvable(scope, &paren.type_annotation)
+            }
+            TSType::TSArrayType(array) => {
+                self.annotation_type_refs_are_locally_resolvable(scope, &array.element_type)
+            }
+            TSType::TSTupleType(tuple) => tuple.element_types.iter().all(|element| {
+                element
+                    .as_ts_type()
+                    .is_some_and(|ty| self.annotation_type_refs_are_locally_resolvable(scope, ty))
+            }),
+            TSType::TSTypeOperatorType(op) => {
+                op.operator == TSTypeOperatorOperator::Keyof
+                    && self.annotation_type_refs_are_locally_resolvable(scope, &op.type_annotation)
+            }
+            TSType::TSIndexedAccessType(access) => {
+                self.annotation_type_refs_are_locally_resolvable(scope, &access.object_type)
+                    && self.annotation_type_refs_are_locally_resolvable(scope, &access.index_type)
+            }
+            _ => false,
+        }
     }
 
     /// Lower an object/interface method or call signature only when every parameter
@@ -427,6 +636,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         members
             .iter()
             .filter(|member| matches!(member, TSSignature::TSCallSignatureDeclaration(_)))
+            .count()
+            > 1
+    }
+
+    pub(in crate::check::checker) fn construct_signatures_overloaded(
+        &self,
+        members: &[TSSignature<'_>],
+    ) -> bool {
+        members
+            .iter()
+            .filter(|member| matches!(member, TSSignature::TSConstructSignatureDeclaration(_)))
             .count()
             > 1
     }

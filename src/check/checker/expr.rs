@@ -646,4 +646,3 @@ fn literal_index(expr: &Expression<'_>) -> Option<usize> {
     }
     Some(value as usize)
 }
-

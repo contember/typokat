@@ -381,8 +381,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         };
 
         // Always infer the callee for its side effects (resolving its name / emitting
-        // `TK2304`, descending into a callee expression).
-        self.infer_expr(scope, &new_expr.callee);
+        // `TK2304`, descending into a callee expression). For non-class callees the
+        // inferred type is also used to find an object construct signature.
+        let inferred_callee = self.infer_expr(scope, &new_expr.callee);
 
         // Infer every argument up front (skipping spreads — out of subset); this descends
         // into nested calls/`new`/functions inside the arguments.
@@ -395,8 +396,21 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         }
 
-        // Not a known class — out of scope. No `new`-specific diagnostic; error-typed.
+        // Not a known class: WU3 falls through to a single object construct
+        // signature. If the callee is not constructable in the represented subset,
+        // preserve the previous no-diagnostic/error-type behavior.
         let Some((decl_id, info)) = class_resolved else {
+            if let Some((callee_ty, _)) = inferred_callee {
+                if let Some(signature_ty) = self.construct_signature(callee_ty) {
+                    let Some(func) = self.interner.store().function_type(signature_ty) else {
+                        return Some((wk.error, new_span));
+                    };
+                    let param_types: Vec<TypeId> = func.params.iter().map(|p| p.ty).collect();
+                    let ret = func.ret;
+                    self.check_call_arguments(&param_types, &arg_types, new_span);
+                    return Some((ret, new_span));
+                }
+            }
             return Some((wk.error, new_span));
         };
 
@@ -431,6 +445,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.check_call_arguments(&param_types, &arg_types, new_span);
 
         Some((instance, new_span))
+    }
+
+    fn construct_signature(&self, callee_ty: TypeId) -> Option<TypeId> {
+        if self.interner.store().tag(callee_ty) != TypeTag::Object {
+            return None;
+        }
+        let object = self.interner.store().object_type(callee_ty)?;
+        let [signature] = object.construct_signatures.as_slice() else {
+            return None;
+        };
+        Some(*signature)
     }
 
     /// M16: the constructor signature + instance type of a `new ClassName(args)` after

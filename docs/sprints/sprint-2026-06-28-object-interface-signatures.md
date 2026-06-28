@@ -222,3 +222,12 @@ but only one implementation should edit `ObjectType`/interner/hash/substitution/
   item was this deferred diagnostic; it independently confirmed hash identity, substitution into call
   signatures, the relation in both directions, no order-dependent dropped errors, and that the 3
   residuals are over-reports (not dropped errors).
+- 2026-06-28: WU3 landed single in-subset construct signatures (constructable objects) mirroring WU2,
+  plus lowering `new (...) => T` constructor-type annotations and a class static-side construct
+  signature for `class → construct-signature` assignability. One new accepted residual (`.apply` on a
+  construct-signature object — same Function.prototype class as WU2). The independent WU3 review caught
+  one genuine **false negative**: the class static-side construct signature was emitted for every
+  non-abstract class, exposing `private`/`protected` constructors as publicly constructable. Fixed by
+  gating the static-side construct signature on `has_public_constructor`; added a regression fixture.
+  The pre-existing gap that a direct `new C()` does not enforce constructor accessibility was filed as
+  backlog [`20`](../backlog/20-constructor-accessibility-on-new.md).

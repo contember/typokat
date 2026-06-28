@@ -44,6 +44,7 @@ pub enum StructuralKey<'a> {
         string_index: Option<TypeId>,
         number_index: Option<TypeId>,
         call_signatures: &'a [TypeId],
+        construct_signatures: &'a [TypeId],
     },
     /// A function type, keyed over its **positional** parameter list (never
     /// sorted) and return type. Two function types collide only when their
@@ -94,6 +95,7 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
             string_index,
             number_index,
             call_signatures,
+            construct_signatures,
         } => {
             TypeTag::Object.hash_discriminant(&mut h);
             // M19: fold the index signatures into the key first (the value-type id,
@@ -108,6 +110,12 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
             // call signature.
             call_signatures.len().hash(&mut h);
             for signature in *call_signatures {
+                signature.0.hash(&mut h);
+            }
+            // F1/WU3: construct signatures are the `new` dual of call
+            // signatures and participate in object identity the same way.
+            construct_signatures.len().hash(&mut h);
+            for signature in *construct_signatures {
                 signature.0.hash(&mut h);
             }
             // Length first so prefixes of a longer property list cannot collide

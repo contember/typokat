@@ -159,16 +159,18 @@ impl Interner {
             string_index: object.string_index,
             number_index: object.number_index,
             call_signatures: &object.call_signatures,
+            construct_signatures: &object.construct_signatures,
         };
         let hash = structural_hash(&key);
         if let Some(existing) = self.lookup(hash, |store, id| {
             store.object_type(id).is_some_and(|existing| {
                 // M19: index signatures are part of identity, so two objects dedup
-                // only when their members, index value types, and F1/WU2 call
+                // only when their members, index value types, and F1/WU2/WU3
                 // signatures match.
                 existing.string_index == object.string_index
                     && existing.number_index == object.number_index
                     && existing.call_signatures == object.call_signatures
+                    && existing.construct_signatures == object.construct_signatures
                     && object_props_eq(&existing.properties, &object.properties)
             })
         }) {

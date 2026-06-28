@@ -568,7 +568,8 @@ fn render_type_inner(
                     if obj.properties.is_empty()
                         && obj.string_index.is_none()
                         && obj.number_index.is_none()
-                        && obj.call_signatures.is_empty() =>
+                        && obj.call_signatures.is_empty()
+                        && obj.construct_signatures.is_empty() =>
                 {
                     "{}".to_string()
                 }
@@ -595,6 +596,9 @@ fn render_type_inner(
                             .iter()
                             .map(|&signature| render_call_signature(store, signature, rendering)),
                     );
+                    members.extend(obj.construct_signatures.iter().map(|&signature| {
+                        render_construct_signature(store, signature, rendering)
+                    }));
                     members.extend(obj.properties.iter().map(|p| {
                         format!(
                             "{}: {}",
@@ -689,6 +693,16 @@ fn render_call_signature(store: &Store, id: TypeId, rendering: &mut Vec<TypeId>)
         Some(func) => {
             let (params, ret) = render_function_parts(store, func, rendering);
             format!("({}): {}", params.join(", "), ret)
+        }
+        None => "<unsupported>".to_string(),
+    }
+}
+
+fn render_construct_signature(store: &Store, id: TypeId, rendering: &mut Vec<TypeId>) -> String {
+    match store.function_type(id) {
+        Some(func) => {
+            let (params, ret) = render_function_parts(store, func, rendering);
+            format!("new ({}): {}", params.join(", "), ret)
         }
         None => "<unsupported>".to_string(),
     }

@@ -243,14 +243,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .unwrap_or_default();
         let properties = compose_members(base_instance, own_instance);
 
-        // M13: build the static-side object type (the class value's type). Composed from
-        // the base's static side and the class's own static members.
         let static_properties = compose_members(base_static, own_static);
-        let static_side = self.interner.intern_object(ObjectType {
-            properties: static_properties,
-            // M19: a class's instance/static side carries no index signature in this subset.
-            ..Default::default()
-        });
 
         // Fill the reserved instance type with the composed (base + own) members.
         self.interner.fill_object(
@@ -280,6 +273,38 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }),
             },
         };
+
+        // F1/WU3: the class value's static side is constructable for relation
+        // purposes (`const c: { new (...): Instance } = Class`). The actual
+        // `new Class(...)` expression still resolves through `class_ctors` below,
+        // so class construction precedence and generic-class substitution stay on
+        // the existing path. Abstract classes deliberately expose no construct
+        // signature here; assigning them to a constructable target would be
+        // unsound. Classes with private/protected constructors likewise expose
+        // no public construct signature on the static side.
+        let construct_signatures = if class.r#abstract || !has_public_constructor(class) {
+            Vec::new()
+        } else {
+            let params = self
+                .interner
+                .store()
+                .function_type(ctor)
+                .map(|func| func.params.clone())
+                .unwrap_or_default();
+            vec![self.interner.intern_function(FunctionType {
+                params,
+                ret: reserved,
+            })]
+        };
+
+        // M13: build the static-side object type (the class value's type). Composed from
+        // the base's static side and the class's own static members.
+        let static_side = self.interner.intern_object(ObjectType {
+            properties: static_properties,
+            construct_signatures,
+            // M19: a class's instance/static side carries no index signature in this subset.
+            ..Default::default()
+        });
 
         // The base's constructor signature (M12), for checking `super(args)` in this
         // class's constructor body. `None` for a class with no resolvable base.
@@ -1025,6 +1050,22 @@ fn lower_visibility(accessibility: Option<TSAccessibility>) -> Visibility {
         Some(TSAccessibility::Protected) => Visibility::Protected,
         Some(TSAccessibility::Public) | None => Visibility::Public,
     }
+}
+
+/// Whether the class's static side should expose a public construct signature. A
+/// class with no explicit constructor has the implicit public constructor; an
+/// explicit `private`/`protected` constructor is not publicly constructable.
+fn has_public_constructor(class: &Class<'_>) -> bool {
+    for element in &class.body.body {
+        let ClassElement::MethodDefinition(method) = element else {
+            continue;
+        };
+        if method.kind != MethodDefinitionKind::Constructor {
+            continue;
+        }
+        return lower_visibility(method.accessibility) == Visibility::Public;
+    }
+    true
 }
 
 /// Compose a derived class's instance members from its **base** members and its

@@ -110,9 +110,11 @@ impl<'a> Substitution<'a> {
         // M19: snapshot the index-signature value types so they too are rewritten
         // (a generic `{ [k: string]: T }` instantiates to `{ [k: string]: number }`).
         let (string_index, number_index) = (object.string_index, object.number_index);
-        // F1/WU2: snapshot call signatures; each is an interned FunctionType id
-        // and must be recursively substituted just like a function-typed property.
+        // F1/WU2/WU3: snapshot call/construct signatures; each is an interned
+        // FunctionType id and must be recursively substituted just like a
+        // function-typed property.
         let call_signatures = object.call_signatures.clone();
+        let construct_signatures = object.construct_signatures.clone();
 
         self.in_progress.insert(ty);
         let mut changed = false;
@@ -143,6 +145,14 @@ impl<'a> Substitution<'a> {
                 new_signature
             })
             .collect();
+        let construct_signatures: Vec<TypeId> = construct_signatures
+            .into_iter()
+            .map(|signature| {
+                let new_signature = self.apply(interner, signature);
+                changed |= new_signature != signature;
+                new_signature
+            })
+            .collect();
         self.in_progress.remove(&ty);
 
         // Unchanged → keep the original id (preserves nominal identity); changed →
@@ -153,6 +163,7 @@ impl<'a> Substitution<'a> {
                 string_index,
                 number_index,
                 call_signatures,
+                construct_signatures,
             })
         } else {
             ty

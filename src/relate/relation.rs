@@ -552,6 +552,16 @@ impl<'a> Relater<'a> {
             return Relation::No(child);
         }
 
+        // F1/WU3 — construct-signature obligation. Mirrors the call-signature
+        // obligation above: a target object with `new (...)` requires the source
+        // object to have a compatible single construct signature, compared by the
+        // existing FunctionType relation through `self.relate`.
+        if let Relation::No(child) =
+            self.relate_object_construct_signatures(src, tgt, kind, assumed)
+        {
+            return Relation::No(child);
+        }
+
         // M19 — index-signature obligations. Snapshot the target's index value types
         // and the source's named-property/(index) value types up front so the
         // recursive `self.relate` below does not overlap the read borrows.
@@ -645,6 +655,31 @@ impl<'a> Relater<'a> {
         let ([src_sig], [tgt_sig]) = (
             src_obj.call_signatures.as_slice(),
             tgt_obj.call_signatures.as_slice(),
+        ) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        self.relate(*src_sig, *tgt_sig, kind, assumed)
+    }
+
+    fn relate_object_construct_signatures(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
+        let Some(tgt_obj) = self.store.object_type(tgt) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        if tgt_obj.construct_signatures.is_empty() {
+            return Relation::Yes;
+        }
+        let Some(src_obj) = self.store.object_type(src) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let ([src_sig], [tgt_sig]) = (
+            src_obj.construct_signatures.as_slice(),
+            tgt_obj.construct_signatures.as_slice(),
         ) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };

@@ -25,6 +25,7 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 **Near-term completeness**
 - [`05`](05-object-interface-signatures.md) — call/method/construct signatures in object & interface types (candidate milestone).
 - [`06`](06-class-completeness-checks.md) — class-completeness checks `TK2416` + `TK2515` (good warm-up).
+- [`20`](20-constructor-accessibility-on-new.md) — enforce private/protected constructor accessibility on direct `new C()`.
 
 **Narrowing + generics (both precede type-level evaluation)**
 - [`07`](07-unstructured-flow-narrowing.md) — unstructured-flow narrowing, the flow-node CFG (M23).
