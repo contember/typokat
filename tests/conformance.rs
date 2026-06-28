@@ -51,7 +51,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Bug-fix corpora (official-suite findings / backlog items). Each is
     // committed `false` as a behavior-neutral spec, then flipped `true` by the
     // commit that lands its fix. See tests/cases/README.md ("Bug-fix corpora").
-    ("f1_object_interface_methods", false),
+    ("f1_object_interface_methods", true),
     ("f3_class_member_collection", true),
     ("f4_destructuring_access", true),
     ("f5_union_readonly", true),

@@ -9,8 +9,8 @@ use crate::types::repr::{
 };
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
-    Class, ClassElement, Expression, FormalParameters,
-    Function, MethodDefinition, MethodDefinitionKind, ObjectPattern, TSAccessibility,
+    Class, ClassElement, Expression, Function,
+    MethodDefinition, MethodDefinitionKind, ObjectPattern, TSAccessibility,
     TSTypeParameterDeclaration,
 };
 use oxc_span::GetSpan;
@@ -641,41 +641,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// `None` only if the return annotation is present but cannot be lowered (out of
     /// subset) — matching the other signature lowerings.
     fn lower_method_signature(&mut self, scope: ScopeId, func: &Function<'_>) -> Option<TypeId> {
-        let void_ty = self.interner.well_known().void;
-        let params = self.lower_signature_parameters(scope, &func.params);
-        let ret = match func.return_type.as_ref() {
-            Some(ann) => self.lower_annotation(scope, &ann.type_annotation)?,
-            None => void_ty,
-        };
-        Some(self.interner.intern_function(FunctionType { params, ret }))
-    }
-
-    /// Lower a method's/constructor's parameter list to positional `ParameterType`s for
-    /// its **signature type** (M11). An un-annotated parameter is out of the MVP subset
-    /// → the error type (no diagnostic), matching `lower_parameters`. Rest/optional
-    /// parameters and parameter properties are out of subset; a destructured parameter
-    /// has no name (defaulted empty). This builds the *signature* only; parameter symbols
-    /// for the body are bound separately by `lower_parameters` during the body walk.
-    fn lower_signature_parameters(
-        &mut self,
-        scope: ScopeId,
-        params: &FormalParameters<'_>,
-    ) -> Vec<ParameterType> {
-        let error_ty = self.interner.well_known().error;
-        let mut lowered: Vec<ParameterType> = Vec::with_capacity(params.items.len());
-        for param in &params.items {
-            let name = parameter_name(&param.pattern).unwrap_or_default();
-            let ty = match param.type_annotation.as_ref() {
-                Some(ann) => self.lower_annotation(scope, &ann.type_annotation).unwrap_or(error_ty),
-                None => error_ty,
-            };
-            lowered.push(ParameterType {
-                name,
-                ty,
-                optional: false,
-            });
-        }
-        lowered
+        self.lower_signature_function_type(scope, &func.params, func.return_type.as_deref())
     }
 
     /// Check a class declaration's member **bodies** (M11). The class's types (instance
@@ -1086,4 +1052,3 @@ fn compose_members(
     }
     composed
 }
-

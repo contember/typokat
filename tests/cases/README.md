@@ -188,3 +188,6 @@ finding ID.
 No deliberate `tsc` divergence is expected for plain non-generic method signatures with explicit
 return annotations. `tsc --strict` 6.0.3 reports `TS7010` for a method signature whose return
 annotation is omitted, so that case is not part of this corpus.
+Optional method signatures are deferred: they are out of the WU1 subset on the sound side, so
+accessing a dropped optional method member over-reports instead of dropping a possibly-undefined
+call error.

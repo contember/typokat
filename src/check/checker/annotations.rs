@@ -6,8 +6,9 @@ use crate::types::repr::{
 };
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
-    FormalParameters, TSLiteral, TSSignature, TSTupleElement,
-    TSType, TSTypeOperatorOperator,
+    FormalParameters, TSLiteral, TSMethodSignature, TSMethodSignatureKind,
+    TSSignature, TSTupleElement, TSType, TSTypeAnnotation,
+    TSTypeOperatorOperator,
 };
 use super::context::*;
 use super::calls::parameter_name;
@@ -178,9 +179,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// M21: an **optional** property (`b?: T`) is a real member with `optional: true`
     /// and an effective type of `T | undefined` (the `| undefined` is interned here).
     ///
+    /// F1/WU1: a non-generic static-name method signature lowers to a
+    /// function-typed property (`f(x: number): string` → `f: (x: number) => string`).
+    ///
     /// A member whose type cannot be lowered, or any unsupported signature
-    /// (call/method/construct, or an index sig with an unsupported key) aborts the
-    /// lowering (`None`).
+    /// (call/construct/generic method/accessor method, or an index sig with an
+    /// unsupported key) aborts the lowering (`None`).
     fn lower_object_annotation(
         &mut self,
         scope: ScopeId,
@@ -218,10 +222,84 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 TSSignature::TSIndexSignature(sig) => {
                     self.lower_index_signature(scope, sig, &mut object)?;
                 }
+                TSSignature::TSMethodSignature(sig) => {
+                    let prop = self.lower_method_signature_property(scope, sig)?;
+                    object.properties.push(prop);
+                }
                 _ => return None,
             }
         }
         Some(self.interner.intern_object(object))
+    }
+
+    /// Lower a `TSMethodSignature` member to a public function-typed property.
+    ///
+    /// This intentionally accepts only the WU1 subset: required, non-generic,
+    /// non-`this`, non-accessor method signatures with static names. Optional
+    /// method signatures are out of subset for WU1 so they keep the existing
+    /// object/interface out-of-subset behavior rather than being represented
+    /// incompletely.
+    pub(in crate::check::checker) fn lower_method_signature_property(
+        &mut self,
+        scope: ScopeId,
+        sig: &TSMethodSignature<'_>,
+    ) -> Option<PropertyType> {
+        if sig.kind != TSMethodSignatureKind::Method
+            || sig.type_parameters.is_some()
+            || sig.this_param.is_some()
+            || sig.optional
+        {
+            return None;
+        }
+
+        let name = sig.key.static_name()?;
+        let ty =
+            self.lower_signature_function_type(scope, &sig.params, sig.return_type.as_deref())?;
+        Some(PropertyType::public(name.into_owned(), ty))
+    }
+
+    /// Lower a function-like signature into an interned [`FunctionType`].
+    ///
+    /// Parameters come from annotations; missing/unlowerable parameter annotations use
+    /// the error type to suppress cascades. A missing return annotation becomes `void`,
+    /// matching the class-method lowering this helper replaces.
+    pub(in crate::check::checker) fn lower_signature_function_type(
+        &mut self,
+        scope: ScopeId,
+        params: &FormalParameters<'_>,
+        return_type: Option<&TSTypeAnnotation<'_>>,
+    ) -> Option<TypeId> {
+        let void_ty = self.interner.well_known().void;
+        let params = self.lower_signature_parameters(scope, params);
+        let ret = match return_type {
+            Some(ann) => self.lower_annotation(scope, &ann.type_annotation)?,
+            None => void_ty,
+        };
+        Some(self.interner.intern_function(FunctionType { params, ret }))
+    }
+
+    /// Lower positional signature parameters for function-typed properties and class
+    /// method/constructor signatures.
+    pub(in crate::check::checker) fn lower_signature_parameters(
+        &mut self,
+        scope: ScopeId,
+        params: &FormalParameters<'_>,
+    ) -> Vec<ParameterType> {
+        let error_ty = self.interner.well_known().error;
+        let mut lowered: Vec<ParameterType> = Vec::with_capacity(params.items.len());
+        for param in &params.items {
+            let name = parameter_name(&param.pattern).unwrap_or_default();
+            let ty = match param.type_annotation.as_ref() {
+                Some(ann) => self.lower_annotation(scope, &ann.type_annotation).unwrap_or(error_ty),
+                None => error_ty,
+            };
+            lowered.push(ParameterType {
+                name,
+                ty,
+                optional: false,
+            });
+        }
+        lowered
     }
 
     /// Lower a single index signature (M19) into the appropriate slot of `object`.
@@ -448,4 +526,3 @@ fn whole_index(value: f64) -> Option<usize> {
     }
     Some(value as usize)
 }
-

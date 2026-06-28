@@ -203,3 +203,7 @@ but only one implementation should edit `ObjectType`/interner/hash/substitution/
 - 2026-06-28: WU1/WU2/WU3 each get their own separately-toggled fixture dir
   (`f1_object_interface_methods` / `f1_object_interface_call` /
   `f1_object_interface_construct`) so every commit stays green with full conformance gating.
+- 2026-06-28: WU1 adversarial review follow-up: optional method signatures are deferred out of the
+  WU1 subset and fixed by restoring the sound out-of-subset behavior; calling a non-callable
+  property remains deferred to WU2 callable-object work; duplicate property/method identifiers were
+  filed as backlog [`18`](../backlog/18-duplicate-identifier-detection.md).

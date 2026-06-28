@@ -363,10 +363,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// Lower an interface body's members to a nominal `ObjectType` (M5). Mirrors
     /// [`lower_object_annotation`] but returns the `ObjectType` (the caller fills the
     /// reserved nominal id rather than interning a fresh structural object). A member
-    /// that is not a plain required property signature, or whose type cannot be
-    /// lowered, is skipped — the interface keeps the members it can express (a partial
-    /// interface is more useful than none, and the unsupported members are out of the
-    /// M5 subset).
+    /// that is not a plain property/index signature or WU1 method signature, or whose
+    /// type cannot be lowered, is skipped — the interface keeps the members it can
+    /// express (a partial interface is more useful than none, and the unsupported
+    /// members are out of the current subset).
     fn lower_interface_members(
         &mut self,
         scope: ScopeId,
@@ -415,6 +415,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 // property), so the interface keeps the members it can express.
                 TSSignature::TSIndexSignature(sig) => {
                     let _ = self.lower_index_signature(scope, sig, &mut object);
+                }
+                TSSignature::TSMethodSignature(sig) => {
+                    if let Some(prop) = self.lower_method_signature_property(scope, sig) {
+                        object.properties.push(prop);
+                    }
                 }
                 _ => continue,
             }
@@ -552,4 +557,3 @@ pub(in crate::check::checker) fn value_decl_id(binder: &Binder, scope: ScopeId, 
     let symbol_id = binder.graph.resolve(scope, name)?;
     binder.symbols.get(symbol_id).and_then(|s| s.value)
 }
-
