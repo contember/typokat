@@ -198,10 +198,17 @@ call error.
 and object type literals, exact arity (`TK2554`), argument mismatch (`TK2345`), call-result
 assignment (`TK2322`), function value assignability to a callable object/interface type with no
 required named properties (including optional named properties), callable object/interface
-assignability back to a matching function type, and missing required named properties (`TK2741`). No
-deliberate `tsc` divergence is expected for this WU2 subset. Overloads, generic signatures,
-optional/rest/default parameters, not-callable diagnostics, and construct signatures remain out of
-scope.
+assignability back to a matching function type, and missing required named properties (`TK2741`).
+Overloads, generic signatures, optional/rest/default parameters, not-callable diagnostics, and
+construct signatures remain out of scope.
+Accepted official-suite over-reports (safe direction, recorded in the scoreboard rather than
+dropped errors):
+- `objectTypeWithCallSignatureAppearsToBeFunctionType.ts` — `TK2339` on `.apply`/`.call`/`.bind`:
+  typokat does not model `Function.prototype` members on callable objects.
+- `assignFromNumberInterface2.ts` — `TK2322`/`TK2741`: typokat does not model primitive-to/from-boxed
+  interface assignability (`number` to/from `Number`).
+- `assignmentCompatWithCallSignatures2.ts` — `TK2322`: typokat does not model
+  generic-function-to-specific-signature assignability.
 
 `f1_object_interface_construct/` covers a single non-overloaded, non-generic construct signature on
 interfaces and object type literals, exact arity (`TK2554`), argument mismatch (`TK2345`), construct
@@ -214,3 +221,8 @@ Typokat does not model JavaScript runtime constructability, so this corpus avoid
 depend on ordinary functions being constructable. Overloads, generic construct signatures,
 optional/rest/default parameters, `abstract new`, `this` parameters, and constructor runtime
 semantics remain out of scope.
+Accepted official-suite over-report (safe direction, recorded in the scoreboard rather than a
+dropped error):
+- `objectTypeWithConstructSignatureAppearsToBeFunctionType.ts` — `TK2339` on
+  `.apply`/`.call`/`.bind`: typokat does not model `Function.prototype` members on
+  construct-signature objects.

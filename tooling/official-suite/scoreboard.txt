@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
 # corpus 874  in-scope 494  out-of-scope 380
-# clean-kept 163/210  error-exact 16/284  diag-recall 197/1658
+# clean-kept 165/210  error-exact 18/284  diag-recall 229/1658
 # cols: status<TAB>matched fn fp expected<TAB>rel  (status=IN | OOS:<bucket>; '-' = n/a)
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -519,15 +519,15 @@ IN	0 16 0 16	conformance/types/members/duplicatePropertyNames.ts
 OOS:syntax:module	- - - -	conformance/types/members/duplicateStringIndexers.ts
 OOS:syntax:mapped-type	- - - -	conformance/types/members/indexSignatures1.ts
 IN	0 1 0 1	conformance/types/members/objectTypeHidingMembersOfExtendedObject.ts
-IN	0 3 1 3	conformance/types/members/objectTypeHidingMembersOfObject.ts
+IN	0 3 0 3	conformance/types/members/objectTypeHidingMembersOfObject.ts
 OOS:unresolved	- - - -	conformance/types/members/objectTypeHidingMembersOfObjectAssignmentCompat.ts
 OOS:unresolved	- - - -	conformance/types/members/objectTypeHidingMembersOfObjectAssignmentCompat2.ts
 IN	0 9 3 9	conformance/types/members/objectTypePropertyAccess.ts
-IN	0 4 1 4	conformance/types/members/objectTypeWithCallSignatureAppearsToBeFunctionType.ts
+IN	0 4 2 4	conformance/types/members/objectTypeWithCallSignatureAppearsToBeFunctionType.ts
 OOS:unresolved	- - - -	conformance/types/members/objectTypeWithCallSignatureHidingMembersOfExtendedFunction.ts
 IN	0 6 3 6	conformance/types/members/objectTypeWithCallSignatureHidingMembersOfFunction.ts
 OOS:unresolved	- - - -	conformance/types/members/objectTypeWithCallSignatureHidingMembersOfFunctionAssignmentCompat.ts
-IN	0 2 1 2	conformance/types/members/objectTypeWithConstructSignatureAppearsToBeFunctionType.ts
+IN	0 2 2 2	conformance/types/members/objectTypeWithConstructSignatureAppearsToBeFunctionType.ts
 OOS:unresolved	- - - -	conformance/types/members/objectTypeWithConstructSignatureHidingMembersOfExtendedFunction.ts
 IN	0 6 3 6	conformance/types/members/objectTypeWithConstructSignatureHidingMembersOfFunction.ts
 OOS:unresolved	- - - -	conformance/types/members/objectTypeWithConstructSignatureHidingMembersOfFunctionAssignmentCompat.ts
@@ -544,7 +544,7 @@ IN	1 2 2 3	conformance/types/members/typesWithPublicConstructor.ts
 IN	0 0 4 0	conformance/types/members/typesWithSpecializedCallSignatures.ts
 IN	0 0 0 0	conformance/types/members/typesWithSpecializedConstructSignatures.ts
 OOS:parse-error	- - - -	conformance/types/objectTypeLiteral/callSignatures/callSignatureWithOptionalParameterAndInitializer.ts
-IN	0 0 1 0	conformance/types/objectTypeLiteral/callSignatures/callSignatureWithoutAnnotationsOrBody.ts
+IN	0 0 0 0	conformance/types/objectTypeLiteral/callSignatures/callSignatureWithoutAnnotationsOrBody.ts
 OOS:syntax:module	- - - -	conformance/types/objectTypeLiteral/callSignatures/callSignatureWithoutReturnTypeAnnotationInference.ts
 IN	0 0 0 0	conformance/types/objectTypeLiteral/callSignatures/callSignaturesThatDifferOnlyByReturnType.ts
 IN	0 2 2 2	conformance/types/objectTypeLiteral/callSignatures/callSignaturesThatDifferOnlyByReturnType2.ts
@@ -612,7 +612,7 @@ OOS:syntax:enum	- - - -	conformance/types/primitives/enum/validEnumAssignments.t
 IN	1 0 0 1	conformance/types/primitives/null/directReferenceToNull.ts
 OOS:syntax:module	- - - -	conformance/types/primitives/null/validNullAssignments.ts
 OOS:unresolved	- - - -	conformance/types/primitives/number/assignFromNumberInterface.ts
-IN	2 0 2 2	conformance/types/primitives/number/assignFromNumberInterface2.ts
+IN	2 0 3 2	conformance/types/primitives/number/assignFromNumberInterface2.ts
 IN	0 0 2 0	conformance/types/primitives/number/extendNumberInterface.ts
 OOS:syntax:module	- - - -	conformance/types/primitives/number/invalidNumberAssignments.ts
 IN	0 0 2 0	conformance/types/primitives/number/numberPropertyAccess.ts
@@ -673,21 +673,21 @@ OOS:syntax:module	- - - -	conformance/types/typeRelationships/assignmentCompatib
 OOS:syntax:enum	- - - -	conformance/types/typeRelationships/assignmentCompatibility/anyAssignableToEveryType.ts
 OOS:syntax:module	- - - -	conformance/types/typeRelationships/assignmentCompatibility/anyAssignableToEveryType2.ts
 IN	1 1 4 2	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatBetweenTupleAndArray.ts
-IN	2 6 3 8	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignatures.ts
-IN	4 8 0 12	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignatures2.ts
+IN	8 0 2 8	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignatures.ts
+IN	12 0 2 12	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignatures2.ts
 OOS:unresolved	- - - -	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignatures3.ts
 OOS:syntax:module	- - - -	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignatures4.ts
 OOS:unresolved	- - - -	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignatures5.ts
 OOS:unresolved	- - - -	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignatures6.ts
 IN	5 12 16 17	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignaturesWithOptionalParameters.ts
 IN	0 11 0 11	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignaturesWithRestParameters.ts
-IN	2 6 0 8	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignatures.ts
-IN	4 8 0 12	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignatures2.ts
+IN	8 0 0 8	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignatures.ts
+IN	12 0 0 12	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignatures2.ts
 IN	0 19 0 19	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignatures3.ts
 OOS:syntax:module	- - - -	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignatures4.ts
 IN	0 8 0 8	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignatures5.ts
 IN	0 7 7 7	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignatures6.ts
-IN	0 11 30 11	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts
+IN	3 8 15 11	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts
 OOS:syntax:module	- - - -	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithDiscriminatedUnion.ts
 OOS:syntax:enum	- - - -	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithEnumIndexer.ts
 OOS:unresolved	- - - -	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithGenericCallSignatures.ts
@@ -852,10 +852,10 @@ IN	0 0 0 0	conformance/types/typeRelationships/typeAndMemberIdentity/objectTypes
 OOS:syntax:enum	- - - -	conformance/types/typeRelationships/typeAndMemberIdentity/primtiveTypesAreIdentical.ts
 OOS:unresolved	- - - -	conformance/types/typeRelationships/typeAndMemberIdentity/typeParametersAreIdenticalToThemselves.ts
 IN	0 3 0 3	conformance/types/typeRelationships/typeAndMemberIdentity/unionTypeIdentity.ts
-IN	0 2 5 2	conformance/types/union/contextualTypeWithUnionTypeCallSignatures.ts
-IN	0 0 8 0	conformance/types/union/contextualTypeWithUnionTypeIndexSignatures.ts
+IN	0 2 0 2	conformance/types/union/contextualTypeWithUnionTypeCallSignatures.ts
+IN	0 0 0 0	conformance/types/union/contextualTypeWithUnionTypeIndexSignatures.ts
 OOS:unresolved	- - - -	conformance/types/union/contextualTypeWithUnionTypeMembers.ts
-IN	1 5 4 6	conformance/types/union/contextualTypeWithUnionTypeObjectLiteral.ts
+IN	2 4 4 6	conformance/types/union/contextualTypeWithUnionTypeObjectLiteral.ts
 OOS:unresolved	- - - -	conformance/types/union/discriminatedUnionTypes1.ts
 OOS:unresolved	- - - -	conformance/types/union/discriminatedUnionTypes2.ts
 OOS:syntax:template-lit-type	- - - -	conformance/types/union/discriminatedUnionTypes3.ts
@@ -871,9 +871,9 @@ OOS:unresolved	- - - -	conformance/types/union/unionTypeConstructSignatures.ts
 IN	0 1 0 1	conformance/types/union/unionTypeEquivalence.ts
 IN	0 1 2 1	conformance/types/union/unionTypeFromArrayLiteral.ts
 OOS:unresolved	- - - -	conformance/types/union/unionTypeIndexSignature.ts
-IN	3 2 9 5	conformance/types/union/unionTypeMembers.ts
+IN	3 2 4 5	conformance/types/union/unionTypeMembers.ts
 IN	2 14 0 16	conformance/types/union/unionTypePropertyAccessibility.ts
 IN	4 1 0 5	conformance/types/union/unionTypeReadonly.ts
 IN	0 0 0 0	conformance/types/union/unionTypeReduction.ts
-IN	0 1 2 1	conformance/types/union/unionTypeReduction2.ts
+IN	0 1 0 1	conformance/types/union/unionTypeReduction2.ts
 OOS:unresolved	- - - -	conformance/types/union/unionTypeWithIndexSignature.ts
