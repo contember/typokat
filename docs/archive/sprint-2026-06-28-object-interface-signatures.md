@@ -1,10 +1,22 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME — shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU1 → <sha>,
-> WU2 → <sha>, … Verification: <the gate command + numbers>. Backlog closed:
-> <ids deleted/rescoped>. Deferred: <honest notes>.
--->
+> **OUTCOME — shipped 2026-06-28.** Method, call, and construct signatures inside object type
+> literals and interfaces no longer collapse the type to `{}`. Methods lower to function-typed
+> properties; a single in-subset call/construct signature makes a value callable/constructable (with
+> `new (...) => T` constructor-type annotations and class-static-side construct signatures);
+> everything is folded into the hash-consed type identity, substitution, rendering, and the relation
+> (both directions). Lowering is narrowed to a strict in-subset — overload sets, optional/rest/default
+> params, and unlowerable annotation types are dropped, the sound out-of-subset behavior. Three
+> independent adversarial reviews caught and fixed three false negatives (optional-method invocation,
+> private/protected constructor exposure, and function→`{call;new}`). Commit map: plan → 0a3438a;
+> WU1 spec → 1a9ca7f, impl(+review fix) → 9f032ee; WU2 spec → ec7162f, impl(+narrowing fix) → 0f95d88;
+> WU3 spec → 5f06d24, impl(+accessibility fix) → 8449f60; WU4 relation fix → 568192e, official-suite
+> ratchet → 33b4292. Verification: `cargo test` (172 unit + conformance, incl. the three new
+> `f1_object_interface_{methods,call,construct}` corpora), `cargo clippy --all-targets -- -D warnings`,
+> and `tsofficial.py run --check` all green; official-suite diag-recall 197→229/1658, with
+> `assignmentCompatWith{Call,Construct}Signatures` rows reaching 8/8 and 12/12 matched. Backlog closed:
+> `05` (shipped). Deferred (filed): `18` duplicate-identifier `TK2300`, `19` not-callable `TK2349`,
+> `20` constructor accessibility on direct `new`. Accepted sound over-reports (4, documented in
+> `tests/cases/README.md` + scoreboard): `.apply` on callable/construct objects (no `Function.prototype`
+> modeling), `number`↔`Number` boxing, generic-function-to-specific assignability.
 
 # Sprint — object/interface signatures (2026-06-28)
 

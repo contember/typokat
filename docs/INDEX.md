@@ -22,13 +22,14 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprints/sprint-2026-06-28-object-interface-signatures.md`](sprints/sprint-2026-06-28-object-interface-signatures.md) — backlog `05` / F1: object & interface method/call/construct signatures.
+- _none active_
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M22 shipped; current-impl bugs F3–F5 fixed** (backlog `01`–`03`; item `04` was a non-bug —
-  see [`archive/sprint-2026-06-24-impl-bugs.md`](archive/sprint-2026-06-24-impl-bugs.md)).
-  Active now: object/interface call, method, and construct signatures (`05` / F1). Next likely:
-  class-completeness warm-up (`06`) or unstructured-flow narrowing (`07`).
+- **M0–M22 shipped; object/interface method, call & construct signatures shipped** (backlog `05` / F1 —
+  see [`archive/sprint-2026-06-28-object-interface-signatures.md`](archive/sprint-2026-06-28-object-interface-signatures.md);
+  earlier current-impl bugs F3–F5 in [`archive/sprint-2026-06-24-impl-bugs.md`](archive/sprint-2026-06-24-impl-bugs.md)).
+  Next likely: class-completeness warm-up (`06`) or unstructured-flow narrowing (`07`). New gaps
+  filed: `18` duplicate-identifier, `19` not-callable, `20` constructor accessibility on `new`.

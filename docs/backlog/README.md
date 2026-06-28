@@ -12,9 +12,9 @@ documents something a future reader needs. Dependencies go in frontmatter:
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.
 
-This **is** the roadmap. Item `05` is a gap surfaced by the official-suite harness (an `F*`
-finding; `01`–`04` shipped — see [`../archive/`](../archive/README.md)); `06`–`17` are the
-milestone roadmap. Architecture §12 governs ordering — the relation
+This **is** the roadmap. Items `01`–`05` shipped — `01`–`04` (current-impl bugs) and `05`
+(object/interface method/call/construct signatures, F1); see [`../archive/`](../archive/README.md).
+`06`–`17` are the milestone roadmap. Architecture §12 governs ordering — the relation
 engine + narrowing come **before** type-level evaluation, whose speed lives in the tree-walker's
 algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor — see
 [ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). See
@@ -23,7 +23,6 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 ## Items
 
 **Near-term completeness**
-- [`05`](05-object-interface-signatures.md) — call/method/construct signatures in object & interface types (candidate milestone).
 - [`06`](06-class-completeness-checks.md) — class-completeness checks `TK2416` + `TK2515` (good warm-up).
 - [`20`](20-constructor-accessibility-on-new.md) — enforce private/protected constructor accessibility on direct `new C()`.
 

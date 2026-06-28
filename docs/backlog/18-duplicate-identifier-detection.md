@@ -38,4 +38,4 @@ and interfaces, with behavior checked against `tsc --strict`.
 Binder and/or annotation lowering paths that collect object and interface members; diagnostic
 definition/rendering for `TK2300`; conformance fixtures documenting the duplicate-member cases.
 
-<!-- Origin: WU1 adversarial review, recorded in ../sprints/sprint-2026-06-28-object-interface-signatures.md. -->
+<!-- Origin: WU1 adversarial review, recorded in ../archive/sprint-2026-06-28-object-interface-signatures.md. -->
