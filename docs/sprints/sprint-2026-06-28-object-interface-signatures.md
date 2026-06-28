@@ -199,3 +199,7 @@ but only one implementation should edit `ObjectType`/interner/hash/substitution/
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
      trim to a one-line pointer ("→ ADR-0007"). -->
+
+- 2026-06-28: WU1/WU2/WU3 each get their own separately-toggled fixture dir
+  (`f1_object_interface_methods` / `f1_object_interface_call` /
+  `f1_object_interface_construct`) so every commit stays green with full conformance gating.
