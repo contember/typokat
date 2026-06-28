@@ -20,3 +20,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+- [`sprint-2026-06-28-object-interface-signatures.md`](sprint-2026-06-28-object-interface-signatures.md) — backlog `05` / F1: object & interface method/call/construct signatures.
