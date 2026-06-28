@@ -181,6 +181,7 @@ finding ID.
 |---|---|---|
 | `f1_object_interface_methods/` | F1 / `05` | object/interface method signatures become function-typed properties |
 | `f1_object_interface_call/` | F1 / `05` | single object/interface call signatures make values callable |
+| `f1_object_interface_construct/` | F1 / `05` | single object/interface construct signatures make values constructable |
 | `f3_class_member_collection/` | F3 / `01` | parameter properties + initializer-inferred class fields become real members |
 | `f4_destructuring_access/` | F4 / `02` | private/protected access control runs through object-destructuring patterns |
 | `f5_union_readonly/` | F5 / `03` | `readonly` enforced on object-type/interface members and through a union member-assignment |
@@ -201,3 +202,15 @@ assignability back to a matching function type, and missing required named prope
 deliberate `tsc` divergence is expected for this WU2 subset. Overloads, generic signatures,
 optional/rest/default parameters, not-callable diagnostics, and construct signatures remain out of
 scope.
+
+`f1_object_interface_construct/` covers a single non-overloaded, non-generic construct signature on
+interfaces and object type literals, exact arity (`TK2554`), argument mismatch (`TK2345`), construct
+result assignment (`TK2322`), class constructor and constructor-typed value assignability to a
+construct-signature object/interface type, and construct-signature object/interface assignability
+back to a matching `new (...) => T` type. Ordinary function values are deliberately out of scope:
+`tsc --strict` 6.0.3 does not treat a plain `(x: number) => Box` value as satisfying a construct
+signature, and `new makeBox(1)` reports `TS7009` because the target lacks a construct signature.
+Typokat does not model JavaScript runtime constructability, so this corpus avoids fixtures that
+depend on ordinary functions being constructable. Overloads, generic construct signatures,
+optional/rest/default parameters, `abstract new`, `this` parameters, and constructor runtime
+semantics remain out of scope.
