@@ -38,7 +38,6 @@ fixture (keeps fixtures robust to author miscounting).
 | `TK2339` | Property does not exist on type |
 | `TK2341` | Property is private (accessed outside its declaring class) |
 | `TK2345` | Argument type not assignable to parameter type |
-| `TK2349` | This expression is not callable |
 | `TK2445` | Property is protected (accessed outside the class and its subclasses) |
 | `TK2511` | Cannot create an instance of an abstract class |
 | `TK2540` | Cannot assign to a read-only property |
@@ -194,11 +193,11 @@ Optional method signatures are deferred: they are out of the WU1 subset on the s
 accessing a dropped optional method member over-reports instead of dropping a possibly-undefined
 call error.
 
-`f1_object_interface_call/` adds `TK2349` for calling a value with no call signature. It covers a
-single non-overloaded, non-generic call signature on interfaces and object type literals, exact
-arity (`TK2554`), argument mismatch (`TK2345`), call-result assignment (`TK2322`), function
-value assignability to a callable object/interface type with no required named properties (including
-optional named properties), callable object/interface assignability back to a matching function type,
-and missing required named properties (`TK2741`). No deliberate `tsc` divergence is expected for
-this WU2 subset. Overloads, generic signatures, optional/rest parameters, and construct signatures
-remain out of scope.
+`f1_object_interface_call/` covers a single non-overloaded, non-generic call signature on interfaces
+and object type literals, exact arity (`TK2554`), argument mismatch (`TK2345`), call-result
+assignment (`TK2322`), function value assignability to a callable object/interface type with no
+required named properties (including optional named properties), callable object/interface
+assignability back to a matching function type, and missing required named properties (`TK2741`). No
+deliberate `tsc` divergence is expected for this WU2 subset. Overloads, generic signatures,
+optional/rest/default parameters, not-callable diagnostics, and construct signatures remain out of
+scope.

@@ -1,14 +1,12 @@
 //! decls module (extracted from checker/mod.rs).
 
+use super::context::*;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::DeclId;
 use crate::binder::Binder;
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
-use crate::types::repr::{
-    ClassId, ObjectType, PropertyType,
-    TypeParamId,
-};
+use crate::types::repr::{ClassId, ObjectType, PropertyType, TypeParamId};
 use crate::types::store::TypeId;
 use crate::types::{substitute, Interner};
 use oxc_ast::ast::{
@@ -16,7 +14,6 @@ use oxc_ast::ast::{
     TSTypeParameterInstantiation,
 };
 use rustc_hash::FxHashMap;
-use super::context::*;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Phase 0b — **fill**. Fill every interface body in place, then force every alias
@@ -56,9 +53,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             };
             let params = params.clone();
             let frame = self.build_type_param_frame(param_decl, &params);
-            let object = self.with_type_params(frame, |pass| {
-                pass.lower_interface_members(scope, members)
-            });
+            let object =
+                self.with_type_params(frame, |pass| pass.lower_interface_members(scope, members));
             self.interner.fill_object(reserved, object);
         }
 
@@ -117,7 +113,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }) => (*annotation, *param_decl, params.clone()),
             // A reference re-entered while this alias is mid-resolution: a recursive
             // alias (out of subset). Break the cycle with the error type.
-            Some(TypeDecl::Alias { resolving: true, .. }) => return error_ty,
+            Some(TypeDecl::Alias {
+                resolving: true, ..
+            }) => return error_ty,
             // An interface with no seeded id, or an out-of-range id: defensive.
             _ => return error_ty,
         };
@@ -131,9 +129,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // reference to `A`/`B` in `type Pair<A, B> = { … }` resolves to the parameter
         // type. The frame is popped before returning (a parameter does not leak).
         let frame = self.build_type_param_frame(param_decl, &params);
-        let target =
-            self.with_type_params(frame, |pass| pass.lower_annotation(scope, annotation))
-                .unwrap_or(error_ty);
+        let target = self
+            .with_type_params(frame, |pass| pass.lower_annotation(scope, annotation))
+            .unwrap_or(error_ty);
 
         if let Some(TypeDecl::Alias { resolving, .. }) = self.type_decls.get_mut(index) {
             *resolving = false;
@@ -373,12 +371,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         members: &[TSSignature<'_>],
     ) -> ObjectType {
         let mut object = ObjectType::default();
+        let overloaded_method_names = self.overloaded_method_names(members);
+        let call_signatures_overloaded = self.call_signatures_overloaded(members);
         for member in members {
             match member {
                 TSSignature::TSPropertySignature(sig) => {
                     let Some(name) = sig.key.static_name() else {
                         continue;
                     };
+                    if overloaded_method_names.contains(name.as_ref()) {
+                        continue;
+                    }
                     let Some(annotation) = sig.type_annotation.as_ref() else {
                         continue;
                     };
@@ -417,8 +420,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     let _ = self.lower_index_signature(scope, sig, &mut object);
                 }
                 TSSignature::TSMethodSignature(sig) => {
+                    let Some(name) = sig.key.static_name() else {
+                        continue;
+                    };
+                    if overloaded_method_names.contains(name.as_ref()) {
+                        continue;
+                    }
                     if let Some(prop) = self.lower_method_signature_property(scope, sig) {
                         object.properties.push(prop);
+                    }
+                }
+                TSSignature::TSCallSignatureDeclaration(sig) => {
+                    if call_signatures_overloaded {
+                        continue;
+                    }
+                    if let Some(signature) = self.lower_call_signature(scope, sig) {
+                        object.call_signatures.push(signature);
                     }
                 }
                 _ => continue,
@@ -426,7 +443,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
         object
     }
-
 }
 
 /// Phase 0a — **reserve**. Walk the top-level type declarations and, indexed by
@@ -466,7 +482,8 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                     }
                 }
                 // M9: allocate one id per declared type parameter (in source order).
-                let params = alloc_type_param_ids(iface.type_parameters.as_deref(), next_type_param);
+                let params =
+                    alloc_type_param_ids(iface.type_parameters.as_deref(), next_type_param);
                 decls.push(TypeDecl::Interface {
                     reserved,
                     params,
@@ -475,7 +492,8 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                 });
             }
             Statement::TSTypeAliasDeclaration(alias) => {
-                let params = alloc_type_param_ids(alias.type_parameters.as_deref(), next_type_param);
+                let params =
+                    alloc_type_param_ids(alias.type_parameters.as_deref(), next_type_param);
                 decls.push(TypeDecl::Alias {
                     annotation: &alias.type_annotation,
                     params,
@@ -505,7 +523,8 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                 // M16: allocate one id per declared type parameter (in source order),
                 // paired with their names later when the class body is lowered with the
                 // parameter frame in scope (`fill_class`) — exactly like an interface.
-                let params = alloc_type_param_ids(class.type_parameters.as_deref(), next_type_param);
+                let params =
+                    alloc_type_param_ids(class.type_parameters.as_deref(), next_type_param);
                 decls.push(TypeDecl::Class {
                     reserved,
                     class_id,
@@ -545,7 +564,11 @@ pub(in crate::check::checker) fn alloc_type_param_ids(
 
 /// The type-space `DeclId` a name resolves to from `scope` (binder type slot), if
 /// any. Walks the scope graph like value resolution, then reads the `ty` slot.
-pub(in crate::check::checker) fn type_decl_id(binder: &Binder, scope: ScopeId, name: &str) -> Option<DeclId> {
+pub(in crate::check::checker) fn type_decl_id(
+    binder: &Binder,
+    scope: ScopeId,
+    name: &str,
+) -> Option<DeclId> {
     let symbol_id = binder.graph.resolve(scope, name)?;
     binder.symbols.get(symbol_id).and_then(|s| s.ty)
 }
@@ -553,7 +576,11 @@ pub(in crate::check::checker) fn type_decl_id(binder: &Binder, scope: ScopeId, n
 /// The **value**-space `DeclId` a name resolves to from `scope` (binder value slot),
 /// if any (M11 — the class constructor side). Mirrors [`type_decl_id`] for the value
 /// space.
-pub(in crate::check::checker) fn value_decl_id(binder: &Binder, scope: ScopeId, name: &str) -> Option<DeclId> {
+pub(in crate::check::checker) fn value_decl_id(
+    binder: &Binder,
+    scope: ScopeId,
+    name: &str,
+) -> Option<DeclId> {
     let symbol_id = binder.graph.resolve(scope, name)?;
     binder.symbols.get(symbol_id).and_then(|s| s.value)
 }

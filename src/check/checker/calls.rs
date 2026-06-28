@@ -1,26 +1,21 @@
 //! calls module (extracted from checker/mod.rs).
 
+use super::context::*;
+use super::decls::alloc_type_param_ids;
+use super::decls::value_decl_id;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::DeclId;
 use crate::check::infer;
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
-use crate::types::repr::{
-    FunctionType, IntrinsicKind, ParameterType,
-    TypeParamId,
-};
+use crate::types::repr::{FunctionType, IntrinsicKind, ParameterType, TypeParamId, TypeTag};
 use crate::types::store::TypeId;
 use crate::types::{substitute, Interner, WellKnown};
 use oxc_ast::ast::{
-    ArrowFunctionExpression, BindingPattern,
-    CallExpression, Expression, FormalParameters,
-    Function, FunctionBody,
-    NewExpression,
+    ArrowFunctionExpression, BindingPattern, CallExpression, Expression, FormalParameters,
+    Function, FunctionBody, NewExpression,
 };
 use rustc_hash::FxHashMap;
-use super::context::*;
-use super::decls::alloc_type_param_ids;
-use super::decls::value_decl_id;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Instantiate a **generic call with explicit type arguments** (`identity<number>
@@ -140,10 +135,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ///    corresponding parameter → `TK2345` (primary span = the argument), paired up
     ///    to the lesser of the two counts.
     ///
-    /// The call's type is the function's return type. A non-function callee is out of
-    /// scope (no diagnostic) and yields the error type. Arguments are always inferred
-    /// (so nested calls/functions inside them are checked) even when the callee is
-    /// not a function.
+    /// The call's type is the selected signature's return type. A callee is callable
+    /// when it is a function type or an object with a single call signature. A
+    /// non-callable callee yields the error type silently, preserving the pre-WU2
+    /// behavior until the dedicated diagnostic can account for dropped callability
+    /// and overloads.
     pub(in crate::check::checker) fn infer_call(
         &mut self,
         scope: ScopeId,
@@ -204,10 +200,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             None => return Some((wk.error, call_span)),
         };
 
+        let Some(signature_ty) = self.callable_signature(callee_ty) else {
+            return Some((wk.error, call_span));
+        };
+
         // Snapshot the callee's parameter types + return type so the immutable store
         // borrow does not overlap pushing obligations / diagnostics below.
-        let Some(func) = self.interner.store().function_type(callee_ty) else {
-            // Non-function callee — out of scope. No diagnostic; error-typed result.
+        let Some(func) = self.interner.store().function_type(signature_ty) else {
             return Some((wk.error, call_span));
         };
         let param_types: Vec<TypeId> = func.params.iter().map(|p| p.ty).collect();
@@ -217,6 +216,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.check_call_arguments(&param_types, &arg_types, call_span);
 
         Some((ret, call_span))
+    }
+
+    fn callable_signature(&self, callee_ty: TypeId) -> Option<TypeId> {
+        match self.interner.store().tag(callee_ty) {
+            TypeTag::Function => Some(callee_ty),
+            TypeTag::Object => {
+                let object = self.interner.store().object_type(callee_ty)?;
+                let [signature] = object.call_signatures.as_slice() else {
+                    return None;
+                };
+                Some(*signature)
+            }
+            _ => None,
+        }
     }
 
     /// Check a `super(args)` constructor call (M12) against the **base** class's
@@ -357,14 +370,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // (`new (expr)(…)`) is out of subset. M16: keep the `DeclId` too, to look up the
         // class's type parameters for a generic instantiation.
         let class_resolved: Option<(DeclId, ClassInfo)> = match &new_expr.callee {
-            Expression::Identifier(ident) => {
-                value_decl_id(self.binder, scope, ident.name.as_str()).and_then(|decl_id| {
+            Expression::Identifier(ident) => value_decl_id(self.binder, scope, ident.name.as_str())
+                .and_then(|decl_id| {
                     self.class_ctors
                         .get(&decl_id)
                         .copied()
                         .map(|info| (decl_id, info))
-                })
-            }
+                }),
             _ => None,
         };
 
@@ -471,11 +483,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // targets are the *uninstantiated* constructor parameter types (they carry the
             // type parameters). Snapshot them before the mutable inference call.
             None => {
-                let param_types: Vec<TypeId> =
-                    match self.interner.store().function_type(info.ctor) {
-                        Some(func) => func.params.iter().map(|p| p.ty).collect(),
-                        None => Vec::new(),
-                    };
+                let param_types: Vec<TypeId> = match self.interner.store().function_type(info.ctor)
+                {
+                    Some(func) => func.params.iter().map(|p| p.ty).collect(),
+                    None => Vec::new(),
+                };
                 let args: Vec<TypeId> = arg_types.iter().map(|(ty, _)| *ty).collect();
                 infer::infer_type_arguments(self.interner, &type_params, &param_types, &args)
             }
@@ -504,7 +516,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         enclosing: ScopeId,
         func: &Function<'_>,
     ) -> (TypeId, Vec<TypeParamId>) {
-        let param_ids = alloc_type_param_ids(func.type_parameters.as_deref(), &mut self.next_type_param);
+        let param_ids =
+            alloc_type_param_ids(func.type_parameters.as_deref(), &mut self.next_type_param);
         let frame = self.build_type_param_frame(func.type_parameters.as_deref(), &param_ids);
 
         let fn_ty = self.with_type_params(frame, |pass| {
@@ -595,8 +608,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         };
 
         let ret = resolve_return_type(self.interner, declared_ret, inferred_ret);
-        self.interner
-            .intern_function(FunctionType { params, ret })
+        self.interner.intern_function(FunctionType { params, ret })
     }
 
     /// Lower a function's/arrow's parameters to `ParameterType`s and, when a function
@@ -616,7 +628,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // Annotated type, or the error type for an un-annotated parameter. Type
             // references in the annotation resolve from the enclosing scope.
             let ty = match param.type_annotation.as_ref() {
-                Some(ann) => self.lower_annotation(enclosing, &ann.type_annotation).unwrap_or(error_ty),
+                Some(ann) => self
+                    .lower_annotation(enclosing, &ann.type_annotation)
+                    .unwrap_or(error_ty),
                 None => error_ty,
             };
 
@@ -688,7 +702,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.narrowed = saved;
         inferred.unwrap_or(void_ty)
     }
-
 }
 
 /// The function's return type: a declared annotation always wins; otherwise the
@@ -737,4 +750,3 @@ pub(in crate::check::checker) fn intrinsic_id(wk: WellKnown, kind: IntrinsicKind
         IntrinsicKind::String => wk.string,
     }
 }
-

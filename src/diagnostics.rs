@@ -364,14 +364,18 @@ fn reason_lines(store: &Store, reason: &Reason, depth: usize) -> Vec<String> {
         }
         // A present-but-incompatible property: announce it, then nest its cause.
         Reason::Property { name, because, .. } => {
-            let mut lines = vec![format!("{indent}Types of property '{name}' are incompatible.")];
+            let mut lines = vec![format!(
+                "{indent}Types of property '{name}' are incompatible."
+            )];
             lines.extend(reason_lines(store, because, depth + 1));
             lines
         }
         // A required target property the source lacks (terminal).
         Reason::MissingProperty { name, tgt, .. } => {
             let tgt = render_type(store, *tgt, /* widen */ false);
-            vec![format!("{indent}Property '{name}' is missing in type '{tgt}'.")]
+            vec![format!(
+                "{indent}Property '{name}' is missing in type '{tgt}'."
+            )]
         }
         // A contravariantly-incompatible parameter: name it (from the source
         // signature when available, else by position), then nest its cause.
@@ -401,7 +405,9 @@ fn reason_lines(store: &Store, reason: &Reason, depth: usize) -> Vec<String> {
         }
         // Covariantly-incompatible return types: announce, then nest the cause.
         Reason::ReturnType { because, .. } => {
-            let mut lines = vec![format!("{indent}Call signature return types are incompatible.")];
+            let mut lines = vec![format!(
+                "{indent}Call signature return types are incompatible."
+            )];
             lines.extend(reason_lines(store, because, depth + 1));
             lines
         }
@@ -527,7 +533,12 @@ pub fn render_type(store: &Store, id: TypeId, widen: bool) -> String {
 /// nominal types), so the guard is keyed on object ids — but it is threaded
 /// through every recursive arm so a cycle reached *via* a union/function member is
 /// also broken.
-fn render_type_inner(store: &Store, id: TypeId, widen: bool, rendering: &mut Vec<TypeId>) -> String {
+fn render_type_inner(
+    store: &Store,
+    id: TypeId,
+    widen: bool,
+    rendering: &mut Vec<TypeId>,
+) -> String {
     match store.tag(id) {
         TypeTag::Intrinsic => store
             .intrinsic_kind(id)
@@ -556,7 +567,8 @@ fn render_type_inner(store: &Store, id: TypeId, widen: bool, rendering: &mut Vec
                 Some(obj)
                     if obj.properties.is_empty()
                         && obj.string_index.is_none()
-                        && obj.number_index.is_none() =>
+                        && obj.number_index.is_none()
+                        && obj.call_signatures.is_empty() =>
                 {
                     "{}".to_string()
                 }
@@ -578,8 +590,17 @@ fn render_type_inner(store: &Store, id: TypeId, widen: bool, rendering: &mut Vec
                             render_type_inner(store, v, false, rendering)
                         ));
                     }
+                    members.extend(
+                        obj.call_signatures
+                            .iter()
+                            .map(|&signature| render_call_signature(store, signature, rendering)),
+                    );
                     members.extend(obj.properties.iter().map(|p| {
-                        format!("{}: {}", p.name, render_type_inner(store, p.ty, false, rendering))
+                        format!(
+                            "{}: {}",
+                            p.name,
+                            render_type_inner(store, p.ty, false, rendering)
+                        )
                     }));
                     rendering.pop();
                     format!("{{ {} }}", members.join("; "))
@@ -594,14 +615,7 @@ fn render_type_inner(store: &Store, id: TypeId, widen: bool, rendering: &mut Vec
         // (only a top-level literal *source* widens, which never recurses here).
         TypeTag::Function => match store.function_type(id) {
             Some(func) => {
-                let params: Vec<String> = func
-                    .params
-                    .iter()
-                    .map(|p| {
-                        format!("{}: {}", p.name, render_type_inner(store, p.ty, false, rendering))
-                    })
-                    .collect();
-                let ret = render_type_inner(store, func.ret, false, rendering);
+                let (params, ret) = render_function_parts(store, func, rendering);
                 format!("({}) => {}", params.join(", "), ret)
             }
             // Defensive fallback; a function always has a side-table entry.
@@ -668,6 +682,36 @@ fn render_type_inner(store: &Store, id: TypeId, widen: bool, rendering: &mut Vec
             None => "<unsupported>".to_string(),
         },
     }
+}
+
+fn render_call_signature(store: &Store, id: TypeId, rendering: &mut Vec<TypeId>) -> String {
+    match store.function_type(id) {
+        Some(func) => {
+            let (params, ret) = render_function_parts(store, func, rendering);
+            format!("({}): {}", params.join(", "), ret)
+        }
+        None => "<unsupported>".to_string(),
+    }
+}
+
+fn render_function_parts(
+    store: &Store,
+    func: &crate::types::repr::FunctionType,
+    rendering: &mut Vec<TypeId>,
+) -> (Vec<String>, String) {
+    let params: Vec<String> = func
+        .params
+        .iter()
+        .map(|p| {
+            format!(
+                "{}: {}",
+                p.name,
+                render_type_inner(store, p.ty, false, rendering)
+            )
+        })
+        .collect();
+    let ret = render_type_inner(store, func.ret, false, rendering);
+    (params, ret)
 }
 
 /// Whether an array element type must be **parenthesized** before the postfix `[]`
@@ -741,9 +785,7 @@ fn to_codespan(diag: &Diagnostic) -> CsDiagnostic<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::repr::{
-        FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType,
-    };
+    use crate::types::repr::{FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType};
     use crate::types::Interner;
 
     fn prop(name: &str, ty: TypeId) -> PropertyType {
@@ -990,7 +1032,10 @@ mod tests {
 
         // Nested: no parentheses for an array element.
         let num_arr_arr = interner.intern_array(num_arr);
-        assert_eq!(render_type(interner.store(), num_arr_arr, false), "number[][]");
+        assert_eq!(
+            render_type(interner.store(), num_arr_arr, false),
+            "number[][]"
+        );
 
         // A union element IS parenthesized.
         let union = interner.union(vec![wk.number, wk.string]);
@@ -1025,11 +1070,17 @@ mod tests {
         let wk = interner.well_known();
 
         let num_str = interner.intern_tuple(vec![wk.number, wk.string]);
-        assert_eq!(render_type(interner.store(), num_str, false), "[number, string]");
+        assert_eq!(
+            render_type(interner.store(), num_str, false),
+            "[number, string]"
+        );
 
         // Order is preserved (not sorted): [string, number] renders in that order.
         let str_num = interner.intern_tuple(vec![wk.string, wk.number]);
-        assert_eq!(render_type(interner.store(), str_num, false), "[string, number]");
+        assert_eq!(
+            render_type(interner.store(), str_num, false),
+            "[string, number]"
+        );
 
         // The empty tuple renders as `[]`.
         let empty = interner.intern_tuple(vec![]);

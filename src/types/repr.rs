@@ -284,6 +284,11 @@ impl PropertyType {
 /// interns distinctly from `{}` and from `{ [k: string]: string }`. The relation
 /// engine reads them for index-signature assignability; substitution rewrites the
 /// value types so a (future) generic `{ [k: string]: T }` instantiates correctly.
+///
+/// F1/WU2 adds call signatures as interned [`FunctionType`] ids. WU2 only lowers a
+/// single call signature, but this is a `Vec` so construct/overload work can extend
+/// the object shape without another representation split. The signatures coexist
+/// with named properties and index signatures and are part of object identity.
 #[derive(Clone, Debug, Default)]
 pub struct ObjectType {
     /// Members in **canonical order** (sorted by name). The interner sorts before
@@ -300,6 +305,10 @@ pub struct ObjectType {
     /// The **value** type of the number index signature `[i: number]: T` (M19), or
     /// `None` if the object has none. Part of the object's structural identity.
     pub number_index: Option<TypeId>,
+    /// Interned call signatures on this object. WU2 uses length `0` or `1`; a
+    /// longer list is reserved for overloads and is not lowered yet. Part of the
+    /// object's structural identity.
+    pub call_signatures: Vec<TypeId>,
 }
 
 impl ObjectType {

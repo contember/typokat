@@ -207,3 +207,18 @@ but only one implementation should edit `ObjectType`/interner/hash/substitution/
   WU1 subset and fixed by restoring the sound out-of-subset behavior; calling a non-callable
   property remains deferred to WU2 callable-object work; duplicate property/method identifiers were
   filed as backlog [`18`](../backlog/18-duplicate-identifier-detection.md).
+- 2026-06-28: WU2 landed single in-subset call signatures (callable objects). The official-suite
+  ratchet caught that partial signature support (WU1 methods + WU2 call sigs) over-reports on
+  overloaded / optional-rest-default / lib types, so lowering was narrowed to the strict in-subset:
+  overload sets and signatures with optional/rest/default params or unlowerable annotation types are
+  dropped (out of subset), restoring prior behavior. This took official-suite regressions 9 → 3.
+  The remaining 3 are leader-accepted **sound over-reports** from features out of sprint scope —
+  `Function.prototype` members on callable objects (`.apply`), primitive↔boxed-interface boxing
+  (`number`↔`Number`), and generic-function-to-specific assignability — to be documented and
+  `--save`d into the scoreboard at WU4.
+- 2026-06-28: WU2 deferred the `TK2349` "not callable" diagnostic (the WU1 finding #2) out of scope —
+  emitting it safely needs dropped-callability/overload/union awareness — filed as backlog
+  [`19`](../backlog/19-call-of-non-callable-diagnostic.md). The independent WU2 review's only FAIL
+  item was this deferred diagnostic; it independently confirmed hash identity, substitution into call
+  signatures, the relation in both directions, no order-dependent dropped errors, and that the 3
+  residuals are over-reports (not dropped errors).

@@ -52,7 +52,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // committed `false` as a behavior-neutral spec, then flipped `true` by the
     // commit that lands its fix. See tests/cases/README.md ("Bug-fix corpora").
     ("f1_object_interface_methods", true),
-    ("f1_object_interface_call", false),
+    ("f1_object_interface_call", true),
     ("f3_class_member_collection", true),
     ("f4_destructuring_access", true),
     ("f5_union_readonly", true),

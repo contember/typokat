@@ -1,17 +1,18 @@
 //! annotations module (extracted from checker/mod.rs).
 
+use super::calls::parameter_name;
+use super::context::*;
 use crate::binder::scope::ScopeId;
 use crate::types::repr::{
     FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TypeTag,
 };
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
-    FormalParameters, TSLiteral, TSMethodSignature, TSMethodSignatureKind,
-    TSSignature, TSTupleElement, TSType, TSTypeAnnotation,
+    FormalParameters, TSCallSignatureDeclaration, TSLiteral, TSMethodSignature,
+    TSMethodSignatureKind, TSSignature, TSTupleElement, TSType, TSTypeAnnotation,
     TSTypeOperatorOperator,
 };
-use super::context::*;
-use super::calls::parameter_name;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Lower an annotation type to its `TypeId`. Supports intrinsic keywords, object
@@ -23,7 +24,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// an inlined copy of the referenced structure. That is what makes lowering a
     /// recursive type terminate: `tail: List | null` stores the union of `List`'s id
     /// and `null`, not an expansion of `List` (mvp-plan M5, §3, §6.3).
-    pub(in crate::check::checker) fn lower_annotation(&mut self, scope: ScopeId, ts_type: &TSType<'_>) -> Option<TypeId> {
+    pub(in crate::check::checker) fn lower_annotation(
+        &mut self,
+        scope: ScopeId,
+        ts_type: &TSType<'_>,
+    ) -> Option<TypeId> {
         let wk = self.interner.well_known();
         let id = match ts_type {
             TSType::TSAnyKeyword(_) => wk.any,
@@ -41,7 +46,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             TSType::TSLiteralType(lit) => return self.lower_literal_type(&lit.literal),
             TSType::TSTypeLiteral(lit) => return self.lower_object_annotation(scope, &lit.members),
             TSType::TSFunctionType(func) => {
-                return self.lower_function_annotation(scope,
+                return self.lower_function_annotation(
+                    scope,
                     &func.params,
                     &func.return_type.type_annotation,
                 );
@@ -69,7 +75,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // the binder's type slot, and (with arguments) generic instantiation.
             // Qualified names (`A.B`) are out of subset.
             TSType::TSTypeReference(reference) => {
-                return self.resolve_type_reference(scope,
+                return self.resolve_type_reference(
+                    scope,
                     &reference.type_name,
                     reference.type_arguments.as_deref(),
                 );
@@ -105,11 +112,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// §3.3). A member whose type cannot be lowered (out of subset) aborts the whole
     /// annotation (`None`), matching the object/function lowering — dropping a member
     /// silently would mis-state the union.
-    fn lower_union_annotation(
-        &mut self,
-        scope: ScopeId,
-        members: &[TSType<'_>],
-    ) -> Option<TypeId> {
+    fn lower_union_annotation(&mut self, scope: ScopeId, members: &[TSType<'_>]) -> Option<TypeId> {
         let mut lowered: Vec<TypeId> = Vec::with_capacity(members.len());
         for member in members {
             lowered.push(self.lower_annotation(scope, member)?);
@@ -191,10 +194,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         members: &[TSSignature<'_>],
     ) -> Option<TypeId> {
         let mut object = ObjectType::default();
+        let overloaded_method_names = self.overloaded_method_names(members);
+        let call_signatures_overloaded = self.call_signatures_overloaded(members);
         for member in members {
             match member {
                 TSSignature::TSPropertySignature(sig) => {
                     let name = sig.key.static_name()?;
+                    if overloaded_method_names.contains(name.as_ref()) {
+                        continue;
+                    }
                     let annotation = sig.type_annotation.as_ref()?;
                     let ty = self.lower_annotation(scope, &annotation.type_annotation)?;
                     // M21: an optional member (`b?: T`) lowers like a normal property whose
@@ -223,8 +231,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     self.lower_index_signature(scope, sig, &mut object)?;
                 }
                 TSSignature::TSMethodSignature(sig) => {
+                    let name = sig.key.static_name()?;
+                    if overloaded_method_names.contains(name.as_ref()) {
+                        return None;
+                    }
                     let prop = self.lower_method_signature_property(scope, sig)?;
                     object.properties.push(prop);
+                }
+                TSSignature::TSCallSignatureDeclaration(sig) => {
+                    if call_signatures_overloaded {
+                        return None;
+                    }
+                    let signature = self.lower_call_signature(scope, sig)?;
+                    object.call_signatures.push(signature);
                 }
                 _ => return None,
             }
@@ -236,9 +255,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ///
     /// This intentionally accepts only the WU1 subset: required, non-generic,
     /// non-`this`, non-accessor method signatures with static names. Optional
-    /// method signatures are out of subset for WU1 so they keep the existing
-    /// object/interface out-of-subset behavior rather than being represented
-    /// incompletely.
+    /// method signatures are out of subset for WU1 and are dropped rather than
+    /// represented incompletely.
     pub(in crate::check::checker) fn lower_method_signature_property(
         &mut self,
         scope: ScopeId,
@@ -253,9 +271,61 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
 
         let name = sig.key.static_name()?;
-        let ty =
-            self.lower_signature_function_type(scope, &sig.params, sig.return_type.as_deref())?;
+        let ty = self.lower_strict_signature_function_type(
+            scope,
+            &sig.params,
+            sig.return_type.as_deref(),
+        )?;
         Some(PropertyType::public(name.into_owned(), ty))
+    }
+
+    /// Lower a single object/interface call signature to an interned function type.
+    ///
+    /// WU2 accepts only a required, non-generic, non-`this`, non-rest signature.
+    /// Optional/rest/default params and generic/`this` call signatures are out of
+    /// subset and do not create represented callability.
+    pub(in crate::check::checker) fn lower_call_signature(
+        &mut self,
+        scope: ScopeId,
+        sig: &TSCallSignatureDeclaration<'_>,
+    ) -> Option<TypeId> {
+        if sig.type_parameters.is_some() || sig.this_param.is_some() {
+            return None;
+        }
+        self.lower_strict_signature_function_type(scope, &sig.params, sig.return_type.as_deref())
+    }
+
+    /// Lower an object/interface method or call signature only when every parameter
+    /// and the declared return type are faithfully representable in the current
+    /// subset. Unlike class/free-function lowering, this never substitutes the error
+    /// type for a bad parameter, because that would make an unsupported signature
+    /// participate in calls/relations as if it were real.
+    fn lower_strict_signature_function_type(
+        &mut self,
+        scope: ScopeId,
+        params: &FormalParameters<'_>,
+        return_type: Option<&TSTypeAnnotation<'_>>,
+    ) -> Option<TypeId> {
+        self.signature_params_in_subset(params)?;
+        let mut lowered: Vec<ParameterType> = Vec::with_capacity(params.items.len());
+        for param in &params.items {
+            let name = parameter_name(&param.pattern)?;
+            let annotation = param.type_annotation.as_ref()?;
+            let ty = self.lower_annotation(scope, &annotation.type_annotation)?;
+            lowered.push(ParameterType {
+                name,
+                ty,
+                optional: false,
+            });
+        }
+        let ret = match return_type {
+            Some(ann) => self.lower_annotation(scope, &ann.type_annotation)?,
+            None => self.interner.well_known().void,
+        };
+        Some(self.interner.intern_function(FunctionType {
+            params: lowered,
+            ret,
+        }))
     }
 
     /// Lower a function-like signature into an interned [`FunctionType`].
@@ -290,7 +360,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         for param in &params.items {
             let name = parameter_name(&param.pattern).unwrap_or_default();
             let ty = match param.type_annotation.as_ref() {
-                Some(ann) => self.lower_annotation(scope, &ann.type_annotation).unwrap_or(error_ty),
+                Some(ann) => self
+                    .lower_annotation(scope, &ann.type_annotation)
+                    .unwrap_or(error_ty),
                 None => error_ty,
             };
             lowered.push(ParameterType {
@@ -300,6 +372,63 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             });
         }
         lowered
+    }
+
+    /// Required-only parameter subset shared by WU2 call signatures and the
+    /// function-type annotation lowerer. Rest and optional parameters need
+    /// different arity/relation rules, so accepting them as required would
+    /// mis-state the type.
+    fn signature_params_in_subset(&self, params: &FormalParameters<'_>) -> Option<()> {
+        if params.rest.is_some() {
+            return None;
+        }
+        for param in &params.items {
+            if param.optional || param.initializer.is_some() {
+                return None;
+            }
+        }
+        Some(())
+    }
+
+    pub(in crate::check::checker) fn overloaded_method_names(
+        &self,
+        members: &[TSSignature<'_>],
+    ) -> FxHashSet<String> {
+        let mut counts: FxHashMap<String, (usize, bool)> = FxHashMap::default();
+        for member in members {
+            let (name, is_method) = match member {
+                TSSignature::TSPropertySignature(sig) => (sig.key.static_name(), false),
+                TSSignature::TSMethodSignature(sig) => (sig.key.static_name(), true),
+                _ => (None, false),
+            };
+            let Some(name) = name else {
+                continue;
+            };
+            let entry = counts.entry(name.into_owned()).or_insert((0, false));
+            entry.0 += 1;
+            entry.1 |= is_method;
+        }
+        counts
+            .into_iter()
+            .filter_map(|(name, (count, has_method))| {
+                if count > 1 && has_method {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub(in crate::check::checker) fn call_signatures_overloaded(
+        &self,
+        members: &[TSSignature<'_>],
+    ) -> bool {
+        members
+            .iter()
+            .filter(|member| matches!(member, TSSignature::TSCallSignatureDeclaration(_)))
+            .count()
+            > 1
     }
 
     /// Lower a single index signature (M19) into the appropriate slot of `object`.
@@ -451,7 +580,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // whole-number-in-range check the M18 element access uses.
             if store.tag(object) == TypeTag::Tuple {
                 if let Some(i) = whole_index(*n) {
-                    if let Some(&element) = store.tuple_type(object).and_then(|t| t.elements.get(i)) {
+                    if let Some(&element) = store.tuple_type(object).and_then(|t| t.elements.get(i))
+                    {
                         return element;
                     }
                 }
@@ -487,17 +617,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         params: &FormalParameters<'_>,
         return_type: &TSType<'_>,
     ) -> Option<TypeId> {
-        // Rest parameters are out of the M3 subset.
-        if params.rest.is_some() {
-            return None;
-        }
+        self.signature_params_in_subset(params)?;
         let mut lowered: Vec<ParameterType> = Vec::with_capacity(params.items.len());
         for param in &params.items {
-            // Optional parameters change the relation rule; abort rather than treat
-            // as required.
-            if param.optional {
-                return None;
-            }
             let name = parameter_name(&param.pattern)?;
             let annotation = param.type_annotation.as_ref()?;
             let ty = self.lower_annotation(scope, &annotation.type_annotation)?;
@@ -513,7 +635,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             ret,
         }))
     }
-
 }
 
 /// Map an `f64` literal value to a non-negative `usize` index, or `None` for a

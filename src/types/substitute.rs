@@ -28,7 +28,9 @@
 //! recursive generic instantiation (and its depth limits) is explicitly out of the
 //! M9 scope.
 
-use crate::types::repr::{FunctionType, ObjectType, ParameterType, PropertyType, TypeParamId, TypeTag};
+use crate::types::repr::{
+    FunctionType, ObjectType, ParameterType, PropertyType, TypeParamId, TypeTag,
+};
 use crate::types::store::TypeId;
 use crate::types::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -108,6 +110,9 @@ impl<'a> Substitution<'a> {
         // M19: snapshot the index-signature value types so they too are rewritten
         // (a generic `{ [k: string]: T }` instantiates to `{ [k: string]: number }`).
         let (string_index, number_index) = (object.string_index, object.number_index);
+        // F1/WU2: snapshot call signatures; each is an interned FunctionType id
+        // and must be recursively substituted just like a function-typed property.
+        let call_signatures = object.call_signatures.clone();
 
         self.in_progress.insert(ty);
         let mut changed = false;
@@ -130,6 +135,14 @@ impl<'a> Substitution<'a> {
             changed |= new_v != v;
             new_v
         });
+        let call_signatures: Vec<TypeId> = call_signatures
+            .into_iter()
+            .map(|signature| {
+                let new_signature = self.apply(interner, signature);
+                changed |= new_signature != signature;
+                new_signature
+            })
+            .collect();
         self.in_progress.remove(&ty);
 
         // Unchanged → keep the original id (preserves nominal identity); changed →
@@ -139,6 +152,7 @@ impl<'a> Substitution<'a> {
                 properties,
                 string_index,
                 number_index,
+                call_signatures,
             })
         } else {
             ty
@@ -304,7 +318,11 @@ mod tests {
         map.insert(TypeParamId(0), wk.number);
 
         assert_eq!(substitute(&mut interner, t, &map), wk.number, "T → number");
-        assert_eq!(substitute(&mut interner, u, &map), u, "unmapped U is untouched");
+        assert_eq!(
+            substitute(&mut interner, u, &map),
+            u,
+            "unmapped U is untouched"
+        );
         // An intrinsic is unaffected.
         assert_eq!(substitute(&mut interner, wk.string, &map), wk.string);
     }
@@ -379,7 +397,11 @@ mod tests {
         let arr_num = interner.intern_array(wk.number);
         let arr_arr_num = interner.intern_array(arr_num);
 
-        assert_eq!(substitute(&mut interner, arr_t, &map), arr_num, "T[] → number[]");
+        assert_eq!(
+            substitute(&mut interner, arr_t, &map),
+            arr_num,
+            "T[] → number[]"
+        );
         assert_eq!(
             substitute(&mut interner, arr_arr_t, &map),
             arr_arr_num,
@@ -417,7 +439,11 @@ mod tests {
         // [T, U] → [number, string]; [U, T] → [string, number] (order preserved).
         let num_str = interner.intern_tuple(vec![wk.number, wk.string]);
         let str_num = interner.intern_tuple(vec![wk.string, wk.number]);
-        assert_eq!(substitute(&mut interner, tu, &map), num_str, "[T, U] → [number, string]");
+        assert_eq!(
+            substitute(&mut interner, tu, &map),
+            num_str,
+            "[T, U] → [number, string]"
+        );
         assert_eq!(
             substitute(&mut interner, ut, &map),
             str_num,

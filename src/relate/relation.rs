@@ -395,6 +395,17 @@ impl<'a> Relater<'a> {
             return self.relate_functions(src, tgt, kind, assumed);
         }
 
+        // F1/WU2: a callable object can relate to a plain function type through
+        // its single call signature. The function-signature comparison itself is
+        // delegated back through `relate`, so variance, cycle assumptions, and
+        // cache-soundness are identical to ordinary function relations.
+        if self.store.tag(src) == TypeTag::Object && self.store.tag(tgt) == TypeTag::Function {
+            return self.relate_object_to_function(src, tgt, kind, assumed);
+        }
+        if self.store.tag(src) == TypeTag::Function && self.store.tag(tgt) == TypeTag::Object {
+            return self.relate_function_to_object(src, tgt, kind, assumed);
+        }
+
         // Array structural rule (M17): `S[]` is assignable to `T[]` iff `S` is
         // assignable to `T` — **covariant** in the element (matching tsc's
         // deliberate array covariance). Nested arrays recurse through the same rule
@@ -532,6 +543,15 @@ impl<'a> Relater<'a> {
             }
         }
 
+        // F1/WU2 — call-signature obligation. A target object with a call
+        // signature requires the source object to have a compatible call
+        // signature; an object without one cannot satisfy a callable target. This
+        // obligation goes through `self.relate` on the interned FunctionType ids,
+        // preserving the relation cache/cycle-stack invariants.
+        if let Relation::No(child) = self.relate_object_call_signatures(src, tgt, kind, assumed) {
+            return Relation::No(child);
+        }
+
         // M19 — index-signature obligations. Snapshot the target's index value types
         // and the source's named-property/(index) value types up front so the
         // recursive `self.relate` below does not overlap the read borrows.
@@ -604,6 +624,77 @@ impl<'a> Relater<'a> {
         }
 
         Relation::Yes
+    }
+
+    fn relate_object_call_signatures(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
+        let Some(tgt_obj) = self.store.object_type(tgt) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        if tgt_obj.call_signatures.is_empty() {
+            return Relation::Yes;
+        }
+        let Some(src_obj) = self.store.object_type(src) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let ([src_sig], [tgt_sig]) = (
+            src_obj.call_signatures.as_slice(),
+            tgt_obj.call_signatures.as_slice(),
+        ) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        self.relate(*src_sig, *tgt_sig, kind, assumed)
+    }
+
+    fn relate_object_to_function(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
+        let Some(src_obj) = self.store.object_type(src) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let [src_sig] = src_obj.call_signatures.as_slice() else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        self.relate(*src_sig, tgt, kind, assumed)
+    }
+
+    fn relate_function_to_object(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
+        let Some(tgt_obj) = self.store.object_type(tgt) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let [tgt_sig] = tgt_obj.call_signatures.as_slice() else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+
+        // A plain function value has no represented named members. It can satisfy
+        // optional target properties by omission, but any required target member is
+        // missing and remains a `TK2741`-shaped relation failure.
+        for tgt_prop in &tgt_obj.properties {
+            if !tgt_prop.optional {
+                return Relation::No(ReasonChain::of(Reason::MissingProperty {
+                    name: tgt_prop.name.clone(),
+                    src,
+                    tgt,
+                }));
+            }
+        }
+
+        self.relate(src, *tgt_sig, kind, assumed)
     }
 
     /// Function assignability (mvp-plan §6.5, architecture §6.5). `src` is
@@ -1168,7 +1259,10 @@ mod tests {
 
         // The three are distinct interned ids (origin/visibility are part of
         // identity), so the relation cache keys them apart.
-        assert_ne!(secret_ty, public_obj, "private member ⇒ distinct from public");
+        assert_ne!(
+            secret_ty, public_obj,
+            "private member ⇒ distinct from public"
+        );
         assert_ne!(secret_ty, other_ty, "different declaring class ⇒ distinct");
 
         let store = interner.store();
@@ -1193,7 +1287,9 @@ mod tests {
                 // The root pins the two object types.
                 assert_eq!(chain.root(), (public_obj, secret_ty));
             }
-            Relation::Yes => panic!("a public object must NOT be assignable to a private-member class"),
+            Relation::Yes => {
+                panic!("a public object must NOT be assignable to a private-member class")
+            }
         }
 
         // `Other` (different origin) is NOT assignable to `Secret`.
@@ -1235,7 +1331,10 @@ mod tests {
         let store = interner.store();
         let mut rel = Relater::new(store, wk);
 
-        assert!(rel.is_assignable(prot_ty, prot_ty).is_yes(), "own instance ok");
+        assert!(
+            rel.is_assignable(prot_ty, prot_ty).is_yes(),
+            "own instance ok"
+        );
         assert!(
             !rel.is_assignable(public_obj, prot_ty).is_yes(),
             "a public object must NOT be assignable to a protected-member class"
@@ -1518,7 +1617,8 @@ mod tests {
         // VOID target return: `() => number` IS assignable to `() => void` — the
         // returned value is discarded.
         assert!(
-            rel.is_assignable(nullary_to_num_only, nullary_to_void).is_yes(),
+            rel.is_assignable(nullary_to_num_only, nullary_to_void)
+                .is_yes(),
             "a value-returning function is assignable to a void-returning function type"
         );
         // `() => void` is assignable to itself (identity), and a void source is
@@ -1551,18 +1651,27 @@ mod tests {
         let mut rel = Relater::new(store, wk);
 
         // Identity.
-        assert!(rel.is_assignable(num_arr, num_arr).is_yes(), "number[] <: number[]");
+        assert!(
+            rel.is_assignable(num_arr, num_arr).is_yes(),
+            "number[] <: number[]"
+        );
 
         // Covariant element: never[] <: number[] (never <: number); number[] NOT <:
         // never[] (number is not <: never).
-        assert!(rel.is_assignable(never_arr, num_arr).is_yes(), "never[] <: number[]");
+        assert!(
+            rel.is_assignable(never_arr, num_arr).is_yes(),
+            "never[] <: number[]"
+        );
         assert!(
             !rel.is_assignable(num_arr, never_arr).is_yes(),
             "number[] is NOT assignable to never[]"
         );
 
         // Covariant: number[] <: unknown[] (number <: unknown), but not the reverse.
-        assert!(rel.is_assignable(num_arr, unknown_arr).is_yes(), "number[] <: unknown[]");
+        assert!(
+            rel.is_assignable(num_arr, unknown_arr).is_yes(),
+            "number[] <: unknown[]"
+        );
         assert!(
             !rel.is_assignable(unknown_arr, num_arr).is_yes(),
             "unknown[] is NOT assignable to number[]"
@@ -2118,7 +2227,10 @@ mod tests {
             let store = interner.store();
             let mut rel = Relater::new(store, wk);
             // The enclosing query: genuinely false (top-level `tag` mismatch).
-            assert!(!rel.is_assignable(ca, aa).is_yes(), "CA <: AA is false (tag)");
+            assert!(
+                !rel.is_assignable(ca, aa).is_yes(),
+                "CA <: AA is false (tag)"
+            );
             // The standalone nested query MUST still be false.
             rel.is_assignable(cb, ab).is_yes()
         };

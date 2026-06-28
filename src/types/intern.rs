@@ -112,9 +112,9 @@ impl Interner {
     pub fn intern_intrinsic(&mut self, kind: IntrinsicKind) -> TypeId {
         let key = StructuralKey::Intrinsic(kind);
         let hash = structural_hash(&key);
-        if let Some(existing) = self.lookup(hash, |store, id| {
-            store.intrinsic_kind(id) == Some(kind)
-        }) {
+        if let Some(existing) =
+            self.lookup(hash, |store, id| store.intrinsic_kind(id) == Some(kind))
+        {
             return existing;
         }
         // The error type is the only intrinsic that carries a flag.
@@ -132,9 +132,9 @@ impl Interner {
     pub fn intern_literal(&mut self, value: LiteralValue) -> TypeId {
         let key = StructuralKey::Literal(&value);
         let hash = structural_hash(&key);
-        if let Some(existing) = self.lookup(hash, |store, id| {
-            store.literal_value(id) == Some(&value)
-        }) {
+        if let Some(existing) =
+            self.lookup(hash, |store, id| store.literal_value(id) == Some(&value))
+        {
             return existing;
         }
         let id = self.store.push_literal(value, TypeFlags::EMPTY);
@@ -158,14 +158,17 @@ impl Interner {
             properties: &object.properties,
             string_index: object.string_index,
             number_index: object.number_index,
+            call_signatures: &object.call_signatures,
         };
         let hash = structural_hash(&key);
         if let Some(existing) = self.lookup(hash, |store, id| {
             store.object_type(id).is_some_and(|existing| {
                 // M19: index signatures are part of identity, so two objects dedup
-                // only when their members AND both index value types match.
+                // only when their members, index value types, and F1/WU2 call
+                // signatures match.
                 existing.string_index == object.string_index
                     && existing.number_index == object.number_index
+                    && existing.call_signatures == object.call_signatures
                     && object_props_eq(&existing.properties, &object.properties)
             })
         }) {
@@ -244,9 +247,9 @@ impl Interner {
     pub fn intern_type_param(&mut self, id: TypeParamId, name: impl Into<String>) -> TypeId {
         let key = StructuralKey::TypeParam(id);
         let hash = structural_hash(&key);
-        if let Some(existing) =
-            self.lookup(hash, |store, ty| store.type_param(ty).map(|p| p.id) == Some(id))
-        {
+        if let Some(existing) = self.lookup(hash, |store, ty| {
+            store.type_param(ty).map(|p| p.id) == Some(id)
+        }) {
             return existing;
         }
         let interned = self.store.push_type_param(
@@ -270,12 +273,14 @@ impl Interner {
     pub fn intern_array(&mut self, element: TypeId) -> TypeId {
         let key = StructuralKey::Array(element);
         let hash = structural_hash(&key);
-        if let Some(existing) =
-            self.lookup(hash, |store, id| store.array_type(id).map(|a| a.element) == Some(element))
-        {
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store.array_type(id).map(|a| a.element) == Some(element)
+        }) {
             return existing;
         }
-        let id = self.store.push_array(ArrayType { element }, TypeFlags::EMPTY);
+        let id = self
+            .store
+            .push_array(ArrayType { element }, TypeFlags::EMPTY);
         self.dedup.entry(hash).or_default().push(id);
         id
     }
@@ -385,11 +390,7 @@ impl Interner {
 
     /// Look up an existing id in the dedup bucket for `hash`, accepting the first
     /// candidate for which `eq` confirms a real structural match.
-    fn lookup(
-        &self,
-        hash: u64,
-        eq: impl Fn(&Store, TypeId) -> bool,
-    ) -> Option<TypeId> {
+    fn lookup(&self, hash: u64, eq: impl Fn(&Store, TypeId) -> bool) -> Option<TypeId> {
         let bucket = self.dedup.get(&hash)?;
         bucket.iter().copied().find(|&id| eq(&self.store, id))
     }
@@ -428,9 +429,9 @@ fn object_props_eq(a: &[PropertyType], b: &[PropertyType]) -> bool {
 /// is decided by id without recursing.
 fn function_params_eq(a: &[ParameterType], b: &[ParameterType]) -> bool {
     a.len() == b.len()
-        && a.iter().zip(b).all(|(x, y)| {
-            x.name == y.name && x.optional == y.optional && x.ty == y.ty
-        })
+        && a.iter()
+            .zip(b)
+            .all(|(x, y)| x.name == y.name && x.optional == y.optional && x.ty == y.ty)
 }
 
 impl TypeTag {
@@ -647,7 +648,10 @@ mod tests {
             params: vec![param("x", wk.number)],
             ret: wk.string,
         });
-        assert_eq!(f1, f1_again, "identical function signatures must share an id");
+        assert_eq!(
+            f1, f1_again,
+            "identical function signatures must share an id"
+        );
 
         // A different return type is a distinct function type.
         let f_ret = interner.intern_function(FunctionType {
@@ -724,7 +728,10 @@ mod tests {
 
         // A union of a single distinct member collapses to that member.
         let single = interner.union(vec![wk.boolean]);
-        assert_eq!(single, wk.boolean, "a 1-member union collapses to the member");
+        assert_eq!(
+            single, wk.boolean,
+            "a 1-member union collapses to the member"
+        );
 
         // An empty union (or one of only `never`s) collapses to `never`.
         assert_eq!(interner.union(vec![]), wk.never, "empty union → never");
@@ -847,7 +854,10 @@ mod tests {
         // Order matters: `[string, number]` is a DISTINCT tuple (NOT sorted into the
         // same canonical form a union would be).
         let sn = interner.intern_tuple(vec![wk.string, wk.number]);
-        assert_ne!(ns_a, sn, "[number, string] ≠ [string, number] (order-significant)");
+        assert_ne!(
+            ns_a, sn,
+            "[number, string] ≠ [string, number] (order-significant)"
+        );
 
         // Arity matters: `[number]` is distinct from `[number, string]`.
         let single = interner.intern_tuple(vec![wk.number]);
@@ -861,7 +871,11 @@ mod tests {
             .expect("ns_a is a tuple")
             .elements
             .clone();
-        assert_eq!(stored, vec![wk.number, wk.string], "stored order is source order");
+        assert_eq!(
+            stored,
+            vec![wk.number, wk.string],
+            "stored order is source order"
+        );
 
         // The empty tuple `[]` is a valid distinct tuple (and interns consistently).
         let empty_a = interner.intern_tuple(vec![]);
@@ -877,7 +891,10 @@ mod tests {
         // Nesting: a tuple element may itself be a tuple, interned by the inner id.
         let nested_a = interner.intern_tuple(vec![ns_a, wk.boolean]);
         let nested_b = interner.intern_tuple(vec![ns_b, wk.boolean]); // ns_b == ns_a
-        assert_eq!(nested_a, nested_b, "nested tuple identity propagates by element id");
+        assert_eq!(
+            nested_a, nested_b,
+            "nested tuple identity propagates by element id"
+        );
     }
 
     /// The well-known intrinsic ids are assigned in `IntrinsicKind::ALL` order
@@ -890,8 +907,16 @@ mod tests {
         assert_eq!(wk.error, TypeId(0));
         // All ten intrinsics are distinct and within the first ten ids.
         let ids = [
-            wk.error, wk.any, wk.unknown, wk.never, wk.void, wk.null, wk.undefined,
-            wk.boolean, wk.number, wk.string,
+            wk.error,
+            wk.any,
+            wk.unknown,
+            wk.never,
+            wk.void,
+            wk.null,
+            wk.undefined,
+            wk.boolean,
+            wk.number,
+            wk.string,
         ];
         for (i, id) in ids.iter().enumerate() {
             assert!(id.0 < IntrinsicKind::ALL.len() as u32);
