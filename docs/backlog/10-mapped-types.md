@@ -19,9 +19,14 @@ Evaluate homomorphic mapped types with `+?`/`-?`, `+readonly`/`-readonly`, and k
 Acceptance: fixtures covering a plain mapping, optional/readonly modifiers (both add and remove), and
 key remapping, matching tsc.
 
+Performance/scalability acceptance is part of this milestone: mapped-type expansion must reuse the
+shared evaluator memoization/work-stack from `09`, avoid repeatedly rebuilding identical key/value
+substitutions, and include a stress fixture over a wide object/union key set so expansion is not
+accidentally quadratic in the common homomorphic case.
+
 ## Touch points
 
 Mapped-type evaluation in the checker; the type store (constructing the resulting object type);
-`keyof` + indexed-access machinery.
+`keyof` + indexed-access machinery; evaluator memoization/work-stack reuse.
 
 <!-- Origin: dev roadmap M26 (was HANDOFF §3, the type-level VM phase). -->

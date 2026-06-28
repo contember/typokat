@@ -91,10 +91,11 @@ relation engine + narrowing come **before** type-level evaluation, never the rev
 evaluation is tree-walked, with the bytecode VM a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)).
 
-Recommended next: the current-impl bugs first (`01`–`04` — highest value, they over-report in the
-false-positive direction), then **unstructured-flow narrowing** (`07`, the biggest remaining
-narrowing gap, most likely to surprise on idiomatic code). For a lighter warm-up, the small
-class-completeness checks (`06`) are well-isolated.
+Recommended next: item `05` (object/interface call, method, and construct signatures) if you want to
+keep burning down official-suite false negatives; item `06` (class-completeness checks) if you want
+a lighter isolated warm-up; or item `07` (unstructured-flow narrowing) if you want the biggest
+remaining narrowing gap. The former current-impl bugs `01`–`04` are shipped/closed; do not plan new
+work from those deleted backlog numbers.
 
 For each item you pick: write its fixture corpus first, update `tests/cases/README.md`, commit the
 spec, dispatch the implementation subagent, dispatch the independent review, fix, and commit. Same

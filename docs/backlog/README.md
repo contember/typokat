@@ -35,10 +35,10 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 - [`10`](10-mapped-types.md) — mapped types (M26) · blocked-by `08`.
 - [`11`](11-template-literal-types.md) — template literal types (M27).
 - [`12`](12-utility-types.md) — utility types (M28) · blocked-by `09`, `10`.
-- [`13`](13-bytecode-vm.md) — type-level evaluator performance: algorithmic wins in the tree-walker; bytecode VM only if profiling demands it · blocked-by `09`, `10`.
+- [`13`](13-bytecode-vm.md) — post-evaluator profiling gate: bytecode VM only if measured dispatch overhead remains after `09`–`12` · blocked-by `09`–`12`.
 
 **Long-term: real-world scale + IDE**
-- [`14`](14-libdts-loading.md) — `lib.d.ts` loading · blocked-by `09`, `10`.
-- [`15`](15-modules-imports.md) — modules / imports / module resolution.
-- [`16`](16-parallelism-type-universe.md) — parallelism: shared type universe (Stages 1 & 2) · blocked-by `14`, `15`.
-- [`17`](17-incrementality.md) — incrementality (Phase 4) · blocked-by `16`.
+- [`14`](14-libdts-loading.md) — full `lib.d.ts` loading · blocked-by `09`, `10` (an earlier minimal ambient/prelude slice is allowed when useful).
+- [`15`](15-modules-imports.md) — modules / imports / module resolution, staged from correctness-first whole-repo checking to cross-file identity.
+- [`16`](16-parallelism-type-universe.md) — parallelism: shared type universe hardening (Stages 1 & 2) · blocked-by `14`, `15`.
+- [`17`](17-incrementality.md) — incrementality (Phase 5) · blocked-by `16`.

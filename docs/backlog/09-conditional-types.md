@@ -23,9 +23,15 @@ alpha-equivalent hash-consing want de Bruijn — see [`../reference/invariants.m
 §2; the migration is localized to the type-param repr + `substitute`). Acceptance: fixtures covering
 a basic conditional, `infer` extraction, and distribution over a union, matching tsc.
 
+Performance/scalability acceptance is part of this milestone, not a later cleanup: conditional
+evaluation must use a heap work-stack/trampoline rather than host recursion, memoize repeated
+`(conditional, args)` evaluations keyed by interned `TypeId`s, and enforce a tsc-like instantiation
+depth limit with cycle detection. A deep recursive conditional fixture must terminate with the
+intended result or an intentional depth-limit diagnostic, not overflow the Rust stack.
+
 ## Touch points
 
 Type-param repr (de Bruijn migration); the relation engine (extends check); conditional-type
-evaluation in the checker.
+evaluation in the checker; evaluator memoization/work-stack/depth-limit machinery.
 
 <!-- Origin: dev roadmap M25 (was HANDOFF §3, the type-level VM phase). -->

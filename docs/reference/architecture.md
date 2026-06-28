@@ -31,7 +31,7 @@ Two key consequences:
 ├─────────────────────────────────────────────────────────────┤
 │  ┌──────────────────────┐  ┌──────────────┐  ┌────────────┐  │
 │  │ Statement checker     │  │ Relation     │  │ Type-level │  │
-│  │ (structural interp.)  │◄►│ engine       │  │ VM         │  │
+│  │ (structural interp.)  │◄►│ engine       │  │ evaluator  │  │
 │  │ flow analysis,        │  │ subtyping,   │  │ conditional│  │
 │  │ narrowing, contextual │  │ assignability│  │ /mapped/   │  │
 │  │ typing, inference     │  │ + caches     │  │ infer      │  │
@@ -77,7 +77,7 @@ in Rust is the biggest perf lever.
 ### 3.2 Two identities (internal vs cross-run)
 
 `TypeId(u32)` is an arena index — it is only valid within a single process run. The moment
-you want disk-cached bytecode (§7.1), incrementality (§11 phase 4), or any serialization,
+you want disk-cached bytecode (§7.1), incrementality (Phase 5), or any serialization,
 the in-memory index is useless because the next run assigns different numbers. So every
 type needs **two identities**:
 
@@ -364,7 +364,7 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
 Parse + bind is **always** per-file-parallel and interner-free (`Binder` is owned; it
 never touches types). Only the *type universe / check phase* climbs the Stage 0→1→2
 ladder. The reserved `stable_hash` column in the type store (§3.2) exists precisely
-for Stage 2; computing it is shared work with incrementality (§11 phase 4).
+for Stage 2; computing it is shared work with incrementality (Phase 5).
 
 ---
 
@@ -439,24 +439,35 @@ design targets the former.
 
 ## 12. Phased plan (against the "years in, still early stage" trap)
 
-1. **Phase 0 — Type store + binder.** Arena, hash-consing, `TypeId` + stable hash,
-   multi-slot scope graph, `.d.ts` parsing, load `lib.d.ts`. Nothing runs without this.
+1. **Phase 0 — Type store + binder.** Arena, hash-consing, run-local `TypeId`, multi-slot
+   scope graph, and enough `.d.ts`-shaped binding machinery to keep declaration spaces honest.
+   The full stable structural hash and full `lib.d.ts` are staged later; the type store is already
+   shaped for them, but they are not prerequisites for the single-file checker.
 2. **Phase 1 — Structural interpreter + relation engine, narrow scope.** Subtyping +
    generics + **full narrowing** + the **relation cache and cycle handling** (§6). Inference
    engine (§5.1). Type-level eval still in the interpreter for now (slow but correct). Goal:
    a usable checker on a real repo as early as possible. Completability is decided here.
 3. **Phase 2 — Scope hardening.** Variance, declaration merging (multi-slot), contextual
-   typing, overloads, reporting mode (§6.4). Catching up on model coverage (the §11.1 wall).
+   typing, overloads, reporting mode (§6.4), and a minimal ambient/prelude loading slice when it
+   buys real-world feedback before the full standard library is viable. Catching up on model
+   coverage is the §11.1 wall.
 4. **Phase 3 — Type-level evaluator (tree-walked).** Once the core stands, build conditional/
    mapped/template/utility evaluation with the four algorithmic wins folded in (§7.2: memoization,
    accumulator reuse, explicit work-stack, arith intrinsics). This is where the order-of-magnitude
    type-level speedup arrives — *in the tree-walker*. A bytecode VM (§7.1) is a **deferred,
    profiling-gated refactor**, not part of this phase (ADR-0001).
-5. **Phase 4 — Incrementality (IDE).** Salsa-style layer over the binder with durability
-   (lib/deps = HIGH, workspace = LOW). A per-file bytecode cache is a complement *if* the VM
-   refactor ever happens.
+5. **Phase 4 — Real-project scale.** Full `lib.d.ts` as a shared read-only prelude (parallelism
+   Stage 1), then modules/imports as an explicit staged rollout: first a correctness-first
+   whole-repo slice, then the cross-file type-identity strategy (stable structural hash or a shared
+   growing interner) needed for parallel Stage 2.
+6. **Phase 5 — Incrementality (IDE).** Salsa-style layer over the binder with durability
+   (lib/deps = HIGH, workspace = LOW). This is where the stable structural hash becomes mandatory
+   if it has not already landed for cross-file exports. A per-file bytecode cache is a complement
+   *if* the VM refactor ever happens.
 
 Plan rule: **the relation engine and narrowing come before the type-level evaluator, and the
 evaluator's speed lives in its algorithms, not in a VM.** The bytecode VM is the sexiest piece but
 the smallest share of real-world cost and the least-mapped risk (§11.2); it stays a
-profiling-gated option. If time runs out, it is the first thing cut.
+profiling-gated option. If time runs out, it is the first thing cut. Full `lib.d.ts`, modules,
+parallel cross-file identity, and incrementality are staged separately so real-project feedback can
+arrive before every scale feature is solved at once.

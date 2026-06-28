@@ -1,10 +1,10 @@
 ---
 id: 13
-title: Type-level evaluator performance — algorithmic wins now, bytecode VM only if profiling demands it
-blocked-by: [./09-conditional-types.md, ./10-mapped-types.md]
+title: Post-evaluator profiling gate — bytecode VM only if profiling demands it
+blocked-by: [./09-conditional-types.md, ./10-mapped-types.md, ./11-template-literal-types.md, ./12-utility-types.md]
 ---
 
-# 13 — Type-level evaluator performance (bytecode VM demoted to a deferred refactor)
+# 13 — Post-evaluator profiling gate (bytecode VM demoted to a deferred refactor)
 
 **Summary.** Originally "build the bytecode VM (M29)". Re-scoped per
 **[ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)**: the
@@ -13,10 +13,10 @@ the IR → bytecode → stack VM is a **potential later refactor**, not a planne
 (tsgo ships ~10× with no VM; the cited VM "proofs" are stalled toys measuring warm caches; Zod-class
 pain is instantiation + relation, not evaluation) is in the ADR.
 
-## Decided work (do this in the tree-walker, as part of `09`–`12`)
+## Decided work moved into `09`–`12`
 
-These are **performance acceptance** on the conditional/mapped/template/utility evaluator — required,
-so nobody ships a naive O(n²) evaluator (architecture §7.2):
+The algorithmic wins are **required acceptance inside the evaluator milestones themselves** so nobody
+ships a naive O(n²) evaluator and hopes this item rescues it later:
 
 1. **Memoization** `(type-fn, args) → result`, keyed on hash-consed argument `TypeId`s. Biggest
    lever for tree (non-tail) recursion (`Flatten<L> & Flatten<R>`). Add depth limit + cycle
@@ -27,23 +27,22 @@ so nobody ships a naive O(n²) evaluator (architecture §7.2):
 4. **Arithmetic intrinsics** — intercept `Add`/`Sub`/`Lte`-style tuple/template math and compute it
    natively instead of recursing over tuple lengths.
 
-**Acceptance:** a deliberately deep/recursive type-level fixture (e.g. a tuple-arithmetic or
-template-literal-parser corpus) type-checks without stack overflow and without O(n²) blowup; the
-conditional/mapped/utility corpus from `09`–`12` passes with these wins in place.
+Acceptance for those lives in `09`–`12`. This item must not be used to postpone the basic evaluator
+guardrails.
 
-## Deferred (the bytecode VM — no commitment)
+## Acceptance for this item
 
-Carving type-level evaluation into IR → bytecode → stack VM (architecture §7.1) is undertaken **only
-if** profiling on real type-level-heavy code shows the *interpreter dispatch loop itself* — not the
-algorithm, not relation/instantiation — is the bottleneck. Trigger: a measured, reproducible
-type-level-dispatch hot spot that the four wins above don't flatten. Until then this stays an
-option, not a roadmap item. If it ever lands, architecture §7.1–7.4 is its design reference and the
-risk in §11.2 re-arms.
+After `09`–`12` land, profile at least one deliberately type-level-heavy corpus and one ordinary
+application-style corpus. If the remaining hot path is relation/instantiation/allocation, close this
+item with the profiling notes and do **not** build a VM. Carving type-level evaluation into IR →
+bytecode → stack VM (architecture §7.1) is undertaken **only if** profiling shows the *interpreter
+dispatch loop itself* — not the algorithm, not relation/instantiation — is the bottleneck. Trigger:
+a measured, reproducible type-level-dispatch hot spot that the four wins above do not flatten. If it
+ever lands, architecture §7.1–7.4 is its design reference and the risk in §11.2 re-arms.
 
 ## Touch points
 
-The conditional/mapped/template/utility evaluator in the checker (memoization table, accumulator
-handling, explicit work-stack, arithmetic intrinsics). No new IR/bytecode/VM unless the deferred
-trigger fires.
+Profiler setup and benchmark fixtures; optionally the conditional/mapped/template/utility evaluator
+if profiling proves dispatch overhead. No new IR/bytecode/VM unless the trigger above fires.
 
 <!-- Origin: dev roadmap M29 (was HANDOFF §3, the type-level VM phase). Re-scoped by ADR-0001. -->

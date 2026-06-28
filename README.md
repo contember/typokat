@@ -7,8 +7,8 @@ full classes, and the common "real-world" type constructs. It is a **checker, no
 emit, JS runtime semantics, and module resolution are out of scope by design — the goal is to
 preserve the **type model** (see [`docs/reference/architecture.md`](./docs/reference/architecture.md)).
 
-> Status: **M0–M22** implemented. ~16k lines of Rust, 170 unit tests + a 63-file conformance
-> corpus (163 expected diagnostics), `clippy -D warnings` clean. Every milestone was
+> Status: **M0–M22** implemented. ~16k lines of Rust, 172 unit tests + a 71-file conformance
+> corpus (188 expected diagnostics), `clippy -D warnings` clean. Every milestone was
 > cross-checked against real `tsc 6.0.3 --strict`.
 
 ## Quick start
@@ -71,7 +71,7 @@ and fast:
 
 ## How it was built
 
-Milestone by milestone (M0 = a literal-to-primitive "walking skeleton" → M20), each as a **vertical
+Milestone by milestone (M0 = a literal-to-primitive "walking skeleton" → M22), each as a **vertical
 slice** that runs end-to-end. The conformance corpus in [`tests/cases/`](./tests/cases/) is the
 spec: each `.ts` fixture carries inline `// error[TK…]` markers, and the harness diffs the checker's
 diagnostics against them (see [`tests/cases/README.md`](./tests/cases/README.md)). Process:
@@ -96,7 +96,7 @@ src/
   check/    checker · infer (inference engine) · flow (narrowing ops)   the checkers
   relate/   relation (is_assignable, cycle stack, reasons) · cache      the relation engine
 tests/
-  conformance.rs        marker-driven harness (MILESTONE_DIRS enables m0..m20)
+  conformance.rs        marker-driven harness (MILESTONE_DIRS enables m0..m22 + bug-fix corpora)
   cases/mN_*/           the conformance corpus (the spec)
 ```
 
@@ -127,6 +127,6 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
 ## Testing
 
 ```sh
-cargo test                              # 170 unit tests + the conformance corpus
+cargo test                              # 172 unit tests + the conformance corpus
 cargo clippy --all-targets -- -D warnings
 ```

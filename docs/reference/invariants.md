@@ -37,7 +37,7 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
   alpha-equivalent hash-consing want de Bruijn. Plan the migration when you start conditional types
   (it is localized to the type-param repr + `substitute`). (Forced by the evaluation work, not by a
   VM — the bytecode VM itself is deferred, [ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md).)
-- **Stable structural hash (blake3) is reserved but uncomputed** — needed for incrementality (Phase 4)
+- **Stable structural hash (blake3) is reserved but uncomputed** — needed for incrementality (Phase 5)
   and for parallelism Stage 2 (cross-file export identity, architecture §8.2). The interner is already
   shaped for it (`src/types/hash.rs`).
 - **Per-argument call errors over-report** vs `tsc` (which stops at the first bad arg) — safe
