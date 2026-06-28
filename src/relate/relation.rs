@@ -729,6 +729,10 @@ impl<'a> Relater<'a> {
             }
         }
 
+        if !tgt_obj.construct_signatures.is_empty() {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        }
+
         self.relate(src, *tgt_sig, kind, assumed)
     }
 

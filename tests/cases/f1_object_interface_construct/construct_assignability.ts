@@ -51,3 +51,17 @@ declare const textResultCtor: TextResultCtor;
 
 const badParamCtor: InterfaceCtor = stringParamCtor;                      // error[TK2322]
 const badResultCtor: InterfaceCtor = textResultCtor;                      // error[TK2322]
+
+type PlainFunction = (input: number) => Box;
+type CallAndConstruct = {
+  (input: number): Box;
+  new (input: number): Box;
+};
+type CallOnly = {
+  (input: number): Box;
+};
+
+declare const plainFunction: PlainFunction;
+
+const plainFunctionToCallAndConstruct: CallAndConstruct = plainFunction;   // error[TK2322]
+const plainFunctionToCallOnly: CallOnly = plainFunction;                   // ok - call-only object type accepts a matching function
