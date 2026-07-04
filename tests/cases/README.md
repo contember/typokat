@@ -41,6 +41,7 @@ fixture (keeps fixtures robust to author miscounting).
 | `TK2344` | Type argument does not satisfy the type parameter's constraint |
 | `TK2345` | Argument type not assignable to parameter type |
 | `TK2445` | Property is protected (accessed outside the class and its subclasses) |
+| `TK2456` | Type alias circularly references itself |
 | `TK2416` | Property in derived type not assignable to the same property in base type (override compatibility) |
 | `TK2511` | Cannot create an instance of an abstract class |
 | `TK2515` | Non-abstract class does not implement inherited abstract member (exactly one missing) |
@@ -48,6 +49,7 @@ fixture (keeps fixtures robust to author miscounting).
 | `TK2540` | Cannot assign to a read-only property |
 | `TK2353` | Object literal may only specify known properties (excess property) |
 | `TK2554` | Wrong number of arguments (arity) |
+| `TK2589` | Type instantiation is excessively deep and possibly infinite |
 | `TK2673` | Constructor of class is private (direct `new` outside the declaring class) |
 | `TK2674` | Constructor of class is protected (direct `new` outside the declaring class/subclasses) |
 | `TK2741` | Property is missing in type but required |
@@ -113,8 +115,8 @@ slots into a known later phase without rework:
   typed value, primitive or structural, clamps normally), type-parameter defaults, and
   intersection types entirely (`T extends T & X` is tsc `TS2313`, but `&` is not in the type
   model — backlog `25`). The constraint is stored as a store-side column keyed by `TypeParamId`,
-  not folded into the interned type's identity. Type parameters use a named representation for
-  now; the de Bruijn migration opens the conditional-types milestone.
+  not folded into the interned type's identity. Type parameters keep the named representation:
+  ADR-0002 scopes de Bruijn indices to `infer` binders within conditional nodes.
 - **classes**: fields/constructor/methods/`this`/`new`/structural instances (**M11**),
   inheritance (`extends`, `super`) (**M12**), and access modifiers (`private`/`protected` —
   access control + nominal typing) + `static` members (**M13**), member-assignment checking
@@ -133,8 +135,22 @@ slots into a known later phase without rework:
   (`const a: 1[] = [1]`), are over-strict (false positive, safe direction); deferred.
 - **index signatures** (`{ [k: string]: T }`, `{ [i: number]: T }`) land in **M19**; `keyof` +
   indexed-access types (`T[K]`) on concrete object types land in **M20** (evaluated eagerly).
-  Generic/deferred `keyof`/`T[K]` (over a type parameter), mapped types, conditional types, and
-  utility types (`Partial`, `Record`, …) remain deferred (they want the type-level VM, §7).
+  Generic/deferred `keyof`/`T[K]` (over a type parameter), mapped types, and utility types
+  (`Partial`, `Record`, …) remain deferred (the type-level evaluation phase, tree-walked —
+  ADR-0001).
+- **conditional types** (`T extends U ? X : Y`): specced in `m25_conditional_types/`, lands with
+  backlog `09` (M25). Scope: resolution through the relation engine; distribution over
+  naked-param unions (`never` → `never`, `boolean` expands to `true | false`); `infer`
+  extraction (array element, object property, fixed tuple positions, function param/return;
+  same-name covariant candidates union; an `infer` name used in the false branch is `TK2304`);
+  deferred conditionals on an open check type (assignable to itself and to any target BOTH
+  branches satisfy; nothing else assignable into one); `TK2456` for a directly self-referential
+  alias; `TK2589` on runaway instantiation depth. Documented divergences: `TK2589`'s span is the
+  annotation that demanded evaluation (tsc points at the recursive reference inside the alias
+  body); same-name `infer` in multiple contravariant positions unions where tsc intersects
+  (`&` is not in the model — backlog `25`); `infer X extends C` (TS 4.7) is out of scope; rest
+  elements are avoided throughout (backlog `24`); a deferred conditional whose branches still
+  contain its own `infer` binders is conservatively non-assignable (over-report, safe).
 - **optional properties** (`a?: T`) on object types, interfaces, and class instance fields land in
   **M21**: lowered as real members (so `keyof`/indexed-access include them and a declared optional no
   longer trips excess), an optional may be **absent** in a value (no `TK2741`), reading one yields
@@ -203,6 +219,7 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m22_unresolved_type/` | M22 — `TK2304` for an unresolved type reference in type position |
 | `m23_unstructured_narrowing/` | M23 — narrowing through unstructured flow (early exit, `&&`/`||`/ternary, assignment, loop edges) |
 | `m24_generic_constraints/` | M24 — generic constraints (`TK2344`, apparent type, clamp-to-constraint inference, `TK2313` circularity) |
+| `m25_conditional_types/` | M25 — conditional types (resolution, distribution, `infer`, deferred conditionals, `TK2456`/`TK2589`) |
 
 ## Bug-fix / backlog corpora
 
