@@ -32,3 +32,10 @@ const m2: "no" = m(42);
 const m3: "no" = m("abc"); // error[TK2322]: Type '"yes"' is not assignable to type '"no"'
 const m4: "yes" = m<string>("abc");
 const m5: "yes" = m<number>(42); // error[TK2322]: Type '"no"' is not assignable to type '"yes"'
+
+// Distribution applies at generic-CALL instantiation too (inferred and
+// explicit union type arguments), exactly as at alias instantiation.
+declare const sn: string | number;
+const d1: "yes" | "no" = m(sn);
+const d2: "no" = m(sn); // error[TK2322]
+const d3: "no" = m<string | number>(sn); // error[TK2322]
