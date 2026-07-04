@@ -138,6 +138,15 @@ slots into a known later phase without rework:
   Generic/deferred `keyof`/`T[K]` (over a type parameter), mapped types, and utility types
   (`Partial`, `Record`, …) remain deferred (the type-level evaluation phase, tree-walked —
   ADR-0001).
+- **mapped types** (`{ [K in keyof T]: … }`): specced in `m26_mapped_types/`, lands with backlog
+  `10` (M26). Scope: evaluation over concrete sources (keyof-derived and literal-union key
+  sources), value transformation, modifier arithmetic (`?`/`+?`/`-?`, `readonly`/`-readonly`),
+  homomorphic preservation of the source's `?`/`readonly`, mapped-of-mapped composition, and
+  generic-call instantiation; a mapped type over an unresolved param stays deferred and relates
+  conservatively (M25 model). Documented divergences: tsc's homomorphic-identity rule (`T` →
+  `{ [K in keyof T]: T[K] }` is assignable in tsc; typokat conservatively rejects — over-report,
+  pinned in `deferred_generics.ts`); `as` key remapping and template-literal keys are out of
+  scope (`11`); `K in string`-style index-signature production is out of scope.
 - **conditional types** (`T extends U ? X : Y`): specced in `m25_conditional_types/`, lands with
   backlog `09` (M25). Scope: resolution through the relation engine; distribution over
   naked-param unions (`never` → `never`, `boolean` expands to `true | false`); `infer`
@@ -226,6 +235,7 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m23_unstructured_narrowing/` | M23 — narrowing through unstructured flow (early exit, `&&`/`||`/ternary, assignment, loop edges) |
 | `m24_generic_constraints/` | M24 — generic constraints (`TK2344`, apparent type, clamp-to-constraint inference, `TK2313` circularity) |
 | `m25_conditional_types/` | M25 — conditional types (resolution, distribution, `infer`, deferred conditionals, `TK2456`/`TK2589`) |
+| `m26_mapped_types/` | M26 — mapped types (`{ [K in keyof T]: … }`, modifiers, homomorphic preservation, deferred generics) |
 
 ## Bug-fix / backlog corpora
 
