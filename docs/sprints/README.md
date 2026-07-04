@@ -20,4 +20,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-<!-- (none) -->
+- [`sprint-2026-07-04-mapped-types.md`](sprint-2026-07-04-mapped-types.md) —
+  backlog `10` / M26: `{ [K in keyof T]: … }` (evaluation, modifier arithmetic, homomorphic
+  preservation, deferred generics).
