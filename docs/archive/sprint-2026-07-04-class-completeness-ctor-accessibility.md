@@ -1,10 +1,24 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME — shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU1 → <sha>,
-> WU2 → <sha>, … Verification: <the gate command + numbers>. Backlog closed:
-> <ids deleted/rescoped>. Deferred: <honest notes>.
--->
+> **OUTCOME — shipped 2026-07-04.** All five codes landed. `TK2416` override compatibility
+> (public↔public, keyed on the **base** member's declaration kind after review round 1 caught the
+> derived-keyed version dropping errors — base method ⇒ bivariant params + covariant return with
+> the void exception, everything else strict), `TK2515`/`TK2654` abstract-member completeness
+> (pending lists composed down the `extends` chain, direct-base attribution, tsc 6.0.3's
+> single/aggregated split), and `TK2673`/`TK2674` constructor accessibility on direct `new`
+> (visibility + declaring class carried/inherited on `ClassInfo`, M13 context + `class_parents`
+> walk, accessibility suppresses `TK2511`). Bonus: the b20 work exposed a pre-existing
+> official-suite harness bug (leading blank after stripped `@option` headers ⇒ 273 files +1 off
+> baseline, zero ever exact-matching) — fixed with the ratchet. Commit map: plan → 9b3fbf2;
+> b06 spec → ddfe81f, amendment → f7e16f3, impl(+review fix) → bbc2d2f; b20 spec → fe147b0,
+> impl → abbd087; harness fix + ratchet → fd7aea5. Verification: `cargo test` (172 unit +
+> conformance, corpus now 96 fixtures incl. the 7-file b06 + 4-file b20 dirs),
+> `clippy -D warnings`, `tsofficial.py run --check` green; scoreboard diag-recall 229→239/1659,
+> error-exact 18→20/285, in-scope 494→495 (gained coverage), clean-kept 165/210. Two
+> adversarial reviews: round 1 FAIL (bivariance mis-keying — fixed + spec amended), round 2
+> PASS ×2 (13-scenario probe matrix; harness diagnosis independently confirmed). Backlog closed:
+> `06`, `20` (deleted). Filed: `21` local-class checking, `22` new-callee forms, `23` static
+> method type params. Deferred (documented in tests/cases/README.md): TS2415/TS2417/TS2425/
+> TS2426/TS2653/TS2675, unequal-arity + non-public + generic-base override checks, bare generic
+> class names in the new messages.
 
 # Sprint — class completeness + constructor accessibility (2026-07-04)
 

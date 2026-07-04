@@ -12,9 +12,10 @@ documents something a future reader needs. Dependencies go in frontmatter:
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.
 
-This **is** the roadmap. Items `01`–`05` shipped — `01`–`04` (current-impl bugs) and `05`
-(object/interface method/call/construct signatures, F1); see [`../archive/`](../archive/README.md).
-`06`–`17` are the milestone roadmap. Architecture §12 governs ordering — the relation
+This **is** the roadmap. Items `01`–`06` and `20` shipped — `01`–`04` (current-impl bugs), `05`
+(object/interface method/call/construct signatures, F1), `06` + `20` (class completeness +
+constructor accessibility); see [`../archive/`](../archive/README.md).
+`07`–`17` are the milestone roadmap. Architecture §12 governs ordering — the relation
 engine + narrowing come **before** type-level evaluation, whose speed lives in the tree-walker's
 algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor — see
 [ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). See
@@ -22,12 +23,8 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 
 ## Items
 
-**Near-term completeness**
-- [`06`](06-class-completeness-checks.md) — class-completeness checks `TK2416` + `TK2515` (good warm-up).
-- [`20`](20-constructor-accessibility-on-new.md) — enforce private/protected constructor accessibility on direct `new C()`.
-
 **Narrowing + generics (both precede type-level evaluation)**
-- [`07`](07-unstructured-flow-narrowing.md) — unstructured-flow narrowing, the flow-node CFG (M23).
+- [`07`](07-unstructured-flow-narrowing.md) — unstructured-flow narrowing, the flow-node CFG (M23) — **in sprint** ([spec committed](../sprints/sprint-2026-07-04-unstructured-flow-narrowing.md)).
 - [`08`](08-generic-constraints.md) — generic constraints `<T extends U>` (M24).
 
 **The type-level evaluation phase (tree-walked; bytecode VM deferred — ADR-0001)**
@@ -44,3 +41,8 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 - [`17`](17-incrementality.md) — incrementality (Phase 5) · blocked-by `16`.
 - [`18`](18-duplicate-identifier-detection.md) — duplicate identifier detection (`TK2300`) for duplicate object/interface members.
 - [`19`](19-call-of-non-callable-diagnostic.md) — `TK2349` call-of-non-callable diagnostic once dropped callability is distinguishable.
+
+**Small known gaps (review findings, sprint 2026-07-04)**
+- [`21`](21-local-class-checking.md) — function-local classes are entirely unchecked (all class-keyed diagnostics silent).
+- [`22`](22-new-callee-forms.md) — `new (C)()` / aliased `new` miss class-keyed checks (`TK2511`/`TK2673`/`TK2674`).
+- [`23`](23-static-method-type-params.md) — `static of<U>(u: U)` raises spurious `TK2304`.

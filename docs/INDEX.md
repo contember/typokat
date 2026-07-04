@@ -22,17 +22,16 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprints/sprint-2026-07-04-class-completeness-ctor-accessibility.md`](sprints/sprint-2026-07-04-class-completeness-ctor-accessibility.md) —
-  backlog `06` + `20` (class completeness + constructor accessibility).
 - [`sprints/sprint-2026-07-04-unstructured-flow-narrowing.md`](sprints/sprint-2026-07-04-unstructured-flow-narrowing.md) —
-  backlog `07` / M23 (the flow-node CFG; spec committed).
+  backlog `07` / M23 (the flow-node CFG; spec committed, implementation in progress).
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M22 shipped; object/interface method, call & construct signatures shipped** (backlog `05` / F1 —
-  see [`archive/sprint-2026-06-28-object-interface-signatures.md`](archive/sprint-2026-06-28-object-interface-signatures.md);
-  earlier current-impl bugs F3–F5 in [`archive/sprint-2026-06-24-impl-bugs.md`](archive/sprint-2026-06-24-impl-bugs.md)).
-  Next likely: class-completeness warm-up (`06`) or unstructured-flow narrowing (`07`). New gaps
-  filed: `18` duplicate-identifier, `19` not-callable, `20` constructor accessibility on `new`.
+- **M0–M22 + class completeness (backlog `06`) + constructor accessibility (`20`) shipped** —
+  `TK2416`/`TK2515`/`TK2654`/`TK2673`/`TK2674`, plus the official-suite header-alignment harness
+  fix (see [`archive/sprint-2026-07-04-class-completeness-ctor-accessibility.md`](archive/sprint-2026-07-04-class-completeness-ctor-accessibility.md)).
+  **In flight: unstructured-flow narrowing (`07` / M23)** — spec committed, implementation next.
+  Then: generic constraints (`08` / M24) → the type-level evaluation phase (`09`–`12`). New gaps
+  filed from reviews: `21` local classes, `22` new-callee forms, `23` static method type params.

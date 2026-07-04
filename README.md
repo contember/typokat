@@ -7,9 +7,10 @@ full classes, and the common "real-world" type constructs. It is a **checker, no
 emit, JS runtime semantics, and module resolution are out of scope by design — the goal is to
 preserve the **type model** (see [`docs/reference/architecture.md`](./docs/reference/architecture.md)).
 
-> Status: **M0–M22** implemented. ~16k lines of Rust, 172 unit tests + a 71-file conformance
-> corpus (188 expected diagnostics), `clippy -D warnings` clean. Every milestone was
-> cross-checked against real `tsc 6.0.3 --strict`.
+> Status: **M0–M22** implemented, plus class-completeness checks (override compatibility,
+> abstract-member completeness) and constructor accessibility. ~18k lines of Rust, 172 unit
+> tests + a 96-file conformance corpus (259 expected diagnostics), `clippy -D warnings` clean.
+> Every milestone was cross-checked against real `tsc 6.0.3 --strict`.
 
 ## Quick start
 
@@ -38,7 +39,7 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 | **Foundation** | primitives & intrinsics (`any`/`unknown`/`never`/`void`, strict null), objects (structural, excess/missing/depth, **optional members `a?: T`**), functions (arity, contravariant params, void-return rule), unions (canonicalized), recursive & mutually-recursive named types, literal types |
 | **Narrowing** | `typeof`, truthiness, `null`/`undefined` equality, **discriminated unions**, `in`, `switch` (flow-sensitive, scoped) |
 | **Generics** | type parameters, instantiation, **type-argument inference** from call arguments |
-| **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract`; **generic classes** |
+| **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract` (incl. **abstract-member completeness**); **generic classes**; **override compatibility** (tsc's base-keyed method bivariance); **constructor accessibility** on `new` |
 | **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, contextual typing), index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`) |
 | **Reporting** | nested reason chains (`Types of property 'x' are incompatible …`) |
 
@@ -47,8 +48,9 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 `tsc`-compatible numeric codes with a `TK` prefix:
 `TK2304` (cannot find name), `TK2322` (not assignable), `TK2339` (no such property),
 `TK2341`/`TK2445` (private/protected), `TK2345` (argument), `TK2353` (excess property),
-`TK2511` (instantiate abstract), `TK2540` (assign read-only), `TK2554` (arity),
-`TK2741` (missing property).
+`TK2416` (incompatible override), `TK2511` (instantiate abstract), `TK2515`/`TK2654`
+(abstract member not implemented), `TK2540` (assign read-only), `TK2554` (arity),
+`TK2673`/`TK2674` (private/protected constructor), `TK2741` (missing property).
 
 ## Architecture
 

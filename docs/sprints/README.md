@@ -20,7 +20,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-07-04-class-completeness-ctor-accessibility.md`](sprint-2026-07-04-class-completeness-ctor-accessibility.md) —
-  backlog `06` (`TK2416` + `TK2515`/`TK2654`) + `20` (`TK2673`/`TK2674`).
 - [`sprint-2026-07-04-unstructured-flow-narrowing.md`](sprint-2026-07-04-unstructured-flow-narrowing.md) —
-  backlog `07` / M23: the flow-node CFG (spec committed; implementation queued behind the sprint above).
+  backlog `07` / M23: the flow-node CFG (spec committed; implementation in progress).
