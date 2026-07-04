@@ -104,6 +104,21 @@ impl Interner {
         &self.store
     }
 
+    /// Record a type parameter's `extends` constraint (M24) in the store-side
+    /// constraint column, keyed by [`TypeParamId`]. The checker calls this while
+    /// lowering a generic declaration's parameter list (frame active); the constraint
+    /// is a side column, not folded into the interned `TypeParamType` identity.
+    pub fn set_type_param_constraint(&mut self, id: TypeParamId, constraint: TypeId) {
+        self.store.set_type_param_constraint(id, constraint);
+    }
+
+    /// Erase a type parameter's constraint (M24 — the `TK2313` circularity fix). A
+    /// circular parameter records **no** constraint; see
+    /// `Store::remove_type_param_constraint`.
+    pub fn remove_type_param_constraint(&mut self, id: TypeParamId) {
+        self.store.remove_type_param_constraint(id);
+    }
+
     pub fn well_known(&self) -> WellKnown {
         self.well_known
     }

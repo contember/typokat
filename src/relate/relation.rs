@@ -332,6 +332,33 @@ impl<'a> Relater<'a> {
             return Relation::Yes;
         }
 
+        // M24 — apparent type of a constrained type parameter: `TypeParam(T)` is
+        // assignable to `tgt` whenever its **constraint** is (the constraint is `T`'s
+        // apparent type). This is **one direction only** — `X → TypeParam(T)` stays
+        // failing (a caller could instantiate `T` with a narrower subtype), so the rule
+        // fires solely on a `TypeParam` *source*. It runs BEFORE the union-target rule so
+        // a whole-union constraint (`K extends "x" | "y"` → `K → "x" | "y"`) relates its
+        // constraint to the *entire* union rather than being decomposed member-by-member
+        // (`"x" | "y" <: "x"` would spuriously fail). The constraint relation runs through
+        // the ordinary [`Relater::relate`], so the cycle stack + cache-soundness apply
+        // unchanged: a self-referential constraint (`<T extends { self: T }>`) re-enters
+        // the same in-flight key and terminates via the assume-true stack, and a verdict
+        // that rested on that assumption bubbles up through `assumed` (never durably cached
+        // as a spurious `true`). A constraint that is itself a type parameter (`U extends
+        // T`) recurses into this same rule, so constraint chains resolve. On failure it
+        // falls through to the leaf below (naming the parameter, not its constraint).
+        if self.store.tag(src) == TypeTag::TypeParam {
+            if let Some(constraint) = self
+                .store
+                .type_param(src)
+                .and_then(|param| self.store.type_param_constraint(param.id))
+            {
+                if self.relate(constraint, tgt, kind, assumed).is_yes() {
+                    return Relation::Yes;
+                }
+            }
+        }
+
         // Union rules (mvp-plan §6, M4) run BEFORE the intrinsic/object/function
         // rules. They are checked source-first, then target-first:
         //

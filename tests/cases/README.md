@@ -34,9 +34,11 @@ fixture (keeps fixtures robust to author miscounting).
 | Code | Meaning |
 |---|---|
 | `TK2304` | Cannot find name (unresolved identifier) |
+| `TK2313` | Type parameter has a circular constraint (`<T extends T>`) |
 | `TK2322` | Type X is not assignable to type Y (annotation/reassignment/return/property) |
 | `TK2339` | Property does not exist on type |
 | `TK2341` | Property is private (accessed outside its declaring class) |
+| `TK2344` | Type argument does not satisfy the type parameter's constraint |
 | `TK2345` | Argument type not assignable to parameter type |
 | `TK2445` | Property is protected (accessed outside the class and its subclasses) |
 | `TK2416` | Property in derived type not assignable to the same property in base type (override compatibility) |
@@ -97,13 +99,22 @@ slots into a known later phase without rework:
   `typeGuards{Redundancy,OnClassProperty}`, `…RightOperandOf{AndAnd,OrOr}Operator`; plus `TK2345`
   in `controlFlowIterationErrors` from the complex-RHS reset-to-declared rule on a loop back edge
   (tsc narrows `x = fn(x)` to the return type; typokat resets — wider, sound).
-- **generics**: explicit type arguments + instantiation (**M9**) and type-argument **inference**
-  (**M10**) are implemented; **constraints** (`<T extends U>`: `TK2344` on explicit arguments,
-  the constraint as the apparent type, clamp-to-constraint inference reporting `TK2345`) are
-  specced in `m24_generic_constraints/` and land with backlog `08` (**M24**). Out of that scope
-  (deferred): `K extends keyof T` (the generic-`keyof` deferral), contextual typing of object
-  literals against a constraint (tsc `TS2353`), type-parameter defaults. Type parameters use a
-  named representation for now; the de Bruijn migration opens the conditional-types milestone.
+- **generics**: explicit type arguments + instantiation (**M9**), type-argument **inference**
+  (**M10**), and **constraints** (`<T extends U>`: `TK2344` on explicit arguments, the constraint
+  as the apparent type — governing member reads AND writes, element access, calls/`new`, and
+  `T → constraint` assignability, clamp-to-constraint
+  inference reporting `TK2345`, and `TK2313` for a circular constraint chain — followed through
+  bare type-parameter constraints and the bare-parameter **members of union constraints**
+  (`<T extends T | number>` is circular); a circular parameter records no constraint) are
+  implemented (**M24**, corpus `m24_generic_constraints/`). Out of that scope (deferred):
+  `K extends keyof T` (the generic-`keyof` deferral), contextual typing of object/array literals
+  against a constraint (tsc `TS2353` / fresh-literal reshaping — so a violating inference
+  candidate that came from a **fresh object/array literal** argument is exempt from the clamp; a
+  typed value, primitive or structural, clamps normally), type-parameter defaults, and
+  intersection types entirely (`T extends T & X` is tsc `TS2313`, but `&` is not in the type
+  model — backlog `25`). The constraint is stored as a store-side column keyed by `TypeParamId`,
+  not folded into the interned type's identity. Type parameters use a named representation for
+  now; the de Bruijn migration opens the conditional-types milestone.
 - **classes**: fields/constructor/methods/`this`/`new`/structural instances (**M11**),
   inheritance (`extends`, `super`) (**M12**), and access modifiers (`private`/`protected` —
   access control + nominal typing) + `static` members (**M13**), member-assignment checking
@@ -191,7 +202,7 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m21_optional/` | M21 — optional properties (`a?: T`) on objects / interfaces / class instance fields |
 | `m22_unresolved_type/` | M22 — `TK2304` for an unresolved type reference in type position |
 | `m23_unstructured_narrowing/` | M23 — narrowing through unstructured flow (early exit, `&&`/`||`/ternary, assignment, loop edges) |
-| `m24_generic_constraints/` | M24 — generic constraints (`TK2344`, apparent type, clamp-to-constraint inference) |
+| `m24_generic_constraints/` | M24 — generic constraints (`TK2344`, apparent type, clamp-to-constraint inference, `TK2313` circularity) |
 
 ## Bug-fix / backlog corpora
 

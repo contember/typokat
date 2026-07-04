@@ -157,6 +157,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return;
         }
 
+        // M24 (review F1): a member WRITE resolves through the base's **apparent type**,
+        // exactly like a read — `t.x = "s"` with `T extends { x: number }` checks the RHS
+        // against `number`. For a non-parameter base this is the identity.
+        let base_ty = self.apparent_type(base_ty);
+
         // Look up the property on the base **object** type. Snapshot the property's
         // type + `readonly` + `is_accessor` + origin before any `&mut` borrow for a
         // diagnostic.
@@ -268,6 +273,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let mut member_prop_types: Vec<TypeId> = Vec::with_capacity(members.len());
         let mut any_readonly = false;
         for member in members {
+            // M24 (audit): a union member that is a constrained type parameter resolves
+            // through its apparent type, mirroring the read side.
+            let member = self.apparent_type(member);
             let prop = self
                 .interner
                 .store()

@@ -6,9 +6,10 @@ use crate::check::flow::FlowNodeId;
 use crate::diagnostics::{render_type, Diagnostic};
 use crate::span::Span;
 use crate::types::repr::{
-    IntrinsicKind, LiteralValue, ObjectType, PropertyType, TypeTag,
+    IntrinsicKind, LiteralValue, ObjectType, PropertyType, TypeParamId, TypeTag,
 };
 use crate::types::store::{Store, TypeId};
+use rustc_hash::FxHashSet;
 use oxc_ast::ast::{
     ArrayExpression, BinaryExpression, BinaryOperator, ComputedMemberExpression, Expression, LogicalExpression, ObjectExpression, ObjectPropertyKind,
     StaticMemberExpression, UnaryExpression,
@@ -379,6 +380,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return Some((wk.error, span));
         }
 
+        // M24 (review F2): element access resolves through the base's **apparent type**
+        // — `t["x"]` with `T extends { x: number }` and `t[0]` with `T extends number[]`
+        // read through the constraint. For a non-parameter base this is the identity.
+        let base_ty = self.apparent_type(base_ty);
+
         // Array base (M17): the result is the element type (any index).
         if let Some(array) = self.interner.store().array_type(base_ty) {
             return Some((array.element, span));
@@ -453,6 +459,43 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         wk.error
     }
 
+    /// The **apparent type** of `ty` (M24): for a **constrained type parameter**, its
+    /// `extends` constraint — resolved **transitively** through a constraint chain
+    /// (`U extends T`, `T extends HasX` → `HasX`) so a structural operand sees the
+    /// ultimate concrete bound. Any other type is its own apparent type (returned
+    /// unchanged), so non-generic operands are untouched. A **cycle** (`T extends T`, or
+    /// a mutual `T extends U` / `U extends T`) terminates: the visited-set guard stops
+    /// at the first repeat, returning the last parameter in the chain (member access on
+    /// it then reports `TK2339`, the safe over-report). An **unconstrained** type
+    /// parameter is also returned unchanged, so `t.x` on a bare `T` stays `TK2339` on
+    /// `'T'`.
+    ///
+    /// This is the **shared Pass-level resolver** (review F1–F3): EVERY structural
+    /// consumer of an operand type routes through it — member reads
+    /// ([`infer_member_access`]), member writes ([`check_member_assignment`]), element
+    /// access ([`infer_element_access`]), and callable/construct signature lookup
+    /// ([`callable_signature`]/[`construct_signature`]) — so a constrained `T` behaves
+    /// as its constraint everywhere, not just on reads.
+    pub(in crate::check::checker) fn apparent_type(&self, ty: TypeId) -> TypeId {
+        let store = self.interner.store();
+        let mut current = ty;
+        let mut seen: FxHashSet<TypeParamId> = FxHashSet::default();
+        while store.tag(current) == TypeTag::TypeParam {
+            let Some(id) = store.type_param(current).map(|p| p.id) else {
+                break;
+            };
+            // A repeated parameter id means a constraint cycle — stop (terminate).
+            if !seen.insert(id) {
+                break;
+            }
+            match store.type_param_constraint(id) {
+                Some(constraint) => current = constraint,
+                None => break,
+            }
+        }
+        current
+    }
+
     /// Infer the type of a member access `obj.prop` in `scope`. A missing property is
     /// `TK2339` and yields the error type (no cascade); an `any`/error base yields the
     /// error type.
@@ -475,11 +518,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return Some((wk.error, prop_span));
         }
 
+        // M24 — apparent type: a **constrained type parameter** exposes its constraint's
+        // members, resolving transitively through a constraint chain (`U extends T`,
+        // `T extends HasX`) and terminating on a cycle ([`apparent_type`]). The member is
+        // resolved against this apparent type, but `base_ty` is kept for the `TK2339`
+        // render so a missing member still names the parameter (`'T'`). For a non-parameter
+        // base `lookup_ty == base_ty`, so M0–M23 behaviour is unchanged.
+        let lookup_ty = self.apparent_type(base_ty);
+
         // Union base (M4): the property must exist on every member; its type is the
         // union of the per-member property types.
-        if self.interner.store().tag(base_ty) == TypeTag::Union {
+        if self.interner.store().tag(lookup_ty) == TypeTag::Union {
             return Some((
-                self.union_member_access(base_ty, prop_name, prop_span),
+                self.union_member_access(lookup_ty, prop_name, prop_span),
                 prop_span,
             ));
         }
@@ -488,11 +539,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // member (`push`, `map`, `filter`, …) needs `lib.d.ts`, so it is deferred →
         // `TK2339` (property does not exist), with the array type rendered in the message
         // (`number[]`). The access yields the error type on the missing path (no cascade).
-        if self.interner.store().tag(base_ty) == TypeTag::Array {
+        if self.interner.store().tag(lookup_ty) == TypeTag::Array {
             if prop_name == "length" {
                 return Some((wk.number, prop_span));
             }
-            let tgt = render_type(self.interner.store(), base_ty, /* widen */ false);
+            let tgt = render_type(self.interner.store(), lookup_ty, /* widen */ false);
             self.diagnostics
                 .push(Diagnostic::property_does_not_exist(prop_span, prop_name, &tgt));
             return Some((wk.error, prop_span));
@@ -500,11 +551,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         // Snapshot the looked-up property's type + visibility + origin before any
         // mutable borrow (a diagnostic needs `&mut pass`). `None` = the property is not
-        // on this object type.
+        // on this object type. Looked up on the apparent type (M24).
         let found = self
             .interner
             .store()
-            .object_type(base_ty)
+            .object_type(lookup_ty)
             .and_then(|obj| obj.property(prop_name))
             .map(|prop| (prop.ty, prop.visibility, prop.declaring_class));
 
@@ -515,7 +566,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let string_index_value = self
             .interner
             .store()
-            .object_type(base_ty)
+            .object_type(lookup_ty)
             .and_then(|obj| obj.string_index);
 
         match found {
@@ -581,6 +632,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 member_prop_types.push(wk.error);
                 continue;
             }
+            // M24 (audit): a union MEMBER that is a constrained type parameter resolves
+            // through its apparent type too (`(T | U).x` with both constrained to
+            // `HasX`), else the lookup would falsely report `TK2339`.
+            let member = self.apparent_type(member);
             match store.object_type(member).and_then(|o| o.property(prop_name)) {
                 Some(prop) => member_prop_types.push(prop.ty),
                 // Missing on this member: the property does not exist on the union.

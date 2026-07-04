@@ -54,9 +54,10 @@
 //! nothing. (Mirrors the relation engine's assume-true cycle stack and the
 //! substitution engine's `in_progress` guard.)
 
+use crate::relate::Relater;
 use crate::types::repr::TypeTag;
 use crate::types::store::{Store, TypeId};
-use crate::types::Interner;
+use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// The accumulating candidate set: for each type parameter, the (already widened)
@@ -138,35 +139,124 @@ fn fix(interner: &mut Interner, candidates: Candidates) -> FxHashMap<crate::type
 /// call's argument types (the M10 entry point used by the checker).
 ///
 /// Every declared parameter id gets an entry: one fixed from its collected
-/// candidates if any landed, otherwise **`unknown`** (the sound no-candidate
-/// fallback — `unknown` cannot mask a downstream error the way `any` would). The
-/// returned map is fed straight to the existing M9 substitution.
+/// candidates if any landed, otherwise the parameter's **constraint** (M24) or
+/// **`unknown`** (the sound no-candidate fallback — `unknown` cannot mask a
+/// downstream error the way `any` would). The returned map is fed straight to the
+/// existing M9 substitution.
+///
+/// `fresh_args` marks, positionally (parallel to `args`), which arguments are
+/// **fresh object/array literals** at the call site. A parameter is exempt from the
+/// M24 clamp-to-constraint (see [`fix_params`]) only when **EVERY** candidate it
+/// received came from a fresh literal (review F4 — the exemption is per-ARGUMENT: a
+/// fresh satisfying literal must not shield a separate non-fresh violating argument
+/// binding the same parameter). tsc contextually retypes a fresh literal against
+/// the constraint — a pass that is out of scope — so clamping an all-fresh parameter
+/// would over-report; any non-fresh candidate is a typed value tsc cannot reshape,
+/// so the parameter clamps normally. A missing/short slice means "not fresh" (the
+/// conservative default for callers with no syntactic argument info, e.g. unit
+/// tests).
 pub fn infer_type_arguments(
     interner: &mut Interner,
     type_params: &[crate::types::repr::TypeParamId],
     params: &[TypeId],
     args: &[TypeId],
+    fresh_args: &[bool],
 ) -> FxHashMap<crate::types::repr::TypeParamId, TypeId> {
-    let candidates = collect_call_candidates(interner, params, args);
+    // Collect candidates per (arg, param) pair, tracking — per parameter — whether it
+    // received a candidate from a FRESH argument and from a NON-fresh one (provenance
+    // for the clamp exemption: exempt iff fresh-only).
+    let mut candidates: Candidates = FxHashMap::default();
+    let mut fresh_params: FxHashSet<crate::types::repr::TypeParamId> = FxHashSet::default();
+    let mut nonfresh_params: FxHashSet<crate::types::repr::TypeParamId> = FxHashSet::default();
+    for (index, (&arg, &param)) in args.iter().zip(params).enumerate() {
+        let mut local: Candidates = FxHashMap::default();
+        infer_from_types(interner, arg, param, &mut local);
+        let is_fresh = fresh_args.get(index).copied().unwrap_or(false);
+        for (param_id, cands) in local {
+            if is_fresh {
+                fresh_params.insert(param_id);
+            } else {
+                nonfresh_params.insert(param_id);
+            }
+            candidates.entry(param_id).or_default().extend(cands);
+        }
+    }
+    // Exempt = candidates came from fresh literals ONLY (review F4).
+    let exempt: FxHashSet<crate::types::repr::TypeParamId> = fresh_params
+        .difference(&nonfresh_params)
+        .copied()
+        .collect();
     let fixed = fix(interner, candidates);
-    fix_params(interner, type_params, fixed)
+    fix_params(interner, type_params, fixed, &exempt)
 }
 
-/// Complete a partially-fixed map to cover **every** declared type parameter: a
-/// parameter already fixed (it had candidates) keeps its type; a parameter with no
-/// candidate maps to **`unknown`**. Keying off the full `type_params` list (not the
-/// candidate map) is what guarantees an un-inferred parameter falls back soundly
-/// rather than silently surviving unsubstituted.
+/// Complete a partially-fixed map to cover **every** declared type parameter,
+/// applying each parameter's **constraint** (M24). Processing parameters in declared
+/// order builds the map incrementally, so a constraint that references an earlier
+/// parameter (`<T, U extends T>`) is substituted with that parameter's already-fixed
+/// argument. For each parameter:
+///
+///  - **a candidate landed** → keep it, unless it **violates** the (substituted)
+///    constraint, in which case **clamp to the constraint** (so the ordinary argument
+///    check then reports `TK2345` against the constraint, matching tsc — the failure
+///    surfaces there, never as `TK2344` on the inference path). The one exemption is
+///    a parameter in `fresh_exempt` — **every** candidate it received came from a
+///    fresh object/array literal argument (review F4: per-argument provenance),
+///    which tsc contextually retypes against the constraint (a pass that is out of
+///    scope, documented deferral), so clamping it would over-report; a parameter
+///    with **any** non-fresh candidate (a typed value — primitive OR structural,
+///    which tsc cannot reshape) clamps normally;
+///  - **no candidate** → fall back to the (substituted) **constraint** when the
+///    parameter has one, else to **`unknown`** (the sound M10 fallback — `unknown`
+///    cannot mask a downstream error the way `any` would).
+///
+/// An **unconstrained** parameter is unchanged from the M10 behaviour (candidate as-is,
+/// or `unknown`), so existing generic inference is untouched.
 fn fix_params(
-    interner: &Interner,
+    interner: &mut Interner,
     type_params: &[crate::types::repr::TypeParamId],
-    mut fixed: FxHashMap<crate::types::repr::TypeParamId, TypeId>,
+    fixed: FxHashMap<crate::types::repr::TypeParamId, TypeId>,
+    fresh_exempt: &FxHashSet<crate::types::repr::TypeParamId>,
 ) -> FxHashMap<crate::types::repr::TypeParamId, TypeId> {
-    let unknown = interner.well_known().unknown;
+    let wk = interner.well_known();
+    // Start from **all** collected candidates — this preserves bindings for parameters
+    // NOT in `type_params` (e.g. a derived generic class inheriting its base's
+    // constructor, whose parameter belongs to the *base*'s list); the constraint pass
+    // below only overrides the declared ones.
+    let mut map = fixed;
     for &param in type_params {
-        fixed.entry(param).or_insert(unknown);
+        // The parameter's constraint, substituted with the arguments fixed so far
+        // (releases the immutable borrow before the `&mut` substitute). `None` when the
+        // parameter is unconstrained.
+        let raw_constraint = interner.store().type_param_constraint(param);
+        let constraint = raw_constraint.map(|c| substitute(interner, c, &map));
+
+        let value = match map.get(&param).copied() {
+            Some(candidate) => match constraint {
+                Some(c) => {
+                    let satisfies = {
+                        let store = interner.store();
+                        let mut relater = Relater::new(store, wk);
+                        relater.is_assignable(candidate, c).is_yes()
+                    };
+                    // A violating candidate clamps to the constraint — unless EVERY
+                    // candidate for this parameter came from a fresh literal argument
+                    // (the contextual-typing deferral; per-argument provenance,
+                    // review F4 — see the doc above).
+                    if satisfies || fresh_exempt.contains(&param) {
+                        candidate
+                    } else {
+                        c
+                    }
+                }
+                None => candidate,
+            },
+            // No candidate: fall back to the constraint if any, else `unknown`.
+            None => constraint.unwrap_or(wk.unknown),
+        };
+        map.insert(param, value);
     }
-    fixed
+    map
 }
 
 /// The per-inference recursion state: the cycle guard for structural matching.
@@ -403,7 +493,7 @@ mod tests {
         // The argument `5` is a literal type.
         let five = interner.intern_literal(LiteralValue::Number(5.0));
 
-        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[t], &[five]);
+        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[t], &[five], &[]);
         assert_eq!(
             map.get(&TypeParamId(0)).copied(),
             Some(wk.number),
@@ -428,6 +518,7 @@ mod tests {
             &[TypeParamId(0), TypeParamId(1)],
             &[a, b],
             &[one, x],
+            &[],
         );
         assert_eq!(map.get(&TypeParamId(0)).copied(), Some(wk.number), "A = number");
         assert_eq!(map.get(&TypeParamId(1)).copied(), Some(wk.string), "B = string");
@@ -453,7 +544,7 @@ mod tests {
             ..Default::default()
         });
 
-        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[box_t], &[arg]);
+        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[box_t], &[arg], &[]);
         assert_eq!(map.get(&TypeParamId(0)).copied(), Some(wk.number), "T = number");
     }
 
@@ -483,7 +574,7 @@ mod tests {
             ret: wk.number,
         });
 
-        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[target], &[source]);
+        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[target], &[source], &[]);
         assert_eq!(map.get(&TypeParamId(0)).copied(), Some(wk.number), "T = number");
     }
 
@@ -498,7 +589,7 @@ mod tests {
         let s = interner.intern_literal(LiteralValue::String("s".to_string()));
         let expected = interner.union(vec![wk.number, wk.string]);
 
-        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[t, t], &[one, s]);
+        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[t, t], &[one, s], &[]);
         assert_eq!(
             map.get(&TypeParamId(0)).copied(),
             Some(expected),
@@ -516,7 +607,7 @@ mod tests {
         let one = interner.intern_literal(LiteralValue::Number(1.0));
         let two = interner.intern_literal(LiteralValue::Number(2.0));
 
-        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[t, t], &[one, two]);
+        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[t, t], &[one, two], &[]);
         assert_eq!(
             map.get(&TypeParamId(0)).copied(),
             Some(wk.number),
@@ -538,7 +629,7 @@ mod tests {
             ..Default::default()
         });
 
-        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[box_t], &[wk.number]);
+        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[box_t], &[wk.number], &[]);
         assert_eq!(
             map.get(&TypeParamId(0)).copied(),
             Some(wk.unknown),
@@ -566,7 +657,7 @@ mod tests {
 
         // Matching `list` against itself must terminate; it has no type parameter,
         // so it infers nothing.
-        let map = infer_type_arguments(&mut interner, &[], &[list], &[list]);
+        let map = infer_type_arguments(&mut interner, &[], &[list], &[list], &[]);
         assert!(map.is_empty(), "no type params → empty map, and no infinite loop");
     }
 }

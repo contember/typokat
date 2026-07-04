@@ -13,8 +13,9 @@
 use crate::types::hash::StableHash;
 use crate::types::repr::{
     ArrayType, FunctionType, IntrinsicKind, LiteralValue, ObjectType, TupleType, TypeFlags,
-    TypeParamType, TypeTag,
+    TypeParamId, TypeParamType, TypeTag,
 };
+use rustc_hash::FxHashMap;
 
 /// A run-local handle to a type: an index into the SoA arena. Cheap to copy and
 /// compare; structural equality of two interned types is `a == b`.
@@ -61,6 +62,18 @@ pub struct Store {
     /// hash-conses to one id and `[number, string]` ≠ `[string, number]` ≠
     /// `[number]`).
     tuples: Vec<TupleType>,
+
+    /// **Type-parameter constraint column** (M24): a type parameter's `extends`
+    /// bound, keyed by its [`TypeParamId`]. A **side column**, NOT part of the
+    /// interned `TypeParamType` identity (the ids are already unique per declaration,
+    /// and folding the constraint in would only churn identity and complicate the
+    /// de Bruijn re-key scheduled for the conditional-types milestone — invariants §2).
+    /// Populated by the checker when lowering each generic declaration's parameter
+    /// list (with the parameter frame active, so `<T, U extends T>` resolves), and
+    /// read by both the checker (apparent type + `TK2344`) and the relation engine
+    /// (`TypeParam(T) → X` via its constraint). A parameter with no `extends`, or an
+    /// unlowerable one, simply has no entry (no constraint — the safe direction).
+    type_param_constraints: FxHashMap<TypeParamId, TypeId>,
 
     /// Reserved cross-run identity column (architecture §3.2). NOT populated in
     /// the MVP (mvp-plan §7.1) — kept so Phase 4 can fill it at intern time
@@ -161,6 +174,30 @@ impl Store {
             return None;
         }
         self.tuples.get(self.payload(id) as usize)
+    }
+
+    /// The `extends` constraint of a type parameter (M24), or `None` if the
+    /// parameter is unconstrained. Keyed by [`TypeParamId`] — the side column, not the
+    /// interned type's identity. Read by the checker (apparent type / `TK2344`) and the
+    /// relation engine (`TypeParam(T) → constraint`).
+    pub fn type_param_constraint(&self, id: TypeParamId) -> Option<TypeId> {
+        self.type_param_constraints.get(&id).copied()
+    }
+
+    /// Record a type parameter's `extends` constraint (M24). Internal — the checker
+    /// calls it through `Interner::set_type_param_constraint` once, when the
+    /// declaration's parameter list is lowered with the frame active.
+    pub(crate) fn set_type_param_constraint(&mut self, id: TypeParamId, constraint: TypeId) {
+        self.type_param_constraints.insert(id, constraint);
+    }
+
+    /// Erase a type parameter's constraint (M24 — the `TK2313` circularity fix): a
+    /// parameter whose constraint chain revisits itself records **no** constraint, so
+    /// the degenerate cycle never feeds the relation engine's assume-true stack.
+    /// Internal — the checker calls it through
+    /// `Interner::remove_type_param_constraint` right after the circularity pass.
+    pub(crate) fn remove_type_param_constraint(&mut self, id: TypeParamId) {
+        self.type_param_constraints.remove(&id);
     }
 
     /// The members of a union type (canonical: flattened, sorted by `TypeId`,

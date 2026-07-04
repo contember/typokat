@@ -20,12 +20,16 @@ use codespan_reporting::term::{self, Config};
 pub enum DiagnosticCode {
     /// Cannot find name (unresolved identifier).
     TK2304,
+    /// Type parameter has a circular constraint (`<T extends T>`) — M24.
+    TK2313,
     /// Type X is not assignable to type Y.
     TK2322,
     /// Property does not exist on type (member access).
     TK2339,
     /// Property is private (accessed outside its declaring class) — M13.
     TK2341,
+    /// Type argument does not satisfy the type parameter's constraint — M24.
+    TK2344,
     /// Argument type is not assignable to the parameter type (call argument).
     TK2345,
     /// Object literal may only specify known properties (excess property).
@@ -63,9 +67,11 @@ impl DiagnosticCode {
     pub fn as_str(self) -> &'static str {
         match self {
             DiagnosticCode::TK2304 => "TK2304",
+            DiagnosticCode::TK2313 => "TK2313",
             DiagnosticCode::TK2322 => "TK2322",
             DiagnosticCode::TK2339 => "TK2339",
             DiagnosticCode::TK2341 => "TK2341",
+            DiagnosticCode::TK2344 => "TK2344",
             DiagnosticCode::TK2345 => "TK2345",
             DiagnosticCode::TK2353 => "TK2353",
             DiagnosticCode::TK2416 => "TK2416",
@@ -130,6 +136,22 @@ impl Diagnostic {
             code: DiagnosticCode::TK2304,
             severity: Severity::Error,
             message: format!("Cannot find name '{name}'"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2313` "circular constraint" error (M24): a type parameter
+    /// whose constraint chain — followed through bare type-parameter constraints
+    /// only — revisits the parameter itself (`<T extends T>`, `<T extends U, U
+    /// extends T>`). The primary span is the constraint annotation. The parameter
+    /// records no constraint, so the degenerate cycle never reaches the relation
+    /// engine's assume-true stack.
+    pub fn circular_constraint(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2313,
+            severity: Severity::Error,
+            message: format!("Type parameter '{name}' has a circular constraint."),
             span,
             elaboration: Vec::new(),
         }
@@ -330,6 +352,20 @@ impl Diagnostic {
             code: DiagnosticCode::TK2353,
             severity: Severity::Error,
             message: format!("'{name}' does not exist in type '{tgt}'"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2344` "type does not satisfy the constraint" error (M24): an
+    /// explicit type argument `src` violates its type parameter's constraint `tgt`.
+    /// The primary span is the offending type argument; the nested reason chain is
+    /// attached via [`Diagnostic::with_elaboration`], exactly like `TK2322`.
+    pub fn constraint_not_satisfied(span: Span, src: &str, tgt: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2344,
+            severity: Severity::Error,
+            message: format!("Type '{src}' does not satisfy the constraint '{tgt}'."),
             span,
             elaboration: Vec::new(),
         }

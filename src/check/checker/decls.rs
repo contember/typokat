@@ -13,7 +13,8 @@ use oxc_ast::ast::{
     Program, Statement, TSSignature, TSTypeName, TSTypeParameterDeclaration,
     TSTypeParameterInstantiation,
 };
-use rustc_hash::FxHashMap;
+use oxc_span::GetSpan;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Phase 0b — **fill**. Fill every interface body in place, then force every alias
@@ -53,8 +54,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             };
             let params = params.clone();
             let frame = self.build_type_param_frame(param_decl, &params);
-            let object =
-                self.with_type_params(frame, |pass| pass.lower_interface_members(scope, members));
+            let object = self.with_type_params(frame, |pass| {
+                // M24: lower the parameters' `extends` constraints with the frame active.
+                pass.lower_type_param_constraints(scope, param_decl, &params);
+                pass.lower_interface_members(scope, members)
+            });
             self.interner.fill_object(reserved, object);
         }
 
@@ -130,7 +134,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // type. The frame is popped before returning (a parameter does not leak).
         let frame = self.build_type_param_frame(param_decl, &params);
         let target = self
-            .with_type_params(frame, |pass| pass.lower_annotation(scope, annotation))
+            .with_type_params(frame, |pass| {
+                // M24: lower the parameters' `extends` constraints with the frame active.
+                pass.lower_type_param_constraints(scope, param_decl, &params);
+                pass.lower_annotation(scope, annotation)
+            })
             .unwrap_or(error_ty);
 
         if let Some(TypeDecl::Alias { resolving, .. }) = self.type_decls.get_mut(index) {
@@ -274,10 +282,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         args: &TSTypeParameterInstantiation<'_>,
     ) -> Option<TypeId> {
         // Lower the type arguments first (in the referencing scope, where any nested
-        // type names / parameters live). A non-lowerable argument aborts.
-        let mut lowered_args: Vec<TypeId> = Vec::with_capacity(args.params.len());
+        // type names / parameters live), keeping each one's span for a constraint
+        // diagnostic. A non-lowerable argument aborts.
+        let mut arg_infos: Vec<(TypeId, Span)> = Vec::with_capacity(args.params.len());
         for arg in &args.params {
-            lowered_args.push(self.lower_annotation(scope, arg)?);
+            arg_infos.push((self.lower_annotation(scope, arg)?, Span::from_oxc(arg.span())));
         }
 
         // The declaration's template (its body with parameter types embedded) and its
@@ -288,9 +297,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Build the substitution, zipping parameters to arguments up to the shorter
         // list (graceful on an arity mismatch — no panic, no spurious diagnostic).
         let mut map: FxHashMap<TypeParamId, TypeId> = FxHashMap::default();
-        for (&param, &arg) in params.iter().zip(&lowered_args) {
+        for (&param, &(arg, _)) in params.iter().zip(&arg_infos) {
             map.insert(param, arg);
         }
+
+        // M24: each explicit type argument must satisfy its parameter's constraint
+        // (`IBox<string>`, `TA<number>`). The bad argument still instantiates below.
+        self.check_type_argument_constraints(&params, &arg_infos, &map);
 
         Some(substitute(self.interner, template, &map))
     }
@@ -329,6 +342,124 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             frame.insert(name.to_string(), interned);
         }
         frame
+    }
+
+    /// Lower each type parameter's `extends` **constraint** (M24) into the store-side
+    /// constraint column, keyed by [`TypeParamId`]. MUST be called with the parameter
+    /// frame **already active** (inside [`with_type_params`]) so a constraint that
+    /// references an earlier parameter of the same list — `<T, U extends T>` — resolves
+    /// `T` to its parameter type. Every generic declaration site (functions, classes,
+    /// interfaces, aliases) calls this once.
+    ///
+    /// The annotation's diagnostics surface normally: an unresolved constraint name
+    /// (`T extends Bogus`) reports `TK2304` at the annotation, exactly like a
+    /// value-position annotation (tsc parity — suppressing it would be a false negative,
+    /// the unsafe direction; see the spec amendment, 162a78b). Only the *recording* is
+    /// gated: a constraint that does not lower to a real type (unresolved name → error
+    /// type, or out of subset → `None`) records **no constraint** — so explicit type
+    /// arguments are then unchecked (no `TK2344` cascade off an error-type constraint)
+    /// and inference proceeds, while a missing constraint never rejects an argument or
+    /// drops a member. The constraint is a side column, not part of the interned
+    /// `TypeParamType` identity, so it survives the de Bruijn re-key (invariants §2).
+    ///
+    /// **Circularity (`TK2313`, spec amendments 02f58a5 + c54bd47).** After the whole
+    /// list is lowered, each parameter's constraint chain is followed through **bare
+    /// type-parameter constraints and the bare-parameter MEMBERS of union constraints**
+    /// (`<T extends T | number>` is circular too — the union-source assume-true rule
+    /// would otherwise make it assignable-to-anything). Structural indirection —
+    /// `<T extends { self: T }>` — ends a branch and stays legal; intersection
+    /// composites are out of the type model (backlog 25). A chain that revisits the
+    /// parameter itself (`<T extends T>`, the mutual `<T extends U, U extends T>` —
+    /// BOTH flagged) reports `TK2313` at the constraint annotation and the parameter
+    /// records **no constraint**. Without this, the degenerate cycle would hit the
+    /// relation engine's assume-true stack and make `T` assignable to *everything* — a
+    /// dropped error. Detection runs on the recorded columns **after** the full list is
+    /// lowered (a later param's constraint isn't recorded yet mid-list), and clearing
+    /// happens **after** all detections (so the mutual cycle is seen from both sides).
+    pub(in crate::check::checker) fn lower_type_param_constraints(
+        &mut self,
+        scope: ScopeId,
+        param_decl: Option<&TSTypeParameterDeclaration<'_>>,
+        ids: &[TypeParamId],
+    ) {
+        let Some(param_decl) = param_decl else {
+            return;
+        };
+        let error_ty = self.interner.well_known().error;
+        // Pass 1 — lower + record every constraint in the list.
+        for (param, &id) in param_decl.params.iter().zip(ids) {
+            let Some(constraint) = param.constraint.as_ref() else {
+                continue;
+            };
+            if let Some(ty) = self.lower_annotation(scope, constraint) {
+                if ty != error_ty {
+                    self.interner.set_type_param_constraint(id, ty);
+                }
+            }
+        }
+        // Pass 2 — circularity detection over the now-complete columns. Collect ALL
+        // circular parameters before clearing any, so `<T extends U, U extends T>`
+        // flags both (clearing `T` first would hide the cycle from `U`'s walk).
+        let mut circular: Vec<(TypeParamId, Span, String)> = Vec::new();
+        for (param, &id) in param_decl.params.iter().zip(ids) {
+            let Some(constraint) = param.constraint.as_ref() else {
+                continue;
+            };
+            if self.constraint_chain_revisits(id) {
+                circular.push((
+                    id,
+                    Span::from_oxc(constraint.span()),
+                    param.name.name.to_string(),
+                ));
+            }
+        }
+        for (id, span, name) in circular {
+            self.diagnostics
+                .push(Diagnostic::circular_constraint(span, &name));
+            self.interner.remove_type_param_constraint(id);
+        }
+    }
+
+    /// Whether `start`'s constraint chain revisits `start` itself (M24 `TK2313`). The
+    /// chain follows, per step, the **bare-parameter successors** of a constraint: a
+    /// bare `TypeParam` constraint continues to that parameter, and a **union**
+    /// constraint continues through each of its bare-`TypeParam` MEMBERS
+    /// (`<T extends T | number>` is circular — spec amendment c54bd47; a union can
+    /// branch, so this is a DFS, not a single-successor walk). Any other constraint
+    /// shape (object, array, function, …) ends that branch: structural self-reference
+    /// is legal and terminates via the relation engine's cycle stack. A cycle that does
+    /// NOT pass through `start` (the walk dead-ends into some other pair's loop) stops
+    /// via the visited set without flagging `start` — the parameters *on* that loop
+    /// flag themselves when their own walks run. Because the successors are read off
+    /// the **lowered** column, a transparent alias that collapses to a bare parameter
+    /// (`type Id<X> = X; <T extends Id<T>>`) is caught too.
+    fn constraint_chain_revisits(&self, start: TypeParamId) -> bool {
+        let store = self.interner.store();
+        let mut visited: FxHashSet<TypeParamId> = FxHashSet::default();
+        let mut stack: Vec<TypeParamId> = vec![start];
+        while let Some(param) = stack.pop() {
+            let Some(constraint) = store.type_param_constraint(param) else {
+                continue;
+            };
+            // One-step bare-parameter successors: the constraint itself, or the
+            // members of a union constraint (canonical unions are flat, so one level
+            // of members is exhaustive). Non-parameter shapes end the branch.
+            let direct = store.type_param(constraint).map(|p| p.id);
+            let members = store
+                .union_members(constraint)
+                .into_iter()
+                .flatten()
+                .filter_map(|&member| store.type_param(member).map(|p| p.id));
+            for next in direct.into_iter().chain(members) {
+                if next == start {
+                    return true;
+                }
+                if visited.insert(next) {
+                    stack.push(next);
+                }
+            }
+        }
+        false
     }
 
     /// Run `body` with the type-parameter frame `frame` pushed onto the scope stack,

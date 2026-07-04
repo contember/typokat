@@ -273,6 +273,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // resolves (M16). For a non-generic class the empty frame is a no-op and the
         // collection is exactly the M11–M15 behaviour.
         let (own_instance, own_static, ctor_params) = self.with_type_params(frame, |pass| {
+            // M24: lower the parameters' `extends` constraints with the frame active.
+            pass.lower_type_param_constraints(scope, param_decl, type_params);
             pass.collect_class_own_members(scope, class_id, class)
         });
 
@@ -1057,6 +1059,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         name: &str,
     ) -> Option<(Visibility, Option<ClassId>)> {
         let store = self.interner.store();
+        // M24 (audit): a constrained-type-parameter source (`function f<T extends K>({
+        // priv }: T)`) resolves through its apparent type, like every other structural
+        // consumer. Identity for a non-parameter source.
+        let source = self.apparent_type(source);
         if let Some(members) = store.union_members(source) {
             // Require the property on every constituent; report the first non-public
             // origin found so the union still gates a private/protected member.
@@ -1066,6 +1072,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 if member == wk.any || member == wk.error {
                     continue;
                 }
+                // A constrained-param constituent resolves through its apparent type too.
+                let member = self.apparent_type(member);
                 match store.object_type(member).and_then(|o| o.property(name)) {
                     Some(prop) => {
                         if result.is_none() || matches!(prop.visibility, Visibility::Private | Visibility::Protected) {

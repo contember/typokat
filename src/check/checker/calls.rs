@@ -6,7 +6,8 @@ use super::decls::value_decl_id;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::DeclId;
 use crate::check::infer;
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
+use crate::relate::{Relater, Relation};
 use crate::span::Span;
 use crate::types::repr::{FunctionType, IntrinsicKind, ParameterType, TypeParamId, TypeTag};
 use crate::types::store::TypeId;
@@ -15,9 +16,65 @@ use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, CallExpression, Expression, FormalParameters,
     Function, FunctionBody, NewExpression,
 };
+use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
+    /// M24 — check each explicit type argument against its type parameter's
+    /// **constraint**, emitting `TK2344` on the offending argument.
+    ///
+    /// The constraint is substituted with the full `TypeParamId → TypeId` argument map
+    /// **before** the check, so a constraint that references an earlier parameter of the
+    /// same list (`<T, U extends T>` instantiated `f<string, number>`) is checked against
+    /// the actual `T` argument (`number` against `string`). Each substituted constraint is
+    /// then related to its argument through the shared relation engine — cycle stack +
+    /// cache-soundness intact. A failure is `TK2344` at the argument's span, carrying the
+    /// relation's reason chain; the bad argument **still instantiates** (tsc behaviour — no
+    /// cascading second diagnostic), so the caller keeps its substituted result.
+    pub(in crate::check::checker) fn check_type_argument_constraints(
+        &mut self,
+        type_params: &[TypeParamId],
+        args: &[(TypeId, Span)],
+        map: &FxHashMap<TypeParamId, TypeId>,
+    ) {
+        // Build the (argument, substituted-constraint, span) checks up front — this needs
+        // `&mut Interner` (substitution may intern new types), which cannot overlap the
+        // relation engine's immutable store borrow below.
+        let mut checks: Vec<(TypeId, TypeId, Span)> = Vec::new();
+        for (&param, &(arg, span)) in type_params.iter().zip(args) {
+            let Some(constraint) = self.interner.store().type_param_constraint(param) else {
+                continue;
+            };
+            let substituted = substitute(self.interner, constraint, map);
+            checks.push((arg, substituted, span));
+        }
+        if checks.is_empty() {
+            return;
+        }
+
+        // Relate each argument to its constraint and render the failures under a single
+        // immutable store borrow; push the diagnostics after it ends.
+        let wk = self.interner.well_known();
+        let mut failures: Vec<(String, String, Span, Vec<String>)> = Vec::new();
+        {
+            let store = self.interner.store();
+            let mut relater = Relater::new(store, wk);
+            for (arg, constraint, span) in checks {
+                if let Relation::No(chain) = relater.is_assignable(arg, constraint) {
+                    let src = render_type(store, arg, /* widen */ false);
+                    let tgt = render_type(store, constraint, /* widen */ false);
+                    let elaboration = render_reason_chain(store, chain.head());
+                    failures.push((src, tgt, span, elaboration));
+                }
+            }
+        }
+        for (src, tgt, span, elaboration) in failures {
+            self.diagnostics.push(
+                Diagnostic::constraint_not_satisfied(span, &src, &tgt).with_elaboration(elaboration),
+            );
+        }
+    }
+
     /// Instantiate a **generic call with explicit type arguments** (`identity<number>
     /// (5)`, M9), returning the instantiated function `TypeId`, or `None` when this is
     /// not such a call (no type arguments, or the callee is not a registered generic
@@ -54,19 +111,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .and_then(|s| s.value)?;
         let sig = self.generic_fns.get(&decl_id)?.clone();
 
-        // Lower the type arguments (in the call's scope). A non-lowerable argument
-        // aborts → fall back to the inferred callee path.
-        let mut lowered_args: Vec<TypeId> = Vec::with_capacity(args.params.len());
+        // Lower the type arguments (in the call's scope), keeping each one's span for a
+        // constraint diagnostic. A non-lowerable argument aborts → fall back to the
+        // inferred callee path.
+        let mut arg_infos: Vec<(TypeId, Span)> = Vec::with_capacity(args.params.len());
         for arg in &args.params {
-            lowered_args.push(self.lower_annotation(scope, arg)?);
+            arg_infos.push((self.lower_annotation(scope, arg)?, Span::from_oxc(arg.span())));
         }
 
         // Substitute the generic's parameters with the arguments (graceful on an arity
         // mismatch: zip to the shorter list) and return the instantiated signature.
         let mut map: FxHashMap<TypeParamId, TypeId> = FxHashMap::default();
-        for (&param, &arg) in sig.params.iter().zip(&lowered_args) {
+        for (&param, &(arg, _)) in sig.params.iter().zip(&arg_infos) {
             map.insert(param, arg);
         }
+        // M24: each explicit type argument must satisfy its parameter's constraint.
+        self.check_type_argument_constraints(&sig.params, &arg_infos, &map);
         Some(substitute(self.interner, sig.fn_ty, &map))
     }
 
@@ -97,6 +157,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         call: &CallExpression<'_>,
         arg_types: &[(TypeId, Span)],
+        arg_fresh: &[bool],
     ) -> Option<TypeId> {
         // The callee must be a plain identifier naming a generic function declaration.
         let Expression::Identifier(ident) = &call.callee else {
@@ -119,8 +180,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let args: Vec<TypeId> = arg_types.iter().map(|(ty, _)| *ty).collect();
 
         // Run the generative inference engine to fix the type arguments, then
-        // instantiate the template by the same M9 substitution.
-        let map = infer::infer_type_arguments(self.interner, &sig.params, &param_types, &args);
+        // instantiate the template by the same M9 substitution. `arg_fresh` feeds the
+        // M24 clamp exemption for fresh object/array literal arguments.
+        let map = infer::infer_type_arguments(
+            self.interner,
+            &sig.params,
+            &param_types,
+            &args,
+            arg_fresh,
+        );
         Some(substitute(self.interner, sig.fn_ty, &map))
     }
 
@@ -167,12 +235,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let inferred_callee = self.infer_expr(scope, &call.callee);
 
         // Infer every argument up front (skipping spreads — out of the M3 subset);
-        // this also descends into nested calls/functions inside the arguments.
+        // this also descends into nested calls/functions inside the arguments. The
+        // parallel `arg_fresh` records which arguments are fresh object/array literals
+        // (the M24 clamp exemption's provenance) — built in the same loop so the two
+        // stay index-aligned even when an out-of-subset argument is skipped.
         let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(call.arguments.len());
+        let mut arg_fresh: Vec<bool> = Vec::with_capacity(call.arguments.len());
         for arg in &call.arguments {
             if let Some(arg_expr) = arg.as_expression() {
                 if let Some(inferred) = self.infer_expr(scope, arg_expr) {
                     arg_types.push(inferred);
+                    arg_fresh.push(is_fresh_literal(arg_expr));
                 }
             }
             // A spread or an out-of-subset argument is not paired against a parameter.
@@ -185,7 +258,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // callee is a registered generic function. A non-generic call yields `None` and
         // falls through to the inferred-callee type unchanged.
         let inferred_generic_callee = if instantiated_callee.is_none() {
-            self.infer_generic_callee(scope, call, &arg_types)
+            self.infer_generic_callee(scope, call, &arg_types, &arg_fresh)
         } else {
             None
         };
@@ -218,7 +291,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some((ret, call_span))
     }
 
+    /// The callable signature of a callee type: a plain function type, or an object's
+    /// single call signature. M24 (review F3): the callee resolves through its
+    /// **apparent type** first, so calling a value typed as a constrained parameter
+    /// (`T extends (a: number) => number`) checks arguments and yields the return type
+    /// through the constraint. For a non-parameter callee this is the identity.
     fn callable_signature(&self, callee_ty: TypeId) -> Option<TypeId> {
+        let callee_ty = self.apparent_type(callee_ty);
         match self.interner.store().tag(callee_ty) {
             TypeTag::Function => Some(callee_ty),
             TypeTag::Object => {
@@ -386,12 +465,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let inferred_callee = self.infer_expr(scope, &new_expr.callee);
 
         // Infer every argument up front (skipping spreads — out of subset); this descends
-        // into nested calls/`new`/functions inside the arguments.
+        // into nested calls/`new`/functions inside the arguments. `arg_fresh` mirrors
+        // `infer_call`'s: which arguments are fresh object/array literals (M24 clamp
+        // exemption), built in the same loop so the vecs stay index-aligned.
         let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(new_expr.arguments.len());
+        let mut arg_fresh: Vec<bool> = Vec::with_capacity(new_expr.arguments.len());
         for arg in &new_expr.arguments {
             if let Some(arg_expr) = arg.as_expression() {
                 if let Some(inferred) = self.infer_expr(scope, arg_expr) {
                     arg_types.push(inferred);
+                    arg_fresh.push(is_fresh_literal(arg_expr));
                 }
             }
         }
@@ -438,7 +521,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // so M11 behaviour is preserved. Explicit type arguments substitute directly; no type
         // arguments infer the parameters from the constructor argument types (M10 engine).
         let (ctor, instance) =
-            self.new_class_substitution(scope, decl_id, &info, new_expr, &arg_types);
+            self.new_class_substitution(scope, decl_id, &info, new_expr, &arg_types, &arg_fresh);
 
         // The (instantiated) constructor signature's parameter types (zero for an implicit
         // constructor).
@@ -455,7 +538,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some((instance, new_span))
     }
 
+    /// The construct signature of a `new` callee type: an object's single construct
+    /// signature. M24 (review F3, same class): the callee resolves through its
+    /// **apparent type** first, so `new t(...)` on a value typed as a constrained
+    /// parameter (`T extends { new (...): X }`) checks through the constraint. For a
+    /// non-parameter callee this is the identity.
     fn construct_signature(&self, callee_ty: TypeId) -> Option<TypeId> {
+        let callee_ty = self.apparent_type(callee_ty);
         if self.interner.store().tag(callee_ty) != TypeTag::Object {
             return None;
         }
@@ -495,6 +584,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         info: &ClassInfo,
         new_expr: &NewExpression<'_>,
         arg_types: &[(TypeId, Span)],
+        arg_fresh: &[bool],
     ) -> (TypeId, TypeId) {
         // Non-generic class: no parameters to substitute — the M11 identity.
         let Some(type_params) = self.class_type_params.get(&decl_id).cloned() else {
@@ -505,11 +595,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // Explicit type arguments: lower each and zip to the class's parameters.
             Some(args) => {
                 let mut map = FxHashMap::default();
+                // Kept aligned so the constraint check pairs each param with its own
+                // argument even when an earlier one is unlowerable (out of subset).
+                let mut checked_params: Vec<TypeParamId> = Vec::with_capacity(args.params.len());
+                let mut arg_infos: Vec<(TypeId, Span)> = Vec::with_capacity(args.params.len());
                 for (&param, arg) in type_params.iter().zip(&args.params) {
                     if let Some(lowered) = self.lower_annotation(scope, arg) {
                         map.insert(param, lowered);
+                        checked_params.push(param);
+                        arg_infos.push((lowered, Span::from_oxc(arg.span())));
                     }
                 }
+                // M24: each explicit type argument must satisfy its parameter's constraint.
+                self.check_type_argument_constraints(&checked_params, &arg_infos, &map);
                 map
             }
             // No type arguments: infer from the constructor argument types. The inference
@@ -522,7 +620,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     None => Vec::new(),
                 };
                 let args: Vec<TypeId> = arg_types.iter().map(|(ty, _)| *ty).collect();
-                infer::infer_type_arguments(self.interner, &type_params, &param_types, &args)
+                infer::infer_type_arguments(
+                    self.interner,
+                    &type_params,
+                    &param_types,
+                    &args,
+                    arg_fresh,
+                )
             }
         };
 
@@ -554,6 +658,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let frame = self.build_type_param_frame(func.type_parameters.as_deref(), &param_ids);
 
         let fn_ty = self.with_type_params(frame, |pass| {
+            // M24: lower the parameters' `extends` constraints with the frame active.
+            pass.lower_type_param_constraints(enclosing, func.type_parameters.as_deref(), &param_ids);
             let fn_scope = pass.binder.fn_scopes.get(&func.span.start).copied();
             let params = pass.lower_parameters(enclosing, fn_scope, &func.params);
 
@@ -597,7 +703,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let param_ids =
             alloc_type_param_ids(arrow.type_parameters.as_deref(), &mut self.next_type_param);
         let frame = self.build_type_param_frame(arrow.type_parameters.as_deref(), &param_ids);
-        self.with_type_params(frame, |pass| pass.infer_arrow_inner(enclosing, arrow))
+        self.with_type_params(frame, |pass| {
+            // M24: lower the parameters' `extends` constraints with the frame active.
+            pass.lower_type_param_constraints(
+                enclosing,
+                arrow.type_parameters.as_deref(),
+                &param_ids,
+            );
+            pass.infer_arrow_inner(enclosing, arrow)
+        })
     }
 
     /// The body of [`infer_arrow`], run with any type-parameter frame already pushed.
@@ -744,6 +858,21 @@ fn resolve_return_type(
     declared
         .or(inferred)
         .unwrap_or_else(|| interner.well_known().void)
+}
+
+/// Whether a call/`new` argument is a **fresh object/array literal** at the call
+/// site (M24) — the provenance the clamp-to-constraint exemption keys on. tsc
+/// contextually retypes a fresh literal against the constraint (out-of-scope pass,
+/// documented deferral), so a violating candidate inferred from one is not clamped;
+/// a typed value (identifier, member access, call result, …) cannot be reshaped and
+/// clamps normally. Freshness is syntactic (mirroring the excess-property check);
+/// parentheses are transparent.
+fn is_fresh_literal(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::ObjectExpression(_) | Expression::ArrayExpression(_) => true,
+        Expression::ParenthesizedExpression(paren) => is_fresh_literal(&paren.expression),
+        _ => false,
+    }
 }
 
 /// The parameter name of a binding pattern, if it is a plain identifier. `None`
