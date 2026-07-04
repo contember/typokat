@@ -44,3 +44,4 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 - [`23`](23-static-method-type-params.md) — `static of<U>(u: U)` raises spurious `TK2304`.
 - [`24`](24-rest-elements-in-type-model.md) — tuple rest elements + rest parameters missing from the type model (silently permissive).
 - [`25`](25-intersection-types.md) — intersection types (`A & B`) missing from the type model (silently permissive).
+- [`26`](26-cross-binder-nested-infer.md) — cross-binder nested `infer` (de Bruijn shifting on embed); M25 ships the conservative poisoned-deferral stopgap.

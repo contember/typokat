@@ -150,7 +150,10 @@ slots into a known later phase without rework:
   body); same-name `infer` in multiple contravariant positions unions where tsc intersects
   (`&` is not in the model — backlog `25`); `infer X extends C` (TS 4.7) is out of scope; rest
   elements are avoided throughout (backlog `24`); a deferred conditional whose branches still
-  contain its own `infer` binders is conservatively non-assignable (over-report, safe).
+  contain its own `infer` binders is conservatively non-assignable (over-report, safe); a nested
+  conditional referencing an OUTER conditional's `infer` binder is **poisoned at lowering** —
+  never evaluated, conservatively related (tsc resolves it; over-report divergence pinned in
+  `nested_infer.ts` — proper de Bruijn shifting is backlog `26`).
 - **optional properties** (`a?: T`) on object types, interfaces, and class instance fields land in
   **M21**: lowered as real members (so `keyof`/indexed-access include them and a declared optional no
   longer trips excess), an optional may be **absent** in a value (no `TK2741`), reading one yields
