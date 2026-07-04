@@ -70,18 +70,23 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Statement::ReturnStatement(ret) => {
                 self.check_return(scope, ret, declared_ret, inferred);
             }
-            // M7: control-flow narrowing happens here (the fork-and-restore).
+            // M7/M23: narrowing lives in the flow graph; the checker just walks the
+            // condition + branches (each reference resolves against its flow node).
             Statement::IfStatement(if_stmt) => {
                 self.check_if(scope, if_stmt, declared_ret, inferred);
             }
-            // A `{ … }` block runs its statements in its own (binder-created) block
-            // scope, inheriting the current narrowing environment.
+            // A `{ … }` block runs its statements in its own (binder-created) block scope.
             Statement::BlockStatement(block) => {
                 self.check_block(scope, block, declared_ret, inferred);
             }
-            // M8: `switch` narrows the discriminant per `case` (fork-and-restore).
+            // M8: `switch` — walk the discriminant + clause bodies.
             Statement::SwitchStatement(switch) => {
                 self.check_switch(scope, switch, declared_ret, inferred);
+            }
+            // M23: a `while` loop — walk the condition + body (the flow graph carries
+            // the loop-edge narrowing).
+            Statement::WhileStatement(while_stmt) => {
+                self.check_while(scope, while_stmt, declared_ret, inferred);
             }
             // Other statements are out of the subset.
             _ => {}

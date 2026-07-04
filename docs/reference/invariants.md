@@ -20,10 +20,17 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
   assignment targets). `substitute` must carry **all** `PropertyType` fields through.
 - **Nominal classes**: a `private`/`protected` member makes a type nominal — the relation requires
   same-name + same `declaring_class` + same visibility. Generic class *instances* are structural.
-- **Narrowing** (`src/check/flow.rs` ops + the checker's narrowing env): keyed on `SymbolId`, never
-  escapes its branch, unknown guard narrows nothing, resets on (any) assignment and at function
-  boundaries. All current narrowing is **structured** (`if`/`else`/`switch`) — see the backlog for
-  the unstructured-flow CFG.
+- **Narrowing** (`src/check/flow.rs` ops + the **flow-node CFG** in `src/check/checker/flowgraph.rs`):
+  keyed on `SymbolId`, never escapes its branch, unknown guard narrows nothing, resets at function
+  boundaries. The flow-node CFG (M23) is the **single** narrowing model — `if`/`else`/`switch` *and*
+  unstructured flow (early `return`/`throw`, `&&`/`||`/ternary, `while` back/exit/`break`/`continue`
+  edges) all resolve through the same backward walk. An assignment narrows the variable to the
+  **assigned value's type** in the straight-line flow that follows (a compound/complex RHS resets to
+  the declared type — over-report, sound); joins widen (union of branch states). **The sharpest CFG
+  trap:** resolving through a **loop label** must never durably cache a pre-loop narrow state across a
+  not-yet-finalized back edge — that is a dropped-error false negative (same shape as the relation
+  cache's provisional-cycle bug; the fixpoint seeds the declared type and never memoizes the
+  provisional seed).
 - **No forbidden hacks**: no `unsafe`, no reachable `unwrap`/`panic`/`todo!`, no `as` casts except
   numeric arena-index/discriminant conversions, no `#![allow(warnings)]`. `clippy -D warnings` is
   clean — keep it that way.

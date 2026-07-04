@@ -81,13 +81,15 @@ slots into a known later phase without rework:
 - `TK2451` *cannot redeclare* — binder check, deferred; fixtures use unique names.
 - **narrowing**: `typeof` / truthiness / `null`/`undefined` equality (**M7**) and
   discriminated-union (literal discriminant) / `in`-operator / `switch` narrowing + literal type
-  annotations (**M8**) are implemented. Narrowing through **unstructured flow** — early
+  annotations (**M8**) are implemented, as is narrowing through **unstructured flow** — early
   `return`/`throw`, `&&`/`||`/ternary, assignment-in-flow, and `while` loop edges (back edge,
-  exit edge, `break`/`continue`) — is specced in `m23_unstructured_narrowing/` and lands with
-  backlog `07` (**M23**, the flow-node CFG). Still deferred: assertion functions / type
-  predicates (`x is T`), `for`/`for-of`/`do-while` loop forms, and narrowing seen by a
-  **closure** over a never-reassigned binding (tsc narrows; typokat keeps the function-boundary
-  reset — over-report, safe direction).
+  exit edge, `break`/`continue`) — via the flow-node CFG (**M23**, `m23_unstructured_narrowing/`),
+  the single narrowing model. Declaration **initializers** are deliberately NOT narrowed
+  (`let x: string | null = "a"` reads as `string | null` — over-report, safe direction); assignment
+  narrowing starts at the first real assignment. Still deferred: assertion functions / type
+  predicates (`x is T`), `for`/`for-of`/`do-while` loop forms, and narrowing seen by a **closure**
+  over a never-reassigned binding (tsc narrows; typokat keeps the function-boundary reset —
+  over-report, safe direction).
 - **generics**: explicit type arguments + instantiation (**M9**) and type-argument **inference**
   (**M10**) are implemented; **constraints** (`extends`, M11) follow. Type parameters use a named
   representation for now; de Bruijn indices (§3.1) are the pre-VM (Phase 3) target.

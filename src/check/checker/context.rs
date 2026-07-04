@@ -10,6 +10,7 @@
 
 use crate::binder::symbol::{DeclId, SymbolId};
 use crate::binder::Binder;
+use crate::check::flow::{FlowNode, FlowNodeId};
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
 use crate::types::repr::{ClassId, TypeParamId, Visibility};
@@ -398,15 +399,47 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// `readonly` target is `TK2540` ([`check_member_assignment`]). Like the other
     /// member-context fields it never leaks (restored at the constructor's boundary).
     pub(in crate::check::checker) current_in_ctor: bool,
-    /// **Narrowing environment** (M7, architecture §5): the current control-flow
-    /// narrowing overlay, mapping a **`SymbolId`** to its narrowed `TypeId`. It is
-    /// consulted *first* when resolving an identifier's type (see
-    /// [`resolve_identifier_type`]); an absent entry falls back to the declared/
-    /// inferred type. This is the structured-flow slice of the §5 flow interpreter:
-    /// the entries are installed by the `if`/`else` fork-and-restore around branch
-    /// walks ([`check_if`]) and never escape an `if` (the pre-`if` map is restored
-    /// after both branches). Keying on `SymbolId` — the specific binding — is what
-    /// guarantees narrowing `x` never affects another symbol `y`, a property access,
-    /// or a shadowed binding in a different scope.
-    pub(in crate::check::checker) narrowed: FxHashMap<SymbolId, TypeId>,
+    /// **Flow-node arena** (M23, architecture §5) — the single narrowing model. A
+    /// pre-pass ([`build_flow_graph`](super::Pass::build_flow_graph)) lowers each
+    /// function body / the module top level into these nodes; slots 0/1 are the
+    /// [`FlowNodeId::UNREACHABLE`]/[`FlowNodeId::START`] sentinels. A reference's
+    /// narrowed type is a memoized backward walk from its flow node
+    /// ([`resolve_narrowed_type`](super::Pass::resolve_narrowed_type)).
+    pub(in crate::check::checker) flow_nodes: Vec<FlowNode>,
+    /// The flow pre-pass's working cursor: the flow node currently in effect as the
+    /// builder walks. Meaningless during the check walk (which resolves via
+    /// [`reference_flow`](Pass::reference_flow)).
+    pub(in crate::check::checker) flow_cursor: FlowNodeId,
+    /// The flow pre-pass's enclosing-loop stack, so a `break`/`continue` can find
+    /// its target loop label + collect its break edges.
+    pub(in crate::check::checker) flow_loops: Vec<FlowLoopFrame>,
+    /// **Reference → flow node** map (M23), keyed by an identifier reference's span
+    /// start. Populated by the pre-pass; read by the check walk's
+    /// [`resolve_identifier_type`] to resolve a reference against the flow node in
+    /// effect at its position. A miss defaults to [`FlowNodeId::START`] (the
+    /// declared type — the sound over-report), so partial pre-pass coverage never
+    /// under-reports. Keying on `SymbolId` in the resolver keeps narrowing `x` from
+    /// touching another symbol / a property access / a shadowed binding.
+    pub(in crate::check::checker) reference_flow: FxHashMap<u32, FlowNodeId>,
+    /// Resolver memo, keyed `(flow node, symbol) → narrowed type`. Durable across
+    /// the whole check pass (ids are globally unique). A value that depended on an
+    /// in-progress loop back edge is **never** written here (gated on
+    /// [`flow_loop_depth`](Pass::flow_loop_depth) — invariants §1).
+    pub(in crate::check::checker) flow_memo: FxHashMap<(FlowNodeId, SymbolId), TypeId>,
+    /// Provisional loop-label seeds during a fixpoint resolution: a re-entrant walk
+    /// of a loop label returns its seed here instead of looping. Cleared per label
+    /// once its fixpoint resolves; never promoted to [`flow_memo`](Pass::flow_memo).
+    pub(in crate::check::checker) flow_provisional: FxHashMap<(FlowNodeId, SymbolId), TypeId>,
+    /// Depth of in-progress loop-label fixpoints. `> 0` suppresses durable memo
+    /// writes (the resolved value may depend on a provisional seed), which is what
+    /// keeps a stale pre-loop narrow state from being cached across a back edge.
+    pub(in crate::check::checker) flow_loop_depth: u32,
+}
+
+/// One enclosing-loop frame for the flow pre-pass: the loop's label (the
+/// `continue`/back-edge target) and the `break` edges collected within it (joined
+/// into the post-loop flow so a `break` un-narrows the after-loop state).
+pub(in crate::check::checker) struct FlowLoopFrame {
+    pub(in crate::check::checker) label: FlowNodeId,
+    pub(in crate::check::checker) break_edges: Vec<FlowNodeId>,
 }

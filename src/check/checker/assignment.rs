@@ -21,19 +21,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// `scope`. The RHS must be assignable to the target's declared type → `TK2322`
     /// with the RHS as the primary span. An unresolved target is `TK2304`.
     ///
-    /// M7 soundness — **any assignment to a narrowed symbol resets its narrowing.**
-    /// Assigning to a narrowed symbol drops its narrowing entry (resetting it to the
-    /// declared type) so a stale narrowing is never read after the value changed.
-    /// (Conservatively resetting to the declared type, rather than re-narrowing to the
-    /// assigned value's type, is sound: the declared type is the widest the symbol can
-    /// hold, so it can only over-report.) The reset runs for **every** assignment to a
-    /// resolvable identifier target — simple (`=`) *and* compound (`+=`, `||=`, …) —
-    /// **before** the compound-operator early-return, so a compound assignment to a
-    /// narrowed variable cannot leave a stale narrowing in place. (Compound-assignment
-    /// *assignability* is unchecked baseline-wide, so the obligation/`TK2322` path stays
-    /// gated on a simple `=`; only the narrowing reset is hoisted.) A non-identifier or
-    /// unresolvable target has no symbol to reset, so it narrows nothing and never
-    /// panics.
+    /// M23 — the assignment's effect on narrowing lives in the **flow graph** (the
+    /// pre-pass installs an assignment node that narrows the symbol to the assigned
+    /// value's type in the straight-line flow after, or resets it to the declared type
+    /// for a compound / complex RHS). This routine only collects the assignability
+    /// obligation; it no longer touches any narrowing state. A non-identifier or
+    /// unresolvable target has no symbol, so it narrows nothing and never panics.
     pub(in crate::check::checker) fn check_assignment(&mut self, scope: ScopeId, assign: &AssignmentExpression<'_>) {
         let target = match &assign.left {
             AssignmentTarget::AssignmentTargetIdentifier(target) => target,
@@ -75,15 +68,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         };
 
-        // Reset any narrowing on the reassigned symbol FIRST — for every operator
-        // (simple or compound). The value changed, so a prior narrowing is now stale
-        // and must not be read by a later reference. Hoisted above the compound-operator
-        // early-return below so `x += …` / `x ||= …` cannot leave a stale narrowing.
-        self.narrowed.remove(&symbol_id);
-
         // Compound assignment (`+=`, `||=`, …): assignability is unchecked baseline-wide
-        // (out of the M7 subset). The narrowing reset above already ran, so it is sound
-        // to stop here without collecting an obligation.
+        // (out of the M7 subset). The flow graph already reset this symbol's narrowing
+        // (an assignment node), so it is sound to stop here without an obligation.
         if assign.operator != AssignmentOperator::Assign {
             return;
         }

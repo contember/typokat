@@ -106,3 +106,32 @@ WU2 review → fix loop → leader commits → ratchet.
 ## Run log
 
 <!-- Append as you work. -->
+
+- 2026-07-04 (WU1 impl): graph built in a dedicated **pre-pass** (`build_flow_graph` →
+  `src/check/checker/flowgraph.rs`), not during the walk — a reference inside a loop body is
+  checked before the back-edge assignment is seen, so back edges must be complete before any
+  resolution (the `loopBackEdge` trap). References map to nodes by span (`reference_flow`);
+  resolution is an iterative memoized backward walk; loop labels run a single-unroll fixpoint
+  seeded from the declared type, provisional seeds never durably memoized and durable writes
+  suppressed while any fixpoint is in flight (`flow_loop_depth`) — the relation-cache lesson
+  applied. Fork-and-restore deleted; every m7/m8 test passed through the CFG unchanged.
+- 2026-07-04 (WU1 impl): supporting changes — binder now binds `while` bodies; `never` member
+  access yields `never` (tsc-aligned); throw arguments stay unwalked in the check pass (pre-M23
+  baseline); dead-code references resolve to the declared type (safe); literal assignments
+  narrow to the widened base, complex/compound RHS resets to declared (safe).
+- 2026-07-04 (WU1 impl): official-suite `--check` is NOT zero — **8 residual regressions, all
+  claimed sound over-reports** (lib-shaped `TK2339`/`TK2345` on newly-walked while bodies /
+  ternary arms / logical RHS, zero dropped errors, matched counts equal-or-up) — inherent to
+  walking more control flow without `lib.d.ts`. Sent to independent review for a per-file
+  matched/fn audit before the WU2 ratchet accepts them.
+- 2026-07-04 (WU1 review fixes, round 1 → FAIL → fixed): (1) a **destructuring assignment**
+  target (`[x] = …`, `({ x } = …)`) kept a stale narrow past the reassignment (dropped error) —
+  the flow builder now emits a reset-to-declared assignment node for every identifier the
+  pattern binds (elements/properties/shorthand/renamed/defaults/rest, nested; member targets
+  bind no symbol; TS-wrapper targets out of subset). Pinned by the amended
+  `assignment_patterns.ts` (spec commit 460807f). (2) the `never` member-access suppression was
+  **reverted** — tsc 6.0.3 reports TS2339 on `never` member access (the "tsc-aligned" claim in
+  the entry above was wrong); the revert reintroduced **no** regression and *gained* a match
+  (`typeGuardsInIfStatement` matched 0→1, suite 236→237: the baseline's TS2339-on-`never` at
+  line 139 now matches). Final `--check`: the same audited 8, nothing new. README m23 note
+  added: declaration initializers deliberately not narrowed.

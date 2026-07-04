@@ -721,18 +721,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let void_ty = self.interner.well_known().void;
         let mut inferred: Option<TypeId> = None;
 
-        // A function boundary resets narrowing: this body's parameters/locals are
-        // distinct symbols, and a closure may run after any enclosing narrowing no
-        // longer holds, so the body must not inherit the caller's narrowing
-        // environment. Save and restore it around the walk (the enclosing walk — e.g.
-        // a `const f = () => …` initializer mid-`if` — keeps its own narrowing intact).
-        let saved = std::mem::take(&mut self.narrowed);
-
+        // M23: the function-boundary narrowing reset lives in the flow pre-pass (each
+        // body is built at its own `START`, so a reference never sees the caller's
+        // narrowing — the documented closure divergence). The check walk here just
+        // descends into the body.
         for stmt in &body.statements {
             self.check_stmt(scope, stmt, declared_ret, &mut inferred);
         }
 
-        self.narrowed = saved;
         inferred.unwrap_or(void_ty)
     }
 }

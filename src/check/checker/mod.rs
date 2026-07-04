@@ -237,6 +237,7 @@ mod classes;
 mod context;
 mod decls;
 mod expr;
+mod flowgraph;
 mod narrowing;
 mod statements;
 
@@ -299,7 +300,18 @@ pub fn check_program<'ast>(
         obligations: Vec::new(),
         override_checks: Vec::new(),
         diagnostics: Vec::new(),
-        narrowed: FxHashMap::default(),
+        // M23 flow-graph state. Slots 0/1 are the UNREACHABLE/START sentinels the
+        // whole arena reserves (see `FlowNodeId::{UNREACHABLE,START}`).
+        flow_nodes: vec![
+            crate::check::flow::FlowNode::Unreachable,
+            crate::check::flow::FlowNode::Start,
+        ],
+        flow_cursor: crate::check::flow::FlowNodeId::START,
+        flow_loops: Vec::new(),
+        reference_flow: FxHashMap::default(),
+        flow_memo: FxHashMap::default(),
+        flow_provisional: FxHashMap::default(),
+        flow_loop_depth: 0,
         current_this: None,
         current_class: None,
         current_super_ctor: None,
@@ -310,6 +322,12 @@ pub fn check_program<'ast>(
     // here on `type_resolved` is complete, so a `TSTypeReference` in the walk is a
     // plain id lookup. ---
     pass.fill_type_decls(binder.module);
+
+    // --- Phase 0.5 (flow): build the control-flow graph for the whole module —
+    // every function body / the top level — recording each reference's flow node.
+    // Runs before the check walk so the loop back edges are complete (the check
+    // walk resolves narrowed types against this finished graph). ---
+    pass.build_flow_graph(binder.module, &program.body);
 
     // --- Phase 1: bind-resolved walk over the module body. ---
     pass.check_statements(binder.module, &program.body);

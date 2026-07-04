@@ -2,6 +2,7 @@
 
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
+use crate::check::flow::FlowNodeId;
 use crate::diagnostics::{render_type, Diagnostic};
 use crate::span::Span;
 use crate::types::repr::{
@@ -77,7 +78,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     return Some((well_known.undefined, span));
                 }
                 match self.binder.graph.resolve(scope, ident.name.as_str()) {
-                    Some(symbol_id) => Some((self.resolve_identifier_type(symbol_id), span)),
+                    Some(symbol_id) => {
+                        Some((self.resolve_identifier_type(symbol_id, ident.span.start), span))
+                    }
                     None => {
                         self.diagnostics
                             .push(Diagnostic::cannot_find_name(span, ident.name.as_str()));
@@ -92,6 +95,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Expression::UnaryExpression(unary) => Some(self.infer_unary(scope, unary)),
             Expression::BinaryExpression(binary) => Some(self.infer_binary(scope, binary)),
             Expression::LogicalExpression(logical) => Some(self.infer_logical(scope, logical)),
+            // M23: a ternary `test ? a : b` — walk all three parts for their side
+            // effects (references resolve against the flow node the pre-pass recorded,
+            // so a guarded arm is narrowed). Its value type is coarse (never an
+            // assignment source in the subset), like a logical expression.
+            Expression::ConditionalExpression(cond) => {
+                self.infer_expr(scope, &cond.test);
+                self.infer_expr(scope, &cond.consequent);
+                self.infer_expr(scope, &cond.alternate);
+                Some((well_known.error, Span::from_oxc(cond.span)))
+            }
             // M17: an array literal `[e1, e2, …]` infers `(<elem>)[]` where the element
             // type is the union of the (widened) element types (`[1,2,3]` → `number[]`,
             // `[1,"x"]` → `(number | string)[]`); `[]` → `never[]`.
@@ -109,26 +122,29 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Resolve a value symbol's *current* type, consulting the narrowing environment
-    /// first (M7). A `SymbolId` present in [`Pass::narrowed`] uses its narrowed type;
-    /// otherwise the declared/inferred type from `decl_types` is used; a resolved
-    /// symbol with no computed type yet (out of subset) is the error type (no cascade).
+    /// Resolve a value symbol's *narrowed* type at a reference (M23). The reference's
+    /// flow node (recorded by the pre-pass, keyed by its span start) drives a backward
+    /// walk over the flow-node CFG ([`resolve_narrowed_type`](Pass::resolve_narrowed_type));
+    /// a reference the pre-pass did not cover defaults to [`FlowNodeId::START`] — the
+    /// **declared** type (the sound over-report), so partial coverage never
+    /// under-reports.
     ///
     /// This single seam is where control-flow narrowing takes effect: every identifier
     /// reference — assignment sources, member-access bases, returned expressions, call
     /// arguments — resolves through [`infer_expr`], which calls this. Keying on the
     /// `SymbolId` (not the name, not the `DeclId` of an unrelated binding) is the
     /// soundness guarantee that narrowing applies to exactly the guarded binding.
-    pub(in crate::check::checker) fn resolve_identifier_type(&self, symbol_id: SymbolId) -> TypeId {
-        if let Some(&narrowed) = self.narrowed.get(&symbol_id) {
-            return narrowed;
-        }
-        self.binder
-            .symbols
-            .get(symbol_id)
-            .and_then(|s| s.value)
-            .and_then(|decl_id| self.decl_types.get(decl_id))
-            .unwrap_or(self.interner.well_known().error)
+    pub(in crate::check::checker) fn resolve_identifier_type(
+        &mut self,
+        symbol_id: SymbolId,
+        ref_start: u32,
+    ) -> TypeId {
+        let flow = self
+            .reference_flow
+            .get(&ref_start)
+            .copied()
+            .unwrap_or(FlowNodeId::START);
+        self.resolve_narrowed_type(flow, symbol_id)
     }
 
     /// Infer a unary expression (M7 condition support). Descends into the operand for

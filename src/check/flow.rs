@@ -41,21 +41,78 @@
 //! and `&&`/`||`/ternary condition narrowing. (M8 added the literal-discriminant,
 //! `in`-operator, and `switch` narrowings via the structured driver in `checker.rs`.)
 
+use crate::binder::symbol::SymbolId;
 use crate::relate::{Relater, Relation};
 use crate::types::repr::{IntrinsicKind, LiteralValue, TypeTag};
 use crate::types::store::TypeId;
 use crate::types::Interner;
 
-/// A node in the control-flow graph. Reserved shape for the **unstructured**-flow
-/// milestone (M8+); the structured M7 slice does not construct it (its driver is
-/// the in-order statement walk in `checker.rs`).
-#[allow(dead_code)] // TODO(M8): produced by the binder/checker flow pass.
+/// Index into the checker's flow-node arena ([`crate::check`]'s `Pass::flow_nodes`).
+/// The graph is built by a pre-pass over each function body / the module top level
+/// (M23); a reference's narrowed type is a backward walk from its flow node applying
+/// the [`narrow`] ops above (architecture §5).
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct FlowNodeId(pub u32);
+
+impl FlowNodeId {
+    /// Unreachable code (after `return`/`throw`/`break`, or a join whose
+    /// antecedents are *all* unreachable — the mechanism that makes early-exit
+    /// narrowing work). Reserved arena slot 0. It is filtered out at join
+    /// construction, so the resolver never asks it for a real type.
+    pub const UNREACHABLE: FlowNodeId = FlowNodeId(0);
+    /// Flow start (function/module entry): a reference resolves to its **declared**
+    /// type here (the backward walk's base case). Reserved arena slot 1.
+    pub const START: FlowNodeId = FlowNodeId(1);
+}
+
+/// A node in the control-flow graph (architecture §5) — the **single** narrowing
+/// model (M23): `if`/`else`/`switch`, early `return`/`throw`, `&&`/`||`/ternary,
+/// assignment-in-flow, and `while` loop edges all lower to these nodes, and a
+/// reference's narrowed type is a memoized backward walk applying the [`narrow`]
+/// ops. Slots 0/1 are the [`FlowNodeId::UNREACHABLE`]/[`FlowNodeId::START`]
+/// sentinels.
 pub enum FlowNode {
-    /// The unreachable start sentinel.
+    /// Reserved sentinel: unreachable code / an all-unreachable join (slot 0).
     Unreachable,
-    /// Flow start (function/module entry).
+    /// Reserved sentinel: flow start — the declared type (slot 1).
     Start,
-    // TODO(M8): Assignment, Condition (true/false branch), Loop, Join, Call, …
+    /// An assignment `symbol = <value>` in straight-line flow. `assigned` is the
+    /// (widened) assigned type, or `None` to reset the symbol to its **declared**
+    /// type — used for a complex RHS or a compound assignment (`+=`), the sound
+    /// over-report direction. A reference to a *different* symbol passes through to
+    /// `antecedent`.
+    Assignment {
+        symbol: SymbolId,
+        assigned: Option<TypeId>,
+        antecedent: FlowNodeId,
+    },
+    /// A condition branch: the guard's `op` applied to `symbol` under `positive`
+    /// (the branch polarity, with any leading `!` already folded in). Resolving the
+    /// guarded `symbol` applies the narrowing; a *different* symbol passes through
+    /// to `antecedent`.
+    Condition {
+        symbol: SymbolId,
+        op: NarrowOp,
+        positive: bool,
+        antecedent: FlowNodeId,
+    },
+    /// A branch join — an `if`/`else` merge or the post-loop join of the exit edge
+    /// with any `break` edges. The reference's type is the `union(...)` over the
+    /// antecedents (which already exclude the unreachable ones, so an all-returning
+    /// `if` collapses to its complement — early-exit narrowing).
+    BranchLabel { antecedents: Vec<FlowNodeId> },
+    /// A `while` loop label (the back-edge join). `pre` are the entry edges, `back`
+    /// the back edges (the body fall-through end + every `continue`). Resolved by a
+    /// **single-unroll fixpoint** seeded with the pre-loop type: the back edge is
+    /// evaluated with the seed visible for re-entry, and the result is the union of
+    /// the seed with the back-edge types. The provisional seed is **never** durably
+    /// memoized (invariants §1 — a pre-loop narrow state cached across a back edge
+    /// is a dropped-error false negative; `loops.ts` `loopBackEdge`/`breakTrap` pin
+    /// this).
+    LoopLabel {
+        pre: Vec<FlowNodeId>,
+        back: Vec<FlowNodeId>,
+    },
 }
 
 /// The `typeof` tags M7 recognizes. `typeof x === "string" | "number" |

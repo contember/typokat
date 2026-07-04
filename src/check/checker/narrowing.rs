@@ -1,13 +1,22 @@
-//! narrowing module (extracted from checker/mod.rs).
+//! Guard analysis + the structural statement walkers (M7/M8, refactored for M23).
+//!
+//! Since M23 there is a **single** narrowing model — the flow-node CFG (built by
+//! [`build_flow_graph`](super::Pass::build_flow_graph) in `flowgraph.rs`). The
+//! `if`/`else`/`switch`/`while` **check** walkers here no longer fork-and-restore a
+//! narrowing environment; they just descend into the condition + branches so every
+//! sub-expression is checked, and each reference resolves its narrowed type against
+//! its recorded flow node. The **guard analysis** ([`analyze_guard`] and friends)
+//! that turns a condition into a [`GuardFact`] is shared: the flow builder uses it
+//! to construct the condition nodes.
 
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
-use crate::check::flow::{narrow, NarrowOp, TypeofTag};
+use crate::check::flow::{NarrowOp, TypeofTag};
 use crate::types::repr::LiteralValue;
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
     BinaryExpression, BinaryOperator, Expression, IfStatement, Statement, SwitchStatement,
-    UnaryOperator,
+    UnaryOperator, WhileStatement,
 };
 use super::context::*;
 
@@ -15,38 +24,25 @@ use super::context::*;
 /// narrowing operation (and the polarity already folded so the then-branch applies
 /// it as written). Pairing a [`NarrowOp`] with a `SymbolId` here — in the checker,
 /// not in the flow operations — is the symbol-keying that keeps a narrowing of `x`
-/// from ever touching another symbol.
+/// from ever touching another symbol. Read by the flow builder to construct a
+/// [`FlowNode::Condition`](crate::check::flow::FlowNode::Condition).
 pub(in crate::check::checker) struct GuardFact {
     /// The value symbol the guard refines (resolved from the condition's operand
     /// through the scope graph, so it is the exact binding in scope).
-    symbol: SymbolId,
+    pub(in crate::check::checker) symbol: SymbolId,
     /// The narrowing operation to apply.
-    op: NarrowOp,
+    pub(in crate::check::checker) op: NarrowOp,
     /// The polarity for the **then**-branch (`true` = apply the op as written). The
     /// else-branch applies the negation. A leading `!` on the condition flips this
-    /// at analysis time so the driver is polarity-agnostic.
-    then_positive: bool,
+    /// at analysis time so the builder is polarity-agnostic.
+    pub(in crate::check::checker) then_positive: bool,
 }
 
 impl<'a, 'ast> Pass<'a, 'ast> {
-    /// Check an `if`/`else` statement with control-flow narrowing (M7, architecture
-    /// §5) — the structured-flow **fork-and-restore**.
-    ///
-    /// The condition is first inferred under the *pre-`if`* (current) environment so
-    /// its operands' references resolve and any nested constructs are checked. It is
-    /// then analyzed into an optional `GuardFact`. The two branches are checked under
-    /// **forked** copies of the narrowing environment:
-    ///
-    ///  - the **then**-branch under the env with the positive fact applied,
-    ///  - the **else**-branch under the env with the negative (complement) fact.
-    ///
-    /// After both branches the pre-`if` environment is **restored**, so no
-    /// branch-local narrowing escapes the `if` (this is exactly what makes a
-    /// post-branch reference see the wide type again — the `const after` re-error in
-    /// the fixtures). An **unrecognized** condition yields no fact, so both branches
-    /// run under the unchanged env (no spurious narrowing → no false negatives). A
-    /// conservative join is used (the post-`if` env is the pre-`if` env); precise joins
-    /// — e.g. both-branches-return — are deferred to the flow-node CFG (M8+).
+    /// Check an `if`/`else` statement (M23: the narrowing itself lives in the flow
+    /// graph). Walk the condition (so its operands resolve and nested constructs are
+    /// checked) and both branches; a reference inside a branch resolves its narrowed
+    /// type against the flow node the pre-pass recorded for it.
     pub(in crate::check::checker) fn check_if(
         &mut self,
         scope: ScopeId,
@@ -54,55 +50,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         declared_ret: Option<TypeId>,
         inferred: &mut Option<TypeId>,
     ) {
-        // Evaluate the condition under the current env (before forking) so references
-        // resolve and nested functions/calls inside it are checked exactly once.
         self.infer_expr(scope, &if_stmt.test);
-        let fact = self.analyze_guard(scope, &if_stmt.test);
-
-        // Snapshot the pre-`if` environment so each branch starts from it and it is
-        // restored afterwards. The map holds only currently-narrowed symbols, so the
-        // clone is small; cloning makes the restore unconditionally correct.
-        let saved = self.narrowed.clone();
-
-        // --- then-branch: apply the positive fact, walk, restore. ---
-        if let Some(fact) = &fact {
-            self.apply_guard(fact, fact.then_positive);
-        }
         self.check_stmt(scope, &if_stmt.consequent, declared_ret, inferred);
-        self.narrowed = saved.clone();
-
-        // --- else-branch: apply the negative (complement) fact, walk, restore. ---
         if let Some(alternate) = &if_stmt.alternate {
-            if let Some(fact) = &fact {
-                self.apply_guard(fact, !fact.then_positive);
-            }
             self.check_stmt(scope, alternate, declared_ret, inferred);
         }
-        // Restore the pre-`if` env unconditionally: narrowing must not escape the `if`.
-        self.narrowed = saved;
     }
 
-    /// Check a `switch (x.prop) { case "lit": … }` statement with per-case
-    /// discriminated-union narrowing (M8, architecture §5) — a fork-and-restore
-    /// mirroring [`check_if`], one fork per `case`/`default` clause.
-    ///
-    /// The discriminant is inferred under the current env (so its operands resolve),
-    /// then read as a member-access discriminant `x.prop`. Each clause is checked under
-    /// a **forked** narrowing env:
-    ///
-    ///  - a `case "lit":` narrows `x` by `x.prop === "lit"` (the discriminant op), and
-    ///  - `default:` narrows `x` by the **complement** of all the case labels
-    ///    (`x.prop !== lit1 && … && x.prop !== litN`).
-    ///
-    /// After each clause the pre-`switch` env is restored, so no per-case narrowing
-    /// escapes the `switch`. An **unrecognized** discriminant (not `x.prop`), or a
-    /// non-literal `case` test, yields no narrowing for that clause (sound — narrows
-    /// nothing). **Fallthrough is handled conservatively**: a clause whose body does
-    /// not definitely terminate (no trailing `return`/`break`/`throw`) falls into the
-    /// next clause, so the next clause's body could see *this* clause's discriminant
-    /// value too; in that case the next clause is checked **without** narrowing (the
-    /// wide type — sound). The common no-fallthrough pattern (each `case` ends in
-    /// `return`/`break`) gets the precise per-case narrowing.
+    /// Check a `switch` statement (M23: per-case narrowing lives in the flow graph).
+    /// Walk the discriminant and every clause body; each reference inside a clause
+    /// resolves against its recorded flow node (the flow builder installed the
+    /// per-case discriminant narrowing, including the conservative fallthrough rule).
     pub(in crate::check::checker) fn check_switch(
         &mut self,
         scope: ScopeId,
@@ -110,121 +68,26 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         declared_ret: Option<TypeId>,
         inferred: &mut Option<TypeId>,
     ) {
-        // Evaluate the discriminant under the current env (before forking) so its
-        // references resolve and nested constructs inside it are checked once.
         self.infer_expr(scope, &switch.discriminant);
-        let discriminant = self.member_discriminant(scope, &switch.discriminant);
-
-        // Intern every `case`'s literal label up front (mutable). A `default` clause has
-        // no test (`None`); a non-literal `case` test also yields `None` (it cannot be
-        // narrowed). The labels are reused to build the `default` complement.
-        let labels: Vec<Option<TypeId>> = switch
-            .cases
-            .iter()
-            .map(|case| {
-                case.test
-                    .as_ref()
-                    .and_then(|test| self.literal_expr_type(test))
-            })
-            .collect();
-
-        // The non-`default` labels, for the `default` clause's complement.
-        let case_labels: Vec<TypeId> = switch
-            .cases
-            .iter()
-            .zip(&labels)
-            .filter_map(|(case, label)| case.test.as_ref().and(*label))
-            .collect();
-
-        let saved = self.narrowed.clone();
-
-        // Whether the *previous* clause fell through into this one (so this clause's
-        // body could also see the previous clause's discriminant value → be conservative
-        // and apply no narrowing for it).
-        let mut prev_fell_through = false;
-
-        for (case, label) in switch.cases.iter().zip(&labels) {
-            // Apply this clause's narrowing only when no preceding clause falls through
-            // into it (otherwise the value reaching this body is not pinned to this
-            // clause's label → narrowing would be unsound).
-            if !prev_fell_through {
-                if let Some((symbol, property)) = &discriminant {
-                    self.apply_case_narrowing(*symbol, property, case, *label, &case_labels);
-                }
-            }
-
-            // Check the clause body in the current scope (a block-bodied case opens its
-            // own scope via the `BlockStatement` arm of `check_stmt`).
+        for case in &switch.cases {
             for stmt in &case.consequent {
                 self.check_stmt(scope, stmt, declared_ret, inferred);
             }
-
-            // Restore the pre-`switch` env: narrowing must not escape a clause.
-            self.narrowed = saved.clone();
-
-            // Does this clause fall through into the next? (Conservative — empty or
-            // non-terminating bodies fall through.)
-            prev_fell_through = !clause_terminates(&case.consequent);
         }
-
-        // Restore unconditionally (covers an empty `switch`).
-        self.narrowed = saved;
     }
 
-    /// Install the narrowing for one `switch` clause into the environment: a `case`
-    /// with a literal label narrows `symbol` by `symbol.prop === label` (then-sense);
-    /// a `default` (no label) narrows by the complement of every case label
-    /// (`symbol.prop !== label` applied for each). A `case` whose test was not a
-    /// literal (`label == None` but it *is* a `case`) installs no narrowing (sound).
-    fn apply_case_narrowing(
+    /// Check a `while` statement (M23). Walk the condition and body; the body's
+    /// references resolve against the flow graph's loop label (the back-edge
+    /// fixpoint), and code after the loop against the exit/`break` join.
+    pub(in crate::check::checker) fn check_while(
         &mut self,
-        symbol: SymbolId,
-        property: &str,
-        case: &oxc_ast::ast::SwitchCase<'_>,
-        label: Option<TypeId>,
-        case_labels: &[TypeId],
+        scope: ScopeId,
+        while_stmt: &WhileStatement<'_>,
+        declared_ret: Option<TypeId>,
+        inferred: &mut Option<TypeId>,
     ) {
-        match (&case.test, label) {
-            // `case <literal>:` — narrow to the matching members.
-            (Some(_), Some(lit)) => {
-                let op = NarrowOp::Discriminant {
-                    property: property.to_string(),
-                    literal: lit,
-                };
-                let current = self.resolve_identifier_type(symbol);
-                let narrowed = narrow(self.interner, current, &op, /* positive */ true);
-                self.narrowed.insert(symbol, narrowed);
-            }
-            // `default:` — narrow to the complement of all case labels by removing each
-            // label's member in turn (`prop !== label1 && … && prop !== labelN`).
-            (None, _) => {
-                let mut current = self.resolve_identifier_type(symbol);
-                for &lit in case_labels {
-                    let op = NarrowOp::Discriminant {
-                        property: property.to_string(),
-                        literal: lit,
-                    };
-                    current = narrow(self.interner, current, &op, /* positive */ false);
-                }
-                self.narrowed.insert(symbol, current);
-            }
-            // A non-literal `case` test: cannot narrow → leave the env unchanged.
-            (Some(_), None) => {}
-        }
-    }
-
-    /// Apply a guard fact to the narrowing environment for one branch: narrow the
-    /// guarded symbol's **current** type (its already-narrowed type if an enclosing
-    /// `if` narrowed it, else its declared type — so nested `if`s compose) by the
-    /// fact's operation under `positive`, and install the result.
-    ///
-    /// `positive` is the branch polarity (the then-branch passes `then_positive`, the
-    /// else-branch its negation). A symbol with no resolvable current type (out of
-    /// subset) is left untouched.
-    fn apply_guard(&mut self, fact: &GuardFact, positive: bool) {
-        let current = self.resolve_identifier_type(fact.symbol);
-        let narrowed = narrow(self.interner, current, &fact.op, positive);
-        self.narrowed.insert(fact.symbol, narrowed);
+        self.infer_expr(scope, &while_stmt.test);
+        self.check_stmt(scope, &while_stmt.body, declared_ret, inferred);
     }
 
     /// Analyze a condition expression into a `GuardFact`, or `None` if it is not a
@@ -244,7 +107,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// non-identifier operand, a `&&`/`||`, a member-access operand in a position other
     /// than the recognized discriminant, …) returns `None`. Takes `&mut Pass` because
     /// the discriminant form interns the comparison literal.
-    fn analyze_guard(&mut self, scope: ScopeId, test: &Expression<'_>) -> Option<GuardFact> {
+    pub(in crate::check::checker) fn analyze_guard(
+        &mut self,
+        scope: ScopeId,
+        test: &Expression<'_>,
+    ) -> Option<GuardFact> {
         match test {
             // `!cond` — recurse and flip the then-branch polarity.
             Expression::UnaryExpression(unary) if unary.operator == UnaryOperator::LogicalNot => {
@@ -303,9 +170,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let right = &binary.right;
 
         // typeof form: `typeof x === "tag"` (either operand order). Loose `==`/`!=` is
-        // fine here because `typeof` always yields a string. These borrow `pass`
-        // immutably and return an owned fact, so the discriminant form below can take
-        // `&mut pass` afterwards.
+        // fine here because `typeof` always yields a string.
         if let Some(fact) = self.typeof_guard(scope, left, right, eq_positive)
             .or_else(|| self.typeof_guard(scope, right, left, eq_positive))
         {
@@ -425,7 +290,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// `x.a.b`, …) — in which case nothing is narrowed (sound). Keying on the base
     /// **symbol** is what guarantees `x.prop === lit` narrows `x` and never `prop` or
     /// another symbol.
-    fn member_discriminant(
+    pub(in crate::check::checker) fn member_discriminant(
         &self,
         scope: ScopeId,
         expr: &Expression<'_>,
@@ -445,7 +310,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// Intern a literal **value** expression (`"circle"`, `42`, `true`) to its literal
     /// `TypeId`, or `None` if it is not a plain literal (the discriminant form only
     /// narrows against a literal). Mirrors the literal arms of [`infer_expr`].
-    fn literal_expr_type(&mut self, expr: &Expression<'_>) -> Option<TypeId> {
+    pub(in crate::check::checker) fn literal_expr_type(&mut self, expr: &Expression<'_>) -> Option<TypeId> {
         let value = match expr {
             Expression::StringLiteral(s) => LiteralValue::String(s.value.to_string()),
             Expression::NumericLiteral(n) => LiteralValue::Number(n.value),
@@ -495,7 +360,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             then_positive: true,
         })
     }
-
 }
 
 /// Whether a `switch` clause body **definitely terminates** (does not fall through
@@ -503,9 +367,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 /// statement is a `return`/`break`/`throw`, or a block whose last statement is one
 /// of those. An empty body, or any other trailing statement, is treated as
 /// falling through (so the next clause is checked without this clause's narrowing —
-/// sound). This is intentionally simple — full reachability is the flow-node CFG's
-/// job (M9+); here it only gates whether the *next* clause may assume its own label.
-fn clause_terminates(consequent: &[Statement<'_>]) -> bool {
+/// sound). This gates whether the flow builder lets the *next* clause assume its own
+/// label (`build_flow_switch`).
+pub(in crate::check::checker) fn clause_terminates(consequent: &[Statement<'_>]) -> bool {
     match consequent.last() {
         Some(stmt) => statement_terminates(stmt),
         None => false,
@@ -530,4 +394,3 @@ fn statement_terminates(stmt: &Statement<'_>) -> bool {
         _ => false,
     }
 }
-

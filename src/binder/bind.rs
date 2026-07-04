@@ -242,6 +242,14 @@ fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
         Statement::SwitchStatement(switch) => {
             bind_switch(state, scope, switch);
         }
+        // M23: a `while` loop binds its condition (for nested functions) and its body
+        // recursively (a `{ … }` body opens its own block scope via the
+        // `BlockStatement` arm above, so a `let`/`const` declared in the loop body is
+        // resolvable — the flow checker now walks these bodies).
+        Statement::WhileStatement(while_stmt) => {
+            bind_expression(state, scope, &while_stmt.test);
+            bind_statement(state, scope, &while_stmt.body);
+        }
         // Other statements declare no names in the subset; their sub-expressions (if
         // any) are not in the subset either.
         _ => {}
