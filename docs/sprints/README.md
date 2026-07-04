@@ -20,4 +20,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- _none active_
+- [`sprint-2026-07-04-generic-constraints.md`](sprint-2026-07-04-generic-constraints.md) —
+  backlog `08` / M24: `<T extends U>` (TK2344, apparent type, clamped inference).

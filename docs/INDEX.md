@@ -22,7 +22,8 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- _none active_
+- [`sprints/sprint-2026-07-04-generic-constraints.md`](sprints/sprint-2026-07-04-generic-constraints.md) —
+  backlog `08` / M24 (spec committed, implementation in progress).
 
 ## What's hot
 
