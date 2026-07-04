@@ -7,13 +7,14 @@ full classes, and the common "real-world" type constructs. It is a **checker, no
 emit, JS runtime semantics, and module resolution are out of scope by design — the goal is to
 preserve the **type model** (see [`docs/reference/architecture.md`](./docs/reference/architecture.md)).
 
-> Status: **M0–M24** implemented (M24 = generic constraints: `TK2344` on explicit type
-> arguments, the constraint as the parameter's apparent type across every structural
-> consumer, clamp-to-constraint inference, `TK2313` circular constraints), on top of the
-> M23 flow-node CFG, class completeness, and constructor accessibility. ~19.5k lines of
-> Rust, 172 unit tests + a 101-file conformance corpus (293 expected diagnostics),
-> `clippy -D warnings` clean. Every milestone was cross-checked against real
-> `tsc 6.0.3 --strict`.
+> Status: **M0–M25** implemented (M25 = conditional types `T extends U ? X : Y`: a
+> demand-driven evaluator with an explicit work-stack, memoization, and a tsc-like
+> instantiation budget; `infer` extraction through a dedicated non-widening inference
+> mode; distribution over unions; `TK2456`/`TK2589`), opening the type-level evaluation
+> phase on top of M24 generic constraints, the M23 flow-node CFG, class completeness,
+> and constructor accessibility. ~22k lines of Rust, 180 unit tests + a 107-file
+> conformance corpus (340 expected diagnostics), `clippy -D warnings` clean. Every
+> milestone was cross-checked against real `tsc 6.0.3 --strict`.
 
 ## Quick start
 
@@ -52,8 +53,9 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 `TK2304` (cannot find name), `TK2313` (circular constraint), `TK2322` (not assignable),
 `TK2339` (no such property), `TK2341`/`TK2445` (private/protected), `TK2344` (constraint
 not satisfied), `TK2345` (argument), `TK2353` (excess property), `TK2416` (incompatible
-override), `TK2511` (instantiate abstract), `TK2515`/`TK2654` (abstract member not
-implemented), `TK2540` (assign read-only), `TK2554` (arity), `TK2673`/`TK2674`
+override), `TK2456` (circular type alias), `TK2511` (instantiate abstract),
+`TK2515`/`TK2654` (abstract member not implemented), `TK2540` (assign read-only),
+`TK2554` (arity), `TK2589` (instantiation excessively deep), `TK2673`/`TK2674`
 (private/protected constructor), `TK2741` (missing property).
 
 ## Architecture

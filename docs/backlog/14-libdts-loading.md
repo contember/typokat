@@ -1,7 +1,7 @@
 ---
 id: 14
 title: Full lib.d.ts loading (the standard library)
-blocked-by: [./09-conditional-types.md, ./10-mapped-types.md]
+blocked-by: [./10-mapped-types.md]
 ---
 
 # 14 — full `lib.d.ts` loading

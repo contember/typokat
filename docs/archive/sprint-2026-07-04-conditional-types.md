@@ -1,6 +1,38 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/.
--->
+# OUTCOME (closed 2026-07-04) — SHIPPED
+
+**M25 shipped** — the type-level evaluation phase is open. Conditional types are an
+interned node (infer binders = de Bruijn indices scoped to the node, ADR-0002),
+evaluated on demand through an explicit work-stack with memoization (provisional
+discipline), a ~1000-step budget (`TK2589`), and alias-cycle detection (`TK2456`);
+distribution over naked-param unions (incl. `boolean` expansion) at alias AND
+generic-call instantiation; infer extraction through a dedicated non-widening
+inference mode with union-target descent and tsc's naked-vs-structural candidate
+priority; deferred conditionals relate conservatively; cross-binder nested infer is
+poisoned (sound stopgap, backlog `26`).
+
+**Commit map.** Spec `8169767` · plan `ff4f89b` (with ADR-0002 `85786ec` pointer) ·
+spec amendments `c0f1807` (call-site distribution), `8a758d9` (poisoned nested
+infer + backlog 26), `390af62` (infer literal widening + param-position evaluation +
+backlog 27), `1b0c114` (candidate priority) · implementation `8255669` (+2519/−26,
+new `eval.rs`) · harness ungate + relabel `a69de61`.
+
+**Verification.** 180 unit + conformance green (m25: 6 files / 47 markers; 10k-deep
+work-stack stress test, no-capture and priority unit tests), clippy clean. Official
+suite: measurement-neutral (conditional-heavy files still gated by mapped-type/
+template-literal/variadic buckets — signal arrives with `10`–`12`/`24`). Four fix
+rounds: two from leader verification (call-site distribution — the implementation's
+own flag confirmed as a dropped error; nested-infer poisoning after probes showed
+verdict inversions), one adversarial-review FAIL (infer literal widening corrupting
+results AND branch selection, union-member collection, param-position over-report),
+one re-review residual (naked-member candidate priority). Final verdict: PASS.
+
+**Deferred.** Cross-binder nested infer resolution (backlog `26`); template-buried
+conditional evaluation (backlog `27`); `new`/`super` construct-path param-position
+evaluation (over-report today — review note); contravariant same-name intersection
+(needs intersections, backlog `25`); `infer X extends C`; rest-element infer shapes
+(backlog `24`); `type A = A` circularity (out of scope).
+
+---
 
 # Sprint — conditional types `T extends U ? X : Y` / M25 (2026-07-04)
 

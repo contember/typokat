@@ -1,7 +1,7 @@
 ---
 id: 12
 title: Utility types (Partial, Record, Pick, …) — M28
-blocked-by: [./09-conditional-types.md, ./10-mapped-types.md]
+blocked-by: [./10-mapped-types.md]
 ---
 
 # 12 — Utility types (`Partial`, `Record`, `Pick`, …)

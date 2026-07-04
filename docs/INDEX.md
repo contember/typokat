@@ -22,17 +22,17 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprints/sprint-2026-07-04-conditional-types.md`](sprints/sprint-2026-07-04-conditional-types.md) —
-  backlog `09` / M25 (spec corpus written; ADR-0002 resolves the de Bruijn scope).
+<!-- (none) -->
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M24 shipped** — M24 (generic constraints: TK2344/TK2345/TK2313, the apparent-type
-  resolver) closed 2026-07-04 after five fix rounds (see [`archive/`](archive/README.md));
-  ADR-0002 scoped de Bruijn to `infer` binders. Scoreboard: in-scope 491, clean-kept 164/209,
-  diag-recall 250/1651. **Now: conditional types (`09` / M25)** — spec corpus committed —
-  then the rest of the type-level phase (`10`–`12`). Known type-model gaps filed from probes:
-  `24` rest elements, `25` intersections. Small warm-ups: `21` local classes, `22` new-callee
-  forms, `23` static method type params.
+- **M0–M25 shipped** — M25 (conditional types: the evaluator with work-stack/memo/budget,
+  `infer` via a non-widening inference mode, distribution, TK2456/TK2589) closed 2026-07-04
+  and **opens the type-level evaluation phase**; M24 (generic constraints) same day. See
+  [`archive/`](archive/README.md). Scoreboard: in-scope 491, clean-kept 164/209, diag-recall
+  250/1651 (conditional-heavy suite files still gated by mapped/template/variadic buckets —
+  signal arrives with `10`–`12`/`24`). **Next: mapped types (`10` / M26)**, then `11`–`12`.
+  Type-model gaps from probes: `24` rest elements, `25` intersections, `26` cross-binder
+  infer, `27` template-buried conditionals. Small warm-ups: `21`–`23`.
