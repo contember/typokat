@@ -213,7 +213,7 @@ IN	0 1 0 1	conformance/classes/propertyMemberDeclarations/accessorsOverridePrope
 IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty5.ts
 IN	0 2 0 2	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty6.ts
 OOS:parse-error	- - - -	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty7.ts
-OOS:syntax:conditional-type	- - - -	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty8.ts
+OOS:syntax:mapped-type	- - - -	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty8.ts
 OOS:syntax:module	- - - -	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty9.ts
 IN	0 5 0 5	conformance/classes/propertyMemberDeclarations/assignParameterPropertyToPropertyDeclarationES2022.ts
 IN	0 5 0 5	conformance/classes/propertyMemberDeclarations/assignParameterPropertyToPropertyDeclarationESNext.ts
@@ -455,7 +455,7 @@ IN	0 8 0 8	conformance/types/intersection/intersectionTypeMembers.ts
 IN	0 2 0 2	conformance/types/intersection/intersectionTypeOverloading.ts
 IN	1 3 0 4	conformance/types/intersection/intersectionTypeReadonly.ts
 OOS:syntax:mapped-type	- - - -	conformance/types/intersection/intersectionWithIndexSignatures.ts
-OOS:syntax:conditional-type	- - - -	conformance/types/intersection/intersectionWithUnionConstraint.ts
+OOS:syntax:mapped-type	- - - -	conformance/types/intersection/intersectionWithUnionConstraint.ts
 OOS:multifile	- - - -	conformance/types/intersection/intersectionsAndEmptyObjects.ts
 IN	0 0 2 0	conformance/types/intersection/operatorsAndIntersectionTypes.ts
 IN	0 6 0 6	conformance/types/intersection/recursiveIntersectionTypes.ts
@@ -463,7 +463,7 @@ IN	0 9 0 9	conformance/types/keyof/circularIndexedAccessErrors.ts
 OOS:syntax:mapped-type	- - - -	conformance/types/keyof/keyofAndForIn.ts
 OOS:syntax:enum	- - - -	conformance/types/keyof/keyofAndIndexedAccess.ts
 OOS:syntax:module	- - - -	conformance/types/keyof/keyofAndIndexedAccess2.ts
-OOS:syntax:conditional-type	- - - -	conformance/types/keyof/keyofAndIndexedAccessErrors.ts
+OOS:syntax:mapped-type	- - - -	conformance/types/keyof/keyofAndIndexedAccessErrors.ts
 OOS:unresolved	- - - -	conformance/types/keyof/keyofIntersection.ts
 IN	0 0 3 0	conformance/types/literal/booleanLiteralTypes1.ts
 IN	0 0 3 0	conformance/types/literal/booleanLiteralTypes2.ts
@@ -496,12 +496,12 @@ IN	0 2 0 2	conformance/types/literal/stringLiteralsWithSwitchStatements02.ts
 IN	0 12 0 12	conformance/types/literal/stringLiteralsWithSwitchStatements03.ts
 IN	0 11 0 11	conformance/types/literal/stringLiteralsWithSwitchStatements04.ts
 IN	0 3 0 3	conformance/types/literal/stringLiteralsWithTypeAssertions01.ts
-OOS:syntax:conditional-type	- - - -	conformance/types/literal/stringMappingDeferralInConditionalTypes.ts
+OOS:unresolved	- - - -	conformance/types/literal/stringMappingDeferralInConditionalTypes.ts
 OOS:syntax:template-lit-type	- - - -	conformance/types/literal/stringMappingOverPatternLiterals.ts
 OOS:syntax:module	- - - -	conformance/types/literal/stringMappingReduction.ts
 OOS:syntax:module	- - - -	conformance/types/literal/templateLiteralTypes1.ts
-OOS:syntax:infer	- - - -	conformance/types/literal/templateLiteralTypes2.ts
-OOS:syntax:conditional-type	- - - -	conformance/types/literal/templateLiteralTypes3.ts
+OOS:syntax:template-lit-type	- - - -	conformance/types/literal/templateLiteralTypes2.ts
+OOS:syntax:template-lit-type	- - - -	conformance/types/literal/templateLiteralTypes3.ts
 OOS:syntax:enum	- - - -	conformance/types/literal/templateLiteralTypes4.ts
 OOS:syntax:template-lit-type	- - - -	conformance/types/literal/templateLiteralTypes5.ts
 OOS:syntax:template-lit-type	- - - -	conformance/types/literal/templateLiteralTypes6.ts
@@ -644,8 +644,8 @@ IN	0 1 0 1	conformance/types/tuple/emptyTuples/emptyTuplesTypeAssertion02.ts
 IN	0 6 0 6	conformance/types/tuple/indexerWithTuple.ts
 OOS:syntax:module	- - - -	conformance/types/tuple/named/namedTupleMembers.ts
 OOS:syntax:module	- - - -	conformance/types/tuple/named/namedTupleMembersErrors.ts
-OOS:syntax:conditional-type	- - - -	conformance/types/tuple/named/partiallyNamedTuples.ts
-OOS:syntax:infer	- - - -	conformance/types/tuple/named/partiallyNamedTuples2.ts
+OOS:syntax:mapped-type	- - - -	conformance/types/tuple/named/partiallyNamedTuples.ts
+OOS:unresolved	- - - -	conformance/types/tuple/named/partiallyNamedTuples2.ts
 OOS:unresolved	- - - -	conformance/types/tuple/named/partiallyNamedTuples3.ts
 OOS:parse-error	- - - -	conformance/types/tuple/optionalTupleElements1.ts
 OOS:parse-error	- - - -	conformance/types/tuple/readonlyArraysAndTuples.ts
@@ -659,8 +659,8 @@ IN	0 0 0 0	conformance/types/tuple/tupleElementTypes4.ts
 IN	0 2 0 2	conformance/types/tuple/tupleLengthCheck.ts
 IN	1 5 5 6	conformance/types/tuple/typeInferenceWithTupleType.ts
 IN	0 8 0 8	conformance/types/tuple/unionsOfTupleTypes1.ts
-OOS:syntax:conditional-type	- - - -	conformance/types/tuple/variadicTuples1.ts
-OOS:syntax:conditional-type	- - - -	conformance/types/tuple/variadicTuples2.ts
+OOS:syntax:mapped-type	- - - -	conformance/types/tuple/variadicTuples1.ts
+OOS:parse-error	- - - -	conformance/types/tuple/variadicTuples2.ts
 IN	0 3 0 3	conformance/types/tuple/variadicTuples3.ts
 IN	0 0 1 0	conformance/types/tuple/wideningTuples1.ts
 OOS:unresolved	- - - -	conformance/types/tuple/wideningTuples2.ts

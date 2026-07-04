@@ -147,9 +147,8 @@ OUT_OF_SCOPE_SYNTAX = [
                           r"|\bdeclare\s+module\b|\bnamespace\b|\bmodule\s+\w+\s*\{", re.M)),
     ("enum", re.compile(r"\benum\b")),
     ("decorator", re.compile(r"^\s*@[A-Za-z_]\w*\s*[\(\n]", re.M)),
-    ("conditional-type", re.compile(r"\bextends\b[^\n;{}]*\?")),
+    # conditional-type + infer gates removed — M25 models them (backlog 09).
     ("mapped-type", re.compile(r"\[\s*\w+\s+in\s+")),
-    ("infer", re.compile(r"\binfer\s+\w")),
     ("template-lit-type", re.compile(r":\s*`[^`]*\$\{|=\s*`[^`]*\$\{")),
     ("satisfies", re.compile(r"\bsatisfies\b")),
     ("as-const", re.compile(r"\bas\s+const\b")),
