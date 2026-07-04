@@ -39,7 +39,10 @@ fixture (keeps fixtures robust to author miscounting).
 | `TK2341` | Property is private (accessed outside its declaring class) |
 | `TK2345` | Argument type not assignable to parameter type |
 | `TK2445` | Property is protected (accessed outside the class and its subclasses) |
+| `TK2416` | Property in derived type not assignable to the same property in base type (override compatibility) |
 | `TK2511` | Cannot create an instance of an abstract class |
+| `TK2515` | Non-abstract class does not implement inherited abstract member (exactly one missing) |
+| `TK2654` | Non-abstract class is missing implementations for members (two or more missing, aggregated) |
 | `TK2540` | Cannot assign to a read-only property |
 | `TK2353` | Object literal may only specify known properties (excess property) |
 | `TK2554` | Wrong number of arguments (arity) |
@@ -87,7 +90,8 @@ slots into a known later phase without rework:
   access control + nominal typing) + `static` members (**M13**), member-assignment checking
   + `readonly` (**M14**), getters/setters + `abstract` classes (**M15**), and generic classes
   (**M16**) are implemented; method-override compatibility (`TK2416`) and
-  abstract-member-not-implemented (`TK2515`) remain deferred.
+  abstract-member completeness (`TK2515` single / `TK2654` aggregated, per tsc 6.0.3) are
+  specced in `b06_class_completeness/` and land with backlog `06`.
   Nominal typing currently constrains only the foreign→private direction (a private/protected
   type rejects a structurally-identical *other* type); widening a private-bearing instance to its
   public structural shape is not yet rejected (a one-directional divergence from tsc TS2322).
@@ -168,14 +172,14 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m21_optional/` | M21 — optional properties (`a?: T`) on objects / interfaces / class instance fields |
 | `m22_unresolved_type/` | M22 — `TK2304` for an unresolved type reference in type position |
 
-## Bug-fix corpora (official-suite findings)
+## Bug-fix / backlog corpora
 
 Fixes to **already-shipped** milestones get their own dir rather than extending an
 enabled milestone dir — so the spec can be committed on its own (per
 `docs/reference/dev-method.md` §1) without changing test results, then enabled by
 the commit that lands the fix. Each is registered in `MILESTONE_DIRS`
 (`tests/conformance.rs`) as `false` until its fix ships. Named by the official-suite
-finding ID.
+finding ID (`fN_…`) or the backlog item ID (`bNN_…`).
 
 | Dir | Finding / backlog | Fix |
 |---|---|---|
@@ -185,6 +189,7 @@ finding ID.
 | `f3_class_member_collection/` | F3 / `01` | parameter properties + initializer-inferred class fields become real members |
 | `f4_destructuring_access/` | F4 / `02` | private/protected access control runs through object-destructuring patterns |
 | `f5_union_readonly/` | F5 / `03` | `readonly` enforced on object-type/interface members and through a union member-assignment |
+| `b06_class_completeness/` | backlog `06` | override compatibility (`TK2416`) + abstract-member completeness (`TK2515`/`TK2654`) |
 
 `f1_object_interface_methods/` uses only existing diagnostics (`TK2322`, `TK2339`, `TK2345`).
 No deliberate `tsc` divergence is expected for plain non-generic method signatures with explicit
@@ -226,3 +231,21 @@ dropped error):
 - `objectTypeWithConstructSignatureAppearsToBeFunctionType.ts` — `TK2339` on
   `.apply`/`.call`/`.bind`: typokat does not model `Function.prototype` members on
   construct-signature objects.
+
+`b06_class_completeness/` covers override compatibility (`TK2416` on the derived member name,
+with the tsc message shape + reason chain) for methods, plain properties, and accessor overrides,
+and abstract-member completeness on the class name: exactly one missing inherited abstract member
+→ `TK2515` (member name unquoted, attributed to the **direct base**, not the declaring class);
+two or more → one aggregated `TK2654` (names quoted, direct base's own abstract members first,
+then inherited pending ones). A concrete accessor or an initializer-inferred field implements an
+abstract member; an incompatible implementation is `TK2416`, not `TK2515`. Cross-checked against
+`tsc 6.0.3 --strict`. Documented divergences (safe direction):
+- **Bivariant method overrides over-report**: tsc accepts a method-declaration override that
+  narrows a parameter (`m(x: string | number)` → `m(x: string)`) via bivariant method params, but
+  rejects the same shape as a function-typed property. typokat lowers methods as function-typed
+  properties and relates contravariantly (architecture §6.5), so it reports `TK2416` on the
+  bivariant-only method shape too. The corpus does not assert that shape either way.
+- **`TS2426`** (accessor-vs-function kind mismatch) is not emitted; typokat still reports the
+  `TK2416` type incompatibility on that line.
+- **`TS2415`** (incorrectly-extends: visibility narrowing, private-member redeclaration) and
+  **`TS2417`** (static-side override incompatibility) are deferred; fixtures avoid those shapes.
