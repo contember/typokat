@@ -70,3 +70,20 @@ const L10: PF<(a: "x") => void> = 123; // error[TK2322]
 type UInfer<T> = T extends string | (infer U)[] ? U : "no";
 const L11: UInfer<number[]> = 1;
 const L12: UInfer<number[]> = "s"; // error[TK2322]: Type 'string' is not assignable to type 'number'
+
+// A same-name infer appearing BOTH as a naked union member and inside a
+// structural member: the STRUCTURAL candidate wins (tsc priority — the naked
+// member's whole-check candidate is discarded, not unioned in).
+type Unbox<T> = T extends { v: infer U } | infer U ? U : never;
+declare const ub: { v: string };
+const L13: Unbox<{ v: string }> = "s";
+const L14: Unbox<{ v: string }> = ub; // error[TK2322]
+type DD<T> = T extends infer U | (infer U)[] ? U : never;
+const L15: DD<number[]> = 1;
+declare const narr: number[];
+const L16: DD<number[]> = narr; // error[TK2322]
+
+// The naked-member candidate IS kept when no structural member binds the name.
+type NakedOnly<T> = T extends string | infer U ? U : never;
+const L17: NakedOnly<number> = 1;
+const L18: NakedOnly<number> = "s"; // error[TK2322]: Type 'string' is not assignable to type 'number'
