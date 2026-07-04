@@ -31,6 +31,13 @@ const q3: Req<P> = { a: 1, b: und, c: true }; // error[TK2322]: 'undefined' is n
 declare const rq: Req<P>;
 const q4: string = rq.b;
 
+// … even when the value is EXACTLY undefined: the property becomes `never`
+// (tsc Required semantics — leader-arbitrated probe, m26_arb.ts).
+type SU = { b?: undefined };
+declare const ru: Req<SU>;
+const q5: never = ru.b;
+const q6: Req<SU> = { b: und }; // error[TK2322]: not assignable to type 'never'
+
 // `readonly` adds it everywhere.
 type RO<T> = { readonly [K in keyof T]: T[K] };
 declare const rop: RO<P>;

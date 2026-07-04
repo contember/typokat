@@ -140,13 +140,19 @@ slots into a known later phase without rework:
   ADR-0001).
 - **mapped types** (`{ [K in keyof T]: … }`): specced in `m26_mapped_types/`, lands with backlog
   `10` (M26). Scope: evaluation over concrete sources (keyof-derived and literal-union key
-  sources), value transformation, modifier arithmetic (`?`/`+?`/`-?`, `readonly`/`-readonly`),
-  homomorphic preservation of the source's `?`/`readonly`, mapped-of-mapped composition, and
-  generic-call instantiation; a mapped type over an unresolved param stays deferred and relates
-  conservatively (M25 model). Documented divergences: tsc's homomorphic-identity rule (`T` →
-  `{ [K in keyof T]: T[K] }` is assignable in tsc; typokat conservatively rejects — over-report,
-  pinned in `deferred_generics.ts`); `as` key remapping and template-literal keys are out of
-  scope (`11`); `K in string`-style index-signature production is out of scope.
+  sources), value transformation, modifier arithmetic (`?`/`+?`/`-?` — `-?` strips `undefined`
+  from the value, an exactly-`undefined` optional member becomes `never`; `readonly`/
+  `-readonly`), homomorphic preservation of the source's `?`/`readonly`, **distribution of
+  homomorphic maps over union type arguments** (`Ident<A | B>` = `Ident<A> | Ident<B>`),
+  mapped-of-mapped composition, generic-call instantiation, and `TK2456` for a directly
+  self-referential mapped alias; a mapped type over an unresolved param stays deferred and
+  relates conservatively (M25 model), and a non-iterable key source (index signatures,
+  primitives) also stays DEFERRED — never a permissive `{}`. Documented divergences: tsc's
+  homomorphic-identity rule (`T` → `{ [K in keyof T]: T[K] }` is assignable in tsc; typokat
+  conservatively rejects — over-report, pinned in `deferred_generics.ts`); index-signature
+  sources (tsc resolves homomorphically; typokat defers — over-report, `evaluation_sites.ts`);
+  the secondary `TS2313` tsc adds on a self-referential mapped alias is omitted (`TK2456`
+  carries the line); `as` key remapping and template-literal keys are out of scope (`11`).
 - **conditional types** (`T extends U ? X : Y`): specced in `m25_conditional_types/`, lands with
   backlog `09` (M25). Scope: resolution through the relation engine; distribution over
   naked-param unions (`never` → `never`, `boolean` expands to `true | false`); `infer`
