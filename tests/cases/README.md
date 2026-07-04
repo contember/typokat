@@ -93,7 +93,7 @@ slots into a known later phase without rework:
   + `readonly` (**M14**), getters/setters + `abstract` classes (**M15**), and generic classes
   (**M16**) are implemented; method-override compatibility (`TK2416`) and
   abstract-member completeness (`TK2515` single / `TK2654` aggregated, per tsc 6.0.3) are
-  specced in `b06_class_completeness/` and land with backlog `06`.
+  implemented too (backlog `06`, corpus `b06_class_completeness/` — see its section below).
   Nominal typing currently constrains only the foreign→private direction (a private/protected
   type rejects a structurally-identical *other* type); widening a private-bearing instance to its
   public structural shape is not yet rejected (a one-directional divergence from tsc TS2322).
@@ -242,14 +242,38 @@ and abstract-member completeness on the class name: exactly one missing inherite
 two or more → one aggregated `TK2654` (names quoted, direct base's own abstract members first,
 then inherited pending ones). A concrete accessor or an initializer-inferred field implements an
 abstract member; an incompatible implementation is `TK2416`, not `TK2515`. Cross-checked against
-`tsc 6.0.3 --strict`. Documented divergences (safe direction):
-- **Bivariant method overrides over-report**: tsc accepts a method-declaration override that
-  narrows a parameter (`m(x: string | number)` → `m(x: string)`) via bivariant method params, but
-  rejects the same shape as a function-typed property. typokat lowers methods as function-typed
-  properties and relates contravariantly (architecture §6.5), so it reports `TK2416` on the
-  bivariant-only method shape too. The corpus does not assert that shape either way.
-- **`TS2426`** (accessor-vs-function kind mismatch) is not emitted; typokat still reports the
-  `TK2416` type incompatibility on that line.
+`tsc 6.0.3 --strict`.
+
+Override compatibility (`TK2416`) is checked **public↔public only** (a private/protected override
+is `TS2415` territory, deferred — note this scope also skips a *genuine* tsc `TS2416` on an
+incompatible protected-over-protected override, a declared false negative, not just an
+over-report avoidance; the nominal relation would otherwise also reject a *legal* protected
+redeclaration). It follows tsc's method/property variance split, keyed on the **base** (target)
+member's declaration kind — probed against tsc 6.0.3, whose verdict depends only on the base
+kind, never the derived one's. The kind is recovered from the AST (composed down the `extends`
+chain, an inherited member keeping the kind of wherever it was last declared) since typokat
+lowers methods and function-typed fields to the same function-typed properties: a base member
+declared with **method syntax** (`m() {}`) compares parameters **bivariantly** and the return
+type covariantly (with the `void`-return exception) regardless of the derived member's kind,
+while a base function-typed **field** (`d: (a) => void`) / initializer / accessor is related by
+the plain (strict-contravariant) assignability query — again regardless of the derived kind, so
+a method-syntax override of a function-typed field is still strict. Documented divergences
+(false-negative — safe only because `TK2416` is a *new* check, so nothing previously reported is
+dropped):
+- **Unequal-arity base-method overrides are skipped**: typokat models neither optional nor rest
+  parameters, so an override of a base **method** that drops or adds a parameter (`m()` over
+  `m(x)`, `m(x?)` over `m()`) is out of subset and not checked — tsc usually accepts these, so
+  skipping avoids over-reporting, at the cost of missing a genuinely-incompatible arity-changing
+  override. (Over a base **field** the strict query's arity rule still applies, so a derived
+  member adding required parameters errors.)
+- **Generic bases are skipped**: an override against a generic base / from within a generic class
+  may carry a free type parameter (the existing generic-base composition deferral), where the
+  relation would over-report — the check is skipped there. Relatedly, `TK2515`/`TK2654` render a
+  generic direct base as its bare name (`Box`) where tsc renders the instantiation
+  (`Box<string>`) — cosmetic, within the same generic-base deferral.
+- **`TS2425`/`TS2426`** (field↔method / accessor-vs-function kind-mismatch codes) are not
+  emitted; typokat still reports the `TK2416` type incompatibility on those lines per the
+  base-kind rule.
 - **`TS2415`** (incorrectly-extends: visibility narrowing, private-member redeclaration) and
   **`TS2417`** (static-side override incompatibility) are deferred; fixtures avoid those shapes.
 

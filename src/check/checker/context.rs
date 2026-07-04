@@ -40,6 +40,30 @@ pub(in crate::check::checker) struct AssignObligation {
     pub(in crate::check::checker) kind: ObligationKind,
 }
 
+/// One class-member override-compatibility check (backlog 06, `TK2416`): the
+/// derived class's own instance member `own_ty` must be compatible with the direct
+/// base's same-named member `base_ty`. Collected at fill time, decided in phase 2 by
+/// the shared relation engine (a separate list from [`AssignObligation`] because a
+/// **method** override follows tsc's *bivariant-parameter / covariant-return* rule,
+/// composed from `is_assignable` over the signature's parts — see
+/// [`emit_override_failures`](super::statements::emit_override_failures) — rather than
+/// a single whole-type query). `name`/`derived`/`base` phrase the headline; `span` is
+/// the derived member's name.
+pub(in crate::check::checker) struct OverrideCheck {
+    pub(in crate::check::checker) own_ty: TypeId,
+    pub(in crate::check::checker) base_ty: TypeId,
+    pub(in crate::check::checker) name: String,
+    pub(in crate::check::checker) derived: String,
+    pub(in crate::check::checker) base: String,
+    pub(in crate::check::checker) span: Span,
+    /// Whether the **base** member was declared with method syntax (`m() {}`) — read
+    /// from [`Pass::class_member_kinds`]. tsc keys the variance split on the base
+    /// (target) member's kind: base method → bivariant parameters; base field /
+    /// accessor → strict contravariance. The derived member's own kind is irrelevant
+    /// to the verdict (it only positions the diagnostic).
+    pub(in crate::check::checker) base_is_method: bool,
+}
+
 /// Per-declaration computed types, indexed by `DeclId`. `None` means a
 /// declaration whose type could not be computed (out of subset); a reference to
 /// it resolves to the error type defensively.
@@ -274,6 +298,26 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// engine, then substituted. It is a sibling map rather than a field on the `Copy`
     /// [`ClassInfo`] so that struct keeps its cheap copy semantics.
     pub(in crate::check::checker) class_type_params: FxHashMap<DeclId, Vec<TypeParamId>>,
+    /// A class's **pending (unimplemented) abstract member names**, in declaration
+    /// order (backlog 06), keyed by the class's value-space `DeclId`. Composed down
+    /// the `extends` chain in [`fill_class`]: a class's own abstract members first,
+    /// then its direct base's pending members that this class does not implement with
+    /// an own concrete member. A **non-abstract** class with a non-empty list reports
+    /// `TK2515` (one member) / `TK2654` (aggregated). Stored (even for abstract
+    /// classes) so a subclass inherits it; a sibling map — like
+    /// [`class_type_params`](Pass::class_type_params) — so [`ClassInfo`] stays `Copy`.
+    pub(in crate::check::checker) class_pending_abstract: FxHashMap<DeclId, Vec<String>>,
+    /// A class's instance members' **declaration kinds** (backlog 06): member name →
+    /// `true` when the member was (last) declared with **method syntax** (`m() {}`),
+    /// `false` for a field / accessor / parameter property. Keyed by the class's
+    /// value-space `DeclId`; composed down the `extends` chain in [`fill_class`]
+    /// (clone of the direct base's map overlaid with this class's own members — own
+    /// wins), so an inherited member keeps the kind of wherever it was last declared.
+    /// Read by [`collect_override_checks`] to key tsc's method-bivariance rule on the
+    /// **base** member's kind ([`OverrideCheck::base_is_method`]). A sibling map —
+    /// like [`class_pending_abstract`](Pass::class_pending_abstract) — so
+    /// [`ClassInfo`] stays `Copy`.
+    pub(in crate::check::checker) class_member_kinds: FxHashMap<DeclId, FxHashMap<String, bool>>,
     /// Per-class fill state (M12), indexed by `TypeDecl` index (parallel to
     /// [`type_decls`](Pass::type_decls)). A class entry tracks whether its instance
     /// type / constructor have been built yet, so a derived class can fill its **base
@@ -284,6 +328,9 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     pub(in crate::check::checker) class_fill: Vec<ClassFillState>,
     pub(in crate::check::checker) decl_types: DeclTypes,
     pub(in crate::check::checker) obligations: Vec<AssignObligation>,
+    /// Backlog 06 — pending class-member override-compatibility checks (`TK2416`),
+    /// collected in [`fill_class`] and decided in phase 2 (see [`OverrideCheck`]).
+    pub(in crate::check::checker) override_checks: Vec<OverrideCheck>,
     pub(in crate::check::checker) diagnostics: Vec<Diagnostic>,
     /// The **current `this` type** (M11): the instance type of the class whose
     /// member body is being checked, or `None` outside any class member. Set (via

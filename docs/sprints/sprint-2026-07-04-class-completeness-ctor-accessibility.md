@@ -202,3 +202,27 @@ Implementations serialize — same files.
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
      trim to a one-line pointer ("→ ADR-0007"). -->
+
+- 2026-07-04 (WU1 impl, deviation from the plan's "contravariant + documented over-report"
+  decision): relating method overrides contravariantly regressed 3 official-suite clean files
+  (`derivedClassTransitivity{,2}.ts`, `derivedTypeAccessesHiddenBaseCallViaSuperPropertyAccess.ts`)
+  — tsc-legal bivariant method overrides. Implemented tsc's actual split instead: **method-syntax**
+  members compare params bivariantly + return covariantly (void exception), recovered from the AST
+  (typokat lowers methods and function-typed fields identically); fields/accessors keep the strict
+  contravariant query. Scoped to the TK2416 check only — the general relation engine stays
+  contravariant. New documented deferrals: unequal-arity method overrides (optional/rest params
+  unmodeled) and generic bases are skipped by the TK2416 check (false-negative class, safe only
+  because the check is new); README b06 notes updated by the impl.
+- 2026-07-04 (WU1 impl): `TK2416` decisions run as a dedicated phase-2 list (`OverrideCheck`) on
+  the shared relater — a plain `AssignObligation` cannot express the bivariant component-wise
+  composition. `abstract get acc()` already lowered as a real member; no M15 change was needed.
+- 2026-07-04 (WU1 review round 1 — FAIL, fixed): the independent review caught the bivariance
+  rule keyed on the **derived** member's declaration kind; tsc keys it on the **base** member's
+  (probed truth table — base field → strict even for a derived method = dropped `TK2416`; base
+  method → bivariant even for a derived field = undocumented over-report). Spec amended with
+  `override_kind_mixtures.ts` (f7e16f3); fix threads the base kind through a composed
+  `class_member_kinds` side table. Review also confirmed: abstract-pending composition (deep
+  chains, re-abstraction, param-property implementations, TK2654 ordering), order-independence
+  across the shared relation cache, and the official-suite rows. Notes taken: `TS2425` deferred
+  like `TS2426`; `TS2653` (class expressions) out of subset; local-class checking is a
+  pre-existing subset gap; generic-base `TK2515` renders `Box` where tsc renders `Box<string>`.

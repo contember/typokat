@@ -157,7 +157,9 @@ const r = new Plain(\"s\");
 /// An own member **overrides** an inherited one of the same name: the derived
 /// type wins. Here `Derived.x: string` overrides `Base.x: number`, so a
 /// `string`-annotated read is clean and a `number`-annotated read errors —
-/// proving the override replaced the inherited member.
+/// proving the override replaced the inherited member. The override is also
+/// type-incompatible (`string` ≇ `number`), so backlog 06 reports `TK2416` on the
+/// derived member's name (matching tsc `TS2416`).
 #[test]
 fn own_member_overrides_inherited() {
     let src = "\
@@ -178,9 +180,13 @@ const d = new Derived();
 const ok: string = d.x;
 const bad: number = d.x;
 ";
-    // The override makes `d.x` a `string`: `string` read (line 15) clean;
-    // `number` read (line 16) TK2322.
-    assert_eq!(diags(src), vec![(16, "TK2322".to_string())]);
+    // The incompatible override is `TK2416` on the derived `x` (line 8). The
+    // override makes `d.x` a `string`: `string` read (line 15) clean; `number` read
+    // (line 16) TK2322.
+    assert_eq!(
+        diags(src),
+        vec![(8, "TK2416".to_string()), (16, "TK2322".to_string())]
+    );
 }
 
 /// An `extends` **cycle** (`A extends B`, `B extends A`) must terminate without a

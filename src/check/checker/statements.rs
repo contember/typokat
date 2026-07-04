@@ -2,8 +2,9 @@
 
 use crate::binder::scope::ScopeId;
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
-use crate::relate::Reason;
+use crate::relate::{Reason, ReasonChain, Relater, Relation};
 use crate::types::store::{Store, TypeId};
+use crate::types::WellKnown;
 use oxc_ast::ast::{
     BindingPattern, BlockStatement, Expression,
     Function, Statement, VariableDeclarationKind, VariableDeclarator,
@@ -321,6 +322,111 @@ pub(in crate::check::checker) fn emit_obligation_failure(
                     .with_elaboration(elaboration),
             );
         }
+    }
+}
+
+/// Decide the phase-2 class-member override-compatibility checks (backlog 06) and
+/// emit `TK2416` for each incompatible one. The relation runs on the shared phase-2
+/// [`Relater`] (same cache/cycle machinery as every other query).
+///
+/// The variance split is keyed on the **base** (target) member's declaration kind
+/// ([`OverrideCheck::base_is_method`]) — tsc 6.0.3 behavior, probed: the derived
+/// member's own kind never changes the verdict. A **base method** (declared `m() {}`,
+/// both member types functions) follows tsc's method rule: parameters are compared
+/// **bivariantly** (compatible if assignable in **either** direction), the return type
+/// **covariantly** (`own → base`, with the `void`-return exception). A
+/// signature-**arity** mismatch there is **out of subset** — typokat models neither
+/// optional nor rest parameters, so it cannot decide whether dropping/adding a
+/// parameter is legal (tsc often accepts it); the check is skipped (a deferral, not an
+/// over-report). Every other shape — a base data property, a base function-typed
+/// **field** (strict contravariant params, per `strictFunctionTypes`, regardless of
+/// how the derived member is declared), or a base accessor — is decided by a single
+/// `own → base` [`Relater::is_assignable`] query (including its arity rule, so a
+/// derived member adding required parameters over a base field errors). The nested
+/// reason chain of the offending component is rendered below the fixed `TK2416`
+/// headline, exactly like `TK2322`.
+pub(in crate::check::checker) fn emit_override_failures(
+    store: &Store,
+    well_known: WellKnown,
+    relater: &mut Relater,
+    checks: &[OverrideCheck],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for check in checks {
+        if let Some(chain) = override_failure_reason(
+            store,
+            well_known,
+            relater,
+            check.own_ty,
+            check.base_ty,
+            check.base_is_method,
+        ) {
+            let elaboration = render_reason_chain(store, chain.head());
+            diagnostics.push(
+                Diagnostic::property_override_incompatible(
+                    check.span,
+                    &check.name,
+                    &check.derived,
+                    &check.base,
+                )
+                .with_elaboration(elaboration),
+            );
+        }
+    }
+}
+
+/// The reason chain for an incompatible override, or `None` when compatible / out of
+/// subset. See [`emit_override_failures`] for the base-method (bivariant-param /
+/// covariant-return) vs. base-field (strict) rule.
+fn override_failure_reason(
+    store: &Store,
+    well_known: WellKnown,
+    relater: &mut Relater,
+    own_ty: TypeId,
+    base_ty: TypeId,
+    base_is_method: bool,
+) -> Option<ReasonChain> {
+    // Method override: the BASE member was declared with method syntax AND both
+    // members are function-typed. Compare per tsc's method rule (bivariant params,
+    // covariant return). A base function-typed FIELD is NOT a method here — it falls
+    // through to the plain (contravariant) query below, matching `strictFunctionTypes`
+    // — even when the DERIVED member is method syntax (the base kind decides).
+    if let (true, Some(own_fn), Some(base_fn)) = (
+        base_is_method,
+        store.function_type(own_ty),
+        store.function_type(base_ty),
+    ) {
+        // Differing arity is out of subset (optional/rest params unmodeled) — skip.
+        if own_fn.params.len() != base_fn.params.len() {
+            return None;
+        }
+        // Parameters: bivariant — compatible if assignable in EITHER direction.
+        for (own_param, base_param) in own_fn.params.iter().zip(base_fn.params.iter()) {
+            if relater.is_assignable(own_param.ty, base_param.ty).is_yes()
+                || relater.is_assignable(base_param.ty, own_param.ty).is_yes()
+            {
+                continue;
+            }
+            // Neither direction holds: report the derived→base (own→base) failure.
+            if let Relation::No(chain) = relater.is_assignable(own_param.ty, base_param.ty) {
+                return Some(chain);
+            }
+        }
+        // Return type: covariant (own → base), with the void-return exception (a void
+        // target return accepts any source return) — mirroring `relate_functions` so a
+        // value-returning method/field over a `void` method stays clean.
+        if base_fn.ret != well_known.void {
+            if let Relation::No(chain) = relater.is_assignable(own_fn.ret, base_fn.ret) {
+                return Some(chain);
+            }
+        }
+        return None;
+    }
+    // Base is a data property / function-typed field / accessor (or a non-function
+    // shape): a single strict own → base assignability query, exactly like `TK2322`.
+    match relater.is_assignable(own_ty, base_ty) {
+        Relation::No(chain) => Some(chain),
+        Relation::Yes => None,
     }
 }
 

@@ -30,11 +30,20 @@ pub enum DiagnosticCode {
     TK2345,
     /// Object literal may only specify known properties (excess property).
     TK2353,
+    /// Property in a derived type is not assignable to the same property in the
+    /// base type (override compatibility) — backlog 06.
+    TK2416,
     /// Property is protected (accessed outside the class and its subclasses) —
     /// M13.
     TK2445,
     /// Cannot create an instance of an abstract class — M15.
     TK2511,
+    /// Non-abstract class does not implement one inherited abstract member —
+    /// backlog 06.
+    TK2515,
+    /// Non-abstract class is missing implementations for two or more inherited
+    /// abstract members (aggregated) — backlog 06.
+    TK2654,
     /// Cannot assign to a read-only property — M14.
     TK2540,
     /// Wrong number of call arguments (arity).
@@ -53,8 +62,11 @@ impl DiagnosticCode {
             DiagnosticCode::TK2341 => "TK2341",
             DiagnosticCode::TK2345 => "TK2345",
             DiagnosticCode::TK2353 => "TK2353",
+            DiagnosticCode::TK2416 => "TK2416",
             DiagnosticCode::TK2445 => "TK2445",
             DiagnosticCode::TK2511 => "TK2511",
+            DiagnosticCode::TK2515 => "TK2515",
+            DiagnosticCode::TK2654 => "TK2654",
             DiagnosticCode::TK2540 => "TK2540",
             DiagnosticCode::TK2554 => "TK2554",
             DiagnosticCode::TK2741 => "TK2741",
@@ -165,6 +177,77 @@ impl Diagnostic {
             code: DiagnosticCode::TK2511,
             severity: Severity::Error,
             message: "Cannot create an instance of an abstract class".to_string(),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2416` override-compatibility error (backlog 06): a derived
+    /// class's own member `name` (in type `derived`) is not assignable to the
+    /// same-named member in its `base`. The primary span is the derived member's
+    /// name; the nested reason chain is attached via [`Diagnostic::with_elaboration`]
+    /// exactly as `TK2322`.
+    pub fn property_override_incompatible(
+        span: Span,
+        name: &str,
+        derived: &str,
+        base: &str,
+    ) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2416,
+            severity: Severity::Error,
+            message: format!(
+                "Property '{name}' in type '{derived}' is not assignable to the same property in base type '{base}'."
+            ),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2515` error (backlog 06): a non-abstract class `class_name`
+    /// leaves exactly one inherited abstract member `member` unimplemented. `base`
+    /// is the **direct** base's name (tsc attributes to the direct base, not the
+    /// declaring class); the member name is rendered **unquoted**. The primary span
+    /// is the class name.
+    pub fn missing_abstract_member(
+        span: Span,
+        class_name: &str,
+        member: &str,
+        base: &str,
+    ) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2515,
+            severity: Severity::Error,
+            message: format!(
+                "Non-abstract class '{class_name}' does not implement inherited abstract member {member} from class '{base}'."
+            ),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2654` error (backlog 06): a non-abstract class `class_name`
+    /// leaves two or more inherited abstract members unimplemented (aggregated into
+    /// one diagnostic). `members` are rendered **quoted**, `, `-separated, in the
+    /// pending-list order; `base` is the **direct** base's name. The primary span is
+    /// the class name.
+    pub fn missing_abstract_members(
+        span: Span,
+        class_name: &str,
+        members: &[String],
+        base: &str,
+    ) -> Self {
+        let list = members
+            .iter()
+            .map(|m| format!("'{m}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Diagnostic {
+            code: DiagnosticCode::TK2654,
+            severity: Severity::Error,
+            message: format!(
+                "Non-abstract class '{class_name}' is missing implementations for the following members of '{base}': {list}."
+            ),
             span,
             elaboration: Vec::new(),
         }

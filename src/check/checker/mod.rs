@@ -242,7 +242,7 @@ mod statements;
 
 use context::{ClassFillState, DeclTypes, Pass, TypeDecl};
 use decls::reserve_type_decls;
-use statements::emit_obligation_failure;
+use statements::{emit_obligation_failure, emit_override_failures};
 
 /// Check a parsed program and return the diagnostics it produces.
 pub fn check_program<'ast>(
@@ -291,9 +291,12 @@ pub fn check_program<'ast>(
         generic_fns: FxHashMap::default(),
         class_ctors: FxHashMap::default(),
         class_type_params: FxHashMap::default(),
+        class_pending_abstract: FxHashMap::default(),
+        class_member_kinds: FxHashMap::default(),
         class_fill,
         decl_types,
         obligations: Vec::new(),
+        override_checks: Vec::new(),
         diagnostics: Vec::new(),
         narrowed: FxHashMap::default(),
         current_this: None,
@@ -314,6 +317,7 @@ pub fn check_program<'ast>(
     let Pass {
         interner,
         obligations,
+        override_checks,
         mut diagnostics,
         ..
     } = pass;
@@ -328,6 +332,16 @@ pub fn check_program<'ast>(
             emit_obligation_failure(store, ob, chain.head(), &mut diagnostics);
         }
     }
+
+    // Backlog 06: decide class-member override compatibility on the same relater
+    // (its cache is shared with the obligation queries above — sound).
+    emit_override_failures(
+        store,
+        well_known,
+        &mut relater,
+        &override_checks,
+        &mut diagnostics,
+    );
 
     diagnostics
 }

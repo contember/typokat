@@ -10,10 +10,11 @@ use crate::types::repr::{
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
     Class, ClassElement, Expression, Function,
-    MethodDefinition, MethodDefinitionKind, ObjectPattern, TSAccessibility,
-    TSTypeParameterDeclaration,
+    MethodDefinition, MethodDefinitionKind, MethodDefinitionType, ObjectPattern,
+    PropertyDefinitionType, TSAccessibility, TSTypeParameterDeclaration,
 };
 use oxc_span::GetSpan;
+use rustc_hash::{FxHashMap, FxHashSet};
 use super::context::*;
 use super::calls::{parameter_name, widen};
 use super::decls::type_decl_id;
@@ -180,10 +181,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// (`g = 2`, `f = () => 1`) declares a member whose type is **inferred** from the
     /// initializer (widened when non-`readonly`). See [`collect_class_own_members`].
     ///
+    /// Backlog 06 (class completeness): after composing, an own **public** instance
+    /// member that overrides a same-named **public** base member is related
+    /// (own→base) through the phase-2 obligation engine — a failure is `TK2416` on the
+    /// derived member's name ([`collect_override_checks`], keyed on the **base**
+    /// member's declaration kind via [`Pass::class_member_kinds`]). Independently, each
+    /// class's own abstract members are composed into a **pending** list down the
+    /// `extends` chain ([`collect_abstract_members`] + [`Pass::class_pending_abstract`]);
+    /// a non-abstract class that leaves any pending reports `TK2515` (one) / `TK2654`
+    /// (aggregated) on the class name ([`report_missing_abstract_members`]). Both skip
+    /// the generic-base / free-type-parameter shape (see below).
+    ///
     /// DEFERRED (out of scope, skipped without error): set-only / differing-get-set-type /
-    /// `static` accessors, `implements`, method-**override compatibility** (`TK2416`), the
-    /// abstract-member-not-implemented completeness check (`TK2515`), `super.method()` (super
-    /// property access), generic **method-level** type parameters on a class, and **generic
+    /// `static` accessors, `implements`, visibility-narrowing / private-redeclaration
+    /// override errors (`TS2415`) and static-side override incompatibility (`TS2417`),
+    /// `super.method()` (super property access), generic **method-level** type parameters
+    /// on a class, and **generic
     /// class inheritance** with a base's type arguments substituted (`class S extends Box<string>`
     /// composes against `Box`'s *unsubstituted* template, so a `super(...)`/inherited-member
     /// check sees the base's free `T` — no crash, terminates, but over-reports; none of the M16
@@ -210,6 +223,33 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // subclass walk). A class with no resolvable base has no parent entry.
         if let Some(base_info) = base {
             self.class_parents.insert(class_id, base_info.class_id);
+        }
+
+        // Backlog 06 — abstract-member completeness. Compose this class's **pending**
+        // (unimplemented) abstract members: its own abstract members (declaration
+        // order) first, then the direct base's pending members that this class does
+        // not implement with an own concrete member. The base was already filled
+        // (base-first, above), so its pending list is available; an unresolvable base
+        // contributes nothing (existing deferral). Stored below so subclasses inherit
+        // it; a NON-abstract class with a non-empty list reports here (`TK2515`/`TK2654`).
+        // The direct base's value-space `DeclId` — the key of the backlog-06 sibling
+        // maps (pending abstract members, member kinds, type params).
+        let base_decl_id = base_class_name(class)
+            .and_then(|name| value_decl_id(self.binder, scope, name));
+        let (own_abstract, own_concrete) = collect_abstract_members(class);
+        let base_pending = base_decl_id
+            .and_then(|decl_id| self.class_pending_abstract.get(&decl_id).cloned())
+            .unwrap_or_default();
+        let mut pending: Vec<String> = own_abstract.clone();
+        for member in base_pending {
+            // An own concrete member implements it; an own abstract redeclaration does
+            // not (it is already carried via `own_abstract`, so skip it to avoid a dup).
+            if !own_concrete.contains(&member) && !own_abstract.contains(&member) {
+                pending.push(member);
+            }
+        }
+        if !class.r#abstract {
+            self.report_missing_abstract_members(class, &pending);
         }
 
         // M16: the class's type-parameter frame (name → interned `TypeParam`). Built before
@@ -241,6 +281,34 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .and_then(|info| self.interner.store().object_type(info.static_side))
             .map(|obj| obj.properties.clone())
             .unwrap_or_default();
+
+        // Backlog 06 — the chain's member **declaration kinds** (name → declared with
+        // method syntax), composed like the pending list: the direct base's map
+        // overlaid with this class's own members (own wins), so an inherited member
+        // keeps the kind of wherever it was last declared. tsc keys the TK2416
+        // method-bivariance rule on the BASE member's kind, so the base's map is read
+        // below and this class's composed map is stored for its own subclasses.
+        let base_member_kinds = base_decl_id
+            .and_then(|decl_id| self.class_member_kinds.get(&decl_id).cloned())
+            .unwrap_or_default();
+        let mut member_kinds = base_member_kinds.clone();
+        member_kinds.extend(own_instance_member_kinds(class));
+
+        // Backlog 06 — TK2416 override compatibility. Relate each own PUBLIC instance
+        // member to a same-named PUBLIC base member (public↔public only — a
+        // private/protected override is TS2415 territory, deferred, and the nominal
+        // relation would otherwise reject a legal protected redeclaration). Skipped
+        // when either side is generic: a member type may then carry a free type
+        // parameter (the generic-base composition deferral), where the relation would
+        // over-report — safe to under-report a NEW check rather than regress. The
+        // relation itself runs in phase 2 via the shared obligation engine.
+        let base_is_generic = base_decl_id
+            .map(|decl_id| self.class_type_params.contains_key(&decl_id))
+            .unwrap_or(false);
+        if type_params.is_empty() && !base_is_generic {
+            self.collect_override_checks(class, &own_instance, &base_instance, &base_member_kinds);
+        }
+
         let properties = compose_members(base_instance, own_instance);
 
         let static_properties = compose_members(base_static, own_static);
@@ -333,6 +401,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 // Kept in a sibling map rather than on `ClassInfo` so the latter stays `Copy`.
                 if !type_params.is_empty() {
                     self.class_type_params.insert(decl_id, type_params.to_vec());
+                }
+                // Backlog 06: record this class's pending abstract members so a
+                // subclass composes against it (absent = empty). Non-abstract classes
+                // that keep pending members already reported above; still stored so a
+                // further subclass sees the same unimplemented set.
+                if !pending.is_empty() {
+                    self.class_pending_abstract.insert(decl_id, pending.clone());
+                }
+                // Backlog 06: record the composed member-kind map so a subclass keys
+                // its TK2416 variance split on this (its base) chain's kinds.
+                if !member_kinds.is_empty() {
+                    self.class_member_kinds.insert(decl_id, member_kinds);
                 }
                 // M13: bind the class's value-slot type to the **static side**, so a
                 // reference to the class *name as a value* — and the base of
@@ -996,6 +1076,92 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
+    /// Backlog 06 — TK2416: record a phase-2 override-compatibility check for every
+    /// own PUBLIC instance member that overrides a same-named PUBLIC member of the
+    /// direct base's (composed) instance members. The check relates the derived
+    /// member's **effective** type (optionals already carry `| undefined`, M21) to the
+    /// base member's; a failure renders as `TK2416` on the derived member's name span
+    /// ([`emit_override_failures`](super::statements::emit_override_failures) applies
+    /// the method bivariant-param / covariant-return rule, keyed on the **base**
+    /// member's declaration kind — `base_member_kinds`, the base chain's composed
+    /// [`Pass::class_member_kinds`] map; a missing entry defaults to field/strict, the
+    /// over-reporting = safe direction). Public↔public only — a private/protected
+    /// override is `TS2415` territory (deferred), and the nominal relation would
+    /// otherwise reject a legal protected redeclaration. An error-typed member is
+    /// skipped (cascade suppression); a member with no locatable AST name span (e.g. a
+    /// constructor parameter property — deferred) is skipped. The caller has already
+    /// gated out the generic (free-type-parameter) case.
+    fn collect_override_checks(
+        &mut self,
+        class: &Class<'_>,
+        own_instance: &[PropertyType],
+        base_instance: &[PropertyType],
+        base_member_kinds: &FxHashMap<String, bool>,
+    ) {
+        let wk = self.interner.well_known();
+        let Some(derived_name) = class.id.as_ref().map(|id| id.name.as_str()) else {
+            return;
+        };
+        let Some(base_name) = base_class_name(class) else {
+            return;
+        };
+        let spans = own_instance_member_spans(class);
+        for own in own_instance {
+            if own.visibility != Visibility::Public {
+                continue;
+            }
+            let Some(base_member) = base_instance.iter().find(|p| p.name == own.name) else {
+                continue;
+            };
+            if base_member.visibility != Visibility::Public {
+                continue;
+            }
+            if own.ty == wk.error || base_member.ty == wk.error {
+                continue;
+            }
+            let Some(&span) = spans.get(&own.name) else {
+                continue;
+            };
+            let base_is_method = base_member_kinds.get(&own.name).copied().unwrap_or(false);
+            self.override_checks.push(OverrideCheck {
+                own_ty: own.ty,
+                base_ty: base_member.ty,
+                name: own.name.clone(),
+                derived: derived_name.to_string(),
+                base: base_name.to_string(),
+                span,
+                base_is_method,
+            });
+        }
+    }
+
+    /// Backlog 06 — emit the abstract-member-completeness diagnostic for a
+    /// non-abstract class with a non-empty `pending` list: `TK2515` for a single
+    /// missing member (unquoted, attributed to the direct base), `TK2654` for two or
+    /// more (aggregated, quoted, in pending order). Both fire on the class **name**
+    /// span. Requires a resolvable direct base to attribute to (own abstract members
+    /// in a non-abstract class with no base is tsc `TS1244`, out of scope) and a named
+    /// class (an anonymous class expression is skipped).
+    fn report_missing_abstract_members(&mut self, class: &Class<'_>, pending: &[String]) {
+        let Some(id) = class.id.as_ref() else {
+            return;
+        };
+        let Some(base_name) = base_class_name(class) else {
+            return;
+        };
+        let span = Span::from_oxc(id.span);
+        let class_name = id.name.as_str();
+        match pending {
+            [] => {}
+            [one] => self.diagnostics.push(Diagnostic::missing_abstract_member(
+                span, class_name, one, base_name,
+            )),
+            many => self.diagnostics.push(Diagnostic::missing_abstract_members(
+                span, class_name, many, base_name,
+            )),
+        }
+    }
+
 }
 
 /// Build the **accessor properties** for a class from its accumulated getters/setters
@@ -1042,6 +1208,176 @@ fn build_accessor_members(class_id: ClassId, accessors: Vec<AccessorBuild>) -> V
     members
 }
 
+/// The direct base class's **name** from a plain-identifier `extends` clause
+/// (backlog 06). `None` when the class has no `extends`, or the clause is not a
+/// plain identifier (`extends mixin(Base)` / `extends Box<string>` with a
+/// non-identifier callee) — the same subset [`resolve_base_class`] recognizes.
+fn base_class_name<'x, 'ast>(class: &'x Class<'ast>) -> Option<&'x str> {
+    match class.super_class.as_ref()? {
+        Expression::Identifier(ident) => Some(ident.name.as_str()),
+        _ => None,
+    }
+}
+
+/// The name-span of each of a class's **own instance members** (non-static,
+/// non-computed fields/methods/accessors; the constructor is excluded), for
+/// positioning the `TK2416` override diagnostic on the derived member's name
+/// (backlog 06). The first key span wins for a name declared twice (a get/set
+/// pair). Constructor parameter properties are intentionally absent (their
+/// override check is deferred — no name span here).
+fn own_instance_member_spans(class: &Class<'_>) -> FxHashMap<String, Span> {
+    let mut spans: FxHashMap<String, Span> = FxHashMap::default();
+    for element in &class.body.body {
+        match element {
+            ClassElement::PropertyDefinition(prop) => {
+                if prop.computed || prop.r#static {
+                    continue;
+                }
+                if let Some(name) = prop.key.static_name() {
+                    spans
+                        .entry(name.into_owned())
+                        .or_insert_with(|| Span::from_oxc(prop.key.span()));
+                }
+            }
+            ClassElement::MethodDefinition(method) => {
+                if method.computed
+                    || method.r#static
+                    || matches!(method.kind, MethodDefinitionKind::Constructor)
+                {
+                    continue;
+                }
+                if let Some(name) = method.key.static_name() {
+                    spans
+                        .entry(name.into_owned())
+                        .or_insert_with(|| Span::from_oxc(method.key.span()));
+                }
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
+/// The **declaration kind** of each of a class's own instance members (backlog 06):
+/// `true` when declared with **method syntax** (`m() {}`), `false` for a field
+/// (annotated or initializer-inferred — including a function-typed one), a `get`/`set`
+/// accessor, or a constructor parameter property. Declaration-order last-wins for a
+/// (invalid-TS) duplicate name. Overlaid onto the base chain's map in [`fill_class`];
+/// tsc keys the `TK2416` method-bivariance rule on the **base** member's kind, so this
+/// is what a subclass's override check reads.
+fn own_instance_member_kinds(class: &Class<'_>) -> FxHashMap<String, bool> {
+    let mut kinds: FxHashMap<String, bool> = FxHashMap::default();
+    for element in &class.body.body {
+        match element {
+            ClassElement::PropertyDefinition(prop) => {
+                if prop.computed || prop.r#static {
+                    continue;
+                }
+                if let Some(name) = prop.key.static_name() {
+                    kinds.insert(name.into_owned(), false);
+                }
+            }
+            ClassElement::MethodDefinition(method) => {
+                if method.computed || method.r#static {
+                    continue;
+                }
+                match method.kind {
+                    // A parameter property declares a (non-method) instance field.
+                    MethodDefinitionKind::Constructor => {
+                        for param in &method.value.params.items {
+                            if param.accessibility.is_none() && !param.readonly {
+                                continue;
+                            }
+                            if let Some(name) = parameter_name(&param.pattern) {
+                                kinds.insert(name, false);
+                            }
+                        }
+                    }
+                    MethodDefinitionKind::Method => {
+                        if let Some(name) = method.key.static_name() {
+                            kinds.insert(name.into_owned(), true);
+                        }
+                    }
+                    // An accessor is not a method for the variance rule.
+                    MethodDefinitionKind::Get | MethodDefinitionKind::Set => {
+                        if let Some(name) = method.key.static_name() {
+                            kinds.insert(name.into_owned(), false);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    kinds
+}
+
+/// A class's own **abstract** member names (declaration order, deduped) and the set
+/// of names its own **concrete** members implement (backlog 06). Abstract: an
+/// `abstract` method / field / accessor. Concrete (implements an inherited abstract
+/// member): a non-abstract method, any field (annotated or initializer-inferred), an
+/// accessor, or a constructor parameter property. Static and computed members are
+/// ignored (an abstract member is never static). Used to compose the pending list
+/// down the `extends` chain.
+fn collect_abstract_members(class: &Class<'_>) -> (Vec<String>, FxHashSet<String>) {
+    let mut own_abstract: Vec<String> = Vec::new();
+    let mut own_concrete: FxHashSet<String> = FxHashSet::default();
+    let mut push_abstract = |name: String| {
+        if !own_abstract.contains(&name) {
+            own_abstract.push(name);
+        }
+    };
+    for element in &class.body.body {
+        match element {
+            ClassElement::PropertyDefinition(prop) => {
+                if prop.computed || prop.r#static {
+                    continue;
+                }
+                let Some(name) = prop.key.static_name() else {
+                    continue;
+                };
+                if prop.r#type == PropertyDefinitionType::TSAbstractPropertyDefinition {
+                    push_abstract(name.into_owned());
+                } else {
+                    own_concrete.insert(name.into_owned());
+                }
+            }
+            ClassElement::MethodDefinition(method) => {
+                if method.computed || method.r#static {
+                    continue;
+                }
+                match method.kind {
+                    // Parameter properties are concrete instance fields.
+                    MethodDefinitionKind::Constructor => {
+                        for param in &method.value.params.items {
+                            if param.accessibility.is_none() && !param.readonly {
+                                continue;
+                            }
+                            if let Some(name) = parameter_name(&param.pattern) {
+                                own_concrete.insert(name);
+                            }
+                        }
+                    }
+                    MethodDefinitionKind::Method
+                    | MethodDefinitionKind::Get
+                    | MethodDefinitionKind::Set => {
+                        let Some(name) = method.key.static_name() else {
+                            continue;
+                        };
+                        if method.r#type == MethodDefinitionType::TSAbstractMethodDefinition {
+                            push_abstract(name.into_owned());
+                        } else {
+                            own_concrete.insert(name.into_owned());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    (own_abstract, own_concrete)
+}
+
 /// Lower an AST `accessibility` modifier ([`TSAccessibility`]) to a [`Visibility`]
 /// (M13). An absent modifier (`None`) is `public` (the default — no diagnostics).
 fn lower_visibility(accessibility: Option<TSAccessibility>) -> Visibility {
@@ -1076,8 +1412,9 @@ fn has_public_constructor(class: &Class<'_>) -> bool {
 ///
 /// The interner re-sorts into canonical (name-sorted) order when the object is filled,
 /// so the order here only affects which entry survives a duplicate name — own over
-/// base, matching TS override semantics. (Override *compatibility* checking, `TK2416`,
-/// is deferred: an incompatible override is accepted, it just replaces the base type.)
+/// base, matching TS override semantics. (Override *compatibility* — `TK2416` — is
+/// checked separately by [`Pass::collect_override_checks`] before this composes;
+/// composition itself still just replaces the base member with the derived one.)
 fn compose_members(
     base_properties: Vec<PropertyType>,
     own_properties: Vec<PropertyType>,
