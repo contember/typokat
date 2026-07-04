@@ -1,0 +1,21 @@
+// M24 — circular constraints: a constraint chain that revisits its own type
+// parameter (following only bare type-parameter constraints) is TK2313 at the
+// constraint annotation, and the parameter records NO constraint — so the
+// degenerate cycle cannot make `T` assignable to everything through the
+// relation engine's assume-true stack (that was a dropped-error bug).
+// Structural self-reference (`<T extends { self: T }>`) is NOT circular.
+// tsc 6.0.3 --strict cross-checked.
+
+function f<T extends T>(t: T): number { // error[TK2313]: Type parameter 'T' has a circular constraint
+  return t; // error[TK2322]: Type 'T' is not assignable to type 'number'
+}
+
+function g<T extends U, U extends T>(t: T): number { // error[TK2313]: circular constraint | error[TK2313]: circular constraint
+  return t; // error[TK2322]
+}
+
+// Structural indirection breaks the chain: legal, terminates via the cycle
+// stack, and the apparent type works.
+function h<T extends { self: T }>(t: T): { self: T } {
+  return t;
+}
