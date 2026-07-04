@@ -46,3 +46,4 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 - [`22`](22-new-callee-forms.md) — `new (C)()` / aliased `new` miss class-keyed checks (`TK2511`/`TK2673`/`TK2674`).
 - [`23`](23-static-method-type-params.md) — `static of<U>(u: U)` raises spurious `TK2304`.
 - [`24`](24-rest-elements-in-type-model.md) — tuple rest elements + rest parameters missing from the type model (silently permissive).
+- [`25`](25-intersection-types.md) — intersection types (`A & B`) missing from the type model (silently permissive).
