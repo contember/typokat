@@ -22,3 +22,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 <!-- one line per active sprint; empty between sprints -->
 - [`sprint-2026-07-04-generic-constraints.md`](sprint-2026-07-04-generic-constraints.md) —
   backlog `08` / M24: `<T extends U>` (TK2344, apparent type, clamped inference).
+- [`sprint-2026-07-04-conditional-types.md`](sprint-2026-07-04-conditional-types.md) —
+  backlog `09` / M25: `T extends U ? X : Y` (evaluator, `infer`, distribution, TK2589/TK2456;
+  ADR-0002 de Bruijn scoping).

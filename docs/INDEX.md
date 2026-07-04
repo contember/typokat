@@ -24,6 +24,8 @@ decisions → reference → archive.
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 - [`sprints/sprint-2026-07-04-generic-constraints.md`](sprints/sprint-2026-07-04-generic-constraints.md) —
   backlog `08` / M24 (spec committed, implementation in progress).
+- [`sprints/sprint-2026-07-04-conditional-types.md`](sprints/sprint-2026-07-04-conditional-types.md) —
+  backlog `09` / M25 (spec corpus written, awaiting M24 land; ADR-0002 resolves the de Bruijn scope).
 
 ## What's hot
 
