@@ -19,3 +19,24 @@ function g<T extends U, U extends T>(t: T): number { // error[TK2313]: circular 
 function h<T extends { self: T }>(t: T): { self: T } {
   return t;
 }
+
+// COMPOSITE circularity: the chain walk follows union/intersection MEMBERS
+// (a bare-param member continues the chain), so these are TK2313 too — the
+// union-source assume-true rule must not turn them into assignable-to-anything.
+function ua<T extends T | number>(t: T): number { // error[TK2313]: Type parameter 'T' has a circular constraint
+  return t; // error[TK2322]
+}
+function ib<T extends T & { x: number }>(t: T): number { // error[TK2313]: circular constraint
+  return t; // error[TK2322]
+}
+function ud<T extends U | number, U extends T>(t: T): number { // error[TK2313]: circular constraint | error[TK2313]: circular constraint
+  return t; // error[TK2322]
+}
+
+// A composite chain that terminates is legal — no TK2313; the return check
+// still fails through the constraint (typokat names 'T', tsc renders the
+// resolved constraint 'string | number' — message-only divergence, code-only
+// marker).
+function uc<T extends U | number, U extends string>(t: T): number {
+  return t; // error[TK2322]
+}
