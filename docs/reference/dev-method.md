@@ -91,11 +91,11 @@ relation engine + narrowing come **before** type-level evaluation, never the rev
 evaluation is tree-walked, with the bytecode VM a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)).
 
-Recommended next: item `07` (unstructured-flow narrowing, M23 — spec committed, the biggest
-remaining narrowing gap), then `08` (generic constraints, M24 — plan the de Bruijn migration at its
-start, per invariants §2), then the type-level evaluation phase (`09`–`12`). Items `01`–`06` and
-`20` are shipped/closed; do not plan new work from those deleted backlog numbers. The small
-review-finding items (`21`–`23`) make good warm-ups between milestones.
+Recommended next: item `08` (generic constraints, M24 — add the constraint slot so it survives
+the de Bruijn migration, which invariants §2 schedules at the start of `09`), then the type-level
+evaluation phase (`09`–`12`). Items `01`–`07` and `20` are shipped/closed; do not plan new work
+from those deleted backlog numbers. The small review-finding items (`21`–`23`) make good warm-ups
+between milestones.
 
 For each item you pick: write its fixture corpus first, update `tests/cases/README.md`, commit the
 spec, dispatch the implementation subagent, dispatch the independent review, fix, and commit. Same

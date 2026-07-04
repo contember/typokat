@@ -12,10 +12,10 @@ documents something a future reader needs. Dependencies go in frontmatter:
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.
 
-This **is** the roadmap. Items `01`–`06` and `20` shipped — `01`–`04` (current-impl bugs), `05`
-(object/interface method/call/construct signatures, F1), `06` + `20` (class completeness +
-constructor accessibility); see [`../archive/`](../archive/README.md).
-`07`–`17` are the milestone roadmap. Architecture §12 governs ordering — the relation
+This **is** the roadmap. Items `01`–`07` and `20` shipped — `01`–`04` (current-impl bugs), `05`
+(object/interface signatures, F1), `06` + `20` (class completeness + constructor accessibility),
+`07` (unstructured-flow narrowing, M23); see [`../archive/`](../archive/README.md).
+`08`–`17` are the milestone roadmap. Architecture §12 governs ordering — the relation
 engine + narrowing come **before** type-level evaluation, whose speed lives in the tree-walker's
 algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor — see
 [ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). See
@@ -23,8 +23,7 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 
 ## Items
 
-**Narrowing + generics (both precede type-level evaluation)**
-- [`07`](07-unstructured-flow-narrowing.md) — unstructured-flow narrowing, the flow-node CFG (M23) — **in sprint** ([spec committed](../sprints/sprint-2026-07-04-unstructured-flow-narrowing.md)).
+**Generics (precede type-level evaluation)**
 - [`08`](08-generic-constraints.md) — generic constraints `<T extends U>` (M24).
 
 **The type-level evaluation phase (tree-walked; bytecode VM deferred — ADR-0001)**

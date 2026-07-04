@@ -20,5 +20,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-07-04-unstructured-flow-narrowing.md`](sprint-2026-07-04-unstructured-flow-narrowing.md) —
-  backlog `07` / M23: the flow-node CFG (spec committed; implementation in progress).
+- _none active_

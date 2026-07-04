@@ -7,10 +7,11 @@ full classes, and the common "real-world" type constructs. It is a **checker, no
 emit, JS runtime semantics, and module resolution are out of scope by design — the goal is to
 preserve the **type model** (see [`docs/reference/architecture.md`](./docs/reference/architecture.md)).
 
-> Status: **M0–M22** implemented, plus class-completeness checks (override compatibility,
-> abstract-member completeness) and constructor accessibility. ~18k lines of Rust, 172 unit
-> tests + a 96-file conformance corpus (259 expected diagnostics), `clippy -D warnings` clean.
-> Every milestone was cross-checked against real `tsc 6.0.3 --strict`.
+> Status: **M0–M23** implemented (M23 = narrowing through unstructured flow via a flow-node
+> CFG), plus class-completeness checks (override compatibility, abstract-member completeness)
+> and constructor accessibility. ~19k lines of Rust, 172 unit tests + a 97-file conformance
+> corpus (262 expected diagnostics), `clippy -D warnings` clean. Every milestone was
+> cross-checked against real `tsc 6.0.3 --strict`.
 
 ## Quick start
 
@@ -37,7 +38,7 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 | Area | Coverage |
 |---|---|
 | **Foundation** | primitives & intrinsics (`any`/`unknown`/`never`/`void`, strict null), objects (structural, excess/missing/depth, **optional members `a?: T`**), functions (arity, contravariant params, void-return rule), unions (canonicalized), recursive & mutually-recursive named types, literal types |
-| **Narrowing** | `typeof`, truthiness, `null`/`undefined` equality, **discriminated unions**, `in`, `switch` (flow-sensitive, scoped) |
+| **Narrowing** | `typeof`, truthiness, `null`/`undefined` equality, **discriminated unions**, `in`, `switch`; **unstructured flow** via the flow-node CFG — early `return`/`throw`, `&&`/`\|\|`/ternary, assignment narrowing, `while` loop edges (back edge / exit / `break` / `continue`) |
 | **Generics** | type parameters, instantiation, **type-argument inference** from call arguments |
 | **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract` (incl. **abstract-member completeness**); **generic classes**; **override compatibility** (tsc's base-keyed method bivariance); **constructor accessibility** on `new` |
 | **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, contextual typing), index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`) |
@@ -67,8 +68,10 @@ and fast:
 - **Binder** — a scope graph with **multi-slot symbols** (value / type / namespace spaces), which is
   what lets a class be both a type (instance) and a value (constructor), and what nominal classes
   key on.
-- **Statement checker** — a flow-sensitive interpreter: a narrowing environment that forks at
-  `if`/`else`/`switch` and restores after, plus the generic **inference engine** (a separate,
+- **Statement checker** — a flow-sensitive interpreter over a **flow-node CFG** (M23): a pre-pass
+  builds each body's flow graph (conditions, assignments, joins, loop labels, unreachable), and
+  references resolve by a memoized backward walk — with the same provisional-state cache
+  discipline as the relation engine. Plus the generic **inference engine** (a separate,
   generative machine from the relation engine).
 
 ## How it was built
@@ -95,7 +98,7 @@ src/
   driver.rs, main.rs, span.rs, diagnostics.rs   pipeline, CLI, spans, diagnostics + rendering
   types/    store · intern (hash-consing) · repr · hash · substitute   the type store
   binder/   scope · symbol (multi-slot) · bind                          scope graph
-  check/    checker · infer (inference engine) · flow (narrowing ops)   the checkers
+  check/    checker (incl. flowgraph) · infer (inference engine) · flow (nodes + narrowing ops)   the checkers
   relate/   relation (is_assignable, cycle stack, reasons) · cache      the relation engine
 tests/
   conformance.rs        marker-driven harness (MILESTONE_DIRS enables m0..m22 + bug-fix corpora)
@@ -106,9 +109,10 @@ tests/
 
 By design `typokat` keeps types and drops emit/runtime; beyond that, these are conscious deferrals:
 
-- **Narrowing through unstructured flow** — `if (x.kind === "a") return; …` does **not** narrow the
-  code after the early `return` (only structured `if`/`else`/`switch` narrows). This needs the
-  flow-node CFG and is the most likely to surprise on idiomatic code.
+- **Narrowing deferrals past M23** — assertion functions / type predicates (`x is T`),
+  `for`/`for-of`/`do-while` loop forms (fall back to declared types — safe), closure narrowing of
+  never-reassigned bindings, and member-path narrowing (`x.a` — narrowing is symbol-keyed).
+  Declaration initializers deliberately don't narrow.
 - **The type-level evaluation phase** — conditional types (`T extends U ? X : Y`), mapped types, and
   utility types (`Partial`, `Record`, …) are not implemented; they will be tree-walked with the
   algorithmic wins folded in (architecture §7). Generic `keyof`/`T[K]` over a bare type parameter

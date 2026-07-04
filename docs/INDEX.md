@@ -22,16 +22,16 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprints/sprint-2026-07-04-unstructured-flow-narrowing.md`](sprints/sprint-2026-07-04-unstructured-flow-narrowing.md) —
-  backlog `07` / M23 (the flow-node CFG; spec committed, implementation in progress).
+- _none active_
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M22 + class completeness (backlog `06`) + constructor accessibility (`20`) shipped** —
-  `TK2416`/`TK2515`/`TK2654`/`TK2673`/`TK2674`, plus the official-suite header-alignment harness
-  fix (see [`archive/sprint-2026-07-04-class-completeness-ctor-accessibility.md`](archive/sprint-2026-07-04-class-completeness-ctor-accessibility.md)).
-  **In flight: unstructured-flow narrowing (`07` / M23)** — spec committed, implementation next.
-  Then: generic constraints (`08` / M24) → the type-level evaluation phase (`09`–`12`). New gaps
-  filed from reviews: `21` local classes, `22` new-callee forms, `23` static method type params.
+- **M0–M23 shipped** — M23 (unstructured-flow narrowing via the flow-node CFG, the single
+  narrowing model) closed 2026-07-04 on top of class completeness (`06`) + constructor
+  accessibility (`20`) and the official-suite header-alignment harness fix (see
+  [`archive/`](archive/README.md)). Scoreboard: diag-recall 250/1659, error-exact 21/285.
+  **Next: generic constraints (`08` / M24)** → the type-level evaluation phase (`09`–`12`,
+  de Bruijn migration at `09`). Small warm-up gaps from reviews: `21` local classes, `22`
+  new-callee forms, `23` static method type params.

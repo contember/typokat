@@ -1,10 +1,22 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME — shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU1 → <sha>,
-> WU2 → <sha>, … Verification: <the gate command + numbers>. Backlog closed:
-> <ids deleted/rescoped>. Deferred: <honest notes>.
--->
+> **OUTCOME — shipped 2026-07-04.** M23 landed: narrowing works through unstructured flow via a
+> flow-node CFG, now the SINGLE narrowing model (fork-and-restore deleted; every m7/m8 test
+> passed through the CFG unchanged). Graph built in a pre-pass so loop back edges are complete
+> before any resolution; memoized backward walk with a single-unroll loop fixpoint whose
+> provisional seeds are never durably memoized (the relation-cache §6.3 lesson applied to flow).
+> Early `return`/`throw`, `&&`/`||`/ternary, assignment narrowing (narrows to assigned type;
+> destructuring targets reset every bound identifier), `while` back/exit/`break`/`continue`
+> edges. Review round 1 FAIL caught two real issues, both fixed: destructuring assignments kept
+> a stale narrow (dropped error — spec amended 460807f) and a `never` member-access suppression
+> mislabeled as tsc behavior (reverted; it was masking a correct baseline match). Commit map:
+> plan → a65d6d5, spec → edf83e9, amendment → 460807f, impl(+review fixes) → b41a0d2,
+> ratchet → 21e654f. Verification: `cargo test` (172 unit + conformance, m23 corpus 6 files),
+> `clippy -D warnings`, stress probes (1000-deep nesting, `while(true)`) panic-free;
+> official-suite diag-recall 239→250/1659, error-exact 20→21, `typeGuardsInWhileStatement` 3/3;
+> clean-kept 165→163 — the audited cost of 8 accepted sound over-reports (lib-shaped member
+> accesses on newly-walked flow; matched never drops, fn never rises; listed in
+> tests/cases/README.md). Backlog closed: `07` (deleted). Deferred (documented): assertion
+> functions / `x is T`, `for`/`for-of`/`do-while`, closure narrowing, member-path narrowing,
+> declaration initializers don't narrow.
 
 # Sprint — unstructured-flow narrowing, the flow-node CFG / M23 (2026-07-04)
 
