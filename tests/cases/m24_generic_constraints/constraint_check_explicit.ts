@@ -27,3 +27,10 @@ type TA<T extends HasX> = { val: T };
 const okI: IBox<{ x: number }> = { val: { x: 1 } };
 const badI: IBox<string> = { val: "s" }; // error[TK2344]
 const badT: TA<number> = { val: 5 }; // error[TK2344]
+
+// An unresolvable constraint reports at the annotation (same as any other
+// unresolved name — tsc behavior) and records NO constraint: explicit args
+// are then unchecked (no TK2344 cascade), inference proceeds.
+function h<T extends Bogus>(t: T): T { return t; } // error[TK2304]: Cannot find name 'Bogus'
+h<number>(5);
+const hv = h("s");
