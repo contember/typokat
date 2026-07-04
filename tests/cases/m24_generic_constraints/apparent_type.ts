@@ -25,3 +25,27 @@ function inline<T extends { s: string }>(t: T): string {
   const v: string = t.s;
   return v;
 }
+
+// The apparent type governs EVERY structural consumer, not just member READS
+// (review findings F1–F3): writes, element access, and calls all resolve
+// through the constraint.
+
+// Member WRITE through the constraint.
+function writeX<T extends HasX>(t: T): void {
+  t.x = 1;
+  t.x = "s"; // error[TK2322]: Type 'string' is not assignable to type 'number'
+}
+
+// Element/computed READ through the constraint (literal key and array index).
+function elemKey<T extends HasX>(t: T): string {
+  return t["x"]; // error[TK2322]: Type 'number' is not assignable to type 'string'
+}
+function elemIndex<T extends number[]>(t: T): string {
+  return t[0]; // error[TK2322]: Type 'number' is not assignable to type 'string'
+}
+
+// CALLING a value whose type is a constrained parameter.
+function callIt<T extends (a: number) => number>(t: T): string {
+  t("s"); // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'
+  return t(1); // error[TK2322]: Type 'number' is not assignable to type 'string'
+}

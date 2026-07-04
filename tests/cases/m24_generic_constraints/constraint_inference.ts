@@ -29,3 +29,12 @@ nums(strs); // error[TK2345]
 // contextual-typing pass is the documented out-of-scope deferral, so typokat
 // stays silent (documented divergence, tests/cases/README.md).
 pick({ y: 1 });
+
+// The freshness exemption is per-ARGUMENT, not per-parameter (review finding
+// F4): the exemption holds only when EVERY candidate for the parameter came
+// from a fresh literal — a fresh satisfying literal must not shield a
+// separate non-fresh violating argument binding the same T.
+declare function one<T extends HasX>(a: T, b: T): T;
+declare const ny2: { y: number };
+one({ x: 1 }, ny2); // error[TK2345]: is not assignable to parameter
+one(ny2, { x: 1 }); // error[TK2345]: is not assignable to parameter
