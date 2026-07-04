@@ -7,11 +7,13 @@ full classes, and the common "real-world" type constructs. It is a **checker, no
 emit, JS runtime semantics, and module resolution are out of scope by design — the goal is to
 preserve the **type model** (see [`docs/reference/architecture.md`](./docs/reference/architecture.md)).
 
-> Status: **M0–M23** implemented (M23 = narrowing through unstructured flow via a flow-node
-> CFG), plus class-completeness checks (override compatibility, abstract-member completeness)
-> and constructor accessibility. ~19k lines of Rust, 172 unit tests + a 97-file conformance
-> corpus (262 expected diagnostics), `clippy -D warnings` clean. Every milestone was
-> cross-checked against real `tsc 6.0.3 --strict`.
+> Status: **M0–M24** implemented (M24 = generic constraints: `TK2344` on explicit type
+> arguments, the constraint as the parameter's apparent type across every structural
+> consumer, clamp-to-constraint inference, `TK2313` circular constraints), on top of the
+> M23 flow-node CFG, class completeness, and constructor accessibility. ~19.5k lines of
+> Rust, 172 unit tests + a 101-file conformance corpus (293 expected diagnostics),
+> `clippy -D warnings` clean. Every milestone was cross-checked against real
+> `tsc 6.0.3 --strict`.
 
 ## Quick start
 
@@ -47,11 +49,12 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 ### Diagnostics
 
 `tsc`-compatible numeric codes with a `TK` prefix:
-`TK2304` (cannot find name), `TK2322` (not assignable), `TK2339` (no such property),
-`TK2341`/`TK2445` (private/protected), `TK2345` (argument), `TK2353` (excess property),
-`TK2416` (incompatible override), `TK2511` (instantiate abstract), `TK2515`/`TK2654`
-(abstract member not implemented), `TK2540` (assign read-only), `TK2554` (arity),
-`TK2673`/`TK2674` (private/protected constructor), `TK2741` (missing property).
+`TK2304` (cannot find name), `TK2313` (circular constraint), `TK2322` (not assignable),
+`TK2339` (no such property), `TK2341`/`TK2445` (private/protected), `TK2344` (constraint
+not satisfied), `TK2345` (argument), `TK2353` (excess property), `TK2416` (incompatible
+override), `TK2511` (instantiate abstract), `TK2515`/`TK2654` (abstract member not
+implemented), `TK2540` (assign read-only), `TK2554` (arity), `TK2673`/`TK2674`
+(private/protected constructor), `TK2741` (missing property).
 
 ## Architecture
 

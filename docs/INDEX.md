@@ -22,19 +22,17 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprints/sprint-2026-07-04-generic-constraints.md`](sprints/sprint-2026-07-04-generic-constraints.md) —
-  backlog `08` / M24 (spec committed, implementation in progress).
 - [`sprints/sprint-2026-07-04-conditional-types.md`](sprints/sprint-2026-07-04-conditional-types.md) —
-  backlog `09` / M25 (spec corpus written, awaiting M24 land; ADR-0002 resolves the de Bruijn scope).
+  backlog `09` / M25 (spec corpus written; ADR-0002 resolves the de Bruijn scope).
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M23 shipped** — M23 (unstructured-flow narrowing via the flow-node CFG, the single
-  narrowing model) closed 2026-07-04 on top of class completeness (`06`) + constructor
-  accessibility (`20`) and the official-suite header-alignment harness fix (see
-  [`archive/`](archive/README.md)). Scoreboard: diag-recall 250/1659, error-exact 21/285.
-  **Next: generic constraints (`08` / M24)** → the type-level evaluation phase (`09`–`12`,
-  de Bruijn migration at `09`). Small warm-up gaps from reviews: `21` local classes, `22`
-  new-callee forms, `23` static method type params.
+- **M0–M24 shipped** — M24 (generic constraints: TK2344/TK2345/TK2313, the apparent-type
+  resolver) closed 2026-07-04 after five fix rounds (see [`archive/`](archive/README.md));
+  ADR-0002 scoped de Bruijn to `infer` binders. Scoreboard: in-scope 491, clean-kept 164/209,
+  diag-recall 250/1651. **Now: conditional types (`09` / M25)** — spec corpus committed —
+  then the rest of the type-level phase (`10`–`12`). Known type-model gaps filed from probes:
+  `24` rest elements, `25` intersections. Small warm-ups: `21` local classes, `22` new-callee
+  forms, `23` static method type params.

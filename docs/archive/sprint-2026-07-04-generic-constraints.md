@@ -1,6 +1,32 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/.
--->
+# OUTCOME (closed 2026-07-04) — SHIPPED
+
+**M24 shipped.** Constraints are checked on explicit type args (`TK2344`), act as the
+apparent type through EVERY structural consumer (reads, writes, element access,
+call/construct signatures, union members, destructuring — via the shared
+`Pass::apparent_type`), participate in inference (clamp-to-constraint → `TK2345`,
+per-argument freshness exemption), and circular constraints are `TK2313` (bare-param
+chains + union members, DFS at lowering). `TK2304` surfaces for unresolvable
+constraint annotations.
+
+**Commit map.** Spec `2fb720f` · plan `bb75673` · spec amendments `162a78b` (TK2304
+not suppressed), `02f58a5` (TK2313 circularity), `1aa2a4f` (non-fresh clamp),
+`d118a60` (composite circularity), `c54bd47` (intersection case dropped → backlog
+`25`), `cb9bae8` (review F1–F4) · implementation `803e1ca` · ratchet `1a2b958`.
+
+**Verification.** 172 unit + conformance green (m24: 4 files / 31 markers), clippy
+clean. Official suite: +2 progress (`typeParameterUsedAsTypeParameterConstraint{,2}`
+fp 12→0), 4 audited `IN → OOS:unresolved` (lib-global TK2304 in constraint position,
+all matched=0 — coverage-only cost). Scoreboard: in-scope 495→491, clean-kept
+164/209, error-exact 21/282, diag-recall 250/1651. Five fix rounds total: four from
+leader verification, one from the independent adversarial review (FAIL → all four
+findings fixed → re-review PASS).
+
+**Deferred.** Contextual typing of args against the constraint (tsc TS2353 shape);
+intersection types (backlog `25`, found here); rest elements (backlog `24`); `keyof`
+constraints, type-param defaults (unchanged deferrals); generic-base heritage clause
+as a TK2344 site (pre-existing generic-base composition deferral).
+
+---
 
 # Sprint — generic constraints `<T extends U>` / M24 (2026-07-04)
 

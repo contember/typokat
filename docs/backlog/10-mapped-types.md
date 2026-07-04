@@ -1,7 +1,6 @@
 ---
 id: 10
 title: Mapped types ({ [K in keyof T]: … }) — M26
-blocked-by: [./08-generic-constraints.md]
 ---
 
 # 10 — Mapped types (`{ [K in keyof T]: … }`)

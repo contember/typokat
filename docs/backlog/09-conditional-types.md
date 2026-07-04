@@ -1,7 +1,6 @@
 ---
 id: 09
 title: Conditional types (T extends U ? X : Y) — M25
-blocked-by: [./08-generic-constraints.md]
 ---
 
 # 09 — Conditional types (`T extends U ? X : Y`)

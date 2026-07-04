@@ -12,10 +12,10 @@ documents something a future reader needs. Dependencies go in frontmatter:
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.
 
-This **is** the roadmap. Items `01`–`07` and `20` shipped — `01`–`04` (current-impl bugs), `05`
+This **is** the roadmap. Items `01`–`08` and `20` shipped — `01`–`04` (current-impl bugs), `05`
 (object/interface signatures, F1), `06` + `20` (class completeness + constructor accessibility),
-`07` (unstructured-flow narrowing, M23); see [`../archive/`](../archive/README.md).
-`08`–`17` are the milestone roadmap. Architecture §12 governs ordering — the relation
+`07` (unstructured-flow narrowing, M23), `08` (generic constraints, M24); see
+[`../archive/`](../archive/README.md). `09`–`17` are the milestone roadmap. Architecture §12 governs ordering — the relation
 engine + narrowing come **before** type-level evaluation, whose speed lives in the tree-walker's
 algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor — see
 [ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). See
@@ -23,12 +23,9 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 
 ## Items
 
-**Generics (precede type-level evaluation)**
-- [`08`](08-generic-constraints.md) — generic constraints `<T extends U>` (M24).
-
 **The type-level evaluation phase (tree-walked; bytecode VM deferred — ADR-0001)**
-- [`09`](09-conditional-types.md) — conditional types (M25) · blocked-by `08`.
-- [`10`](10-mapped-types.md) — mapped types (M26) · blocked-by `08`.
+- [`09`](09-conditional-types.md) — conditional types (M25) — **in sprint**.
+- [`10`](10-mapped-types.md) — mapped types (M26).
 - [`11`](11-template-literal-types.md) — template literal types (M27).
 - [`12`](12-utility-types.md) — utility types (M28) · blocked-by `09`, `10`.
 - [`13`](13-bytecode-vm.md) — post-evaluator profiling gate: bytecode VM only if measured dispatch overhead remains after `09`–`12` · blocked-by `09`–`12`.
