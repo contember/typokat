@@ -98,8 +98,12 @@ slots into a known later phase without rework:
   in `controlFlowIterationErrors` from the complex-RHS reset-to-declared rule on a loop back edge
   (tsc narrows `x = fn(x)` to the return type; typokat resets — wider, sound).
 - **generics**: explicit type arguments + instantiation (**M9**) and type-argument **inference**
-  (**M10**) are implemented; **constraints** (`extends`, M11) follow. Type parameters use a named
-  representation for now; de Bruijn indices (§3.1) are the pre-VM (Phase 3) target.
+  (**M10**) are implemented; **constraints** (`<T extends U>`: `TK2344` on explicit arguments,
+  the constraint as the apparent type, clamp-to-constraint inference reporting `TK2345`) are
+  specced in `m24_generic_constraints/` and land with backlog `08` (**M24**). Out of that scope
+  (deferred): `K extends keyof T` (the generic-`keyof` deferral), contextual typing of object
+  literals against a constraint (tsc `TS2353`), type-parameter defaults. Type parameters use a
+  named representation for now; the de Bruijn migration opens the conditional-types milestone.
 - **classes**: fields/constructor/methods/`this`/`new`/structural instances (**M11**),
   inheritance (`extends`, `super`) (**M12**), and access modifiers (`private`/`protected` —
   access control + nominal typing) + `static` members (**M13**), member-assignment checking
@@ -187,6 +191,7 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m21_optional/` | M21 — optional properties (`a?: T`) on objects / interfaces / class instance fields |
 | `m22_unresolved_type/` | M22 — `TK2304` for an unresolved type reference in type position |
 | `m23_unstructured_narrowing/` | M23 — narrowing through unstructured flow (early exit, `&&`/`||`/ternary, assignment, loop edges) |
+| `m24_generic_constraints/` | M24 — generic constraints (`TK2344`, apparent type, clamp-to-constraint inference) |
 
 ## Bug-fix / backlog corpora
 
