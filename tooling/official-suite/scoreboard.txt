@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
 # corpus 874  in-scope 495  out-of-scope 379
-# clean-kept 165/210  error-exact 20/285  diag-recall 239/1659
+# clean-kept 163/210  error-exact 21/285  diag-recall 250/1659
 # cols: status<TAB>matched fn fp expected<TAB>rel  (status=IN | OOS:<bucket>; '-' = n/a)
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -316,8 +316,8 @@ OOS:unresolved	- - - -	conformance/controlFlow/controlFlowIfStatement.ts
 OOS:syntax:template-lit-type	- - - -	conformance/controlFlow/controlFlowInOperator.ts
 OOS:syntax:instanceof	- - - -	conformance/controlFlow/controlFlowInstanceOfGuardPrimitives.ts
 OOS:syntax:module	- - - -	conformance/controlFlow/controlFlowInstanceofExtendsFunction.ts
-IN	0 0 0 0	conformance/controlFlow/controlFlowIteration.ts
-IN	0 4 1 4	conformance/controlFlow/controlFlowIterationErrors.ts
+IN	0 0 2 0	conformance/controlFlow/controlFlowIteration.ts
+IN	2 2 6 4	conformance/controlFlow/controlFlowIterationErrors.ts
 OOS:unresolved	- - - -	conformance/controlFlow/controlFlowIterationErrorsAsync.ts
 IN	0 0 1 0	conformance/controlFlow/controlFlowNoIntermediateErrors.ts
 IN	0 1 1 1	conformance/controlFlow/controlFlowNullishCoalesce.ts
@@ -376,27 +376,27 @@ IN	2 13 14 15	conformance/expressions/typeGuards/typeGuardOfFormTypeOfOther.ts
 IN	0 6 0 6	conformance/expressions/typeGuards/typeGuardOfFormTypeOfPrimitiveSubtype.ts
 IN	0 29 0 29	conformance/expressions/typeGuards/typeGuardOfFormTypeOfString.ts
 OOS:syntax:instanceof	- - - -	conformance/expressions/typeGuards/typeGuardOfFromPropNameInUnionType.ts
-IN	0 14 0 14	conformance/expressions/typeGuards/typeGuardRedundancy.ts
+IN	4 10 4 14	conformance/expressions/typeGuards/typeGuardRedundancy.ts
 IN	0 2 0 2	conformance/expressions/typeGuards/typeGuardTautologicalConsistiency.ts
 IN	0 0 0 0	conformance/expressions/typeGuards/typeGuardTypeOfUndefined.ts
 OOS:unresolved	- - - -	conformance/expressions/typeGuards/typeGuardsDefeat.ts
 IN	0 0 20 0	conformance/expressions/typeGuards/typeGuardsInClassAccessors.ts
 IN	0 20 15 20	conformance/expressions/typeGuards/typeGuardsInClassMethods.ts
-IN	0 0 0 0	conformance/expressions/typeGuards/typeGuardsInConditionalExpression.ts
+IN	0 0 3 0	conformance/expressions/typeGuards/typeGuardsInConditionalExpression.ts
 IN	0 3 0 3	conformance/expressions/typeGuards/typeGuardsInDoStatement.ts
 OOS:syntax:module	- - - -	conformance/expressions/typeGuards/typeGuardsInExternalModule.ts
 IN	0 6 0 6	conformance/expressions/typeGuards/typeGuardsInForStatement.ts
 IN	0 25 18 25	conformance/expressions/typeGuards/typeGuardsInFunction.ts
 OOS:syntax:module	- - - -	conformance/expressions/typeGuards/typeGuardsInFunctionAndModuleBlock.ts
 IN	0 3 1 3	conformance/expressions/typeGuards/typeGuardsInGlobal.ts
-IN	0 2 3 2	conformance/expressions/typeGuards/typeGuardsInIfStatement.ts
+IN	1 1 4 2	conformance/expressions/typeGuards/typeGuardsInIfStatement.ts
 OOS:syntax:module	- - - -	conformance/expressions/typeGuards/typeGuardsInModule.ts
 IN	0 0 4 0	conformance/expressions/typeGuards/typeGuardsInProperties.ts
-IN	0 0 1 0	conformance/expressions/typeGuards/typeGuardsInRightOperandOfAndAndOperator.ts
-IN	0 1 1 1	conformance/expressions/typeGuards/typeGuardsInRightOperandOfOrOrOperator.ts
-IN	0 3 0 3	conformance/expressions/typeGuards/typeGuardsInWhileStatement.ts
+IN	0 0 3 0	conformance/expressions/typeGuards/typeGuardsInRightOperandOfAndAndOperator.ts
+IN	1 0 2 1	conformance/expressions/typeGuards/typeGuardsInRightOperandOfOrOrOperator.ts
+IN	3 0 0 3	conformance/expressions/typeGuards/typeGuardsInWhileStatement.ts
 IN	0 0 8 0	conformance/expressions/typeGuards/typeGuardsObjectMethods.ts
-IN	0 1 2 1	conformance/expressions/typeGuards/typeGuardsOnClassProperty.ts
+IN	0 1 4 1	conformance/expressions/typeGuards/typeGuardsOnClassProperty.ts
 OOS:syntax:instanceof	- - - -	conformance/expressions/typeGuards/typeGuardsWithAny.ts
 OOS:syntax:instanceof	- - - -	conformance/expressions/typeGuards/typeGuardsWithInstanceOf.ts
 OOS:syntax:instanceof	- - - -	conformance/expressions/typeGuards/typeGuardsWithInstanceOfByConstructorSignature.ts

@@ -90,6 +90,13 @@ slots into a known later phase without rework:
   predicates (`x is T`), `for`/`for-of`/`do-while` loop forms, and narrowing seen by a **closure**
   over a never-reassigned binding (tsc narrows; typokat keeps the function-boundary reset —
   over-report, safe direction).
+  Accepted official-suite over-reports from M23 (safe direction, recorded in the scoreboard —
+  independently audited: matched never drops, fn never rises): walking `while` bodies / ternary
+  arms / logical RHS surfaces lib-shaped `TK2339` (`.length`/`.toString`/… on correctly-narrowed
+  primitives — no `lib.d.ts`) in `controlFlowIteration*`, `typeGuardsIn{If,ConditionalExpression}`,
+  `typeGuards{Redundancy,OnClassProperty}`, `…RightOperandOf{AndAnd,OrOr}Operator`; plus `TK2345`
+  in `controlFlowIterationErrors` from the complex-RHS reset-to-declared rule on a loop back edge
+  (tsc narrows `x = fn(x)` to the return type; typokat resets — wider, sound).
 - **generics**: explicit type arguments + instantiation (**M9**) and type-argument **inference**
   (**M10**) are implemented; **constraints** (`extends`, M11) follow. Type parameters use a named
   representation for now; de Bruijn indices (§3.1) are the pre-VM (Phase 3) target.
