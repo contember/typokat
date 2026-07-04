@@ -226,3 +226,15 @@ Implementations serialize — same files.
   across the shared relation cache, and the official-suite rows. Notes taken: `TS2425` deferred
   like `TS2426`; `TS2653` (class expressions) out of subset; local-class checking is a
   pre-existing subset gap; generic-base `TK2515` renders `Box` where tsc renders `Box<string>`.
+- 2026-07-04 (WU2 impl): ctor visibility + declaring `ClassId` carried on `ClassInfo` (inherited
+  with the ctor when a derived class has none); gate `check_new_accessibility` reuses the M13
+  `current_class` + `class_parents` walk; accessibility beats `TK2511` per probe. Where
+  construction is denied, arity/arg checks still run (over-report, consistent with the existing
+  abstract behavior; no fixture exercises the combo).
+- 2026-07-04 (WU2 impl — official-suite harness finding): the 2 `run --check` "regressions" on
+  `typesWith{Private,Protected}Constructor.ts` are a PRE-EXISTING `tsofficial.py::parse_units`
+  line-alignment bug — the harness strips `// @option:` headers but not the blank line after
+  them (TS's own harness does), so every blank-after-header corpus file (278; zero ever
+  exact-match) sits +1 off the baseline. Validated fix (strip one leading blank per unit) →
+  0 regressions / 6 progress incl. both ctor rows crediting the new TK2673/74; reverted, queued
+  for the WU3 ratchet pending independent confirmation.

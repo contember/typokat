@@ -192,6 +192,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// (aggregated) on the class name ([`report_missing_abstract_members`]). Both skip
     /// the generic-base / free-type-parameter shape (see below).
     ///
+    /// Backlog 20 (constructor accessibility): the constructor's **visibility** and its
+    /// **declaring class** are recorded on the class's [`ClassInfo`]
+    /// ([`ClassInfo::ctor_visibility`] / [`ClassInfo::ctor_declaring_class`]) — a derived
+    /// class with no own `constructor` **inherits** the base's, mirroring
+    /// [`ctor`](ClassInfo::ctor). A direct `new C(...)` is then gated on them
+    /// ([`check_new_accessibility`] → `TK2673`/`TK2674`), independent of the F1/WU3
+    /// static-side `has_public_constructor` gating (which stays on the AST).
+    ///
     /// DEFERRED (out of scope, skipped without error): set-only / differing-get-set-type /
     /// `static` accessors, `implements`, visibility-narrowing / private-redeclaration
     /// override errors (`TS2415`) and static-side override incompatibility (`TS2417`),
@@ -322,6 +330,21 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             },
         );
 
+        // Backlog 20: the constructor's visibility + declaring class, for gating a direct
+        // `new C(...)` ([`infer_new`]). An explicit own constructor contributes its own
+        // visibility, declared by this class; with no own constructor a derived class
+        // **inherits** the base's (mirroring `ctor` below), and a class with no base has
+        // the implicit public constructor. `ctor_params.is_some()` iff an explicit
+        // constructor is present (only that arm of `collect_class_own_members` sets it).
+        let (ctor_visibility, ctor_declaring_class) = if ctor_params.is_some() {
+            (constructor_visibility(class), class_id)
+        } else {
+            match base {
+                Some(base_info) => (base_info.ctor_visibility, base_info.ctor_declaring_class),
+                None => (Visibility::Public, class_id),
+            }
+        };
+
         // The constructor signature. With an explicit constructor, its parameters. With
         // none, M12: **inherit the base's constructor** (so `new Derived(...)` checks
         // against the base signature); for a class with no base either, the implicit
@@ -381,6 +404,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Register the class's `new`-info under its VALUE-space `DeclId` (the constructor
         // side), so `new ClassName(args)` resolves it via the value slot.
         if let Some(id) = &class.id {
+            // Backlog 20: record the class's display name, keyed by `ClassId`, so
+            // `infer_new` can name the constructor's **declaring** class (possibly a
+            // base) in a `TK2673`/`TK2674` message.
+            self.class_names.insert(class_id, id.name.to_string());
             if let Some(decl_id) = value_decl_id(self.binder, scope, id.name.as_str()) {
                 self.class_ctors.insert(
                     decl_id,
@@ -392,6 +419,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         super_ctor,
                         // M15: only this class's own `abstract` keyword matters for `new`.
                         is_abstract: class.r#abstract,
+                        // Backlog 20: the constructor's visibility + declaring class
+                        // (inherited from the base when this class has no own ctor).
+                        ctor_visibility,
+                        ctor_declaring_class,
                     },
                 );
                 // M16: record the class's type-parameter ids under the same value `DeclId`,
@@ -1053,6 +1084,63 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .map(|prop| (prop.visibility, prop.declaring_class))
     }
 
+    /// Backlog 20 — gate a direct `new C(...)` on the constructor's accessibility,
+    /// emitting `TK2673` (private) / `TK2674` (protected) on the whole `new` span when the
+    /// constructor is not reachable from the current context, and returning whether it was
+    /// **inaccessible** (so the caller suppresses the abstract-instantiation `TK2511`,
+    /// which tsc drops in favour of the accessibility error).
+    ///
+    /// A `public` constructor is always accessible. A `private` one is reachable only
+    /// lexically inside its **declaring** class (instance methods and statics both set
+    /// [`Pass::current_class`] to it). A `protected` one is reachable inside the declaring
+    /// class or a **subclass** of it (the M13 [`is_class_or_subclass`] walk — the same
+    /// machinery member access uses). The message names the constructor's **declaring**
+    /// class ([`ClassInfo::ctor_declaring_class`]), which is the base for an inherited
+    /// constructor.
+    pub(in crate::check::checker) fn check_new_accessibility(
+        &mut self,
+        info: &ClassInfo,
+        new_span: Span,
+    ) -> bool {
+        let declaring = info.ctor_declaring_class;
+        let diag = match info.ctor_visibility {
+            // A public (explicit or implicit) constructor is always accessible.
+            Visibility::Public => return false,
+            // Private: reachable only inside the exact declaring class's body.
+            Visibility::Private => {
+                if self.current_class == Some(declaring) {
+                    return false;
+                }
+                let name = self.declaring_class_name(declaring);
+                Diagnostic::constructor_is_private(new_span, name)
+            }
+            // Protected: reachable inside the declaring class or any subclass of it.
+            Visibility::Protected => {
+                let allowed = match self.current_class {
+                    Some(ctx) => self.is_class_or_subclass(ctx, declaring),
+                    None => false,
+                };
+                if allowed {
+                    return false;
+                }
+                let name = self.declaring_class_name(declaring);
+                Diagnostic::constructor_is_protected(new_span, name)
+            }
+        };
+        self.diagnostics.push(diag);
+        true
+    }
+
+    /// The display name of a constructor's declaring class (backlog 20), for a
+    /// `TK2673`/`TK2674` message. A defensive empty string keeps the message well-formed
+    /// if the id is somehow unknown (every named class is recorded in [`fill_class`]).
+    fn declaring_class_name(&self, class_id: ClassId) -> &str {
+        self.class_names
+            .get(&class_id)
+            .map(String::as_str)
+            .unwrap_or("")
+    }
+
     /// Whether `class_id` **is** `ancestor` or a **subclass** of it (M13), by walking the
     /// [`Pass::class_parents`] chain upward from `class_id`. Used to decide `protected`
     /// access: the accessing context's class must be the declaring class or a descendant.
@@ -1402,6 +1490,23 @@ fn has_public_constructor(class: &Class<'_>) -> bool {
         return lower_visibility(method.accessibility) == Visibility::Public;
     }
     true
+}
+
+/// The visibility of the class's **own** explicit constructor (backlog 20). A class
+/// with no explicit constructor has the implicit **public** constructor. Callers use
+/// this only when an own constructor exists (`ctor_params.is_some()`); a class with no
+/// own constructor inherits the base's visibility instead of calling this.
+fn constructor_visibility(class: &Class<'_>) -> Visibility {
+    for element in &class.body.body {
+        let ClassElement::MethodDefinition(method) = element else {
+            continue;
+        };
+        if method.kind != MethodDefinitionKind::Constructor {
+            continue;
+        }
+        return lower_visibility(method.accessibility);
+    }
+    Visibility::Public
 }
 
 /// Compose a derived class's instance members from its **base** members and its

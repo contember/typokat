@@ -293,3 +293,8 @@ class that is both `abstract` and inaccessibly-constructable, the accessibility 
 `TK2511` is suppressed (tsc 6.0.3 behavior, probed). Deferred (documented false negative):
 **`TS2675`** (`class D extends C` where `C`'s constructor is private) — a heritage-clause check,
 out of this corpus's direct-`new` scope; fixtures avoid that shape.
+Review-noted nuances (safe, cosmetic or pre-existing): for a generic class the message renders
+the bare class name (`Constructor of class 'Box' is private…`) where tsc renders `'Box<T>'`;
+`new` through a parenthesized callee (`new (Priv)()`) or a `const Alias = Priv` alias misses the
+class-keyed `new` checks — the same pre-existing boundary the shipped `TK2511` abstract check
+has (the class-value path is keyed on a direct identifier callee).

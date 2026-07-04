@@ -12,7 +12,7 @@ use crate::binder::symbol::{DeclId, SymbolId};
 use crate::binder::Binder;
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
-use crate::types::repr::{ClassId, TypeParamId};
+use crate::types::repr::{ClassId, TypeParamId, Visibility};
 use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_ast::ast::{Class, TSType, TSTypeParameterDeclaration};
@@ -220,6 +220,20 @@ pub(in crate::check::checker) struct ClassInfo {
     /// abstract (its own flag is `false`), so it instantiates fine. The flag is not
     /// part of the instance type's structural identity; it gates `new`, nothing else.
     pub(in crate::check::checker) is_abstract: bool,
+    /// The **constructor's visibility** (backlog 20), for gating a direct `new C(...)`
+    /// ([`infer_new`]): `private` is constructable only lexically inside the declaring
+    /// class, `protected` also inside its subclasses. A derived class with **no own
+    /// `constructor`** inherits the base's constructor visibility (mirroring
+    /// [`ctor`](ClassInfo::ctor)); a class with an explicit or implicit public
+    /// constructor is `Public`. Distinct from the F1/WU3 static-side construct-signature
+    /// gating (`has_public_constructor`), which stays on the AST.
+    pub(in crate::check::checker) ctor_visibility: Visibility,
+    /// The [`ClassId`] that **declares** the constructor gating this class's `new`
+    /// (backlog 20). For a derived class inheriting the base's constructor this is the
+    /// **base** class (so the `TK2673`/`TK2674` message names the declaring class, and
+    /// the `protected` subclass walk keys on it); otherwise this class itself. The
+    /// declaring class's *name* is looked up in [`Pass::class_names`] for the message.
+    pub(in crate::check::checker) ctor_declaring_class: ClassId,
 }
 
 /// A class's fill progress (M12), tracked per [`TypeDecl`] index so a derived class
@@ -318,6 +332,13 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// like [`class_pending_abstract`](Pass::class_pending_abstract) — so
     /// [`ClassInfo`] stays `Copy`.
     pub(in crate::check::checker) class_member_kinds: FxHashMap<DeclId, FxHashMap<String, bool>>,
+    /// A class's **display name** keyed by its stable [`ClassId`] (backlog 20). Built in
+    /// [`fill_class`] for every named class, so [`infer_new`] can name the constructor's
+    /// **declaring** class in a `TK2673`/`TK2674` message — the declaring class may be a
+    /// base ([`ClassInfo::ctor_declaring_class`]), not the class being constructed. A
+    /// sibling map — like [`class_member_kinds`](Pass::class_member_kinds) — so
+    /// [`ClassInfo`] stays `Copy` (a `ClassId` is `Copy`, a name is not).
+    pub(in crate::check::checker) class_names: FxHashMap<ClassId, String>,
     /// Per-class fill state (M12), indexed by `TypeDecl` index (parallel to
     /// [`type_decls`](Pass::type_decls)). A class entry tracks whether its instance
     /// type / constructor have been built yet, so a derived class can fill its **base

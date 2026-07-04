@@ -293,6 +293,7 @@ pub fn check_program<'ast>(
         class_type_params: FxHashMap::default(),
         class_pending_abstract: FxHashMap::default(),
         class_member_kinds: FxHashMap::default(),
+        class_names: FxHashMap::default(),
         class_fill,
         decl_types,
         obligations: Vec::new(),

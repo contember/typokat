@@ -44,6 +44,12 @@ pub enum DiagnosticCode {
     /// Non-abstract class is missing implementations for two or more inherited
     /// abstract members (aggregated) — backlog 06.
     TK2654,
+    /// Constructor of class is private (constructed outside its declaring class) —
+    /// backlog 20.
+    TK2673,
+    /// Constructor of class is protected (constructed outside the class and its
+    /// subclasses) — backlog 20.
+    TK2674,
     /// Cannot assign to a read-only property — M14.
     TK2540,
     /// Wrong number of call arguments (arity).
@@ -67,6 +73,8 @@ impl DiagnosticCode {
             DiagnosticCode::TK2511 => "TK2511",
             DiagnosticCode::TK2515 => "TK2515",
             DiagnosticCode::TK2654 => "TK2654",
+            DiagnosticCode::TK2673 => "TK2673",
+            DiagnosticCode::TK2674 => "TK2674",
             DiagnosticCode::TK2540 => "TK2540",
             DiagnosticCode::TK2554 => "TK2554",
             DiagnosticCode::TK2741 => "TK2741",
@@ -247,6 +255,39 @@ impl Diagnostic {
             severity: Severity::Error,
             message: format!(
                 "Non-abstract class '{class_name}' is missing implementations for the following members of '{base}': {list}."
+            ),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2673` "constructor is private" error (backlog 20): a direct
+    /// `new C(...)` reaches a `private` constructor from outside its declaring class.
+    /// `class_name` is the constructor's **declaring** class (the base, for an
+    /// inherited constructor). The primary span is the whole `new` expression.
+    pub fn constructor_is_private(span: Span, class_name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2673,
+            severity: Severity::Error,
+            message: format!(
+                "Constructor of class '{class_name}' is private and only accessible within the class declaration."
+            ),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2674` "constructor is protected" error (backlog 20): a direct
+    /// `new C(...)` reaches a `protected` constructor from outside the declaring class
+    /// and its subclasses. `class_name` is the constructor's **declaring** class (the
+    /// base, for an inherited constructor). The primary span is the whole `new`
+    /// expression.
+    pub fn constructor_is_protected(span: Span, class_name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2674,
+            severity: Severity::Error,
+            message: format!(
+                "Constructor of class '{class_name}' is protected and only accessible within the class declaration."
             ),
             span,
             elaboration: Vec::new(),

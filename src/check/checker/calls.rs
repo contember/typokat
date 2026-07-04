@@ -414,13 +414,21 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return Some((wk.error, new_span));
         };
 
+        // Backlog 20: constructor accessibility on a direct `new C(...)`. A
+        // `private`/`protected` constructor reachable only from inside its declaring
+        // class (and, for `protected`, its subclasses) emits `TK2673`/`TK2674` on the
+        // whole `new` span; returns whether the constructor was inaccessible.
+        let ctor_inaccessible = self.check_new_accessibility(&info, new_span);
+
         // M15: an `abstract` class cannot be instantiated → `TK2511`. **Only the directly-
         // named class's flag matters** (`info.is_abstract`): a concrete subclass of an
         // abstract class has its own flag `false`, so `new Concrete(...)` is fine even though
         // its base is abstract. The argument/arity checks below still run (matching tsc,
         // which reports both the abstract-instantiation error and any bad arguments); the
         // expression's type is still the instance type, so downstream uses do not cascade.
-        if info.is_abstract {
+        // Backlog 20: suppressed when the constructor is ALSO inaccessible — tsc reports
+        // only the accessibility error in that combination (probed).
+        if info.is_abstract && !ctor_inaccessible {
             self.diagnostics
                 .push(Diagnostic::abstract_instantiation(new_span));
         }
