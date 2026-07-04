@@ -81,9 +81,13 @@ slots into a known later phase without rework:
 - `TK2451` *cannot redeclare* — binder check, deferred; fixtures use unique names.
 - **narrowing**: `typeof` / truthiness / `null`/`undefined` equality (**M7**) and
   discriminated-union (literal discriminant) / `in`-operator / `switch` narrowing + literal type
-  annotations (**M8**) are implemented. Still deferred: assertion functions / type predicates
-  (`x is T`) and narrowing through unstructured flow (early `return`/`throw`, loops — needs the
-  flow-node CFG).
+  annotations (**M8**) are implemented. Narrowing through **unstructured flow** — early
+  `return`/`throw`, `&&`/`||`/ternary, assignment-in-flow, and `while` loop edges (back edge,
+  exit edge, `break`/`continue`) — is specced in `m23_unstructured_narrowing/` and lands with
+  backlog `07` (**M23**, the flow-node CFG). Still deferred: assertion functions / type
+  predicates (`x is T`), `for`/`for-of`/`do-while` loop forms, and narrowing seen by a
+  **closure** over a never-reassigned binding (tsc narrows; typokat keeps the function-boundary
+  reset — over-report, safe direction).
 - **generics**: explicit type arguments + instantiation (**M9**) and type-argument **inference**
   (**M10**) are implemented; **constraints** (`extends`, M11) follow. Type parameters use a named
   representation for now; de Bruijn indices (§3.1) are the pre-VM (Phase 3) target.
@@ -173,6 +177,7 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m20_keyof/` | M20 — `keyof T` + indexed-access types (`T[K]`) on concrete object types |
 | `m21_optional/` | M21 — optional properties (`a?: T`) on objects / interfaces / class instance fields |
 | `m22_unresolved_type/` | M22 — `TK2304` for an unresolved type reference in type position |
+| `m23_unstructured_narrowing/` | M23 — narrowing through unstructured flow (early exit, `&&`/`||`/ternary, assignment, loop edges) |
 
 ## Bug-fix / backlog corpora
 
