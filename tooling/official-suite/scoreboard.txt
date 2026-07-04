@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
-# corpus 874  in-scope 495  out-of-scope 379
-# clean-kept 163/210  error-exact 21/285  diag-recall 250/1659
+# corpus 874  in-scope 491  out-of-scope 383
+# clean-kept 164/209  error-exact 21/282  diag-recall 250/1651
 # cols: status<TAB>matched fn fp expected<TAB>rel  (status=IN | OOS:<bucket>; '-' = n/a)
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -256,7 +256,7 @@ IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarat
 IN	2 13 2 15	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/memberFunctionsWithPublicPrivateOverloads.ts
 IN	0 0 1 0	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/staticFactory1.ts
 IN	1 0 0 1	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/staticMemberAssignsToConstructorFunctionMembers.ts
-IN	0 2 0 2	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/typeOfThisInMemberFunctions.ts
+OOS:unresolved	- - - -	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/typeOfThisInMemberFunctions.ts
 IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/optionalMethod.ts
 IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/optionalProperty.ts
 IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/overrideInterfaceProperty.ts
@@ -565,14 +565,14 @@ OOS:parse-error	- - - -	conformance/types/objectTypeLiteral/callSignatures/restP
 OOS:parse-error	- - - -	conformance/types/objectTypeLiteral/callSignatures/restParametersOfNonArrayTypes.ts
 OOS:parse-error	- - - -	conformance/types/objectTypeLiteral/callSignatures/restParametersOfNonArrayTypes2.ts
 OOS:parse-error	- - - -	conformance/types/objectTypeLiteral/callSignatures/restParametersWithArrayTypeAnnotations.ts
-IN	0 1 0 1	conformance/types/objectTypeLiteral/callSignatures/specializedSignatureIsNotSubtypeOfNonSpecializedSignature.ts
-IN	0 0 0 0	conformance/types/objectTypeLiteral/callSignatures/specializedSignatureIsSubtypeOfNonSpecializedSignature.ts
+OOS:unresolved	- - - -	conformance/types/objectTypeLiteral/callSignatures/specializedSignatureIsNotSubtypeOfNonSpecializedSignature.ts
+OOS:unresolved	- - - -	conformance/types/objectTypeLiteral/callSignatures/specializedSignatureIsSubtypeOfNonSpecializedSignature.ts
 IN	0 0 0 0	conformance/types/objectTypeLiteral/callSignatures/specializedSignatureWithOptional.ts
 IN	0 0 0 0	conformance/types/objectTypeLiteral/callSignatures/stringLiteralTypesInImplementationSignatures.ts
 IN	0 1 0 1	conformance/types/objectTypeLiteral/callSignatures/stringLiteralTypesInImplementationSignatures2.ts
 IN	0 1 0 1	conformance/types/objectTypeLiteral/callSignatures/typeParameterAsTypeArgument.ts
-IN	0 0 12 0	conformance/types/objectTypeLiteral/callSignatures/typeParameterUsedAsTypeParameterConstraint.ts
-IN	0 0 12 0	conformance/types/objectTypeLiteral/callSignatures/typeParameterUsedAsTypeParameterConstraint2.ts
+IN	0 0 0 0	conformance/types/objectTypeLiteral/callSignatures/typeParameterUsedAsTypeParameterConstraint.ts
+IN	0 0 0 0	conformance/types/objectTypeLiteral/callSignatures/typeParameterUsedAsTypeParameterConstraint2.ts
 IN	0 0 0 0	conformance/types/objectTypeLiteral/callSignatures/typeParameterUsedAsTypeParameterConstraint3.ts
 OOS:unresolved	- - - -	conformance/types/objectTypeLiteral/callSignatures/typeParameterUsedAsTypeParameterConstraint4.ts
 IN	0 4 2 4	conformance/types/objectTypeLiteral/constructSignatures/constructSignaturesWithIdenticalOverloads.ts
@@ -728,7 +728,7 @@ OOS:unresolved	- - - -	conformance/types/typeRelationships/assignmentCompatibili
 OOS:syntax:module	- - - -	conformance/types/typeRelationships/assignmentCompatibility/enumAssignability.ts
 OOS:syntax:module	- - - -	conformance/types/typeRelationships/assignmentCompatibility/enumAssignabilityInInheritance.ts
 OOS:syntax:enum	- - - -	conformance/types/typeRelationships/assignmentCompatibility/everyTypeAssignableToAny.ts
-IN	0 5 0 5	conformance/types/typeRelationships/assignmentCompatibility/genericCallWithObjectTypeArgsAndInitializers.ts
+OOS:unresolved	- - - -	conformance/types/typeRelationships/assignmentCompatibility/genericCallWithObjectTypeArgsAndInitializers.ts
 OOS:syntax:module	- - - -	conformance/types/typeRelationships/assignmentCompatibility/intersectionIncludingPropFromGlobalAugmentation.ts
 OOS:syntax:enum	- - - -	conformance/types/typeRelationships/assignmentCompatibility/nullAssignableToEveryType.ts
 IN	0 1 0 1	conformance/types/typeRelationships/assignmentCompatibility/nullAssignedToUndefined.ts
