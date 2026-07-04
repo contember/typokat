@@ -72,7 +72,11 @@ in Rust is the biggest perf lever.
 - **SoA (struct-of-arrays) layout** for hot type attributes (flags, kind tag), so that
   comparison and filtering are cache-friendly and bit-packable.
 - **de Bruijn indices** for type parameters and `infer`, so alpha-equivalent generics
-  (`<T>(x:T)=>T` vs `<U>(x:U)=>U`) hash-cons to the same node.
+  (`<T>(x:T)=>T` vs `<U>(x:U)=>U`) hash-cons to the same node. **Scoped by
+  [ADR-0002](../decisions/0002-de-bruijn-scoped-to-infer-binders.md)**: indices apply to
+  `infer` binders within conditional nodes; declaration type params stay named unique ids
+  (context-free open types keep the relation cache sound); alpha-equivalence of generic
+  *declarations* is a measured, deferred optimization.
 
 ### 3.2 Two identities (internal vs cross-run)
 
