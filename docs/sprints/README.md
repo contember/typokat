@@ -20,4 +20,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- _none active_
+- [`sprint-2026-07-04-class-completeness-ctor-accessibility.md`](sprint-2026-07-04-class-completeness-ctor-accessibility.md) —
+  backlog `06` (`TK2416` + `TK2515`/`TK2654`) + `20` (`TK2673`/`TK2674`).

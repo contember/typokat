@@ -22,7 +22,8 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- _none active_
+- [`sprints/sprint-2026-07-04-class-completeness-ctor-accessibility.md`](sprints/sprint-2026-07-04-class-completeness-ctor-accessibility.md) —
+  backlog `06` + `20` (class completeness + constructor accessibility).
 
 ## What's hot
 
