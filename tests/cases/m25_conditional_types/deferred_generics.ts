@@ -39,3 +39,13 @@ declare const sn: string | number;
 const d1: "yes" | "no" = m(sn);
 const d2: "no" = m(sn); // error[TK2322]
 const d3: "no" = m<string | number>(sn); // error[TK2322]
+
+// PARAMETER-position conditionals instantiate and evaluate at call sites too:
+// valid calls are clean, argument mismatches report against the RESOLVED type
+// (review note: the parameter path must not stay a deferred node that rejects
+// every call).
+declare function g2<T>(t: T, c: T extends string ? "yes" : "no"): T;
+g2("abc", "yes");
+g2(42, "no");
+g2("abc", "no"); // error[TK2345]: not assignable to parameter of type '"yes"'
+g2(42, "yes"); // error[TK2345]: not assignable to parameter of type '"no"'

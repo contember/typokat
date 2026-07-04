@@ -153,7 +153,10 @@ slots into a known later phase without rework:
   contain its own `infer` binders is conservatively non-assignable (over-report, safe); a nested
   conditional referencing an OUTER conditional's `infer` binder is **poisoned at lowering** —
   never evaluated, conservatively related (tsc resolves it; over-report divergence pinned in
-  `nested_infer.ts` — proper de Bruijn shifting is backlog `26`).
+  `nested_infer.ts` — proper de Bruijn shifting is backlog `26`); a conditional buried inside a
+  **named alias / interface / class body** (`type W = { foo: IsString<string> }`) is not yet
+  evaluated — it stays deferred and relates conservatively (over-report, safe; backlog `27`);
+  an infer left unbound in a taken true branch resolves to `unknown` (matches tsc).
 - **optional properties** (`a?: T`) on object types, interfaces, and class instance fields land in
   **M21**: lowered as real members (so `keyof`/indexed-access include them and a declared optional no
   longer trips excess), an optional may be **absent** in a value (no `TK2741`), reading one yields

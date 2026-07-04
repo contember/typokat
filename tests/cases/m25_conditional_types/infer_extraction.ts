@@ -43,3 +43,30 @@ const i7b: ParamOf<(a: string) => void> = 1; // error[TK2322]: Type 'number' is 
 
 // An infer name is not in scope in the false branch.
 type BadScope<T> = T extends (infer U)[] ? U : U; // error[TK2304]: Cannot find name 'U'
+
+// infer candidates NEVER widen literals (review findings HIGH-1/HIGH-2: the
+// call-site inference engine widens; conditional infer must not).
+const L1: ElementOf<"x"[]> = "x";
+const L2: ElementOf<"x"[]> = "other"; // error[TK2322]: not assignable to type '"x"'
+const L3: Ret<() => "hi"> = "hi";
+const L4: Ret<() => "hi"> = "other"; // error[TK2322]: not assignable to type '"hi"'
+const L5: Both<{ a: "x"; b: "y" }> = "x";
+const L6: Both<{ a: "x"; b: "y" }> = "z"; // error[TK2322]
+
+// Top-level infer binds the whole (un-widened) check type.
+type Idish<T> = T extends infer U ? U : never;
+const L7: Idish<"hi"> = "hi";
+const L8: Idish<"hi"> = "other"; // error[TK2322]: not assignable to type '"hi"'
+
+// Contravariant-position infer keeps the literal AND the branch selection
+// intact (widening 'P' would make the extends test itself fail).
+type PF<T> = T extends (a: infer P) => unknown ? P : unknown;
+declare const pf: PF<(a: "x") => void>;
+const L9: "x" = pf;
+const L10: PF<(a: "x") => void> = 123; // error[TK2322]
+
+// infer inside a union member of the extends type still collects (against
+// the member the check type matches).
+type UInfer<T> = T extends string | (infer U)[] ? U : "no";
+const L11: UInfer<number[]> = 1;
+const L12: UInfer<number[]> = "s"; // error[TK2322]: Type 'string' is not assignable to type 'number'
