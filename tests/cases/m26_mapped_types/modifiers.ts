@@ -20,10 +20,16 @@ const p1: Part<P> = {};
 const p2: Part<P> = { a: 1 };
 const p3: Part<P> = { a: "s" }; // error[TK2322]
 
-// `-?` strips optionality (Required).
+// `-?` strips optionality (Required) — including `undefined` from the VALUE
+// type (tsc Required semantics), so writing undefined errors and reads are
+// exact.
 type Req<T> = { [K in keyof T]-?: T[K] };
 const q1: Req<P> = { a: 1, b: "s", c: true };
 const q2: Req<P> = { a: 1, c: true }; // error[TK2741]: 'b' is missing
+declare const und: undefined;
+const q3: Req<P> = { a: 1, b: und, c: true }; // error[TK2322]: 'undefined' is not assignable to type 'string'
+declare const rq: Req<P>;
+const q4: string = rq.b;
 
 // `readonly` adds it everywhere.
 type RO<T> = { readonly [K in keyof T]: T[K] };
