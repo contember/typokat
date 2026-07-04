@@ -46,6 +46,8 @@ fixture (keeps fixtures robust to author miscounting).
 | `TK2540` | Cannot assign to a read-only property |
 | `TK2353` | Object literal may only specify known properties (excess property) |
 | `TK2554` | Wrong number of arguments (arity) |
+| `TK2673` | Constructor of class is private (direct `new` outside the declaring class) |
+| `TK2674` | Constructor of class is protected (direct `new` outside the declaring class/subclasses) |
 | `TK2741` | Property is missing in type but required |
 
 ## Type display format (what the renderer must print)
@@ -190,6 +192,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`).
 | `f4_destructuring_access/` | F4 / `02` | private/protected access control runs through object-destructuring patterns |
 | `f5_union_readonly/` | F5 / `03` | `readonly` enforced on object-type/interface members and through a union member-assignment |
 | `b06_class_completeness/` | backlog `06` | override compatibility (`TK2416`) + abstract-member completeness (`TK2515`/`TK2654`) |
+| `b20_ctor_accessibility/` | backlog `20` | private/protected constructor accessibility on direct `new C()` (`TK2673`/`TK2674`) |
 
 `f1_object_interface_methods/` uses only existing diagnostics (`TK2322`, `TK2339`, `TK2345`).
 No deliberate `tsc` divergence is expected for plain non-generic method signatures with explicit
@@ -249,3 +252,15 @@ abstract member; an incompatible implementation is `TK2416`, not `TK2515`. Cross
   `TK2416` type incompatibility on that line.
 - **`TS2415`** (incorrectly-extends: visibility narrowing, private-member redeclaration) and
   **`TS2417`** (static-side override incompatibility) are deferred; fixtures avoid those shapes.
+
+`b20_ctor_accessibility/` covers direct `new C()` against a `private`/`protected` constructor
+(`TK2673`/`TK2674` on the whole `new` expression, tsc message shape). `private` permits
+construction only lexically inside the declaring class (instance methods and statics);
+`protected` also inside subclasses — including constructing the *base* directly from a subclass.
+A derived class with no own constructor inherits the base constructor's visibility and the
+diagnostic names the **declaring** class; a derived class with its own public constructor is
+freely constructable. Where construction is permitted, arity/argument checks run unchanged. On a
+class that is both `abstract` and inaccessibly-constructable, the accessibility error wins and
+`TK2511` is suppressed (tsc 6.0.3 behavior, probed). Deferred (documented false negative):
+**`TS2675`** (`class D extends C` where `C`'s constructor is private) — a heritage-clause check,
+out of this corpus's direct-`new` scope; fixtures avoid that shape.

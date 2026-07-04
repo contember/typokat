@@ -59,6 +59,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("f5_union_readonly", true),
     // Backlog corpora (same mechanism, named by backlog item ID).
     ("b06_class_completeness", false),
+    ("b20_ctor_accessibility", false),
 ];
 
 /// An expectation parsed from a single inline marker.
