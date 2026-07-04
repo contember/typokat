@@ -45,3 +45,4 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 - [`25`](25-intersection-types.md) — intersection types (`A & B`) missing from the type model (silently permissive).
 - [`26`](26-cross-binder-nested-infer.md) — cross-binder nested `infer` (de Bruijn shifting on embed); M25 ships the conservative poisoned-deferral stopgap.
 - [`27`](27-template-buried-conditional-evaluation.md) — conditionals buried in named alias/interface/class bodies stay deferred (conservative); evaluate them.
+- [`28`](28-interface-extends-composition.md) — interface `extends` members missing from the interface type (silent false negatives; pre-existing, found by the M26 review).
