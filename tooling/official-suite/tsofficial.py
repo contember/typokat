@@ -96,7 +96,13 @@ def parse_units(source):
 
     def flush():
         if cur_name is not None or cur_lines:
-            units.append((cur_name, "\n".join(cur_lines)))
+            # Strip the leading blank run left by removed @option headers, like TS's
+            # makeUnitsFromTest — baselines number lines from the first non-blank line.
+            # NOTE: `\s*` is deliberately greedy across newlines: one substitution eats
+            # the WHOLE run. Don't "harden" it to `[ \t]*\n` — that would strip a single
+            # line and re-break multi-blank files (constructorParameterShadowsOuterScopes2.ts).
+            content = re.sub(r"^\s*\n", "", "\n".join(cur_lines), count=1)
+            units.append((cur_name, content))
 
     for raw in source.split("\n"):
         m = OPTION_RE.match(raw)
