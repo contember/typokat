@@ -4,14 +4,17 @@ use super::calls::parameter_name;
 use super::context::*;
 use super::decls::type_decl_id;
 use crate::binder::scope::ScopeId;
+use crate::binder::symbol::DeclId;
+use crate::diagnostics::Diagnostic;
+use crate::span::Span;
 use crate::types::repr::{
-    FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TypeTag,
+    ConditionalType, FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TypeTag,
 };
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
-    FormalParameters, TSCallSignatureDeclaration, TSConstructSignatureDeclaration,
-    TSConstructorType, TSLiteral, TSMethodSignature, TSMethodSignatureKind, TSSignature,
-    TSTupleElement, TSType, TSTypeAnnotation, TSTypeName, TSTypeOperatorOperator,
+    FormalParameters, TSCallSignatureDeclaration, TSConditionalType, TSConstructSignatureDeclaration,
+    TSConstructorType, TSInferType, TSLiteral, TSMethodSignature, TSMethodSignatureKind,
+    TSSignature, TSTupleElement, TSType, TSTypeAnnotation, TSTypeName, TSTypeOperatorOperator,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -103,9 +106,175 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 let index = self.lower_annotation(scope, &access.index_type)?;
                 return Some(self.indexed_access_type(object, index));
             }
+            // M25: a conditional type `C extends E ? T : F`. Lowered to an interned node
+            // (WU1) and, at a value-position demand site, evaluated (WU2) — see
+            // [`lower_conditional_type`].
+            TSType::TSConditionalType(cond) => return self.lower_conditional_type(scope, cond),
+            // M25: an `infer U` binder — only meaningful inside a conditional's `extends`
+            // position (where an infer frame is active). Elsewhere it is out of subset.
+            TSType::TSInferType(infer) => return self.lower_infer_type(infer),
             _ => return None,
         };
         Some(id)
+    }
+
+    /// Lower a conditional type `check extends extends_ty ? true : false` (M25, WU1).
+    ///
+    /// The node's [`CondFrame`] is pushed for the WHOLE call (check/extends/true/false
+    /// positions) and its binders are in scope (`active`) only while the `extends` type
+    /// and the **true** branch are lowered — so `infer U` binds a node-scoped de Bruijn
+    /// index there, a reference to a name declared by THIS node from its false branch
+    /// finds no active frame → `TK2304`, and a reference to an OUTER node's still-active
+    /// binder from any nested position resolves as **cross-binder** — no `TK2304`, but it
+    /// POISONS every node from the reference up to the binder's owner
+    /// ([`Pass::resolve_infer_reference`], backlog 26 stopgap; a poisoned node never
+    /// evaluates). The check type is lowered without this node's binders; `distributive`
+    /// records whether it was a **naked** declaration type parameter. A check that
+    /// surface-references the enclosing conditional alias is `TK2456` (a circular
+    /// alias). At a value-position demand site the built node is evaluated
+    /// ([`Pass::maybe_evaluate`]); inside a template body it is left as the interned
+    /// node.
+    fn lower_conditional_type(
+        &mut self,
+        scope: ScopeId,
+        cond: &TSConditionalType<'_>,
+    ) -> Option<TypeId> {
+        let error_ty = self.interner.well_known().error;
+
+        // TK2456: the check surface-references the conditional alias currently being
+        // resolved (`type Self = Self extends string ? 1 : 2`). Scoped to the check
+        // surface so m5 recursion through object members stays legal.
+        if let Some((decl_id, alias_span, name)) = self.resolving_conditional_alias.clone() {
+            if self.check_surface_references(scope, &cond.check_type, decl_id) {
+                self.diagnostics
+                    .push(Diagnostic::circular_type_alias(alias_span, &name));
+                return Some(error_ty);
+            }
+        }
+
+        // This node's lowering context — see the doc above and `Pass::cond_frames`.
+        self.cond_frames.push(CondFrame::default());
+
+        // Check type — this node's own binders are NOT in scope (frame inactive). A
+        // naked declaration type parameter check drives distribution.
+        let check = self.lower_annotation(scope, &cond.check_type);
+        let distributive =
+            check.is_some_and(|c| self.interner.store().tag(c) == TypeTag::TypeParam);
+        // An out-of-subset check aborts the whole annotation (pre-poison behavior kept);
+        // the context must still unwind.
+        let Some(check) = check else {
+            self.cond_frames.pop();
+            return None;
+        };
+
+        // The `infer` binders declared in the extends type are in scope for the extends
+        // type itself and the true branch only.
+        if let Some(frame) = self.cond_frames.last_mut() {
+            frame.active = true;
+        }
+        let extends_ty = self.lower_annotation(scope, &cond.extends_type);
+        let true_branch = self.lower_annotation(scope, &cond.true_type);
+        if let Some(frame) = self.cond_frames.last_mut() {
+            frame.active = false;
+        }
+        // False branch — this node's own infer names are out of scope here (→ TK2304);
+        // an outer node's binder still resolves (and poisons — cross-binder).
+        let false_branch = self.lower_annotation(scope, &cond.false_type);
+
+        // Unwind the context: the binder count and the poison verdict.
+        let frame = self.cond_frames.pop().unwrap_or_default();
+        let infer_count = frame.binders.len() as u32;
+        let poisoned = frame.poisoned;
+
+        let (extends_ty, true_branch, false_branch) =
+            match (extends_ty, true_branch, false_branch) {
+                (Some(e), Some(t), Some(f)) => (e, t, f),
+                // An out-of-subset component degrades the whole conditional to the error
+                // type (the M22 discipline — the diagnostics for the component are
+                // already emitted; the error type suppresses cascade).
+                _ => return Some(error_ty),
+            };
+
+        let id = self.interner.intern_conditional(ConditionalType {
+            check,
+            extends_ty,
+            true_branch,
+            false_branch,
+            infer_count,
+            distributive,
+            poisoned,
+        });
+        let span = Span::from_oxc(cond.span);
+        Some(self.maybe_evaluate(id, span))
+    }
+
+    /// Lower an `infer U` binder to its node-scoped de Bruijn [`TypeTag::Infer`] index
+    /// (M25), declared into the **innermost active** frame. A new name takes the next
+    /// index (`binders.len()`); a repeated name reuses its index (so
+    /// `{ a: infer U; b: infer U }` binds one index). Outside any conditional's
+    /// `extends`/true position (no active frame) it is out of subset → `None`.
+    fn lower_infer_type(&mut self, infer: &TSInferType<'_>) -> Option<TypeId> {
+        let name = infer.type_parameter.name.name.as_str();
+        let frame = self.cond_frames.iter_mut().rev().find(|f| f.active)?;
+        let index = match frame.binders.get(name) {
+            Some(&i) => i,
+            None => {
+                let i = frame.binders.len() as u32;
+                frame.binders.insert(name.to_string(), i);
+                i
+            }
+        };
+        Some(self.interner.intern_infer(index))
+    }
+
+    /// Whether the conditional check type `check` surface-references the alias `decl_id`
+    /// (a bare `TSTypeReference` whose name resolves to that declaration) — the `TK2456`
+    /// circular-alias case (M25). Deliberately only the surface form (not through an
+    /// object member), so recursion through structural members stays legal.
+    fn check_surface_references(&self, scope: ScopeId, check: &TSType<'_>, decl_id: DeclId) -> bool {
+        let TSType::TSTypeReference(reference) = check else {
+            return false;
+        };
+        let TSTypeName::IdentifierReference(ident) = &reference.type_name else {
+            return false;
+        };
+        type_decl_id(self.binder, scope, ident.name.as_str()) == Some(decl_id)
+    }
+
+    /// Resolve a type-name reference against the in-scope `infer` binders (M25),
+    /// searching the ACTIVE conditional frames innermost-first. A hit on the frame of
+    /// the node currently being built (the innermost context) resolves normally; a hit
+    /// on an OUTER node's frame is a **cross-binder** reference (backlog 26 stopgap): it
+    /// still resolves — no spurious `TK2304` — but POISONS every node from the
+    /// referencing one up to and including the binder-owning one (a poisoned node never
+    /// evaluates; conservative relations apply). A miss falls through to the ordinary
+    /// type-reference resolution.
+    pub(in crate::check::checker) fn resolve_infer_reference(&mut self, name: &str) -> Option<TypeId> {
+        let innermost = self.cond_frames.len().checked_sub(1)?;
+        let (owner, index) = self
+            .cond_frames
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, frame)| frame.active)
+            .find_map(|(pos, frame)| frame.binders.get(name).map(|&i| (pos, i)))?;
+        if owner != innermost {
+            for frame in &mut self.cond_frames[owner..] {
+                frame.poisoned = true;
+            }
+        }
+        Some(self.interner.intern_infer(index))
+    }
+
+    /// Evaluate `ty` at a demand site unless a **template** body is being lowered (M25).
+    /// A template's conditional must survive as its interned node until instantiated;
+    /// a value-position type is resolved eagerly.
+    pub(in crate::check::checker) fn maybe_evaluate(&mut self, ty: TypeId, span: Span) -> TypeId {
+        if self.building_template {
+            ty
+        } else {
+            self.evaluate_type(ty, span)
+        }
     }
 
     /// Lower a union type annotation `A | B | …` to a canonical interned `TypeId`

@@ -236,6 +236,7 @@ mod calls;
 mod classes;
 mod context;
 mod decls;
+mod eval;
 mod expr;
 mod flowgraph;
 mod narrowing;
@@ -312,6 +313,10 @@ pub fn check_program<'ast>(
         flow_memo: FxHashMap::default(),
         flow_provisional: FxHashMap::default(),
         flow_loop_depth: 0,
+        cond_memo: FxHashMap::default(),
+        cond_frames: Vec::new(),
+        building_template: false,
+        resolving_conditional_alias: None,
         current_this: None,
         current_class: None,
         current_super_ctor: None,

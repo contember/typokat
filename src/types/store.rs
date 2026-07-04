@@ -12,8 +12,8 @@
 
 use crate::types::hash::StableHash;
 use crate::types::repr::{
-    ArrayType, FunctionType, IntrinsicKind, LiteralValue, ObjectType, TupleType, TypeFlags,
-    TypeParamId, TypeParamType, TypeTag,
+    ArrayType, ConditionalType, FunctionType, InstantiationType, IntrinsicKind, LiteralValue,
+    ObjectType, TupleType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
 };
 use rustc_hash::FxHashMap;
 
@@ -62,6 +62,14 @@ pub struct Store {
     /// hash-conses to one id and `[number, string]` ≠ `[string, number]` ≠
     /// `[number]`).
     tuples: Vec<TupleType>,
+    /// Conditional types (M25). Addressed by the `payload` of a `Conditional`-tagged
+    /// row. Field order is significant (position is meaning); a recursive alias
+    /// template row is reserved empty and filled in place (`fill_conditional`), like a
+    /// nominal object.
+    conditionals: Vec<ConditionalType>,
+    /// Lazy alias instantiations (M25). Addressed by the `payload` of an
+    /// `Instantiation`-tagged row. Identity is `(base, sorted args)`.
+    instantiations: Vec<InstantiationType>,
 
     /// **Type-parameter constraint column** (M24): a type parameter's `extends`
     /// bound, keyed by its [`TypeParamId`]. A **side column**, NOT part of the
@@ -174,6 +182,34 @@ impl Store {
             return None;
         }
         self.tuples.get(self.payload(id) as usize)
+    }
+
+    /// The `ConditionalType` of a conditional type (M25), or `None` if `id` is not a
+    /// conditional.
+    pub fn conditional_type(&self, id: TypeId) -> Option<&ConditionalType> {
+        if self.tag(id) != TypeTag::Conditional {
+            return None;
+        }
+        self.conditionals.get(self.payload(id) as usize)
+    }
+
+    /// The `InstantiationType` of a lazy instantiation (M25), or `None` if `id` is not
+    /// an instantiation.
+    pub fn instantiation_type(&self, id: TypeId) -> Option<&InstantiationType> {
+        if self.tag(id) != TypeTag::Instantiation {
+            return None;
+        }
+        self.instantiations.get(self.payload(id) as usize)
+    }
+
+    /// The de Bruijn index of an `infer` binder (M25), or `None` if `id` is not one.
+    /// The index is reconstructed from the `payload` (stored inline like an intrinsic
+    /// kind).
+    pub fn infer_index(&self, id: TypeId) -> Option<u32> {
+        if self.tag(id) != TypeTag::Infer {
+            return None;
+        }
+        Some(self.payload(id))
     }
 
     /// The `extends` constraint of a type parameter (M24), or `None` if the
@@ -301,5 +337,47 @@ impl Store {
         let payload = self.tuples.len() as u32;
         self.tuples.push(tuple);
         self.push(TypeTag::Tuple, flags, payload)
+    }
+
+    /// Append a conditional row (M25). Internal — `Interner` owns dedup (by all four
+    /// component ids + `infer_count` + `distributive`, in order).
+    pub(crate) fn push_conditional(
+        &mut self,
+        conditional: ConditionalType,
+        flags: TypeFlags,
+    ) -> TypeId {
+        let payload = self.conditionals.len() as u32;
+        self.conditionals.push(conditional);
+        self.push(TypeTag::Conditional, flags, payload)
+    }
+
+    /// Replace the body of an existing `Conditional` row in place (M25 recursive
+    /// conditional-alias reserve-then-fill — `Interner::fill_conditional`). Preserves
+    /// the row's `TypeId`; a no-op if `id` is not a conditional row.
+    pub(crate) fn set_conditional(&mut self, id: TypeId, conditional: ConditionalType) {
+        if self.tag(id) != TypeTag::Conditional {
+            return;
+        }
+        let payload = self.payload(id) as usize;
+        if let Some(slot) = self.conditionals.get_mut(payload) {
+            *slot = conditional;
+        }
+    }
+
+    /// Append an instantiation row (M25). Internal — `Interner` owns dedup.
+    pub(crate) fn push_instantiation(
+        &mut self,
+        instantiation: InstantiationType,
+        flags: TypeFlags,
+    ) -> TypeId {
+        let payload = self.instantiations.len() as u32;
+        self.instantiations.push(instantiation);
+        self.push(TypeTag::Instantiation, flags, payload)
+    }
+
+    /// Append an infer-binder row (M25). Internal — `Interner` owns dedup (by index).
+    /// The de Bruijn index is stored inline in `payload`.
+    pub(crate) fn push_infer(&mut self, index: u32, flags: TypeFlags) -> TypeId {
+        self.push(TypeTag::Infer, flags, index)
     }
 }

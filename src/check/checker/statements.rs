@@ -312,7 +312,11 @@ pub(in crate::check::checker) fn emit_obligation_failure(
                 // M0/M1 message spec). For a union source the headline names the
                 // specific failing member, not the whole union (matching tsc:
                 // `number | string` → `number` reports `'string'`).
-                let src = render_type(store, headline_src(ob, head), /* widen */ true);
+                // M25: keep the source literal when the target is itself a literal / unit
+                // type (`false` → `true`, `2` → `1`) — tsc does not widen against a unit
+                // target, only against a non-literal one (`"hello"` → `string`).
+                let widen = !is_literal_target(store, ob.tgt);
+                let src = render_type(store, headline_src(ob, head), widen);
                 let tgt = render_type(store, ob.tgt, /* widen */ false);
                 let message = format!("Type '{src}' is not assignable to type '{tgt}'");
                 diagnostics
@@ -320,7 +324,8 @@ pub(in crate::check::checker) fn emit_obligation_failure(
             }
         },
         ObligationKind::Argument => {
-            let src = render_type(store, headline_src(ob, head), /* widen */ true);
+            let widen = !is_literal_target(store, ob.tgt);
+            let src = render_type(store, headline_src(ob, head), widen);
             let tgt = render_type(store, ob.tgt, /* widen */ false);
             diagnostics.push(
                 Diagnostic::argument_not_assignable(ob.src_span, &src, &tgt)
@@ -445,5 +450,13 @@ fn headline_src(ob: &AssignObligation, head: &Reason) -> TypeId {
         Reason::UnionSourceMember { member, .. } => *member,
         _ => ob.src,
     }
+}
+
+/// Whether the message's **target** is a literal / unit type (M25). When it is, the
+/// source literal is shown as-is rather than widened to its base intrinsic — tsc keeps
+/// `'false'` / `'2'` against a `true` / `1` target, and only widens (`"hello"` →
+/// `string`) against a non-literal target.
+fn is_literal_target(store: &Store, tgt: TypeId) -> bool {
+    store.literal_value(tgt).is_some()
 }
 

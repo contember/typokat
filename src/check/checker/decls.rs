@@ -6,7 +6,7 @@ use crate::binder::symbol::DeclId;
 use crate::binder::Binder;
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
-use crate::types::repr::{ClassId, ObjectType, PropertyType, TypeParamId};
+use crate::types::repr::{ClassId, ObjectType, PropertyType, TypeParamId, TypeTag};
 use crate::types::store::TypeId;
 use crate::types::{substitute, Interner};
 use oxc_ast::ast::{
@@ -31,6 +31,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// because resolution is lazy in both directions.)
     pub(in crate::check::checker) fn fill_type_decls(&mut self, scope: ScopeId) {
         let count = self.type_decls.len();
+
+        // M25: everything lowered in phase 0 is a **template** (an alias / interface /
+        // class body), so a concrete conditional must stay its interned node rather than
+        // evaluate eagerly — evaluation is a value-position (phase 1) demand. Restored to
+        // `false` before the check walk.
+        self.building_template = true;
 
         // Fill each interface's reserved id with its lowered members. Members are
         // lowered with the full resolver available; a self/sibling reference resolves
@@ -62,6 +68,61 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             self.interner.fill_object(reserved, object);
         }
 
+        // M25: fill each **conditional-alias** template (its reserved conditional id)
+        // BEFORE resolving ordinary aliases, so a plain alias instantiating a conditional
+        // one (`type WU = Wrap<U>`) sees the filled template. The body is lowered with the
+        // parameter frame active and `resolving_conditional_alias` set (so a check that
+        // surface-references the alias is `TK2456`); a self-recursive reference in a
+        // branch resolves to the reserved id as a lazy instantiation (never expands).
+        for index in 0..count {
+            let (placeholder, params, param_decl, annotation, name, name_span) =
+                match &self.type_decls[index] {
+                    TypeDecl::Alias {
+                        conditional_template: Some(placeholder),
+                        params,
+                        param_decl,
+                        annotation,
+                        name,
+                        name_span,
+                        ..
+                    } => (
+                        *placeholder,
+                        params.clone(),
+                        *param_decl,
+                        *annotation,
+                        name.clone(),
+                        *name_span,
+                    ),
+                    _ => continue,
+                };
+            let decl_id = DeclId(index as u32);
+            let frame = self.build_type_param_frame(param_decl, &params);
+            self.resolving_conditional_alias = Some((decl_id, name_span, name));
+            let lowered = self.with_type_params(frame, |pass| {
+                pass.lower_type_param_constraints(scope, param_decl, &params);
+                pass.lower_annotation(scope, annotation)
+            });
+            self.resolving_conditional_alias = None;
+
+            let error_ty = self.interner.well_known().error;
+            match lowered {
+                Some(id) if self.interner.store().tag(id) == TypeTag::Conditional => {
+                    // Copy the freshly-lowered conditional's body into the reserved
+                    // template id, so self-recursive instantiations point at a filled node.
+                    if let Some(cond) = self.interner.store().conditional_type(id).copied() {
+                        self.interner.fill_conditional(placeholder, cond);
+                    }
+                }
+                // Circular check (`TK2456`) or out-of-subset body → the alias is the error
+                // type (silent downstream, m22 discipline).
+                _ => {
+                    if let Some(slot) = self.type_resolved.get_mut(index) {
+                        *slot = Some(error_ty);
+                    }
+                }
+            }
+        }
+
         // Resolve every remaining alias (interfaces are now filled, so a generic alias
         // instantiating an interface substitutes over the filled template). Resolution
         // is on-demand and idempotent, so touching every alias resolves the whole DAG.
@@ -89,6 +150,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 self.ensure_class_filled(scope, index);
             }
         }
+
+        // M25: template building is done — value-position annotations (phase 1) now
+        // evaluate their conditionals.
+        self.building_template = false;
     }
 
     /// Resolve a single type declaration to its `TypeId`, memoizing the result in
@@ -114,6 +179,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 param_decl,
                 params,
                 resolving: false,
+                ..
             }) => (*annotation, *param_decl, params.clone()),
             // A reference re-entered while this alias is mid-resolution: a recursive
             // alias (out of subset). Break the cycle with the error type.
@@ -182,6 +248,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return None;
         };
         let name = ident.name.as_str();
+        let ref_span = Span::from_oxc(ident.span);
+
+        // M25: an in-scope `infer` binder shadows a named type and takes no arguments.
+        // An own-binder reference (this node's extends/true) resolves normally; an OUTER
+        // node's binder resolves as cross-binder — no TK2304, but it poisons the nodes in
+        // between (backlog 26 stopgap). A name in no active frame (e.g. this node's own
+        // binder referenced from its false branch) falls through → `TK2304`.
+        if type_arguments.is_none() {
+            if let Some(infer_ty) = self.resolve_infer_reference(name) {
+                return Some(infer_ty);
+            }
+        }
 
         // 1. A type parameter in scope shadows any named type and takes no arguments.
         if type_arguments.is_none() {
@@ -242,13 +320,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         };
 
-        // 2. With type arguments: instantiate the generic declaration by substitution.
+        // 2. With type arguments: instantiate the generic declaration by substitution
+        //    (M25: a conditional template instantiates lazily), then evaluate at a
+        //    value-position demand site.
         if let Some(args) = type_arguments {
-            return self.instantiate_type_reference(scope, decl_id, args);
+            let instantiated = self.instantiate_type_reference(scope, decl_id, args)?;
+            return Some(self.maybe_evaluate(instantiated, ref_span));
         }
 
-        // 3. Bare named type (M5 behaviour).
-        Some(self.resolve_type_decl(scope, decl_id))
+        // 3. Bare named type (M5 behaviour). M25: a bare reference to a non-generic
+        //    conditional alias resolves to its (concrete) conditional template — evaluated
+        //    here at a value-position demand site.
+        let resolved = self.resolve_type_decl(scope, decl_id);
+        Some(self.maybe_evaluate(resolved, ref_span))
     }
 
     /// Instantiate a generic type reference `Name<Arg, …>` by substitution (M9).
@@ -304,6 +388,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // M24: each explicit type argument must satisfy its parameter's constraint
         // (`IBox<string>`, `TA<number>`). The bad argument still instantiates below.
         self.check_type_argument_constraints(&params, &arg_infos, &map);
+
+        // M25: a **conditional** template instantiates **lazily** — as an interned
+        // [`InstantiationType`] the evaluator applies (and distributes) on demand — rather
+        // than eager substitution. This keeps a self-recursive conditional alias from
+        // expanding at lowering (which would loop) and lets distribution derive per-member
+        // branches from the naked check parameter.
+        if self.interner.store().tag(template) == TypeTag::Conditional {
+            let args: Vec<(TypeParamId, TypeId)> = params
+                .iter()
+                .zip(&arg_infos)
+                .map(|(&param, &(arg, _))| (param, arg))
+                .collect();
+            return Some(self.interner.intern_instantiation(template, args));
+        }
 
         Some(substitute(self.interner, template, &map))
     }
@@ -633,11 +731,32 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
             Statement::TSTypeAliasDeclaration(alias) => {
                 let params =
                     alloc_type_param_ids(alias.type_parameters.as_deref(), next_type_param);
+                // M25: a top-level conditional-type body reserves a conditional template
+                // id and seeds `type_resolved`, so a self-recursive reference resolves to
+                // it (as a lazy instantiation) rather than expanding at lowering. The
+                // placeholder is filled in the fill step.
+                let conditional_template =
+                    if matches!(alias.type_annotation, oxc_ast::ast::TSType::TSConditionalType(_)) {
+                        let reserved = interner.reserve_conditional();
+                        if let Some(decl_id) =
+                            type_decl_id(binder, binder.module, alias.id.name.as_str())
+                        {
+                            if let Some(slot) = resolved.get_mut(decl_id.index()) {
+                                *slot = Some(reserved);
+                            }
+                        }
+                        Some(reserved)
+                    } else {
+                        None
+                    };
                 decls.push(TypeDecl::Alias {
                     annotation: &alias.type_annotation,
                     params,
                     param_decl: alias.type_parameters.as_deref(),
                     resolving: false,
+                    conditional_template,
+                    name: alias.id.name.to_string(),
+                    name_span: Span::from_oxc(alias.id.span),
                 });
             }
             // M11: a named `class` reserves its **instance type** id (an empty object,

@@ -30,6 +30,8 @@ pub enum DiagnosticCode {
     TK2341,
     /// Type argument does not satisfy the type parameter's constraint — M24.
     TK2344,
+    /// Type alias circularly references itself — M25 (`type A = A extends … ? … : …`).
+    TK2456,
     /// Argument type is not assignable to the parameter type (call argument).
     TK2345,
     /// Object literal may only specify known properties (excess property).
@@ -58,6 +60,8 @@ pub enum DiagnosticCode {
     TK2540,
     /// Wrong number of call arguments (arity).
     TK2554,
+    /// Type instantiation is excessively deep and possibly infinite — M25.
+    TK2589,
     /// Property is missing in type but required.
     TK2741,
 }
@@ -73,6 +77,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2341 => "TK2341",
             DiagnosticCode::TK2344 => "TK2344",
             DiagnosticCode::TK2345 => "TK2345",
+            DiagnosticCode::TK2456 => "TK2456",
             DiagnosticCode::TK2353 => "TK2353",
             DiagnosticCode::TK2416 => "TK2416",
             DiagnosticCode::TK2445 => "TK2445",
@@ -83,6 +88,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2674 => "TK2674",
             DiagnosticCode::TK2540 => "TK2540",
             DiagnosticCode::TK2554 => "TK2554",
+            DiagnosticCode::TK2589 => "TK2589",
             DiagnosticCode::TK2741 => "TK2741",
         }
     }
@@ -325,6 +331,34 @@ impl Diagnostic {
             code: DiagnosticCode::TK2540,
             severity: Severity::Error,
             message: format!("Cannot assign to '{name}' because it is a read-only property"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2456` "type alias circularly references itself" error (M25): a
+    /// type alias whose conditional-type body's **check** surface-references the alias
+    /// itself (`type Self = Self extends string ? 1 : 2`). The primary span is the alias
+    /// declaration name. The alias degrades to the error type (silent downstream).
+    pub fn circular_type_alias(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2456,
+            severity: Severity::Error,
+            message: format!("Type alias '{name}' circularly references itself."),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2589` "excessively deep" error (M25): evaluating a conditional
+    /// type exceeded the per-root instantiation step budget (a runaway / genuinely
+    /// infinite type). The primary span is the annotation that demanded the evaluation
+    /// (a documented divergence from tsc, which attributes it inside the alias body).
+    pub fn excessively_deep(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2589,
+            severity: Severity::Error,
+            message: "Type instantiation is excessively deep and possibly infinite.".to_string(),
             span,
             elaboration: Vec::new(),
         }
@@ -843,6 +877,51 @@ fn render_type_inner(
                 format!("[{}]", elems.join(", "))
             }
             // Defensive fallback; a tuple always has a side-table entry.
+            None => "<unsupported>".to_string(),
+        },
+        // Conditional (M25): `C extends E ? T : F`. Conditional-typed targets are
+        // asserted code-only in the corpus, so the exact form only has to be stable and
+        // sanely parenthesized (branches never widen — only a top-level literal source
+        // widens, which never recurses here).
+        TypeTag::Conditional => match store.conditional_type(id) {
+            Some(cond) => {
+                if rendering.contains(&id) {
+                    return "...".to_string();
+                }
+                rendering.push(id);
+                let check = render_type_inner(store, cond.check, false, rendering);
+                let extends = render_type_inner(store, cond.extends_ty, false, rendering);
+                let true_branch = render_type_inner(store, cond.true_branch, false, rendering);
+                let false_branch = render_type_inner(store, cond.false_branch, false, rendering);
+                rendering.pop();
+                format!("{check} extends {extends} ? {true_branch} : {false_branch}")
+            }
+            None => "<unsupported>".to_string(),
+        },
+        // Lazy instantiation (M25): render as the applied base with its arguments. Only
+        // ever surfaces for a still-deferred recursive conditional alias; asserted
+        // code-only, so a stable form suffices.
+        TypeTag::Instantiation => match store.instantiation_type(id) {
+            Some(inst) => {
+                if rendering.contains(&id) {
+                    return "...".to_string();
+                }
+                rendering.push(id);
+                let args: Vec<String> = inst
+                    .args
+                    .iter()
+                    .map(|(_, arg)| render_type_inner(store, *arg, false, rendering))
+                    .collect();
+                let base = render_type_inner(store, inst.base, false, rendering);
+                rendering.pop();
+                format!("{base}<{}>", args.join(", "))
+            }
+            None => "<unsupported>".to_string(),
+        },
+        // Infer binder (M25): `infer` de Bruijn index. Only surfaces inside a deferred
+        // conditional's rendered form; a stable placeholder suffices.
+        TypeTag::Infer => match store.infer_index(id) {
+            Some(index) => format!("infer#{index}"),
             None => "<unsupported>".to_string(),
         },
     }

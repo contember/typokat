@@ -29,7 +29,7 @@
 //! M9 scope.
 
 use crate::types::repr::{
-    FunctionType, ObjectType, ParameterType, PropertyType, TypeParamId, TypeTag,
+    ConditionalType, FunctionType, ObjectType, ParameterType, PropertyType, TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
 use crate::types::Interner;
@@ -81,6 +81,12 @@ impl<'a> Substitution<'a> {
             TypeTag::Union => self.apply_union(interner, ty),
             TypeTag::Array => self.apply_array(interner, ty),
             TypeTag::Tuple => self.apply_tuple(interner, ty),
+            TypeTag::Conditional => self.apply_conditional(interner, ty),
+            TypeTag::Instantiation => self.apply_instantiation(interner, ty),
+            // An `infer` binder (M25) is a **bound** de Bruijn variable, never a free
+            // declaration parameter — the no-capture rule (ADR-0002): substitution must
+            // leave it alone (the evaluator resolves it via infer matching, not here).
+            TypeTag::Infer => ty,
         }
     }
 
@@ -294,6 +300,105 @@ impl<'a> Substitution<'a> {
             ty
         }
     }
+
+    /// Substitute through a **conditional** type (M25), rewriting all four component
+    /// ids and re-interning **only when something changed**. This is a *plain* rewrite:
+    /// it does **not** capture the node's own `infer` binders — those are
+    /// [`TypeTag::Infer`] nodes, which `apply` leaves untouched (the no-capture rule,
+    /// ADR-0002). No cycle guard is needed: a conditional's components are interned
+    /// types; a *recursive* conditional alias defers through an
+    /// [`TypeTag::Instantiation`] branch (handled by `apply_instantiation`), which never
+    /// expands here.
+    ///
+    /// **Distribution guard**: a *distributive* conditional whose naked check parameter
+    /// is mapped to a **distributing** type (a union, `never`, or the `boolean`
+    /// intrinsic) cannot be plainly rewritten — that would bake the whole union into the
+    /// check (`string | number extends string` evaluated once) where tsc distributes per
+    /// member. It is instead deferred as a lazy [`crate::types::repr::InstantiationType`]
+    /// carrying the map, so the evaluator distributes — the SAME path alias
+    /// instantiation takes. This is what makes a generic **call**'s conditional return
+    /// distribute over a union type argument (inferred or explicit). A check parameter
+    /// mapped to a single non-distributing type takes the plain rewrite below (behavior
+    /// unchanged), so the evaluator's own per-member substitutions never re-wrap (no
+    /// cycle).
+    fn apply_conditional(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
+        let Some(cond) = interner.store().conditional_type(ty).copied() else {
+            return ty;
+        };
+        // A poisoned node never evaluates (backlog 26 stopgap), so the lazy distribution
+        // wrap below would be pointless — it takes the plain rewrite (carrying the flag).
+        if cond.distributive && !cond.poisoned {
+            let mapped = interner
+                .store()
+                .type_param(cond.check)
+                .map(|p| p.id)
+                .and_then(|id| self.map.get(&id).copied());
+            if let Some(arg) = mapped {
+                if distributes_over(interner, arg) {
+                    let args: Vec<(TypeParamId, TypeId)> =
+                        self.map.iter().map(|(&p, &v)| (p, v)).collect();
+                    return interner.intern_instantiation(ty, args);
+                }
+            }
+        }
+        let check = self.apply(interner, cond.check);
+        let extends_ty = self.apply(interner, cond.extends_ty);
+        let true_branch = self.apply(interner, cond.true_branch);
+        let false_branch = self.apply(interner, cond.false_branch);
+        if check == cond.check
+            && extends_ty == cond.extends_ty
+            && true_branch == cond.true_branch
+            && false_branch == cond.false_branch
+        {
+            return ty;
+        }
+        interner.intern_conditional(ConditionalType {
+            check,
+            extends_ty,
+            true_branch,
+            false_branch,
+            infer_count: cond.infer_count,
+            distributive: cond.distributive,
+            poisoned: cond.poisoned,
+        })
+    }
+
+    /// Substitute through a **lazy instantiation** `substitute(base, args)` (M25):
+    /// compose the outer substitution into each argument **value** (the `base` template
+    /// and the argument **keys** are untouched — they are the template's own parameters).
+    /// So `substitute(Inst{base, {T→U}}, map)` becomes `Inst{base, {T→substitute(U, map)}}`,
+    /// keeping the recursive reference lazy (its `base` never expands here). Re-interned
+    /// only when an argument value changed.
+    fn apply_instantiation(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
+        let Some(inst) = interner.store().instantiation_type(ty) else {
+            return ty;
+        };
+        let base = inst.base;
+        let args: Vec<(TypeParamId, TypeId)> = inst.args.clone();
+        let mut changed = false;
+        let new_args: Vec<(TypeParamId, TypeId)> = args
+            .into_iter()
+            .map(|(param, value)| {
+                let new_value = self.apply(interner, value);
+                changed |= new_value != value;
+                (param, new_value)
+            })
+            .collect();
+        if changed {
+            interner.intern_instantiation(base, new_args)
+        } else {
+            ty
+        }
+    }
+}
+
+/// Whether a check-parameter argument **distributes** a distributive conditional (M25):
+/// a union (per-member evaluation), `never` (→ `never`), or the `boolean` intrinsic
+/// (expands to `true | false` first). A single other type evaluates once — the plain
+/// rewrite path.
+fn distributes_over(interner: &Interner, arg: TypeId) -> bool {
+    let wk = interner.well_known();
+    interner.store().tag(arg) == TypeTag::Union || arg == wk.never || arg == wk.boolean
 }
 
 /// Convenience: instantiate `ty` with the given `TypeParamId → TypeId` map in one
@@ -539,6 +644,122 @@ mod tests {
 
         assert_eq!(box_num_a, box_num_b, "Box<number> interns consistently");
         assert_ne!(box_num_a, box_str, "Box<number> ≠ Box<string>");
+    }
+
+    /// M25 — `substitute` must **not capture** a conditional's own `infer` binders,
+    /// even under nested conditionals: an [`TypeTag::Infer`] node is a bound de Bruijn
+    /// variable, never a substitution target (ADR-0002). Substituting the free
+    /// declaration parameter `T` rewrites the check/false positions but leaves every
+    /// `infer` node identical, at both nesting levels.
+    #[test]
+    fn substitute_does_not_capture_infer_binders_under_nesting() {
+        use crate::types::repr::ConditionalType;
+
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let t = interner.intern_type_param(TypeParamId(0), "T");
+        let infer0 = interner.intern_infer(0);
+        let arr_infer0 = interner.intern_array(infer0);
+
+        // Inner: `T extends (infer U)[] ? U : T` (infer in extends + true, T in check/false).
+        let inner = interner.intern_conditional(ConditionalType {
+            check: t,
+            extends_ty: arr_infer0,
+            true_branch: infer0,
+            false_branch: t,
+            infer_count: 1,
+            distributive: true,
+            poisoned: false,
+        });
+        // Outer nests the inner conditional as the true branch: `T extends string ? <inner> : T`.
+        let outer = interner.intern_conditional(ConditionalType {
+            check: t,
+            extends_ty: wk.string,
+            true_branch: inner,
+            false_branch: t,
+            infer_count: 0,
+            distributive: true,
+            poisoned: false,
+        });
+
+        let mut map = FxHashMap::default();
+        map.insert(TypeParamId(0), wk.number);
+        let result = substitute(&mut interner, outer, &map);
+
+        // The result: `number extends string ? <inner'> : number` where inner' is
+        // `number extends (infer U)[] ? U : number` — the infer nodes UNCHANGED.
+        let store = interner.store();
+        let outer_c = store.conditional_type(result).expect("outer is conditional");
+        assert_eq!(outer_c.check, wk.number, "T → number in outer check");
+        assert_eq!(outer_c.false_branch, wk.number, "T → number in outer false");
+        let inner_c = store
+            .conditional_type(outer_c.true_branch)
+            .expect("inner is conditional");
+        assert_eq!(inner_c.check, wk.number, "T → number in inner check");
+        assert_eq!(inner_c.false_branch, wk.number, "T → number in inner false");
+        // No capture: the infer binder is untouched in both extends and true positions.
+        assert_eq!(inner_c.extends_ty, arr_infer0, "infer extends unchanged (no capture)");
+        assert_eq!(inner_c.true_branch, infer0, "infer true branch unchanged (no capture)");
+    }
+
+    /// M25 — the **distribution guard**: substituting a *distributive* conditional's
+    /// naked check parameter with a **union** (or `never`/`boolean`) defers to a lazy
+    /// instantiation (the evaluator distributes — same path as alias instantiation, so a
+    /// generic CALL's conditional return distributes too); a **single** non-distributing
+    /// argument takes the plain rewrite (so the evaluator's per-member substitutions
+    /// never re-wrap — no cycle).
+    #[test]
+    fn distributive_conditional_defers_on_union_plain_on_single() {
+        use crate::types::repr::ConditionalType;
+
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let t = interner.intern_type_param(TypeParamId(0), "T");
+        let yes = interner.intern_literal(crate::types::repr::LiteralValue::String("yes".into()));
+        let no = interner.intern_literal(crate::types::repr::LiteralValue::String("no".into()));
+
+        // `T extends string ? "yes" : "no"` (distributive — naked check param).
+        let cond = interner.intern_conditional(ConditionalType {
+            check: t,
+            extends_ty: wk.string,
+            true_branch: yes,
+            false_branch: no,
+            infer_count: 0,
+            distributive: true,
+            poisoned: false,
+        });
+
+        // A union argument defers as an instantiation of the ORIGINAL node.
+        let union = interner.union(vec![wk.string, wk.number]);
+        let mut map = FxHashMap::default();
+        map.insert(TypeParamId(0), union);
+        let deferred = substitute(&mut interner, cond, &map);
+        let inst = interner
+            .store()
+            .instantiation_type(deferred)
+            .expect("a union check argument must defer as a lazy instantiation");
+        assert_eq!(inst.base, cond, "the instantiation wraps the original node");
+        assert_eq!(inst.args, vec![(TypeParamId(0), union)]);
+
+        // `never` distributes too (→ never at evaluation), so it must also defer.
+        let mut never_map = FxHashMap::default();
+        never_map.insert(TypeParamId(0), wk.never);
+        let deferred_never = substitute(&mut interner, cond, &never_map);
+        assert!(
+            interner.store().instantiation_type(deferred_never).is_some(),
+            "a `never` check argument must defer (it distributes to `never`)"
+        );
+
+        // A single non-distributing argument takes the PLAIN rewrite — a concrete
+        // conditional, never a wrap (the evaluator's per-member path relies on this).
+        let mut single_map = FxHashMap::default();
+        single_map.insert(TypeParamId(0), wk.string);
+        let plain = substitute(&mut interner, cond, &single_map);
+        let plain_cond = interner
+            .store()
+            .conditional_type(plain)
+            .expect("a single check argument must plainly rewrite to a concrete conditional");
+        assert_eq!(plain_cond.check, wk.string);
     }
 
     /// A self-referential **nominal** object (no type parameter) substitutes to

@@ -11,8 +11,9 @@
 
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
-    ArrayType, FunctionType, IntrinsicKind, LiteralValue, ObjectType, ParameterType, PropertyType,
-    TupleType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
+    ArrayType, ConditionalType, FunctionType, InstantiationType, IntrinsicKind, LiteralValue,
+    ObjectType, ParameterType, PropertyType, TupleType, TypeFlags, TypeParamId, TypeParamType,
+    TypeTag,
 };
 use crate::types::store::{Store, TypeId};
 use rustc_hash::FxHashMap;
@@ -401,6 +402,106 @@ impl Interner {
         let id = self
             .store
             .push_union(flat.into_boxed_slice(), TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
+    /// Intern a **conditional** type `check extends extends_ty ? true : false` (M25).
+    ///
+    /// Identity is all four component ids **in order** plus `infer_count` and
+    /// `distributive` (position is meaning — the branches are not a canonical set, so
+    /// swapping them is a different type). A reserved (recursive-template) conditional id
+    /// is filled through [`Interner::fill_conditional`], not this method.
+    pub fn intern_conditional(&mut self, conditional: ConditionalType) -> TypeId {
+        let key = StructuralKey::Conditional {
+            check: conditional.check,
+            extends_ty: conditional.extends_ty,
+            true_branch: conditional.true_branch,
+            false_branch: conditional.false_branch,
+            infer_count: conditional.infer_count,
+            distributive: conditional.distributive,
+            poisoned: conditional.poisoned,
+        };
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store.conditional_type(id).is_some_and(|existing| {
+                existing.check == conditional.check
+                    && existing.extends_ty == conditional.extends_ty
+                    && existing.true_branch == conditional.true_branch
+                    && existing.false_branch == conditional.false_branch
+                    && existing.infer_count == conditional.infer_count
+                    && existing.distributive == conditional.distributive
+                    && existing.poisoned == conditional.poisoned
+            })
+        }) {
+            return existing;
+        }
+        let id = self.store.push_conditional(conditional, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
+    /// Reserve a **recursive conditional-alias template** id with a placeholder body,
+    /// returning the id WITHOUT hash-consing it (M25 — mirrors
+    /// [`Interner::reserve_object`]). The id exists before the alias body is lowered, so
+    /// a self-recursive reference (`type Unwrap<T> = … Unwrap<U> …`) can point at it (as
+    /// a lazy [`InstantiationType`] base) without expanding. Filled later via
+    /// [`Interner::fill_conditional`]. A reserved template is nominal (not deduped): a
+    /// placeholder body would otherwise mis-key the dedup index.
+    pub fn reserve_conditional(&mut self) -> TypeId {
+        // A placeholder body; overwritten by `fill_conditional`. The error type is a
+        // safe neutral filler (never observed before the fill).
+        let error = self.well_known.error;
+        self.store.push_conditional(
+            ConditionalType {
+                check: error,
+                extends_ty: error,
+                true_branch: error,
+                false_branch: error,
+                infer_count: 0,
+                distributive: false,
+                poisoned: false,
+            },
+            TypeFlags::EMPTY,
+        )
+    }
+
+    /// Fill the body of a previously [reserved](Interner::reserve_conditional)
+    /// conditional template in place (M25). The id is **not** added to the dedup index
+    /// (it stays nominal); a no-op if `id` is not a conditional row.
+    pub fn fill_conditional(&mut self, id: TypeId, conditional: ConditionalType) {
+        self.store.set_conditional(id, conditional);
+    }
+
+    /// Intern a **lazy instantiation** `substitute(base, args)` (M25). `args` are sorted
+    /// by [`TypeParamId`] here so two equal instantiations share one id.
+    pub fn intern_instantiation(&mut self, base: TypeId, mut args: Vec<(TypeParamId, TypeId)>) -> TypeId {
+        args.sort_by_key(|(param, _)| param.0);
+        let key = StructuralKey::Instantiation { base, args: &args };
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store
+                .instantiation_type(id)
+                .is_some_and(|existing| existing.base == base && existing.args == args)
+        }) {
+            return existing;
+        }
+        let id = self
+            .store
+            .push_instantiation(InstantiationType { base, args }, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
+    /// Intern an **`infer` binder** at the given de Bruijn index (M25). Identity is the
+    /// index alone, so alpha-equivalent conditionals hash-cons to one node.
+    pub fn intern_infer(&mut self, index: u32) -> TypeId {
+        let key = StructuralKey::Infer(index);
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, id| store.infer_index(id) == Some(index)) {
+            return existing;
+        }
+        let id = self.store.push_infer(index, TypeFlags::EMPTY);
         self.dedup.entry(hash).or_default().push(id);
         id
     }

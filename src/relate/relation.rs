@@ -371,6 +371,35 @@ impl<'a> Relater<'a> {
         // has ≥ 2 members (the interner collapses the degenerate cases), so these
         // never spuriously match an intrinsic. The `src`-union case is tried first
         // so a union-to-union relation decomposes member-by-member on the source.
+        // M25 — deferred conditionals (a conditional whose check still contains a free
+        // declaration type parameter is an ordinary, context-free interned type, so the
+        // cache stays sound). Rules (an identical node is already accepted by the
+        // `src == tgt` fast path in `relate`):
+        //
+        //  - a conditional **source** is assignable to `tgt` iff **both branches** are —
+        //    only when both branches are **closed** w.r.t. this node's own `infer`
+        //    binders; otherwise a conservative `No` (the sound over-report direction).
+        //    Runs BEFORE the union-target rule (like the M24 constraint rule) so a
+        //    conditional source relates to the *whole* union target (both branches land
+        //    in it), rather than being decomposed member-by-member;
+        //  - nothing is assignable **into** a deferred conditional (or a lazy
+        //    instantiation) except an identical one — conservative, matching probed tsc.
+        if self.store.tag(src) == TypeTag::Conditional {
+            return self.relate_conditional_source(src, tgt, kind, assumed);
+        }
+        if matches!(
+            self.store.tag(tgt),
+            TypeTag::Conditional | TypeTag::Instantiation
+        ) {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        }
+        // A lazy instantiation source that did not evaluate (should not reach here for
+        // the M25 corpus) is conservatively unassignable to anything but an identical
+        // node — the safe direction.
+        if self.store.tag(src) == TypeTag::Instantiation {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        }
+
         if self.store.tag(src) == TypeTag::Union {
             return self.relate_union_source(src, tgt, kind, assumed);
         }
@@ -1062,6 +1091,90 @@ impl<'a> Relater<'a> {
             }
         }
         Relation::No(ReasonChain::of(Reason::NoUnionMember { src, tgt }))
+    }
+
+    /// Deferred conditional as **source** (M25): assignable to `tgt` iff **both**
+    /// branches are, but only when both branches are **closed** w.r.t. this node's own
+    /// `infer` binders (a branch still containing an `infer` node is not a meaningful
+    /// type outside the match, so the whole relation is a conservative `No` — the sound
+    /// over-report). Each branch relation runs through the ordinary [`Relater::relate`],
+    /// so the cache / cycle-stack invariants are unchanged.
+    fn relate_conditional_source(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
+        let Some(cond) = self.store.conditional_type(src) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let (true_branch, false_branch) = (cond.true_branch, cond.false_branch);
+        if self.contains_infer(true_branch) || self.contains_infer(false_branch) {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        }
+        if let Relation::No(child) = self.relate(true_branch, tgt, kind, assumed) {
+            return Relation::No(child);
+        }
+        self.relate(false_branch, tgt, kind, assumed)
+    }
+
+    /// Whether `ty` contains an unbound `infer` binder ([`TypeTag::Infer`]) — used to
+    /// decide a deferred conditional's branch is *open* (M25). Iterative with a visited
+    /// set so a recursive interned type cannot loop; does not descend into a nested
+    /// conditional (which rebinds its own indices).
+    fn contains_infer(&self, ty: TypeId) -> bool {
+        let mut stack = vec![ty];
+        let mut visited: FxHashSet<TypeId> = FxHashSet::default();
+        while let Some(t) = stack.pop() {
+            if !visited.insert(t) {
+                continue;
+            }
+            match self.store.tag(t) {
+                TypeTag::Infer => return true,
+                TypeTag::Object => {
+                    if let Some(object) = self.store.object_type(t) {
+                        stack.extend(object.properties.iter().map(|p| p.ty));
+                        stack.extend(object.string_index);
+                        stack.extend(object.number_index);
+                        stack.extend(object.call_signatures.iter().copied());
+                        stack.extend(object.construct_signatures.iter().copied());
+                    }
+                }
+                TypeTag::Function => {
+                    if let Some(f) = self.store.function_type(t) {
+                        stack.extend(f.params.iter().map(|p| p.ty));
+                        stack.push(f.ret);
+                    }
+                }
+                TypeTag::Union => {
+                    if let Some(members) = self.store.union_members(t) {
+                        stack.extend(members.iter().copied());
+                    }
+                }
+                TypeTag::Array => {
+                    if let Some(a) = self.store.array_type(t) {
+                        stack.push(a.element);
+                    }
+                }
+                TypeTag::Tuple => {
+                    if let Some(tup) = self.store.tuple_type(t) {
+                        stack.extend(tup.elements.iter().copied());
+                    }
+                }
+                TypeTag::Instantiation => {
+                    if let Some(inst) = self.store.instantiation_type(t) {
+                        stack.extend(inst.args.iter().map(|(_, v)| *v));
+                    }
+                }
+                // A nested conditional rebinds its own infer indices — do not descend.
+                TypeTag::Intrinsic
+                | TypeTag::Literal
+                | TypeTag::TypeParam
+                | TypeTag::Conditional => {}
+            }
+        }
+        false
     }
 
     /// `any` or the error type — both relate to everything.

@@ -115,6 +115,21 @@ pub fn infer_from_types(
     ctx.infer(interner, source, target, candidates);
 }
 
+/// Structurally match a source against a target in **conditional-`infer` mode** (M25):
+/// the same walker as [`infer_from_types`], but literal candidates are **not widened**
+/// (tsc keeps `"x"` — review HIGH-1/HIGH-2) and a **union target** descends into its
+/// members (review MEDIUM-3). Used by the conditional-type evaluator's extends test;
+/// call-site type-argument inference (M10) keeps [`infer_from_types`].
+pub fn infer_from_types_for_conditional(
+    interner: &mut Interner,
+    source: TypeId,
+    target: TypeId,
+    candidates: &mut Candidates,
+) {
+    let mut ctx = InferenceContext::for_conditional();
+    ctx.infer(interner, source, target, candidates);
+}
+
 /// Fix every collected candidate list to a single type, producing the
 /// `TypeParamId → TypeId` substitution map. A type parameter with **no** candidate
 /// is **omitted** from the map; the caller maps an omitted parameter to `unknown`
@@ -259,19 +274,43 @@ fn fix_params(
     map
 }
 
-/// The per-inference recursion state: the cycle guard for structural matching.
-/// Built once per [`infer_from_types`] call and dropped after.
+/// The per-inference recursion state: the cycle guard for structural matching, plus
+/// the **collection mode** (M25). Built once per entry-point call and dropped after.
 struct InferenceContext {
     /// `(source, target)` id pairs currently on the recursion stack. Re-entering a
     /// pair short-circuits (it is already contributing candidates further up). See
     /// the module docs.
     visited: FxHashSet<(TypeId, TypeId)>,
+    /// Widen literal candidates to their base (`5` → `number`) — the M10 **call-site**
+    /// rule (an inferred type argument is never narrower than the value denotes).
+    /// Conditional-type `infer` extraction (M25) must NOT widen: tsc keeps the literal
+    /// (`ElementOf<"x"[]>` is `"x"`), and widening a contravariant-position candidate
+    /// even corrupts the extends test itself (review findings HIGH-1/HIGH-2).
+    widen_literals: bool,
+    /// Descend into a union **target**'s members with a non-union source (M25,
+    /// review MEDIUM-3): `number[]` against `string | (infer U)[]` collects `U` from the
+    /// array member (same-name contributions union). Call-site inference keeps only the
+    /// M10 equal-length pairwise union rule (no behavior change for m10).
+    union_target_descent: bool,
 }
 
 impl InferenceContext {
+    /// Call-site mode (M10): literal candidates widen; no union-target descent.
     fn new() -> Self {
         InferenceContext {
             visited: FxHashSet::default(),
+            widen_literals: true,
+            union_target_descent: false,
+        }
+    }
+
+    /// Conditional-`infer` mode (M25): literals never widen; a union extends target
+    /// collects from its members.
+    fn for_conditional() -> Self {
+        InferenceContext {
+            visited: FxHashSet::default(),
+            widen_literals: false,
+            union_target_descent: true,
         }
     }
 
@@ -289,11 +328,17 @@ impl InferenceContext {
         if interner.store().tag(target) == TypeTag::TypeParam {
             if let Some(param) = interner.store().type_param(target) {
                 let id = param.id;
-                // Widen the candidate (literal → base) so the inferred argument is
-                // never narrower than the value's type denotes — sound (widening
-                // only goes wider) and matches the conventional top-level result.
-                let widened = widen(interner, source);
-                candidates.entry(id).or_default().push(widened);
+                // Call-site mode widens the candidate (literal → base) so the inferred
+                // argument is never narrower than the value's type denotes — sound
+                // (widening only goes wider) and matches the conventional top-level
+                // result. Conditional-`infer` mode records the source AS-IS (tsc never
+                // widens there — M25 review HIGH-1/HIGH-2).
+                let candidate = if self.widen_literals {
+                    widen(interner, source)
+                } else {
+                    source
+                };
+                candidates.entry(id).or_default().push(candidate);
             }
             return;
         }
@@ -301,6 +346,50 @@ impl InferenceContext {
         // Structural recursion is cycle-guarded: re-entering an in-flight
         // (source, target) pair adds nothing, so short-circuit.
         if !self.visited.insert((source, target)) {
+            return;
+        }
+
+        // M25 (conditional mode): a union TARGET with a non-union source descends into
+        // every member — a member the source does not shape-match contributes nothing,
+        // and same-name contributions union. A union source keeps the pairwise arm.
+        //
+        // A **naked** infer member (`{ v: infer U } | infer U`) records the whole check
+        // type as a LOW-priority candidate (tsc's inference priorities): it is DISCARDED
+        // when any structural member of this union bound the same binder, and kept only
+        // when no structural member did (`string | infer U` — the naked-only shape).
+        // Structural members are therefore collected first (into a local set, so the
+        // drop decision keys on THIS union's contributions), then merged.
+        if self.union_target_descent
+            && interner.store().tag(target) == TypeTag::Union
+            && interner.store().tag(source) != TypeTag::Union
+        {
+            let members: Vec<TypeId> = interner
+                .store()
+                .union_members(target)
+                .map(|m| m.to_vec())
+                .unwrap_or_default();
+            let (naked, structural): (Vec<TypeId>, Vec<TypeId>) = members
+                .into_iter()
+                .partition(|&m| interner.store().tag(m) == TypeTag::TypeParam);
+            let mut structural_cands = Candidates::default();
+            for member in structural {
+                self.infer(interner, source, member, &mut structural_cands);
+            }
+            for member in naked {
+                let bound_structurally = interner
+                    .store()
+                    .type_param(member)
+                    .is_some_and(|p| structural_cands.get(&p.id).is_some_and(|c| !c.is_empty()));
+                if bound_structurally {
+                    continue;
+                }
+                // Kept: the ordinary TypeParam-target arm records it (mode-gated widen).
+                self.infer(interner, source, member, candidates);
+            }
+            for (id, cands) in structural_cands {
+                candidates.entry(id).or_default().extend(cands);
+            }
+            self.visited.remove(&(source, target));
             return;
         }
 
@@ -320,6 +409,14 @@ impl InferenceContext {
             // `T[][]`.
             (TypeTag::Array, TypeTag::Array) => {
                 self.infer_arrays(interner, source, target, candidates);
+            }
+            // M25 (conditional-type `infer`): both tuples → recurse **positionally** on
+            // each element up to the shorter list, exactly like function parameters. A
+            // `[infer H, infer R]` extends target infers `H`/`R` from a `[string,
+            // number]` check. (Reuses the shared inference machinery — the same one M10
+            // uses for call-argument inference.)
+            (TypeTag::Tuple, TypeTag::Tuple) => {
+                self.infer_tuples(interner, source, target, candidates);
             }
             // Any other pairing (scalar, mismatched shapes, error type, …) yields
             // no candidate — inference simply learns nothing from it. Soundness is
@@ -374,6 +471,30 @@ impl InferenceContext {
             return;
         };
         self.infer(interner, source_elem, target_elem, candidates);
+    }
+
+    /// Both tuples (M25): recurse **positionally** on each element up to the shorter
+    /// list. A `[infer H, infer R]` target infers `H`/`R` from a `[string, number]`
+    /// source; a length mismatch just pairs the common prefix (sound — a surplus
+    /// element contributes nothing).
+    fn infer_tuples(
+        &mut self,
+        interner: &mut Interner,
+        source: TypeId,
+        target: TypeId,
+        candidates: &mut Candidates,
+    ) {
+        let source_elems: Vec<TypeId> = match interner.store().tuple_type(source) {
+            Some(t) => t.elements.clone(),
+            None => return,
+        };
+        let target_elems: Vec<TypeId> = match interner.store().tuple_type(target) {
+            Some(t) => t.elements.clone(),
+            None => return,
+        };
+        for (&source_ty, &target_ty) in source_elems.iter().zip(&target_elems) {
+            self.infer(interner, source_ty, target_ty, candidates);
+        }
     }
 
     /// Both functions: recurse **positionally** on parameters (up to the shorter
@@ -498,6 +619,110 @@ mod tests {
             map.get(&TypeParamId(0)).copied(),
             Some(wk.number),
             "T inferred from `5` widens to number"
+        );
+    }
+
+    /// M25 — the **conditional collection mode**: literal candidates are NOT widened
+    /// (`"x"` stays `"x"`; call-site mode widens — pinned by
+    /// [`infers_from_scalar_argument`] above), and a **union target** descends into its
+    /// members (`number[]` against `string | T[]` infers `T = number`).
+    #[test]
+    fn conditional_mode_keeps_literals_and_descends_union_targets() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let t = interner.intern_type_param(TypeParamId(0), "T");
+        let x = interner.intern_literal(LiteralValue::String("x".to_string()));
+
+        // No widening: `"x"` against `T` records the literal itself.
+        let mut candidates = Candidates::default();
+        infer_from_types_for_conditional(&mut interner, x, t, &mut candidates);
+        assert_eq!(
+            candidates.get(&TypeParamId(0)).map(|c| c.as_slice()),
+            Some(&[x][..]),
+            "conditional mode must record the un-widened literal"
+        );
+
+        // Union-target descent: `number[]` against `string | T[]` lands `T = number`
+        // via the array member (the string member contributes nothing).
+        let t_arr = interner.intern_array(t);
+        let union_target = interner.union(vec![wk.string, t_arr]);
+        let num_arr = interner.intern_array(wk.number);
+        let mut candidates = Candidates::default();
+        infer_from_types_for_conditional(&mut interner, num_arr, union_target, &mut candidates);
+        assert_eq!(
+            candidates.get(&TypeParamId(0)).map(|c| c.as_slice()),
+            Some(&[wk.number][..]),
+            "a union extends target must collect from its shape-matching member"
+        );
+
+        // The CALL-site entry point on the same union shape stays M10-conservative
+        // (non-union source vs union target infers nothing — no m10 behavior change).
+        let mut candidates = Candidates::default();
+        infer_from_types(&mut interner, num_arr, union_target, &mut candidates);
+        assert!(
+            candidates.is_empty(),
+            "call-site mode must not descend into union targets (M10 unchanged)"
+        );
+    }
+
+    /// M25 round-4 — a **naked** infer union member's whole-check candidate is LOW
+    /// priority: it is DISCARDED when a structural member of the same union bound the
+    /// same binder (`{ v: T } | T` against `{ v: string }` → `T = string`, not
+    /// `string | { v: string }`), and KEPT when no structural member did
+    /// (`string | T` against `number` → `T = number`). A different-name naked member
+    /// never blocks a structural binder (`A | B[]`).
+    #[test]
+    fn naked_union_member_candidate_yields_to_structural() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let t = interner.intern_type_param(TypeParamId(0), "T");
+
+        // `{ v: T } | T` against `{ v: string }` → structural wins: T = string only.
+        let v_t = interner.intern_object(ObjectType {
+            properties: vec![prop("v", t)],
+            ..Default::default()
+        });
+        let target = interner.union(vec![v_t, t]);
+        let v_str = interner.intern_object(ObjectType {
+            properties: vec![prop("v", wk.string)],
+            ..Default::default()
+        });
+        let mut candidates = Candidates::default();
+        infer_from_types_for_conditional(&mut interner, v_str, target, &mut candidates);
+        assert_eq!(
+            candidates.get(&TypeParamId(0)).map(|c| c.as_slice()),
+            Some(&[wk.string][..]),
+            "the naked member's whole-check candidate must be dropped"
+        );
+
+        // `string | T` against `number` → naked-only: the whole check IS the candidate.
+        let target = interner.union(vec![wk.string, t]);
+        let mut candidates = Candidates::default();
+        infer_from_types_for_conditional(&mut interner, wk.number, target, &mut candidates);
+        assert_eq!(
+            candidates.get(&TypeParamId(0)).map(|c| c.as_slice()),
+            Some(&[wk.number][..]),
+            "a naked-only member keeps its whole-check candidate"
+        );
+
+        // `A | B[]` against `number[]`: B binds structurally; the naked A (a DIFFERENT
+        // binder) still records the whole check — no cross-binder blocking.
+        let a = interner.intern_type_param(TypeParamId(1), "A");
+        let b = interner.intern_type_param(TypeParamId(2), "B");
+        let b_arr = interner.intern_array(b);
+        let target = interner.union(vec![a, b_arr]);
+        let num_arr = interner.intern_array(wk.number);
+        let mut candidates = Candidates::default();
+        infer_from_types_for_conditional(&mut interner, num_arr, target, &mut candidates);
+        assert_eq!(
+            candidates.get(&TypeParamId(2)).map(|c| c.as_slice()),
+            Some(&[wk.number][..]),
+            "B = number from the structural member"
+        );
+        assert_eq!(
+            candidates.get(&TypeParamId(1)).map(|c| c.as_slice()),
+            Some(&[num_arr][..]),
+            "A (different name) keeps its naked whole-check candidate"
         );
     }
 

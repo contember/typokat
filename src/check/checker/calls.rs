@@ -285,8 +285,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let param_types: Vec<TypeId> = func.params.iter().map(|p| p.ty).collect();
         let ret = func.ret;
 
+        // M25: a substituted PARAMETER type may be a now-concrete conditional too
+        // (`g2<T>(t: T, c: T extends string ? "yes" : "no")`). Evaluate each (the same
+        // demand as the return below) so valid calls pass and a mismatch reports against
+        // the RESOLVED type — an unevaluated deferred node would reject every argument.
+        let param_types: Vec<TypeId> = param_types
+            .into_iter()
+            .map(|param| self.evaluate_type(param, call_span))
+            .collect();
+
         // Arity (TK2554) + per-argument assignability (TK2345), shared with `new`.
         self.check_call_arguments(&param_types, &arg_types, call_span);
+
+        // M25: a generic call's return type may be a conditional instantiated by the
+        // inferred/explicit type arguments (`m("abc")` → `"abc" extends string ? … : …`).
+        // Now that its check type is concrete, evaluate it (a no-op for any other type).
+        let ret = self.evaluate_type(ret, call_span);
 
         Some((ret, call_span))
     }

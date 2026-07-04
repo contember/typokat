@@ -449,7 +449,12 @@ fn member_matches_typeof(
         | TypeTag::Union
         | TypeTag::TypeParam
         | TypeTag::Array
-        | TypeTag::Tuple => false,
+        | TypeTag::Tuple
+        // M25: a conditional / lazy instantiation / infer binder never appears as a
+        // narrowable union member in the M7 `typeof` subset — defensively false.
+        | TypeTag::Conditional
+        | TypeTag::Instantiation
+        | TypeTag::Infer => false,
     }
 }
 

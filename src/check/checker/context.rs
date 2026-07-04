@@ -124,11 +124,25 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
     /// M5 subset — broken by yielding the error type rather than looping). A generic
     /// alias (`params` non-empty) lowers its annotation with the parameters in scope
     /// to a **template**; `Pair<number, string>` substitutes it.
+    ///
+    /// M25: a top-level **conditional-type** body reserves a conditional template id
+    /// ([`conditional_template`](TypeDecl::Alias::conditional_template)) so a
+    /// self-recursive reference (`type Unwrap<T> = … Unwrap<U> …`) lowers to a lazy
+    /// instantiation of it rather than expanding (which would loop); it is filled in the
+    /// fill step. `name`/`name_span` phrase the `TK2456` circular-alias diagnostic.
     Alias {
         annotation: &'ast TSType<'ast>,
         params: Vec<TypeParamId>,
         param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
         resolving: bool,
+        /// The reserved conditional template id when the top body is a conditional
+        /// (M25), else `None`. `type_resolved` is seeded with it so a self-reference
+        /// resolves here; the fill step lowers the body and fills it.
+        conditional_template: Option<TypeId>,
+        /// The alias name (M25) — for the `TK2456` message.
+        name: String,
+        /// The alias name-declaration span (M25) — the `TK2456` primary span.
+        name_span: Span,
     },
     /// A `class` (M11, extended for M13/M16). `reserved` is its **instance type** id: an
     /// object id allocated empty via `Interner::reserve_object`, filled with the
@@ -434,6 +448,33 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// writes (the resolved value may depend on a provisional seed), which is what
     /// keeps a stale pre-loop narrow state from being cached across a back edge.
     pub(in crate::check::checker) flow_loop_depth: u32,
+    /// **Conditional-type evaluation memo** (M25): `substituted conditional /
+    /// instantiation id → result`. Durable across the whole pass (ids are globally
+    /// unique and hash-consing makes the key total). A result reached under budget
+    /// exhaustion or through an in-flight cycle is never written here (the evaluator's
+    /// provisional discipline — invariants §1).
+    pub(in crate::check::checker) cond_memo: FxHashMap<TypeId, TypeId>,
+    /// **Conditional-type lowering contexts** (M25): one [`CondFrame`] per
+    /// `lower_conditional_type` call currently on the stack — pushed for the WHOLE node
+    /// (check/extends/true/false positions), with the node's `infer` binders in scope
+    /// (`active`) only while its `extends` type + true branch are lowered. A reference
+    /// resolving to a NON-innermost frame is a **cross-binder** nested-`infer` reference
+    /// (backlog 26 stopgap): it resolves without `TK2304` but poisons every node from
+    /// the referencing one up to and including the binder-owning one. A name found in no
+    /// active frame falls through to ordinary resolution (`TK2304` — e.g. an own-binder
+    /// reference in this node's false branch).
+    pub(in crate::check::checker) cond_frames: Vec<CondFrame>,
+    /// Whether a **type-declaration template** is currently being lowered (M25): an
+    /// alias / interface / class body. While true, a concrete conditional is left as its
+    /// interned node rather than evaluated eagerly — evaluation is a value-position
+    /// demand only (a generic template's conditional must stay a template until
+    /// instantiated). Set via save/restore around each template body's lowering.
+    pub(in crate::check::checker) building_template: bool,
+    /// The **conditional-alias declaration currently being resolved** (M25): its type
+    /// `DeclId`, name-declaration span, and name. Set while a `type A = C extends E ? …`
+    /// body is lowered, so a check type that surface-references `A` itself is caught as
+    /// `TK2456` at the alias declaration. `None` outside such a body.
+    pub(in crate::check::checker) resolving_conditional_alias: Option<(DeclId, Span, String)>,
 }
 
 /// One enclosing-loop frame for the flow pre-pass: the loop's label (the
@@ -442,4 +483,21 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
 pub(in crate::check::checker) struct FlowLoopFrame {
     pub(in crate::check::checker) label: FlowNodeId,
     pub(in crate::check::checker) break_edges: Vec<FlowNodeId>,
+}
+
+/// One conditional-type lowering context (M25): the node's `infer` binder frame plus the
+/// cross-binder poison flag (backlog 26 stopgap). Lives on [`Pass::cond_frames`] for the
+/// whole `lower_conditional_type` call.
+#[derive(Default)]
+pub(in crate::check::checker) struct CondFrame {
+    /// This node's `infer` name → de Bruijn index map. A new name takes index
+    /// `binders.len()`; a repeated name reuses its index (`infer_count` is the final
+    /// `binders.len()`).
+    pub(in crate::check::checker) binders: FxHashMap<String, u32>,
+    /// Whether this node's binders are in scope — `true` only while its `extends` type
+    /// and true branch are lowered.
+    pub(in crate::check::checker) active: bool,
+    /// Set when a cross-binder reference poisons this node (see
+    /// [`crate::types::repr::ConditionalType::poisoned`]).
+    pub(in crate::check::checker) poisoned: bool,
 }

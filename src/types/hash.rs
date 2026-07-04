@@ -73,6 +73,27 @@ pub enum StructuralKey<'a> {
     /// `[number]` (length differs). Each element is itself canonical (interned), so
     /// the key is decided by the ordered sequence of ids.
     Tuple(&'a [TypeId]),
+    /// A **conditional** type (`C extends E ? T : F` — M25), keyed over its four
+    /// component ids **in order** (position is meaning — the branches are not
+    /// interchangeable), plus `infer_count` and `distributive`. So
+    /// `C extends E ? T : F` and `C extends E ? F : T` hash differently.
+    Conditional {
+        check: TypeId,
+        extends_ty: TypeId,
+        true_branch: TypeId,
+        false_branch: TypeId,
+        infer_count: u32,
+        distributive: bool,
+        poisoned: bool,
+    },
+    /// A **lazy instantiation** (M25), keyed over its base id and its
+    /// **sorted-by-id** argument list. Two equal `(base, args)` collide.
+    Instantiation {
+        base: TypeId,
+        args: &'a [(TypeParamId, TypeId)],
+    },
+    /// An **`infer` binder** (M25), keyed over its de Bruijn index alone.
+    Infer(u32),
 }
 
 /// Live structural hash used for hash-consing (FxHash for speed). This is the
@@ -199,6 +220,40 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
                 // hash differently.
                 element.0.hash(&mut h);
             }
+        }
+        StructuralKey::Conditional {
+            check,
+            extends_ty,
+            true_branch,
+            false_branch,
+            infer_count,
+            distributive,
+            poisoned,
+        } => {
+            TypeTag::Conditional.hash_discriminant(&mut h);
+            // Hashed in field order (position is meaning — the branches are not a set).
+            check.0.hash(&mut h);
+            extends_ty.0.hash(&mut h);
+            true_branch.0.hash(&mut h);
+            false_branch.0.hash(&mut h);
+            infer_count.hash(&mut h);
+            distributive.hash(&mut h);
+            poisoned.hash(&mut h);
+        }
+        StructuralKey::Instantiation { base, args } => {
+            TypeTag::Instantiation.hash_discriminant(&mut h);
+            base.0.hash(&mut h);
+            // Args arrive sorted by TypeParamId, so this is order-stable across two
+            // structurally equal instantiations.
+            args.len().hash(&mut h);
+            for (param, arg) in *args {
+                param.0.hash(&mut h);
+                arg.0.hash(&mut h);
+            }
+        }
+        StructuralKey::Infer(index) => {
+            TypeTag::Infer.hash_discriminant(&mut h);
+            index.hash(&mut h);
         }
     }
     h.finish()

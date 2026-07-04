@@ -39,6 +39,27 @@ pub enum TypeTag {
     /// list (order is significant — unlike a union, `[A, B]` ≠ `[B, A]`).
     /// Constructed by `Interner::intern_tuple` (M18).
     Tuple,
+    /// A **conditional** type (`C extends E ? T : F` — M25). `payload` indexes
+    /// `Store::conditionals`. Carries the four component ids (check, extends, true,
+    /// false), the count of `infer` binders it introduces, and whether its check was a
+    /// *naked* declaration type parameter (drives distribution). Constructed by
+    /// `Interner::intern_conditional`; a recursive conditional alias's template id is
+    /// reserved/filled like a nominal object (`reserve_conditional`/`fill_conditional`).
+    Conditional,
+    /// A **lazy alias instantiation** (`Alias<Args>` where `Alias`'s body is a
+    /// conditional — M25). `payload` indexes `Store::instantiations`. Denotes
+    /// `substitute(base, args)` computed *lazily* by the evaluator, so a self-recursive
+    /// conditional alias (`type Unwrap<T> = … Unwrap<U> …`) does not expand at lowering
+    /// (which would loop) but at demand. Constructed by `Interner::intern_instantiation`.
+    Instantiation,
+    /// An **`infer` binder** (`infer U` inside a conditional's `extends` type — M25).
+    /// `payload` is the **de Bruijn index** within the enclosing conditional node
+    /// (ADR-0002: de Bruijn scoped to infer binders only). The same infer name in
+    /// several positions of one node shares an index. Constructed by
+    /// `Interner::intern_infer`; identity is the index alone. `substitute` never targets
+    /// it (it is a *bound* variable, not a free declaration parameter — the no-capture
+    /// rule).
+    Infer,
 }
 
 /// The fixed set of intrinsic (keyword) types. The discriminant doubles as the
@@ -438,4 +459,63 @@ pub struct TupleType {
     /// The element types in **source order** (`[A, B]` → `[A, B]`). The tuple's
     /// entire structural identity; never sorted.
     pub elements: Vec<TypeId>,
+}
+
+/// A conditional type `check extends extends_ty ? true_branch : false_branch` (M25).
+///
+/// The four component ids plus [`infer_count`](ConditionalType::infer_count) and
+/// [`distributive`](ConditionalType::distributive) are its whole structural identity.
+/// **Field order is meaning** — the interner must not reorder or sort them (unlike a
+/// union's members): swapping the branches is a different type. `infer` binders inside
+/// the `extends` type are represented as [`TypeTag::Infer`] de Bruijn indices scoped to
+/// this node (ADR-0002), and are in scope only in `true_branch` (a reference in
+/// `false_branch` is out of scope → `TK2304` at lowering).
+#[derive(Copy, Clone, Debug)]
+pub struct ConditionalType {
+    /// The **check** type (`C` in `C extends E ? T : F`). A conditional is *deferred*
+    /// while this contains a free declaration type parameter, and *evaluated* once it is
+    /// concrete.
+    pub check: TypeId,
+    /// The **extends** type (`E`) — the constraint the check is tested against. May
+    /// contain [`TypeTag::Infer`] binders.
+    pub extends_ty: TypeId,
+    /// The **true** branch (`T`), taken when `check <: extends_ty`. May reference this
+    /// node's infer binders (substituted with their matched candidates on selection).
+    pub true_branch: TypeId,
+    /// The **false** branch (`F`), taken otherwise. Infer binders are out of scope here.
+    pub false_branch: TypeId,
+    /// The number of distinct `infer` binders this node introduces (de Bruijn indices
+    /// `0..infer_count`). `0` for a conditional with no `infer`.
+    pub infer_count: u32,
+    /// Whether the check type was a **naked** declaration type parameter at lowering
+    /// (`T extends …`, not `[T] extends …` or `(T | undefined) extends …`). This is what
+    /// makes the conditional **distributive**: an instantiation whose argument is a union
+    /// (or `never`, or the `boolean` intrinsic) distributes over its members. Recorded at
+    /// lowering because substitution erases the naked parameter.
+    pub distributive: bool,
+    /// Whether this node is **poisoned** by a cross-binder `infer` reference (backlog 26
+    /// stopgap): a reference to an OUTER conditional's `infer` binder from inside a
+    /// nested node poisons every node from the reference up to and including the
+    /// binder-owning one. A poisoned conditional **never evaluates** — it stays a
+    /// deferred node under the conservative relation rules (over-report; tsc resolves
+    /// these). Declaration-param substitution still applies (only evaluation is off).
+    /// Identity-bearing like [`distributive`](ConditionalType::distributive) (folded
+    /// into the hash/eq).
+    pub poisoned: bool,
+}
+
+/// A lazy alias instantiation `substitute(base, args)` (M25) — see
+/// [`TypeTag::Instantiation`]. `base` is a (reserved-or-resolved) conditional template
+/// id; `args` is the substitution to apply, sorted by [`TypeParamId`] for a stable
+/// structural identity. Kept lazy so a self-recursive conditional alias does not expand
+/// at lowering; the evaluator applies `args` to `base` on demand (and distributes when
+/// `base` is distributive and the check argument is a union).
+#[derive(Clone, Debug)]
+pub struct InstantiationType {
+    /// The conditional template being applied (its own free parameters are the keys of
+    /// `args`).
+    pub base: TypeId,
+    /// The substitution `TypeParamId → TypeId`, **sorted by the id** so two equal
+    /// instantiations hash-cons to one node.
+    pub args: Vec<(TypeParamId, TypeId)>,
 }
