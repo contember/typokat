@@ -24,6 +24,8 @@ decisions → reference → archive.
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 - [`sprints/sprint-2026-07-04-class-completeness-ctor-accessibility.md`](sprints/sprint-2026-07-04-class-completeness-ctor-accessibility.md) —
   backlog `06` + `20` (class completeness + constructor accessibility).
+- [`sprints/sprint-2026-07-04-unstructured-flow-narrowing.md`](sprints/sprint-2026-07-04-unstructured-flow-narrowing.md) —
+  backlog `07` / M23 (the flow-node CFG; spec committed).
 
 ## What's hot
 
