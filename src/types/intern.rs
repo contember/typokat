@@ -12,8 +12,8 @@
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
     ArrayType, ConditionalType, FunctionType, InstantiationType, IntrinsicKind, LiteralValue,
-    MappedType, ObjectType, ParameterType, PropertyType, TupleType, TypeFlags, TypeParamId,
-    TypeParamType, TypeTag,
+    MappedType, ObjectType, ParameterType, PropertyType, TemplateType, TupleType, TypeFlags,
+    TypeParamId, TypeParamType, TypeTag,
 };
 use crate::types::store::{Store, TypeId};
 use rustc_hash::FxHashMap;
@@ -530,6 +530,28 @@ impl Interner {
             return existing;
         }
         let id = self.store.push_mapped(mapped, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
+    /// Intern a **template literal type** `` `a${T}b` `` (M27). Identity is its ordered
+    /// text segments and hole ids (a template is a sequence — position is meaning), so
+    /// two structurally equal templates share one id. The caller supplies the texts and
+    /// holes in order (`texts.len() == holes.len() + 1`).
+    pub fn intern_template(&mut self, template: TemplateType) -> TypeId {
+        let key = StructuralKey::Template {
+            texts: &template.texts,
+            holes: &template.holes,
+        };
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store.template_type(id).is_some_and(|existing| {
+                existing.texts == template.texts && existing.holes == template.holes
+            })
+        }) {
+            return existing;
+        }
+        let id = self.store.push_template(template, TypeFlags::EMPTY);
         self.dedup.entry(hash).or_default().push(id);
         id
     }
@@ -1056,6 +1078,41 @@ mod tests {
             nested_a, nested_b,
             "nested tuple identity propagates by element id"
         );
+    }
+
+    /// Template hash-consing (M27): a template's identity is its ordered text segments +
+    /// hole ids, so `` `a-${string}` `` interns consistently, differs from
+    /// `` `b-${string}` `` (text) and `` `a-${number}` `` (hole), and adjacent-hole
+    /// templates (empty interior text) are representable and distinct.
+    #[test]
+    fn template_interning_is_structural() {
+        use crate::types::repr::TemplateType;
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        let mk = |interner: &mut Interner, texts: &[&str], holes: Vec<TypeId>| {
+            interner.intern_template(TemplateType {
+                texts: texts.iter().map(|s| s.to_string()).collect(),
+                holes,
+            })
+        };
+
+        let a = mk(&mut interner, &["a-", ""], vec![wk.string]);
+        let a2 = mk(&mut interner, &["a-", ""], vec![wk.string]);
+        assert_eq!(a, a2, "identical templates hash-cons to one id");
+        assert_eq!(interner.store().tag(a), TypeTag::Template);
+
+        let b = mk(&mut interner, &["b-", ""], vec![wk.string]);
+        assert_ne!(a, b, "differing text ⇒ distinct template");
+
+        let num = mk(&mut interner, &["a-", ""], vec![wk.number]);
+        assert_ne!(a, num, "differing hole type ⇒ distinct template");
+
+        // Adjacent holes (empty interior text) are representable and distinct from a
+        // separated form.
+        let adjacent = mk(&mut interner, &["", "", ""], vec![wk.string, wk.string]);
+        let separated = mk(&mut interner, &["", "-", ""], vec![wk.string, wk.string]);
+        assert_ne!(adjacent, separated, "adjacency is part of identity");
     }
 
     /// The well-known intrinsic ids are assigned in `IntrinsicKind::ALL` order

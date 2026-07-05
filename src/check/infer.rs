@@ -15,14 +15,15 @@
 //!
 //! Two phases, mirroring tsc's "candidate collection" then "fixing":
 //!
-//!  1. **Collect** ([`infer_from_types`]): structurally match each call-argument
+//!  1. **Collect** ([`infer_from_types_raw`]): structurally match each call-argument
 //!     type against its parameter type, recording, for every type parameter, the
-//!     argument types that landed against it (its *candidates*).
-//!  2. **Fix** ([`fix`]): turn each parameter's candidate list into a single type —
-//!     no candidates → **`unknown`** (the **sound** fallback: `unknown` accepts
-//!     nothing downstream without a check, so it can never *mask* a real error the
-//!     way `any` would); one candidate → that type; ≥ 2 distinct candidates → their
-//!     **union** ([`Interner::union`]).
+//!     **raw** (un-widened) argument types that landed against it (its *candidates*).
+//!  2. **Fix** ([`fix_candidates`]): turn each parameter's candidate list into a
+//!     single type — no candidates → **`unknown`** (the **sound** fallback: `unknown`
+//!     accepts nothing downstream without a check, so it can never *mask* a real
+//!     error the way `any` would); one candidate → that type; ≥ 2 distinct
+//!     candidates → their **union** ([`Interner::union`]). Literal candidates widen
+//!     here (per parameter — see the Soundness note below).
 //!
 //! The resulting `TypeParamId → TypeId` map is then fed to the **existing** M9
 //! substitution to instantiate the signature, after which the **existing**
@@ -37,11 +38,14 @@
 //! follow:
 //!
 //!  - the no-candidate fallback is `unknown`, never `any`;
-//!  - each candidate is **widened** (a literal `5` → `number`) when recorded, so an
-//!    inferred argument is never *narrower* than what a value of that type denotes.
-//!    Widening can only make the inferred type wider, so it stays sound; it also
-//!    matches the conventional top-level (non-contextual) inference result and the
-//!    fixtures' "`T` inferred `number`" expectations.
+//!  - each literal candidate is **widened** (a literal `5` → `number`) at fix time,
+//!    so an inferred argument is never *narrower* than what a value of that type
+//!    denotes. Widening can only make the inferred type wider, so it stays sound; it
+//!    also matches the conventional top-level (non-contextual) inference result and
+//!    the fixtures' "`T` inferred `number`" expectations. The one exception
+//!    (M24/M27): a parameter with a **primitive constraint** keeps the literal —
+//!    tsc's `hasPrimitiveConstraint` rule, which only ever preserves where tsc also
+//!    preserves (see [`fix_candidates`]).
 //!
 //! ## Termination
 //!
@@ -55,71 +59,24 @@
 //! substitution engine's `in_progress` guard.)
 
 use crate::relate::Relater;
-use crate::types::repr::TypeTag;
+use crate::types::repr::{IntrinsicKind, LiteralValue, TemplateType, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
 use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-/// The accumulating candidate set: for each type parameter, the (already widened)
+/// The accumulating candidate set: for each type parameter, the **raw** (un-widened)
 /// argument types matched against it. A `Vec` rather than a set keeps the code
-/// simple; duplicates are collapsed by [`Interner::union`] in [`fix`], so an
-/// over-count never affects the fixed result.
+/// simple; duplicates are collapsed by [`Interner::union`] in [`fix_candidates`], so
+/// an over-count never affects the fixed result.
 pub type Candidates = FxHashMap<crate::types::repr::TypeParamId, Vec<TypeId>>;
 
-/// Collect candidates for a whole call: match each argument type against its
-/// corresponding parameter type, positionally, up to the shorter list. A surplus
-/// argument or parameter contributes nothing (the M9/M3 arity check reports the
-/// count mismatch separately; inference stays silent and sound).
-///
-/// `params` are the generic signature's parameter types (which contain the
-/// `TypeParam`s to be inferred); `args` are the inferred call-argument types.
-pub fn collect_call_candidates(
-    interner: &mut Interner,
-    params: &[TypeId],
-    args: &[TypeId],
-) -> Candidates {
-    let mut candidates: Candidates = FxHashMap::default();
-    for (&arg, &param) in args.iter().zip(params) {
-        infer_from_types(interner, arg, param, &mut candidates);
-    }
-    candidates
-}
-
-/// Structurally match a source (argument) type against a target (parameter) type,
-/// recording candidates for any type parameter found in the target (architecture
-/// §5.1). The target is the type that may *contain* type parameters; the source is
-/// the concrete argument type they are inferred from.
-///
-/// Cases (kept deliberately small and sound for M10):
-///
-///  - target is a **type parameter** → record the (widened) source as a candidate
-///    for that parameter id;
-///  - **both objects** → for each property present in **both**, recurse on the
-///    property types (a property only on one side contributes no candidate);
-///  - **both functions** → recurse **positionally** on the parameters (up to the
-///    shorter list) and on the return type;
-///  - **both unions** → best-effort: recurse **pairwise** on members **only when
-///    the two unions have equal length** (a positional pairing); otherwise skip
-///    (ambiguous — skipping is sound, it just infers nothing here);
-///  - anything else → no candidate.
-///
-/// The recursion is cycle-guarded (see the module docs) so self-referential
-/// argument/parameter types terminate.
-pub fn infer_from_types(
-    interner: &mut Interner,
-    source: TypeId,
-    target: TypeId,
-    candidates: &mut Candidates,
-) {
-    let mut ctx = InferenceContext::new();
-    ctx.infer(interner, source, target, candidates);
-}
-
 /// Structurally match a source against a target in **conditional-`infer` mode** (M25):
-/// the same walker as [`infer_from_types`], but literal candidates are **not widened**
-/// (tsc keeps `"x"` — review HIGH-1/HIGH-2) and a **union target** descends into its
-/// members (review MEDIUM-3). Used by the conditional-type evaluator's extends test;
-/// call-site type-argument inference (M10) keeps [`infer_from_types`].
+/// the same walker as [`infer_from_types_raw`], but a **union target** descends into
+/// its members (review MEDIUM-3) and a template-pattern target captures `infer` holes
+/// (M27). Candidates are never widened here — not even at fix time (tsc keeps `"x"` —
+/// review HIGH-1/HIGH-2); the evaluator fixes them itself. Used by the
+/// conditional-type evaluator's extends test; call-site type-argument inference goes
+/// through [`infer_type_arguments`].
 pub fn infer_from_types_for_conditional(
     interner: &mut Interner,
     source: TypeId,
@@ -128,26 +85,6 @@ pub fn infer_from_types_for_conditional(
 ) {
     let mut ctx = InferenceContext::for_conditional();
     ctx.infer(interner, source, target, candidates);
-}
-
-/// Fix every collected candidate list to a single type, producing the
-/// `TypeParamId → TypeId` substitution map. A type parameter with **no** candidate
-/// is **omitted** from the map; the caller maps an omitted parameter to `unknown`
-/// (the sound fallback) via [`fix_params`], which knows the full parameter list. A
-/// single candidate fixes to itself; ≥ 2 distinct candidates fix to their union.
-fn fix(interner: &mut Interner, candidates: Candidates) -> FxHashMap<crate::types::repr::TypeParamId, TypeId> {
-    let mut map = FxHashMap::default();
-    for (param, cands) in candidates {
-        let fixed = match cands.len() {
-            0 => continue,
-            1 => cands[0],
-            // ≥ 2: union them (canonicalized — duplicates and order collapse, so
-            // two identical candidates fix to that one type, not a 2-member union).
-            _ => interner.union(cands),
-        };
-        map.insert(param, fixed);
-    }
-    map
 }
 
 /// Build the full instantiation map for a generic signature's parameters from a
@@ -185,7 +122,10 @@ pub fn infer_type_arguments(
     let mut nonfresh_params: FxHashSet<crate::types::repr::TypeParamId> = FxHashSet::default();
     for (index, (&arg, &param)) in args.iter().zip(params).enumerate() {
         let mut local: Candidates = FxHashMap::default();
-        infer_from_types(interner, arg, param, &mut local);
+        // Collect **raw** (un-widened) candidates; widening is decided per parameter at
+        // fix time, so a primitive-constrained parameter can keep its literal (see
+        // `fix_candidates` / `has_primitive_constraint`).
+        infer_from_types_raw(interner, arg, param, &mut local);
         let is_fresh = fresh_args.get(index).copied().unwrap_or(false);
         for (param_id, cands) in local {
             if is_fresh {
@@ -201,8 +141,105 @@ pub fn infer_type_arguments(
         .difference(&nonfresh_params)
         .copied()
         .collect();
-    let fixed = fix(interner, candidates);
+    let fixed = fix_candidates(interner, candidates);
     fix_params(interner, type_params, fixed, &exempt)
+}
+
+/// Fix raw candidate lists to one type per parameter (M10, refined for M24/M27's
+/// `hasPrimitiveConstraint` rule). Literal candidates **widen** to their base
+/// (`"x"` → `string`) — the M10 call-site rule keeping an inferred argument no narrower
+/// than the value denotes — **unless** the parameter has a **primitive constraint**
+/// (`<T extends string>`, `<T extends "a" | "b">`, a template-pattern constraint, …), in
+/// which case tsc preserves the literal (`mk<T extends string>("x")` infers `T = "x"`,
+/// not `string`). A single (prepared) candidate fixes to itself; several fix to their
+/// union.
+fn fix_candidates(
+    interner: &mut Interner,
+    candidates: Candidates,
+) -> FxHashMap<crate::types::repr::TypeParamId, TypeId> {
+    let mut map = FxHashMap::default();
+    for (param, cands) in candidates {
+        if cands.is_empty() {
+            continue;
+        }
+        let prepared: Vec<TypeId> = if has_primitive_constraint(interner, param) {
+            cands
+        } else {
+            cands.iter().map(|&c| widen(interner, c)).collect()
+        };
+        let fixed = if prepared.len() == 1 {
+            prepared[0]
+        } else {
+            interner.union(prepared)
+        };
+        map.insert(param, fixed);
+    }
+    map
+}
+
+/// Whether a type parameter has a **primitive constraint** (tsc `hasPrimitiveConstraint`),
+/// so literal candidates inferred for it are **not** widened (M24/M27). True when the
+/// constraint is (or, for a union, contains) a primitive intrinsic
+/// (`string`/`number`/`boolean`/`null`/`undefined`/`void`), a literal, or a template
+/// literal pattern; false for an unconstrained parameter or an object/`unknown`/`any`
+/// constraint.
+fn has_primitive_constraint(interner: &Interner, param: TypeParamId) -> bool {
+    match interner.store().type_param_constraint(param) {
+        Some(constraint) => is_primitive_ish(interner.store(), constraint),
+        None => false,
+    }
+}
+
+fn is_primitive_ish(store: &Store, ty: TypeId) -> bool {
+    match store.tag(ty) {
+        TypeTag::Literal | TypeTag::Template => true,
+        TypeTag::Intrinsic => matches!(
+            store.intrinsic_kind(ty),
+            Some(
+                IntrinsicKind::String
+                    | IntrinsicKind::Number
+                    | IntrinsicKind::Boolean
+                    | IntrinsicKind::Null
+                    | IntrinsicKind::Undefined
+                    | IntrinsicKind::Void
+            )
+        ),
+        TypeTag::Union => store
+            .union_members(ty)
+            .is_some_and(|members| members.iter().any(|&m| is_primitive_ish(store, m))),
+        _ => false,
+    }
+}
+
+/// Structurally match a source (argument) type against a target (parameter) type,
+/// recording **raw** (un-widened) candidates for any type parameter found in the
+/// target (architecture §5.1) — [`fix_candidates`] then widens per parameter. The
+/// call-site collection mode: no union-target descent (the M10 rule — a union target
+/// with a non-union source is ambiguous, so it infers nothing).
+///
+/// Cases (kept deliberately small and sound):
+///
+///  - target is a **type parameter** → record the source as a candidate for that
+///    parameter id;
+///  - **both objects** → for each property present in **both**, recurse on the
+///    property types (a property only on one side contributes no candidate);
+///  - **both functions** → recurse **positionally** on the parameters (up to the
+///    shorter list) and on the return type;
+///  - **both unions** → best-effort: recurse **pairwise** on members **only when
+///    the two unions have equal length** (a positional pairing); otherwise skip
+///    (ambiguous — skipping is sound, it just infers nothing here);
+///  - anything else → no candidate.
+///
+/// The recursion is cycle-guarded (see the module docs) so self-referential
+/// argument/parameter types terminate.
+fn infer_from_types_raw(
+    interner: &mut Interner,
+    source: TypeId,
+    target: TypeId,
+    candidates: &mut Candidates,
+) {
+    let mut ctx = InferenceContext::for_call_raw();
+    ctx.infer(interner, source, target, candidates);
 }
 
 /// Complete a partially-fixed map to cover **every** declared type parameter,
@@ -281,12 +318,6 @@ struct InferenceContext {
     /// pair short-circuits (it is already contributing candidates further up). See
     /// the module docs.
     visited: FxHashSet<(TypeId, TypeId)>,
-    /// Widen literal candidates to their base (`5` → `number`) — the M10 **call-site**
-    /// rule (an inferred type argument is never narrower than the value denotes).
-    /// Conditional-type `infer` extraction (M25) must NOT widen: tsc keeps the literal
-    /// (`ElementOf<"x"[]>` is `"x"`), and widening a contravariant-position candidate
-    /// even corrupts the extends test itself (review findings HIGH-1/HIGH-2).
-    widen_literals: bool,
     /// Descend into a union **target**'s members with a non-union source (M25,
     /// review MEDIUM-3): `number[]` against `string | (infer U)[]` collects `U` from the
     /// array member (same-name contributions union). Call-site inference keeps only the
@@ -295,22 +326,23 @@ struct InferenceContext {
 }
 
 impl InferenceContext {
-    /// Call-site mode (M10): literal candidates widen; no union-target descent.
-    fn new() -> Self {
-        InferenceContext {
-            visited: FxHashSet::default(),
-            widen_literals: true,
-            union_target_descent: false,
-        }
-    }
-
-    /// Conditional-`infer` mode (M25): literals never widen; a union extends target
-    /// collects from its members.
+    /// Conditional-`infer` mode (M25): a union extends target collects from its
+    /// members; a template-pattern target captures `infer` holes (M27).
     fn for_conditional() -> Self {
         InferenceContext {
             visited: FxHashSet::default(),
-            widen_literals: false,
             union_target_descent: true,
+        }
+    }
+
+    /// Call-site **raw** mode (M10, refined M24/M27): no union-target descent.
+    /// Candidates are always recorded **un-widened** in both modes — call-site
+    /// widening is [`fix_candidates`]'s job (per parameter, skipping a
+    /// primitive-constrained one); the conditional evaluator never widens.
+    fn for_call_raw() -> Self {
+        InferenceContext {
+            visited: FxHashSet::default(),
+            union_target_descent: false,
         }
     }
 
@@ -324,21 +356,14 @@ impl InferenceContext {
         target: TypeId,
         candidates: &mut Candidates,
     ) {
-        // A target type parameter is the one place a candidate is recorded.
+        // A target type parameter is the one place a candidate is recorded — always
+        // AS-IS (raw). Call-site widening happens at fix time ([`fix_candidates`], per
+        // parameter); conditional-`infer` extraction never widens (tsc keeps `"x"` —
+        // M25 review HIGH-1/HIGH-2).
         if interner.store().tag(target) == TypeTag::TypeParam {
             if let Some(param) = interner.store().type_param(target) {
                 let id = param.id;
-                // Call-site mode widens the candidate (literal → base) so the inferred
-                // argument is never narrower than the value's type denotes — sound
-                // (widening only goes wider) and matches the conventional top-level
-                // result. Conditional-`infer` mode records the source AS-IS (tsc never
-                // widens there — M25 review HIGH-1/HIGH-2).
-                let candidate = if self.widen_literals {
-                    widen(interner, source)
-                } else {
-                    source
-                };
-                candidates.entry(id).or_default().push(candidate);
+                candidates.entry(id).or_default().push(source);
             }
             return;
         }
@@ -389,6 +414,18 @@ impl InferenceContext {
             for (id, cands) in structural_cands {
                 candidates.entry(id).or_default().extend(cands);
             }
+            self.visited.remove(&(source, target));
+            return;
+        }
+
+        // M27 (conditional mode): a **template pattern** extends target
+        // (`` `a-${infer R}` ``) matched against a string-literal check — non-greedy
+        // anchored scanning captures each `infer` hole's segment as a NON-widened
+        // string-literal candidate. Distribution over a union check is handled upstream
+        // (the conditional distributes before the extends test), so the source here is a
+        // single string literal.
+        if self.union_target_descent && interner.store().tag(target) == TypeTag::Template {
+            self.infer_from_template(interner, source, target, candidates);
             self.visited.remove(&(source, target));
             return;
         }
@@ -497,6 +534,74 @@ impl InferenceContext {
         }
     }
 
+    /// Match a string-literal `source` against a template-pattern `target` (M27),
+    /// capturing each `infer` hole's segment (the hole is a **freshened type parameter**
+    /// after the evaluator's de Bruijn freshening) as a NON-widened string-literal
+    /// candidate. Non-capturing holes (`string`/`number` intrinsic, a literal) must match
+    /// their segment; any mismatch (a failed anchor, an adjacent-hole separator, a bad
+    /// numeric segment) records **no** candidate, so the conditional's extends test then
+    /// takes the false branch. A non-string-literal source records nothing.
+    fn infer_from_template(
+        &mut self,
+        interner: &mut Interner,
+        source: TypeId,
+        target: TypeId,
+        candidates: &mut Candidates,
+    ) {
+        let s = match interner.store().literal_value(source) {
+            Some(LiteralValue::String(s)) => s.clone(),
+            _ => return,
+        };
+        let Some(template) = interner.store().template_type(target).cloned() else {
+            return;
+        };
+        let TemplateType { texts, holes } = template;
+        if holes.is_empty() {
+            return;
+        }
+        let prefix = texts.first().map(String::as_str).unwrap_or("");
+        let Some(mut rest) = s.strip_prefix(prefix) else {
+            return;
+        };
+        let n = holes.len();
+        // (param id, captured segment) pairs, interned once the whole scan succeeds.
+        let mut captures: Vec<(TypeParamId, String)> = Vec::new();
+        for (i, &hole) in holes.iter().enumerate() {
+            let sep = texts.get(i + 1).map(String::as_str).unwrap_or("");
+            let seg: &str = if i == n - 1 {
+                let Some(seg) = rest.strip_suffix(sep) else {
+                    return;
+                };
+                rest = "";
+                seg
+            } else {
+                if sep.is_empty() {
+                    return;
+                }
+                let Some(idx) = rest.find(sep) else {
+                    return;
+                };
+                let seg = &rest[..idx];
+                rest = &rest[idx + sep.len()..];
+                seg
+            };
+            if interner.store().tag(hole) == TypeTag::TypeParam {
+                if let Some(id) = interner.store().type_param(hole).map(|p| p.id) {
+                    captures.push((id, seg.to_string()));
+                }
+            } else if !segment_matches_hole(interner.store(), hole, seg) {
+                return;
+            }
+        }
+        if !rest.is_empty() {
+            return;
+        }
+        for (id, seg) in captures {
+            let lit = interner.intern_literal(LiteralValue::String(seg));
+            candidates.entry(id).or_default().push(lit);
+        }
+    }
+
     /// Both functions: recurse **positionally** on parameters (up to the shorter
     /// list) and on the return type. Parameter pairing is positional because that
     /// is how the relation engine compares function parameters (M3); a surplus
@@ -562,6 +667,55 @@ fn function_shape(store: &Store, ty: TypeId) -> Option<(Vec<TypeId>, TypeId)> {
     store
         .function_type(ty)
         .map(|function| (function.params.iter().map(|p| p.ty).collect(), function.ret))
+}
+
+/// Whether a matched segment satisfies a **non-capturing** template hole (M27): a
+/// `string` intrinsic accepts anything, a `number` intrinsic a decimal segment, a
+/// literal its own string form, a union any matching member. Mirrors the relation
+/// engine's hole matcher (kept local so the inference engine has no dependency on it).
+fn segment_matches_hole(store: &Store, hole: TypeId, seg: &str) -> bool {
+    match store.intrinsic_kind(hole) {
+        Some(IntrinsicKind::String) => return true,
+        Some(IntrinsicKind::Number) => return is_decimal_numeric(seg),
+        _ => {}
+    }
+    if let Some(lit) = store.literal_value(hole) {
+        let text = match lit {
+            LiteralValue::String(s) => s.clone(),
+            LiteralValue::Number(n) => crate::types::repr::number_to_string(*n),
+            LiteralValue::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
+        };
+        return text == seg;
+    }
+    if let Some(members) = store.union_members(hole) {
+        return members
+            .iter()
+            .any(|&member| segment_matches_hole(store, member, seg));
+    }
+    false
+}
+
+/// Whether a segment is a decimal numeric string (M27 — the `` `${number}` `` acceptance
+/// rule, sound against tsc's `String(Number(s)) === s`).
+fn is_decimal_numeric(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let mut seen_dot = false;
+    for (i, c) in s.char_indices() {
+        if c == '.' {
+            if seen_dot || i == 0 || i + 1 == s.len() {
+                return false;
+            }
+            seen_dot = true;
+        } else if !c.is_ascii_digit() {
+            return false;
+        }
+    }
+    match s.parse::<f64>() {
+        Ok(n) => crate::types::repr::number_to_string(n) == s,
+        Err(_) => false,
+    }
 }
 
 /// Widen a candidate: a literal widens to its base intrinsic (`5` → `number`);
@@ -655,10 +809,10 @@ mod tests {
             "a union extends target must collect from its shape-matching member"
         );
 
-        // The CALL-site entry point on the same union shape stays M10-conservative
+        // The CALL-site collection mode on the same union shape stays M10-conservative
         // (non-union source vs union target infers nothing — no m10 behavior change).
         let mut candidates = Candidates::default();
-        infer_from_types(&mut interner, num_arr, union_target, &mut candidates);
+        infer_from_types_raw(&mut interner, num_arr, union_target, &mut candidates);
         assert!(
             candidates.is_empty(),
             "call-site mode must not descend into union targets (M10 unchanged)"
@@ -861,6 +1015,68 @@ mod tests {
             "no candidate → unknown, never any"
         );
         assert_ne!(map.get(&TypeParamId(0)).copied(), Some(wk.any));
+    }
+
+    /// M24/M27 — a parameter with a **primitive constraint** keeps the inferred literal
+    /// (tsc `hasPrimitiveConstraint`): `mk<T extends string>("x")` infers `T = "x"`, while
+    /// an unconstrained `id<U>("x")` widens to `string`.
+    #[test]
+    fn primitive_constraint_preserves_literal() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let x = interner.intern_literal(LiteralValue::String("x".to_string()));
+
+        // `<T extends string>`: literal preserved.
+        let t = interner.intern_type_param(TypeParamId(0), "T");
+        interner.set_type_param_constraint(TypeParamId(0), wk.string);
+        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[t], &[x], &[]);
+        assert_eq!(
+            map.get(&TypeParamId(0)).copied(),
+            Some(x),
+            "a string-constrained parameter keeps the literal `\"x\"`"
+        );
+
+        // `<U>` (unconstrained): widened.
+        let u = interner.intern_type_param(TypeParamId(1), "U");
+        let map = infer_type_arguments(&mut interner, &[TypeParamId(1)], &[u], &[x], &[]);
+        assert_eq!(
+            map.get(&TypeParamId(1)).copied(),
+            Some(wk.string),
+            "an unconstrained parameter widens `\"x\"` → string"
+        );
+    }
+
+    /// M27 — template-pattern `infer` capture: matching a string literal against a
+    /// template extends target captures each `infer` hole (a freshened type parameter) as
+    /// a NON-widened string-literal candidate, non-greedily on the first separator; a
+    /// failed anchor records nothing.
+    #[test]
+    fn template_infer_captures_segments() {
+        use crate::types::repr::TemplateType;
+        let mut interner = Interner::with_intrinsics();
+
+        // Extends pattern `` `${L}:${R}` `` with L, R freshened infer parameters.
+        let l = interner.intern_type_param(TypeParamId(0), "L");
+        let r = interner.intern_type_param(TypeParamId(1), "R");
+        let pattern = interner.intern_template(TemplateType {
+            texts: vec![String::new(), ":".to_string(), String::new()],
+            holes: vec![l, r],
+        });
+
+        // "a:b:c" — first `:` anchors (non-greedy): L = "a", R = "b:c".
+        let check = interner.intern_literal(LiteralValue::String("a:b:c".to_string()));
+        let mut candidates = Candidates::default();
+        infer_from_types_for_conditional(&mut interner, check, pattern, &mut candidates);
+        let a = interner.intern_literal(LiteralValue::String("a".to_string()));
+        let bc = interner.intern_literal(LiteralValue::String("b:c".to_string()));
+        assert_eq!(candidates.get(&TypeParamId(0)).map(|c| c.as_slice()), Some(&[a][..]), "L = \"a\"");
+        assert_eq!(candidates.get(&TypeParamId(1)).map(|c| c.as_slice()), Some(&[bc][..]), "R = \"b:c\"");
+
+        // A source with no `:` separator records nothing (no match → false branch).
+        let no_sep = interner.intern_literal(LiteralValue::String("abc".to_string()));
+        let mut candidates = Candidates::default();
+        infer_from_types_for_conditional(&mut interner, no_sep, pattern, &mut candidates);
+        assert!(candidates.is_empty(), "a non-matching source records no candidate");
     }
 
     /// A self-referential argument/parameter pair terminates (cycle guard): a

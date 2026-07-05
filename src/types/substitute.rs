@@ -30,7 +30,7 @@
 
 use crate::types::repr::{
     ConditionalType, FunctionType, MappedType, ObjectType, ParameterType, PropertyType,
-    TypeParamId, TypeTag,
+    TemplateType, TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
 use crate::types::Interner;
@@ -85,6 +85,7 @@ impl<'a> Substitution<'a> {
             TypeTag::Conditional => self.apply_conditional(interner, ty),
             TypeTag::Instantiation => self.apply_instantiation(interner, ty),
             TypeTag::Mapped => self.apply_mapped(interner, ty),
+            TypeTag::Template => self.apply_template(interner, ty),
             // An `infer` binder (M25) / a mapped-value placeholder (M26) is a **bound**
             // node-scoped variable, never a free declaration parameter — the no-capture
             // rule (ADR-0002): substitution must leave it alone (the evaluator resolves
@@ -454,6 +455,40 @@ impl<'a> Substitution<'a> {
             optional_modifier: mapped.optional_modifier,
             readonly_modifier: mapped.readonly_modifier,
         })
+    }
+
+    /// Substitute through a **template literal type** (M27), rewriting each **hole** and
+    /// re-interning **only when a hole changed** (else the original id is returned,
+    /// keeping the no-op path allocation-free). The text segments are untouched. This is
+    /// what turns a generic `` `tag:${T}` `` into `` `tag:${string}` `` / `` `tag:${"x"}` ``
+    /// at instantiation; the constructed literal/union collapse then happens at the
+    /// evaluation demand site, not here. No cycle guard is needed: a template's holes are
+    /// interned (never self-referential-by-id) types.
+    fn apply_template(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
+        let Some(template) = interner.store().template_type(ty) else {
+            return ty;
+        };
+        let texts = template.texts.clone();
+        let holes: Vec<TypeId> = template.holes.clone();
+
+        let mut changed = false;
+        let new_holes: Vec<TypeId> = holes
+            .iter()
+            .map(|&hole| {
+                let new_hole = self.apply(interner, hole);
+                changed |= new_hole != hole;
+                new_hole
+            })
+            .collect();
+
+        if changed {
+            interner.intern_template(TemplateType {
+                texts,
+                holes: new_holes,
+            })
+        } else {
+            ty
+        }
     }
 }
 
@@ -952,6 +987,46 @@ mod tests {
             substitute(&mut interner, direct, &other_map),
             direct,
             "the direct-union form stays a single mapped node (no distribution)"
+        );
+    }
+
+    /// M27 — `substitute` rewrites a template's **holes** (its text segments untouched):
+    /// `` `tag:${T}` `` → `` `tag:${string}` `` under `T → string`; a template with no
+    /// mapped hole is returned unchanged (no-op path).
+    #[test]
+    fn substitution_rewrites_template_holes() {
+        use crate::types::repr::TemplateType;
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let t = interner.intern_type_param(TypeParamId(0), "T");
+
+        // `` `tag:${T}` `` and `` `x${U}` `` (U unmapped).
+        let tag_t = interner.intern_template(TemplateType {
+            texts: vec!["tag:".to_string(), String::new()],
+            holes: vec![t],
+        });
+        let u = interner.intern_type_param(TypeParamId(1), "U");
+        let x_u = interner.intern_template(TemplateType {
+            texts: vec!["x".to_string(), String::new()],
+            holes: vec![u],
+        });
+
+        let mut map = FxHashMap::default();
+        map.insert(TypeParamId(0), wk.string);
+
+        let tag_string = interner.intern_template(TemplateType {
+            texts: vec!["tag:".to_string(), String::new()],
+            holes: vec![wk.string],
+        });
+        assert_eq!(
+            substitute(&mut interner, tag_t, &map),
+            tag_string,
+            "`tag:${{T}}` → `tag:${{string}}`"
+        );
+        assert_eq!(
+            substitute(&mut interner, x_u, &map),
+            x_u,
+            "a template with no mapped hole is unchanged"
         );
     }
 

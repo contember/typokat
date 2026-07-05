@@ -13,7 +13,8 @@
 use crate::types::hash::StableHash;
 use crate::types::repr::{
     ArrayType, ConditionalType, FunctionType, InstantiationType, IntrinsicKind, LiteralValue,
-    MappedType, ObjectType, TupleType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
+    MappedType, ObjectType, TemplateType, TupleType, TypeFlags, TypeParamId, TypeParamType,
+    TypeTag,
 };
 use rustc_hash::FxHashMap;
 
@@ -74,6 +75,10 @@ pub struct Store {
     /// whole [`MappedType`] is its structural identity. A `MappedValue` placeholder row
     /// carries no side-table entry (payload `0`), like an intrinsic.
     mapped: Vec<MappedType>,
+    /// Template literal types (M27). Addressed by the `payload` of a `Template`-tagged
+    /// row. The whole [`TemplateType`] (its text segments + hole ids) is its structural
+    /// identity.
+    templates: Vec<TemplateType>,
 
     /// **Type-parameter constraint column** (M24): a type parameter's `extends`
     /// bound, keyed by its [`TypeParamId`]. A **side column**, NOT part of the
@@ -222,6 +227,15 @@ impl Store {
             return None;
         }
         self.mapped.get(self.payload(id) as usize)
+    }
+
+    /// The `TemplateType` of a template literal type (M27), or `None` if `id` is not a
+    /// template.
+    pub fn template_type(&self, id: TypeId) -> Option<&TemplateType> {
+        if self.tag(id) != TypeTag::Template {
+            return None;
+        }
+        self.templates.get(self.payload(id) as usize)
     }
 
     /// The `extends` constraint of a type parameter (M24), or `None` if the
@@ -405,5 +419,13 @@ impl Store {
     /// (identity is the tag alone; payload `0`).
     pub(crate) fn push_mapped_value(&mut self, flags: TypeFlags) -> TypeId {
         self.push(TypeTag::MappedValue, flags, 0)
+    }
+
+    /// Append a template-literal row (M27). Internal — `Interner` owns dedup (by the
+    /// whole [`TemplateType`]).
+    pub(crate) fn push_template(&mut self, template: TemplateType, flags: TypeFlags) -> TypeId {
+        let payload = self.templates.len() as u32;
+        self.templates.push(template);
+        self.push(TypeTag::Template, flags, payload)
     }
 }

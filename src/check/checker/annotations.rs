@@ -9,14 +9,14 @@ use crate::diagnostics::Diagnostic;
 use crate::span::Span;
 use crate::types::repr::{
     ConditionalType, FunctionType, LiteralValue, MappedType, ModifierOp, ObjectType, ParameterType,
-    PropertyType, TypeTag,
+    PropertyType, TemplateType, TypeTag,
 };
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
     FormalParameters, TSCallSignatureDeclaration, TSConditionalType, TSConstructSignatureDeclaration,
     TSConstructorType, TSInferType, TSLiteral, TSMappedType, TSMappedTypeModifierOperator,
-    TSMethodSignature, TSMethodSignatureKind, TSSignature, TSTupleElement, TSType, TSTypeAnnotation,
-    TSTypeName, TSTypeOperatorOperator,
+    TSMethodSignature, TSMethodSignatureKind, TSSignature, TSTemplateLiteralType, TSTupleElement,
+    TSType, TSTypeAnnotation, TSTypeName, TSTypeOperatorOperator,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -128,6 +128,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // M25: an `infer U` binder — only meaningful inside a conditional's `extends`
             // position (where an infer frame is active). Elsewhere it is out of subset.
             TSType::TSInferType(infer) => return self.lower_infer_type(infer),
+            // M27: a template literal type `` `a${T}b` ``. Lowered to an interned node
+            // (WU1) and, at a value-position demand site, constructed (collapse / cartesian
+            // union) — see [`lower_template_type`].
+            TSType::TSTemplateLiteralType(template) => {
+                return self.lower_template_type(scope, template);
+            }
             _ => return None,
         };
         Some(id)
@@ -240,6 +246,61 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         };
         Some(self.interner.intern_infer(index))
+    }
+
+    /// Lower a template literal type `` `a${T}b${U}c` `` to its interned node (M27, WU1).
+    ///
+    /// The `quasis` become the ordered text segments and each interpolated `types[i]`
+    /// becomes a hole (lowered recursively — a hole may be a literal, a union, a
+    /// `string`/`number` intrinsic, an in-scope type parameter, or, inside a conditional's
+    /// extends position, an `infer` binder). A hole that cannot be lowered (out of subset),
+    /// or a quasi with no cooked value (an invalid escape), aborts the whole annotation
+    /// (`None`), matching the object / union lowering.
+    ///
+    /// **Adjacent-`infer` poison (WU3):** two holes with no literal separator between them
+    /// (an empty interior text) where either is an `infer` binder are out of the M27 subset
+    /// (tsc's one-char-first resolution is not modelled). The enclosing conditional is
+    /// **poisoned** via the M25 mechanism (the innermost active `infer` frame), so it never
+    /// evaluates and relates conservatively (documented over-report divergence,
+    /// `tests/cases/README.md`).
+    ///
+    /// At a value-position demand site the built node is **constructed**
+    /// ([`Pass::maybe_evaluate`]); inside a template body it stays the interned node.
+    fn lower_template_type(
+        &mut self,
+        scope: ScopeId,
+        template: &TSTemplateLiteralType<'_>,
+    ) -> Option<TypeId> {
+        // Text segments — the cooked quasi values (`texts.len() == holes.len() + 1`). An
+        // invalid escape (`cooked == None`) is out of subset.
+        let mut texts: Vec<String> = Vec::with_capacity(template.quasis.len());
+        for quasi in &template.quasis {
+            texts.push(quasi.value.cooked.as_ref()?.to_string());
+        }
+
+        // Holes — the interpolated types, lowered in order (an `infer` hole registers into
+        // the active conditional frame, exactly like a bare `infer U`).
+        let mut holes: Vec<TypeId> = Vec::with_capacity(template.types.len());
+        for hole in &template.types {
+            holes.push(self.lower_annotation(scope, hole)?);
+        }
+
+        // Adjacent-`infer` poison: an empty interior separator between two holes where
+        // either is an `infer` node poisons the innermost active conditional frame.
+        for i in 1..holes.len() {
+            let separator_empty = texts.get(i).is_some_and(|t| t.is_empty());
+            let adjacent_infer = self.interner.store().tag(holes[i - 1]) == TypeTag::Infer
+                || self.interner.store().tag(holes[i]) == TypeTag::Infer;
+            if separator_empty && adjacent_infer {
+                if let Some(frame) = self.cond_frames.iter_mut().rev().find(|f| f.active) {
+                    frame.poisoned = true;
+                }
+            }
+        }
+
+        let id = self.interner.intern_template(TemplateType { texts, holes });
+        let span = Span::from_oxc(template.span);
+        Some(self.maybe_evaluate(id, span))
     }
 
     /// Whether the conditional check type `check` surface-references the alias `decl_id`

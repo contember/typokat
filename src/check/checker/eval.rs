@@ -38,8 +38,8 @@ use crate::diagnostics::Diagnostic;
 use crate::relate::Relater;
 use crate::span::Span;
 use crate::types::repr::{
-    ConditionalType, LiteralValue, MappedType, ModifierOp, ObjectType, PropertyType, TypeParamId,
-    TypeTag,
+    ConditionalType, LiteralValue, MappedType, ModifierOp, ObjectType, PropertyType, TemplateType,
+    TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
 use crate::types::{substitute, Interner};
@@ -60,7 +60,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     pub(in crate::check::checker) fn evaluate_type(&mut self, ty: TypeId, span: Span) -> TypeId {
         if !matches!(
             self.interner.store().tag(ty),
-            TypeTag::Conditional | TypeTag::Instantiation | TypeTag::Union | TypeTag::Mapped
+            TypeTag::Conditional
+                | TypeTag::Instantiation
+                | TypeTag::Union
+                | TypeTag::Mapped
+                | TypeTag::Template
         ) {
             return ty;
         }
@@ -106,6 +110,29 @@ enum Task {
     /// result object type, and push it. The metadata carries each property's name +
     /// resolved optional/readonly flags.
     BuildMappedObject(Vec<MappedProp>),
+}
+
+/// The classification of a template hole for construction (M27) — see
+/// [`ConditionalEvaluator::hole_parts`].
+enum HolePart {
+    /// A `never` hole: the whole template collapses to `never`.
+    Never,
+    /// A non-literal hole (string/number intrinsic, free parameter, `infer`, …): the
+    /// template stays a symbolic pattern.
+    NonLiteral,
+    /// A literal (or union-of-literals) hole: the ordered string parts it contributes to
+    /// the cartesian product.
+    Literals(Vec<String>),
+}
+
+/// The string a literal value contributes to a constructed template (M27): a string
+/// literal is its value, a number is JS-`String(n)`, a boolean is `"false"`/`"true"`.
+fn literal_to_string(lit: &LiteralValue) -> String {
+    match lit {
+        LiteralValue::String(s) => s.clone(),
+        LiteralValue::Number(n) => crate::types::repr::number_to_string(*n),
+        LiteralValue::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
+    }
 }
 
 /// One resolved output property of a mapped type (M26): its name and the
@@ -213,6 +240,7 @@ impl<'a> ConditionalEvaluator<'a> {
                         }
                         TypeTag::Union => self.eval_union(ty, &mut tasks, &mut values),
                         TypeTag::Mapped => self.eval_mapped(ty, &mut tasks, &mut values, error),
+                        TypeTag::Template => self.eval_template(ty, &mut values, error),
                         // Any other type is already a value.
                         _ => values.push(ty),
                     }
@@ -387,7 +415,7 @@ impl<'a> ConditionalEvaluator<'a> {
         let needs_eval = members.iter().any(|&m| {
             matches!(
                 self.interner.store().tag(m),
-                TypeTag::Conditional | TypeTag::Instantiation | TypeTag::Mapped
+                TypeTag::Conditional | TypeTag::Instantiation | TypeTag::Mapped | TypeTag::Template
             )
         });
         if !needs_eval {
@@ -438,6 +466,121 @@ impl<'a> ConditionalEvaluator<'a> {
         tasks.push(Task::SetMemo(ty));
         tasks.push(Task::AssembleMapped(ty));
         tasks.push(Task::Eval(mapped.key_source));
+    }
+
+    /// **Construct** a template literal type (M27). When every hole is a string / number
+    /// / boolean literal (or a union thereof) the template **collapses**: a single
+    /// combination to a string literal, several to the cartesian-product **union**
+    /// (canonicalized by `Interner::union`). A `never` hole short-circuits the whole
+    /// template to `never`; a `boolean` hole expands to `"false" | "true"` before the
+    /// product. A **non-literal** hole (`string`/`number` intrinsic, a free declaration
+    /// type parameter, an `infer` binder, or any still-symbolic type) leaves the template
+    /// a **symbolic pattern** — returned unchanged. The cartesian product iterates under
+    /// the shared per-root step budget, so a combinatorial blow-up trips `TK2589` (via
+    /// `exhausted`), never OOM. The result is memoized (a concrete collapse only — a
+    /// symbolic template is idempotent and left un-memoized, mirroring a deferred
+    /// conditional).
+    fn eval_template(&mut self, ty: TypeId, values: &mut Vec<TypeId>, error: TypeId) {
+        let Some(template) = self.interner.store().template_type(ty).cloned() else {
+            values.push(ty);
+            return;
+        };
+        let wk = self.interner.well_known();
+
+        // M22 discipline: an error-typed hole (an unresolved name upstream) degrades the
+        // whole template to the error type so cascades stay suppressed — mirroring
+        // `assemble_mapped`'s error/any key-source handling.
+        if template.holes.contains(&wk.error) {
+            self.memo.insert(ty, error);
+            values.push(error);
+            return;
+        }
+
+        // Classify each hole; a `never` hole makes the whole template `never`, a
+        // non-literal hole keeps it symbolic, otherwise it is a cartesian factor.
+        let mut factors: Vec<Vec<String>> = Vec::with_capacity(template.holes.len());
+        for &hole in &template.holes {
+            match self.hole_parts(hole) {
+                HolePart::Never => {
+                    self.memo.insert(ty, wk.never);
+                    values.push(wk.never);
+                    return;
+                }
+                HolePart::NonLiteral => {
+                    // A symbolic pattern (string/number intrinsic, free param, …) —
+                    // return the node unchanged, un-memoized (idempotent).
+                    values.push(ty);
+                    return;
+                }
+                HolePart::Literals(parts) => factors.push(parts),
+            }
+        }
+
+        // All-literal holes: build the cartesian product of text + hole combinations,
+        // metering each combination against the shared step budget.
+        let empty = String::new();
+        let mut acc: Vec<String> = vec![template.texts.first().cloned().unwrap_or_default()];
+        for (i, factor) in factors.iter().enumerate() {
+            let sep = template.texts.get(i + 1).unwrap_or(&empty);
+            let mut next: Vec<String> = Vec::with_capacity(acc.len().saturating_mul(factor.len()));
+            for prefix in &acc {
+                for part in factor {
+                    self.steps += 1;
+                    if self.steps > self.budget {
+                        self.exhausted = true;
+                        values.push(error);
+                        return;
+                    }
+                    next.push(format!("{prefix}{part}{sep}"));
+                }
+            }
+            acc = next;
+        }
+
+        let members: Vec<TypeId> = acc
+            .into_iter()
+            .map(|s| self.interner.intern_literal(LiteralValue::String(s)))
+            .collect();
+        let result = self.interner.union(members);
+        self.memo.insert(ty, result);
+        values.push(result);
+    }
+
+    /// Classify a template hole for construction (M27). A string/number/boolean literal
+    /// (or a union thereof) yields the ordered list of string parts it contributes to the
+    /// cartesian product; the `boolean` intrinsic expands to `"false"`/`"true"`; the
+    /// `never` intrinsic short-circuits the whole template; anything else (a
+    /// `string`/`number` intrinsic, a free parameter, an `infer` binder, or a union with
+    /// any non-literal member) leaves the template symbolic.
+    fn hole_parts(&self, hole: TypeId) -> HolePart {
+        let wk = self.interner.well_known();
+        let store = self.interner.store();
+        if hole == wk.never {
+            return HolePart::Never;
+        }
+        if hole == wk.boolean {
+            return HolePart::Literals(vec!["false".to_string(), "true".to_string()]);
+        }
+        if let Some(lit) = store.literal_value(hole) {
+            return HolePart::Literals(vec![literal_to_string(lit)]);
+        }
+        if let Some(members) = store.union_members(hole) {
+            // Every member must itself be constructible (a `never` member cannot occur —
+            // the interner drops it from a union). A non-literal member keeps the whole
+            // template symbolic.
+            let mut parts: Vec<String> = Vec::with_capacity(members.len());
+            for &member in members {
+                match self.hole_parts(member) {
+                    HolePart::Literals(sub) => parts.extend(sub),
+                    HolePart::Never => return HolePart::NonLiteral,
+                    HolePart::NonLiteral => return HolePart::NonLiteral,
+                }
+            }
+            return HolePart::Literals(parts);
+        }
+        // A `string`/`number` intrinsic, a free type parameter, an `infer` binder, or any
+        // other symbolic type — not constructible.
+        HolePart::NonLiteral
     }
 
     /// Assemble a mapped type's output properties (M26) after its key source has been
@@ -855,6 +998,31 @@ impl<'a> ConditionalEvaluator<'a> {
                     ty
                 }
             }
+            // M27: a template's `T[K]` placeholder lives in its holes
+            // (`` `x${T[K]}` `` inside a mapped value template) — recurse into them.
+            TypeTag::Template => {
+                let Some(template) = self.interner.store().template_type(ty).cloned() else {
+                    return ty;
+                };
+                let mut changed = false;
+                let new_holes: Vec<TypeId> = template
+                    .holes
+                    .iter()
+                    .map(|&hole| {
+                        let nh = self.replace_mapped_value(hole, value);
+                        changed |= nh != hole;
+                        nh
+                    })
+                    .collect();
+                if changed {
+                    self.interner.intern_template(TemplateType {
+                        texts: template.texts,
+                        holes: new_holes,
+                    })
+                } else {
+                    ty
+                }
+            }
         }
     }
 
@@ -1065,6 +1233,31 @@ impl<'a> ConditionalEvaluator<'a> {
                     ty
                 }
             }
+            // M27: a template's infer binders live in its holes (`` `a${infer R}` `` in an
+            // extends position) — freshen them by rewriting each hole.
+            TypeTag::Template => {
+                let Some(template) = self.interner.store().template_type(ty).cloned() else {
+                    return ty;
+                };
+                let mut changed = false;
+                let new_holes: Vec<TypeId> = template
+                    .holes
+                    .iter()
+                    .map(|&hole| {
+                        let nh = self.substitute_infers(hole, fresh);
+                        changed |= nh != hole;
+                        nh
+                    })
+                    .collect();
+                if changed {
+                    self.interner.intern_template(TemplateType {
+                        texts: template.texts,
+                        holes: new_holes,
+                    })
+                } else {
+                    ty
+                }
+            }
         }
     }
 
@@ -1188,6 +1381,12 @@ impl<'a> ConditionalEvaluator<'a> {
             TypeTag::Mapped => store
                 .mapped_type(ty)
                 .map(|m| vec![m.key_source, m.value_template])
+                .unwrap_or_default(),
+            // M27: a template is concrete once every hole is (a free type parameter hole,
+            // e.g. `` `tag:${T}` ``, makes it a deferred node).
+            TypeTag::Template => store
+                .template_type(ty)
+                .map(|t| t.holes.clone())
                 .unwrap_or_default(),
             _ => Vec::new(),
         }
@@ -1488,6 +1687,112 @@ mod tests {
         // optional `| undefined` baked in).
         let expected = interner.union(vec![wk.number, wk.null, wk.undefined]);
         assert_eq!(a.ty, expected, "value template `T[K] | null` + optional `| undefined`");
+    }
+
+    /// M27 — template construction: all-literal holes **collapse** (`` `a-${"b"}` `` →
+    /// `"a-b"`), a union hole distributes to the cartesian-product union, `boolean`
+    /// expands to `"false" | "true"`, a `never` hole short-circuits to `never`, and a
+    /// number literal stringifies.
+    #[test]
+    fn template_construction_collapses_and_distributes() {
+        use crate::types::repr::TemplateType;
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let mut next = 0u32;
+        let mut memo = FxHashMap::default();
+
+        let s = |interner: &mut Interner, v: &str| {
+            interner.intern_literal(LiteralValue::String(v.to_string()))
+        };
+        let template = |interner: &mut Interner, texts: &[&str], holes: Vec<TypeId>| {
+            interner.intern_template(TemplateType {
+                texts: texts.iter().map(|t| t.to_string()).collect(),
+                holes,
+            })
+        };
+
+        // `` `a-${"b"}` `` → "a-b".
+        let b = s(&mut interner, "b");
+        let one = template(&mut interner, &["a-", ""], vec![b]);
+        let expect = s(&mut interner, "a-b");
+        assert_eq!(eval(&mut interner, &mut next, &mut memo, one), expect);
+
+        // `` `${"a"|"b"}-${"1"|"2"}` `` → "a-1" | "a-2" | "b-1" | "b-2".
+        let a = s(&mut interner, "a");
+        let b = s(&mut interner, "b");
+        let d1 = s(&mut interner, "1");
+        let d2 = s(&mut interner, "2");
+        let ab = interner.union(vec![a, b]);
+        let d12 = interner.union(vec![d1, d2]);
+        let two = template(&mut interner, &["", "-", ""], vec![ab, d12]);
+        let members: Vec<TypeId> = ["a-1", "a-2", "b-1", "b-2"]
+            .into_iter()
+            .map(|v| s(&mut interner, v))
+            .collect();
+        let expect = interner.union(members);
+        assert_eq!(eval(&mut interner, &mut next, &mut memo, two), expect);
+
+        // `` `is:${boolean}` `` → "is:false" | "is:true".
+        let bh = template(&mut interner, &["is:", ""], vec![wk.boolean]);
+        let f = s(&mut interner, "is:false");
+        let t = s(&mut interner, "is:true");
+        let expect = interner.union(vec![f, t]);
+        assert_eq!(eval(&mut interner, &mut next, &mut memo, bh), expect);
+
+        // `` `x${never}` `` → never.
+        let nh = template(&mut interner, &["x", ""], vec![wk.never]);
+        assert_eq!(eval(&mut interner, &mut next, &mut memo, nh), wk.never);
+
+        // `` `v${1|2}` `` → "v1" | "v2" (number stringify).
+        let n1 = interner.intern_literal(LiteralValue::Number(1.0));
+        let n2 = interner.intern_literal(LiteralValue::Number(2.0));
+        let n12 = interner.union(vec![n1, n2]);
+        let ver = template(&mut interner, &["v", ""], vec![n12]);
+        let v1 = s(&mut interner, "v1");
+        let v2 = s(&mut interner, "v2");
+        let expect = interner.union(vec![v1, v2]);
+        assert_eq!(eval(&mut interner, &mut next, &mut memo, ver), expect);
+    }
+
+    /// M27 — a template with a **non-literal** hole (a `string` intrinsic, or a free
+    /// declaration type parameter) stays a **symbolic** node; an **error-typed** hole
+    /// degrades the whole template to the error type (M22 cascade suppression).
+    #[test]
+    fn template_construction_keeps_symbolic_and_suppresses_error() {
+        use crate::types::repr::TemplateType;
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let mut next = 1u32;
+        let mut memo = FxHashMap::default();
+
+        let template = |interner: &mut Interner, hole: TypeId| {
+            interner.intern_template(TemplateType {
+                texts: vec!["tag:".to_string(), String::new()],
+                holes: vec![hole],
+            })
+        };
+
+        // `string` hole → symbolic pattern (unchanged, un-memoized).
+        let pattern = template(&mut interner, wk.string);
+        assert_eq!(
+            eval(&mut interner, &mut next, &mut memo, pattern),
+            pattern,
+            "a `${{string}}` pattern stays symbolic"
+        );
+        assert!(!memo.contains_key(&pattern), "a symbolic template is not memoized");
+
+        // Free type parameter hole → deferred (symbolic).
+        let t = interner.intern_type_param(TypeParamId(0), "T");
+        let deferred = template(&mut interner, t);
+        assert_eq!(eval(&mut interner, &mut next, &mut memo, deferred), deferred);
+
+        // Error hole → error type (M22 cascade suppression).
+        let err = template(&mut interner, wk.error);
+        assert_eq!(
+            eval(&mut interner, &mut next, &mut memo, err),
+            wk.error,
+            "an error-typed hole degrades the template to the error type"
+        );
     }
 
     /// M26 — a mapped type over a **free** declaration type parameter stays deferred: the

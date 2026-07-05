@@ -47,3 +47,4 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 - [`27`](27-template-buried-conditional-evaluation.md) — conditionals buried in named alias/interface/class bodies stay deferred (conservative); evaluate them.
 - [`28`](28-interface-extends-composition.md) — interface `extends` members missing from the interface type (silent false negatives; pre-existing, found by the M26 review).
 - [`29`](29-silent-alias-cycle-permissiveness.md) — alias-cycle re-entry silently error-types with no primary diagnostic (missing `TK2456` for plain circular aliases; legal member recursion degraded — pre-existing, M26 review).
+- [`30`](30-numeric-literal-correctness.md) — negative numeric literal types lower to `any` (fully permissive!); `number_to_string` isn't JS-exact (pre-existing, M27 review).

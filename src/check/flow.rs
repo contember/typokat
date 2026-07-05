@@ -439,6 +439,10 @@ fn member_matches_typeof(
     match store.tag(member) {
         TypeTag::Intrinsic => store.intrinsic_kind(member) == Some(tag.intrinsic()),
         TypeTag::Literal => store.literal_value(member).map(LiteralValue::base_kind) == Some(tag.intrinsic()),
+        // M27: a template literal type is a string subtype, so it matches `typeof x ===
+        // "string"` (and no other tag) — kept correct so a template member is not
+        // wrongly narrowed out of a `string` branch.
+        TypeTag::Template => tag.intrinsic() == crate::types::repr::IntrinsicKind::String,
         // Objects/functions/unions/type-parameters/arrays/tuples never match a
         // primitive `typeof` tag (a nested union cannot appear as a member after
         // canonicalization, a type parameter only appears inside an uninstantiated

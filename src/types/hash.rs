@@ -107,6 +107,13 @@ pub enum StructuralKey<'a> {
     /// A **mapped-value placeholder** (M26). Identity is the tag alone (no payload), so
     /// every `T[K]` placeholder hash-conses to one node.
     MappedValue,
+    /// A **template literal type** (M27), keyed over its ordered text segments and hole
+    /// ids (position is meaning — a template is a sequence, not a set), so two
+    /// structurally equal templates collide.
+    Template {
+        texts: &'a [String],
+        holes: &'a [TypeId],
+    },
 }
 
 /// Live structural hash used for hash-consing (FxHash for speed). This is the
@@ -284,6 +291,20 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
         }
         StructuralKey::MappedValue => {
             TypeTag::MappedValue.hash_discriminant(&mut h);
+        }
+        StructuralKey::Template { texts, holes } => {
+            TypeTag::Template.hash_discriminant(&mut h);
+            // Lengths first so a shorter template cannot collide with a prefix of a
+            // longer one under the streaming hasher; then the segments and holes in
+            // order (a template is a sequence — position is part of identity).
+            texts.len().hash(&mut h);
+            for text in *texts {
+                text.hash(&mut h);
+            }
+            holes.len().hash(&mut h);
+            for hole in *holes {
+                hole.0.hash(&mut h);
+            }
         }
     }
     h.finish()

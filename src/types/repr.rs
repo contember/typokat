@@ -76,6 +76,17 @@ pub enum TypeTag {
     /// replaces it per key with the source property's type. Identity is the tag alone
     /// (payload `0`). Constructed via `Interner::intern_mapped_value`.
     MappedValue,
+    /// A **template literal type** (`` `a${T}` `` — M27). `payload` indexes
+    /// `Store::templates`. Carries alternating literal **text** segments and **hole**
+    /// `TypeId`s (the interpolated types), the holes being ordinary types folded into the
+    /// hash. A template whose holes are all string/number/boolean literals (or unions
+    /// thereof) is *constructed* by the type-level evaluator to a string literal or the
+    /// cartesian-product union; one with a `string`/`number` intrinsic hole stays a
+    /// symbolic **pattern** (anchored segment matching in the relation engine); one with a
+    /// free declaration type parameter hole stays a **deferred** node related
+    /// conservatively (identical-only, plus deferred → `string`). Constructed via
+    /// `Interner::intern_template`. See [`TemplateType`].
+    Template,
 }
 
 /// The fixed set of intrinsic (keyword) types. The discriminant doubles as the
@@ -565,6 +576,49 @@ impl ModifierOp {
     }
 }
 
+/// A template literal type `` `a${T}b${U}c` `` (M27).
+///
+/// Stored as alternating **text** segments and **hole** types: `texts[i]` precedes
+/// `holes[i]`, and `texts.last()` is the trailing text, so `texts.len() ==
+/// holes.len() + 1` always. `` `a-${T}` `` is `texts = ["a-", ""]`, `holes = [T]`;
+/// `` `${A}${B}` `` (adjacent holes, no separator) is `texts = ["", "", ""]`,
+/// `holes = [A, B]` — the empty **interior** text is what records the adjacency the
+/// M27 poison rule reads. The whole `(texts, holes)` pair is the structural identity
+/// (holes are ordinary types, folded into the hash), so two structurally equal
+/// templates hash-cons to one id and substitution may make a hole concrete.
+#[derive(Clone, Debug, Default)]
+pub struct TemplateType {
+    /// The literal text segments in order (`texts.len() == holes.len() + 1`). A leading
+    /// / trailing empty string means the template starts / ends with a hole; an empty
+    /// **interior** string means two adjacent holes with no separator.
+    pub texts: Vec<String>,
+    /// The interpolated hole types, in order. Each is an ordinary interned type
+    /// (`string`/`number` intrinsic, a literal or union thereof, a free type parameter,
+    /// or an `infer` binder inside a conditional's extends position).
+    pub holes: Vec<TypeId>,
+}
+
+/// Render an `f64` the way JavaScript's `String(n)` would for the common finite cases
+/// — the value a numeric hole contributes to a constructed template literal (M27), and
+/// the canonical form a `` `${number}` `` segment is validated against. Integers and
+/// simple decimals match `String(n)` exactly (Rust's shortest round-trip Display);
+/// negative zero normalizes to `"0"`, and the non-finite forms use the JS spellings.
+/// Scientific/large-magnitude forms diverge from `String(n)` (out of the M27 subset —
+/// documented, conservative).
+pub fn number_to_string(n: f64) -> String {
+    if n == 0.0 {
+        // Covers both `0.0` and `-0.0` (JS `String(-0)` is `"0"`).
+        return "0".to_string();
+    }
+    if n.is_nan() {
+        return "NaN".to_string();
+    }
+    if n.is_infinite() {
+        return if n < 0.0 { "-Infinity" } else { "Infinity" }.to_string();
+    }
+    format!("{n}")
+}
+
 /// A mapped type `{ [K in S]: V }` (M26).
 ///
 /// The whole struct is its structural identity (all fields folded into the hash/eq).
@@ -595,4 +649,22 @@ pub struct MappedType {
     /// The readonly modifier (`readonly`/`+readonly`/`-readonly`), applied to each
     /// property's starting readonly flag.
     pub readonly_modifier: ModifierOp,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::number_to_string;
+
+    /// M27 — JS-`String(n)`-faithful number rendering for the common finite cases:
+    /// integers drop the decimal, simple decimals round-trip, and negative zero
+    /// normalizes to `"0"`.
+    #[test]
+    fn number_to_string_matches_js_for_common_cases() {
+        assert_eq!(number_to_string(1.0), "1");
+        assert_eq!(number_to_string(42.0), "42");
+        assert_eq!(number_to_string(3.5), "3.5");
+        assert_eq!(number_to_string(0.0), "0");
+        assert_eq!(number_to_string(-0.0), "0", "negative zero renders as 0");
+        assert_eq!(number_to_string(0.5), "0.5");
+    }
 }

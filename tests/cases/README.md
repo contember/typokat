@@ -162,7 +162,13 @@ slots into a known later phase without rework:
   and deferred generics (M25/M26 conservative model — plus: a deferred template IS assignable to
   `string`). Documented divergences: ADJACENT infer holes (no literal separator) poison the
   conditional — deferred, conservative (tsc resolves them: first hole takes one char);
-  `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics are backlog `12`.
+  `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics are backlog `12`;
+  scientific/large-magnitude numeric stringification is a **known unsound gap — backlog `30`**
+  (numeric holes and `${number}` segment validation stringify via Rust's shortest-form Display,
+  not JS `String(n)`: `` `${1e21}` `` constructs `"1000000000000000000000"` where tsc's type is
+  `"1e+21"`, so typokat accepts a string tsc rejects — an UNDER-report, not conservative); a
+  hole that itself needs evaluation (a nested template, a conditional / alias instantiation)
+  stays symbolic and relates conservatively — rejects strings tsc accepts (over-report, safe).
 - **conditional types** (`T extends U ? X : Y`): specced in `m25_conditional_types/`, lands with
   backlog `09` (M25). Scope: resolution through the relation engine; distribution over
   naked-param unions (`never` → `never`, `boolean` expands to `true | false`); `infer`

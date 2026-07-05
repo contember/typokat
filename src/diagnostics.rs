@@ -952,6 +952,36 @@ fn render_type_inner(
         // surfaces inside a deferred mapped type's rendered form; a stable placeholder
         // suffices.
         TypeTag::MappedValue => "T[K]".to_string(),
+        // Template literal type (M27): the backtick form `` `a${T}b` `` — text segments
+        // interleaved with `${hole}`. Template-typed targets are asserted code-only in
+        // the corpus, so the exact form only has to be stable (holes never widen — only a
+        // top-level literal source widens, which never recurses here).
+        TypeTag::Template => match store.template_type(id) {
+            Some(template) => {
+                if rendering.contains(&id) {
+                    return "...".to_string();
+                }
+                rendering.push(id);
+                let mut out = String::from("`");
+                for (i, hole) in template.holes.iter().enumerate() {
+                    out.push_str(template.texts.get(i).map(String::as_str).unwrap_or(""));
+                    out.push_str("${");
+                    out.push_str(&render_type_inner(store, *hole, false, rendering));
+                    out.push('}');
+                }
+                out.push_str(
+                    template
+                        .texts
+                        .get(template.holes.len())
+                        .map(String::as_str)
+                        .unwrap_or(""),
+                );
+                out.push('`');
+                rendering.pop();
+                out
+            }
+            None => "<unsupported>".to_string(),
+        },
     }
 }
 
