@@ -21,8 +21,9 @@ function ret3<T extends string>(t: Tag<T>): string {
 // Instantiation collapses (literal) or keeps a pattern (string).
 const c1: Tag<"x"> = "tag:x";
 const c2: Tag<"x"> = "tag:y"; // error[TK2322]: Type '"tag:y"' is not assignable to type '"tag:x"'
+declare const someStr: string;
 declare function mk<T extends string>(t: T): Tag<T>;
 const c3: `tag:${string}` = mk(someStr);
-declare const someStr: string;
+const c3b: "tag:x" = mk(someStr); // error[TK2322]
 const c4: "tag:x" = mk("x");
 const c5: "tag:x" = mk("y"); // error[TK2322]
