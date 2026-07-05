@@ -47,3 +47,4 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 - [`28`](28-interface-extends-composition.md) — interface `extends` members missing from the interface type (silent false negatives; pre-existing, found by the M26 review).
 - [`29`](29-silent-alias-cycle-permissiveness.md) — alias-cycle re-entry silently error-types with no primary diagnostic (missing `TK2456` for plain circular aliases; legal member recursion degraded — pre-existing, M26 review).
 - [`30`](30-numeric-literal-correctness.md) — negative numeric literal types lower to `any` (fully permissive!); `number_to_string` isn't JS-exact (pre-existing, M27 review).
+- [`31`](31-object-literal-contextual-typing.md) — object/tuple/array literal members widen against literal-typed targets (false positives on valid code; pre-existing, b28 warm-up).

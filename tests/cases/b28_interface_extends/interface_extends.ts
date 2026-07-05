@@ -30,10 +30,13 @@ interface Deep extends Derived { d: number }
 const d1: Deep = { x: 1, y: "s", d: 2 };
 const d2: Deep = { y: "s", d: 2 }; // error[TK2741]: 'x' is missing
 
-// An own member overrides the inherited one by name.
+// An own member overrides the inherited one by name (checked via READS —
+// object-literal assignment against literal-typed members is the documented
+// contextual-typing deferral, backlog 31: '{ x: 5 }' widens to number).
 interface Over extends Base { x: 5 }
-const o1: Over = { x: 5 };
-const o2: Over = { x: 6 }; // error[TK2322]: Type '6' is not assignable to type '5'
+declare const ov: Over;
+const o1: 5 = ov.x;
+const o2: 6 = ov.x; // error[TK2322]: Type '5' is not assignable to type '6'
 
 // Mapped types over a derived interface see the full key set (M26 interplay).
 type Ident<T> = { [K in keyof T]: T[K] };
