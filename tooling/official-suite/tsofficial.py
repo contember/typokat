@@ -149,7 +149,7 @@ OUT_OF_SCOPE_SYNTAX = [
     ("decorator", re.compile(r"^\s*@[A-Za-z_]\w*\s*[\(\n]", re.M)),
     # conditional-type + infer gates removed — M25 models them (backlog 09).
     # mapped-type gate removed — M26 models them (backlog 10).
-    ("template-lit-type", re.compile(r":\s*`[^`]*\$\{|=\s*`[^`]*\$\{")),
+    # template-lit-type gate removed — M27 models them (backlog 11).
     ("satisfies", re.compile(r"\bsatisfies\b")),
     ("as-const", re.compile(r"\bas\s+const\b")),
     # Deferred narrowing (README: type predicates + unstructured-flow CFG = M23).

@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
-# corpus 874  in-scope 495  out-of-scope 379
-# clean-kept 166/211  error-exact 21/284  diag-recall 250/1657
+# corpus 874  in-scope 500  out-of-scope 374
+# clean-kept 168/215  error-exact 22/285  diag-recall 252/1659
 # cols: status<TAB>matched fn fp expected<TAB>rel  (status=IN | OOS:<bucket>; '-' = n/a)
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -313,7 +313,7 @@ OOS:unresolved	- - - -	conformance/controlFlow/controlFlowForStatement.ts
 OOS:syntax:module	- - - -	conformance/controlFlow/controlFlowGenericTypes.ts
 IN	0 2 5 2	conformance/controlFlow/controlFlowIIFE.ts
 OOS:unresolved	- - - -	conformance/controlFlow/controlFlowIfStatement.ts
-OOS:syntax:template-lit-type	- - - -	conformance/controlFlow/controlFlowInOperator.ts
+IN	0 0 0 0	conformance/controlFlow/controlFlowInOperator.ts
 OOS:syntax:instanceof	- - - -	conformance/controlFlow/controlFlowInstanceOfGuardPrimitives.ts
 OOS:syntax:module	- - - -	conformance/controlFlow/controlFlowInstanceofExtendsFunction.ts
 IN	0 0 2 0	conformance/controlFlow/controlFlowIteration.ts
@@ -480,7 +480,7 @@ IN	1 0 0 1	conformance/types/literal/literalTypesWidenInParameterPosition.ts
 IN	0 0 2 0	conformance/types/literal/numericLiteralTypes1.ts
 IN	0 0 2 0	conformance/types/literal/numericLiteralTypes2.ts
 IN	16 12 0 28	conformance/types/literal/numericLiteralTypes3.ts
-OOS:syntax:template-lit-type	- - - -	conformance/types/literal/numericStringLiteralTypes.ts
+OOS:unresolved	- - - -	conformance/types/literal/numericStringLiteralTypes.ts
 OOS:syntax:enum	- - - -	conformance/types/literal/stringEnumLiteralTypes1.ts
 OOS:syntax:enum	- - - -	conformance/types/literal/stringEnumLiteralTypes2.ts
 OOS:syntax:enum	- - - -	conformance/types/literal/stringEnumLiteralTypes3.ts
@@ -497,18 +497,18 @@ IN	0 12 0 12	conformance/types/literal/stringLiteralsWithSwitchStatements03.ts
 IN	0 11 0 11	conformance/types/literal/stringLiteralsWithSwitchStatements04.ts
 IN	0 3 0 3	conformance/types/literal/stringLiteralsWithTypeAssertions01.ts
 OOS:unresolved	- - - -	conformance/types/literal/stringMappingDeferralInConditionalTypes.ts
-OOS:syntax:template-lit-type	- - - -	conformance/types/literal/stringMappingOverPatternLiterals.ts
+OOS:unresolved	- - - -	conformance/types/literal/stringMappingOverPatternLiterals.ts
 OOS:syntax:module	- - - -	conformance/types/literal/stringMappingReduction.ts
 OOS:syntax:module	- - - -	conformance/types/literal/templateLiteralTypes1.ts
-OOS:syntax:template-lit-type	- - - -	conformance/types/literal/templateLiteralTypes2.ts
-OOS:syntax:template-lit-type	- - - -	conformance/types/literal/templateLiteralTypes3.ts
+OOS:syntax:as-const	- - - -	conformance/types/literal/templateLiteralTypes2.ts
+OOS:syntax:as-const	- - - -	conformance/types/literal/templateLiteralTypes3.ts
 OOS:syntax:enum	- - - -	conformance/types/literal/templateLiteralTypes4.ts
-OOS:syntax:template-lit-type	- - - -	conformance/types/literal/templateLiteralTypes5.ts
-OOS:syntax:template-lit-type	- - - -	conformance/types/literal/templateLiteralTypes6.ts
-OOS:syntax:template-lit-type	- - - -	conformance/types/literal/templateLiteralTypes7.ts
+OOS:unresolved	- - - -	conformance/types/literal/templateLiteralTypes5.ts
+IN	0 0 1 0	conformance/types/literal/templateLiteralTypes6.ts
+OOS:unresolved	- - - -	conformance/types/literal/templateLiteralTypes7.ts
 OOS:syntax:enum	- - - -	conformance/types/literal/templateLiteralTypes8.ts
 OOS:syntax:module	- - - -	conformance/types/literal/templateLiteralTypesPatterns.ts
-OOS:syntax:template-lit-type	- - - -	conformance/types/literal/templateLiteralTypesPatternsPrefixSuffixAssignability.ts
+IN	2 0 0 2	conformance/types/literal/templateLiteralTypesPatternsPrefixSuffixAssignability.ts
 IN	0 1 1 1	conformance/types/members/augmentedTypeAssignmentCompatIndexSignature.ts
 IN	0 0 0 0	conformance/types/members/augmentedTypeBracketAccessIndexSignature.ts
 IN	6 2 4 8	conformance/types/members/classWithPrivateProperty.ts
@@ -517,7 +517,7 @@ IN	0 0 4 0	conformance/types/members/classWithPublicProperty.ts
 IN	0 12 0 12	conformance/types/members/duplicateNumericIndexers.ts
 IN	0 16 0 16	conformance/types/members/duplicatePropertyNames.ts
 OOS:syntax:module	- - - -	conformance/types/members/duplicateStringIndexers.ts
-OOS:syntax:template-lit-type	- - - -	conformance/types/members/indexSignatures1.ts
+OOS:syntax:as-const	- - - -	conformance/types/members/indexSignatures1.ts
 IN	0 1 0 1	conformance/types/members/objectTypeHidingMembersOfExtendedObject.ts
 IN	0 3 0 3	conformance/types/members/objectTypeHidingMembersOfObject.ts
 OOS:unresolved	- - - -	conformance/types/members/objectTypeHidingMembersOfObjectAssignmentCompat.ts
@@ -659,7 +659,7 @@ IN	0 0 0 0	conformance/types/tuple/tupleElementTypes4.ts
 IN	0 2 0 2	conformance/types/tuple/tupleLengthCheck.ts
 IN	1 5 5 6	conformance/types/tuple/typeInferenceWithTupleType.ts
 IN	0 8 0 8	conformance/types/tuple/unionsOfTupleTypes1.ts
-OOS:syntax:template-lit-type	- - - -	conformance/types/tuple/variadicTuples1.ts
+OOS:syntax:as-const	- - - -	conformance/types/tuple/variadicTuples1.ts
 OOS:parse-error	- - - -	conformance/types/tuple/variadicTuples2.ts
 IN	0 3 0 3	conformance/types/tuple/variadicTuples3.ts
 IN	0 0 1 0	conformance/types/tuple/wideningTuples1.ts
@@ -858,7 +858,7 @@ OOS:unresolved	- - - -	conformance/types/union/contextualTypeWithUnionTypeMember
 IN	2 4 4 6	conformance/types/union/contextualTypeWithUnionTypeObjectLiteral.ts
 OOS:unresolved	- - - -	conformance/types/union/discriminatedUnionTypes1.ts
 OOS:unresolved	- - - -	conformance/types/union/discriminatedUnionTypes2.ts
-OOS:syntax:template-lit-type	- - - -	conformance/types/union/discriminatedUnionTypes3.ts
+IN	0 0 1 0	conformance/types/union/discriminatedUnionTypes3.ts
 OOS:syntax:enum	- - - -	conformance/types/union/discriminatedUnionTypes4.ts
 OOS:unresolved	- - - -	conformance/types/union/unionTypeCallSignatures.ts
 IN	0 9 0 9	conformance/types/union/unionTypeCallSignatures2.ts
@@ -866,7 +866,7 @@ IN	0 1 0 1	conformance/types/union/unionTypeCallSignatures3.ts
 IN	0 2 0 2	conformance/types/union/unionTypeCallSignatures4.ts
 IN	0 1 0 1	conformance/types/union/unionTypeCallSignatures5.ts
 IN	0 6 0 6	conformance/types/union/unionTypeCallSignatures6.ts
-OOS:syntax:template-lit-type	- - - -	conformance/types/union/unionTypeCallSignatures7.ts
+IN	0 0 0 0	conformance/types/union/unionTypeCallSignatures7.ts
 OOS:unresolved	- - - -	conformance/types/union/unionTypeConstructSignatures.ts
 IN	0 1 0 1	conformance/types/union/unionTypeEquivalence.ts
 IN	0 1 2 1	conformance/types/union/unionTypeFromArrayLiteral.ts
