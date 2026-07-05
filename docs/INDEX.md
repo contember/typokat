@@ -22,7 +22,8 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-<!-- (none) -->
+- [`sprints/sprint-2026-07-05-template-literals.md`](sprints/sprint-2026-07-05-template-literals.md) —
+  backlog `11` / M27 (spec committed, implementation in progress).
 
 ## What's hot
 

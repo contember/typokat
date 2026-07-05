@@ -20,4 +20,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-<!-- (none) -->
+- [`sprint-2026-07-05-template-literals.md`](sprint-2026-07-05-template-literals.md) —
+  backlog `11` / M27: `` `a${T}` `` (construction/distribution, pattern relation rules,
+  infer extraction, deferred generics).
