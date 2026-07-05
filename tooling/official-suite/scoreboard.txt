@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
-# corpus 874  in-scope 500  out-of-scope 374
-# clean-kept 168/215  error-exact 22/285  diag-recall 253/1659
+# corpus 874  in-scope 506  out-of-scope 368
+# clean-kept 171/219  error-exact 22/287  diag-recall 285/1691
 # cols: status<TAB>matched fn fp expected<TAB>rel  (status=IN | OOS:<bucket>; '-' = n/a)
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -298,7 +298,7 @@ OOS:syntax:module	- - - -	conformance/controlFlow/controlFlowBinaryOrExpression.
 OOS:syntax:as-const	- - - -	conformance/controlFlow/controlFlowBindingElement.ts
 OOS:syntax:as-const	- - - -	conformance/controlFlow/controlFlowBindingPatternOrder.ts
 IN	0 0 0 0	conformance/controlFlow/controlFlowCommaOperator.ts
-OOS:unresolved	- - - -	conformance/controlFlow/controlFlowComputedPropertyNames.ts
+IN	0 0 0 0	conformance/controlFlow/controlFlowComputedPropertyNames.ts
 IN	0 1 0 1	conformance/controlFlow/controlFlowConditionalExpression.ts
 IN	0 3 0 3	conformance/controlFlow/controlFlowDeleteOperator.ts
 OOS:unresolved	- - - -	conformance/controlFlow/controlFlowDestructuringDeclaration.ts
@@ -368,7 +368,7 @@ OOS:syntax:module	- - - -	conformance/expressions/typeGuards/typeGuardOfFormThis
 OOS:syntax:module	- - - -	conformance/expressions/typeGuards/typeGuardOfFormThisMemberErrors.ts
 IN	0 29 0 29	conformance/expressions/typeGuards/typeGuardOfFormTypeOfBoolean.ts
 IN	0 6 0 6	conformance/expressions/typeGuards/typeGuardOfFormTypeOfEqualEqualHasNoEffect.ts
-OOS:unresolved	- - - -	conformance/expressions/typeGuards/typeGuardOfFormTypeOfFunction.ts
+IN	0 0 2 0	conformance/expressions/typeGuards/typeGuardOfFormTypeOfFunction.ts
 IN	1 11 1 12	conformance/expressions/typeGuards/typeGuardOfFormTypeOfIsOrderIndependent.ts
 IN	0 6 0 6	conformance/expressions/typeGuards/typeGuardOfFormTypeOfNotEqualHasNoEffect.ts
 IN	0 27 0 27	conformance/expressions/typeGuards/typeGuardOfFormTypeOfNumber.ts
@@ -464,7 +464,7 @@ IN	0 0 0 0	conformance/types/keyof/keyofAndForIn.ts
 OOS:syntax:enum	- - - -	conformance/types/keyof/keyofAndIndexedAccess.ts
 OOS:syntax:module	- - - -	conformance/types/keyof/keyofAndIndexedAccess2.ts
 OOS:unresolved	- - - -	conformance/types/keyof/keyofAndIndexedAccessErrors.ts
-OOS:unresolved	- - - -	conformance/types/keyof/keyofIntersection.ts
+IN	0 0 0 0	conformance/types/keyof/keyofIntersection.ts
 IN	0 0 3 0	conformance/types/literal/booleanLiteralTypes1.ts
 IN	0 0 3 0	conformance/types/literal/booleanLiteralTypes2.ts
 OOS:syntax:enum	- - - -	conformance/types/literal/enumLiteralTypes1.ts
@@ -486,7 +486,7 @@ OOS:syntax:enum	- - - -	conformance/types/literal/stringEnumLiteralTypes2.ts
 OOS:syntax:enum	- - - -	conformance/types/literal/stringEnumLiteralTypes3.ts
 IN	0 0 0 0	conformance/types/literal/stringLiteralsAssertionsInEqualityComparisons01.ts
 IN	0 3 0 3	conformance/types/literal/stringLiteralsAssertionsInEqualityComparisons02.ts
-OOS:unresolved	- - - -	conformance/types/literal/stringLiteralsAssignedToStringMappings.ts
+IN	3 0 2 3	conformance/types/literal/stringLiteralsAssignedToStringMappings.ts
 IN	0 6 0 6	conformance/types/literal/stringLiteralsWithEqualityChecks01.ts
 IN	0 6 0 6	conformance/types/literal/stringLiteralsWithEqualityChecks02.ts
 IN	0 6 0 6	conformance/types/literal/stringLiteralsWithEqualityChecks03.ts
@@ -496,8 +496,8 @@ IN	0 2 0 2	conformance/types/literal/stringLiteralsWithSwitchStatements02.ts
 IN	0 12 0 12	conformance/types/literal/stringLiteralsWithSwitchStatements03.ts
 IN	0 11 0 11	conformance/types/literal/stringLiteralsWithSwitchStatements04.ts
 IN	0 3 0 3	conformance/types/literal/stringLiteralsWithTypeAssertions01.ts
-OOS:unresolved	- - - -	conformance/types/literal/stringMappingDeferralInConditionalTypes.ts
-OOS:unresolved	- - - -	conformance/types/literal/stringMappingOverPatternLiterals.ts
+IN	0 0 0 0	conformance/types/literal/stringMappingDeferralInConditionalTypes.ts
+IN	29 0 26 29	conformance/types/literal/stringMappingOverPatternLiterals.ts
 OOS:syntax:module	- - - -	conformance/types/literal/stringMappingReduction.ts
 OOS:syntax:module	- - - -	conformance/types/literal/templateLiteralTypes1.ts
 OOS:syntax:as-const	- - - -	conformance/types/literal/templateLiteralTypes2.ts
