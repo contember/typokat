@@ -44,8 +44,6 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 - [`25`](25-intersection-types.md) — intersection types (`A & B`) missing from the type model (silently permissive).
 - [`26`](26-cross-binder-nested-infer.md) — cross-binder nested `infer` (de Bruijn shifting on embed); M25 ships the conservative poisoned-deferral stopgap.
 - [`27`](27-template-buried-conditional-evaluation.md) — conditionals buried in named alias/interface/class bodies stay deferred (conservative); evaluate them.
-- [`28`](28-interface-extends-composition.md) — interface `extends` members missing from the interface type (silent false negatives; pre-existing, found by the M26 review).
-- [`29`](29-silent-alias-cycle-permissiveness.md) — alias-cycle re-entry silently error-types with no primary diagnostic (missing `TK2456` for plain circular aliases; legal member recursion degraded — pre-existing, M26 review).
-- [`30`](30-numeric-literal-correctness.md) — negative numeric literal types lower to `any` (fully permissive!); `number_to_string` isn't JS-exact (pre-existing, M27 review).
+- [`30`](30-numeric-literal-correctness.md) — JS-exact number stringification (`String(n)` dtoa; the negative-literal half shipped in the warm-ups sprint).
 - [`31`](31-object-literal-contextual-typing.md) — object/tuple/array literal members widen against literal-typed targets (false positives on valid code; pre-existing, b28 warm-up).
 - [`32`](32-eager-keyof-forward-references.md) — eager `keyof` over forward-referenced declarations silently degrades (FN family; pre-existing, warm-up re-review).

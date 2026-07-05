@@ -22,18 +22,18 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprints/sprint-2026-07-05-soundness-warmups.md`](sprints/sprint-2026-07-05-soundness-warmups.md) —
-  backlog `28`+`29`+`30` (spec committed, implementation in progress).
+<!-- (none) -->
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M27 shipped** — the M24→M27 generics + type-level run (constraints, conditional
-  types, mapped types, template literals) landed in one 24h push on the shared evaluator
-  (work-stack/memo/budget); see [`archive/`](archive/README.md). Scoreboard: in-scope 500,
-  clean-kept 168/215, error-exact 22/285, diag-recall 252/1659. **Next: utility types
-  (`12` / M28)** — closes the type-level phase — then the `13` profiling gate and the
-  real-world track (`14` lib.d.ts, `15` modules). Known-gap items from review probes:
-  `24`–`30` (`30` — negative literals lower to `any` — is HIGH and small; `28`/`29` are
-  silent-FN families). Small warm-ups: `21`–`23`.
+- **M0–M27 + the soundness warm-ups shipped** — after the M24→M27 type-level run, the
+  warm-ups sprint killed three silent-FN families (interface `extends` composition incl.
+  class/alias bases, alias-cycle `TK2456` + legal-recursion reads incl. the canonical
+  `Json` shape, negative literals); see [`archive/`](archive/README.md). Scoreboard:
+  in-scope 500, clean-kept 168/215, error-exact 22/285, diag-recall 253/1659. **Next:
+  utility types (`12` / M28)** — closes the type-level phase — then the `13` profiling
+  gate and the real-world track (`14` lib.d.ts, `15` modules). Known-gap items: `24`–`27`,
+  `30`–`32` (`31` object-literal contextual typing and `32` eager-keyof forward refs are
+  the new review byproducts). Small warm-ups: `21`–`23`.

@@ -20,5 +20,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-07-05-soundness-warmups.md`](sprint-2026-07-05-soundness-warmups.md) —
-  backlog `28`+`29`+`30`: the three silent-FN families from the M26/M27 reviews.
+<!-- (none) -->

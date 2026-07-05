@@ -1,6 +1,33 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/.
--->
+# OUTCOME (closed 2026-07-05) — SHIPPED
+
+**Three silent-FN families killed.** b30: negative literals are real literal types
+(both type and value position, `-0`≡`0`). b28: interface heritage composes for
+interface, class, and object-literal-alias bases (on-demand cycle-guarded fills;
+the spurious TK2353/TK2339 on valid derived-interface code are gone). b29: surface
+alias cycles report `TK2456` per cycle member; legal member recursion — including
+the canonical `Json` shape through index-signature values and mapped templates —
+resolves to real types.
+
+**Commit map.** Spec `978e743` · plan `037b2a8` · spec amendments `eff3eb3`
+(read-based override + backlog 31), `92d36cf` (Json/MapRec + alias/class bases) ·
+implementation `dca01ca` (+743/−59, incl. backlog 32 filing) · ratchet `e765f6f`.
+
+**Verification.** 194 unit + conformance green (three corpora: 3 files / 34
+markers), clippy clean. Adversarial review round 1 **FAIL** (spurious TK2456 on
+`Json` — two missed indirection boundaries; silent FN for alias/class heritage
+bases) → fixed → re-review **PASS**. Official suite: +1 progress
+(`callSignaturesThatDifferOnlyByReturnType2` matched 0→1, fp 2→0), diag-recall
+252→253/1659, 0 regressions.
+
+**Deferred / byproducts.** Backlog `31` (object-literal contextual typing — the
+fixture blocker, proven pre-existing) and `32` (eager `keyof` over forward
+references — attribution-proven pre-existing in an isolated HEAD worktree).
+Known gaps in the run log: non-seeded indirection reads (`Arr = Arr[]`) error-type
+on recursive positions (FN on reads, no FP); TS2430/TS2310/TS2313-twin out of
+scope; `- -1` double negation out of subset; ≥1e21 dtoa stays in backlog `30`
+(re-scoped to the stringification half).
+
+---
 
 # Sprint — soundness warm-ups: backlog 28 + 29 + 30 (2026-07-05)
 
