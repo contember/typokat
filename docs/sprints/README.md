@@ -20,4 +20,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-<!-- (none) -->
+- [`sprint-2026-07-05-utility-types.md`](sprint-2026-07-05-utility-types.md) —
+  backlog `12` / M28: built-in utility types (prelude unit, Omit composition, string intrinsics).
