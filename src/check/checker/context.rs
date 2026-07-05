@@ -16,8 +16,8 @@ use crate::span::Span;
 use crate::types::repr::{ClassId, TypeParamId, Visibility};
 use crate::types::store::TypeId;
 use crate::types::Interner;
-use oxc_ast::ast::{Class, TSType, TSTypeParameterDeclaration};
-use rustc_hash::FxHashMap;
+use oxc_ast::ast::{Class, TSInterfaceHeritage, TSType, TSTypeParameterDeclaration};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Which diagnostic an assignability obligation produces on failure. The
 /// structural verdict is the same relation query; only the code/message mapping
@@ -118,6 +118,11 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
         params: Vec<TypeParamId>,
         param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
         members: &'ast [oxc_ast::ast::TSSignature<'ast>],
+        /// B28: the interface's `extends` heritage clauses. Their members are folded
+        /// into the reserved object at fill time (own members override by name; bases
+        /// merged left-to-right), so inherited members are part of the interface's
+        /// type for assignability / member access / `keyof` / mapped sources.
+        extends: &'ast [TSInterfaceHeritage<'ast>],
     },
     /// A `type` alias — **transparent**. `annotation` is the aliased type, lowered
     /// on demand to the target id; `resolving` guards a recursive alias (out of the
@@ -139,6 +144,14 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
         /// (M25), else `None`. `type_resolved` is seeded with it so a self-reference
         /// resolves here; the fill step lowers the body and fills it.
         conditional_template: Option<TypeId>,
+        /// B29: the reserved object id when the top body is an **object type literal**
+        /// (`type X = { a: X | null }`), else `None`. Mirrors `conditional_template`:
+        /// `type_resolved` is seeded with it so a self-reference **through a member**
+        /// resolves to this stable id (the m5 named-recursive representation) rather than
+        /// re-entering into the error type; the fill step lowers the members and fills it.
+        /// This is what keeps legal member recursion resolving correctly (and off the
+        /// surface-cycle path — a seeded alias never re-enters `resolve_type_decl`).
+        object_template: Option<TypeId>,
         /// The alias name (M25) — for the `TK2456` message.
         name: String,
         /// The alias name-declaration span (M25) — the `TK2456` primary span.
@@ -362,6 +375,17 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// composes against the base's members built so far rather than looping). A
     /// non-class index stays `Done` (nothing to fill).
     pub(in crate::check::checker) class_fill: Vec<ClassFillState>,
+    /// B28/B29 — per-**template** fill state, indexed by `TypeDecl` index (parallel to
+    /// [`type_decls`](Pass::type_decls)). Mirrors [`class_fill`](Pass::class_fill) and
+    /// covers both reserved-object template kinds: **interfaces**
+    /// ([`ensure_interface_filled`]) and **seeded object-literal aliases**
+    /// ([`ensure_object_alias_filled`]). Each index is only ever advanced by the ensure
+    /// fn matching its decl kind. Fill is on demand and base-first in any declaration
+    /// order (interface heritage force-fills its interface / class / alias base —
+    /// [`ensure_heritage_base_filled`]), and an `extends` cycle is broken by the
+    /// `Filling` guard (out-of-scope TS2310 — no diagnostic, terminates). Any other
+    /// index stays `Done`.
+    pub(in crate::check::checker) template_fill: Vec<ClassFillState>,
     pub(in crate::check::checker) decl_types: DeclTypes,
     pub(in crate::check::checker) obligations: Vec<AssignObligation>,
     /// Backlog 06 — pending class-member override-compatibility checks (`TK2416`),
@@ -486,6 +510,29 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// conditional fill loop scopes to top-level conditional bodies only) so nested
     /// conditionals inside plain alias bodies keep their M25 behavior.
     pub(in crate::check::checker) resolving_alias: Option<(DeclId, Span, String)>,
+    /// B29 — the **stack** of aliases currently being resolved (pushed/popped per
+    /// `resolve_type_decl`), so a detected surface cycle can report `TK2456` at **every**
+    /// alias in the cycle, not just the one re-entered. A re-entry into a stack member
+    /// (`type Mut1 = Mut2 | null; type Mut2 = Mut1`) reports the whole slice from that
+    /// member to the top. Distinct from [`resolving_alias`](Pass::resolving_alias) (the
+    /// single innermost, for M26 mapped detection). The trailing `u32` is the
+    /// [`alias_indirection_depth`](Pass::alias_indirection_depth) at which the alias
+    /// started resolving: a re-entry at the **same** depth is a surface cycle (`TK2456`);
+    /// a re-entry at a **greater** depth came through a type constructor (array / tuple /
+    /// function / object member) — legal recursion, silently error-typed (no `TK2456`).
+    pub(in crate::check::checker) resolving_alias_stack: Vec<(DeclId, Span, String, u32)>,
+    /// B29 — how many **type-constructor** boundaries (array element, tuple element,
+    /// object-literal member, function/constructor parameter or return) the current
+    /// lowering has descended through. Bracketed by
+    /// [`with_indirection`](Pass::with_indirection). Only constructors that make
+    /// recursion **legal** increment it; unions / intersections / `keyof` stay at the
+    /// surface (a recursive alias through them is a genuine cycle). Conservative by
+    /// design: a missed increment over-reports `TK2456` (safe), never under-reports.
+    pub(in crate::check::checker) alias_indirection_depth: u32,
+    /// B29 — aliases confirmed to be part of a **surface cycle** (`TK2456` reported).
+    /// Their resolution is forced to the error type (final, not provisional — a detected
+    /// cycle is a settled verdict), so the M22 silent-downstream discipline holds.
+    pub(in crate::check::checker) circular_aliases: FxHashSet<usize>,
     /// **Mapped-type lowering contexts** (M26): one [`MappedFrame`] per
     /// `lower_mapped_type` call currently on the stack, each recording the node's key
     /// binder name. While a frame is active, an indexed access `X[K]` whose index names

@@ -13,10 +13,11 @@ use crate::types::repr::{
 };
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
-    FormalParameters, TSCallSignatureDeclaration, TSConditionalType, TSConstructSignatureDeclaration,
-    TSConstructorType, TSInferType, TSLiteral, TSMappedType, TSMappedTypeModifierOperator,
-    TSMethodSignature, TSMethodSignatureKind, TSSignature, TSTemplateLiteralType, TSTupleElement,
-    TSType, TSTypeAnnotation, TSTypeName, TSTypeOperatorOperator,
+    Expression, FormalParameters, TSCallSignatureDeclaration, TSConditionalType,
+    TSConstructSignatureDeclaration, TSConstructorType, TSInferType, TSLiteral, TSMappedType,
+    TSMappedTypeModifierOperator, TSMethodSignature, TSMethodSignatureKind, TSSignature,
+    TSTemplateLiteralType, TSTupleElement, TSType, TSTypeAnnotation, TSTypeName,
+    TSTypeOperatorOperator, UnaryOperator,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -67,7 +68,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // nests), then interned as an array type. A non-lowerable element (out of
             // subset) aborts the whole annotation (`None`), matching the other lowerings.
             TSType::TSArrayType(array) => {
-                let element = self.lower_annotation(scope, &array.element_type)?;
+                let element =
+                    self.with_indirection(|p| p.lower_annotation(scope, &array.element_type))?;
                 return Some(self.interner.intern_array(element));
             }
             // M18: a tuple type `[A, B]`. Each element is lowered recursively (so nested
@@ -137,6 +139,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             _ => return None,
         };
         Some(id)
+    }
+
+    /// B29 — run `f` with the alias **indirection depth** incremented by one: a descent
+    /// through a type constructor whose recursion is legal (array element, tuple element,
+    /// object-literal member, function/constructor parameter or return). Always balanced,
+    /// so a `?` / early return by the caller leaves the depth restored. A re-entry into a
+    /// still-resolving alias at a greater depth than it started is legal recursion, not a
+    /// surface cycle (see [`Pass::resolve_type_decl`]).
+    fn with_indirection<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.alias_indirection_depth += 1;
+        let result = f(self);
+        self.alias_indirection_depth -= 1;
+        result
     }
 
     /// Lower a conditional type `check extends extends_ty ? true : false` (M25, WU1).
@@ -410,8 +425,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.mapped_frames.push(MappedFrame {
             key_name: mapped.key.name.to_string(),
         });
+        // B29: a mapped VALUE template is a legal-recursion boundary (`type MapRec =
+        // string | { [K in "a" | "b"]: MapRec }`), so it lowers one indirection deeper.
+        // The key source stays at surface depth (a self-referencing key set is the
+        // TK2456 case, caught above / by surface re-entry).
         let value_template = match &mapped.type_annotation {
-            Some(annotation) => self.lower_annotation(scope, annotation),
+            Some(annotation) => self.with_indirection(|p| p.lower_annotation(scope, annotation)),
             // A mapped type with no value (`{ [K in S] }`) is out of subset.
             None => None,
         };
@@ -485,7 +504,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // A plain positional element exposes its underlying `TSType`; an optional /
             // rest element does not (`as_ts_type` → `None`) and is out of subset.
             let ts_type = element.as_ts_type()?;
-            lowered.push(self.lower_annotation(scope, ts_type)?);
+            lowered.push(self.with_indirection(|p| p.lower_annotation(scope, ts_type))?);
         }
         Some(self.interner.intern_tuple(lowered))
     }
@@ -494,16 +513,29 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// `TypeId` (M8). A string/number/boolean literal interns to the hash-consed
     /// literal id (so it shares identity with the same literal anywhere, which is what
     /// makes literal↔literal assignability and discriminant matching reduce to id
-    /// equality). A `bigint`/template/`-1`-style (unary) literal type is out of the M8
-    /// subset → `None` (the caller aborts the enclosing annotation, matching the other
-    /// lowerings — silently dropping it would mis-state the type).
+    /// equality). A negated numeric literal (`-1`, oxc: a unary-minus type expression)
+    /// lowers to the corresponding negative number literal. A `bigint`/template/other
+    /// unary literal type is out of the M8 subset → `None` (the caller aborts the
+    /// enclosing annotation, matching the other lowerings — silently dropping it would
+    /// mis-state the type).
     fn lower_literal_type(&mut self, literal: &TSLiteral<'_>) -> Option<TypeId> {
         let value = match literal {
             TSLiteral::StringLiteral(s) => LiteralValue::String(s.value.to_string()),
             TSLiteral::NumericLiteral(n) => LiteralValue::Number(n.value),
             TSLiteral::BooleanLiteral(b) => LiteralValue::Boolean(b.value),
-            // `bigint`, template-literal types, and unary (`-1`) literal types are out
-            // of the M8 subset.
+            // `-<numeric literal>` is a negative number literal type. tsc interns `-0`
+            // and `0` to the same literal (SameValueZero), so collapse `-0.0` to `0.0`.
+            TSLiteral::UnaryExpression(unary)
+                if unary.operator == UnaryOperator::UnaryNegation =>
+            {
+                let Expression::NumericLiteral(n) = &unary.argument else {
+                    return None;
+                };
+                let negated = -n.value;
+                LiteralValue::Number(if negated == 0.0 { 0.0 } else { negated })
+            }
+            // `bigint`, template-literal types, and other unary literal types (`+1`,
+            // `-1n`, `~1`) are out of the M8 subset.
             TSLiteral::BigIntLiteral(_)
             | TSLiteral::TemplateLiteral(_)
             | TSLiteral::UnaryExpression(_) => return None,
@@ -545,7 +577,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         continue;
                     }
                     let annotation = sig.type_annotation.as_ref()?;
-                    let ty = self.lower_annotation(scope, &annotation.type_annotation)?;
+                    // B29: an object member is a legal-recursion boundary (`type W = { a: W
+                    // } | null`), so lower it at a deeper indirection level.
+                    let ty = self
+                        .with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation))?;
                     // M21: an optional member (`b?: T`) lowers like a normal property whose
                     // effective type is `T | undefined` (see [`lower_interface_members`] for
                     // the rationale — the `| undefined` must be interned here, not in the
@@ -697,14 +732,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         for param in &params.items {
             let name = parameter_name(&param.pattern)?;
             let annotation = param.type_annotation.as_ref()?;
-            let ty = self.lower_annotation(scope, &annotation.type_annotation)?;
+            // B29: a parameter/return is a legal-recursion boundary.
+            let ty = self
+                .with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation))?;
             lowered.push(ParameterType {
                 name,
                 ty,
                 optional: false,
             });
         }
-        let ret = self.lower_annotation(scope, &return_type.type_annotation)?;
+        let ret =
+            self.with_indirection(|p| p.lower_annotation(scope, &return_type.type_annotation))?;
         Some(self.interner.intern_function(FunctionType {
             params: lowered,
             ret,
@@ -1008,7 +1046,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return None;
         };
         let key = self.lower_annotation(scope, &param.type_annotation.type_annotation)?;
-        let value = self.lower_annotation(scope, &sig.type_annotation.type_annotation)?;
+        // B29: an index-signature VALUE is a legal-recursion boundary (the canonical
+        // `type Json = … | { [k: string]: Json }`), so it lowers one indirection deeper.
+        // The key stays at surface depth (recursion through a key is never legal).
+        let value = self
+            .with_indirection(|p| p.lower_annotation(scope, &sig.type_annotation.type_annotation))?;
         let wk = self.interner.well_known();
         if key == wk.string {
             object.string_index = Some(value);
@@ -1180,14 +1222,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         for param in &params.items {
             let name = parameter_name(&param.pattern)?;
             let annotation = param.type_annotation.as_ref()?;
-            let ty = self.lower_annotation(scope, &annotation.type_annotation)?;
+            // B29: a parameter/return is a legal-recursion boundary (`type Fn = () => Fn`).
+            let ty = self
+                .with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation))?;
             lowered.push(ParameterType {
                 name,
                 ty,
                 optional: false,
             });
         }
-        let ret = self.lower_annotation(scope, return_type)?;
+        let ret = self.with_indirection(|p| p.lower_annotation(scope, return_type))?;
         Some(self.interner.intern_function(FunctionType {
             params: lowered,
             ret,

@@ -158,6 +158,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn infer_unary(&mut self, scope: ScopeId, unary: &UnaryExpression<'_>) -> (TypeId, Span) {
         let wk = self.interner.well_known();
         let span = Span::from_oxc(unary.span);
+        // `-<numeric literal>` is a fresh negative number literal (mirrors the plain
+        // numeric-literal case; tsc collapses `-0` to `0`).
+        if unary.operator == UnaryOperator::UnaryNegation {
+            if let Expression::NumericLiteral(lit) = &unary.argument {
+                let negated = -lit.value;
+                let value = if negated == 0.0 { 0.0 } else { negated };
+                let id = self.interner.intern_literal(LiteralValue::Number(value));
+                return (id, span);
+            }
+        }
         // Walk the operand so references inside the condition resolve (and nested
         // functions are checked).
         self.infer_expr(scope, &unary.argument);

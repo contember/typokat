@@ -10,8 +10,8 @@ use crate::types::repr::{ClassId, ObjectType, PropertyType, TypeParamId, TypeTag
 use crate::types::store::TypeId;
 use crate::types::{substitute, Interner};
 use oxc_ast::ast::{
-    Program, Statement, TSSignature, TSTypeName, TSTypeParameterDeclaration,
-    TSTypeParameterInstantiation,
+    Expression, Program, Statement, TSInterfaceHeritage, TSSignature, TSTypeName,
+    TSTypeParameterDeclaration, TSTypeParameterInstantiation,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -49,23 +49,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // `Box<number>` substitutes it. A non-generic interface fills with an empty
         // frame and stays nominal (filled in place, never re-interned).
         for index in 0..count {
-            let TypeDecl::Interface {
-                reserved,
-                ref params,
-                param_decl,
-                members,
-            } = self.type_decls[index]
-            else {
-                continue;
-            };
-            let params = params.clone();
-            let frame = self.build_type_param_frame(param_decl, &params);
-            let object = self.with_type_params(frame, |pass| {
-                // M24: lower the parameters' `extends` constraints with the frame active.
-                pass.lower_type_param_constraints(scope, param_decl, &params);
-                pass.lower_interface_members(scope, members)
-            });
-            self.interner.fill_object(reserved, object);
+            self.ensure_interface_filled(scope, index);
         }
 
         // M25: fill each **conditional-alias** template (its reserved conditional id)
@@ -123,6 +107,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         }
 
+        // B29: fill each **object-literal alias** template (its reserved object id) BEFORE
+        // resolving ordinary aliases, mirroring the conditional-template step. The reserved
+        // id is already seeded in `type_resolved`, so a self-reference through a member
+        // (`type X = { a: X | null }`, mutual `Even`/`Odd`) resolves to the stable id — the
+        // m5 named-recursive representation — never re-entering into the error type.
+        // Idempotent per index — an interface whose heritage named the alias already
+        // force-filled it ([`ensure_heritage_base_filled`]).
+        for index in 0..count {
+            self.ensure_object_alias_filled(scope, index);
+        }
+
         // Resolve every remaining alias (interfaces are now filled, so a generic alias
         // instantiating an interface substitutes over the filled template). Resolution
         // is on-demand and idempotent, so touching every alias resolves the whole DAG.
@@ -156,24 +151,253 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.building_template = false;
     }
 
+    /// B28 — fill one interface's reserved object with its **composed** type (own
+    /// members plus everything inherited through `extends`), on demand and exactly once.
+    /// Mirrors [`ensure_class_filled`]: the base interfaces are filled **first** (so a
+    /// derived interface reads their fully-composed members regardless of declaration
+    /// order), the `Filling` guard breaks an `extends` cycle (out-of-scope TS2310 — no
+    /// diagnostic, terminates), and a non-interface / out-of-range index is a no-op.
+    fn ensure_interface_filled(&mut self, scope: ScopeId, index: usize) {
+        match self.template_fill.get(index).copied() {
+            // Already filled, or filling (an `extends` cycle re-entered) — do not recurse.
+            Some(ClassFillState::Done) | Some(ClassFillState::Filling) => return,
+            Some(ClassFillState::Pending) => {}
+            // Out of range: nothing to fill.
+            None => return,
+        }
+        let TypeDecl::Interface {
+            reserved,
+            ref params,
+            param_decl,
+            members,
+            extends,
+        } = self.type_decls[index]
+        else {
+            // Not an interface (a Pending object-template alias belongs to
+            // [`ensure_object_alias_filled`]) — leave the state untouched.
+            return;
+        };
+        let params = params.clone();
+
+        // Mark in-progress before touching a base, so a cyclic `extends` hits the
+        // `Filling` guard above rather than looping.
+        if let Some(slot) = self.template_fill.get_mut(index) {
+            *slot = ClassFillState::Filling;
+        }
+
+        // Fill each base first — interface, class, or (through a transparent alias) a
+        // seeded object-literal alias — outside this interface's type-param frame, so a
+        // base's parameters never leak into (or capture) this interface's frame.
+        for heritage in extends {
+            self.ensure_heritage_base_filled(scope, heritage);
+        }
+
+        let frame = self.build_type_param_frame(param_decl, &params);
+        let object = self.with_type_params(frame, |pass| {
+            // M24: lower the parameters' `extends` constraints with the frame active.
+            pass.lower_type_param_constraints(scope, param_decl, &params);
+            let own = pass.lower_interface_members(scope, members);
+            pass.compose_interface_heritage(scope, own, extends)
+        });
+        self.interner.fill_object(reserved, object);
+
+        if let Some(slot) = self.template_fill.get_mut(index) {
+            *slot = ClassFillState::Done;
+        }
+    }
+
+    /// B29 — fill one **seeded object-literal alias**'s reserved object with its lowered
+    /// members, on demand and exactly once (mirroring [`ensure_interface_filled`], same
+    /// [`template_fill`](Pass::template_fill) array). Members are lowered with the
+    /// `resolving_alias` context set, so a nested mapped key source that
+    /// surface-references the alias still hits the M26 `TK2456` path. A non-seeded /
+    /// out-of-range index is a no-op.
+    fn ensure_object_alias_filled(&mut self, scope: ScopeId, index: usize) {
+        match self.template_fill.get(index).copied() {
+            Some(ClassFillState::Done) | Some(ClassFillState::Filling) => return,
+            Some(ClassFillState::Pending) => {}
+            None => return,
+        }
+        let (reserved, members, name, name_span) = match &self.type_decls[index] {
+            TypeDecl::Alias {
+                object_template: Some(reserved),
+                annotation: oxc_ast::ast::TSType::TSTypeLiteral(lit),
+                name,
+                name_span,
+                ..
+            } => (*reserved, &lit.members, name.clone(), *name_span),
+            // Not a seeded object alias (a Pending interface belongs to
+            // [`ensure_interface_filled`]) — leave the state untouched.
+            _ => return,
+        };
+        if let Some(slot) = self.template_fill.get_mut(index) {
+            *slot = ClassFillState::Filling;
+        }
+        let decl_id = DeclId(index as u32);
+        let prev_resolving_alias = self.resolving_alias.take();
+        self.resolving_alias = Some((decl_id, name_span, name.clone()));
+        self.resolving_alias_stack
+            .push((decl_id, name_span, name, self.alias_indirection_depth));
+        let object = self.lower_interface_members(scope, members);
+        self.resolving_alias_stack.pop();
+        self.resolving_alias = prev_resolving_alias;
+        self.interner.fill_object(reserved, object);
+        if let Some(slot) = self.template_fill.get_mut(index) {
+            *slot = ClassFillState::Done;
+        }
+    }
+
+    /// B28 — force-fill a heritage clause's base so the compose step reads real members
+    /// regardless of declaration/fill order. Dispatches on the named declaration's kind:
+    /// an **interface** fills recursively; a **class** fills via the (idempotent,
+    /// cycle-guarded) class machinery — tsc allows `interface extends Class`, composing
+    /// the instance type; a bare **alias** resolves (memoized) and whatever reserved
+    /// template it lands on — an interface, a class instance, or a B29 seeded
+    /// object-literal alias — is filled via [`ensure_reserved_template_filled`]. A
+    /// generic alias heritage (`Alias<Args>`) needs no pre-fill: instantiation resolves
+    /// its template on demand at compose time.
+    fn ensure_heritage_base_filled(&mut self, scope: ScopeId, heritage: &TSInterfaceHeritage<'_>) {
+        let Expression::Identifier(ident) = &heritage.expression else {
+            return;
+        };
+        let Some(decl_id) = type_decl_id(self.binder, scope, ident.name.as_str()) else {
+            return;
+        };
+        match self.type_decls.get(decl_id.index()) {
+            Some(TypeDecl::Interface { .. }) => self.ensure_interface_filled(scope, decl_id.index()),
+            Some(TypeDecl::Class { .. }) => self.ensure_class_filled(scope, decl_id.index()),
+            Some(TypeDecl::Alias { .. }) if heritage.type_arguments.is_none() => {
+                let ty = self.resolve_type_decl(scope, decl_id);
+                self.ensure_reserved_template_filled(scope, ty);
+            }
+            _ => {}
+        }
+    }
+
+    /// B28 — given a resolved base `TypeId`, fill the declaration whose reserved
+    /// template it is (interface / class instance / seeded object-literal alias), if
+    /// any. This is what makes a transparent alias chain (`type A = RealBase`) compose
+    /// the *filled* target in any declaration order. A `TypeId` owned by no declaration
+    /// (a structural type, the error type) needs no fill.
+    fn ensure_reserved_template_filled(&mut self, scope: ScopeId, ty: TypeId) {
+        let target = self.type_decls.iter().position(|decl| match decl {
+            TypeDecl::Interface { reserved, .. } | TypeDecl::Class { reserved, .. } => {
+                *reserved == ty
+            }
+            TypeDecl::Alias {
+                object_template: Some(reserved),
+                ..
+            } => *reserved == ty,
+            _ => false,
+        });
+        let Some(index) = target else {
+            return;
+        };
+        match self.type_decls.get(index) {
+            Some(TypeDecl::Interface { .. }) => self.ensure_interface_filled(scope, index),
+            Some(TypeDecl::Class { .. }) => self.ensure_class_filled(scope, index),
+            Some(TypeDecl::Alias { .. }) => self.ensure_object_alias_filled(scope, index),
+            _ => {}
+        }
+    }
+
+    /// B28 — fold every `extends` base's members into `own` and return the composed
+    /// object. Bases are merged left-to-right (a later base overriding an earlier one on
+    /// a name conflict, matching tsc's read order); `own` members override any inherited
+    /// one by name. Index signatures and (subset) call/construct signatures inherit when
+    /// `own` does not declare them. A base that does not resolve to an object type
+    /// contributes nothing (no diagnostic — over/under-report guarded by scope).
+    fn compose_interface_heritage(
+        &mut self,
+        scope: ScopeId,
+        own: ObjectType,
+        extends: &[TSInterfaceHeritage<'_>],
+    ) -> ObjectType {
+        if extends.is_empty() {
+            return own;
+        }
+        let mut base = ObjectType::default();
+        for heritage in extends {
+            let Some(base_ty) = self.resolve_heritage_type(scope, heritage) else {
+                continue;
+            };
+            let Some(base_obj) = self.interner.store().object_type(base_ty).cloned() else {
+                continue;
+            };
+            base = merge_object_members(base, base_obj);
+        }
+        merge_object_members(base, own)
+    }
+
+    /// B28 — resolve a heritage clause's base to its `TypeId`: a bare interface/alias
+    /// reference resolves through `type_resolved`; a generic base (`extends Base<T>`)
+    /// instantiates its template with the lowered arguments. Non-identifier bases (out of
+    /// subset) yield `None`.
+    fn resolve_heritage_type(
+        &mut self,
+        scope: ScopeId,
+        heritage: &TSInterfaceHeritage<'_>,
+    ) -> Option<TypeId> {
+        let Expression::Identifier(ident) = &heritage.expression else {
+            return None;
+        };
+        let decl_id = type_decl_id(self.binder, scope, ident.name.as_str())?;
+        match heritage.type_arguments.as_deref() {
+            Some(args) => self.instantiate_type_reference(scope, decl_id, args),
+            None => Some(self.resolve_type_decl(scope, decl_id)),
+        }
+    }
+
     /// Resolve a single type declaration to its `TypeId`, memoizing the result in
-    /// `pass.type_resolved`. Interfaces are already seeded (their reserved id);
-    /// aliases are lowered on first request. A recursive alias (an alias whose body,
-    /// directly or transitively, references itself) is detected by the `resolving`
-    /// flag and broken by yielding the error type — recursive *aliases* are out of the
-    /// M5 subset (recursion comes via interfaces), so this never loops.
+    /// `pass.type_resolved`. Interfaces are already seeded (their reserved id); an
+    /// object-literal alias is seeded with a reserved object id (B29); other aliases are
+    /// lowered on first request.
+    ///
+    /// B29: a **surface cycle** — an alias whose own surface (its body, a union member,
+    /// or a mutual partner's surface) re-enters it, reachable without descending through a
+    /// member — is a circular alias. It reports `TK2456` at **every** alias in the cycle
+    /// (via the resolving-alias stack) and error-types them (the M22 silent-downstream
+    /// discipline then holds). Legal recursion **through a member** never reaches this
+    /// path: an object-literal alias is seeded, so a member self-reference resolves to its
+    /// reserved id (the m5 named-recursive representation) rather than re-entering.
     fn resolve_type_decl(&mut self, scope: ScopeId, decl_id: DeclId) -> TypeId {
         let error_ty = self.interner.well_known().error;
 
-        // Already resolved (interface reserved id, or a previously-resolved alias).
+        // Already resolved (interface reserved id, a seeded object/conditional template,
+        // or a previously-resolved alias).
         if let Some(existing) = self.type_resolved.get(decl_id.index()).copied().flatten() {
             return existing;
         }
 
         let index = decl_id.index();
+
+        // A reference re-entered this alias while it is mid-resolution. If the re-entry is
+        // at the alias's own surface depth it is a **surface cycle** (`type Y = Y | null`,
+        // mutual pairs) — report `TK2456` for the whole cycle and error-type it. If it came
+        // through a type constructor (a greater depth: `type Arr = Arr[]`, `type W = { a: W
+        // } | null`) it is **legal recursion** — silently error-type (no `TK2456`; a seeded
+        // object-literal alias resolves such reads correctly instead of re-entering).
+        if matches!(
+            self.type_decls.get(index),
+            Some(TypeDecl::Alias { resolving: true, .. })
+        ) {
+            let start_depth = self
+                .resolving_alias_stack
+                .iter()
+                .find(|(id, ..)| *id == decl_id)
+                .map(|&(_, _, _, depth)| depth);
+            return match start_depth {
+                Some(depth) if self.alias_indirection_depth == depth => {
+                    self.report_surface_cycle(decl_id)
+                }
+                _ => error_ty,
+            };
+        }
+
         // Capture the alias annotation and its (M9) type-parameter frame inputs before
         // mutating, so the body is lowered with the parameters in scope. The name +
-        // name span feed the M26 `resolving_alias` context (mapped `TK2456`).
+        // name span feed the M26 `resolving_alias` context (mapped `TK2456`) and the B29
+        // cycle stack.
         let (annotation, param_decl, params, name, name_span) = match self.type_decls.get(index) {
             Some(TypeDecl::Alias {
                 annotation,
@@ -190,11 +414,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 name.clone(),
                 *name_span,
             ),
-            // A reference re-entered while this alias is mid-resolution: a recursive
-            // alias (out of subset). Break the cycle with the error type.
-            Some(TypeDecl::Alias {
-                resolving: true, ..
-            }) => return error_ty,
             // An interface with no seeded id, or an out-of-range id: defensive.
             _ => return error_ty,
         };
@@ -206,9 +425,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         // M26: record which alias is being resolved (save/restore — alias resolution
         // nests), so a mapped key source that surface-references THIS alias is `TK2456`
-        // at the declaration rather than a silent error-type key source.
+        // at the declaration rather than a silent error-type key source. B29: also push
+        // the resolving-alias stack, so a surface cycle can name every alias in it.
         let prev_resolving_alias = self.resolving_alias.take();
-        self.resolving_alias = Some((decl_id, name_span, name));
+        self.resolving_alias = Some((decl_id, name_span, name.clone()));
+        self.resolving_alias_stack
+            .push((decl_id, name_span, name, self.alias_indirection_depth));
 
         // M9: lower the annotation with the alias's type parameters in scope, so a
         // reference to `A`/`B` in `type Pair<A, B> = { … }` resolves to the parameter
@@ -222,14 +444,47 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             })
             .unwrap_or(error_ty);
 
+        self.resolving_alias_stack.pop();
         self.resolving_alias = prev_resolving_alias;
         if let Some(TypeDecl::Alias { resolving, .. }) = self.type_decls.get_mut(index) {
             *resolving = false;
         }
+        // B29: a confirmed surface-cycle member is the error type (final, not provisional
+        // — a detected cycle is settled), so downstream stays silent (M22).
+        let final_ty = if self.circular_aliases.contains(&index) {
+            error_ty
+        } else {
+            target
+        };
         if let Some(slot) = self.type_resolved.get_mut(index) {
-            *slot = Some(target);
+            *slot = Some(final_ty);
         }
-        target
+        final_ty
+    }
+
+    /// B29 — a surface cycle re-entered `decl_id`. Report `TK2456` at every alias from
+    /// `decl_id`'s position on the resolving-alias stack up to the top (the whole cycle),
+    /// deduped via `circular_aliases`, and return the error type. Cloning the slice keeps
+    /// the diagnostic/set writes off the stack borrow.
+    fn report_surface_cycle(&mut self, decl_id: DeclId) -> TypeId {
+        let cycle: Vec<(usize, Span, String)> = self
+            .resolving_alias_stack
+            .iter()
+            .position(|(id, ..)| *id == decl_id)
+            .map(|pos| {
+                self.resolving_alias_stack[pos..]
+                    .iter()
+                    .map(|(id, span, name, _)| (id.index(), *span, name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (idx, span, name) in cycle {
+            if self.circular_aliases.insert(idx) {
+                self.diagnostics
+                    .push(Diagnostic::circular_type_alias(span, &name));
+            }
+        }
+        self.interner.well_known().error
     }
 
     /// Resolve a `TSTypeReference` to a `TypeId` (M5, extended for M9).
@@ -698,6 +953,36 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     }
 }
 
+/// B28 — merge an `overlay` object type onto a `base`, `overlay` winning on every
+/// conflict. Used to fold interface `extends` bases (left-to-right) and then the
+/// interface's own members onto them: an `overlay` property replaces a same-named base
+/// property (else appends), and an index / call / construct signature the `overlay`
+/// declares shadows the base's (an absent one leaves the inherited one in place).
+fn merge_object_members(base: ObjectType, overlay: ObjectType) -> ObjectType {
+    let mut properties = base.properties;
+    for prop in overlay.properties {
+        match properties.iter_mut().find(|p| p.name == prop.name) {
+            Some(existing) => *existing = prop,
+            None => properties.push(prop),
+        }
+    }
+    ObjectType {
+        properties,
+        string_index: overlay.string_index.or(base.string_index),
+        number_index: overlay.number_index.or(base.number_index),
+        call_signatures: if overlay.call_signatures.is_empty() {
+            base.call_signatures
+        } else {
+            overlay.call_signatures
+        },
+        construct_signatures: if overlay.construct_signatures.is_empty() {
+            base.construct_signatures
+        } else {
+            overlay.construct_signatures
+        },
+    }
+}
+
 /// Phase 0a — **reserve**. Walk the top-level type declarations and, indexed by
 /// the binder's type-space `DeclId`, record each one's lowering plan. Every
 /// `interface` gets a fresh nominal object id reserved up front (empty body); each
@@ -742,6 +1027,7 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                     params,
                     param_decl: iface.type_parameters.as_deref(),
                     members: &iface.body.body,
+                    extends: &iface.extends,
                 });
             }
             Statement::TSTypeAliasDeclaration(alias) => {
@@ -765,12 +1051,35 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                     } else {
                         None
                     };
+                // B29: a **non-generic** alias whose top body is an object type literal
+                // (`type X = { a: X | null }`) reserves an object id and seeds
+                // `type_resolved`, so a self-reference through a member resolves to this
+                // stable id (legal member recursion) rather than re-entering into the
+                // error type. Filled in the fill step. Generic object aliases stay
+                // structural templates (instantiated by substitution), so they are not
+                // seeded here.
+                let object_template = if alias.type_parameters.is_none()
+                    && matches!(alias.type_annotation, oxc_ast::ast::TSType::TSTypeLiteral(_))
+                {
+                    let reserved = interner.reserve_object();
+                    if let Some(decl_id) =
+                        type_decl_id(binder, binder.module, alias.id.name.as_str())
+                    {
+                        if let Some(slot) = resolved.get_mut(decl_id.index()) {
+                            *slot = Some(reserved);
+                        }
+                    }
+                    Some(reserved)
+                } else {
+                    None
+                };
                 decls.push(TypeDecl::Alias {
                     annotation: &alias.type_annotation,
                     params,
                     param_decl: alias.type_parameters.as_deref(),
                     resolving: false,
                     conditional_template,
+                    object_template,
                     name: alias.id.name.to_string(),
                     name_span: Span::from_oxc(alias.id.span),
                 });

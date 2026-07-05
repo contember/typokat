@@ -228,7 +228,7 @@ use crate::diagnostics::Diagnostic;
 use crate::relate::{Relater, Relation};
 use crate::types::Interner;
 use oxc_ast::ast::Program;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 mod annotations;
 mod assignment;
@@ -282,6 +282,21 @@ pub fn check_program<'ast>(
         })
         .collect();
 
+    // B28/B29: per-template fill state, parallel to `type_decls`. An interface or
+    // seeded object-literal-alias index starts `Pending` (its object type is built on
+    // demand, base first); any other index is `Done`.
+    let template_fill: Vec<ClassFillState> = type_decls
+        .iter()
+        .map(|decl| match decl {
+            TypeDecl::Interface { .. } => ClassFillState::Pending,
+            TypeDecl::Alias {
+                object_template: Some(_),
+                ..
+            } => ClassFillState::Pending,
+            _ => ClassFillState::Done,
+        })
+        .collect();
+
     let mut pass = Pass {
         interner,
         binder: &binder,
@@ -297,6 +312,7 @@ pub fn check_program<'ast>(
         class_member_kinds: FxHashMap::default(),
         class_names: FxHashMap::default(),
         class_fill,
+        template_fill,
         decl_types,
         obligations: Vec::new(),
         override_checks: Vec::new(),
@@ -318,6 +334,9 @@ pub fn check_program<'ast>(
         building_template: false,
         resolving_conditional_alias: None,
         resolving_alias: None,
+        resolving_alias_stack: Vec::new(),
+        circular_aliases: FxHashSet::default(),
+        alias_indirection_depth: 0,
         mapped_frames: Vec::new(),
         current_this: None,
         current_class: None,
