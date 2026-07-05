@@ -91,13 +91,15 @@ relation engine + narrowing come **before** type-level evaluation, never the rev
 evaluation is tree-walked, with the bytecode VM a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)).
 
-Recommended next: finish the type-level evaluation phase — `11` (template literal types, M27)
-then `12` (utility types, M28) — on the shared evaluator machinery from `09`/`10`. Items
-`01`–`10` and `20` are shipped/closed; do not plan new work from those deleted backlog numbers.
-The small review-finding items (`21`–`23`) make good warm-ups between milestones; the known-gap
-items (`24` rest elements, `25` intersections, `26` cross-binder infer, `27` template-buried
-conditionals, `28` interface extends, `29` silent alias cycles) kill false-negative families
-and known over-reports when scheduled — `28`/`29` are silent-FN families worth scheduling early.
+Recommended next: `12` (utility types, M28) closes the type-level evaluation phase; then the
+`13` profiling gate and the real-world track (`14` lib.d.ts, `15` modules). Items `01`–`11` and
+`20` are shipped/closed; do not plan new work from those deleted backlog numbers. The small
+review-finding items (`21`–`23`) make good warm-ups between milestones; the known-gap items
+(`24` rest elements, `25` intersections, `26` cross-binder infer, `27` template-buried
+conditionals, `28` interface extends, `29` silent alias cycles, `30` numeric-literal
+correctness) kill false-negative families when scheduled — `30` is HIGH and small (negative
+literals lower to `any`), `28`/`29` are silent-FN families; all three are worth scheduling
+before the real-world track.
 
 For each item you pick: write its fixture corpus first, update `tests/cases/README.md`, commit the
 spec, dispatch the implementation subagent, dispatch the independent review, fix, and commit. Same

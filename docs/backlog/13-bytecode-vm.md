@@ -1,7 +1,7 @@
 ---
 id: 13
 title: Post-evaluator profiling gate — bytecode VM only if profiling demands it
-blocked-by: [./11-template-literal-types.md, ./12-utility-types.md]
+blocked-by: [./12-utility-types.md]
 ---
 
 # 13 — Post-evaluator profiling gate (bytecode VM demoted to a deferred refactor)

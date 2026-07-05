@@ -12,11 +12,11 @@ documents something a future reader needs. Dependencies go in frontmatter:
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.
 
-This **is** the roadmap. Items `01`–`10` and `20` shipped — `01`–`04` (current-impl bugs), `05`
+This **is** the roadmap. Items `01`–`11` and `20` shipped — `01`–`04` (current-impl bugs), `05`
 (object/interface signatures, F1), `06` + `20` (class completeness + constructor accessibility),
-`07` (unstructured-flow narrowing, M23), `08` (generic constraints, M24), `09` (conditional
-types, M25), `10` (mapped types, M26); see [`../archive/`](../archive/README.md). `11`–`17` are
-the milestone roadmap. Architecture §12 governs ordering — the relation
+`07` (unstructured-flow narrowing, M23), `08`–`11` (the generics + type-level run: constraints
+M24, conditional types M25, mapped types M26, template literals M27); see
+[`../archive/`](../archive/README.md). `12`–`17` are the milestone roadmap. Architecture §12 governs ordering — the relation
 engine + narrowing come **before** type-level evaluation, whose speed lives in the tree-walker's
 algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor — see
 [ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). See
@@ -25,9 +25,8 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 ## Items
 
 **The type-level evaluation phase (tree-walked; bytecode VM deferred — ADR-0001)**
-- [`11`](11-template-literal-types.md) — template literal types (M27).
 - [`12`](12-utility-types.md) — utility types (M28).
-- [`13`](13-bytecode-vm.md) — post-evaluator profiling gate: bytecode VM only if measured dispatch overhead remains after `11`–`12` · blocked-by `11`–`12`.
+- [`13`](13-bytecode-vm.md) — post-evaluator profiling gate: bytecode VM only if measured dispatch overhead remains after `12` · blocked-by `12`.
 
 **Long-term: real-world scale + IDE**
 - [`14`](14-libdts-loading.md) — full `lib.d.ts` loading (an earlier minimal ambient/prelude slice is allowed when useful).

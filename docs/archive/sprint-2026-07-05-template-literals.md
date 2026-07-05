@@ -1,6 +1,34 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/.
--->
+# OUTCOME (closed 2026-07-05) — SHIPPED
+
+**M27 shipped.** Template literal types: interned alternating-texts/holes node;
+construction (literal collapse, budget-metered cartesian products, boolean/never/
+number rules); the pattern relation arm (anchored non-greedy matching, correct
+directionality, subsumption); `infer` extraction on literal anchors through the
+non-widening candidate mode; adjacent-hole poison (M25 mechanism); deferred
+conservatism + the → `string` allowance. Cross-milestone, spec-driven: call-site
+inference preserves literals for primitive-constrained params (tsc
+`hasPrimitiveConstraint`), and candidate collection is now raw-only with widening
+in exactly one place.
+
+**Commit map.** Spec `6752f56` · plan `e5a5214` · spec cleanup `778ed60` (c3
+forward-reference accident + c3b) · implementation `87a02d4` (+1429/−134, incl.
+backlog 30 filing + dead-collector deletion) · gate lift + ratchet `1622913`.
+
+**Verification.** 194 unit + conformance green (m27: 4 files / 26 markers), clippy
+clean. Adversarial review: **PASS** (41 probes; no M27-attributable false
+negative; the inference change regression-swept). Gate lift: 5 files enter scope —
+2 clean-kept, 1 with 2/2 matched (a direct pattern-relation win), 2 with one
+audited over-report fp each. Scoreboard: in-scope 495→500, clean-kept 168/215,
+**error-exact 21→22**, diag-recall 252/1659, 0 regressions.
+
+**Deferred / byproducts.** Backlog `30` (negative numeric literals lower to `any` —
+pre-existing HIGH found by the review's attribution work; `number_to_string` not
+JS-exact — an UNDER-report at ≥1e21, doc direction corrected). Unevaluated holes
+(nested template/conditional instantiations) stay symbolic — over-report,
+documented; adjacent-hole resolution (tsc one-char rule) and `Uppercase`/…
+intrinsics → backlog `12`.
+
+---
 
 # Sprint — template literal types `` `a${T}` `` / M27 (2026-07-05)
 
