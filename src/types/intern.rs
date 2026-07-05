@@ -12,8 +12,8 @@
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
     ArrayType, ConditionalType, FunctionType, InstantiationType, IntrinsicKind, LiteralValue,
-    ObjectType, ParameterType, PropertyType, TupleType, TypeFlags, TypeParamId, TypeParamType,
-    TypeTag,
+    MappedType, ObjectType, ParameterType, PropertyType, TupleType, TypeFlags, TypeParamId,
+    TypeParamType, TypeTag,
 };
 use crate::types::store::{Store, TypeId};
 use rustc_hash::FxHashMap;
@@ -502,6 +502,49 @@ impl Interner {
             return existing;
         }
         let id = self.store.push_infer(index, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
+    /// Intern a **mapped type** `{ [K in S]: V }` (M26). Identity is its whole
+    /// [`MappedType`] shape (homomorphic flag, key source, value template, and both
+    /// modifier operators), so two structurally equal mapped types share one id.
+    pub fn intern_mapped(&mut self, mapped: MappedType) -> TypeId {
+        let key = StructuralKey::Mapped {
+            homomorphic: mapped.homomorphic,
+            key_source: mapped.key_source,
+            value_template: mapped.value_template,
+            optional_modifier: mapped.optional_modifier,
+            readonly_modifier: mapped.readonly_modifier,
+        };
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store.mapped_type(id).is_some_and(|existing| {
+                existing.homomorphic == mapped.homomorphic
+                    && existing.key_source == mapped.key_source
+                    && existing.value_template == mapped.value_template
+                    && existing.optional_modifier == mapped.optional_modifier
+                    && existing.readonly_modifier == mapped.readonly_modifier
+            })
+        }) {
+            return existing;
+        }
+        let id = self.store.push_mapped(mapped, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
+    /// Intern the **mapped-value placeholder** (`T[K]` — M26). Identity is the tag
+    /// alone, so every placeholder hash-conses to one node.
+    pub fn intern_mapped_value(&mut self) -> TypeId {
+        let key = StructuralKey::MappedValue;
+        let hash = structural_hash(&key);
+        if let Some(existing) =
+            self.lookup(hash, |store, id| store.tag(id) == TypeTag::MappedValue)
+        {
+            return existing;
+        }
+        let id = self.store.push_mapped_value(TypeFlags::EMPTY);
         self.dedup.entry(hash).or_default().push(id);
         id
     }

@@ -317,6 +317,8 @@ pub fn check_program<'ast>(
         cond_frames: Vec::new(),
         building_template: false,
         resolving_conditional_alias: None,
+        resolving_alias: None,
+        mapped_frames: Vec::new(),
         current_this: None,
         current_class: None,
         current_super_ctor: None,

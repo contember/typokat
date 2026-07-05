@@ -924,6 +924,47 @@ fn render_type_inner(
             Some(index) => format!("infer#{index}"),
             None => "<unsupported>".to_string(),
         },
+        // Mapped type (M26): `{ [K in S]: V }` (with readonly/optional modifiers). Only
+        // surfaces for a still-deferred (generic) mapped type; mapped-typed targets are
+        // asserted code-only in the corpus, so a stable, sanely-parenthesized form
+        // suffices.
+        TypeTag::Mapped => match store.mapped_type(id) {
+            Some(mapped) => {
+                if rendering.contains(&id) {
+                    return "...".to_string();
+                }
+                rendering.push(id);
+                let source = render_type_inner(store, mapped.key_source, false, rendering);
+                let source = if mapped.homomorphic {
+                    format!("keyof {source}")
+                } else {
+                    source
+                };
+                let value = render_type_inner(store, mapped.value_template, false, rendering);
+                rendering.pop();
+                let readonly = render_modifier(mapped.readonly_modifier, "readonly ");
+                let optional = render_modifier(mapped.optional_modifier, "?");
+                format!("{{ {readonly}[K in {source}]{optional}: {value} }}")
+            }
+            None => "<unsupported>".to_string(),
+        },
+        // Mapped-value placeholder (M26): the source property value `T[K]`. Only
+        // surfaces inside a deferred mapped type's rendered form; a stable placeholder
+        // suffices.
+        TypeTag::MappedValue => "T[K]".to_string(),
+    }
+}
+
+/// Render a mapped-type modifier for display (M26). A `readonly`/`?` prefix or suffix
+/// is emitted for `Add`, an explicit `-` for `Remove`, and nothing for `Keep`. Only
+/// surfaces for a deferred mapped type (asserted code-only), so the exact form only has
+/// to be stable.
+fn render_modifier(op: crate::types::repr::ModifierOp, token: &str) -> String {
+    use crate::types::repr::ModifierOp;
+    match op {
+        ModifierOp::Keep => String::new(),
+        ModifierOp::Add => token.to_string(),
+        ModifierOp::Remove => format!("-{}", token.trim()),
     }
 }
 

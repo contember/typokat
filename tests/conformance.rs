@@ -51,7 +51,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("m23_unstructured_narrowing", true),
     ("m24_generic_constraints", true),
     ("m25_conditional_types", true),
-    ("m26_mapped_types", false),
+    ("m26_mapped_types", true),
     // Bug-fix corpora (official-suite findings / backlog items). Each is
     // committed `false` as a behavior-neutral spec, then flipped `true` by the
     // commit that lands its fix. See tests/cases/README.md ("Bug-fix corpora").

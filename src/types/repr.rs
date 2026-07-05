@@ -60,6 +60,22 @@ pub enum TypeTag {
     /// it (it is a *bound* variable, not a free declaration parameter — the no-capture
     /// rule).
     Infer,
+    /// A **mapped type** (`{ [K in S]: V }` — M26). `payload` indexes `Store::mapped`.
+    /// Carries the key source, the value template (with `T[K]` represented as the
+    /// node-scoped [`TypeTag::MappedValue`] placeholder), and the optional/readonly
+    /// modifier arithmetic. A mapped type over a **concrete** key source is *evaluated*
+    /// to an object by the type-level evaluator; one over a free declaration type
+    /// parameter stays a **deferred** node under the M25 conservative relation rules
+    /// (identical-only). Constructed via `Interner::intern_mapped`. See
+    /// [`MappedType`].
+    Mapped,
+    /// The **source value placeholder** (`T[K]`) inside a mapped type's value template
+    /// (M26) — a node-scoped bound variable standing for the current key's source
+    /// property value. `substitute` never targets it (a bound variable, not a free
+    /// declaration parameter — the no-capture rule, ADR-0002 analog); the evaluator
+    /// replaces it per key with the source property's type. Identity is the tag alone
+    /// (payload `0`). Constructed via `Interner::intern_mapped_value`.
+    MappedValue,
 }
 
 /// The fixed set of intrinsic (keyword) types. The discriminant doubles as the
@@ -518,4 +534,65 @@ pub struct InstantiationType {
     /// The substitution `TypeParamId → TypeId`, **sorted by the id** so two equal
     /// instantiations hash-cons to one node.
     pub args: Vec<(TypeParamId, TypeId)>,
+}
+
+/// A mapped-type modifier operator (`?`/`readonly`) — how the node adjusts a
+/// property's optionality or readonly-ness (M26). `Keep` applies no change (the
+/// homomorphic default, preserving the source property's flag); `Add` sets the flag
+/// (`?`/`+?`, `readonly`/`+readonly`); `Remove` clears it (`-?`, `-readonly`).
+/// Identity-bearing (folded into the mapped node's hash/eq).
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[repr(u8)]
+pub enum ModifierOp {
+    /// No modifier written — keep the source property's flag (homomorphic
+    /// preservation); the non-homomorphic default flag is `false`.
+    Keep = 0,
+    /// `?` / `+?` (optional) or `readonly` / `+readonly` — set the flag.
+    Add = 1,
+    /// `-?` or `-readonly` — clear the flag.
+    Remove = 2,
+}
+
+impl ModifierOp {
+    /// Apply the modifier to a source flag (M26): `Keep` preserves it, `Add` sets it,
+    /// `Remove` clears it.
+    pub fn apply(self, source: bool) -> bool {
+        match self {
+            ModifierOp::Keep => source,
+            ModifierOp::Add => true,
+            ModifierOp::Remove => false,
+        }
+    }
+}
+
+/// A mapped type `{ [K in S]: V }` (M26).
+///
+/// The whole struct is its structural identity (all fields folded into the hash/eq).
+/// A mapped type is *evaluated* to an object once its [`key_source`](MappedType::key_source)
+/// is concrete (no free declaration type parameter); while it contains a free
+/// parameter it stays a **deferred** node related conservatively (M25 model — identical
+/// node only). The value template's `T[K]` is the node-scoped
+/// [`TypeTag::MappedValue`] placeholder, left untouched by declaration-param
+/// substitution (no-capture) and resolved per key at evaluation.
+#[derive(Copy, Clone, Debug)]
+pub struct MappedType {
+    /// Whether the `in` clause was `keyof <source>` (**homomorphic**). A homomorphic
+    /// map iterates the source object's properties and **preserves** each property's
+    /// `?`/`readonly` flags (before the modifier arithmetic); a non-homomorphic map
+    /// (a literal-union key source) builds required, non-readonly members by default.
+    pub homomorphic: bool,
+    /// The key source. When [`homomorphic`](MappedType::homomorphic): the object
+    /// **source** operand `<source>` of `keyof <source>` (was `T`, substituted to a
+    /// concrete object at instantiation). Otherwise: the constraint type directly (the
+    /// literal-union / single-literal key set, e.g. `"x" | "y"`).
+    pub key_source: TypeId,
+    /// The value type template, with the current key's source property value (`T[K]`)
+    /// represented as the [`TypeTag::MappedValue`] placeholder.
+    pub value_template: TypeId,
+    /// The optionality modifier (`?`/`+?`/`-?`), applied to each property's starting
+    /// optional flag.
+    pub optional_modifier: ModifierOp,
+    /// The readonly modifier (`readonly`/`+readonly`/`-readonly`), applied to each
+    /// property's starting readonly flag.
+    pub readonly_modifier: ModifierOp,
 }

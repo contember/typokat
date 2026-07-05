@@ -17,7 +17,7 @@
 //!   for it. Phase 4 fills this in without changing call sites.
 
 use crate::types::repr::{
-    IntrinsicKind, LiteralValue, ParameterType, PropertyType, TypeParamId, TypeTag,
+    IntrinsicKind, LiteralValue, ModifierOp, ParameterType, PropertyType, TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
 use rustc_hash::FxHasher;
@@ -94,6 +94,19 @@ pub enum StructuralKey<'a> {
     },
     /// An **`infer` binder** (M25), keyed over its de Bruijn index alone.
     Infer(u32),
+    /// A **mapped type** (M26), keyed over its whole shape (homomorphic flag, key
+    /// source, value template, and both modifier operators) so two structurally equal
+    /// mapped types collide.
+    Mapped {
+        homomorphic: bool,
+        key_source: TypeId,
+        value_template: TypeId,
+        optional_modifier: ModifierOp,
+        readonly_modifier: ModifierOp,
+    },
+    /// A **mapped-value placeholder** (M26). Identity is the tag alone (no payload), so
+    /// every `T[K]` placeholder hash-conses to one node.
+    MappedValue,
 }
 
 /// Live structural hash used for hash-consing (FxHash for speed). This is the
@@ -254,6 +267,23 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
         StructuralKey::Infer(index) => {
             TypeTag::Infer.hash_discriminant(&mut h);
             index.hash(&mut h);
+        }
+        StructuralKey::Mapped {
+            homomorphic,
+            key_source,
+            value_template,
+            optional_modifier,
+            readonly_modifier,
+        } => {
+            TypeTag::Mapped.hash_discriminant(&mut h);
+            homomorphic.hash(&mut h);
+            key_source.0.hash(&mut h);
+            value_template.0.hash(&mut h);
+            (*optional_modifier as u8).hash(&mut h);
+            (*readonly_modifier as u8).hash(&mut h);
+        }
+        StructuralKey::MappedValue => {
+            TypeTag::MappedValue.hash_discriminant(&mut h);
         }
     }
     h.finish()

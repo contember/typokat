@@ -29,7 +29,8 @@
 //! M9 scope.
 
 use crate::types::repr::{
-    ConditionalType, FunctionType, ObjectType, ParameterType, PropertyType, TypeParamId, TypeTag,
+    ConditionalType, FunctionType, MappedType, ObjectType, ParameterType, PropertyType,
+    TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
 use crate::types::Interner;
@@ -83,10 +84,12 @@ impl<'a> Substitution<'a> {
             TypeTag::Tuple => self.apply_tuple(interner, ty),
             TypeTag::Conditional => self.apply_conditional(interner, ty),
             TypeTag::Instantiation => self.apply_instantiation(interner, ty),
-            // An `infer` binder (M25) is a **bound** de Bruijn variable, never a free
-            // declaration parameter — the no-capture rule (ADR-0002): substitution must
-            // leave it alone (the evaluator resolves it via infer matching, not here).
-            TypeTag::Infer => ty,
+            TypeTag::Mapped => self.apply_mapped(interner, ty),
+            // An `infer` binder (M25) / a mapped-value placeholder (M26) is a **bound**
+            // node-scoped variable, never a free declaration parameter — the no-capture
+            // rule (ADR-0002): substitution must leave it alone (the evaluator resolves
+            // it, not this pass).
+            TypeTag::Infer | TypeTag::MappedValue => ty,
         }
     }
 
@@ -389,6 +392,68 @@ impl<'a> Substitution<'a> {
         } else {
             ty
         }
+    }
+
+    /// Substitute through a **mapped** type (M26), rewriting its key source and value
+    /// template and re-interning **only when something changed**. The node's own
+    /// `MappedValue` placeholder is a bound variable, so `apply` leaves it untouched
+    /// (the no-capture rule); a free declaration parameter in the key source (`T` in
+    /// `{ [K in keyof T]: T[K] }`) is substituted, which is what turns `Ident<T>` into
+    /// the concrete `Ident<P>` the evaluator then maps. No cycle guard is needed: a
+    /// mapped type's components are interned, non-self-referential-by-id types.
+    ///
+    /// **Distribution guard (review F1 — the M25 conditional guard's mapped analog):** a
+    /// **homomorphic** map whose `keyof` operand is a **naked declaration type
+    /// parameter** mapped to a **union** distributes over the members — tsc:
+    /// `Ident<A | B>` = `Ident<A> | Ident<B>` — as a union of plain per-member
+    /// substitutions of the whole node; `never` distributes to `never`. Unlike M25 this
+    /// builds the union **eagerly**: a mapped node is inherently lazy (interned, only
+    /// expanded at evaluation demand), so no `InstantiationType` wrap is needed, and a
+    /// member is never a union, so the per-member recursion takes the plain path (no
+    /// re-distribution). The DIRECT `{ [K in keyof (A | B)]: … }` form never fires this
+    /// guard (its key source is already the union at lowering, not a parameter) and
+    /// takes the evaluation-time common-key semantics instead (tsc: `keyof (A | B)` is
+    /// the intersection of the key sets) — the two must not be conflated.
+    fn apply_mapped(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
+        let Some(mapped) = interner.store().mapped_type(ty).copied() else {
+            return ty;
+        };
+        if mapped.homomorphic {
+            let param_id = interner.store().type_param(mapped.key_source).map(|p| p.id);
+            if let Some((param, arg)) =
+                param_id.and_then(|id| self.map.get(&id).copied().map(|arg| (id, arg)))
+            {
+                let wk = interner.well_known();
+                if arg == wk.never {
+                    // Distributing over zero members: Ident<never> = never (tsc).
+                    return wk.never;
+                }
+                if let Some(members) = interner.store().union_members(arg) {
+                    let members: Vec<TypeId> = members.to_vec();
+                    let per_member: Vec<TypeId> = members
+                        .into_iter()
+                        .map(|member| {
+                            let mut member_map = self.map.clone();
+                            member_map.insert(param, member);
+                            substitute(interner, ty, &member_map)
+                        })
+                        .collect();
+                    return interner.union(per_member);
+                }
+            }
+        }
+        let key_source = self.apply(interner, mapped.key_source);
+        let value_template = self.apply(interner, mapped.value_template);
+        if key_source == mapped.key_source && value_template == mapped.value_template {
+            return ty;
+        }
+        interner.intern_mapped(MappedType {
+            homomorphic: mapped.homomorphic,
+            key_source,
+            value_template,
+            optional_modifier: mapped.optional_modifier,
+            readonly_modifier: mapped.readonly_modifier,
+        })
     }
 }
 
@@ -760,6 +825,134 @@ mod tests {
             .conditional_type(plain)
             .expect("a single check argument must plainly rewrite to a concrete conditional");
         assert_eq!(plain_cond.check, wk.string);
+    }
+
+    /// M26 — `substitute` maps over a mapped type's **key source** and **value
+    /// template** but does **not capture** the node's own `MappedValue` placeholder
+    /// (the no-capture rule, ADR-0002 analog). Substituting the free declaration
+    /// parameter `T` rewrites the key source (`T` → `P`) while the value template's
+    /// placeholder stays identical.
+    #[test]
+    fn substitute_maps_over_mapped_without_capturing_value_placeholder() {
+        use crate::types::repr::{MappedType, ModifierOp};
+
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let t = interner.intern_type_param(TypeParamId(0), "T");
+        let value_placeholder = interner.intern_mapped_value();
+        // Value template `T[K] | null` — the placeholder inside a union.
+        let value_template = interner.union(vec![value_placeholder, wk.null]);
+
+        // `{ [K in keyof T]: T[K] | null }` — key source is the bare parameter `T`.
+        let mapped = interner.intern_mapped(MappedType {
+            homomorphic: true,
+            key_source: t,
+            value_template,
+            optional_modifier: ModifierOp::Keep,
+            readonly_modifier: ModifierOp::Keep,
+        });
+
+        // The concrete source `P = { a: number }`.
+        let p = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number)],
+            ..Default::default()
+        });
+        let mut map = FxHashMap::default();
+        map.insert(TypeParamId(0), p);
+
+        let result = substitute(&mut interner, mapped, &map);
+        let out = interner
+            .store()
+            .mapped_type(result)
+            .copied()
+            .expect("result is a mapped type");
+        assert_eq!(out.key_source, p, "T → P in the key source");
+        assert_eq!(
+            out.value_template, value_template,
+            "the value template (with its MappedValue placeholder) is untouched"
+        );
+        assert!(out.homomorphic);
+    }
+
+    /// M26 — the **mapped distribution guard** (review F1): substituting a homomorphic
+    /// map's naked key parameter with a **union** distributes per member
+    /// (`Ident<A | B>` = `Ident<A> | Ident<B>`) and `never` distributes to `never`,
+    /// while a map whose key source is **already a union** (the direct
+    /// `{ [K in keyof (A | B)]: … }` form) takes the plain rewrite — a single node, no
+    /// distribution (evaluation-time common-key semantics apply there instead).
+    #[test]
+    fn homomorphic_mapped_distributes_over_naked_param_union_only() {
+        use crate::types::repr::{MappedType, ModifierOp};
+
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let t = interner.intern_type_param(TypeParamId(0), "T");
+        let placeholder = interner.intern_mapped_value();
+        let a = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number)],
+            ..Default::default()
+        });
+        let b = interner.intern_object(ObjectType {
+            properties: vec![prop("b", wk.string)],
+            ..Default::default()
+        });
+        let ab = interner.union(vec![a, b]);
+
+        // `Ident<T> = { [K in keyof T]: T[K] }`.
+        let ident = interner.intern_mapped(MappedType {
+            homomorphic: true,
+            key_source: t,
+            value_template: placeholder,
+            optional_modifier: ModifierOp::Keep,
+            readonly_modifier: ModifierOp::Keep,
+        });
+
+        // Naked-param union argument distributes: Ident<A | B> = Ident<A> | Ident<B>.
+        let mut map = FxHashMap::default();
+        map.insert(TypeParamId(0), ab);
+        let distributed = substitute(&mut interner, ident, &map);
+        let ident_a = interner.intern_mapped(MappedType {
+            homomorphic: true,
+            key_source: a,
+            value_template: placeholder,
+            optional_modifier: ModifierOp::Keep,
+            readonly_modifier: ModifierOp::Keep,
+        });
+        let ident_b = interner.intern_mapped(MappedType {
+            homomorphic: true,
+            key_source: b,
+            value_template: placeholder,
+            optional_modifier: ModifierOp::Keep,
+            readonly_modifier: ModifierOp::Keep,
+        });
+        let expected = interner.union(vec![ident_a, ident_b]);
+        assert_eq!(distributed, expected, "Ident<A | B> = Ident<A> | Ident<B>");
+
+        // `never` distributes to zero members → never.
+        let mut never_map = FxHashMap::default();
+        never_map.insert(TypeParamId(0), wk.never);
+        assert_eq!(
+            substitute(&mut interner, ident, &never_map),
+            wk.never,
+            "Ident<never> = never"
+        );
+
+        // The DIRECT union form (key source already a union, not a parameter) must NOT
+        // distribute: an unrelated substitution leaves it a single mapped node.
+        let direct = interner.intern_mapped(MappedType {
+            homomorphic: true,
+            key_source: ab,
+            value_template: placeholder,
+            optional_modifier: ModifierOp::Keep,
+            readonly_modifier: ModifierOp::Keep,
+        });
+        let mut other_map = FxHashMap::default();
+        other_map.insert(TypeParamId(9), wk.string);
+        assert_eq!(
+            substitute(&mut interner, direct, &other_map),
+            direct,
+            "the direct-union form stays a single mapped node (no distribution)"
+        );
     }
 
     /// A self-referential **nominal** object (no type parameter) substitutes to

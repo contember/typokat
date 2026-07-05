@@ -389,7 +389,7 @@ impl<'a> Relater<'a> {
         }
         if matches!(
             self.store.tag(tgt),
-            TypeTag::Conditional | TypeTag::Instantiation
+            TypeTag::Conditional | TypeTag::Instantiation | TypeTag::Mapped
         ) {
             return Relation::No(ReasonChain::leaf(src, tgt));
         }
@@ -397,6 +397,16 @@ impl<'a> Relater<'a> {
         // the M25 corpus) is conservatively unassignable to anything but an identical
         // node — the safe direction.
         if self.store.tag(src) == TypeTag::Instantiation {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        }
+        // M26 — a **deferred** mapped type (one over a free declaration type parameter,
+        // e.g. `Ident<T>`) that did not evaluate is conservatively unassignable to
+        // anything but an identical node (the `src == tgt` fast path already accepted
+        // that): a `T`/literal source is NOT assignable into it, and it is NOT assignable
+        // to any other target — mirroring the deferred-conditional model (nothing in
+        // EITHER direction). tsc's homomorphic-identity allowance (`T` → `Ident<T>`) is
+        // the documented over-report divergence (safe direction; deferred_generics.ts).
+        if self.store.tag(src) == TypeTag::Mapped {
             return Relation::No(ReasonChain::leaf(src, tgt));
         }
 
@@ -1168,10 +1178,14 @@ impl<'a> Relater<'a> {
                     }
                 }
                 // A nested conditional rebinds its own infer indices — do not descend.
+                // A mapped type (M26) is related as a deferred node (never traversed for
+                // its own infer binders), and a mapped-value placeholder is not an infer.
                 TypeTag::Intrinsic
                 | TypeTag::Literal
                 | TypeTag::TypeParam
-                | TypeTag::Conditional => {}
+                | TypeTag::Conditional
+                | TypeTag::Mapped
+                | TypeTag::MappedValue => {}
             }
         }
         false

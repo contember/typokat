@@ -172,15 +172,24 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         let index = decl_id.index();
         // Capture the alias annotation and its (M9) type-parameter frame inputs before
-        // mutating, so the body is lowered with the parameters in scope.
-        let (annotation, param_decl, params) = match self.type_decls.get(index) {
+        // mutating, so the body is lowered with the parameters in scope. The name +
+        // name span feed the M26 `resolving_alias` context (mapped `TK2456`).
+        let (annotation, param_decl, params, name, name_span) = match self.type_decls.get(index) {
             Some(TypeDecl::Alias {
                 annotation,
                 param_decl,
                 params,
                 resolving: false,
+                name,
+                name_span,
                 ..
-            }) => (*annotation, *param_decl, params.clone()),
+            }) => (
+                *annotation,
+                *param_decl,
+                params.clone(),
+                name.clone(),
+                *name_span,
+            ),
             // A reference re-entered while this alias is mid-resolution: a recursive
             // alias (out of subset). Break the cycle with the error type.
             Some(TypeDecl::Alias {
@@ -195,6 +204,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             *resolving = true;
         }
 
+        // M26: record which alias is being resolved (save/restore — alias resolution
+        // nests), so a mapped key source that surface-references THIS alias is `TK2456`
+        // at the declaration rather than a silent error-type key source.
+        let prev_resolving_alias = self.resolving_alias.take();
+        self.resolving_alias = Some((decl_id, name_span, name));
+
         // M9: lower the annotation with the alias's type parameters in scope, so a
         // reference to `A`/`B` in `type Pair<A, B> = { … }` resolves to the parameter
         // type. The frame is popped before returning (a parameter does not leak).
@@ -207,6 +222,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             })
             .unwrap_or(error_ty);
 
+        self.resolving_alias = prev_resolving_alias;
         if let Some(TypeDecl::Alias { resolving, .. }) = self.type_decls.get_mut(index) {
             *resolving = false;
         }

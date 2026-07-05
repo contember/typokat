@@ -37,7 +37,10 @@ use crate::check::infer::infer_from_types_for_conditional;
 use crate::diagnostics::Diagnostic;
 use crate::relate::Relater;
 use crate::span::Span;
-use crate::types::repr::{ConditionalType, LiteralValue, TypeParamId, TypeTag};
+use crate::types::repr::{
+    ConditionalType, LiteralValue, MappedType, ModifierOp, ObjectType, PropertyType, TypeParamId,
+    TypeTag,
+};
 use crate::types::store::TypeId;
 use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -57,7 +60,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     pub(in crate::check::checker) fn evaluate_type(&mut self, ty: TypeId, span: Span) -> TypeId {
         if !matches!(
             self.interner.store().tag(ty),
-            TypeTag::Conditional | TypeTag::Instantiation | TypeTag::Union
+            TypeTag::Conditional | TypeTag::Instantiation | TypeTag::Union | TypeTag::Mapped
         ) {
             return ty;
         }
@@ -95,6 +98,29 @@ enum Task {
     SetMemo(TypeId),
     /// Pop `n` results, union them, push the union.
     BuildUnion(usize),
+    /// M26: the mapped type `id`'s key source is on the value stack (freshly evaluated).
+    /// Pop it, derive each output property's metadata + pre-evaluation value type, then
+    /// schedule the per-property value evaluations and a [`Task::BuildMappedObject`].
+    AssembleMapped(TypeId),
+    /// M26: pop one evaluated value per recorded property (in order), assemble the
+    /// result object type, and push it. The metadata carries each property's name +
+    /// resolved optional/readonly flags.
+    BuildMappedObject(Vec<MappedProp>),
+}
+
+/// One resolved output property of a mapped type (M26): its name and the
+/// modifier-arithmetic result flags. The property's value type is evaluated separately
+/// (routed through the work-stack) and paired back by position in
+/// [`Task::BuildMappedObject`].
+struct MappedProp {
+    name: String,
+    optional: bool,
+    readonly: bool,
+    /// `-?` over an **optional** source member also strips `undefined` from the
+    /// property's **evaluated** value type (tsc `Required` semantics, probed 6.0.3:
+    /// even a template-re-added `| undefined` is removed; a result that is EXACTLY
+    /// `undefined` maps to `never`; a non-optional source member never strips).
+    strip_undefined: bool,
 }
 
 /// The conditional-type evaluator. Standalone (borrows only an [`Interner`], a
@@ -165,6 +191,14 @@ impl<'a> ConditionalEvaluator<'a> {
                     let members: Vec<TypeId> = values.split_off(start);
                     values.push(self.interner.union(members));
                 }
+                Task::AssembleMapped(id) => {
+                    self.assemble_mapped(id, &mut tasks, &mut values, error);
+                }
+                Task::BuildMappedObject(meta) => {
+                    let start = values.len().saturating_sub(meta.len());
+                    let vals: Vec<TypeId> = values.split_off(start);
+                    values.push(self.build_mapped_object(&meta, &vals));
+                }
                 Task::Eval(ty) => {
                     if let Some(&cached) = self.memo.get(&ty) {
                         values.push(cached);
@@ -178,6 +212,7 @@ impl<'a> ConditionalEvaluator<'a> {
                             self.eval_instantiation(ty, &mut tasks, &mut values, error)
                         }
                         TypeTag::Union => self.eval_union(ty, &mut tasks, &mut values),
+                        TypeTag::Mapped => self.eval_mapped(ty, &mut tasks, &mut values, error),
                         // Any other type is already a value.
                         _ => values.push(ty),
                     }
@@ -352,7 +387,7 @@ impl<'a> ConditionalEvaluator<'a> {
         let needs_eval = members.iter().any(|&m| {
             matches!(
                 self.interner.store().tag(m),
-                TypeTag::Conditional | TypeTag::Instantiation
+                TypeTag::Conditional | TypeTag::Instantiation | TypeTag::Mapped
             )
         });
         if !needs_eval {
@@ -362,6 +397,464 @@ impl<'a> ConditionalEvaluator<'a> {
         tasks.push(Task::BuildUnion(members.len()));
         for &m in members.iter().rev() {
             tasks.push(Task::Eval(m));
+        }
+    }
+
+    /// Schedule the evaluation of a mapped type `ty` (M26). A mapped type over a **free**
+    /// key source is deferred (returned as its own value, related conservatively by the
+    /// M25 model); a concrete one first evaluates its key source (a tail step, so a
+    /// mapped-of-mapped is a loop, not host recursion), then [`Task::AssembleMapped`]
+    /// derives the output properties.
+    fn eval_mapped(
+        &mut self,
+        ty: TypeId,
+        tasks: &mut Vec<Task>,
+        values: &mut Vec<TypeId>,
+        error: TypeId,
+    ) {
+        let Some(mapped) = self.interner.store().mapped_type(ty).copied() else {
+            values.push(ty);
+            return;
+        };
+        // Deferred: a free declaration type parameter (in the key source or value
+        // template) leaves the whole mapped type an ordinary interned (deferred) node.
+        if !self.is_concrete(ty) {
+            values.push(ty);
+            return;
+        }
+        if self.in_flight.contains(&ty) || self.exhausted {
+            values.push(error);
+            return;
+        }
+        self.steps += 1;
+        if self.steps > self.budget {
+            self.exhausted = true;
+            values.push(error);
+            return;
+        }
+        self.in_flight.insert(ty);
+        // The result IS the assembled object; memoize this id to it once the key source
+        // resolves and the properties are built (tail steps).
+        tasks.push(Task::SetMemo(ty));
+        tasks.push(Task::AssembleMapped(ty));
+        tasks.push(Task::Eval(mapped.key_source));
+    }
+
+    /// Assemble a mapped type's output properties (M26) after its key source has been
+    /// evaluated (its result is on top of the value stack). Homomorphic: iterate the
+    /// source properties ([`Self::homomorphic_source_props`] — a plain object's members,
+    /// or the common-key intersection for the direct-union form), starting each output
+    /// property's `?`/`readonly` from the source property (homomorphic preservation) and
+    /// applying the node's modifier arithmetic, with `T[K]` resolved to the source
+    /// property's type. Non-homomorphic: one property per string-literal key, starting
+    /// both flags absent. Schedules a per-property value evaluation (the value template
+    /// may itself demand conditional evaluation) and a final [`Task::BuildMappedObject`].
+    ///
+    /// **No permissive fallback (review F1 root cause):** a key source this subset
+    /// cannot iterate — an index-signature source, a primitive, a non-literal key set —
+    /// leaves the node **DEFERRED** (its own value, conservative relations), never an
+    /// accept-everything `{}`. An error/any key source (an unresolved name upstream)
+    /// degrades to the **error type** instead (M22 cascade suppression).
+    fn assemble_mapped(
+        &mut self,
+        ty: TypeId,
+        tasks: &mut Vec<Task>,
+        values: &mut Vec<TypeId>,
+        error: TypeId,
+    ) {
+        let key_source = values.pop().unwrap_or(error);
+        let Some(mapped) = self.interner.store().mapped_type(ty).copied() else {
+            // Defensive: leave the node as its own (deferred) value; SetMemo pops it.
+            values.push(ty);
+            return;
+        };
+        // M22 discipline: an error/any key source (e.g. `keyof Bogus` after TK2304)
+        // degrades the whole result to the error type — cascades stay suppressed.
+        let wk = self.interner.well_known();
+        if key_source == wk.error || key_source == wk.any {
+            values.push(error);
+            return;
+        }
+
+        let mut meta: Vec<MappedProp> = Vec::new();
+        let mut value_pre: Vec<TypeId> = Vec::new();
+        if mapped.homomorphic {
+            let Some(props) = self.homomorphic_source_props(key_source) else {
+                // Non-iterable source (index signatures, primitives, …): out of the M26
+                // subset — the node stays deferred, never a permissive `{}`.
+                values.push(ty);
+                return;
+            };
+            for prop in props {
+                let value = self.replace_mapped_value(mapped.value_template, prop.ty);
+                meta.push(MappedProp {
+                    name: prop.name,
+                    optional: mapped.optional_modifier.apply(prop.optional),
+                    readonly: mapped.readonly_modifier.apply(prop.readonly),
+                    // `-?` over an optional source member strips `undefined` from the
+                    // evaluated value (tsc Required semantics; applied in
+                    // `build_mapped_object` once the value has resolved).
+                    strip_undefined: mapped.optional_modifier == ModifierOp::Remove
+                        && prop.optional,
+                });
+                value_pre.push(value);
+            }
+        } else {
+            // Non-homomorphic: the key set is the string-literal members of the key
+            // source. No source property flags → the modifier arithmetic starts absent
+            // (and there is no optional source to strip `undefined` for). A key set with
+            // any non-string-literal member (`K in string`, a numeric key) is out of
+            // subset → deferred.
+            let Some(names) = self.literal_string_keys(key_source) else {
+                values.push(ty);
+                return;
+            };
+            for name in names {
+                let value = self.replace_mapped_value(mapped.value_template, error);
+                meta.push(MappedProp {
+                    name,
+                    optional: mapped.optional_modifier.apply(false),
+                    readonly: mapped.readonly_modifier.apply(false),
+                    strip_undefined: false,
+                });
+                value_pre.push(value);
+            }
+        }
+
+        tasks.push(Task::BuildMappedObject(meta));
+        // Push in reverse so the per-property values pop (and their results land) in
+        // order, aligning with the metadata order in `BuildMappedObject`.
+        for &v in value_pre.iter().rev() {
+            tasks.push(Task::Eval(v));
+        }
+    }
+
+    /// The source properties a homomorphic map iterates (M26), or `None` when the key
+    /// source is not iterable in this subset (the node then stays deferred):
+    ///
+    ///  - a plain **object** (no index signatures) → its properties (`{}` included:
+    ///    `Ident<{}>` = `{}`);
+    ///  - a **union of plain objects** — only reachable as the DIRECT
+    ///    `{ [K in keyof (A | B)]: … }` form, since a substituted naked-param union
+    ///    distributes in `substitute` before evaluation — → the **common-key**
+    ///    intersection (tsc: `keyof (A | B)` = `keyof A & keyof B`), each common
+    ///    property's type the union of the members' types, `?`/`readonly` OR-ed across
+    ///    members (matching tsc's union-property synthesis);
+    ///  - an object **with** index signatures (no `K in string` production), a
+    ///    primitive, or any other shape → `None`.
+    fn homomorphic_source_props(&mut self, key_source: TypeId) -> Option<Vec<PropertyType>> {
+        let store = self.interner.store();
+        if let Some(object) = store.object_type(key_source) {
+            if object.string_index.is_some() || object.number_index.is_some() {
+                return None;
+            }
+            return Some(object.properties.clone());
+        }
+        let members = store.union_members(key_source)?.to_vec();
+        let mut member_objects: Vec<Vec<PropertyType>> = Vec::with_capacity(members.len());
+        for member in &members {
+            let object = store.object_type(*member)?;
+            if object.string_index.is_some() || object.number_index.is_some() {
+                return None;
+            }
+            member_objects.push(object.properties.clone());
+        }
+        // Intersect: keep the first member's keys present in EVERY member, collecting
+        // each member's value type + flags. (A union always has ≥ 2 members.)
+        let (first, rest) = member_objects.split_first()?;
+        let mut common: Vec<(String, Vec<TypeId>, bool, bool)> = Vec::new();
+        for prop in first {
+            let mut tys = vec![prop.ty];
+            let mut optional = prop.optional;
+            let mut readonly = prop.readonly;
+            let mut in_all = true;
+            for other in rest {
+                match other.iter().find(|p| p.name == prop.name) {
+                    Some(p) => {
+                        tys.push(p.ty);
+                        optional |= p.optional;
+                        readonly |= p.readonly;
+                    }
+                    None => {
+                        in_all = false;
+                        break;
+                    }
+                }
+            }
+            if in_all {
+                common.push((prop.name.clone(), tys, optional, readonly));
+            }
+        }
+        // Union the per-member value types outside the store borrow.
+        let mut out: Vec<PropertyType> = Vec::with_capacity(common.len());
+        for (name, tys, optional, readonly) in common {
+            let ty = self.interner.union(tys);
+            let mut prop = PropertyType::public(name, ty);
+            prop.optional = optional;
+            prop.readonly = readonly;
+            out.push(prop);
+        }
+        Some(out)
+    }
+
+    /// Build the result object of a mapped evaluation (M26): pair each property's
+    /// metadata with its evaluated value type (by position), stripping `undefined` for a
+    /// `-?`-over-optional property (tsc `Required` semantics) and baking `| undefined`
+    /// into an **optional** property's stored type (the M21 convention the relation
+    /// engine reads back), then interning the object.
+    fn build_mapped_object(&mut self, meta: &[MappedProp], values: &[TypeId]) -> TypeId {
+        let undefined = self.interner.well_known().undefined;
+        let mut object = ObjectType::default();
+        for (m, &value) in meta.iter().zip(values) {
+            // `-?` Required semantics: strip `undefined` from the EVALUATED value of an
+            // optional source member (probed tsc 6.0.3 — see `strip_undefined`).
+            let value = if m.strip_undefined {
+                self.strip_undefined(value)
+            } else {
+                value
+            };
+            // M21: an optional member's stored effective type includes `| undefined`, so
+            // the relation engine's optional handling stays consistent.
+            let ty = if m.optional {
+                self.interner.union(vec![value, undefined])
+            } else {
+                value
+            };
+            let mut prop = PropertyType::public(m.name.clone(), ty);
+            prop.optional = m.optional;
+            prop.readonly = m.readonly;
+            object.properties.push(prop);
+        }
+        self.interner.intern_object(object)
+    }
+
+    /// Remove `undefined` from a value type (M26 — the `-?` Required strip, probed
+    /// against tsc 6.0.3, leader-arbitrated `m26_arb.ts`): a union containing
+    /// `undefined` re-unions its other members (a 1-member remainder collapses via
+    /// `Interner::union`); a value that is EXACTLY `undefined` maps to **`never`**
+    /// (`Required<{ b?: undefined }>` gives `b: never` — filtering `undefined` by the
+    /// not-undefined fact leaves nothing); any other non-union type is untouched.
+    fn strip_undefined(&mut self, ty: TypeId) -> TypeId {
+        let wk = self.interner.well_known();
+        if ty == wk.undefined {
+            return wk.never;
+        }
+        let filtered: Vec<TypeId> = match self.interner.store().union_members(ty) {
+            Some(members) if members.contains(&wk.undefined) => {
+                members.iter().copied().filter(|&m| m != wk.undefined).collect()
+            }
+            _ => return ty,
+        };
+        self.interner.union(filtered)
+    }
+
+    /// The string-literal keys of a non-homomorphic mapped type's key source (M26): the
+    /// members of a literal union, or a single string literal. `None` — deferring the
+    /// node — when ANY member is not a string literal (`K in string`, numeric keys, …):
+    /// silently dropping such a key would shrink the target (a missed-member false
+    /// negative), so the whole map is out of subset instead (review F1 secondaries).
+    fn literal_string_keys(&self, ty: TypeId) -> Option<Vec<String>> {
+        let store = self.interner.store();
+        let members: Vec<TypeId> = match store.union_members(ty) {
+            Some(members) => members.to_vec(),
+            None => vec![ty],
+        };
+        members
+            .into_iter()
+            .map(|m| match store.literal_value(m) {
+                Some(LiteralValue::String(s)) => Some(s.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Replace every [`TypeTag::MappedValue`] placeholder (`T[K]`) in a mapped type's
+    /// value template with `value` — the current key's source property type (M26).
+    /// Recurses through structural composites and a conditional's components; re-interns
+    /// only when something changed. A **nested** mapped type descends into its
+    /// **key source only** (which is outer-scoped — `Outer<T> = { [K in keyof T]:
+    /// Ident<T[K]> }` injects the outer placeholder there, review probe X): its value
+    /// template rebinds its OWN placeholder and stays untouched (the cross-binder case
+    /// is out of subset, safe over-report).
+    fn replace_mapped_value(&mut self, ty: TypeId, value: TypeId) -> TypeId {
+        match self.interner.store().tag(ty) {
+            TypeTag::MappedValue => value,
+            TypeTag::Intrinsic | TypeTag::Literal | TypeTag::TypeParam | TypeTag::Infer => ty,
+            TypeTag::Mapped => {
+                let Some(mapped) = self.interner.store().mapped_type(ty).copied() else {
+                    return ty;
+                };
+                let key_source = self.replace_mapped_value(mapped.key_source, value);
+                if key_source == mapped.key_source {
+                    return ty;
+                }
+                self.interner.intern_mapped(MappedType {
+                    key_source,
+                    ..mapped
+                })
+            }
+            TypeTag::Object => {
+                let Some(object) = self.interner.store().object_type(ty).cloned() else {
+                    return ty;
+                };
+                let mut changed = false;
+                let mut new = object.clone();
+                for prop in &mut new.properties {
+                    let nt = self.replace_mapped_value(prop.ty, value);
+                    changed |= nt != prop.ty;
+                    prop.ty = nt;
+                }
+                new.string_index = object.string_index.map(|v| {
+                    let nv = self.replace_mapped_value(v, value);
+                    changed |= nv != v;
+                    nv
+                });
+                new.number_index = object.number_index.map(|v| {
+                    let nv = self.replace_mapped_value(v, value);
+                    changed |= nv != v;
+                    nv
+                });
+                new.call_signatures = object
+                    .call_signatures
+                    .iter()
+                    .map(|&s| {
+                        let ns = self.replace_mapped_value(s, value);
+                        changed |= ns != s;
+                        ns
+                    })
+                    .collect();
+                new.construct_signatures = object
+                    .construct_signatures
+                    .iter()
+                    .map(|&s| {
+                        let ns = self.replace_mapped_value(s, value);
+                        changed |= ns != s;
+                        ns
+                    })
+                    .collect();
+                if changed {
+                    self.interner.intern_object(new)
+                } else {
+                    ty
+                }
+            }
+            TypeTag::Function => {
+                let Some(function) = self.interner.store().function_type(ty).cloned() else {
+                    return ty;
+                };
+                let mut changed = false;
+                let mut new = function.clone();
+                for param in &mut new.params {
+                    let nt = self.replace_mapped_value(param.ty, value);
+                    changed |= nt != param.ty;
+                    param.ty = nt;
+                }
+                let nr = self.replace_mapped_value(function.ret, value);
+                changed |= nr != function.ret;
+                new.ret = nr;
+                if changed {
+                    self.interner.intern_function(new)
+                } else {
+                    ty
+                }
+            }
+            TypeTag::Union => {
+                let Some(members) = self.interner.store().union_members(ty) else {
+                    return ty;
+                };
+                let members: Vec<TypeId> = members.to_vec();
+                let mut changed = false;
+                let subst: Vec<TypeId> = members
+                    .iter()
+                    .map(|&m| {
+                        let nm = self.replace_mapped_value(m, value);
+                        changed |= nm != m;
+                        nm
+                    })
+                    .collect();
+                if changed {
+                    self.interner.union(subst)
+                } else {
+                    ty
+                }
+            }
+            TypeTag::Array => {
+                let Some(element) = self.interner.store().array_type(ty).map(|a| a.element) else {
+                    return ty;
+                };
+                let ne = self.replace_mapped_value(element, value);
+                if ne != element {
+                    self.interner.intern_array(ne)
+                } else {
+                    ty
+                }
+            }
+            TypeTag::Tuple => {
+                let Some(elements) =
+                    self.interner.store().tuple_type(ty).map(|t| t.elements.clone())
+                else {
+                    return ty;
+                };
+                let mut changed = false;
+                let subst: Vec<TypeId> = elements
+                    .iter()
+                    .map(|&e| {
+                        let ne = self.replace_mapped_value(e, value);
+                        changed |= ne != e;
+                        ne
+                    })
+                    .collect();
+                if changed {
+                    self.interner.intern_tuple(subst)
+                } else {
+                    ty
+                }
+            }
+            TypeTag::Conditional => {
+                let Some(cond) = self.interner.store().conditional_type(ty).copied() else {
+                    return ty;
+                };
+                let check = self.replace_mapped_value(cond.check, value);
+                let extends_ty = self.replace_mapped_value(cond.extends_ty, value);
+                let true_branch = self.replace_mapped_value(cond.true_branch, value);
+                let false_branch = self.replace_mapped_value(cond.false_branch, value);
+                if check == cond.check
+                    && extends_ty == cond.extends_ty
+                    && true_branch == cond.true_branch
+                    && false_branch == cond.false_branch
+                {
+                    return ty;
+                }
+                self.interner.intern_conditional(ConditionalType {
+                    check,
+                    extends_ty,
+                    true_branch,
+                    false_branch,
+                    infer_count: cond.infer_count,
+                    distributive: cond.distributive,
+                    poisoned: cond.poisoned,
+                })
+            }
+            TypeTag::Instantiation => {
+                let Some(inst) = self.interner.store().instantiation_type(ty).cloned() else {
+                    return ty;
+                };
+                let mut changed = false;
+                let new_args: Vec<(TypeParamId, TypeId)> = inst
+                    .args
+                    .iter()
+                    .map(|&(p, v)| {
+                        let nv = self.replace_mapped_value(v, value);
+                        changed |= nv != v;
+                        (p, nv)
+                    })
+                    .collect();
+                if changed {
+                    self.interner.intern_instantiation(inst.base, new_args)
+                } else {
+                    ty
+                }
+            }
         }
     }
 
@@ -428,7 +921,14 @@ impl<'a> ConditionalEvaluator<'a> {
                 Some(i) => fresh.get(i as usize).copied().unwrap_or(ty),
                 None => ty,
             },
-            TypeTag::Intrinsic | TypeTag::Literal | TypeTag::TypeParam | TypeTag::Conditional => ty,
+            // A nested conditional rebinds its own infer indices; a mapped type / mapped
+            // value placeholder (M26) carries no conditional infer binder — all opaque.
+            TypeTag::Intrinsic
+            | TypeTag::Literal
+            | TypeTag::TypeParam
+            | TypeTag::Conditional
+            | TypeTag::Mapped
+            | TypeTag::MappedValue => ty,
             TypeTag::Object => {
                 let Some(object) = self.interner.store().object_type(ty).cloned() else {
                     return ty;
@@ -600,7 +1100,13 @@ impl<'a> ConditionalEvaluator<'a> {
                         self.concrete.insert(t, false);
                         continue;
                     }
-                    TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer => {
+                    // M26: a mapped-value placeholder is a bound variable — concrete. A
+                    // mapped type falls through to descend into its key source + value
+                    // template (below).
+                    TypeTag::Intrinsic
+                    | TypeTag::Literal
+                    | TypeTag::Infer
+                    | TypeTag::MappedValue => {
                         self.concrete.insert(t, true);
                         continue;
                     }
@@ -675,6 +1181,13 @@ impl<'a> ConditionalEvaluator<'a> {
             TypeTag::Instantiation => store
                 .instantiation_type(ty)
                 .map(|i| i.args.iter().map(|(_, v)| *v).collect())
+                .unwrap_or_default(),
+            // M26: a mapped type is concrete once its key source and value template are
+            // (the value template's `MappedValue` placeholder is a bound variable —
+            // classified concrete above).
+            TypeTag::Mapped => store
+                .mapped_type(ty)
+                .map(|m| vec![m.key_source, m.value_template])
                 .unwrap_or_default(),
             _ => Vec::new(),
         }
@@ -899,5 +1412,174 @@ mod tests {
         let mut ev = ConditionalEvaluator::new(&mut interner, &mut next_type_param, &mut memo, DEFAULT_STEP_BUDGET);
         let _ = ev.evaluate(root);
         assert!(ev.exhausted, "a runaway alias must exhaust the step budget");
+    }
+
+    /// M26 — a homomorphic identity mapped type `{ [K in keyof T]: T[K] }` over a
+    /// concrete source evaluates to the source's shape (per-property `T[K]` = the source
+    /// property's type), and its result is memoized.
+    fn eval(interner: &mut Interner, next: &mut u32, memo: &mut FxHashMap<TypeId, TypeId>, ty: TypeId) -> TypeId {
+        let mut ev = ConditionalEvaluator::new(interner, next, memo, DEFAULT_STEP_BUDGET);
+        ev.evaluate(ty)
+    }
+
+    #[test]
+    fn mapped_identity_evaluates_to_source_shape() {
+        use crate::types::repr::{MappedType, ModifierOp};
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        // Concrete source `{ a: number; b: string }`.
+        let source = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number), prop("b", wk.string)],
+            ..Default::default()
+        });
+        let placeholder = interner.intern_mapped_value();
+        let ident = interner.intern_mapped(MappedType {
+            homomorphic: true,
+            key_source: source,
+            value_template: placeholder,
+            optional_modifier: ModifierOp::Keep,
+            readonly_modifier: ModifierOp::Keep,
+        });
+        let mut next = 0u32;
+        let mut memo = FxHashMap::default();
+        let result = eval(&mut interner, &mut next, &mut memo, ident);
+        assert_eq!(
+            result, source,
+            "an identity map over a concrete source yields the source shape"
+        );
+        assert!(memo.contains_key(&ident), "the mapped evaluation is memoized");
+    }
+
+    /// M26 — modifier arithmetic: `readonly` (Add) sets every result property readonly;
+    /// `?` (Add) makes every property optional; a `MappedValue | null` template unions
+    /// `null` into each value.
+    #[test]
+    fn mapped_modifiers_and_value_transform_apply() {
+        use crate::types::repr::{MappedType, ModifierOp};
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let source = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number)],
+            ..Default::default()
+        });
+        let placeholder = interner.intern_mapped_value();
+        // `{ readonly [K in keyof T]?: T[K] | null }`.
+        let value_template = interner.union(vec![placeholder, wk.null]);
+        let mapped = interner.intern_mapped(MappedType {
+            homomorphic: true,
+            key_source: source,
+            value_template,
+            optional_modifier: ModifierOp::Add,
+            readonly_modifier: ModifierOp::Add,
+        });
+        let mut next = 0u32;
+        let mut memo = FxHashMap::default();
+        let result = eval(&mut interner, &mut next, &mut memo, mapped);
+
+        let a = interner
+            .store()
+            .object_type(result)
+            .and_then(|o| o.property("a"))
+            .expect("property a survives")
+            .clone();
+        assert!(a.readonly, "readonly (Add) makes the property readonly");
+        assert!(a.optional, "? (Add) makes the property optional");
+        // Effective type is `number | null | undefined` (value `number | null`, plus the
+        // optional `| undefined` baked in).
+        let expected = interner.union(vec![wk.number, wk.null, wk.undefined]);
+        assert_eq!(a.ty, expected, "value template `T[K] | null` + optional `| undefined`");
+    }
+
+    /// M26 — a mapped type over a **free** declaration type parameter stays deferred: the
+    /// evaluator returns the node unchanged (related conservatively by the M25 model),
+    /// and it is NOT memoized.
+    #[test]
+    fn deferred_mapped_over_free_param_is_returned_unchanged() {
+        use crate::types::repr::{MappedType, ModifierOp};
+        let mut interner = Interner::with_intrinsics();
+        let t = interner.intern_type_param(TypeParamId(0), "T");
+        let placeholder = interner.intern_mapped_value();
+        let mapped = interner.intern_mapped(MappedType {
+            homomorphic: true,
+            key_source: t, // a free parameter → deferred
+            value_template: placeholder,
+            optional_modifier: ModifierOp::Keep,
+            readonly_modifier: ModifierOp::Keep,
+        });
+        let mut next = 1u32;
+        let mut memo = FxHashMap::default();
+        let result = eval(&mut interner, &mut next, &mut memo, mapped);
+        assert_eq!(result, mapped, "a deferred mapped type is returned unchanged");
+        assert!(
+            !memo.contains_key(&mapped),
+            "a deferred mapped type is not memoized"
+        );
+    }
+
+    /// M26 — `-?` Required semantics (probed tsc 6.0.3, leader-arbitrated): over an
+    /// **optional** source member, `undefined` is stripped from the **evaluated** value
+    /// type — including a template-re-added `| undefined`; a result that is EXACTLY
+    /// `undefined` maps to `never`; a **non-optional** source member never strips
+    /// (template-added `undefined` is kept).
+    #[test]
+    fn required_strips_undefined_from_optional_source_values() {
+        use crate::types::repr::{MappedType, ModifierOp};
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let placeholder = interner.intern_mapped_value();
+
+        // Source `{ a: string | undefined; b?: string; u?: undefined }` — M21 stores an
+        // optional member's effective type with `| undefined` baked in.
+        let str_or_undef = interner.union(vec![wk.string, wk.undefined]);
+        let mut b = prop("b", str_or_undef);
+        b.optional = true;
+        let mut u = prop("u", wk.undefined);
+        u.optional = true;
+        let source = interner.intern_object(ObjectType {
+            properties: vec![prop("a", str_or_undef), b, u],
+            ..Default::default()
+        });
+
+        // `{ [K in keyof T]-?: T[K] | undefined }` — the template RE-ADDS `undefined`,
+        // distinguishing a result-level strip from a source-level one.
+        let template = interner.union(vec![placeholder, wk.undefined]);
+        let req = interner.intern_mapped(MappedType {
+            homomorphic: true,
+            key_source: source,
+            value_template: template,
+            optional_modifier: ModifierOp::Remove,
+            readonly_modifier: ModifierOp::Keep,
+        });
+        let mut next = 0u32;
+        let mut memo = FxHashMap::default();
+        let result = eval(&mut interner, &mut next, &mut memo, req);
+
+        let props: Vec<PropertyType> = interner
+            .store()
+            .object_type(result)
+            .expect("result is an object")
+            .properties
+            .clone();
+        let get = |name: &str| {
+            props
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap_or_else(|| panic!("property {name} present"))
+                .clone()
+        };
+        // Optional source `b`: undefined stripped from the whole RESULT (even the
+        // template-added one) → exactly `string`, and required.
+        let b_out = get("b");
+        assert!(!b_out.optional, "-? clears optionality");
+        assert_eq!(b_out.ty, wk.string, "undefined stripped from the evaluated value");
+        // Exactly-undefined optional source `u`: maps to `never` (leader-arbitrated
+        // tsc probe m26_arb.ts — filtering `undefined` by not-undefined leaves nothing).
+        assert_eq!(get("u").ty, wk.never, "an exactly-undefined value maps to never");
+        // NON-optional source `a`: never strips — keeps `string | undefined`.
+        assert_eq!(
+            get("a").ty,
+            str_or_undef,
+            "a non-optional source member keeps its undefined"
+        );
     }
 }

@@ -13,7 +13,7 @@
 use crate::types::hash::StableHash;
 use crate::types::repr::{
     ArrayType, ConditionalType, FunctionType, InstantiationType, IntrinsicKind, LiteralValue,
-    ObjectType, TupleType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
+    MappedType, ObjectType, TupleType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
 };
 use rustc_hash::FxHashMap;
 
@@ -70,6 +70,10 @@ pub struct Store {
     /// Lazy alias instantiations (M25). Addressed by the `payload` of an
     /// `Instantiation`-tagged row. Identity is `(base, sorted args)`.
     instantiations: Vec<InstantiationType>,
+    /// Mapped types (M26). Addressed by the `payload` of a `Mapped`-tagged row. The
+    /// whole [`MappedType`] is its structural identity. A `MappedValue` placeholder row
+    /// carries no side-table entry (payload `0`), like an intrinsic.
+    mapped: Vec<MappedType>,
 
     /// **Type-parameter constraint column** (M24): a type parameter's `extends`
     /// bound, keyed by its [`TypeParamId`]. A **side column**, NOT part of the
@@ -210,6 +214,14 @@ impl Store {
             return None;
         }
         Some(self.payload(id))
+    }
+
+    /// The `MappedType` of a mapped type (M26), or `None` if `id` is not a mapped type.
+    pub fn mapped_type(&self, id: TypeId) -> Option<&MappedType> {
+        if self.tag(id) != TypeTag::Mapped {
+            return None;
+        }
+        self.mapped.get(self.payload(id) as usize)
     }
 
     /// The `extends` constraint of a type parameter (M24), or `None` if the
@@ -379,5 +391,19 @@ impl Store {
     /// The de Bruijn index is stored inline in `payload`.
     pub(crate) fn push_infer(&mut self, index: u32, flags: TypeFlags) -> TypeId {
         self.push(TypeTag::Infer, flags, index)
+    }
+
+    /// Append a mapped-type row (M26). Internal — `Interner` owns dedup (by the whole
+    /// [`MappedType`]).
+    pub(crate) fn push_mapped(&mut self, mapped: MappedType, flags: TypeFlags) -> TypeId {
+        let payload = self.mapped.len() as u32;
+        self.mapped.push(mapped);
+        self.push(TypeTag::Mapped, flags, payload)
+    }
+
+    /// Append a mapped-value placeholder row (M26). Internal — `Interner` owns dedup
+    /// (identity is the tag alone; payload `0`).
+    pub(crate) fn push_mapped_value(&mut self, flags: TypeFlags) -> TypeId {
+        self.push(TypeTag::MappedValue, flags, 0)
     }
 }

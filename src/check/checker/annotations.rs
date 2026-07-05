@@ -8,13 +8,15 @@ use crate::binder::symbol::DeclId;
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
 use crate::types::repr::{
-    ConditionalType, FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TypeTag,
+    ConditionalType, FunctionType, LiteralValue, MappedType, ModifierOp, ObjectType, ParameterType,
+    PropertyType, TypeTag,
 };
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
     FormalParameters, TSCallSignatureDeclaration, TSConditionalType, TSConstructSignatureDeclaration,
-    TSConstructorType, TSInferType, TSLiteral, TSMethodSignature, TSMethodSignatureKind,
-    TSSignature, TSTupleElement, TSType, TSTypeAnnotation, TSTypeName, TSTypeOperatorOperator,
+    TSConstructorType, TSInferType, TSLiteral, TSMappedType, TSMappedTypeModifierOperator,
+    TSMethodSignature, TSMethodSignatureKind, TSSignature, TSTupleElement, TSType, TSTypeAnnotation,
+    TSTypeName, TSTypeOperatorOperator,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -101,11 +103,24 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // member type(s) named by `K` are looked up on `T` eagerly
             // ([`indexed_access_type`]). Out-of-scope combinations (a non-object `T`, a
             // missing key, a generic key) yield the error type (no crash).
+            //
+            // M26: inside a mapped type's value template, `X[K]` whose index names the
+            // innermost mapped key binder is the source property value — it lowers to the
+            // node-scoped [`TypeTag::MappedValue`] placeholder (resolved per key at
+            // evaluation), NOT the eager M20 lookup (which would resolve to the error
+            // type against the still-abstract source).
             TSType::TSIndexedAccessType(access) => {
+                if self.index_is_active_mapped_key(&access.index_type) {
+                    return Some(self.interner.intern_mapped_value());
+                }
                 let object = self.lower_annotation(scope, &access.object_type)?;
                 let index = self.lower_annotation(scope, &access.index_type)?;
                 return Some(self.indexed_access_type(object, index));
             }
+            // M26: a mapped type `{ [K in S]: V }`. Lowered to an interned node (WU1)
+            // and, at a value-position demand site, evaluated (WU2) — see
+            // [`lower_mapped_type`].
+            TSType::TSMappedType(mapped) => return self.lower_mapped_type(scope, mapped),
             // M25: a conditional type `C extends E ? T : F`. Lowered to an interned node
             // (WU1) and, at a value-position demand site, evaluated (WU2) — see
             // [`lower_conditional_type`].
@@ -275,6 +290,99 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         } else {
             self.evaluate_type(ty, span)
         }
+    }
+
+    /// Lower a mapped type `{ [K in S]: V }` (M26, WU1).
+    ///
+    /// The `in` clause `S` is classified: `keyof <source>` is **homomorphic** (the key
+    /// source is `<source>`, whose per-property `?`/`readonly` flags are preserved), any
+    /// other constraint is non-homomorphic (the key source is the constraint type — a
+    /// literal-union key set). The value template `V` is lowered with a
+    /// [`MappedFrame`] pushed, so an indexed access on the key binder (`T[K]`) lowers to
+    /// the node-scoped [`TypeTag::MappedValue`] placeholder. The `?`/`readonly` modifier
+    /// operators are recorded. At a value-position demand site the built node is
+    /// evaluated ([`Pass::maybe_evaluate`]); inside a template body it stays the interned
+    /// node.
+    ///
+    /// Out of the M26 subset (aborting the annotation, degrading to the error type): an
+    /// `as` key remapping (`name_type`), a missing value template, or an un-lowerable key
+    /// source / value template.
+    fn lower_mapped_type(&mut self, scope: ScopeId, mapped: &TSMappedType<'_>) -> Option<TypeId> {
+        // `as` key remapping is out of the M26 subset (backlog 11).
+        if mapped.name_type.is_some() {
+            return None;
+        }
+
+        // The key-source surface: the `keyof` operand for a homomorphic map, else the
+        // constraint itself.
+        let key_surface: &TSType<'_> = match &mapped.constraint {
+            TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Keyof => {
+                &op.type_annotation
+            }
+            other => other,
+        };
+
+        // TK2456 (review): a key source that surface-references the alias currently
+        // being resolved (`type M = { [K in keyof M]: number }`) is a circular alias —
+        // the re-entry error type would otherwise silently feed the map. The alias
+        // degrades to the error type (silent downstream, M22 discipline). tsc also adds
+        // a TS2313 for K's circular constraint — secondary code omitted (documented).
+        if let Some((decl_id, alias_span, name)) = self.resolving_alias.clone() {
+            if self.check_surface_references(scope, key_surface, decl_id) {
+                self.diagnostics
+                    .push(Diagnostic::circular_type_alias(alias_span, &name));
+                return Some(self.interner.well_known().error);
+            }
+        }
+
+        // Classify the `in` clause: `keyof <source>` is homomorphic (preserves the
+        // source's `?`/`readonly`); anything else is a non-homomorphic key set.
+        let (homomorphic, key_source) = match &mapped.constraint {
+            TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Keyof => {
+                (true, self.lower_annotation(scope, &op.type_annotation)?)
+            }
+            other => (false, self.lower_annotation(scope, other)?),
+        };
+
+        // Lower the value template with this node's key binder in scope, so `X[K]`
+        // becomes the source-value placeholder.
+        self.mapped_frames.push(MappedFrame {
+            key_name: mapped.key.name.to_string(),
+        });
+        let value_template = match &mapped.type_annotation {
+            Some(annotation) => self.lower_annotation(scope, annotation),
+            // A mapped type with no value (`{ [K in S] }`) is out of subset.
+            None => None,
+        };
+        self.mapped_frames.pop();
+        let value_template = value_template?;
+
+        let id = self.interner.intern_mapped(MappedType {
+            homomorphic,
+            key_source,
+            value_template,
+            optional_modifier: modifier_op(mapped.optional),
+            readonly_modifier: modifier_op(mapped.readonly),
+        });
+        let span = Span::from_oxc(mapped.span);
+        Some(self.maybe_evaluate(id, span))
+    }
+
+    /// Whether `index` names the **innermost active mapped key** binder (M26) — a bare
+    /// `TSTypeReference` (no type arguments) whose name equals the current mapped
+    /// frame's key. Used to recognize `T[K]` as the source-value placeholder inside a
+    /// mapped type's value template.
+    fn index_is_active_mapped_key(&self, index: &TSType<'_>) -> bool {
+        let Some(frame) = self.mapped_frames.last() else {
+            return false;
+        };
+        let TSType::TSTypeReference(reference) = index else {
+            return false;
+        };
+        let TSTypeName::IdentifierReference(ident) = &reference.type_name else {
+            return false;
+        };
+        reference.type_arguments.is_none() && ident.name.as_str() == frame.key_name
     }
 
     /// Lower a union type annotation `A | B | …` to a canonical interned `TypeId`
@@ -1023,6 +1131,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             params: lowered,
             ret,
         }))
+    }
+}
+
+/// Map an oxc mapped-type modifier to the type-model [`ModifierOp`] (M26). No modifier
+/// is `Keep` (preserve the source flag / default absent); `?`/`+?` and
+/// `readonly`/`+readonly` (`True`/`Plus`) are `Add`; `-?`/`-readonly` (`Minus`) is
+/// `Remove`.
+fn modifier_op(op: Option<TSMappedTypeModifierOperator>) -> ModifierOp {
+    match op {
+        None => ModifierOp::Keep,
+        Some(TSMappedTypeModifierOperator::True) | Some(TSMappedTypeModifierOperator::Plus) => {
+            ModifierOp::Add
+        }
+        Some(TSMappedTypeModifierOperator::Minus) => ModifierOp::Remove,
     }
 }
 

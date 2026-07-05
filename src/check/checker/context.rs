@@ -475,6 +475,23 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// body is lowered, so a check type that surface-references `A` itself is caught as
     /// `TK2456` at the alias declaration. `None` outside such a body.
     pub(in crate::check::checker) resolving_conditional_alias: Option<(DeclId, Span, String)>,
+    /// The **plain alias declaration currently being resolved** (M26): its type
+    /// `DeclId`, name-declaration span, and name, save/restored per nested
+    /// `resolve_type_decl` call. Consumed ONLY by `lower_mapped_type`, so a mapped key
+    /// source that surface-references the alias itself
+    /// (`type M = { [K in keyof M]: number }`) is `TK2456` at the alias declaration —
+    /// the silent re-entry error type would otherwise feed the mapped evaluation a
+    /// bogus source. Kept separate from
+    /// [`resolving_conditional_alias`](Pass::resolving_conditional_alias) (which the
+    /// conditional fill loop scopes to top-level conditional bodies only) so nested
+    /// conditionals inside plain alias bodies keep their M25 behavior.
+    pub(in crate::check::checker) resolving_alias: Option<(DeclId, Span, String)>,
+    /// **Mapped-type lowering contexts** (M26): one [`MappedFrame`] per
+    /// `lower_mapped_type` call currently on the stack, each recording the node's key
+    /// binder name. While a frame is active, an indexed access `X[K]` whose index names
+    /// the innermost mapped key lowers to the node-scoped [`crate::types::repr::TypeTag::MappedValue`]
+    /// placeholder (the source property value `T[K]`) instead of eagerly resolving.
+    pub(in crate::check::checker) mapped_frames: Vec<MappedFrame>,
 }
 
 /// One enclosing-loop frame for the flow pre-pass: the loop's label (the
@@ -483,6 +500,14 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
 pub(in crate::check::checker) struct FlowLoopFrame {
     pub(in crate::check::checker) label: FlowNodeId,
     pub(in crate::check::checker) break_edges: Vec<FlowNodeId>,
+}
+
+/// One mapped-type lowering context (M26): the node's key binder name. Lives on
+/// [`Pass::mapped_frames`] while the mapped type's value template is lowered, so an
+/// indexed access on the key (`T[K]`) is recognized as the source-value placeholder.
+pub(in crate::check::checker) struct MappedFrame {
+    /// The key binder name (`K` in `{ [K in S]: V }`).
+    pub(in crate::check::checker) key_name: String,
 }
 
 /// One conditional-type lowering context (M25): the node's `infer` binder frame plus the
