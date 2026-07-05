@@ -22,18 +22,17 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprints/sprint-2026-07-04-mapped-types.md`](sprints/sprint-2026-07-04-mapped-types.md) —
-  backlog `10` / M26 (spec committed, implementation in progress).
+<!-- (none) -->
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M25 shipped** — M25 (conditional types: the evaluator with work-stack/memo/budget,
-  `infer` via a non-widening inference mode, distribution, TK2456/TK2589) closed 2026-07-04
-  and **opens the type-level evaluation phase**; M24 (generic constraints) same day. See
-  [`archive/`](archive/README.md). Scoreboard: in-scope 491, clean-kept 164/209, diag-recall
-  250/1651 (conditional-heavy suite files still gated by mapped/template/variadic buckets —
-  signal arrives with `10`–`12`/`24`). **Next: mapped types (`10` / M26)**, then `11`–`12`.
-  Type-model gaps from probes: `24` rest elements, `25` intersections, `26` cross-binder
-  infer, `27` template-buried conditionals. Small warm-ups: `21`–`23`.
+- **M0–M26 shipped** — M26 (mapped types: template-mapper node, modifier arithmetic, union
+  distribution, TK2456) closed 2026-07-05 on top of M25 conditional types and M24 generic
+  constraints (all three in one 24h push; see [`archive/`](archive/README.md)). Scoreboard:
+  in-scope 495, clean-kept 166/211, diag-recall 250/1657. **Next: template literal types
+  (`11` / M27)**, then utility types (`12`). Type-model gaps from review probes: `24` rest
+  elements, `25` intersections, `26` cross-binder infer, `27` template-buried conditionals,
+  `28` interface extends composition, `29` silent alias-cycle permissiveness. Small
+  warm-ups: `21`–`23`.

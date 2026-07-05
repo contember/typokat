@@ -1,7 +1,6 @@
 ---
 id: 14
 title: Full lib.d.ts loading (the standard library)
-blocked-by: [./10-mapped-types.md]
 ---
 
 # 14 — full `lib.d.ts` loading

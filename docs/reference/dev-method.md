@@ -91,12 +91,13 @@ relation engine + narrowing come **before** type-level evaluation, never the rev
 evaluation is tree-walked, with the bytecode VM a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)).
 
-Recommended next: continue the type-level evaluation phase with item `10` (mapped types, M26 —
-`09`'s evaluator, memo, and budget machinery are in place to build on), then `11`–`12`. Items
-`01`–`09` and `20` are shipped/closed; do not plan new work from those deleted backlog numbers.
-The small review-finding items (`21`–`23`) make good warm-ups between milestones; the type-model
-gaps (`24` rest elements, `25` intersections, `26` cross-binder infer, `27` template-buried
-conditionals) unblock corpus breadth and kill known over-reports when scheduled.
+Recommended next: finish the type-level evaluation phase — `11` (template literal types, M27)
+then `12` (utility types, M28) — on the shared evaluator machinery from `09`/`10`. Items
+`01`–`10` and `20` are shipped/closed; do not plan new work from those deleted backlog numbers.
+The small review-finding items (`21`–`23`) make good warm-ups between milestones; the known-gap
+items (`24` rest elements, `25` intersections, `26` cross-binder infer, `27` template-buried
+conditionals, `28` interface extends, `29` silent alias cycles) kill false-negative families
+and known over-reports when scheduled — `28`/`29` are silent-FN families worth scheduling early.
 
 For each item you pick: write its fixture corpus first, update `tests/cases/README.md`, commit the
 spec, dispatch the implementation subagent, dispatch the independent review, fix, and commit. Same

@@ -1,6 +1,37 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/.
--->
+# OUTCOME (closed 2026-07-05) — SHIPPED
+
+**M26 shipped.** Mapped types are an interned node (template-mapper model: a
+node-scoped `MappedValue` placeholder for `T[K]`; M20 untouched), evaluated over
+concrete sources with homomorphic preservation and full modifier arithmetic
+(`-?` strips `undefined`, exactly-`undefined` → `never`), **distributing over union
+type arguments** (`Ident<A|B>` = `Ident<A> | Ident<B>`); no permissive fallback —
+error sources error-type, non-iterable sources defer conservatively; self-
+referential mapped aliases report `TK2456`.
+
+**Commit map.** Spec `4abd6cb` · plan `4509dc3` · spec amendments `db0c8b8` (`-?`
+undefined strip), `5b700ec` (union distribution + `-?`→`never` + no-`{}` fallback +
+self-ref TK2456 + index-sig deferral) · backlog byproducts `2d5c3a1` (28),
+`b037a7b` includes 29 · implementation `b037a7b` (+1540/−26) · gate lift + ratchet
+`e24907c`.
+
+**Verification.** 186 unit + conformance green (m26: 5 files / 23 markers), clippy
+clean. Official suite: mapped-type gate lifted — 4 files enter scope (2 fully
+clean-kept), scoreboard in-scope 491→495, clean-kept 166/211, diag-recall
+250/1657, 0 regressions. Two fix rounds: leader verification (`-?` strip — where
+the round-1 directive itself mis-encoded tsc's exactly-`undefined` behavior and
+leader arbitration corrected the disputed probes), adversarial review FAIL (union
+distribution — the permissive `{}` fallback; `never` edge) → fixes → re-review
+**PASS** (the 13h re-verification run also independently confirmed).
+
+**Deferred / byproducts.** Backlog `28` (interface `extends` composition —
+pre-existing silent FN family) and `29` (silent alias-cycle permissiveness —
+error-typing with no primary diagnostic; the review's sharpest cross-cutting
+find). Index-signature sources defer (tsc resolves — documented over-report);
+nested-mapped-in-composite templates and instance-reached class fields stay
+conservative (backlog `27` analog); `as` remapping + template-literal keys →
+`11`; numeric-literal keys defer.
+
+---
 
 # Sprint — mapped types `{ [K in keyof T]: … }` / M26 (2026-07-04)
 

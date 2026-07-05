@@ -7,14 +7,14 @@ full classes, and the common "real-world" type constructs. It is a **checker, no
 emit, JS runtime semantics, and module resolution are out of scope by design — the goal is to
 preserve the **type model** (see [`docs/reference/architecture.md`](./docs/reference/architecture.md)).
 
-> Status: **M0–M25** implemented (M25 = conditional types `T extends U ? X : Y`: a
-> demand-driven evaluator with an explicit work-stack, memoization, and a tsc-like
-> instantiation budget; `infer` extraction through a dedicated non-widening inference
-> mode; distribution over unions; `TK2456`/`TK2589`), opening the type-level evaluation
-> phase on top of M24 generic constraints, the M23 flow-node CFG, class completeness,
-> and constructor accessibility. ~22k lines of Rust, 180 unit tests + a 107-file
-> conformance corpus (340 expected diagnostics), `clippy -D warnings` clean. Every
-> milestone was cross-checked against real `tsc 6.0.3 --strict`.
+> Status: **M0–M26** implemented (M26 = mapped types `{ [K in keyof T]: … }`: modifier
+> arithmetic with tsc `Required` semantics, homomorphic preservation, distribution over
+> union type arguments; M25 = conditional types with the demand-driven evaluator —
+> explicit work-stack, memoization, tsc-like instantiation budget, non-widening `infer`
+> mode, `TK2456`/`TK2589`), on top of M24 generic constraints, the M23 flow-node CFG,
+> class completeness, and constructor accessibility. ~23k lines of Rust, 186 unit tests
+> + a 112-file conformance corpus (363 expected diagnostics), `clippy -D warnings`
+> clean. Every milestone was cross-checked against real `tsc 6.0.3 --strict`.
 
 ## Quick start
 
