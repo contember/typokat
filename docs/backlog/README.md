@@ -47,3 +47,6 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 - [`30`](30-numeric-literal-correctness.md) — JS-exact number stringification (`String(n)` dtoa; the negative-literal half shipped in the warm-ups sprint).
 - [`31`](31-object-literal-contextual-typing.md) — object/tuple/array literal members widen against literal-typed targets (false positives on valid code; pre-existing, b28 warm-up).
 - [`32`](32-eager-keyof-forward-references.md) — eager `keyof` over forward-referenced declarations silently degrades (FN family; pre-existing, warm-up re-review).
+- [`33`](33-as-cast-assignability.md) — `as`-cast RHS bypasses initializer assignability (silent FN family; pre-existing, M28 review).
+- [`34`](34-fix-params-evaluate-before-gate.md) — `fix_params` gates deferred `keyof` without evaluating first (missed TS2345; pre-existing, M28 review).
+- [`35`](35-keyof-union-and-key-source-edges.md) — `keyof` over unions + `never`/template-literal mapped key sources (over-report tail; M28 review).
