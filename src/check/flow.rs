@@ -454,14 +454,15 @@ fn member_matches_typeof(
         | TypeTag::TypeParam
         | TypeTag::Array
         | TypeTag::Tuple
-        // M25/M26: a conditional / lazy instantiation / infer binder / mapped type /
-        // mapped-value placeholder never appears as a narrowable union member in the M7
-        // `typeof` subset — defensively false.
+        // M25/M26/M28: a conditional / lazy instantiation / infer binder / mapped type /
+        // mapped-value placeholder / deferred keyof never appears as a narrowable union
+        // member in the M7 `typeof` subset — defensively false.
         | TypeTag::Conditional
         | TypeTag::Instantiation
         | TypeTag::Infer
         | TypeTag::Mapped
-        | TypeTag::MappedValue => false,
+        | TypeTag::MappedValue
+        | TypeTag::Keyof => false,
     }
 }
 

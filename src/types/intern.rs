@@ -35,6 +35,25 @@ pub struct WellKnown {
     pub boolean: TypeId,
     pub number: TypeId,
     pub string: TypeId,
+    /// M28 — the four string-intrinsic **markers** (the base of a symbolic
+    /// `Uppercase<S>` instantiation; see [`IntrinsicKind::Uppercase`]). Not keyword
+    /// types: they only ever appear as an
+    /// [`crate::types::repr::InstantiationType::base`] the evaluator intercepts by
+    /// identity.
+    pub uppercase: TypeId,
+    pub lowercase: TypeId,
+    pub capitalize: TypeId,
+    pub uncapitalize: TypeId,
+}
+
+impl WellKnown {
+    /// Whether `id` is one of the four M28 string-intrinsic markers.
+    pub fn is_string_intrinsic_marker(&self, id: TypeId) -> bool {
+        id == self.uppercase
+            || id == self.lowercase
+            || id == self.capitalize
+            || id == self.uncapitalize
+    }
 }
 
 pub struct Interner {
@@ -66,6 +85,10 @@ impl Interner {
                 boolean: TypeId(0),
                 number: TypeId(0),
                 string: TypeId(0),
+                uppercase: TypeId(0),
+                lowercase: TypeId(0),
+                capitalize: TypeId(0),
+                uncapitalize: TypeId(0),
             },
         };
 
@@ -94,6 +117,10 @@ impl Interner {
             boolean: id_of(IntrinsicKind::Boolean),
             number: id_of(IntrinsicKind::Number),
             string: id_of(IntrinsicKind::String),
+            uppercase: id_of(IntrinsicKind::Uppercase),
+            lowercase: id_of(IntrinsicKind::Lowercase),
+            capitalize: id_of(IntrinsicKind::Capitalize),
+            uncapitalize: id_of(IntrinsicKind::Uncapitalize),
         };
 
         interner
@@ -118,6 +145,14 @@ impl Interner {
     /// `Store::remove_type_param_constraint`.
     pub fn remove_type_param_constraint(&mut self, id: TypeParamId) {
         self.store.remove_type_param_constraint(id);
+    }
+
+    /// Record a reserved template row's alias display name (M28 round 3) — a
+    /// rendering-only side column, never part of identity. The checker calls this
+    /// right after `reserve_conditional`/`reserve_mapped` for a named alias, so a
+    /// deferred instantiation renders as `Extract<K, string>` instead of the raw body.
+    pub fn set_template_name(&mut self, id: TypeId, name: impl Into<String>) {
+        self.store.set_template_name(id, name.into());
     }
 
     pub fn well_known(&self) -> WellKnown {
@@ -507,13 +542,15 @@ impl Interner {
     }
 
     /// Intern a **mapped type** `{ [K in S]: V }` (M26). Identity is its whole
-    /// [`MappedType`] shape (homomorphic flag, key source, value template, and both
-    /// modifier operators), so two structurally equal mapped types share one id.
+    /// [`MappedType`] shape (homomorphic flag, key source, value template, the M28
+    /// modifiers source, and both modifier operators), so two structurally equal
+    /// mapped types share one id.
     pub fn intern_mapped(&mut self, mapped: MappedType) -> TypeId {
         let key = StructuralKey::Mapped {
             homomorphic: mapped.homomorphic,
             key_source: mapped.key_source,
             value_template: mapped.value_template,
+            modifiers_source: mapped.modifiers_source,
             optional_modifier: mapped.optional_modifier,
             readonly_modifier: mapped.readonly_modifier,
         };
@@ -523,6 +560,9 @@ impl Interner {
                 existing.homomorphic == mapped.homomorphic
                     && existing.key_source == mapped.key_source
                     && existing.value_template == mapped.value_template
+                    // M28: identity-bearing — maps differing only in modifiers source
+                    // must not conflate (leader constraint, sprint WU2 item 2).
+                    && existing.modifiers_source == mapped.modifiers_source
                     && existing.optional_modifier == mapped.optional_modifier
                     && existing.readonly_modifier == mapped.readonly_modifier
             })
@@ -530,6 +570,54 @@ impl Interner {
             return existing;
         }
         let id = self.store.push_mapped(mapped, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
+    /// Reserve a **recursive mapped-alias template** id with a placeholder body,
+    /// returning the id WITHOUT hash-consing it (M28 — mirrors
+    /// [`Interner::reserve_conditional`]). The id exists before the alias body is
+    /// lowered, so a self-recursive reference (`type DeepPartial<T> = { [K in keyof T]?:
+    /// DeepPartial<T[K]> }`) can point at it (as a lazy [`InstantiationType`] base)
+    /// without expanding. Filled later via [`Interner::fill_mapped`]. A reserved
+    /// template is nominal (not deduped): a placeholder body would mis-key the dedup
+    /// index.
+    pub fn reserve_mapped(&mut self) -> TypeId {
+        // A placeholder body; overwritten by `fill_mapped`. The error type is a safe
+        // neutral filler (never observed before the fill).
+        let error = self.well_known.error;
+        self.store.push_mapped(
+            MappedType {
+                homomorphic: false,
+                key_source: error,
+                value_template: error,
+                modifiers_source: None,
+                optional_modifier: crate::types::repr::ModifierOp::Keep,
+                readonly_modifier: crate::types::repr::ModifierOp::Keep,
+            },
+            TypeFlags::EMPTY,
+        )
+    }
+
+    /// Fill the body of a previously [reserved](Interner::reserve_mapped) mapped
+    /// template in place (M28). The id is **not** added to the dedup index (it stays
+    /// nominal); a no-op if `id` is not a mapped row.
+    pub fn fill_mapped(&mut self, id: TypeId, mapped: MappedType) {
+        self.store.set_mapped(id, mapped);
+    }
+
+    /// Intern a **deferred `keyof`** node (M28). Identity is the operand id alone, so
+    /// `keyof T` hash-conses to one node. Constructed only for a pending-computation
+    /// operand — see [`TypeTag::Keyof`].
+    pub fn intern_keyof(&mut self, operand: TypeId) -> TypeId {
+        let key = StructuralKey::Keyof(operand);
+        let hash = structural_hash(&key);
+        if let Some(existing) =
+            self.lookup(hash, |store, id| store.keyof_operand(id) == Some(operand))
+        {
+            return existing;
+        }
+        let id = self.store.push_keyof(operand, TypeFlags::EMPTY);
         self.dedup.entry(hash).or_default().push(id);
         id
     }

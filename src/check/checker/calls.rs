@@ -3,6 +3,7 @@
 use super::context::*;
 use super::decls::alloc_type_param_ids;
 use super::decls::value_decl_id;
+use super::eval::{contains_deferred_argument, contains_deferred_keyof};
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::DeclId;
 use crate::check::infer;
@@ -40,13 +41,36 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Build the (argument, substituted-constraint, span) checks up front — this needs
         // `&mut Interner` (substitution may intern new types), which cannot overlap the
         // relation engine's immutable store borrow below.
-        let mut checks: Vec<(TypeId, TypeId, Span)> = Vec::new();
+        let mut checks: Vec<(TypeId, TypeId, TypeId, Span)> = Vec::new();
         for (&param, &(arg, span)) in type_params.iter().zip(args) {
             let Some(constraint) = self.interner.store().type_param_constraint(param) else {
                 continue;
             };
             let substituted = substitute(self.interner, constraint, map);
-            checks.push((arg, substituted, span));
+            // M28: a substituted constraint may be a pending computation (`K extends
+            // keyof T` at `Pick<P, "q">` → `keyof P`) — resolve it through the shared
+            // evaluator before relating, so the check runs against the VALUE
+            // (`"a" | "b"`), driving the fixture's TK2344.
+            let evaluated = self.evaluate_type(substituted, span);
+            // M28 CONSTRAINT-side gate (round 1, re-affirmed round 4): a substituted
+            // constraint still carrying a deferred `keyof` (the canonical Omit idiom —
+            // `Pick<T, Exclude<keyof T, K>>` inside a generic body, where Pick's
+            // constraint is `keyof T` with `T` free) cannot be decided; tsc lands that
+            // check at concrete instantiation (M24 parity). Keyof only, so
+            // conditional/mapped constraints keep their pre-M28 behavior.
+            if contains_deferred_keyof(self.interner.store(), evaluated) {
+                continue;
+            }
+            // M28 round 4 (leader tsc-probe arbitration, REPLACING the round-3
+            // argument-side gate — its "tsc defers these" rationale was
+            // probe-disproven): the ARGUMENT always evaluates through the shared
+            // evaluator, then the check ALWAYS runs on the evaluated form. A decidable
+            // composition (`Exclude<"a" | 1, "a">` → `1`) checks precisely; a
+            // still-deferred result checks conservatively — tsc-exact on unprovable
+            // shapes (`MyExclude<K, "a">`), a documented over-report on provable ones
+            // (`Extract<K, string>` — tsc's constraint approximation, backlog 37).
+            let evaluated_arg = self.evaluate_type(arg, span);
+            checks.push((evaluated_arg, arg, evaluated, span));
         }
         if checks.is_empty() {
             return;
@@ -59,9 +83,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         {
             let store = self.interner.store();
             let mut relater = Relater::new(store, wk);
-            for (arg, constraint, span) in checks {
-                if let Relation::No(chain) = relater.is_assignable(arg, constraint) {
-                    let src = render_type(store, arg, /* widen */ false);
+            for (evaluated_arg, written_arg, constraint, span) in checks {
+                if let Relation::No(chain) = relater.is_assignable(evaluated_arg, constraint) {
+                    // Render the WRITTEN argument when the evaluated form is still
+                    // deferred — the source form carries the alias name
+                    // (`Extract<K, string>`, round-4 directive) where the evaluated
+                    // form would be a raw substituted body; a fully-evaluated value
+                    // renders as itself (`1` — tsc-like).
+                    let render_id = if contains_deferred_argument(store, evaluated_arg) {
+                        written_arg
+                    } else {
+                        evaluated_arg
+                    };
+                    let src = render_type(store, render_id, /* widen */ false);
                     let tgt = render_type(store, constraint, /* widen */ false);
                     let elaboration = render_reason_chain(store, chain.head());
                     failures.push((src, tgt, span, elaboration));
@@ -920,5 +954,10 @@ pub(in crate::check::checker) fn intrinsic_id(wk: WellKnown, kind: IntrinsicKind
         IntrinsicKind::Boolean => wk.boolean,
         IntrinsicKind::Number => wk.number,
         IntrinsicKind::String => wk.string,
+        // M28 string-intrinsic markers.
+        IntrinsicKind::Uppercase => wk.uppercase,
+        IntrinsicKind::Lowercase => wk.lowercase,
+        IntrinsicKind::Capitalize => wk.capitalize,
+        IntrinsicKind::Uncapitalize => wk.uncapitalize,
     }
 }

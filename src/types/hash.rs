@@ -95,12 +95,13 @@ pub enum StructuralKey<'a> {
     /// An **`infer` binder** (M25), keyed over its de Bruijn index alone.
     Infer(u32),
     /// A **mapped type** (M26), keyed over its whole shape (homomorphic flag, key
-    /// source, value template, and both modifier operators) so two structurally equal
-    /// mapped types collide.
+    /// source, value template, modifiers source (M28), and both modifier operators) so
+    /// two structurally equal mapped types collide.
     Mapped {
         homomorphic: bool,
         key_source: TypeId,
         value_template: TypeId,
+        modifiers_source: Option<TypeId>,
         optional_modifier: ModifierOp,
         readonly_modifier: ModifierOp,
     },
@@ -114,6 +115,9 @@ pub enum StructuralKey<'a> {
         texts: &'a [String],
         holes: &'a [TypeId],
     },
+    /// A **deferred `keyof`** (M28), keyed over its operand id alone. `keyof T`
+    /// collides with `keyof T`; `keyof T` and `keyof U` do not.
+    Keyof(TypeId),
 }
 
 /// Live structural hash used for hash-consing (FxHash for speed). This is the
@@ -279,6 +283,7 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
             homomorphic,
             key_source,
             value_template,
+            modifiers_source,
             optional_modifier,
             readonly_modifier,
         } => {
@@ -286,11 +291,19 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
             homomorphic.hash(&mut h);
             key_source.0.hash(&mut h);
             value_template.0.hash(&mut h);
+            // M28: the modifiers source is identity-bearing — two maps differing only
+            // here (a captured `T[P]` object vs none) must not collide.
+            modifiers_source.map(|v| v.0).hash(&mut h);
             (*optional_modifier as u8).hash(&mut h);
             (*readonly_modifier as u8).hash(&mut h);
         }
         StructuralKey::MappedValue => {
             TypeTag::MappedValue.hash_discriminant(&mut h);
+        }
+        StructuralKey::Keyof(operand) => {
+            TypeTag::Keyof.hash_discriminant(&mut h);
+            // Identity is the (canonical) operand id alone.
+            operand.0.hash(&mut h);
         }
         StructuralKey::Template { texts, holes } => {
             TypeTag::Template.hash_discriminant(&mut h);

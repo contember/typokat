@@ -223,11 +223,17 @@
 //! `&mut Interner` while the relater borrows the store immutably — they cannot be
 //! held at once. No `unwrap`/`panic` on any path.
 
-use crate::binder::bind_module;
+use crate::binder::bind_module_with_prelude;
+use crate::binder::Binder;
 use crate::diagnostics::Diagnostic;
 use crate::relate::{Relater, Relation};
+use crate::types::repr::TypeParamId;
+use crate::types::store::TypeId;
 use crate::types::Interner;
+use oxc_allocator::Allocator;
 use oxc_ast::ast::Program;
+use oxc_parser::Parser;
+use oxc_span::SourceType;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 mod annotations;
@@ -236,23 +242,42 @@ mod calls;
 mod classes;
 mod context;
 mod decls;
-mod eval;
+pub(in crate::check) mod eval;
 mod expr;
 mod flowgraph;
 mod narrowing;
 mod statements;
 
 use context::{ClassFillState, DeclTypes, Pass, TypeDecl};
-use decls::reserve_type_decls;
+use decls::{reserve_type_decls, type_decl_id};
 use statements::{emit_obligation_failure, emit_override_failures};
+
+/// The embedded **prelude** source (M28): the built-in utility-type slice, checked
+/// as a real compilation unit before every user program. A trusted asset — it must
+/// check clean (asserted in debug builds + pinned by unit test); its diagnostics
+/// never surface (their spans would be meaningless against the user source).
+pub(crate) const PRELUDE_SOURCE: &str = include_str!("../../prelude.ts");
 
 /// Check a parsed program and return the diagnostics it produces.
 pub fn check_program<'ast>(
     interner: &mut Interner,
     program: &'ast Program<'ast>,
 ) -> Vec<Diagnostic> {
-    let binder = bind_module(program);
-    let decl_types = DeclTypes::new(binder.decl_count);
+    // --- M28 prelude unit: parse + bind + resolve the built-in utility aliases
+    // BEFORE user code. The prelude AST lives only inside this function (its own
+    // allocator); everything the user pass consumes from it — scope-graph entries,
+    // resolved `TypeId`s interned into the SHARED store, type-parameter ids — is
+    // lifetime-free, so the user decl table holds [`TypeDecl::Resolved`]
+    // placeholders for prelude indices instead of AST borrows. ---
+    let prelude_allocator = Allocator::default();
+    let prelude_parsed = Parser::new(&prelude_allocator, PRELUDE_SOURCE, SourceType::ts()).parse();
+    debug_assert!(
+        !prelude_parsed.panicked && prelude_parsed.diagnostics.is_empty(),
+        "the prelude must parse clean: {:?}",
+        prelude_parsed.diagnostics
+    );
+
+    let binder = bind_module_with_prelude(&prelude_parsed.program, program);
 
     // Reserve a nominal id for every interface and record every type-declaration
     // body, indexed by its type-space `DeclId`, BEFORE any body is lowered (the
@@ -263,86 +288,110 @@ pub fn check_program<'ast>(
     // M13: allocate one stable `ClassId` per declared class (in source order),
     // advancing this counter as `reserve_type_decls` walks the declarations.
     let mut next_class_id: u32 = 0;
-    let (type_decls, type_resolved) = reserve_type_decls(
+    let total_type_decls = binder.type_decl_count as usize;
+    let mut type_resolved: Vec<Option<TypeId>> = vec![None; total_type_decls];
+
+    // --- Prelude pass: reserve + fill ONLY the prelude declarations, in a scoped
+    // `Pass` whose decl table borrows the (function-local) prelude AST. Every
+    // prelude alias resolves here — in the PRELUDE scope, so `Omit`'s
+    // `Pick`/`Exclude` references can never be captured by user shadows — and is
+    // memoized into `type_resolved` before any user lowering runs. ---
+    let mut prelude_decls: Vec<TypeDecl> = Vec::new();
+    reserve_type_decls(
         interner,
         &binder,
+        binder.prelude_module,
+        &prelude_parsed.program,
+        &mut next_type_param,
+        &mut next_class_id,
+        &mut prelude_decls,
+        &mut type_resolved,
+    );
+    let mut prelude_pass = build_pass(
+        interner,
+        &binder,
+        prelude_decls,
+        type_resolved,
+        DeclTypes::new(0),
+        next_type_param,
+    );
+    prelude_pass.fill_type_decls(binder.prelude_module);
+    // The prelude is a TRUSTED asset: it must check clean (unit-tested + asserted
+    // here in debug builds); anything a release build would produce is filtered by
+    // the extraction below, never surfaced to users.
+    debug_assert!(
+        prelude_pass.diagnostics.is_empty(),
+        "the prelude must check clean: {:?}",
+        prelude_pass.diagnostics
+    );
+    // Extract the lifetime-free outputs and drop the prelude pass (releasing the
+    // prelude AST borrows). The prelude produces no obligations/overrides (it holds
+    // only type aliases).
+    let prelude_params: Vec<Vec<TypeParamId>> = prelude_pass
+        .type_decls
+        .iter()
+        .map(|decl| match decl {
+            TypeDecl::Interface { params, .. }
+            | TypeDecl::Alias { params, .. }
+            | TypeDecl::Class { params, .. }
+            | TypeDecl::Resolved { params } => params.clone(),
+        })
+        .collect();
+    let Pass {
+        mut type_resolved,
+        next_type_param: prelude_next_type_param,
+        ..
+    } = prelude_pass;
+    next_type_param = prelude_next_type_param;
+
+    // Seed the four **string intrinsics** by prelude-declared identity (M28/WU3):
+    // each `type Uppercase<S extends string> = intrinsic;` alias resolves to its
+    // well-known marker id, which the evaluator intercepts on instantiation. Done
+    // AFTER the prelude fill so the aliases' `S extends string` constraints were
+    // recorded by the ordinary resolution path (the `= intrinsic` body itself
+    // lowers to nothing, silently).
+    {
+        let wk = interner.well_known();
+        for (name, marker) in [
+            ("Uppercase", wk.uppercase),
+            ("Lowercase", wk.lowercase),
+            ("Capitalize", wk.capitalize),
+            ("Uncapitalize", wk.uncapitalize),
+        ] {
+            if let Some(decl_id) = type_decl_id(&binder, binder.prelude_module, name) {
+                if let Some(slot) = type_resolved.get_mut(decl_id.index()) {
+                    *slot = Some(marker);
+                }
+            }
+        }
+    }
+
+    // --- User pass: prelude indices become lifetime-free `Resolved` placeholders
+    // (their `type_resolved` slots are complete); user declarations append after
+    // them, index-aligned with the binder's DeclIds. ---
+    let mut type_decls: Vec<TypeDecl<'ast>> = prelude_params
+        .into_iter()
+        .map(|params| TypeDecl::Resolved { params })
+        .collect();
+    reserve_type_decls(
+        interner,
+        &binder,
+        binder.module,
         program,
         &mut next_type_param,
         &mut next_class_id,
+        &mut type_decls,
+        &mut type_resolved,
     );
-
-    // M12: per-class fill state, indexed parallel to `type_decls`. A class index
-    // starts `Pending` (its instance type / constructor are built on demand, base
-    // first); a non-class index is `Done` (nothing to fill).
-    let class_fill: Vec<ClassFillState> = type_decls
-        .iter()
-        .map(|decl| match decl {
-            TypeDecl::Class { .. } => ClassFillState::Pending,
-            _ => ClassFillState::Done,
-        })
-        .collect();
-
-    // B28/B29: per-template fill state, parallel to `type_decls`. An interface or
-    // seeded object-literal-alias index starts `Pending` (its object type is built on
-    // demand, base first); any other index is `Done`.
-    let template_fill: Vec<ClassFillState> = type_decls
-        .iter()
-        .map(|decl| match decl {
-            TypeDecl::Interface { .. } => ClassFillState::Pending,
-            TypeDecl::Alias {
-                object_template: Some(_),
-                ..
-            } => ClassFillState::Pending,
-            _ => ClassFillState::Done,
-        })
-        .collect();
-
-    let mut pass = Pass {
+    let decl_types = DeclTypes::new(binder.decl_count);
+    let mut pass = build_pass(
         interner,
-        binder: &binder,
+        &binder,
         type_decls,
         type_resolved,
-        type_param_scopes: Vec::new(),
-        next_type_param,
-        class_parents: FxHashMap::default(),
-        generic_fns: FxHashMap::default(),
-        class_ctors: FxHashMap::default(),
-        class_type_params: FxHashMap::default(),
-        class_pending_abstract: FxHashMap::default(),
-        class_member_kinds: FxHashMap::default(),
-        class_names: FxHashMap::default(),
-        class_fill,
-        template_fill,
         decl_types,
-        obligations: Vec::new(),
-        override_checks: Vec::new(),
-        diagnostics: Vec::new(),
-        // M23 flow-graph state. Slots 0/1 are the UNREACHABLE/START sentinels the
-        // whole arena reserves (see `FlowNodeId::{UNREACHABLE,START}`).
-        flow_nodes: vec![
-            crate::check::flow::FlowNode::Unreachable,
-            crate::check::flow::FlowNode::Start,
-        ],
-        flow_cursor: crate::check::flow::FlowNodeId::START,
-        flow_loops: Vec::new(),
-        reference_flow: FxHashMap::default(),
-        flow_memo: FxHashMap::default(),
-        flow_provisional: FxHashMap::default(),
-        flow_loop_depth: 0,
-        cond_memo: FxHashMap::default(),
-        cond_frames: Vec::new(),
-        building_template: false,
-        resolving_conditional_alias: None,
-        resolving_alias: None,
-        resolving_alias_stack: Vec::new(),
-        circular_aliases: FxHashSet::default(),
-        alias_indirection_depth: 0,
-        mapped_frames: Vec::new(),
-        current_this: None,
-        current_class: None,
-        current_super_ctor: None,
-        current_in_ctor: false,
-    };
+        next_type_param,
+    );
 
     // --- Phase 0 (fill): resolve every alias and fill every interface body. From
     // here on `type_resolved` is complete, so a `TSTypeReference` in the walk is a
@@ -389,6 +438,88 @@ pub fn check_program<'ast>(
     );
 
     diagnostics
+}
+
+/// Construct a fresh phase-1 [`Pass`] over the given decl tables (M28 — one for the
+/// prelude unit, one for the user unit; the working-set defaults are identical).
+///
+/// M12/B28/B29 fill states are derived from the decl table: a class index starts
+/// `Pending` (instance type / constructor built on demand, base first); an interface
+/// or seeded object-literal-alias index starts `Pending` for the template machinery;
+/// everything else — including M28 `Resolved` prelude placeholders — is `Done`.
+fn build_pass<'a, 'ast>(
+    interner: &'a mut Interner,
+    binder: &'a Binder,
+    type_decls: Vec<TypeDecl<'ast>>,
+    type_resolved: Vec<Option<TypeId>>,
+    decl_types: DeclTypes,
+    next_type_param: u32,
+) -> Pass<'a, 'ast> {
+    let class_fill: Vec<ClassFillState> = type_decls
+        .iter()
+        .map(|decl| match decl {
+            TypeDecl::Class { .. } => ClassFillState::Pending,
+            _ => ClassFillState::Done,
+        })
+        .collect();
+    let template_fill: Vec<ClassFillState> = type_decls
+        .iter()
+        .map(|decl| match decl {
+            TypeDecl::Interface { .. } => ClassFillState::Pending,
+            TypeDecl::Alias {
+                object_template: Some(_),
+                ..
+            } => ClassFillState::Pending,
+            _ => ClassFillState::Done,
+        })
+        .collect();
+
+    Pass {
+        interner,
+        binder,
+        type_decls,
+        type_resolved,
+        type_param_scopes: Vec::new(),
+        next_type_param,
+        class_parents: FxHashMap::default(),
+        generic_fns: FxHashMap::default(),
+        class_ctors: FxHashMap::default(),
+        class_type_params: FxHashMap::default(),
+        class_pending_abstract: FxHashMap::default(),
+        class_member_kinds: FxHashMap::default(),
+        class_names: FxHashMap::default(),
+        class_fill,
+        template_fill,
+        decl_types,
+        obligations: Vec::new(),
+        override_checks: Vec::new(),
+        diagnostics: Vec::new(),
+        // M23 flow-graph state. Slots 0/1 are the UNREACHABLE/START sentinels the
+        // whole arena reserves (see `FlowNodeId::{UNREACHABLE,START}`).
+        flow_nodes: vec![
+            crate::check::flow::FlowNode::Unreachable,
+            crate::check::flow::FlowNode::Start,
+        ],
+        flow_cursor: crate::check::flow::FlowNodeId::START,
+        flow_loops: Vec::new(),
+        reference_flow: FxHashMap::default(),
+        flow_memo: FxHashMap::default(),
+        flow_provisional: FxHashMap::default(),
+        flow_loop_depth: 0,
+        cond_memo: FxHashMap::default(),
+        cond_frames: Vec::new(),
+        building_template: false,
+        resolving_conditional_alias: None,
+        resolving_alias: None,
+        resolving_alias_stack: Vec::new(),
+        circular_aliases: FxHashSet::default(),
+        alias_indirection_depth: 0,
+        mapped_frames: Vec::new(),
+        current_this: None,
+        current_class: None,
+        current_super_ctor: None,
+        current_in_ctor: false,
+    }
 }
 
 // ===========================================================================

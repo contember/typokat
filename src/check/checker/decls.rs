@@ -107,6 +107,67 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         }
 
+        // M28: fill each **mapped-alias** template (its reserved mapped id), mirroring
+        // the conditional-template step above. The body is lowered with the parameter
+        // frame active and the `resolving_alias` context set (so a key source that
+        // surface-references the alias itself — `type M = { [K in keyof M]: number }` —
+        // stays the M26 `TK2456`); a self-recursive reference in the VALUE template
+        // resolves to the reserved id as a lazy instantiation (never expands, never the
+        // error type).
+        for index in 0..count {
+            let (placeholder, params, param_decl, annotation, name, name_span) =
+                match &self.type_decls[index] {
+                    TypeDecl::Alias {
+                        mapped_template: Some(placeholder),
+                        params,
+                        param_decl,
+                        annotation,
+                        name,
+                        name_span,
+                        ..
+                    } => (
+                        *placeholder,
+                        params.clone(),
+                        *param_decl,
+                        *annotation,
+                        name.clone(),
+                        *name_span,
+                    ),
+                    _ => continue,
+                };
+            let decl_id = DeclId(index as u32);
+            let frame = self.build_type_param_frame(param_decl, &params);
+            let prev_resolving_alias = self.resolving_alias.take();
+            self.resolving_alias = Some((decl_id, name_span, name.clone()));
+            self.resolving_alias_stack
+                .push((decl_id, name_span, name, self.alias_indirection_depth));
+            let lowered = self.with_type_params(frame, |pass| {
+                pass.lower_type_param_constraints(scope, param_decl, &params);
+                pass.lower_annotation(scope, annotation)
+            });
+            self.resolving_alias_stack.pop();
+            self.resolving_alias = prev_resolving_alias;
+
+            let error_ty = self.interner.well_known().error;
+            match lowered {
+                Some(id) if self.interner.store().tag(id) == TypeTag::Mapped => {
+                    // Copy the freshly-lowered mapped body into the reserved template
+                    // id, so self-recursive instantiations point at a filled node.
+                    if let Some(mapped) = self.interner.store().mapped_type(id).copied() {
+                        self.interner.fill_mapped(placeholder, mapped);
+                    }
+                }
+                // Circular key source (`TK2456`) or out-of-subset body → the alias is
+                // the error type (silent downstream, M22 discipline; overwrites the
+                // seeded reserved id).
+                _ => {
+                    if let Some(slot) = self.type_resolved.get_mut(index) {
+                        *slot = Some(error_ty);
+                    }
+                }
+            }
+        }
+
         // B29: fill each **object-literal alias** template (its reserved object id) BEFORE
         // resolving ordinary aliases, mirroring the conditional-template step. The reserved
         // id is already seeded in `type_resolved`, so a self-reference through a member
@@ -665,7 +726,24 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // than eager substitution. This keeps a self-recursive conditional alias from
         // expanding at lowering (which would loop) and lets distribution derive per-member
         // branches from the naked check parameter.
-        if self.interner.store().tag(template) == TypeTag::Conditional {
+        //
+        // M28: a **mapped** template instantiates lazily too (faithful mirror of the
+        // conditional machinery): a self-recursive mapped alias (`DeepPartial`) must
+        // not expand at lowering — its reserved template row may not even be filled yet
+        // while its own body lowers. Behavior-equivalent for non-recursive mapped
+        // aliases (the evaluator's plain expansion runs the same `substitute`, and
+        // both the pre- and post-expansion forms relate conservatively while
+        // deferred). A **string-intrinsic marker** template (`Uppercase` — the prelude
+        // seeding) also instantiates lazily, as the symbolic form the evaluator
+        // intercepts by identity; eager substitution would erase it to the bare marker.
+        let template_tag = self.interner.store().tag(template);
+        if template_tag == TypeTag::Conditional
+            || template_tag == TypeTag::Mapped
+            || self
+                .interner
+                .well_known()
+                .is_string_intrinsic_marker(template)
+        {
             let args: Vec<(TypeParamId, TypeId)> = params
                 .iter()
                 .zip(&arg_infos)
@@ -685,7 +763,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             | Some(TypeDecl::Alias { params, .. })
             // M16: a generic class carries its type-parameter ids just like an interface,
             // so `Box<number>` used as a type instantiates the class's instance template.
-            | Some(TypeDecl::Class { params, .. }) => params.clone(),
+            | Some(TypeDecl::Class { params, .. })
+            // M28: a prelude declaration resolved in the prelude pass keeps only its
+            // ordered parameter ids — exactly what instantiation needs.
+            | Some(TypeDecl::Resolved { params }) => params.clone(),
             None => Vec::new(),
         }
     }
@@ -991,22 +1072,26 @@ fn merge_object_members(base: ObjectType, overlay: ObjectType) -> ObjectType {
 /// Reserving the interface ids *before* any body is resolved is what lets a body
 /// reference itself or a sibling: `interface List { tail: List | null }` and the
 /// mutual `Ping`/`Pong` lower because `List`/`Pong` already have ids by the time
-/// their members are lowered. Returns the per-`DeclId` decl table and a parallel
-/// `resolved` table (interfaces pre-seeded with their reserved id; aliases `None`).
+/// their members are lowered.
+///
+/// M28: reserve runs **per compilation unit** (the prelude, then the user program):
+/// name lookups resolve against the unit's own `scope`, and the decl/`resolved`
+/// tables are **appended** through `&mut` (the caller pre-seeds `decls` — with
+/// [`TypeDecl::Resolved`] prelude placeholders for the user unit — and sizes
+/// `resolved` to the binder's full `type_decl_count`). The binder assigned type
+/// `DeclId`s in the same prelude-then-user source order, so appending keeps the decl
+/// table index-aligned with the `DeclId`s.
+#[allow(clippy::too_many_arguments)] // Two counters + two appended tables — irreducible reserve state.
 pub(in crate::check::checker) fn reserve_type_decls<'ast>(
     interner: &mut Interner,
     binder: &Binder,
+    scope: ScopeId,
     program: &'ast Program<'ast>,
     next_type_param: &mut u32,
     next_class_id: &mut u32,
-) -> (Vec<TypeDecl<'ast>>, Vec<Option<TypeId>>) {
-    let count = binder.type_decl_count as usize;
-    // Placeholders so the tables are indexable by every type `DeclId`; a
-    // declaration the binder counted but we don't recognise stays an unresolved
-    // alias of a never-resolving annotation (defensive — not expected).
-    let mut decls: Vec<TypeDecl<'ast>> = Vec::with_capacity(count);
-    let mut resolved: Vec<Option<TypeId>> = vec![None; count];
-
+    decls: &mut Vec<TypeDecl<'ast>>,
+    resolved: &mut [Option<TypeId>],
+) {
     // Build by walking declarations in source order; the binder assigned type
     // `DeclId`s in that same order (`bind_type_declarations`), so pushing in order
     // keeps the decl table index-aligned with the `DeclId`s.
@@ -1014,7 +1099,7 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
         match stmt {
             Statement::TSInterfaceDeclaration(iface) => {
                 let reserved = interner.reserve_object();
-                if let Some(decl_id) = type_decl_id(binder, binder.module, iface.id.name.as_str()) {
+                if let Some(decl_id) = type_decl_id(binder, scope, iface.id.name.as_str()) {
                     if let Some(slot) = resolved.get_mut(decl_id.index()) {
                         *slot = Some(reserved);
                     }
@@ -1040,8 +1125,32 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                 let conditional_template =
                     if matches!(alias.type_annotation, oxc_ast::ast::TSType::TSConditionalType(_)) {
                         let reserved = interner.reserve_conditional();
+                        // M28 round 3: name the reserved row so a deferred
+                        // instantiation renders by alias NAME, not the raw body.
+                        interner.set_template_name(reserved, alias.id.name.as_str());
                         if let Some(decl_id) =
-                            type_decl_id(binder, binder.module, alias.id.name.as_str())
+                            type_decl_id(binder, scope, alias.id.name.as_str())
+                        {
+                            if let Some(slot) = resolved.get_mut(decl_id.index()) {
+                                *slot = Some(reserved);
+                            }
+                        }
+                        Some(reserved)
+                    } else {
+                        None
+                    };
+                // M28: a top-level **mapped**-type body reserves a mapped template id
+                // and seeds `type_resolved`, mirroring the conditional-template
+                // machinery, so a self-recursive reference (`DeepPartial<T[K]>` inside
+                // the body) resolves to it as a lazy instantiation — never the error
+                // type. The placeholder is filled in the fill step.
+                let mapped_template =
+                    if matches!(alias.type_annotation, oxc_ast::ast::TSType::TSMappedType(_)) {
+                        let reserved = interner.reserve_mapped();
+                        // M28 round 3: named for rendering, like the conditional row.
+                        interner.set_template_name(reserved, alias.id.name.as_str());
+                        if let Some(decl_id) =
+                            type_decl_id(binder, scope, alias.id.name.as_str())
                         {
                             if let Some(slot) = resolved.get_mut(decl_id.index()) {
                                 *slot = Some(reserved);
@@ -1063,7 +1172,7 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                 {
                     let reserved = interner.reserve_object();
                     if let Some(decl_id) =
-                        type_decl_id(binder, binder.module, alias.id.name.as_str())
+                        type_decl_id(binder, scope, alias.id.name.as_str())
                     {
                         if let Some(slot) = resolved.get_mut(decl_id.index()) {
                             *slot = Some(reserved);
@@ -1079,6 +1188,7 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                     param_decl: alias.type_parameters.as_deref(),
                     resolving: false,
                     conditional_template,
+                    mapped_template,
                     object_template,
                     name: alias.id.name.to_string(),
                     name_span: Span::from_oxc(alias.id.span),
@@ -1097,7 +1207,7 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                 let class_id = ClassId(*next_class_id);
                 *next_class_id += 1;
                 if let Some(id) = &class.id {
-                    if let Some(decl_id) = type_decl_id(binder, binder.module, id.name.as_str()) {
+                    if let Some(decl_id) = type_decl_id(binder, scope, id.name.as_str()) {
                         if let Some(slot) = resolved.get_mut(decl_id.index()) {
                             *slot = Some(reserved);
                         }
@@ -1119,8 +1229,6 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
             _ => {}
         }
     }
-
-    (decls, resolved)
 }
 
 /// Allocate one fresh [`TypeParamId`] per declared type parameter (M9), in source

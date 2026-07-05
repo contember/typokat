@@ -282,6 +282,15 @@ fn fix_params(
         // parameter is unconstrained.
         let raw_constraint = interner.store().type_param_constraint(param);
         let constraint = raw_constraint.map(|c| substitute(interner, c, &map));
+        // M28 gate (mirroring the TK2344 gate in `check_type_argument_constraints`): a
+        // substituted constraint still carrying a deferred `keyof` (`Key extends
+        // keyof T` with `T` fixed to `unknown`) is undecidable — the relation is
+        // identical-node-only on it, so clamping/falling back to it would fabricate
+        // failures tsc defers. Treat the parameter as unconstrained here (exactly the
+        // pre-M28 behavior, when such a constraint was never recorded).
+        let constraint = constraint.filter(|&c| {
+            !crate::check::checker::eval::contains_deferred_keyof(interner.store(), c)
+        });
 
         let value = match map.get(&param).copied() {
             Some(candidate) => match constraint {
@@ -744,6 +753,11 @@ fn intrinsic_id(interner: &Interner, kind: crate::types::repr::IntrinsicKind) ->
         IntrinsicKind::Boolean => wk.boolean,
         IntrinsicKind::Number => wk.number,
         IntrinsicKind::String => wk.string,
+        // M28 string-intrinsic markers.
+        IntrinsicKind::Uppercase => wk.uppercase,
+        IntrinsicKind::Lowercase => wk.lowercase,
+        IntrinsicKind::Capitalize => wk.capitalize,
+        IntrinsicKind::Uncapitalize => wk.uncapitalize,
     }
 }
 

@@ -144,6 +144,15 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
         /// (M25), else `None`. `type_resolved` is seeded with it so a self-reference
         /// resolves here; the fill step lowers the body and fills it.
         conditional_template: Option<TypeId>,
+        /// M28: the reserved **mapped** template id when the top body is a mapped type
+        /// (`type DeepPartial<T> = { [K in keyof T]?: DeepPartial<T[K]> }`), else
+        /// `None`. Mirrors `conditional_template`: `type_resolved` is seeded with it so
+        /// a self-recursive reference resolves to a lazy instantiation of the reserved
+        /// id (never the error type); the fill step lowers the body and fills it, and
+        /// every instantiation of a mapped-template alias is **lazy** (an
+        /// [`crate::types::repr::InstantiationType`] the evaluator expands on demand —
+        /// faithful to the conditional-template machinery).
+        mapped_template: Option<TypeId>,
         /// B29: the reserved object id when the top body is an **object type literal**
         /// (`type X = { a: X | null }`), else `None`. Mirrors `conditional_template`:
         /// `type_resolved` is seeded with it so a self-reference **through a member**
@@ -188,6 +197,13 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
         param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
         class: &'ast Class<'ast>,
     },
+    /// M28 — a declaration **already fully resolved in a previous compilation unit**
+    /// (the prelude): its `type_resolved` slot is seeded, so nothing is ever lowered
+    /// from it again — only its ordered type-parameter ids are needed (for
+    /// instantiation by substitution). Lifetime-free by design: the prelude's AST does
+    /// not outlive the prelude pass, so the user pass's `TypeDecl<'ast>` table holds
+    /// this variant for prelude indices instead of AST borrows.
+    Resolved { params: Vec<TypeParamId> },
 }
 
 /// A generic value declaration's signature (M9): the ordered type-parameter ids
@@ -555,6 +571,12 @@ pub(in crate::check::checker) struct FlowLoopFrame {
 pub(in crate::check::checker) struct MappedFrame {
     /// The key binder name (`K` in `{ [K in S]: V }`).
     pub(in crate::check::checker) key_name: String,
+    /// M28 — the **captured modifiers source**: the lowered `T` of a `T[P]` indexed
+    /// access on this frame's key whose object side is a bare in-scope type parameter
+    /// (the `Pick` shape; nothing else is captured, so no new diagnostics can fire).
+    /// First capture wins; consumed by `lower_mapped_type` into
+    /// [`crate::types::repr::MappedType::modifiers_source`] for a NON-homomorphic node.
+    pub(in crate::check::checker) captured_source: Option<TypeId>,
 }
 
 /// One conditional-type lowering context (M25): the node's `infer` binder frame plus the

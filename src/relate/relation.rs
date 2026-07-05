@@ -389,9 +389,27 @@ impl<'a> Relater<'a> {
         }
         if matches!(
             self.store.tag(tgt),
-            TypeTag::Conditional | TypeTag::Instantiation | TypeTag::Mapped
+            TypeTag::Conditional | TypeTag::Instantiation | TypeTag::Mapped | TypeTag::Keyof
         ) {
             return Relation::No(ReasonChain::leaf(src, tgt));
+        }
+        // M28 — a **symbolic string-intrinsic** source (`Uppercase<T>` over a pattern /
+        // `string` / a free parameter) always denotes SOME string, so it is assignable
+        // wherever `string` is (→ `string`, `string`-containing unions, `unknown` via the
+        // rule below) and nowhere narrower — the WU3 "→ string allowed" rule. Runs before
+        // the general instantiation-source `No` below; an identical node was already
+        // accepted by the `src == tgt` fast path.
+        if self.store.tag(src) == TypeTag::Instantiation {
+            let marker_base = self
+                .store
+                .instantiation_type(src)
+                .is_some_and(|inst| self.well_known.is_string_intrinsic_marker(inst.base));
+            if marker_base {
+                if self.relate(wk.string, tgt, kind, assumed).is_yes() {
+                    return Relation::Yes;
+                }
+                return Relation::No(ReasonChain::leaf(src, tgt));
+            }
         }
         // A lazy instantiation source that did not evaluate (should not reach here for
         // the M25 corpus) is conservatively unassignable to anything but an identical
@@ -407,6 +425,13 @@ impl<'a> Relater<'a> {
         // EITHER direction). tsc's homomorphic-identity allowance (`T` → `Ident<T>`) is
         // the documented over-report divergence (safe direction; deferred_generics.ts).
         if self.store.tag(src) == TypeTag::Mapped {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        }
+        // M28 — a **deferred `keyof`** source (`keyof T` over a free parameter) that did
+        // not evaluate relates conservatively: nothing in either direction but an
+        // identical node (the fast path) — mirroring the deferred mapped/conditional
+        // model (sprint WU2 item 1: no permissive fallback anywhere).
+        if self.store.tag(src) == TypeTag::Keyof {
             return Relation::No(ReasonChain::leaf(src, tgt));
         }
 
@@ -1200,6 +1225,13 @@ impl<'a> Relater<'a> {
                         stack.extend(template.holes.iter().copied());
                     }
                 }
+                // M28: a deferred keyof's operand may carry an infer binder
+                // (`keyof (infer U)` inside an extends position) — descend into it.
+                TypeTag::Keyof => {
+                    if let Some(operand) = self.store.keyof_operand(t) {
+                        stack.push(operand);
+                    }
+                }
                 // A nested conditional rebinds its own infer indices — do not descend.
                 // A mapped type (M26) is related as a deferred node (never traversed for
                 // its own infer binders), and a mapped-value placeholder is not an infer.
@@ -1278,6 +1310,11 @@ impl<'a> Relater<'a> {
             IntrinsicKind::Boolean => wk.boolean,
             IntrinsicKind::Number => wk.number,
             IntrinsicKind::String => wk.string,
+            // M28 string-intrinsic markers.
+            IntrinsicKind::Uppercase => wk.uppercase,
+            IntrinsicKind::Lowercase => wk.lowercase,
+            IntrinsicKind::Capitalize => wk.capitalize,
+            IntrinsicKind::Uncapitalize => wk.uncapitalize,
         }
     }
 }

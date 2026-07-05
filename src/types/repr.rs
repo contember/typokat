@@ -87,6 +87,18 @@ pub enum TypeTag {
     /// conservatively (identical-only, plus deferred → `string`). Constructed via
     /// `Interner::intern_template`. See [`TemplateType`].
     Template,
+    /// A **deferred `keyof`** (`keyof T` over a not-yet-computable operand — M28).
+    /// `payload` is the **operand** `TypeId` stored inline (like an `Infer` index — no
+    /// cold side-table row). Constructed only when the operand is a pending type-level
+    /// computation (a free type parameter, a deferred conditional / mapped /
+    /// instantiation / template / keyof); a concrete **object** operand keys eagerly at
+    /// lowering, and other operand shapes (primitives, unions, arrays, tuples) stay the
+    /// M20 out-of-scope error type. Substitution rewrites the operand; the shared
+    /// evaluator resolves the node at a value-position demand once the operand is
+    /// concrete — through the SAME keyof computation used for eager operands (single
+    /// source of truth). An unevaluable node relates conservatively (identical-node
+    /// only). Constructed via `Interner::intern_keyof`.
+    Keyof,
 }
 
 /// The fixed set of intrinsic (keyword) types. The discriminant doubles as the
@@ -112,12 +124,22 @@ pub enum IntrinsicKind {
     Boolean,
     Number,
     String,
+    /// The four **string-manipulation intrinsic markers** (M28): the base a symbolic
+    /// `Uppercase<S>` instantiation carries. Each marker id only ever appears as an
+    /// [`crate::types::repr::InstantiationType::base`]; the prelude seeds
+    /// `type Uppercase<S extends string> = intrinsic;` to its marker, and the
+    /// evaluator intercepts instantiations by this well-known identity. Appended
+    /// AFTER the keyword kinds so the existing well-known ids stay stable.
+    Uppercase,
+    Lowercase,
+    Capitalize,
+    Uncapitalize,
 }
 
 impl IntrinsicKind {
     /// The full set in canonical interning order. Adding a kind here is the only
     /// place that defines the well-known id assignment.
-    pub const ALL: [IntrinsicKind; 10] = [
+    pub const ALL: [IntrinsicKind; 14] = [
         IntrinsicKind::Error,
         IntrinsicKind::Any,
         IntrinsicKind::Unknown,
@@ -128,6 +150,10 @@ impl IntrinsicKind {
         IntrinsicKind::Boolean,
         IntrinsicKind::Number,
         IntrinsicKind::String,
+        IntrinsicKind::Uppercase,
+        IntrinsicKind::Lowercase,
+        IntrinsicKind::Capitalize,
+        IntrinsicKind::Uncapitalize,
     ];
 
     /// Display name used by the type renderer (`tests/cases/README.md` →
@@ -145,6 +171,12 @@ impl IntrinsicKind {
             IntrinsicKind::Boolean => "boolean",
             IntrinsicKind::Number => "number",
             IntrinsicKind::String => "string",
+            // M28 string-intrinsic markers: render by their alias name, so a symbolic
+            // instantiation displays as `Uppercase<T>`.
+            IntrinsicKind::Uppercase => "Uppercase",
+            IntrinsicKind::Lowercase => "Lowercase",
+            IntrinsicKind::Capitalize => "Capitalize",
+            IntrinsicKind::Uncapitalize => "Uncapitalize",
         }
     }
 }
@@ -643,6 +675,16 @@ pub struct MappedType {
     /// The value type template, with the current key's source property value (`T[K]`)
     /// represented as the [`TypeTag::MappedValue`] placeholder.
     pub value_template: TypeId,
+    /// The **modifiers source** of a NON-homomorphic map whose value template indexes an
+    /// object by the mapped key (M28 — tsc's `modifiersType`): the `T` of
+    /// `{ [P in K]: T[P] }`, captured at lowering when the indexed-access object is a
+    /// bare in-scope type parameter. At evaluation each key resolves against this
+    /// object — its property's value type replaces the `MappedValue` placeholder and its
+    /// `?`/`readonly` flags seed the modifier arithmetic (so `Pick` preserves both).
+    /// `None` for a homomorphic map (its `key_source` IS the modifiers source) and for
+    /// value templates with no key-indexed access (`Record`'s bare `V`). Identity-bearing
+    /// (folded into the hash/eq): two maps differing only here are distinct types.
+    pub modifiers_source: Option<TypeId>,
     /// The optionality modifier (`?`/`+?`/`-?`), applied to each property's starting
     /// optional flag.
     pub optional_modifier: ModifierOp,

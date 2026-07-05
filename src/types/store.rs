@@ -92,6 +92,14 @@ pub struct Store {
     /// unlowerable one, simply has no entry (no constraint — the safe direction).
     type_param_constraints: FxHashMap<TypeParamId, TypeId>,
 
+    /// **Template display-name column** (M28 round 3): the alias NAME of a reserved
+    /// conditional/mapped template row, keyed by the reserved `TypeId`. A
+    /// rendering-only side column (like `TypeParamType::name` — never part of
+    /// identity; reserved rows are nominal and never deduped anyway): the renderer
+    /// prints a deferred instantiation of a named template as `Extract<K, string>`
+    /// instead of its raw body. Set at reserve time by the checker.
+    template_names: FxHashMap<TypeId, String>,
+
     /// Reserved cross-run identity column (architecture §3.2). NOT populated in
     /// the MVP (mvp-plan §7.1) — kept so Phase 4 can fill it at intern time
     /// without changing the arena shape.
@@ -238,6 +246,16 @@ impl Store {
         self.templates.get(self.payload(id) as usize)
     }
 
+    /// The operand of a deferred `keyof` (M28), or `None` if `id` is not one. The
+    /// operand id is reconstructed from the `payload` (stored inline, like an `Infer`
+    /// index).
+    pub fn keyof_operand(&self, id: TypeId) -> Option<TypeId> {
+        if self.tag(id) != TypeTag::Keyof {
+            return None;
+        }
+        Some(TypeId(self.payload(id)))
+    }
+
     /// The `extends` constraint of a type parameter (M24), or `None` if the
     /// parameter is unconstrained. Keyed by [`TypeParamId`] — the side column, not the
     /// interned type's identity. Read by the checker (apparent type / `TK2344`) and the
@@ -260,6 +278,18 @@ impl Store {
     /// `Interner::remove_type_param_constraint` right after the circularity pass.
     pub(crate) fn remove_type_param_constraint(&mut self, id: TypeParamId) {
         self.type_param_constraints.remove(&id);
+    }
+
+    /// The display name of a reserved template row (M28 round 3), or `None` for an
+    /// unnamed/ordinary type. Rendering-only — see the `template_names` column.
+    pub fn template_name(&self, id: TypeId) -> Option<&str> {
+        self.template_names.get(&id).map(String::as_str)
+    }
+
+    /// Record a reserved template row's display name (M28 round 3). Internal — the
+    /// checker calls it through `Interner::set_template_name` at reserve time.
+    pub(crate) fn set_template_name(&mut self, id: TypeId, name: String) {
+        self.template_names.insert(id, name);
     }
 
     /// The members of a union type (canonical: flattened, sorted by `TypeId`,
@@ -413,6 +443,26 @@ impl Store {
         let payload = self.mapped.len() as u32;
         self.mapped.push(mapped);
         self.push(TypeTag::Mapped, flags, payload)
+    }
+
+    /// Replace the body of an existing `Mapped` row in place (M28 recursive
+    /// mapped-alias reserve-then-fill — `Interner::fill_mapped`, mirroring
+    /// [`Store::set_conditional`]). Preserves the row's `TypeId`; a no-op if `id` is
+    /// not a mapped row.
+    pub(crate) fn set_mapped(&mut self, id: TypeId, mapped: MappedType) {
+        if self.tag(id) != TypeTag::Mapped {
+            return;
+        }
+        let payload = self.payload(id) as usize;
+        if let Some(slot) = self.mapped.get_mut(payload) {
+            *slot = mapped;
+        }
+    }
+
+    /// Append a deferred-`keyof` row (M28). Internal — `Interner` owns dedup (by
+    /// operand). The operand id is stored inline in `payload`.
+    pub(crate) fn push_keyof(&mut self, operand: TypeId, flags: TypeFlags) -> TypeId {
+        self.push(TypeTag::Keyof, flags, operand.0)
     }
 
     /// Append a mapped-value placeholder row (M26). Internal — `Interner` owns dedup

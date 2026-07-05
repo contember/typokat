@@ -60,7 +60,14 @@ use rustc_hash::FxHashMap;
 pub struct Binder {
     pub graph: ScopeGraph,
     pub symbols: SymbolTable,
+    /// The **user** module scope. M28: its parent is [`Binder::prelude_module`], so a
+    /// user reference falls through to the prelude names and a user declaration
+    /// shadows them by ordinary innermost-first resolution (no duplicate-name
+    /// diagnostics — the two units are distinct scopes).
     pub module: ScopeId,
+    /// The **prelude** root scope (M28) — the compilation unit holding the built-in
+    /// utility aliases, bound BEFORE the user program. Its parent is `None`.
+    pub prelude_module: ScopeId,
     /// Number of value declarations assigned a `DeclId` (`DeclId`s run
     /// `0..decl_count`). Includes variable bindings, function declaration names,
     /// and function parameters.
@@ -114,39 +121,47 @@ impl BindState {
     }
 }
 
-/// Build the scope graph and symbol table for a program.
+/// Build the scope graph and symbol table for the **prelude + user** program pair
+/// (M28).
 ///
-/// Creates the module scope, declares every top-level value binding (variables
-/// and function declaration names) up front so references resolve regardless of
-/// textual order, then recurses to give each function its own scope. The checker
-/// still relies on initialization order for *types* (fixtures declare before use).
-pub fn bind_module(program: &Program<'_>) -> Binder {
-    let mut graph = ScopeGraph::new();
-    let symbols = SymbolTable::new();
-    let module = graph.push(Scope::new(ScopeKind::Module, None));
-
+/// The prelude unit binds first, into its own root [`ScopeKind::Module`] scope; the
+/// user module scope is then created **with the prelude scope as its parent**, so
+/// user references fall through to the prelude names and user declarations shadow
+/// them (innermost-first resolution — tsc-like, and no duplicate-name diagnostics
+/// since the two units are distinct scopes). `DeclId` numbering (both spaces) runs
+/// prelude-first, matching the checker's prelude-then-user decl-table layout.
+///
+/// Within each unit the M5 shape is kept: every top-level **type** name (type
+/// aliases + interfaces + class type sides) is declared up front, before value
+/// declarations and bodies, so forward/mutual references resolve regardless of
+/// textual order — the precondition for the checker's reserve-then-fill.
+pub fn bind_module_with_prelude(prelude: &Program<'_>, program: &Program<'_>) -> Binder {
     let mut state = BindState {
-        graph,
-        symbols,
+        graph: ScopeGraph::new(),
+        symbols: SymbolTable::new(),
         fn_scopes: FxHashMap::default(),
         block_scopes: FxHashMap::default(),
         next_decl: 0,
         next_type_decl: 0,
     };
 
-    // Declare every top-level **type** name (type aliases + interfaces) up front,
-    // before walking value declarations and bodies. Forward and mutual references
-    // (`interface Ping { pong: Pong }` / `interface Pong { ping: Ping }`) then
-    // resolve regardless of textual order — the precondition for the checker's
-    // two-phase reserve-then-fill of recursive types (mvp-plan M5, §6.3).
-    bind_type_declarations(&mut state, module, &program.body);
+    // Prelude unit — bound first so its DeclIds occupy the low range.
+    let prelude_module = state.graph.push(Scope::new(ScopeKind::Module, None));
+    bind_type_declarations(&mut state, prelude_module, &prelude.body);
+    bind_statements(&mut state, prelude_module, &prelude.body);
 
+    // User unit — its module scope CHAINS to the prelude scope.
+    let module = state
+        .graph
+        .push(Scope::new(ScopeKind::Module, Some(prelude_module)));
+    bind_type_declarations(&mut state, module, &program.body);
     bind_statements(&mut state, module, &program.body);
 
     Binder {
         graph: state.graph,
         symbols: state.symbols,
         module,
+        prelude_module,
         decl_count: state.next_decl,
         type_decl_count: state.next_type_decl,
         fn_scopes: state.fn_scopes,

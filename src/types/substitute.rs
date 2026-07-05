@@ -86,6 +86,7 @@ impl<'a> Substitution<'a> {
             TypeTag::Instantiation => self.apply_instantiation(interner, ty),
             TypeTag::Mapped => self.apply_mapped(interner, ty),
             TypeTag::Template => self.apply_template(interner, ty),
+            TypeTag::Keyof => self.apply_keyof(interner, ty),
             // An `infer` binder (M25) / a mapped-value placeholder (M26) is a **bound**
             // node-scoped variable, never a free declaration parameter — the no-capture
             // rule (ADR-0002): substitution must leave it alone (the evaluator resolves
@@ -445,16 +446,42 @@ impl<'a> Substitution<'a> {
         }
         let key_source = self.apply(interner, mapped.key_source);
         let value_template = self.apply(interner, mapped.value_template);
-        if key_source == mapped.key_source && value_template == mapped.value_template {
+        // M28: the modifiers source (`T` of a captured `T[P]`) is a free-position
+        // component like the key source — substitution rewrites it so `Pick<P, …>`
+        // resolves each key against the concrete `P`.
+        let modifiers_source = mapped.modifiers_source.map(|ms| self.apply(interner, ms));
+        if key_source == mapped.key_source
+            && value_template == mapped.value_template
+            && modifiers_source == mapped.modifiers_source
+        {
             return ty;
         }
         interner.intern_mapped(MappedType {
             homomorphic: mapped.homomorphic,
             key_source,
             value_template,
+            modifiers_source,
             optional_modifier: mapped.optional_modifier,
             readonly_modifier: mapped.readonly_modifier,
         })
+    }
+
+    /// Substitute through a **deferred `keyof`** (M28), rewriting its operand and
+    /// re-interning **only when it changed** (else the original id is returned). No
+    /// eager evaluation here — a now-concrete operand (`keyof T` → `keyof P`) resolves
+    /// at the next value-position demand site through the shared evaluator (the single
+    /// keyof computation), keeping substitution a pure rewrite. No cycle guard is
+    /// needed: the operand is an interned (never self-referential-by-id) type.
+    fn apply_keyof(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
+        let Some(operand) = interner.store().keyof_operand(ty) else {
+            return ty;
+        };
+        let new_operand = self.apply(interner, operand);
+        if new_operand != operand {
+            interner.intern_keyof(new_operand)
+        } else {
+            ty
+        }
     }
 
     /// Substitute through a **template literal type** (M27), rewriting each **hole** and
@@ -883,6 +910,7 @@ mod tests {
             homomorphic: true,
             key_source: t,
             value_template,
+            modifiers_source: None,
             optional_modifier: ModifierOp::Keep,
             readonly_modifier: ModifierOp::Keep,
         });
@@ -907,6 +935,66 @@ mod tests {
             "the value template (with its MappedValue placeholder) is untouched"
         );
         assert!(out.homomorphic);
+    }
+
+    /// M28 — `substitute` rewrites a mapped type's **modifiers source** (the captured
+    /// `T` of a `Pick`-shaped `T[P]`) alongside the key source, still without
+    /// capturing the bound `MappedValue` placeholder; and it rewrites a **deferred
+    /// `keyof`**'s operand as a pure rewrite (the node STAYS a `Keyof` — evaluation
+    /// happens only at a demand site, never inside substitution).
+    #[test]
+    fn substitute_rewrites_modifiers_source_and_keyof_operand() {
+        use crate::types::repr::{MappedType, ModifierOp};
+
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let t = interner.intern_type_param(TypeParamId(0), "T");
+        let k = interner.intern_type_param(TypeParamId(1), "K");
+        let placeholder = interner.intern_mapped_value();
+
+        // `{ [P in K]: T[P] }` — the Pick shape: key source K, modifiers source T.
+        let pick = interner.intern_mapped(MappedType {
+            homomorphic: false,
+            key_source: k,
+            value_template: placeholder,
+            modifiers_source: Some(t),
+            optional_modifier: ModifierOp::Keep,
+            readonly_modifier: ModifierOp::Keep,
+        });
+        let p = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number)],
+            ..Default::default()
+        });
+        let a_key = interner.intern_literal(crate::types::repr::LiteralValue::String("a".into()));
+        let mut map = FxHashMap::default();
+        map.insert(TypeParamId(0), p);
+        map.insert(TypeParamId(1), a_key);
+
+        let result = substitute(&mut interner, pick, &map);
+        let out = interner
+            .store()
+            .mapped_type(result)
+            .copied()
+            .expect("result is a mapped type");
+        assert_eq!(out.key_source, a_key, "K → \"a\" in the key source");
+        assert_eq!(out.modifiers_source, Some(p), "T → P in the modifiers source");
+        assert_eq!(
+            out.value_template, placeholder,
+            "the bound placeholder is never captured"
+        );
+
+        // `keyof T` → `keyof P`: a pure rewrite (no evaluation in substitution).
+        let keyof_t = interner.intern_keyof(t);
+        let rewritten = substitute(&mut interner, keyof_t, &map);
+        assert_eq!(
+            interner.store().keyof_operand(rewritten),
+            Some(p),
+            "the operand is rewritten and the node stays a deferred keyof"
+        );
+        // An unmapped operand leaves the node unchanged (no-op path).
+        let u = interner.intern_type_param(TypeParamId(9), "U");
+        let keyof_u = interner.intern_keyof(u);
+        assert_eq!(substitute(&mut interner, keyof_u, &map), keyof_u);
     }
 
     /// M26 — the **mapped distribution guard** (review F1): substituting a homomorphic
@@ -938,6 +1026,7 @@ mod tests {
             homomorphic: true,
             key_source: t,
             value_template: placeholder,
+            modifiers_source: None,
             optional_modifier: ModifierOp::Keep,
             readonly_modifier: ModifierOp::Keep,
         });
@@ -950,6 +1039,7 @@ mod tests {
             homomorphic: true,
             key_source: a,
             value_template: placeholder,
+            modifiers_source: None,
             optional_modifier: ModifierOp::Keep,
             readonly_modifier: ModifierOp::Keep,
         });
@@ -957,6 +1047,7 @@ mod tests {
             homomorphic: true,
             key_source: b,
             value_template: placeholder,
+            modifiers_source: None,
             optional_modifier: ModifierOp::Keep,
             readonly_modifier: ModifierOp::Keep,
         });
@@ -978,6 +1069,7 @@ mod tests {
             homomorphic: true,
             key_source: ab,
             value_template: placeholder,
+            modifiers_source: None,
             optional_modifier: ModifierOp::Keep,
             readonly_modifier: ModifierOp::Keep,
         });

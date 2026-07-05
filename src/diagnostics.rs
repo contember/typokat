@@ -912,7 +912,14 @@ fn render_type_inner(
                     .iter()
                     .map(|(_, arg)| render_type_inner(store, *arg, false, rendering))
                     .collect();
-                let base = render_type_inner(store, inst.base, false, rendering);
+                // M28 round 3: a NAMED template base (a reserved conditional/mapped
+                // alias row) renders by its alias name — `Extract<K, string>` — never
+                // the raw body; intrinsic markers already name themselves via
+                // `IntrinsicKind::display_name`.
+                let base = match store.template_name(inst.base) {
+                    Some(name) => name.to_string(),
+                    None => render_type_inner(store, inst.base, false, rendering),
+                };
                 rendering.pop();
                 format!("{base}<{}>", args.join(", "))
             }
@@ -952,6 +959,21 @@ fn render_type_inner(
         // surfaces inside a deferred mapped type's rendered form; a stable placeholder
         // suffices.
         TypeTag::MappedValue => "T[K]".to_string(),
+        // Deferred keyof (M28): `keyof <operand>`. Only surfaces for a still-deferred
+        // node (a free type parameter operand); keyof-typed targets are asserted
+        // code-only in the corpus, so a stable form suffices.
+        TypeTag::Keyof => match store.keyof_operand(id) {
+            Some(operand) => {
+                if rendering.contains(&id) {
+                    return "...".to_string();
+                }
+                rendering.push(id);
+                let rendered = render_type_inner(store, operand, false, rendering);
+                rendering.pop();
+                format!("keyof {rendered}")
+            }
+            None => "<unsupported>".to_string(),
+        },
         // Template literal type (M27): the backtick form `` `a${T}b` `` — text segments
         // interleaved with `${hole}`. Template-typed targets are asserted code-only in
         // the corpus, so the exact form only has to be stable (holes never widen — only a

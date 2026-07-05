@@ -113,6 +113,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // type against the still-abstract source).
             TSType::TSIndexedAccessType(access) => {
                 if self.index_is_active_mapped_key(&access.index_type) {
+                    // M28: capture the **modifiers source** — the `T` of a `T[P]`
+                    // access on the active mapped key — when the object side is a bare
+                    // in-scope type parameter (the `Pick` shape; nothing else is
+                    // captured, so no new lowering paths/diagnostics can fire). First
+                    // capture wins.
+                    if let Some(param_ty) = self.bare_type_param_reference(&access.object_type) {
+                        if let Some(frame) = self.mapped_frames.last_mut() {
+                            frame.captured_source.get_or_insert(param_ty);
+                        }
+                    }
                     return Some(self.interner.intern_mapped_value());
                 }
                 let object = self.lower_annotation(scope, &access.object_type)?;
@@ -424,6 +434,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // becomes the source-value placeholder.
         self.mapped_frames.push(MappedFrame {
             key_name: mapped.key.name.to_string(),
+            captured_source: None,
         });
         // B29: a mapped VALUE template is a legal-recursion boundary (`type MapRec =
         // string | { [K in "a" | "b"]: MapRec }`), so it lowers one indirection deeper.
@@ -434,18 +445,42 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // A mapped type with no value (`{ [K in S] }`) is out of subset.
             None => None,
         };
-        self.mapped_frames.pop();
+        let captured_source = self
+            .mapped_frames
+            .pop()
+            .and_then(|frame| frame.captured_source);
         let value_template = value_template?;
 
         let id = self.interner.intern_mapped(MappedType {
             homomorphic,
             key_source,
             value_template,
+            // M28: only a NON-homomorphic map carries a modifiers source (a
+            // homomorphic map's `key_source` already IS its source object) — see
+            // [`crate::types::repr::MappedType::modifiers_source`].
+            modifiers_source: if homomorphic { None } else { captured_source },
             optional_modifier: modifier_op(mapped.optional),
             readonly_modifier: modifier_op(mapped.readonly),
         });
         let span = Span::from_oxc(mapped.span);
         Some(self.maybe_evaluate(id, span))
+    }
+
+    /// The interned type-parameter id a bare `TSTypeReference` (no type arguments)
+    /// resolves to through the in-scope parameter frames, or `None` for any other
+    /// shape (M28 — the `T[P]` modifiers-source capture; deliberately narrow so the
+    /// capture never triggers extra lowering or diagnostics).
+    fn bare_type_param_reference(&self, ty: &TSType<'_>) -> Option<TypeId> {
+        let TSType::TSTypeReference(reference) = ty else {
+            return None;
+        };
+        if reference.type_arguments.is_some() {
+            return None;
+        }
+        let TSTypeName::IdentifierReference(ident) = &reference.type_name else {
+            return None;
+        };
+        self.lookup_type_param(ident.name.as_str())
     }
 
     /// Whether `index` names the **innermost active mapped key** binder (M26) — a bare
@@ -1065,49 +1100,43 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Compute `keyof T` **eagerly** (M20). `T` is the already-lowered operand type.
+    /// Compute `keyof T` (M20, extended for M28). `T` is the already-lowered operand.
     ///
-    /// For a concrete **object** type the result is the `union(...)` of its property
-    /// **names** as **string-literal** types (`keyof { x; y }` → `"x" | "y"`), plus
-    /// `string` if the object has a string index signature and `number` if it has a
-    /// number index signature (`keyof { [k: string]: V }` → `string`). An object with
-    /// no members and no index signature yields `never` (an empty union collapses to
-    /// `never` via `Interner::union`).
+    /// A concrete **object** operand keys **eagerly** through the shared
+    /// [`keyof_of_object`] computation (the SAME one the evaluator's deferred path
+    /// uses — single source of truth): the `union(...)` of its property names as
+    /// string-literal types, plus `string`/`number` for the respective index
+    /// signatures (`keyof {}` → `never` via the union collapse).
     ///
-    /// Anything else — a primitive, a union/intersection, a type parameter, an array,
-    /// a tuple — is **out of the M20 scope** (generic `keyof` is a type-level-VM
-    /// feature) and yields the **error type**: no crash, and the error type suppresses
-    /// any cascade where the result is used. The error/`any` operand also yields the
-    /// error type (it carries no enumerable keys here).
+    /// M28: an operand that is a **pending type-level computation** — a free type
+    /// parameter, a deferred conditional / mapped / instantiation / template / keyof,
+    /// an `infer` binder, or the mapped-value placeholder — lowers to a **deferred**
+    /// [`TypeTag::Keyof`] node: substitution rewrites its operand and the evaluator
+    /// resolves it at a value-position demand (previously these collapsed to the
+    /// permissive error type — a silent-false-negative generator).
+    ///
+    /// Anything else — a primitive, a union, an array, a tuple — stays the **M20
+    /// out-of-scope error type** (no crash; the error type suppresses cascade), as
+    /// does an error/`any` operand.
     fn keyof_type(&mut self, operand: TypeId) -> TypeId {
+        if let Some(keys) = super::eval::keyof_of_object(self.interner, operand) {
+            return keys;
+        }
         let wk = self.interner.well_known();
-        let store = self.interner.store();
-        let Some(object) = store.object_type(operand) else {
-            // Non-object (primitive / union / type parameter / array / tuple) → out of
-            // M20 scope. No crash; the error type suppresses cascade.
-            return wk.error;
-        };
-
-        // Snapshot the key components before the mutable interning borrow: property
-        // names become string-literal types, and each index signature contributes its
-        // fixed key intrinsic (`string` / `number`).
-        let names: Vec<String> = object.properties.iter().map(|p| p.name.clone()).collect();
-        let has_string_index = object.string_index.is_some();
-        let has_number_index = object.number_index.is_some();
-
-        let mut members: Vec<TypeId> = Vec::with_capacity(names.len() + 2);
-        for name in names {
-            members.push(self.interner.intern_literal(LiteralValue::String(name)));
+        match self.interner.store().tag(operand) {
+            TypeTag::TypeParam
+            | TypeTag::Conditional
+            | TypeTag::Instantiation
+            | TypeTag::Mapped
+            | TypeTag::Template
+            | TypeTag::Keyof
+            | TypeTag::Infer
+            | TypeTag::MappedValue => self.interner.intern_keyof(operand),
+            // Primitives / unions / arrays / tuples: out of the M20 subset — the
+            // error type (unchanged behaviour), never a deferred node that could not
+            // possibly resolve.
+            _ => wk.error,
         }
-        if has_string_index {
-            members.push(wk.string);
-        }
-        if has_number_index {
-            members.push(wk.number);
-        }
-        // `union(...)` canonicalizes/dedups (so `keyof {}` → `never`, and a repeated
-        // key collapses).
-        self.interner.union(members)
     }
 
     /// Compute an indexed-access type `T[K]` **eagerly** (M20). `object` and `index`

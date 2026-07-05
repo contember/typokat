@@ -12,4 +12,4 @@ pub mod bind;
 pub mod scope;
 pub mod symbol;
 
-pub use bind::{bind_module, Binder};
+pub use bind::{bind_module_with_prelude, Binder};

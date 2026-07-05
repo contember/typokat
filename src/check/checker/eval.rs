@@ -65,6 +65,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 | TypeTag::Union
                 | TypeTag::Mapped
                 | TypeTag::Template
+                | TypeTag::Keyof
         ) {
             return ty;
         }
@@ -110,6 +111,35 @@ enum Task {
     /// result object type, and push it. The metadata carries each property's name +
     /// resolved optional/readonly flags.
     BuildMappedObject(Vec<MappedProp>),
+    /// M28: the deferred keyof `id`'s operand is on the value stack (freshly
+    /// evaluated). Pop it and resolve: an object operand keys through the SHARED
+    /// keyof computation; error/any degrades to the error type; anything else stays a
+    /// (rebuilt) deferred node.
+    BuildKeyof(TypeId),
+    /// M28: the template `id`'s evaluable holes are on the value stack (freshly
+    /// evaluated, one per hole in order). Pop them and finish construction inline —
+    /// collapse / cartesian union / `never` / symbolic — WITHOUT re-scheduling (a
+    /// still-deferred hole must not loop back through [`Task::Eval`]).
+    FinishTemplate(TypeId),
+    /// M28: the distributive instantiation `id`'s check argument is on the value
+    /// stack (freshly evaluated — it was an evaluable node, e.g. `keyof P` or a nested
+    /// `Exclude<…>`). Pop it, re-derive the per-member conditionals from the evaluated
+    /// argument, and schedule their evaluation + the result union.
+    ExpandDistributive(TypeId),
+    /// M28: the string-intrinsic instantiation `id`'s argument is on the value stack
+    /// (freshly evaluated). Pop it and apply the intrinsic: a string literal
+    /// transforms, a union distributes per member, anything else stays a (rebuilt)
+    /// symbolic instantiation.
+    ApplyStringIntrinsic(TypeId),
+    /// M28 (review round 2): the conditional `id`'s check and extends OPERANDS are on
+    /// the value stack (freshly evaluated — they were pending computations, e.g.
+    /// `Uppercase<S> extends S` / `K extends keyof T` after substitution). Pop both,
+    /// run the extends test against the VALUES, and pick the branch — with the
+    /// no-false-on-undecidable rule: a `No` verdict where either evaluated operand
+    /// still carries an unevaluable deferred node does NOT pick the false branch (the
+    /// relation is conservative there, so `No` may mean "cannot prove"); the whole
+    /// conditional stays deferred instead. A `Yes` is always sound → true branch.
+    DecideConditional(TypeId),
 }
 
 /// The classification of a template hole for construction (M27) — see
@@ -226,6 +256,21 @@ impl<'a> ConditionalEvaluator<'a> {
                     let vals: Vec<TypeId> = values.split_off(start);
                     values.push(self.build_mapped_object(&meta, &vals));
                 }
+                Task::BuildKeyof(id) => {
+                    self.build_keyof(id, &mut values, error);
+                }
+                Task::FinishTemplate(id) => {
+                    self.finish_template(id, &mut values, error);
+                }
+                Task::ExpandDistributive(id) => {
+                    self.expand_distributive(id, &mut tasks, &mut values);
+                }
+                Task::ApplyStringIntrinsic(id) => {
+                    self.apply_string_intrinsic(id, &mut values, error);
+                }
+                Task::DecideConditional(id) => {
+                    self.decide_conditional(id, &mut tasks, &mut values, error);
+                }
                 Task::Eval(ty) => {
                     if let Some(&cached) = self.memo.get(&ty) {
                         values.push(cached);
@@ -240,7 +285,8 @@ impl<'a> ConditionalEvaluator<'a> {
                         }
                         TypeTag::Union => self.eval_union(ty, &mut tasks, &mut values),
                         TypeTag::Mapped => self.eval_mapped(ty, &mut tasks, &mut values, error),
-                        TypeTag::Template => self.eval_template(ty, &mut values, error),
+                        TypeTag::Template => self.eval_template(ty, &mut tasks, &mut values, error),
+                        TypeTag::Keyof => self.eval_keyof(ty, &mut tasks, &mut values, error),
                         // Any other type is already a value.
                         _ => values.push(ty),
                     }
@@ -290,16 +336,165 @@ impl<'a> ConditionalEvaluator<'a> {
             return;
         }
         self.in_flight.insert(ty);
+        // M28 (review round 2): a check/extends OPERAND may itself be a pending
+        // computation — substituted concrete but unevaluated (`Uppercase<S> extends S`
+        // at `IsUpper<"ABC">`, `K extends keyof T` at `Has<{a:1}, "a">`). Relating the
+        // raw node would be a conservative `No` → the FALSE branch forced → the
+        // true-branch error silently dropped (review HIGH-1/HIGH-2). Demand-evaluate
+        // BOTH operands through the shared work-stack first; the extends test then
+        // runs against the VALUES ([`Task::DecideConditional`]).
+        if self.arg_needs_pre_eval(cond.check) || self.arg_needs_pre_eval(cond.extends_ty) {
+            tasks.push(Task::SetMemo(ty));
+            tasks.push(Task::DecideConditional(ty));
+            tasks.push(Task::Eval(cond.check));
+            tasks.push(Task::Eval(cond.extends_ty));
+            return;
+        }
+        // Direct path — the operands are not top-level pending computations. The
+        // no-false-on-undecidable rule still applies (review round 3, HIGH): a deferred
+        // node NESTED inside a composite operand (`{ v: keyof T } extends { v: "a" }`)
+        // makes the relation's `No` unprovable at depth, and deep PRE-evaluation is
+        // forbidden (leader arbitration — tsc's own resolution of these shapes is
+        // mixed; backlog 36), so an unmatched conditional with a deep-deferred operand
+        // stays deferred rather than forcing the false branch.
         let (matched, true_final) = self.run_extends_test(&cond);
-        let branch = if matched {
-            true_final
-        } else {
-            cond.false_branch
-        };
-        // The result IS the evaluated branch: memoize this id to it once the branch
-        // resolves (tail step — a chain of conditionals is a loop here).
+        // The result memoizes under this id once it resolves (tail step — a chain of
+        // conditionals is a loop here).
         tasks.push(Task::SetMemo(ty));
-        tasks.push(Task::Eval(branch));
+        if matched {
+            tasks.push(Task::Eval(true_final));
+        } else if self.operand_undecidable(cond.check) || self.operand_undecidable(cond.extends_ty)
+        {
+            // Cannot prove the relation either way — stay deferred (SetMemo commits
+            // ty → ty, idempotent).
+            values.push(ty);
+        } else {
+            tasks.push(Task::Eval(cond.false_branch));
+        }
+    }
+
+    /// Decide a conditional whose check/extends operands were pre-evaluated (M28
+    /// review round 2): pop the two evaluated operands, run the extends test against
+    /// the VALUES (the `ConditionalType` is `Copy` — the test needs no re-interning),
+    /// and schedule the taken branch. The enclosing [`Task::SetMemo`] (pushed by
+    /// [`ConditionalEvaluator::eval_conditional`]) commits the result under the
+    /// ORIGINAL node id.
+    ///
+    /// **No-false-on-undecidable:** a `Yes` verdict is always sound (the relation
+    /// never proves spuriously) → true branch. A `No` where either evaluated operand
+    /// still carries an unevaluable deferred node (a symbolic intrinsic application,
+    /// a deferred keyof / mapped / conditional — at ANY structural depth, see
+    /// [`ConditionalEvaluator::operand_undecidable`], review round 3) may mean
+    /// "cannot prove", not "provably false": the conditional must NOT pick the
+    /// false branch — it stays a deferred value (conservative relations, the sound
+    /// over-report). Template patterns are NOT gated: the M27 anchored-matching model
+    /// decides them, and gating would regress the pattern-extends fixtures.
+    fn decide_conditional(
+        &mut self,
+        ty: TypeId,
+        tasks: &mut Vec<Task>,
+        values: &mut Vec<TypeId>,
+        error: TypeId,
+    ) {
+        // Push order in `eval_conditional` was [.., Eval(check), Eval(extends)], so the
+        // check evaluated LAST and sits on top.
+        let check = values.pop().unwrap_or(error);
+        let extends_ty = values.pop().unwrap_or(error);
+        let Some(cond) = self.interner.store().conditional_type(ty).copied() else {
+            values.push(ty);
+            return;
+        };
+        let evaluated = ConditionalType {
+            check,
+            extends_ty,
+            ..cond
+        };
+        let (matched, true_final) = self.run_extends_test(&evaluated);
+        if matched {
+            tasks.push(Task::Eval(true_final));
+            return;
+        }
+        if self.operand_undecidable(check) || self.operand_undecidable(extends_ty) {
+            // Cannot prove the relation either way — never force the false branch.
+            // The node stays its own deferred value (SetMemo commits ty → ty,
+            // idempotent, mirroring the deferred mapped/keyof discipline).
+            values.push(ty);
+            return;
+        }
+        tasks.push(Task::Eval(cond.false_branch));
+    }
+
+    /// Whether a conditional operand carries an unevaluable deferred node — a symbolic
+    /// instantiation, a deferred keyof / mapped / conditional — at **any structural
+    /// depth** (M28 review round 3): through object property types, index-signature
+    /// values, call/construct signatures, function parameters + returns, tuple and
+    /// array elements, and union members. The relation answers `No` conservatively
+    /// through such a nested node (`{ v: keyof T } extends { v: "a" }` fails at depth
+    /// without proof), so an unmatched conditional whose operand trips this walk must
+    /// stay deferred — never the false branch. Deep PRE-evaluation is deliberately NOT
+    /// performed (leader arbitration: tsc's resolution of these shapes is mixed —
+    /// eager-false for some, evaluated for others — chasing it is backlog 36; the
+    /// deferred verdict is the FN-free direction across the whole arbitration table).
+    ///
+    /// **Template patterns are excluded** (the round-2 recorded deviation): the M27
+    /// anchored-matching model genuinely decides them, and gating them would regress
+    /// the pattern-extends fixtures. Intrinsics, literals, type parameters, `infer`
+    /// binders, and the mapped-value placeholder are decidable leaves. Iterative with
+    /// a visited set so recursive interned types terminate.
+    fn operand_undecidable(&self, operand: TypeId) -> bool {
+        let store = self.interner.store();
+        let mut stack = vec![operand];
+        let mut visited: FxHashSet<TypeId> = FxHashSet::default();
+        while let Some(t) = stack.pop() {
+            if !visited.insert(t) {
+                continue;
+            }
+            match store.tag(t) {
+                TypeTag::Conditional
+                | TypeTag::Instantiation
+                | TypeTag::Mapped
+                | TypeTag::Keyof => return true,
+                TypeTag::Object => {
+                    if let Some(object) = store.object_type(t) {
+                        stack.extend(object.properties.iter().map(|p| p.ty));
+                        stack.extend(object.string_index);
+                        stack.extend(object.number_index);
+                        stack.extend(object.call_signatures.iter().copied());
+                        stack.extend(object.construct_signatures.iter().copied());
+                    }
+                }
+                TypeTag::Function => {
+                    if let Some(f) = store.function_type(t) {
+                        stack.extend(f.params.iter().map(|p| p.ty));
+                        stack.push(f.ret);
+                    }
+                }
+                TypeTag::Union => {
+                    if let Some(members) = store.union_members(t) {
+                        stack.extend(members.iter().copied());
+                    }
+                }
+                TypeTag::Array => {
+                    if let Some(a) = store.array_type(t) {
+                        stack.push(a.element);
+                    }
+                }
+                TypeTag::Tuple => {
+                    if let Some(tup) = store.tuple_type(t) {
+                        stack.extend(tup.elements.iter().copied());
+                    }
+                }
+                // Decidable leaves — see the doc above (templates deliberately
+                // excluded per the round-2 deviation).
+                TypeTag::Template
+                | TypeTag::Intrinsic
+                | TypeTag::Literal
+                | TypeTag::TypeParam
+                | TypeTag::Infer
+                | TypeTag::MappedValue => {}
+            }
+        }
+        false
     }
 
     /// Schedule the evaluation of a lazy instantiation `substitute(base, args)`. When
@@ -321,7 +516,49 @@ impl<'a> ConditionalEvaluator<'a> {
             values.push(error);
             return;
         }
+
+        // M28/WU3 — a **string-intrinsic** instantiation (`Uppercase<…>`), intercepted
+        // by the prelude-declared marker identity: evaluate the argument through the
+        // shared work-stack, then transform ([`Task::ApplyStringIntrinsic`]).
+        let wk = self.interner.well_known();
+        if wk.is_string_intrinsic_marker(inst.base) {
+            let Some(&(_, arg)) = inst.args.first() else {
+                // A marker with no argument (ill-formed `Uppercase` bare reference
+                // routed here defensively) stays symbolic.
+                values.push(ty);
+                return;
+            };
+            self.steps += 1;
+            if self.steps > self.budget {
+                self.exhausted = true;
+                values.push(error);
+                return;
+            }
+            self.in_flight.insert(ty);
+            tasks.push(Task::SetMemo(ty));
+            tasks.push(Task::ApplyStringIntrinsic(ty));
+            tasks.push(Task::Eval(arg));
+            return;
+        }
+
         self.in_flight.insert(ty);
+
+        // M28/WU2 — a distributive conditional whose check argument is itself a
+        // pending computation (`Exclude<keyof P, K>`: the check arg is a deferred-now-
+        // concrete `keyof P`) must evaluate that argument FIRST — distribution derives
+        // the per-member branches from the argument's VALUE (its union members), not
+        // from the unevaluated node. Scheduled through the shared work-stack
+        // ([`Task::ExpandDistributive`]); the M26 no-permissive-fallback rules are
+        // untouched (a still-unevaluable argument distributes as a single member and
+        // the branch test stays conservative).
+        if let Some(arg) = self.distributive_check_arg(&inst) {
+            if self.arg_needs_pre_eval(arg) {
+                tasks.push(Task::SetMemo(ty));
+                tasks.push(Task::ExpandDistributive(ty));
+                tasks.push(Task::Eval(arg));
+                return;
+            }
+        }
 
         let per_conditionals = self.expand_instantiation(&inst);
 
@@ -332,6 +569,130 @@ impl<'a> ConditionalEvaluator<'a> {
         for &cond in per_conditionals.iter().rev() {
             tasks.push(Task::Eval(cond));
         }
+    }
+
+    /// The check argument of a distributive-conditional instantiation (M28): the value
+    /// mapped to the base's naked check parameter, or `None` when the base is not a
+    /// (non-poisoned) distributive conditional or the parameter is not in the args.
+    fn distributive_check_arg(&self, inst: &crate::types::repr::InstantiationType) -> Option<TypeId> {
+        let check_param = self
+            .interner
+            .store()
+            .conditional_type(inst.base)
+            .filter(|c| c.distributive && !c.poisoned)
+            .and_then(|c| self.interner.store().type_param(c.check).map(|p| p.id))?;
+        inst.args
+            .iter()
+            .find(|(p, _)| *p == check_param)
+            .map(|&(_, v)| v)
+    }
+
+    /// Whether an instantiation argument is a pending type-level computation that must
+    /// evaluate before distribution (M28): an evaluable node, or a union containing one.
+    fn arg_needs_pre_eval(&self, arg: TypeId) -> bool {
+        let evaluable = |t: TypeId| {
+            matches!(
+                self.interner.store().tag(t),
+                TypeTag::Conditional
+                    | TypeTag::Instantiation
+                    | TypeTag::Mapped
+                    | TypeTag::Template
+                    | TypeTag::Keyof
+            )
+        };
+        if evaluable(arg) {
+            return true;
+        }
+        self.interner
+            .store()
+            .union_members(arg)
+            .is_some_and(|members| members.iter().any(|&m| evaluable(m)))
+    }
+
+    /// Finish a distributive instantiation whose check argument was pre-evaluated
+    /// (M28): pop the evaluated argument, re-derive the per-member conditionals from
+    /// its VALUE, and schedule their evaluation + the result union. The enclosing
+    /// [`Task::SetMemo`] (pushed by [`ConditionalEvaluator::eval_instantiation`])
+    /// commits the union under the ORIGINAL instantiation id.
+    fn expand_distributive(&mut self, ty: TypeId, tasks: &mut Vec<Task>, values: &mut Vec<TypeId>) {
+        let evaluated_arg = values.pop().unwrap_or(self.interner.well_known().error);
+        let Some(inst) = self.interner.store().instantiation_type(ty).cloned() else {
+            // Defensive: leave the node as its own (deferred) value; SetMemo pops it.
+            values.push(ty);
+            return;
+        };
+        // Rebuild the argument list with the check parameter bound to the evaluated
+        // value, then expand exactly like the direct path.
+        let mut modified = inst;
+        if let Some(check_param) = self
+            .interner
+            .store()
+            .conditional_type(modified.base)
+            .filter(|c| c.distributive && !c.poisoned)
+            .and_then(|c| self.interner.store().type_param(c.check).map(|p| p.id))
+        {
+            for (param, value) in &mut modified.args {
+                if *param == check_param {
+                    *value = evaluated_arg;
+                }
+            }
+        }
+        let per_conditionals = self.expand_instantiation(&modified);
+        tasks.push(Task::BuildUnion(per_conditionals.len()));
+        for &cond in per_conditionals.iter().rev() {
+            tasks.push(Task::Eval(cond));
+        }
+    }
+
+    /// Apply a string intrinsic to its (freshly evaluated) argument (M28/WU3): a string
+    /// literal transforms (Rust `to_uppercase`/`to_lowercase`; Capitalize/Uncapitalize
+    /// touch the first char only); a union distributes per member; an error/any
+    /// argument degrades to the error type (M22); anything else (a template pattern,
+    /// the `string` intrinsic, a free parameter) stays a **symbolic** instantiation —
+    /// rebuilt over the evaluated argument — relating conservatively (identical-node;
+    /// → `string`).
+    fn apply_string_intrinsic(&mut self, ty: TypeId, values: &mut Vec<TypeId>, error: TypeId) {
+        let arg = values.pop().unwrap_or(error);
+        let Some(inst) = self.interner.store().instantiation_type(ty).cloned() else {
+            values.push(ty);
+            return;
+        };
+        let wk = self.interner.well_known();
+        if arg == wk.error || arg == wk.any {
+            values.push(error);
+            return;
+        }
+        let Some(&(param, _)) = inst.args.first() else {
+            values.push(ty);
+            return;
+        };
+        let members: Vec<TypeId> = match self.interner.store().union_members(arg) {
+            Some(members) => members.to_vec(),
+            None => vec![arg],
+        };
+        let mut results: Vec<TypeId> = Vec::with_capacity(members.len());
+        for member in members {
+            let transformed = self
+                .interner
+                .store()
+                .literal_value(member)
+                .and_then(|lit| match lit {
+                    LiteralValue::String(s) => {
+                        Some(transform_string_intrinsic(&self.interner.well_known(), inst.base, s))
+                    }
+                    _ => None,
+                });
+            match transformed {
+                Some(out) => results.push(self.interner.intern_literal(LiteralValue::String(out))),
+                // A non-string-literal member stays a symbolic per-member application.
+                // Hash-consing makes a rebuild over the unchanged single argument THE
+                // original node, so identical-node relations stay total.
+                None => results.push(self.interner.intern_instantiation(inst.base, vec![(param, member)])),
+            }
+        }
+        // A 1-member list collapses through `union` to that member.
+        let result = self.interner.union(results);
+        values.push(result);
     }
 
     /// Produce the concrete conditional(s) an instantiation expands to. A distributive
@@ -415,7 +776,11 @@ impl<'a> ConditionalEvaluator<'a> {
         let needs_eval = members.iter().any(|&m| {
             matches!(
                 self.interner.store().tag(m),
-                TypeTag::Conditional | TypeTag::Instantiation | TypeTag::Mapped | TypeTag::Template
+                TypeTag::Conditional
+                    | TypeTag::Instantiation
+                    | TypeTag::Mapped
+                    | TypeTag::Template
+                    | TypeTag::Keyof
             )
         });
         if !needs_eval {
@@ -462,10 +827,82 @@ impl<'a> ConditionalEvaluator<'a> {
         }
         self.in_flight.insert(ty);
         // The result IS the assembled object; memoize this id to it once the key source
-        // resolves and the properties are built (tail steps).
+        // resolves and the properties are built (tail steps). M28: a captured modifiers
+        // source evaluates through the same stack (so `Pick<Partial<P>, …>` composes);
+        // the tasks pop in push-reverse order, so `assemble_mapped` pops the key source
+        // first, then the modifiers source.
         tasks.push(Task::SetMemo(ty));
         tasks.push(Task::AssembleMapped(ty));
         tasks.push(Task::Eval(mapped.key_source));
+        if let Some(ms) = mapped.modifiers_source {
+            tasks.push(Task::Eval(ms));
+        }
+    }
+
+    /// Schedule the evaluation of a deferred `keyof` (M28). A node whose operand still
+    /// contains a free declaration type parameter stays deferred (its own value,
+    /// conservative relations); a concrete one first evaluates its operand through the
+    /// shared work-stack (the operand may itself be an instantiation / mapped /
+    /// conditional — `keyof Omit<P, "a">`), then [`Task::BuildKeyof`] resolves it
+    /// through the SAME keyof computation the eager path uses ([`keyof_of_object`] —
+    /// single source of truth).
+    fn eval_keyof(
+        &mut self,
+        ty: TypeId,
+        tasks: &mut Vec<Task>,
+        values: &mut Vec<TypeId>,
+        error: TypeId,
+    ) {
+        let Some(operand) = self.interner.store().keyof_operand(ty) else {
+            values.push(ty);
+            return;
+        };
+        // Deferred: a free declaration type parameter in the operand leaves the node
+        // an ordinary interned (deferred) type.
+        if !self.is_concrete(ty) {
+            values.push(ty);
+            return;
+        }
+        if self.in_flight.contains(&ty) || self.exhausted {
+            values.push(error);
+            return;
+        }
+        self.steps += 1;
+        if self.steps > self.budget {
+            self.exhausted = true;
+            values.push(error);
+            return;
+        }
+        self.in_flight.insert(ty);
+        tasks.push(Task::SetMemo(ty));
+        tasks.push(Task::BuildKeyof(ty));
+        tasks.push(Task::Eval(operand));
+    }
+
+    /// Resolve a deferred `keyof` whose operand has been evaluated (M28 — the operand
+    /// result is on top of the value stack). An **object** operand keys through the
+    /// shared [`keyof_of_object`] computation; an error/any operand degrades to the
+    /// error type (M22 cascade suppression); any other shape (a primitive after
+    /// substitution, a union, a still-deferred node) is **not** computable in this
+    /// subset — the node stays a deferred value (rebuilt over the evaluated operand),
+    /// never a permissive fallback.
+    fn build_keyof(&mut self, ty: TypeId, values: &mut Vec<TypeId>, error: TypeId) {
+        let operand = values.pop().unwrap_or(error);
+        let wk = self.interner.well_known();
+        if operand == wk.error || operand == wk.any {
+            values.push(error);
+            return;
+        }
+        if let Some(keys) = keyof_of_object(self.interner, operand) {
+            values.push(keys);
+            return;
+        }
+        let node = if self.interner.store().keyof_operand(ty) == Some(operand) {
+            ty
+        } else {
+            self.interner.intern_keyof(operand)
+        };
+        values.push(node);
     }
 
     /// **Construct** a template literal type (M27). When every hole is a string / number
@@ -480,17 +917,67 @@ impl<'a> ConditionalEvaluator<'a> {
     /// `exhausted`), never OOM. The result is memoized (a concrete collapse only — a
     /// symbolic template is idempotent and left un-memoized, mirroring a deferred
     /// conditional).
-    fn eval_template(&mut self, ty: TypeId, values: &mut Vec<TypeId>, error: TypeId) {
+    fn eval_template(
+        &mut self,
+        ty: TypeId,
+        tasks: &mut Vec<Task>,
+        values: &mut Vec<TypeId>,
+        error: TypeId,
+    ) {
         let Some(template) = self.interner.store().template_type(ty).cloned() else {
             values.push(ty);
             return;
         };
+
+        // M28: a hole may itself be a pending type-level computation (a substituted
+        // string-intrinsic instantiation — the `Greet` composition — a conditional, a
+        // keyof, …). Evaluate such holes through the shared work-stack FIRST, then
+        // finish construction inline ([`Task::FinishTemplate`] never re-schedules, so
+        // a hole that stays deferred cannot loop).
+        let needs_eval = template.holes.iter().any(|&h| self.arg_needs_pre_eval(h));
+        if needs_eval {
+            tasks.push(Task::FinishTemplate(ty));
+            for &hole in template.holes.iter().rev() {
+                tasks.push(Task::Eval(hole));
+            }
+            return;
+        }
+
+        let holes = template.holes.clone();
+        self.finish_template_with_holes(ty, &template, holes, values, error);
+    }
+
+    /// Finish a template whose evaluable holes were pre-evaluated (M28): pop one value
+    /// per hole (in order) and construct inline.
+    fn finish_template(&mut self, ty: TypeId, values: &mut Vec<TypeId>, error: TypeId) {
+        let Some(template) = self.interner.store().template_type(ty).cloned() else {
+            values.push(ty);
+            return;
+        };
+        let start = values.len().saturating_sub(template.holes.len());
+        let holes: Vec<TypeId> = values.split_off(start);
+        self.finish_template_with_holes(ty, &template, holes, values, error);
+    }
+
+    /// The template construction core (M27, factored for M28's hole pre-evaluation):
+    /// classify the (possibly re-evaluated) `holes`, then collapse / short-circuit /
+    /// stay symbolic exactly as before. Results memoize under the ORIGINAL node id
+    /// `ty`; a symbolic survivor whose holes changed re-interns (un-memoized,
+    /// idempotent — mirroring the deferred-conditional discipline).
+    fn finish_template_with_holes(
+        &mut self,
+        ty: TypeId,
+        template: &TemplateType,
+        holes: Vec<TypeId>,
+        values: &mut Vec<TypeId>,
+        error: TypeId,
+    ) {
         let wk = self.interner.well_known();
 
         // M22 discipline: an error-typed hole (an unresolved name upstream) degrades the
         // whole template to the error type so cascades stay suppressed — mirroring
         // `assemble_mapped`'s error/any key-source handling.
-        if template.holes.contains(&wk.error) {
+        if holes.contains(&wk.error) {
             self.memo.insert(ty, error);
             values.push(error);
             return;
@@ -498,8 +985,8 @@ impl<'a> ConditionalEvaluator<'a> {
 
         // Classify each hole; a `never` hole makes the whole template `never`, a
         // non-literal hole keeps it symbolic, otherwise it is a cartesian factor.
-        let mut factors: Vec<Vec<String>> = Vec::with_capacity(template.holes.len());
-        for &hole in &template.holes {
+        let mut factors: Vec<Vec<String>> = Vec::with_capacity(holes.len());
+        for &hole in &holes {
             match self.hole_parts(hole) {
                 HolePart::Never => {
                     self.memo.insert(ty, wk.never);
@@ -507,9 +994,19 @@ impl<'a> ConditionalEvaluator<'a> {
                     return;
                 }
                 HolePart::NonLiteral => {
-                    // A symbolic pattern (string/number intrinsic, free param, …) —
-                    // return the node unchanged, un-memoized (idempotent).
-                    values.push(ty);
+                    // A symbolic pattern (string/number intrinsic, free param, a
+                    // still-symbolic intrinsic application, …) — keep the node
+                    // symbolic, un-memoized (idempotent). Holes that DID evaluate are
+                    // baked in (re-interned) so relations see the resolved form.
+                    let node = if holes == template.holes {
+                        ty
+                    } else {
+                        self.interner.intern_template(TemplateType {
+                            texts: template.texts.clone(),
+                            holes,
+                        })
+                    };
+                    values.push(node);
                     return;
                 }
                 HolePart::Literals(parts) => factors.push(parts),
@@ -608,9 +1105,17 @@ impl<'a> ConditionalEvaluator<'a> {
         let key_source = values.pop().unwrap_or(error);
         let Some(mapped) = self.interner.store().mapped_type(ty).copied() else {
             // Defensive: leave the node as its own (deferred) value; SetMemo pops it.
+            // (A hand-built node without a mapped row carries no modifiers source, so
+            // there is no second stack value to pop here.)
             values.push(ty);
             return;
         };
+        // M28: the (evaluated) modifiers source sits under the key source on the value
+        // stack — pop it unconditionally whenever the node carries one, keeping the
+        // stack arity balanced on every early return below.
+        let modifiers_source = mapped
+            .modifiers_source
+            .map(|_| values.pop().unwrap_or(error));
         // M22 discipline: an error/any key source (e.g. `keyof Bogus` after TK2304)
         // degrades the whole result to the error type — cascades stay suppressed.
         let wk = self.interner.well_known();
@@ -644,23 +1149,50 @@ impl<'a> ConditionalEvaluator<'a> {
             }
         } else {
             // Non-homomorphic: the key set is the string-literal members of the key
-            // source. No source property flags → the modifier arithmetic starts absent
-            // (and there is no optional source to strip `undefined` for). A key set with
-            // any non-string-literal member (`K in string`, a numeric key) is out of
-            // subset → deferred.
+            // source. A key set with any non-string-literal member (`K in string`, a
+            // numeric key) is out of subset → deferred.
             let Some(names) = self.literal_string_keys(key_source) else {
                 values.push(ty);
                 return;
             };
+            // M28: a captured **modifiers source** (`{ [P in K]: T[P] }` — tsc's
+            // modifiersType) resolves each key against the source object: the
+            // property's value type replaces the `MappedValue` placeholder and its
+            // `?`/`readonly` flags seed the modifier arithmetic — so `Pick` preserves
+            // both. Without one (Record's bare `V`), or for a key the source lacks
+            // (`Pick<P, "q">` after its TK2344 — tsc still instantiates), the M26
+            // behavior is unchanged: placeholder → error type, flags start absent.
+            let ms_object = modifiers_source
+                .and_then(|ms| self.interner.store().object_type(ms).cloned());
             for name in names {
-                let value = self.replace_mapped_value(mapped.value_template, error);
-                meta.push(MappedProp {
-                    name,
-                    optional: mapped.optional_modifier.apply(false),
-                    readonly: mapped.readonly_modifier.apply(false),
-                    strip_undefined: false,
-                });
-                value_pre.push(value);
+                let source_prop = ms_object
+                    .as_ref()
+                    .and_then(|object| object.property(&name).cloned());
+                match source_prop {
+                    Some(prop) => {
+                        let value = self.replace_mapped_value(mapped.value_template, prop.ty);
+                        meta.push(MappedProp {
+                            name,
+                            optional: mapped.optional_modifier.apply(prop.optional),
+                            readonly: mapped.readonly_modifier.apply(prop.readonly),
+                            // `-?` over an optional source member strips `undefined`,
+                            // exactly like the homomorphic path.
+                            strip_undefined: mapped.optional_modifier == ModifierOp::Remove
+                                && prop.optional,
+                        });
+                        value_pre.push(value);
+                    }
+                    None => {
+                        let value = self.replace_mapped_value(mapped.value_template, error);
+                        meta.push(MappedProp {
+                            name,
+                            optional: mapped.optional_modifier.apply(false),
+                            readonly: mapped.readonly_modifier.apply(false),
+                            strip_undefined: false,
+                        });
+                        value_pre.push(value);
+                    }
+                }
             }
         }
 
@@ -828,11 +1360,18 @@ impl<'a> ConditionalEvaluator<'a> {
                     return ty;
                 };
                 let key_source = self.replace_mapped_value(mapped.key_source, value);
-                if key_source == mapped.key_source {
+                // M28: the modifiers source is outer-scoped like the key source (the
+                // captured `T` of a nested `{ [P in K]: T[P] }` may be the OUTER map's
+                // placeholder) — descend into it too.
+                let modifiers_source = mapped
+                    .modifiers_source
+                    .map(|ms| self.replace_mapped_value(ms, value));
+                if key_source == mapped.key_source && modifiers_source == mapped.modifiers_source {
                     return ty;
                 }
                 self.interner.intern_mapped(MappedType {
                     key_source,
+                    modifiers_source,
                     ..mapped
                 })
             }
@@ -1019,6 +1558,19 @@ impl<'a> ConditionalEvaluator<'a> {
                         texts: template.texts,
                         holes: new_holes,
                     })
+                } else {
+                    ty
+                }
+            }
+            // M28: a `keyof X[K]`-style value template carries the placeholder in the
+            // keyof operand — recurse into it.
+            TypeTag::Keyof => {
+                let Some(operand) = self.interner.store().keyof_operand(ty) else {
+                    return ty;
+                };
+                let no = self.replace_mapped_value(operand, value);
+                if no != operand {
+                    self.interner.intern_keyof(no)
                 } else {
                     ty
                 }
@@ -1258,6 +1810,19 @@ impl<'a> ConditionalEvaluator<'a> {
                     ty
                 }
             }
+            // M28: a `keyof (infer U)`-style extends component carries the binder in
+            // the keyof operand — freshen it there.
+            TypeTag::Keyof => {
+                let Some(operand) = self.interner.store().keyof_operand(ty) else {
+                    return ty;
+                };
+                let no = self.substitute_infers(operand, fresh);
+                if no != operand {
+                    self.interner.intern_keyof(no)
+                } else {
+                    ty
+                }
+            }
         }
     }
 
@@ -1375,12 +1940,16 @@ impl<'a> ConditionalEvaluator<'a> {
                 .instantiation_type(ty)
                 .map(|i| i.args.iter().map(|(_, v)| *v).collect())
                 .unwrap_or_default(),
-            // M26: a mapped type is concrete once its key source and value template are
-            // (the value template's `MappedValue` placeholder is a bound variable —
-            // classified concrete above).
+            // M26: a mapped type is concrete once its key source, value template, and
+            // (M28) modifiers source are (the value template's `MappedValue`
+            // placeholder is a bound variable — classified concrete above).
             TypeTag::Mapped => store
                 .mapped_type(ty)
-                .map(|m| vec![m.key_source, m.value_template])
+                .map(|m| {
+                    let mut out = vec![m.key_source, m.value_template];
+                    out.extend(m.modifiers_source);
+                    out
+                })
                 .unwrap_or_default(),
             // M27: a template is concrete once every hole is (a free type parameter hole,
             // e.g. `` `tag:${T}` ``, makes it a deferred node).
@@ -1388,8 +1957,191 @@ impl<'a> ConditionalEvaluator<'a> {
                 .template_type(ty)
                 .map(|t| t.holes.clone())
                 .unwrap_or_default(),
+            // M28: a deferred keyof is concrete once its operand is.
+            TypeTag::Keyof => store
+                .keyof_operand(ty)
+                .map(|operand| vec![operand])
+                .unwrap_or_default(),
             _ => Vec::new(),
         }
+    }
+}
+
+/// Compute `keyof` over an **object** operand — the single source of truth shared by
+/// the eager lowering path ([`crate::check::checker::Pass::keyof_type`]) and the
+/// evaluator's deferred-keyof resolution ([`ConditionalEvaluator::build_keyof`]), per
+/// the M28 contract (no second keyof semantics). The result is the `union(...)` of the
+/// property names as string-literal types, plus `string`/`number` for the respective
+/// index signatures (an empty object yields `never` via the union collapse). `None`
+/// when the operand is not an object — the caller decides the out-of-scope handling.
+pub(in crate::check::checker) fn keyof_of_object(
+    interner: &mut Interner,
+    operand: TypeId,
+) -> Option<TypeId> {
+    let store = interner.store();
+    let object = store.object_type(operand)?;
+
+    // Snapshot the key components before the mutable interning borrow.
+    let names: Vec<String> = object.properties.iter().map(|p| p.name.clone()).collect();
+    let has_string_index = object.string_index.is_some();
+    let has_number_index = object.number_index.is_some();
+
+    let wk = interner.well_known();
+    let mut members: Vec<TypeId> = Vec::with_capacity(names.len() + 2);
+    for name in names {
+        members.push(interner.intern_literal(LiteralValue::String(name)));
+    }
+    if has_string_index {
+        members.push(wk.string);
+    }
+    if has_number_index {
+        members.push(wk.number);
+    }
+    Some(interner.union(members))
+}
+
+/// Whether `ty` transitively contains a deferred [`TypeTag::Keyof`] node (M28) — the
+/// TK2344 **constraint-side** gate: a substituted constraint still carrying one cannot
+/// be decided by the identical-node relation, so the constraint check is skipped (tsc
+/// defers it; scoped to the NEW node kind only, leaving pre-M28 constraint behavior
+/// untouched). Also gates the inference clamp ([`crate::check::infer`]).
+pub(in crate::check) fn contains_deferred_keyof(
+    store: &crate::types::store::Store,
+    ty: TypeId,
+) -> bool {
+    contains_nodes(store, ty, |tag| tag == TypeTag::Keyof)
+}
+
+/// Whether `ty` transitively contains a **deferred type-level node** — a deferred
+/// keyof, conditional, or lazy instantiation. Since M28 round 4 this is a
+/// **message-form chooser only** (the round-3 TK2344 argument-side GATE it powered
+/// was probe-disproven and removed — arguments now always evaluate and always
+/// check): a failing argument whose evaluated form still trips this walk renders by
+/// its WRITTEN form (which carries the alias name — `Extract<K, string>`) instead of
+/// the raw substituted body.
+pub(in crate::check) fn contains_deferred_argument(
+    store: &crate::types::store::Store,
+    ty: TypeId,
+) -> bool {
+    contains_nodes(store, ty, |tag| {
+        matches!(
+            tag,
+            TypeTag::Keyof | TypeTag::Conditional | TypeTag::Instantiation
+        )
+    })
+}
+
+/// The shared deep walk behind the M28 undecidability gates: whether any node of a
+/// target tag kind occurs anywhere inside `ty` (descending through every composite,
+/// including conditional components, instantiation bases + argument values, mapped
+/// components, and template holes). Iterative with a visited set so recursive
+/// interned types terminate.
+fn contains_nodes(
+    store: &crate::types::store::Store,
+    ty: TypeId,
+    is_target: impl Fn(TypeTag) -> bool,
+) -> bool {
+    let mut stack = vec![ty];
+    let mut visited: FxHashSet<TypeId> = FxHashSet::default();
+    while let Some(t) = stack.pop() {
+        if !visited.insert(t) {
+            continue;
+        }
+        if is_target(store.tag(t)) {
+            return true;
+        }
+        match store.tag(t) {
+            TypeTag::Keyof => {
+                if let Some(operand) = store.keyof_operand(t) {
+                    stack.push(operand);
+                }
+            }
+            TypeTag::Object => {
+                if let Some(object) = store.object_type(t) {
+                    stack.extend(object.properties.iter().map(|p| p.ty));
+                    stack.extend(object.string_index);
+                    stack.extend(object.number_index);
+                    stack.extend(object.call_signatures.iter().copied());
+                    stack.extend(object.construct_signatures.iter().copied());
+                }
+            }
+            TypeTag::Function => {
+                if let Some(f) = store.function_type(t) {
+                    stack.extend(f.params.iter().map(|p| p.ty));
+                    stack.push(f.ret);
+                }
+            }
+            TypeTag::Union => {
+                if let Some(members) = store.union_members(t) {
+                    stack.extend(members.iter().copied());
+                }
+            }
+            TypeTag::Array => {
+                if let Some(a) = store.array_type(t) {
+                    stack.push(a.element);
+                }
+            }
+            TypeTag::Tuple => {
+                if let Some(tup) = store.tuple_type(t) {
+                    stack.extend(tup.elements.iter().copied());
+                }
+            }
+            TypeTag::Conditional => {
+                if let Some(c) = store.conditional_type(t) {
+                    stack.extend([c.check, c.extends_ty, c.true_branch, c.false_branch]);
+                }
+            }
+            TypeTag::Instantiation => {
+                if let Some(inst) = store.instantiation_type(t) {
+                    stack.push(inst.base);
+                    stack.extend(inst.args.iter().map(|(_, v)| *v));
+                }
+            }
+            TypeTag::Mapped => {
+                if let Some(m) = store.mapped_type(t) {
+                    stack.push(m.key_source);
+                    stack.push(m.value_template);
+                    stack.extend(m.modifiers_source);
+                }
+            }
+            TypeTag::Template => {
+                if let Some(template) = store.template_type(t) {
+                    stack.extend(template.holes.iter().copied());
+                }
+            }
+            TypeTag::Intrinsic
+            | TypeTag::Literal
+            | TypeTag::TypeParam
+            | TypeTag::Infer
+            | TypeTag::MappedValue => {}
+        }
+    }
+    false
+}
+
+/// Apply an M28 string intrinsic (identified by its well-known marker `base`) to a
+/// string-literal value. `Uppercase`/`Lowercase` map the whole string (Rust
+/// `to_uppercase`/`to_lowercase` — char-wise Unicode, matching JS for the corpus's
+/// cases; multi-char expansions like `ß` → `"SS"` agree with JS `toUpperCase`);
+/// `Capitalize`/`Uncapitalize` map the **first char only**.
+fn transform_string_intrinsic(wk: &crate::types::WellKnown, base: TypeId, s: &str) -> String {
+    if base == wk.uppercase {
+        return s.to_uppercase();
+    }
+    if base == wk.lowercase {
+        return s.to_lowercase();
+    }
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => {
+            let mapped: String = if base == wk.capitalize {
+                first.to_uppercase().collect()
+            } else {
+                first.to_lowercase().collect()
+            };
+            mapped + chars.as_str()
+        }
+        None => String::new(),
     }
 }
 
@@ -1636,6 +2388,7 @@ mod tests {
             homomorphic: true,
             key_source: source,
             value_template: placeholder,
+            modifiers_source: None,
             optional_modifier: ModifierOp::Keep,
             readonly_modifier: ModifierOp::Keep,
         });
@@ -1668,6 +2421,7 @@ mod tests {
             homomorphic: true,
             key_source: source,
             value_template,
+            modifiers_source: None,
             optional_modifier: ModifierOp::Add,
             readonly_modifier: ModifierOp::Add,
         });
@@ -1808,6 +2562,7 @@ mod tests {
             homomorphic: true,
             key_source: t, // a free parameter → deferred
             value_template: placeholder,
+            modifiers_source: None,
             optional_modifier: ModifierOp::Keep,
             readonly_modifier: ModifierOp::Keep,
         });
@@ -1819,6 +2574,169 @@ mod tests {
             !memo.contains_key(&mapped),
             "a deferred mapped type is not memoized"
         );
+    }
+
+    /// M28 — a **deferred `keyof`** over a free type parameter is returned unchanged
+    /// (and not memoized); once its operand is concrete (an object) it resolves
+    /// through the SHARED keyof computation to the key-literal union; an error
+    /// operand degrades to the error type; a concrete-but-non-object operand (a
+    /// primitive after substitution) stays a deferred node — never a permissive
+    /// fallback.
+    #[test]
+    fn deferred_keyof_defers_and_resolves_via_shared_computation() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let mut next = 1u32;
+        let mut memo = FxHashMap::default();
+
+        // Free operand: unchanged, un-memoized.
+        let t = interner.intern_type_param(TypeParamId(0), "T");
+        let keyof_t = interner.intern_keyof(t);
+        assert_eq!(eval(&mut interner, &mut next, &mut memo, keyof_t), keyof_t);
+        assert!(!memo.contains_key(&keyof_t), "a deferred keyof is not memoized");
+
+        // Concrete object operand: the key-literal union (same as the eager path).
+        let obj = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number), prop("b", wk.string)],
+            ..Default::default()
+        });
+        let keyof_obj = interner.intern_keyof(obj);
+        let a = interner.intern_literal(LiteralValue::String("a".into()));
+        let b = interner.intern_literal(LiteralValue::String("b".into()));
+        let expect = interner.union(vec![a, b]);
+        assert_eq!(eval(&mut interner, &mut next, &mut memo, keyof_obj), expect);
+        let eager = keyof_of_object(&mut interner, obj).expect("object operand keys");
+        assert_eq!(eager, expect, "single source of truth: eager == deferred result");
+
+        // Error operand: the error type (M22 cascade suppression).
+        let keyof_err = interner.intern_keyof(wk.error);
+        assert_eq!(eval(&mut interner, &mut next, &mut memo, keyof_err), wk.error);
+
+        // Concrete non-object operand: stays deferred (conservative, not permissive).
+        let keyof_num = interner.intern_keyof(wk.number);
+        assert_eq!(eval(&mut interner, &mut next, &mut memo, keyof_num), keyof_num);
+    }
+
+    /// M28 — the four string intrinsics: a literal argument transforms
+    /// (whole-string for Uppercase/Lowercase; first char only for
+    /// Capitalize/Uncapitalize; the empty string unchanged), a union distributes per
+    /// member, and a non-literal argument (`string`) stays a **symbolic**
+    /// instantiation (the identical, hash-consed node).
+    #[test]
+    fn string_intrinsics_transform_distribute_and_stay_symbolic() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let mut next = 1u32;
+        let mut memo = FxHashMap::default();
+        let s_param = TypeParamId(0);
+
+        let lit = |interner: &mut Interner, v: &str| {
+            interner.intern_literal(LiteralValue::String(v.to_string()))
+        };
+        let apply = |interner: &mut Interner,
+                     next: &mut u32,
+                     memo: &mut FxHashMap<TypeId, TypeId>,
+                     base: TypeId,
+                     arg: TypeId| {
+            let inst = interner.intern_instantiation(base, vec![(s_param, arg)]);
+            let mut ev = ConditionalEvaluator::new(interner, next, memo, DEFAULT_STEP_BUDGET);
+            ev.evaluate(inst)
+        };
+
+        // Literal transforms — the four kinds.
+        let abc = lit(&mut interner, "abc");
+        let big = lit(&mut interner, "ABC");
+        let cases = [
+            (wk.uppercase, abc, "ABC"),
+            (wk.lowercase, big, "abc"),
+            (wk.capitalize, abc, "Abc"),
+            (wk.uncapitalize, big, "aBC"),
+        ];
+        for (base, arg, expect) in cases {
+            let expect = lit(&mut interner, expect);
+            assert_eq!(apply(&mut interner, &mut next, &mut memo, base, arg), expect);
+        }
+        // The empty string is unchanged (no first char to map).
+        let empty = lit(&mut interner, "");
+        assert_eq!(
+            apply(&mut interner, &mut next, &mut memo, wk.capitalize, empty),
+            empty
+        );
+
+        // A union argument distributes per member.
+        let a = lit(&mut interner, "a");
+        let b = lit(&mut interner, "b");
+        let ab = interner.union(vec![a, b]);
+        let big_a = lit(&mut interner, "A");
+        let big_b = lit(&mut interner, "B");
+        let expect = interner.union(vec![big_a, big_b]);
+        assert_eq!(
+            apply(&mut interner, &mut next, &mut memo, wk.uppercase, ab),
+            expect
+        );
+
+        // A non-literal argument stays the symbolic (identical, hash-consed) node.
+        let sym = interner.intern_instantiation(wk.uppercase, vec![(s_param, wk.string)]);
+        assert_eq!(eval(&mut interner, &mut next, &mut memo, sym), sym);
+    }
+
+    /// M28 — a non-homomorphic map with a **modifiers source** (the `Pick` shape)
+    /// resolves each key against the source object: the property's value type
+    /// replaces the placeholder and its `?` flag survives (with the M21
+    /// `| undefined` baked in); a key the source lacks keeps the M26 behavior
+    /// (error-typed value, flags absent).
+    #[test]
+    fn modifiers_source_preserves_values_and_flags() {
+        use crate::types::repr::{MappedType, ModifierOp};
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let placeholder = interner.intern_mapped_value();
+
+        // Source `{ a: number; b?: string }` (M21 stores b as `string | undefined`).
+        let str_or_undef = interner.union(vec![wk.string, wk.undefined]);
+        let mut b = prop("b", str_or_undef);
+        b.optional = true;
+        let source = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number), b],
+            ..Default::default()
+        });
+
+        // `{ [P in "a" | "b" | "q"]: T[P] }` with modifiers source = the object.
+        let a_key = interner.intern_literal(LiteralValue::String("a".into()));
+        let b_key = interner.intern_literal(LiteralValue::String("b".into()));
+        let q_key = interner.intern_literal(LiteralValue::String("q".into()));
+        let keys = interner.union(vec![a_key, b_key, q_key]);
+        let mapped = interner.intern_mapped(MappedType {
+            homomorphic: false,
+            key_source: keys,
+            value_template: placeholder,
+            modifiers_source: Some(source),
+            optional_modifier: ModifierOp::Keep,
+            readonly_modifier: ModifierOp::Keep,
+        });
+        let mut next = 0u32;
+        let mut memo = FxHashMap::default();
+        let result = eval(&mut interner, &mut next, &mut memo, mapped);
+
+        let props: Vec<PropertyType> = interner
+            .store()
+            .object_type(result)
+            .expect("result is an object")
+            .properties
+            .clone();
+        let get = |name: &str| {
+            props
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap_or_else(|| panic!("property {name} present"))
+                .clone()
+        };
+        assert_eq!(get("a").ty, wk.number, "picked value type preserved");
+        assert!(!get("a").optional);
+        assert!(get("b").optional, "picked optionality preserved");
+        assert_eq!(get("b").ty, str_or_undef);
+        assert!(!get("q").optional, "a missing key keeps the M26 defaults");
+        assert_eq!(get("q").ty, wk.error);
     }
 
     /// M26 — `-?` Required semantics (probed tsc 6.0.3, leader-arbitrated): over an
@@ -1852,6 +2770,7 @@ mod tests {
             homomorphic: true,
             key_source: source,
             value_template: template,
+            modifiers_source: None,
             optional_modifier: ModifierOp::Remove,
             readonly_modifier: ModifierOp::Keep,
         });

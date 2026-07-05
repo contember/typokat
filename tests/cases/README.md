@@ -135,9 +135,9 @@ slots into a known later phase without rework:
   (`const a: 1[] = [1]`), are over-strict (false positive, safe direction); deferred.
 - **index signatures** (`{ [k: string]: T }`, `{ [i: number]: T }`) land in **M19**; `keyof` +
   indexed-access types (`T[K]`) on concrete object types land in **M20** (evaluated eagerly).
-  Generic/deferred `keyof`/`T[K]` (over a type parameter), mapped types, and utility types
-  (`Partial`, `Record`, …) remain deferred (the type-level evaluation phase, tree-walked —
-  ADR-0001).
+  Generic `keyof` (over a type parameter) is a **deferred keyof node** since M28 (see the
+  utility-types bullet); a generic/deferred `T[K]` outside a mapped value template remains the
+  error type (silent, out of scope).
 - **mapped types** (`{ [K in keyof T]: … }`): specced in `m26_mapped_types/`, lands with backlog
   `10` (M26). Scope: evaluation over concrete sources (keyof-derived and literal-union key
   sources), value transformation, modifier arithmetic (`?`/`+?`/`-?` — `-?` strips `undefined`
@@ -153,15 +153,61 @@ slots into a known later phase without rework:
   sources (tsc resolves homomorphically; typokat defers — over-report, `evaluation_sites.ts`);
   the secondary `TS2313` tsc adds on a self-referential mapped alias is omitted (`TK2456`
   carries the line); `as` key remapping and template-literal keys are out of scope (`11`).
-- **utility types** (`Partial`, …): specced in `m28_utility_types/`, lands with backlog `12`
-  (M28). The standard aliases (Partial, Required, Readonly, Record, Pick, Omit, Exclude,
-  Extract, NonNullable, ReturnType) become BUILT-INS via a prelude compilation unit — each is
-  the ordinary mapped/conditional definition evaluated by the M25–M27 machinery (a user
-  redeclaration shadows the prelude; Omit additionally needs mapped key sources that are alias
-  instantiations to evaluate on demand). Uppercase/Lowercase/Capitalize/Uncapitalize are
-  evaluator intrinsics on string literals (distributing over unions; symbolic + conservative on
-  patterns/`string`). Out of scope: `Parameters`/`ConstructorParameters` (need rest elements,
-  backlog `24`), `InstanceType`/`ThisType`, `Awaited`, and `NoInfer`.
+- **utility types** (`Partial`, …): `m28_utility_types/` (M28, backlog `12`). The standard
+  aliases (Partial, Required, Readonly, Record, Pick, Omit, Exclude, Extract, NonNullable,
+  ReturnType) are BUILT-INS via a **prelude compilation unit** (`src/prelude.ts`, parsed +
+  bound + resolved before every user program) — each is the ordinary mapped/conditional
+  definition evaluated by the M25–M27 machinery; a user redeclaration shadows the prelude.
+  `keyof <pending computation>` (a free type parameter, a deferred node) is a **deferred
+  keyof** node evaluated on demand — previously the permissive error type, now conservative
+  (identical-node-only while deferred: rejects e.g. `x: T` against `keyof T`, matching tsc);
+  a non-homomorphic map whose value is `T[P]` on the mapped key carries `T` as its
+  **modifiers source** (tsc modifiersType), so Pick/Omit preserve value types + `?`/`readonly`.
+  Uppercase/Lowercase/Capitalize/Uncapitalize are evaluator intrinsics on string literals
+  (distributing over unions; Rust char-wise case mapping — agrees with JS for the corpus,
+  including multi-char expansions like `ß` → `"SS"`). Out of scope:
+  `Parameters`/`ConstructorParameters` (need rest elements, backlog `24`),
+  `InstanceType`/`ThisType`, `Awaited`, `NoInfer`, and the `intrinsic` keyword outside the
+  four (a user `= intrinsic` alias silently degrades to the error type). Documented
+  divergences: the prelude `ReturnType` matches a **zero-arity** `() => infer R` (rest
+  parameters are out of the type model), so `ReturnType<(x: X) => R>` is `never` — over-report
+  vs tsc — and its lib constraint is dropped (`ReturnType<number>` is `never`, not TS2344 —
+  a documented under-report); a **symbolic** intrinsic application (`Uppercase<S>` over a
+  pattern/`string`/free param) relates conservatively — assignable to `string` (and an
+  identical node) only, nothing flows INTO it — rejecting values tsc's string-mapping algebra
+  accepts (over-report, safe; witnessed by the official suite's `stringMapping*` files);
+  tsc's TS2820 did-you-mean variant of 2322 is not produced; a constraint check is
+  **skipped** only when the substituted CONSTRAINT still carries a deferred keyof (the
+  canonical Omit idiom, `Pick<T, Exclude<keyof T, K>>` with `T` free — that check lands at
+  concrete instantiation; conditional/mapped constraints keep their pre-M28 behavior);
+  TK2344 **argument** checks EVALUATE first, then always run: a decidable composition
+  checks precisely (`Pick<P, Exclude<"a" | 1, "a">>` → `1` → TK2344, tsc-exact), a
+  still-deferred argument checks conservatively — tsc-exact on unprovable shapes
+  (`Uppercase<MyExclude<K, "a">>` errors in both), an over-report ONLY on provable shapes
+  (`Uppercase<Extract<K, string>>` — tsc's constraint approximation proves the bound and
+  stays clean; backlog `37`; `constraint_arguments.ts`);
+  a conditional's top-level evaluable check/extends operands demand-evaluate before the
+  extends test, and a `No` against an operand carrying an unevaluable deferred node
+  (keyof / conditional / instantiation / mapped) at **any structural depth** — through
+  object members, index-signature values, call/construct signatures, function
+  parameters/returns, tuple/array elements, and union members; template patterns excluded
+  (the M27 matching model decides them) — **never picks the false branch**: the whole
+  conditional stays deferred (over-report; tsc decides via its string-mapping/keyof
+  algebra; `conditional_positions.ts`);
+  deferred nodes **nested inside composite operands** are NOT pre-evaluated — tsc's own
+  resolution of those shapes is mixed (object-wrapped keyof / function-return keyof /
+  tuple-wrapped intrinsics evaluate; object-wrapped and array-wrapped intrinsics
+  eager-false), so the five tsc-clean lines in `conditional_positions.ts`'s nested block
+  are documented sound-direction over-reports — exact parity is backlog `36`;
+  `Pick`/`Omit` stay DEFERRED over **union** operands and for **`K = never`** (a
+  keyof-of-union / `never` key source is not iterable in this subset — over-report; tsc
+  computes the common-key/empty results);
+  `Record` iterates **literal-union key sets only** — template-literal keys
+  (`` Record<`k${string}`, V> ``) stay deferred (over-report; tsc produces the pattern
+  index signature);
+  `DeepPartial`-style recursion over **primitive leaves** over-reports (no-lib
+  `keyof <primitive>` is the existing M20 gap — the leaf stays a deferred map, rejecting
+  values tsc accepts).
 - **template literal types** (`` `a${T}` ``): specced in `m27_template_literals/`, lands with
   backlog `11` (M27). Scope: construction (all-literal holes collapse; union holes distribute as
   a cartesian product; `boolean` expands; `never` short-circuits; numeric literals stringify),
@@ -171,7 +217,9 @@ slots into a known later phase without rework:
   and deferred generics (M25/M26 conservative model — plus: a deferred template IS assignable to
   `string`). Documented divergences: ADJACENT infer holes (no literal separator) poison the
   conditional — deferred, conservative (tsc resolves them: first hole takes one char);
-  `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics are backlog `12`;
+  `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics land in M28 (see the
+  utility-types bullet) and compose with construction (an evaluable hole — an intrinsic
+  application, a conditional, a keyof — is evaluated before the collapse);
   scientific/large-magnitude numeric stringification is a **known unsound gap — backlog `30`**
   (numeric holes and `${number}` segment validation stringify via Rust's shortest-form Display,
   not JS `String(n)`: `` `${1e21}` `` constructs `"1000000000000000000000"` where tsc's type is

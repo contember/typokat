@@ -53,7 +53,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("m25_conditional_types", true),
     ("m26_mapped_types", true),
     ("m27_template_literals", true),
-    ("m28_utility_types", false),
+    ("m28_utility_types", true),
     // Bug-fix corpora (official-suite findings / backlog items). Each is
     // committed `false` as a behavior-neutral spec, then flipped `true` by the
     // commit that lands its fix. See tests/cases/README.md ("Bug-fix corpora").

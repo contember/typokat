@@ -176,22 +176,24 @@ const oob: T[5] = 123;
     assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
 }
 
-/// Generic `keyof T` / `T[K]` over a **type parameter** is out of the M20 scope
-/// (a type-level-VM feature): `T` lowers to a type-parameter type, not an object,
-/// so both `keyof T` and `T[K]` fall back to the error type — silently and
-/// **without a crash** — inside a generic function body.
+/// Generic `keyof T` over a **type parameter** is a **deferred node** (M28 — it
+/// previously collapsed to the permissive error type, silently accepting anything):
+/// `x: T` is NOT assignable to `keyof T` (tsc agrees — TS2322), relating
+/// conservatively (identical-node only), and there is **no crash**. `T["a"]` (a
+/// generic indexed access) stays the M20 out-of-scope error type — silent.
 #[test]
-fn generic_keyof_and_indexed_access_fall_back_no_crash() {
+fn generic_keyof_defers_and_indexed_access_falls_back_no_crash() {
     let src = "\
 function f<T>(x: T): void {
   let k: keyof T = x;
   let v: T[\"a\"] = x;
 }
 ";
-    // `keyof T` and `T["a"]` over a type parameter are error types; binding `x: T`
-    // to them is clean (error suppresses cascade). No panic.
-    assert!(
-        diags(src).is_empty(),
-        "generic keyof / indexed access must degrade to the error type silently"
+    // Line 2: `T` ≁ deferred `keyof T` → TK2322 (the sound over-report tsc shares).
+    // Line 3: `T["a"]` is still the error type → clean (cascade suppressed). No panic.
+    assert_eq!(
+        diags(src),
+        vec![(2, "TK2322".to_string())],
+        "deferred keyof rejects a plain T source; generic indexed access stays silent"
     );
 }
