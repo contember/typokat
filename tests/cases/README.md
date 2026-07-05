@@ -153,6 +153,15 @@ slots into a known later phase without rework:
   sources (tsc resolves homomorphically; typokat defers — over-report, `evaluation_sites.ts`);
   the secondary `TS2313` tsc adds on a self-referential mapped alias is omitted (`TK2456`
   carries the line); `as` key remapping and template-literal keys are out of scope (`11`).
+- **utility types** (`Partial`, …): specced in `m28_utility_types/`, lands with backlog `12`
+  (M28). The standard aliases (Partial, Required, Readonly, Record, Pick, Omit, Exclude,
+  Extract, NonNullable, ReturnType) become BUILT-INS via a prelude compilation unit — each is
+  the ordinary mapped/conditional definition evaluated by the M25–M27 machinery (a user
+  redeclaration shadows the prelude; Omit additionally needs mapped key sources that are alias
+  instantiations to evaluate on demand). Uppercase/Lowercase/Capitalize/Uncapitalize are
+  evaluator intrinsics on string literals (distributing over unions; symbolic + conservative on
+  patterns/`string`). Out of scope: `Parameters`/`ConstructorParameters` (need rest elements,
+  backlog `24`), `InstanceType`/`ThisType`, `Awaited`, and `NoInfer`.
 - **template literal types** (`` `a${T}` ``): specced in `m27_template_literals/`, lands with
   backlog `11` (M27). Scope: construction (all-literal holes collapse; union holes distribute as
   a cartesian product; `boolean` expands; `never` short-circuits; numeric literals stringify),
@@ -259,6 +268,7 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m25_conditional_types/` | M25 — conditional types (resolution, distribution, `infer`, deferred conditionals, `TK2456`/`TK2589`) |
 | `m26_mapped_types/` | M26 — mapped types (`{ [K in keyof T]: … }`, modifiers, homomorphic preservation, deferred generics) |
 | `m27_template_literals/` | M27 — template literal types (construction/distribution, patterns, `infer` extraction, deferred generics) |
+| `m28_utility_types/` | M28 — built-in utility types (prelude aliases: Partial…Omit/ReturnType; Uppercase-family intrinsics) |
 
 ## Bug-fix / backlog corpora
 
