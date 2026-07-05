@@ -50,3 +50,4 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 - [`33`](33-as-cast-assignability.md) — `as`-cast RHS bypasses initializer assignability (silent FN family; pre-existing, M28 review).
 - [`34`](34-fix-params-evaluate-before-gate.md) — `fix_params` gates deferred `keyof` without evaluating first (missed TS2345; pre-existing, M28 review).
 - [`35`](35-keyof-union-and-key-source-edges.md) — `keyof` over unions + `never`/template-literal mapped key sources (over-report tail; M28 review).
+- [`36`](36-conditional-structural-operand-parity.md) — tsc parity for conditionals with structurally-wrapped deferred operands (eager-false shortcut model; M28 round-2 arbitration).
