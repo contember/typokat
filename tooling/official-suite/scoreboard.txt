@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
-# corpus 874  in-scope 491  out-of-scope 383
-# clean-kept 164/209  error-exact 21/282  diag-recall 250/1651
+# corpus 874  in-scope 495  out-of-scope 379
+# clean-kept 166/211  error-exact 21/284  diag-recall 250/1657
 # cols: status<TAB>matched fn fp expected<TAB>rel  (status=IN | OOS:<bucket>; '-' = n/a)
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -213,7 +213,7 @@ IN	0 1 0 1	conformance/classes/propertyMemberDeclarations/accessorsOverridePrope
 IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty5.ts
 IN	0 2 0 2	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty6.ts
 OOS:parse-error	- - - -	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty7.ts
-OOS:syntax:mapped-type	- - - -	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty8.ts
+OOS:syntax:as-const	- - - -	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty8.ts
 OOS:syntax:module	- - - -	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty9.ts
 IN	0 5 0 5	conformance/classes/propertyMemberDeclarations/assignParameterPropertyToPropertyDeclarationES2022.ts
 IN	0 5 0 5	conformance/classes/propertyMemberDeclarations/assignParameterPropertyToPropertyDeclarationESNext.ts
@@ -333,20 +333,20 @@ IN	0 0 2 0	conformance/controlFlow/controlFlowWithTemplateLiterals.ts
 OOS:syntax:module	- - - -	conformance/controlFlow/definiteAssignmentAssertions.ts
 OOS:parse-error	- - - -	conformance/controlFlow/definiteAssignmentAssertionsWithObjectShortHand.ts
 OOS:unresolved	- - - -	conformance/controlFlow/dependentDestructuredVariables.ts
-OOS:syntax:mapped-type	- - - -	conformance/controlFlow/dependentDestructuredVariablesFromNestedPatterns.ts
+OOS:syntax:as-const	- - - -	conformance/controlFlow/dependentDestructuredVariablesFromNestedPatterns.ts
 OOS:syntax:module	- - - -	conformance/controlFlow/dependentDestructuredVariablesWithExport.ts
 OOS:syntax:enum	- - - -	conformance/controlFlow/exhaustiveSwitchStatements1.ts
 OOS:syntax:module	- - - -	conformance/controlFlow/neverReturningFunctions1.ts
 IN	0 0 2 0	conformance/controlFlow/switchWithConstrainedTypeVariable.ts
 OOS:syntax:module	- - - -	conformance/controlFlow/typeGuardsAsAssertions.ts
 OOS:syntax:instanceof	- - - -	conformance/controlFlow/typeGuardsNestedAssignments.ts
-OOS:syntax:mapped-type	- - - -	conformance/controlFlow/typeGuardsTypeParameters.ts
+OOS:syntax:instanceof	- - - -	conformance/controlFlow/typeGuardsTypeParameters.ts
 OOS:syntax:instanceof	- - - -	conformance/expressions/typeGuards/TypeGuardWithArrayUnion.ts
 OOS:syntax:enum	- - - -	conformance/expressions/typeGuards/TypeGuardWithEnumUnion.ts
 IN	0 0 0 0	conformance/expressions/typeGuards/nullOrUndefinedTypeGuardIsOrderIndependent.ts
 OOS:syntax:enum	- - - -	conformance/expressions/typeGuards/typeGuardEnums.ts
 OOS:syntax:type-predicate	- - - -	conformance/expressions/typeGuards/typeGuardFunction.ts
-OOS:syntax:mapped-type	- - - -	conformance/expressions/typeGuards/typeGuardFunctionErrors.ts
+OOS:syntax:type-predicate	- - - -	conformance/expressions/typeGuards/typeGuardFunctionErrors.ts
 OOS:syntax:type-predicate	- - - -	conformance/expressions/typeGuards/typeGuardFunctionGenerics.ts
 OOS:syntax:type-predicate	- - - -	conformance/expressions/typeGuards/typeGuardFunctionOfFormThis.ts
 OOS:syntax:type-predicate	- - - -	conformance/expressions/typeGuards/typeGuardFunctionOfFormThisErrors.ts
@@ -438,7 +438,7 @@ OOS:parse-error	- - - -	conformance/interfaces/interfaceDeclarations/interfacesW
 IN	0 2 0 2	conformance/types/intersection/commonTypeIntersection.ts
 IN	0 0 0 0	conformance/types/intersection/contextualIntersectionType.ts
 IN	0 19 0 19	conformance/types/intersection/intersectionAndUnionTypes.ts
-OOS:syntax:mapped-type	- - - -	conformance/types/intersection/intersectionAsWeakTypeSource.ts
+IN	0 2 0 2	conformance/types/intersection/intersectionAsWeakTypeSource.ts
 OOS:syntax:module	- - - -	conformance/types/intersection/intersectionMemberOfUnionNarrowsCorrectly.ts
 IN	0 1 0 1	conformance/types/intersection/intersectionNarrowing.ts
 IN	0 0 0 0	conformance/types/intersection/intersectionOfUnionNarrowing.ts
@@ -449,21 +449,21 @@ IN	0 0 3 0	conformance/types/intersection/intersectionThisTypes.ts
 IN	2 2 0 4	conformance/types/intersection/intersectionTypeAssignment.ts
 IN	0 0 0 0	conformance/types/intersection/intersectionTypeEquivalence.ts
 IN	1 2 0 3	conformance/types/intersection/intersectionTypeInference.ts
-OOS:syntax:mapped-type	- - - -	conformance/types/intersection/intersectionTypeInference2.ts
+IN	0 0 0 0	conformance/types/intersection/intersectionTypeInference2.ts
 OOS:unresolved	- - - -	conformance/types/intersection/intersectionTypeInference3.ts
 IN	0 8 0 8	conformance/types/intersection/intersectionTypeMembers.ts
 IN	0 2 0 2	conformance/types/intersection/intersectionTypeOverloading.ts
 IN	1 3 0 4	conformance/types/intersection/intersectionTypeReadonly.ts
-OOS:syntax:mapped-type	- - - -	conformance/types/intersection/intersectionWithIndexSignatures.ts
-OOS:syntax:mapped-type	- - - -	conformance/types/intersection/intersectionWithUnionConstraint.ts
+IN	0 4 0 4	conformance/types/intersection/intersectionWithIndexSignatures.ts
+OOS:unresolved	- - - -	conformance/types/intersection/intersectionWithUnionConstraint.ts
 OOS:multifile	- - - -	conformance/types/intersection/intersectionsAndEmptyObjects.ts
 IN	0 0 2 0	conformance/types/intersection/operatorsAndIntersectionTypes.ts
 IN	0 6 0 6	conformance/types/intersection/recursiveIntersectionTypes.ts
 IN	0 9 0 9	conformance/types/keyof/circularIndexedAccessErrors.ts
-OOS:syntax:mapped-type	- - - -	conformance/types/keyof/keyofAndForIn.ts
+IN	0 0 0 0	conformance/types/keyof/keyofAndForIn.ts
 OOS:syntax:enum	- - - -	conformance/types/keyof/keyofAndIndexedAccess.ts
 OOS:syntax:module	- - - -	conformance/types/keyof/keyofAndIndexedAccess2.ts
-OOS:syntax:mapped-type	- - - -	conformance/types/keyof/keyofAndIndexedAccessErrors.ts
+OOS:unresolved	- - - -	conformance/types/keyof/keyofAndIndexedAccessErrors.ts
 OOS:unresolved	- - - -	conformance/types/keyof/keyofIntersection.ts
 IN	0 0 3 0	conformance/types/literal/booleanLiteralTypes1.ts
 IN	0 0 3 0	conformance/types/literal/booleanLiteralTypes2.ts
@@ -480,7 +480,7 @@ IN	1 0 0 1	conformance/types/literal/literalTypesWidenInParameterPosition.ts
 IN	0 0 2 0	conformance/types/literal/numericLiteralTypes1.ts
 IN	0 0 2 0	conformance/types/literal/numericLiteralTypes2.ts
 IN	16 12 0 28	conformance/types/literal/numericLiteralTypes3.ts
-OOS:syntax:mapped-type	- - - -	conformance/types/literal/numericStringLiteralTypes.ts
+OOS:syntax:template-lit-type	- - - -	conformance/types/literal/numericStringLiteralTypes.ts
 OOS:syntax:enum	- - - -	conformance/types/literal/stringEnumLiteralTypes1.ts
 OOS:syntax:enum	- - - -	conformance/types/literal/stringEnumLiteralTypes2.ts
 OOS:syntax:enum	- - - -	conformance/types/literal/stringEnumLiteralTypes3.ts
@@ -517,7 +517,7 @@ IN	0 0 4 0	conformance/types/members/classWithPublicProperty.ts
 IN	0 12 0 12	conformance/types/members/duplicateNumericIndexers.ts
 IN	0 16 0 16	conformance/types/members/duplicatePropertyNames.ts
 OOS:syntax:module	- - - -	conformance/types/members/duplicateStringIndexers.ts
-OOS:syntax:mapped-type	- - - -	conformance/types/members/indexSignatures1.ts
+OOS:syntax:template-lit-type	- - - -	conformance/types/members/indexSignatures1.ts
 IN	0 1 0 1	conformance/types/members/objectTypeHidingMembersOfExtendedObject.ts
 IN	0 3 0 3	conformance/types/members/objectTypeHidingMembersOfObject.ts
 OOS:unresolved	- - - -	conformance/types/members/objectTypeHidingMembersOfObjectAssignmentCompat.ts
@@ -644,7 +644,7 @@ IN	0 1 0 1	conformance/types/tuple/emptyTuples/emptyTuplesTypeAssertion02.ts
 IN	0 6 0 6	conformance/types/tuple/indexerWithTuple.ts
 OOS:syntax:module	- - - -	conformance/types/tuple/named/namedTupleMembers.ts
 OOS:syntax:module	- - - -	conformance/types/tuple/named/namedTupleMembersErrors.ts
-OOS:syntax:mapped-type	- - - -	conformance/types/tuple/named/partiallyNamedTuples.ts
+OOS:unresolved	- - - -	conformance/types/tuple/named/partiallyNamedTuples.ts
 OOS:unresolved	- - - -	conformance/types/tuple/named/partiallyNamedTuples2.ts
 OOS:unresolved	- - - -	conformance/types/tuple/named/partiallyNamedTuples3.ts
 OOS:parse-error	- - - -	conformance/types/tuple/optionalTupleElements1.ts
@@ -659,7 +659,7 @@ IN	0 0 0 0	conformance/types/tuple/tupleElementTypes4.ts
 IN	0 2 0 2	conformance/types/tuple/tupleLengthCheck.ts
 IN	1 5 5 6	conformance/types/tuple/typeInferenceWithTupleType.ts
 IN	0 8 0 8	conformance/types/tuple/unionsOfTupleTypes1.ts
-OOS:syntax:mapped-type	- - - -	conformance/types/tuple/variadicTuples1.ts
+OOS:syntax:template-lit-type	- - - -	conformance/types/tuple/variadicTuples1.ts
 OOS:parse-error	- - - -	conformance/types/tuple/variadicTuples2.ts
 IN	0 3 0 3	conformance/types/tuple/variadicTuples3.ts
 IN	0 0 1 0	conformance/types/tuple/wideningTuples1.ts

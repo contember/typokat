@@ -148,7 +148,7 @@ OUT_OF_SCOPE_SYNTAX = [
     ("enum", re.compile(r"\benum\b")),
     ("decorator", re.compile(r"^\s*@[A-Za-z_]\w*\s*[\(\n]", re.M)),
     # conditional-type + infer gates removed — M25 models them (backlog 09).
-    ("mapped-type", re.compile(r"\[\s*\w+\s+in\s+")),
+    # mapped-type gate removed — M26 models them (backlog 10).
     ("template-lit-type", re.compile(r":\s*`[^`]*\$\{|=\s*`[^`]*\$\{")),
     ("satisfies", re.compile(r"\bsatisfies\b")),
     ("as-const", re.compile(r"\bas\s+const\b")),
