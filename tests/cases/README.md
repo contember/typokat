@@ -153,6 +153,16 @@ slots into a known later phase without rework:
   sources (tsc resolves homomorphically; typokat defers — over-report, `evaluation_sites.ts`);
   the secondary `TS2313` tsc adds on a self-referential mapped alias is omitted (`TK2456`
   carries the line); `as` key remapping and template-literal keys are out of scope (`11`).
+- **template literal types** (`` `a${T}` ``): specced in `m27_template_literals/`, lands with
+  backlog `11` (M27). Scope: construction (all-literal holes collapse; union holes distribute as
+  a cartesian product; `boolean` expands; `never` short-circuits; numeric literals stringify),
+  pattern assignability (anchored segment matching for `${string}`/`${number}` holes; `string`
+  does not match a pattern; patterns flow into `string` and subsuming patterns), `infer`
+  extraction for holes separated by non-empty literal anchors (non-greedy on the first anchor),
+  and deferred generics (M25/M26 conservative model — plus: a deferred template IS assignable to
+  `string`). Documented divergences: ADJACENT infer holes (no literal separator) poison the
+  conditional — deferred, conservative (tsc resolves them: first hole takes one char);
+  `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics are backlog `12`.
 - **conditional types** (`T extends U ? X : Y`): specced in `m25_conditional_types/`, lands with
   backlog `09` (M25). Scope: resolution through the relation engine; distribution over
   naked-param unions (`never` → `never`, `boolean` expands to `true | false`); `infer`
@@ -242,6 +252,7 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m24_generic_constraints/` | M24 — generic constraints (`TK2344`, apparent type, clamp-to-constraint inference, `TK2313` circularity) |
 | `m25_conditional_types/` | M25 — conditional types (resolution, distribution, `infer`, deferred conditionals, `TK2456`/`TK2589`) |
 | `m26_mapped_types/` | M26 — mapped types (`{ [K in keyof T]: … }`, modifiers, homomorphic preservation, deferred generics) |
+| `m27_template_literals/` | M27 — template literal types (construction/distribution, patterns, `infer` extraction, deferred generics) |
 
 ## Bug-fix / backlog corpora
 
