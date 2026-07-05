@@ -42,3 +42,17 @@ const o2: 6 = ov.x; // error[TK2322]: Type '5' is not assignable to type '6'
 type Ident<T> = { [K in keyof T]: T[K] };
 const md1: Ident<Derived> = { x: 1, y: "s" };
 const md2: Ident<Derived> = { y: "s" }; // error[TK2741]: 'x' is missing
+
+// A base that is a (non-generic) object-literal type ALIAS composes too.
+type ObjAlias = { p: number };
+interface IA extends ObjAlias { q: string }
+const ia1: IA = { p: 1, q: "s" };
+const ia2: IA = { q: "s" }; // error[TK2741]: 'p' is missing
+declare const iav: IA;
+const iar: number = iav.p;
+
+// A base that is a CLASS composes (tsc allows extending classes).
+class CBase { cx: number = 1 }
+interface IC extends CBase { q: string }
+const ic1: IC = { cx: 1, q: "s" };
+const ic2: IC = { q: "s" }; // error[TK2741]: 'cx' is missing

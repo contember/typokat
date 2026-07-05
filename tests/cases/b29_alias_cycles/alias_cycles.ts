@@ -27,3 +27,13 @@ type Odd = { next: Even | null };
 declare const ev: Even;
 const n1: Odd | null = ev.next;
 const n2: string = ev.next; // error[TK2322]
+
+// Legal recursion through INDEX-SIGNATURE values and MAPPED value templates
+// (the canonical JSON shape) — no TK2456, and the alias resolves to a REAL
+// type (the undefined line proves it isn't silently error-typed).
+type Json = string | number | boolean | null | Json[] | { [k: string]: Json };
+declare const j: Json;
+const j1: Json = { a: 1 };
+const j2: Json = undefined; // error[TK2322]
+type MapRec = string | { [K in "a" | "b"]: MapRec };
+declare const mr: MapRec;
