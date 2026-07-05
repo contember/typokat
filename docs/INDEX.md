@@ -22,19 +22,19 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprints/sprint-2026-07-05-utility-types.md`](sprints/sprint-2026-07-05-utility-types.md) —
-  backlog `12` / M28 (spec committed, implementation in progress).
+*(none — between sprints)*
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M27 + the soundness warm-ups shipped** — after the M24→M27 type-level run, the
-  warm-ups sprint killed three silent-FN families (interface `extends` composition incl.
-  class/alias bases, alias-cycle `TK2456` + legal-recursion reads incl. the canonical
-  `Json` shape, negative literals); see [`archive/`](archive/README.md). Scoreboard:
-  in-scope 500, clean-kept 168/215, error-exact 22/285, diag-recall 253/1659. **Next:
-  utility types (`12` / M28)** — closes the type-level phase — then the `13` profiling
-  gate and the real-world track (`14` lib.d.ts, `15` modules). Known-gap items: `24`–`27`,
-  `30`–`32` (`31` object-literal contextual typing and `32` eager-keyof forward refs are
-  the new review byproducts). Small warm-ups: `21`–`23`.
+- **M0–M28 shipped — the type-level evaluation phase is complete.** M28 (utility types)
+  added the prelude compilation unit (ten built-in utilities + the `Uppercase` intrinsic
+  family), the deferred `keyof` node, modifier-preserving Pick, and recursive
+  mapped-alias seeding; four adversarial review rounds hardened conditional operand
+  evaluation (no-false-on-undecidable); see [`archive/`](archive/README.md). Scoreboard:
+  in-scope 506, clean-kept 171/219, error-exact 22/287, diag-recall 285/1691. **Next:
+  the `13` profiling gate, then the real-world track (`14` lib.d.ts — the prelude is its
+  stepping stone, `15` modules).** Known-gap items: `24`–`27`, `30`–`37` (`33`–`37` are
+  the M28 review byproducts; `31` object-literal contextual typing unblocks literal-heavy
+  corpora). Small warm-ups: `21`–`23`.

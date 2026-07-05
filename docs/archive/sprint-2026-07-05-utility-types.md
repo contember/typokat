@@ -1,6 +1,46 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/.
--->
+# OUTCOME (closed 2026-07-05) — SHIPPED
+
+**M28 utility types shipped — the type-level evaluation phase is complete.** The ten
+standard utility aliases (`Partial`…`ReturnType`) are built-ins via a **prelude
+compilation unit** (`src/prelude.ts`, ordinary TS parsed + bound in a scoped pre-pass;
+user scope chains to it, shadowing wins, prelude diagnostics never surface — the
+stepping stone to backlog `14`). WU2 (probe-driven re-scope S/M→L): a **deferred
+`TypeTag::Keyof` node** replaces the permissive error-type collapse of
+`keyof <free param>`; **modifier/value-preserving Pick** via identity-bearing
+`MappedType.modifiers_source`; **recursive mapped-alias seeding** (`reserve_mapped`).
+WU3: the four string intrinsics evaluate literals, distribute over unions, stay
+conservatively symbolic otherwise (`ß`→`SS` matches tsc).
+
+**Commit map.** Spec `9bc1123` · plan `4756c6c` · WU2 expansion `a50c971` · spec
+amendments `c898c77` (conditional operand positions), `f1fbdca` (nested operands +
+leader arbitration), `3ffb601` (TK2344 argument-site semantics) · byproduct filings
+`5a8bbc7` (backlog 33–35), `72520c6` (36), `1ac4cb9` (37) · implementation `66118a9`
+(+2336/−212) · ratchet `03f9337`.
+
+**Verification.** 203 unit + conformance green (m28: 4 fixture files / 42 markers;
+corpus total 123 files / 444 markers), clippy clean. **Four adversarial review
+rounds**: R1 FAIL (two HIGH FNs — conditional check/extends operands related
+unevaluated → wrong branch) → `DecideConditional` demand-eval + no-false-on-undecidable;
+R2 FAIL (gate walked top-level only — nested deferred nodes escaped; leader arbitration
+probe pinned tsc's MIXED structural resolution, deep pre-eval proven wrong both ways) →
+deep undecidable walk; R3 FAIL (leader's own R2 LOW-2a directive was an FN generator —
+tsc errors at declaration even on unprovable deferred args) → evaluate-first-then-check;
+R4 **PASS** (zero FNs across all probe corpora, every extra line a pinned over-report).
+Official suite: in-scope 500→506 (six OOS files gained coverage, incl.
+`stringMappingOverPatternLiterals` 29/29), clean-kept 171/219, diag-recall 285→/1691
+(+32), error-exact 22/287, 0 regressions.
+
+**Deferred / byproducts.** Backlog `33` (as-cast RHS bypasses assignability +
+call-arity variant — pre-existing), `34` (`fix_params` evaluate-before-gate),
+`35` (keyof-over-union / `never` / template-literal key sources), `36` (tsc parity for
+structurally-wrapped conditional operands — the eager-false shortcut, arbitration
+table inside), `37` (constraint approximation for provable deferred args — the one
+`Uppercase<Extract<K, string>>` over-report). Divergences documented in
+`tests/cases/README.md`. Process note: two of the four rounds corrected the LEADER
+(mis-directed gate; incomplete reviewer table arbitrated by fresh probes) — the
+independent-review + leader-arbitration loop caught both.
+
+---
 
 # Sprint — utility types / M28 (2026-07-05)
 

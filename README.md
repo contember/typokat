@@ -7,15 +7,18 @@ full classes, and the common "real-world" type constructs. It is a **checker, no
 emit, JS runtime semantics, and module resolution are out of scope by design — the goal is to
 preserve the **type model** (see [`docs/reference/architecture.md`](./docs/reference/architecture.md)).
 
-> Status: **M0–M27** implemented — the type-level evaluation run: M24 generic
+> Status: **M0–M28** implemented — the type-level evaluation phase complete: M24 generic
 > constraints, M25 conditional types (demand-driven evaluator: explicit work-stack,
 > memoization, tsc-like instantiation budget, non-widening `infer` mode), M26 mapped
 > types (modifier arithmetic with tsc `Required` semantics, homomorphic union
 > distribution), M27 template literal types (construction, anchored pattern matching,
-> `infer` extraction) — on top of the M23 flow-node CFG, class completeness, and
-> constructor accessibility. ~24k lines of Rust, 194 unit tests + a 116-file
-> conformance corpus (385 expected diagnostics), `clippy -D warnings` clean. Every
-> milestone was cross-checked against real `tsc 6.0.3 --strict`.
+> `infer` extraction), M28 **built-in utility types** (`Partial`…`ReturnType` via an
+> embedded prelude compilation unit, the `Uppercase`/`Lowercase`/`Capitalize`/
+> `Uncapitalize` intrinsics, a deferred `keyof` type node) — on top of the M23
+> flow-node CFG, class completeness, and constructor accessibility. ~26k lines of
+> Rust, 203 unit tests + a 123-file conformance corpus (444 expected diagnostics),
+> `clippy -D warnings` clean. Every milestone was cross-checked against real
+> `tsc 6.0.3 --strict`.
 
 ## Quick start
 
@@ -43,7 +46,8 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 |---|---|
 | **Foundation** | primitives & intrinsics (`any`/`unknown`/`never`/`void`, strict null), objects (structural, excess/missing/depth, **optional members `a?: T`**), functions (arity, contravariant params, void-return rule), unions (canonicalized), recursive & mutually-recursive named types, literal types |
 | **Narrowing** | `typeof`, truthiness, `null`/`undefined` equality, **discriminated unions**, `in`, `switch`; **unstructured flow** via the flow-node CFG — early `return`/`throw`, `&&`/`\|\|`/ternary, assignment narrowing, `while` loop edges (back edge / exit / `break` / `continue`) |
-| **Generics** | type parameters, instantiation, **type-argument inference** from call arguments |
+| **Generics** | type parameters, instantiation, **type-argument inference** from call arguments, **constraints** (`extends` — apparent types, declaration + call-site `TK2344`/`TK2345`, circularity `TK2313`) |
+| **Type-level evaluation** | conditional types (**distribution**, `infer` incl. anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, **the ten standard utility types as built-ins** (prelude compilation unit) + the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
 | **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract` (incl. **abstract-member completeness**); **generic classes**; **override compatibility** (tsc's base-keyed method bivariance); **constructor accessibility** on `new` |
 | **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, contextual typing), index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`) |
 | **Reporting** | nested reason chains (`Types of property 'x' are incompatible …`) |
@@ -102,12 +106,13 @@ values — none of which the implementation's own tests surfaced.
 ```
 src/
   driver.rs, main.rs, span.rs, diagnostics.rs   pipeline, CLI, spans, diagnostics + rendering
+  prelude.ts                                    the built-in utility-types compilation unit
   types/    store · intern (hash-consing) · repr · hash · substitute   the type store
   binder/   scope · symbol (multi-slot) · bind                          scope graph
   check/    checker (incl. flowgraph) · infer (inference engine) · flow (nodes + narrowing ops)   the checkers
   relate/   relation (is_assignable, cycle stack, reasons) · cache      the relation engine
 tests/
-  conformance.rs        marker-driven harness (MILESTONE_DIRS enables m0..m22 + bug-fix corpora)
+  conformance.rs        marker-driven harness (MILESTONE_DIRS enables m0..m28 + bug-fix corpora)
   cases/mN_*/           the conformance corpus (the spec)
 ```
 

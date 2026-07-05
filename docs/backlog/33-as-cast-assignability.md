@@ -18,6 +18,11 @@ assignability check is skipped entirely when the RHS is a cast, so every declara
 with a cast RHS checks nothing — a broad silent-FN family in real-world code, where
 casts are common.
 
+The M28 round-4 review widened the finding: `as`-expressions in CALL ARGUMENT
+position break arity/assignment checking too (`g(1 as never)` → spurious TK2554 with
+no generics involved), so the whole `as`-expression typing path is unfinished, not
+just the initializer site.
+
 tsc also validates the cast itself (TS2352 when the source and asserted types are
 unrelated); that sub-check can ship with this item or be split when scoped.
 
