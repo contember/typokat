@@ -22,14 +22,13 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-07-06-modules-cross-file.md`](sprints/sprint-2026-07-06-modules-cross-file.md) —
-  backlog `15` slice 1 / M29: correctness-first local relative modules and cross-file named imports/exports.
+*(none — between sprints)*
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M29 shipped/in-flight — real-project scale has started.** M28 completed the type-level
+- **M0–M29 shipped — real-project scale has started.** M28 completed the type-level
   evaluation phase (prelude utilities, deferred `keyof`, modifier-preserving Pick, recursive
   mapped-alias seeding, string intrinsics). M29 ships backlog `15` slice 1: correctness-first
   local-relative modules and cross-file named imports/exports in one serial type universe;

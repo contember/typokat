@@ -1,3 +1,34 @@
+# OUTCOME (closed 2026-07-06) — SHIPPED
+
+**M29 local-relative modules shipped.** `typokat check <files...>` now runs a
+correctness-first project checker for provided local relative `.ts` modules:
+dependency-ordered named imports/exports, simple export lists, `import type`,
+class value+type imports, cross-file nominal identity, and `TK2305`/`TK2307`.
+The implementation deliberately keeps `driver::check_files` as the old
+independent per-file parallel API and leaves full resolver breadth plus Stage 2
+parallel cross-file identity in backlog `15`/`16`.
+
+**Commit map.** Spec/plan `5e266ea` · implementation `cec1a6b`.
+
+**Verification.** `cargo test` (203 unit tests + conformance; corpus 134 files /
+463 markers), `cargo clippy --all-targets -- -D warnings`, M29 fixtures
+cross-checked against `tsc 6.0.3 --strict --noEmit --module esnext
+--moduleResolution bundler`, CLI probes for cross-file imports and type-only
+value-use, official-suite `run --bin ../../target/debug/typokat --check` (0
+regressions / 0 progress; official module gates remain closed).
+
+**Review.** Independent review round 1 **FAIL**: type-only imports/exports used
+as values were silent FNs; CLI still used old per-file checking. Fix: value-position
+identifier resolution now requires a value slot (`TK2304` for the temporary TS2693
+mapping), and CLI routes `check` through `check_project`. Re-review **PASS**.
+
+**Deferred.** Packages / `node_modules`, `tsconfig` resolver options, `.d.ts`,
+default/namespace/star imports, re-export-from, CommonJS, ambient modules, cycles,
+full `lib.d.ts`, official-suite module gate lifting, stable structural hash /
+parallel Stage 2 identity, and incrementality.
+
+---
+
 # Sprint — modules / cross-file correctness slice (2026-07-06)
 
 **Goal.** Ship backlog [`15`](../backlog/15-modules-imports.md)'s first slice:
