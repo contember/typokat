@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
 # corpus 874  in-scope 506  out-of-scope 368
-# clean-kept 171/219  error-exact 22/287  diag-recall 285/1691
+# clean-kept 172/219  error-exact 22/287  diag-recall 285/1691
 # cols: status<TAB>matched fn fp expected<TAB>rel  (status=IN | OOS:<bucket>; '-' = n/a)
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -319,7 +319,7 @@ OOS:syntax:module	- - - -	conformance/controlFlow/controlFlowInstanceofExtendsFu
 IN	0 0 2 0	conformance/controlFlow/controlFlowIteration.ts
 IN	2 2 6 4	conformance/controlFlow/controlFlowIterationErrors.ts
 OOS:unresolved	- - - -	conformance/controlFlow/controlFlowIterationErrorsAsync.ts
-IN	0 0 1 0	conformance/controlFlow/controlFlowNoIntermediateErrors.ts
+IN	0 0 0 0	conformance/controlFlow/controlFlowNoIntermediateErrors.ts
 IN	0 1 1 1	conformance/controlFlow/controlFlowNullishCoalesce.ts
 OOS:syntax:type-predicate	- - - -	conformance/controlFlow/controlFlowOptionalChain.ts
 IN	0 0 0 0	conformance/controlFlow/controlFlowOptionalChain2.ts
@@ -657,7 +657,7 @@ IN	0 0 0 0	conformance/types/tuple/tupleElementTypes2.ts
 IN	0 0 0 0	conformance/types/tuple/tupleElementTypes3.ts
 IN	0 0 0 0	conformance/types/tuple/tupleElementTypes4.ts
 IN	0 2 0 2	conformance/types/tuple/tupleLengthCheck.ts
-IN	1 5 5 6	conformance/types/tuple/typeInferenceWithTupleType.ts
+IN	1 5 4 6	conformance/types/tuple/typeInferenceWithTupleType.ts
 IN	0 8 0 8	conformance/types/tuple/unionsOfTupleTypes1.ts
 OOS:syntax:as-const	- - - -	conformance/types/tuple/variadicTuples1.ts
 OOS:parse-error	- - - -	conformance/types/tuple/variadicTuples2.ts
