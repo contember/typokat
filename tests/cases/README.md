@@ -34,6 +34,8 @@ fixture (keeps fixtures robust to author miscounting).
 | Code | Meaning |
 |---|---|
 | `TK2304` | Cannot find name (unresolved identifier) |
+| `TK2305` | Module has no exported member |
+| `TK2307` | Cannot find module |
 | `TK2313` | Type parameter has a circular constraint (`<T extends T>`) |
 | `TK2322` | Type X is not assignable to type Y (annotation/reassignment/return/property) |
 | `TK2339` | Property does not exist on type |
@@ -317,6 +319,23 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m26_mapped_types/` | M26 — mapped types (`{ [K in keyof T]: … }`, modifiers, homomorphic preservation, deferred generics) |
 | `m27_template_literals/` | M27 — template literal types (construction/distribution, patterns, `infer` extraction, deferred generics) |
 | `m28_utility_types/` | M28 — built-in utility types (prelude aliases: Partial…Omit/ReturnType; Uppercase-family intrinsics) |
+| `m29_modules/` | M29 — local relative modules / named imports + exports across files (project fixture subdirectories) |
+
+## Project fixture convention (M29+)
+
+M29 introduces multi-file project fixtures. A project fixture is a subdirectory
+under `tests/cases/m29_modules/`; every `.ts` file in that subdirectory tree is
+part of one project, and markers follow the same same-line convention as
+single-file fixtures. Diagnostics are matched against the file that produced
+them. Project fixtures stay registered `false` until the conformance harness grows
+the project-check path.
+
+The first M29 slice is deliberately narrow: local relative `./` / `../` imports
+resolved to `.ts` files; named imports and named exports for values, types,
+interfaces, and classes; simple `export { x as y }` lists; one serial type
+universe. Packages, `tsconfig`, default/namespace/star imports, re-exports from
+another module, CommonJS, ambient modules, `.d.ts`, cycles, and parallel
+cross-universe identity are out of scope.
 
 ## Bug-fix / backlog corpora
 

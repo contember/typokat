@@ -54,6 +54,10 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("m26_mapped_types", true),
     ("m27_template_literals", true),
     ("m28_utility_types", true),
+    // M29 modules are project fixtures (subdirectories with multiple files), not
+    // flat single-file fixtures. Registered false by the spec commit; the
+    // implementation commit extends the harness before flipping this on.
+    ("m29_modules", false),
     // Bug-fix corpora (official-suite findings / backlog items). Each is
     // committed `false` as a behavior-neutral spec, then flipped `true` by the
     // commit that lands its fix. See tests/cases/README.md ("Bug-fix corpora").

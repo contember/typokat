@@ -20,5 +20,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-07-05-utility-types.md`](sprint-2026-07-05-utility-types.md) —
-  backlog `12` / M28: built-in utility types (prelude unit, Omit composition, string intrinsics).
+- [`sprint-2026-07-06-modules-cross-file.md`](sprint-2026-07-06-modules-cross-file.md) —
+  backlog `15` slice 1 / M29: correctness-first local relative modules and cross-file named imports/exports.

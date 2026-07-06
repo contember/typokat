@@ -22,7 +22,8 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-*(none — between sprints)*
+- [`sprint-2026-07-06-modules-cross-file.md`](sprints/sprint-2026-07-06-modules-cross-file.md) —
+  backlog `15` slice 1 / M29: correctness-first local relative modules and cross-file named imports/exports.
 
 ## What's hot
 
