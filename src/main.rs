@@ -1,16 +1,16 @@
 //! typokat CLI entry point.
 //!
 //! One command: `typokat check <file.ts>...`, which parses and checks one or more
-//! files (in parallel across files — [`check_files`]), renders any diagnostics to
-//! stderr per file, and exits non-zero if any file has errors. A single-file
-//! invocation renders exactly as it always has. All pipeline logic lives in the
-//! `typokat` library crate (`lib.rs`).
+//! files as one local-relative project, renders any diagnostics to stderr per
+//! file, and exits non-zero if any file has errors. A single-file invocation
+//! renders exactly as it always has. All pipeline logic lives in the `typokat`
+//! library crate (`lib.rs`).
 
 use std::io::Write;
 use std::process::ExitCode;
 
 use typokat::diagnostics;
-use typokat::driver::{check_files, FileInput};
+use typokat::driver::{check_project, FileInput};
 
 /// Exit code for a usage error (bad/missing arguments).
 const EXIT_USAGE: u8 = 2;
@@ -57,7 +57,8 @@ fn run(args: &[String]) -> Result<bool, String> {
     }
 }
 
-/// Read, check (in parallel across files), and report. Returns `Ok(had_errors)`.
+/// Read, check as one local-relative project, and report. Returns
+/// `Ok(had_errors)`.
 ///
 /// Every file is read up front; a read failure aborts with a usage/IO error (exit
 /// 2), exactly as the single-file path always did. The per-file rendering is
@@ -76,7 +77,7 @@ fn check_paths(paths: &[String]) -> Result<bool, String> {
         });
     }
 
-    let reports = check_files(inputs);
+    let reports = check_project(inputs);
 
     let stderr = std::io::stderr();
     let mut handle = stderr.lock();

@@ -4,19 +4,21 @@ A from-scratch **TypeScript type checker in Rust**, built to a state-of-the-art 
 `typokat check <file.ts>` parses, binds, and type-checks TypeScript and reports `tsc`-style
 diagnostics — structural **and** nominal typing, control-flow narrowing, generics with inference,
 full classes, and the common "real-world" type constructs. It is a **checker, not a compiler**:
-emit, JS runtime semantics, and module resolution are out of scope by design — the goal is to
-preserve the **type model** (see [`docs/reference/architecture.md`](./docs/reference/architecture.md)).
+emit and JS runtime semantics are out of scope by design, while module resolution is a narrow
+type-checking slice (local relative `.ts` modules) — the goal is to preserve the
+**type model** (see [`docs/reference/architecture.md`](./docs/reference/architecture.md)).
 
-> Status: **M0–M28** implemented — the type-level evaluation phase complete: M24 generic
-> constraints, M25 conditional types (demand-driven evaluator: explicit work-stack,
-> memoization, tsc-like instantiation budget, non-widening `infer` mode), M26 mapped
-> types (modifier arithmetic with tsc `Required` semantics, homomorphic union
-> distribution), M27 template literal types (construction, anchored pattern matching,
-> `infer` extraction), M28 **built-in utility types** (`Partial`…`ReturnType` via an
+> Status: **M0–M29** implemented — M29 adds the first correctness-first cross-file
+> slice: local relative named imports/exports in one serial type universe. The type-level
+> evaluation phase is complete: M24 generic constraints, M25 conditional types (demand-driven
+> evaluator: explicit work-stack, memoization, tsc-like instantiation budget, non-widening
+> `infer` mode), M26 mapped types (modifier arithmetic with tsc `Required` semantics,
+> homomorphic union distribution), M27 template literal types (construction, anchored pattern
+> matching, `infer` extraction), M28 **built-in utility types** (`Partial`…`ReturnType` via an
 > embedded prelude compilation unit, the `Uppercase`/`Lowercase`/`Capitalize`/
 > `Uncapitalize` intrinsics, a deferred `keyof` type node) — on top of the M23
 > flow-node CFG, class completeness, and constructor accessibility. ~26k lines of
-> Rust, 203 unit tests + a 123-file conformance corpus (444 expected diagnostics),
+> Rust, 203 unit tests + a 134-file conformance corpus (463 expected diagnostics),
 > `clippy -D warnings` clean. Every milestone was cross-checked against real
 > `tsc 6.0.3 --strict`.
 
@@ -49,13 +51,14 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 | **Generics** | type parameters, instantiation, **type-argument inference** from call arguments, **constraints** (`extends` — apparent types, declaration + call-site `TK2344`/`TK2345`, circularity `TK2313`) |
 | **Type-level evaluation** | conditional types (**distribution**, `infer` incl. anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, **the ten standard utility types as built-ins** (prelude compilation unit) + the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
 | **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract` (incl. **abstract-member completeness**); **generic classes**; **override compatibility** (tsc's base-keyed method bivariance); **constructor accessibility** on `new` |
-| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, contextual typing), index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`) |
+| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, contextual typing), index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), local relative modules with named imports/exports |
 | **Reporting** | nested reason chains (`Types of property 'x' are incompatible …`) |
 
 ### Diagnostics
 
 `tsc`-compatible numeric codes with a `TK` prefix:
-`TK2304` (cannot find name), `TK2313` (circular constraint), `TK2322` (not assignable),
+`TK2304` (cannot find name), `TK2305` (no exported member), `TK2307` (cannot find module),
+`TK2313` (circular constraint), `TK2322` (not assignable),
 `TK2339` (no such property), `TK2341`/`TK2445` (private/protected), `TK2344` (constraint
 not satisfied), `TK2345` (argument), `TK2353` (excess property), `TK2416` (incompatible
 override), `TK2456` (circular type alias), `TK2511` (instantiate abstract),
@@ -134,10 +137,14 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   deferred: optional **methods**/accessors (`go?(): T`), the dedicated *possibly-undefined*
   diagnostics (tsc `TS2532`/`TS18048`/`TS2722`), and narrowing an optional through a member-access
   guard (over-reports `T | undefined`, the safe direction).
-- **No `lib.d.ts`** (so `console`, array methods, `Promise`, … are absent) and **no modules/imports**.
-  An **unresolved type name** in type position is `TK2304` (M22); still deferred there (distinct tsc
-  codes): a value used as a type (`TS2749`), type args on a type parameter (`TS2315`), a wrong
-  type-argument count such as bare `Array` (`TS2314`), and qualified names `A.B` (`TS2503`).
+- **No `lib.d.ts`** (so `console`, array methods, `Promise`, … are absent). Modules/imports are
+  implemented only for local relative `.ts` files with named imports/exports in one serial project
+  check. Still deferred: packages / `node_modules`, `tsconfig` resolver options, `.d.ts`, default /
+  namespace / star imports, re-exports from another module, CommonJS, ambient modules, cyclic module
+  graphs, and parallel cross-file type identity. An **unresolved type name** in type position is
+  `TK2304` (M22); still deferred there (distinct tsc codes): a value used as a type (`TS2749`), type
+  args on a type parameter (`TS2315`), a wrong type-argument count such as bare `Array` (`TS2314`),
+  and qualified names `A.B` (`TS2503`).
 - Minor `tsc` divergences, all in the safe (over-report) direction, are logged in
   [`tests/cases/README.md`](./tests/cases/README.md).
 

@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use typokat::driver::check_source;
+use typokat::driver::{check_project, check_source, FileInput};
 use typokat::span::LineIndex;
 
 /// Milestone fixture directories under `tests/cases/`. Only enabled dirs run.
@@ -57,7 +57,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // M29 modules are project fixtures (subdirectories with multiple files), not
     // flat single-file fixtures. Registered false by the spec commit; the
     // implementation commit extends the harness before flipping this on.
-    ("m29_modules", false),
+    ("m29_modules", true),
     // Bug-fix corpora (official-suite findings / backlog items). Each is
     // committed `false` as a behavior-neutral spec, then flipped `true` by the
     // commit that lands its fix. See tests/cases/README.md ("Bug-fix corpora").
@@ -96,6 +96,23 @@ fn conformance() {
             continue;
         }
         let dir_path = cases_root.join(dir);
+        if *dir == "m29_modules" {
+            let mut projects = discover_project_dirs(&dir_path);
+            projects.sort();
+            assert!(
+                !projects.is_empty(),
+                "no project fixtures found in {}",
+                dir_path.display()
+            );
+            for project in projects {
+                let fixtures = discover_ts_files_recursive(&project);
+                files_checked += fixtures.len();
+                if let Err(project_failures) = run_project_fixture(&project, fixtures) {
+                    failures.extend(project_failures);
+                }
+            }
+            continue;
+        }
         let mut fixtures = discover_ts_files(&dir_path);
         fixtures.sort();
         assert!(
@@ -128,12 +145,51 @@ fn run_fixture(path: &Path) -> Result<(), Vec<String>> {
     let source = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("cannot read fixture {}: {e}", path.display()));
 
-    // Expected: line -> multiset of markers (ordered by appearance on the line).
-    let expected = parse_markers(&source);
-
-    // Actual: run the checker, map each diagnostic to its primary-span start line.
     let output = check_source(&source);
-    let line_index = LineIndex::new(&source);
+    compare_fixture_output(path, &source, &output)
+}
+
+fn run_project_fixture(project: &Path, mut fixtures: Vec<PathBuf>) -> Result<(), Vec<String>> {
+    fixtures.sort();
+    let mut inputs = Vec::with_capacity(fixtures.len());
+    for fixture in &fixtures {
+        let source = std::fs::read_to_string(fixture)
+            .unwrap_or_else(|e| panic!("cannot read fixture {}: {e}", fixture.display()));
+        inputs.push(FileInput {
+            name: fixture.display().to_string(),
+            source,
+        });
+    }
+    let reports = check_project(inputs);
+    let mut failures = Vec::new();
+    for (fixture, report) in fixtures.iter().zip(&reports) {
+        if let Err(file_failures) = compare_fixture_output(fixture, &report.source, &report.output)
+        {
+            failures.extend(file_failures);
+        }
+    }
+    if reports.len() != fixtures.len() {
+        failures.push(format!(
+            "{}: project report count mismatch, expected {}, got {}",
+            display_path(project),
+            fixtures.len(),
+            reports.len()
+        ));
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures)
+    }
+}
+
+fn compare_fixture_output(
+    path: &Path,
+    source: &str,
+    output: &typokat::driver::CheckOutput,
+) -> Result<(), Vec<String>> {
+    let expected = parse_markers(source);
+    let line_index = LineIndex::new(source);
 
     // A parse error in an M0 fixture is always a harness/spec problem — surface
     // it loudly rather than masking it as "0 diagnostics".
@@ -300,6 +356,41 @@ fn discover_ts_files(dir: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+fn discover_project_dirs(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let entries = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("cannot read fixtures dir {}: {e}", dir.display()));
+    for entry in entries {
+        let entry = entry.expect("dir entry");
+        let path = entry.path();
+        if path.is_dir() {
+            out.push(path);
+        }
+    }
+    out
+}
+
+fn discover_ts_files_recursive(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    discover_ts_files_recursive_into(dir, &mut out);
+    out.sort();
+    out
+}
+
+fn discover_ts_files_recursive_into(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("cannot read fixtures dir {}: {e}", dir.display()));
+    for entry in entries {
+        let entry = entry.expect("dir entry");
+        let path = entry.path();
+        if path.is_dir() {
+            discover_ts_files_recursive_into(&path, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("ts") {
+            out.push(path);
+        }
+    }
 }
 
 /// The `tests/cases` directory, relative to the crate manifest.

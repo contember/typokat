@@ -265,8 +265,14 @@ slots into a known later phase without rework:
   object-target messages are asserted code-only): where tsc renders a present-but-wrong optional
   property's target as the bare `T` (e.g. `{ b: 5 }` → "not assignable to type 'string'"), typokat
   relates against the effective `T | undefined` and may render that union instead.
-- **modules/imports** and the rest of **`lib.d.ts` globals** (`console`, string methods, `Promise`,
-  …) are out of scope for now — fixtures avoid the standard library otherwise.
+- **modules/imports**: M29 implements the first correctness-first cross-file slice: local relative
+  `./` / `../` imports resolved to provided `.ts` files; named imports, `import type`, exported
+  declarations, and simple `export { x as y }` lists; one serial type universe. It deliberately does
+  not implement packages / `node_modules`, `tsconfig` resolver options, `.d.ts`, default imports,
+  namespace imports, star imports/re-exports, re-export-from, CommonJS, ambient modules, cyclic
+  module graphs, or parallel cross-file identity. The rest of **`lib.d.ts` globals** (`console`,
+  string methods, `Promise`, …) are still out of scope — fixtures avoid the standard library
+  otherwise.
 
 Other conventions: an unresolved name (`TK2304`) gets the **error type** (`any`-like), which
 **suppresses cascade** diagnostics on the same expression. As of **M22** this applies in **type
@@ -275,11 +281,12 @@ parameter / return / interface or object-type member / type-alias body / union /
 generic name or argument / `keyof` operand) reports `TK2304` and degrades to the error type (so
 `const a: Foo = 5` is only `TK2304`, never also a `TK2322`). Top-level type declarations are
 **hoisted**, so a forward reference resolves (no false `TK2304`). Deferred (silent, documented
-divergences — `TK2304` fires only when the name resolves to *no* space): a value used as a type
-(tsc `TS2749` — the name resolves in the value space), type arguments applied to a type parameter
-(tsc `TS2315`), a wrong **type-argument count** on a recognized type such as bare/over-applied
-`Array` (tsc `TS2314` — `Array` is a known built-in, not "cannot find name"), and **qualified** type
-names (`A.B` — needs namespaces). `strictNullChecks` is
+divergences — `TK2304` usually fires only when the name resolves to *no* space, plus M29's temporary
+mapping of a type-only import/export used as a value to `TK2304` instead of tsc's `TS2693`): a value
+used as a type (tsc `TS2749` — the name resolves in the value space), type arguments applied to a
+type parameter (tsc `TS2315`), a wrong **type-argument count** on a recognized type such as
+bare/over-applied `Array` (tsc `TS2314` — `Array` is a known built-in, not "cannot find name"), and
+**qualified** type names (`A.B` — needs namespaces). `strictNullChecks` is
 **on** (our default): `null`/`undefined` are distinct types, not assignable to others.
 
 Known divergence (over-report, safe direction): on a call/`new` with **several** mismatched

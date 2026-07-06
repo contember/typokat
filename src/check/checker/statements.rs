@@ -6,7 +6,7 @@ use crate::relate::{Reason, ReasonChain, Relater, Relation};
 use crate::types::store::{Store, TypeId};
 use crate::types::WellKnown;
 use oxc_ast::ast::{
-    BindingPattern, BlockStatement, Expression,
+    BindingPattern, BlockStatement, Declaration, Expression,
     Function, Statement, VariableDeclarationKind, VariableDeclarator,
 };
 use super::context::*;
@@ -88,7 +88,33 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Statement::WhileStatement(while_stmt) => {
                 self.check_while(scope, while_stmt, declared_ret, inferred);
             }
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(decl) = &export.declaration {
+                    self.check_declaration(scope, decl);
+                }
+            }
             // Other statements are out of the subset.
+            _ => {}
+        }
+    }
+
+    fn check_declaration(
+        &mut self,
+        scope: ScopeId,
+        decl: &Declaration<'_>,
+    ) {
+        match decl {
+            Declaration::VariableDeclaration(var) => {
+                for declarator in &var.declarations {
+                    self.check_declarator(scope, var.kind, declarator);
+                }
+            }
+            Declaration::FunctionDeclaration(func) => {
+                self.check_function_declaration(scope, func);
+            }
+            Declaration::ClassDeclaration(class) => {
+                self.check_class(scope, class);
+            }
             _ => {}
         }
     }
@@ -459,4 +485,3 @@ fn headline_src(ob: &AssignObligation, head: &Reason) -> TypeId {
 fn is_literal_target(store: &Store, tgt: TypeId) -> bool {
     store.literal_value(tgt).is_some()
 }
-

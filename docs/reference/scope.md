@@ -12,10 +12,11 @@ Codes use the `TK` prefix; the number mirrors `tsc` exactly (`TK2322` ≡ `TS232
 ## The boundary in one line
 
 typokat models TypeScript **types**. In scope: the semantic/type errors a strict
-`tsc --noEmit --strict` reports about a single, already-parsed `.ts` file. Out of
-scope by design (per [`CLAUDE.md`](../../CLAUDE.md)): **parsing** (oxc owns it),
-**emit**, **JS runtime semantics**, **module resolution**, and **compiler/CLI
-configuration**. Everything below is a consequence of that one line.
+`tsc --noEmit --strict` reports about an already-parsed `.ts` file or, for the M29
+slice, a local-relative `.ts` project with named imports/exports. Out of scope by
+design (per [`CLAUDE.md`](../../CLAUDE.md)): **parsing** (oxc owns it), **emit**,
+**JS runtime semantics**, full package/tsconfig **module resolution**, and
+**compiler/CLI configuration**. Everything below is a consequence of that one line.
 
 ## Error codes by range
 

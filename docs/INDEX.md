@@ -29,13 +29,13 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M28 shipped — the type-level evaluation phase is complete.** M28 (utility types)
-  added the prelude compilation unit (ten built-in utilities + the `Uppercase` intrinsic
-  family), the deferred `keyof` node, modifier-preserving Pick, and recursive
-  mapped-alias seeding; four adversarial review rounds hardened conditional operand
-  evaluation (no-false-on-undecidable); see [`archive/`](archive/README.md). Scoreboard:
-  in-scope 506, clean-kept 171/219, error-exact 22/287, diag-recall 285/1691. **Next:
-  the `13` profiling gate, then the real-world track (`14` lib.d.ts — the prelude is its
-  stepping stone, `15` modules).** Known-gap items: `24`–`27`, `30`–`37` (`33`–`37` are
-  the M28 review byproducts; `31` object-literal contextual typing unblocks literal-heavy
-  corpora). Small warm-ups: `21`–`23`.
+- **M0–M29 shipped/in-flight — real-project scale has started.** M28 completed the type-level
+  evaluation phase (prelude utilities, deferred `keyof`, modifier-preserving Pick, recursive
+  mapped-alias seeding, string intrinsics). M29 ships backlog `15` slice 1: correctness-first
+  local-relative modules and cross-file named imports/exports in one serial type universe;
+  parallel Stage 2 identity and full resolver semantics remain deferred. Scoreboard stays
+  in-scope 506, clean-kept 171/219, error-exact 22/287, diag-recall 285/1691 (official module
+  gates remain closed). **Next:** the `13` profiling gate, then `14` full `lib.d.ts` /
+  parallelism Stage 1, then backlog `15` slice 2 / `16` cross-file identity. Known-gap items:
+  `24`–`27`, `30`–`37` (`33`–`37` are the M28 review byproducts; `31` object-literal contextual
+  typing unblocks literal-heavy corpora). Small warm-ups: `21`–`23`.

@@ -33,8 +33,8 @@ use crate::types::store::TypeId;
 use oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, AssignmentOperator, AssignmentTarget,
     AssignmentTargetMaybeDefault, AssignmentTargetProperty, Class, ClassElement,
-    ConditionalExpression, Expression, Function, IfStatement, LogicalExpression, LogicalOperator,
-    ObjectPropertyKind, Statement, SwitchStatement, WhileStatement,
+    ConditionalExpression, Declaration, Expression, Function, IfStatement, LogicalExpression,
+    LogicalOperator, ObjectPropertyKind, Statement, SwitchStatement, WhileStatement,
 };
 use rustc_hash::FxHashMap;
 
@@ -106,6 +106,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
             Statement::SwitchStatement(switch) => self.build_flow_switch(scope, switch),
             Statement::WhileStatement(while_stmt) => self.build_flow_while(scope, while_stmt),
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(decl) = &export.declaration {
+                    self.build_flow_declaration(scope, decl);
+                }
+            }
             Statement::BreakStatement(_) => {
                 // The break carries the current (narrowed) state out to the loop's
                 // exit join — this is what makes a `break` un-narrow the after-loop
@@ -129,6 +134,21 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // Out of subset (`for`/`for-of`/`do-while`/`try`, …): not walked by the
             // check pass either, so no references are resolved inside them — a miss in
             // `reference_flow` falls back to the declared type (sound). Left un-built.
+            _ => {}
+        }
+    }
+
+    fn build_flow_declaration(&mut self, scope: ScopeId, decl: &Declaration<'_>) {
+        match decl {
+            Declaration::VariableDeclaration(var) => {
+                for declarator in &var.declarations {
+                    if let Some(init) = &declarator.init {
+                        self.build_flow_expr(scope, init);
+                    }
+                }
+            }
+            Declaration::FunctionDeclaration(func) => self.build_flow_function(scope, func),
+            Declaration::ClassDeclaration(class) => self.build_flow_class(scope, class),
             _ => {}
         }
     }

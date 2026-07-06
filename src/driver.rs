@@ -5,13 +5,21 @@
 //! milestone keeps this end-to-end shape (mvp-plan §1.1: "vertical slice,
 //! always").
 
-use crate::check::check_program;
+use crate::check::{
+    check_program, check_project_programs, ProjectImport, ProjectImportSource, ProjectProgram,
+};
 use crate::diagnostics::Diagnostic;
+use crate::span::Span;
 use crate::types::Interner;
 use oxc_allocator::Allocator;
+use oxc_ast::ast::{
+    ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName, Program, Statement,
+};
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use rayon::prelude::*;
+use std::collections::BTreeMap;
+use std::path::{Component, Path, PathBuf};
 
 /// The outcome of checking one source file.
 pub struct CheckOutput {
@@ -123,6 +131,257 @@ pub fn check_files(inputs: Vec<FileInput>) -> Vec<FileReport> {
             }
         })
         .collect()
+}
+
+/// Check a local relative-module project in one serial type universe.
+///
+/// This is the M29 correctness-first API. It deliberately lives beside
+/// [`check_files`]: the old multi-file API remains per-file independent and
+/// parallel, while this path resolves only `./` / `../` specifiers among the
+/// provided `.ts` files and checks them in dependency order with one `Interner`.
+pub fn check_project(inputs: Vec<FileInput>) -> Vec<FileReport> {
+    if inputs.is_empty() {
+        return Vec::new();
+    }
+
+    let source_type = SourceType::ts();
+    let allocators: Vec<Allocator> = (0..inputs.len()).map(|_| Allocator::default()).collect();
+    let parsed: Vec<_> = inputs
+        .iter()
+        .zip(&allocators)
+        .map(|(input, allocator)| Parser::new(allocator, &input.source, source_type).parse())
+        .collect();
+
+    let parse_errors: Vec<Vec<String>> = parsed
+        .iter()
+        .map(|parsed| parsed.diagnostics.iter().map(|d| d.to_string()).collect())
+        .collect();
+
+    let paths = normalized_input_paths(&inputs);
+    let path_to_index: BTreeMap<PathBuf, usize> = paths
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, path)| (path, index))
+        .collect();
+    let raw_imports: Vec<Vec<RawImport>> = parsed
+        .iter()
+        .zip(&paths)
+        .map(|(parsed, path)| scan_imports(&parsed.program, path, &path_to_index))
+        .collect();
+    let order = dependency_order(&raw_imports);
+    let mut ordered_index = vec![0usize; inputs.len()];
+    for (position, &original) in order.iter().enumerate() {
+        if let Some(slot) = ordered_index.get_mut(original) {
+            *slot = position;
+        }
+    }
+
+    let project_units: Vec<ProjectProgram<'_>> = order
+        .iter()
+        .map(|&original| ProjectProgram {
+            program: &parsed[original].program,
+            imports: raw_imports[original]
+                .iter()
+                .map(|import| ProjectImport {
+                    local: import.local.clone(),
+                    imported: import.imported.clone(),
+                    module: import.specifier.clone(),
+                    source: match import.source {
+                        RawImportSource::Resolved(target) => {
+                            ProjectImportSource::Resolved(ordered_index[target])
+                        }
+                        RawImportSource::Missing => {
+                            ProjectImportSource::Missing(import.specifier.clone())
+                        }
+                    },
+                    type_only: import.type_only,
+                    span: import.span,
+                })
+                .collect(),
+        })
+        .collect();
+
+    let mut interner = Interner::with_intrinsics();
+    let ordered_diagnostics = check_project_programs(&mut interner, &project_units);
+    let mut diagnostics_by_original: Vec<Vec<Diagnostic>> =
+        (0..inputs.len()).map(|_| Vec::new()).collect();
+    for (ordered, &original) in order.iter().enumerate() {
+        if let Some(diagnostics) = ordered_diagnostics.get(ordered) {
+            diagnostics_by_original[original] = diagnostics.clone();
+        }
+    }
+
+    inputs
+        .into_iter()
+        .enumerate()
+        .map(|(index, input)| FileReport {
+            name: input.name,
+            source: input.source,
+            output: CheckOutput {
+                diagnostics: diagnostics_by_original
+                    .get_mut(index)
+                    .map(std::mem::take)
+                    .unwrap_or_default(),
+                parse_errors: parse_errors.get(index).cloned().unwrap_or_default(),
+            },
+        })
+        .collect()
+}
+
+#[derive(Clone)]
+struct RawImport {
+    local: String,
+    imported: String,
+    specifier: String,
+    source: RawImportSource,
+    type_only: bool,
+    span: Span,
+}
+
+#[derive(Clone, Copy)]
+enum RawImportSource {
+    Resolved(usize),
+    Missing,
+}
+
+fn scan_imports(
+    program: &Program<'_>,
+    importer_path: &Path,
+    path_to_index: &BTreeMap<PathBuf, usize>,
+) -> Vec<RawImport> {
+    let mut imports = Vec::new();
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(import) = stmt else {
+            continue;
+        };
+        let specifier = import.source.value.as_str().to_string();
+        if !is_local_relative(&specifier) {
+            continue;
+        }
+        let source = resolve_local_import(importer_path, &specifier)
+            .and_then(|path| path_to_index.get(&path).copied())
+            .map(RawImportSource::Resolved)
+            .unwrap_or(RawImportSource::Missing);
+        let outer_type_only = import.import_kind == ImportOrExportKind::Type;
+        if let Some(specifiers) = &import.specifiers {
+            for spec in specifiers {
+                let ImportDeclarationSpecifier::ImportSpecifier(named) = spec else {
+                    continue;
+                };
+                let Some(imported) = module_export_name(&named.imported) else {
+                    continue;
+                };
+                let type_only = outer_type_only || named.import_kind == ImportOrExportKind::Type;
+                imports.push(RawImport {
+                    local: named.local.name.to_string(),
+                    imported: imported.to_string(),
+                    specifier: specifier.clone(),
+                    source,
+                    type_only,
+                    span: Span::from_oxc(named.span),
+                });
+            }
+        }
+    }
+    imports
+}
+
+fn module_export_name<'ast>(name: &'ast ModuleExportName<'ast>) -> Option<&'ast str> {
+    match name {
+        ModuleExportName::IdentifierName(id) => Some(id.name.as_str()),
+        ModuleExportName::IdentifierReference(id) => Some(id.name.as_str()),
+        ModuleExportName::StringLiteral(_) => None,
+    }
+}
+
+fn dependency_order(imports: &[Vec<RawImport>]) -> Vec<usize> {
+    let mut state = vec![VisitState::Unseen; imports.len()];
+    let mut order = Vec::with_capacity(imports.len());
+    for index in 0..imports.len() {
+        visit(index, imports, &mut state, &mut order);
+    }
+    order
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VisitState {
+    Unseen,
+    Visiting,
+    Done,
+}
+
+fn visit(
+    index: usize,
+    imports: &[Vec<RawImport>],
+    state: &mut [VisitState],
+    order: &mut Vec<usize>,
+) {
+    match state.get(index).copied() {
+        Some(VisitState::Done | VisitState::Visiting) | None => return,
+        Some(VisitState::Unseen) => {}
+    }
+    if let Some(slot) = state.get_mut(index) {
+        *slot = VisitState::Visiting;
+    }
+    if let Some(module_imports) = imports.get(index) {
+        for import in module_imports {
+            if let RawImportSource::Resolved(dep) = import.source {
+                visit(dep, imports, state, order);
+            }
+        }
+    }
+    if let Some(slot) = state.get_mut(index) {
+        *slot = VisitState::Done;
+    }
+    order.push(index);
+}
+
+fn normalized_input_paths(inputs: &[FileInput]) -> Vec<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    inputs
+        .iter()
+        .map(|input| {
+            let path = Path::new(&input.name);
+            let absolute = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                cwd.join(path)
+            };
+            normalize_path(&absolute)
+        })
+        .collect()
+}
+
+fn resolve_local_import(importer_path: &Path, specifier: &str) -> Option<PathBuf> {
+    if !is_local_relative(specifier) {
+        return None;
+    }
+    let base = importer_path.parent()?;
+    let mut path = normalize_path(&base.join(specifier));
+    if path.extension().is_none() {
+        path.set_extension("ts");
+    }
+    Some(path)
+}
+
+fn is_local_relative(specifier: &str) -> bool {
+    specifier.starts_with("./") || specifier.starts_with("../")
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(part) => out.push(part),
+            Component::RootDir | Component::Prefix(_) => out.push(component.as_os_str()),
+        }
+    }
+    out
 }
 
 #[cfg(test)]

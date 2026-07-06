@@ -148,3 +148,21 @@ per-file API until Stage 2.
 ## Run log
 
 <!-- Append as you work. -->
+
+- 2026-07-06: Implemented slice-1 project checking as an additive serial API:
+  `check_project` resolves only provided local relative `.ts` files, keeps
+  `check_source`/parallel `check_files` unchanged, and checks dependency-ordered
+  modules in one interner. Exported declarations are unwrapped consistently in
+  binder, type-decl reserve, flow build, and statement checking; simple export
+  lists resolve the local symbol slots rather than trusting syntax kind. Type-decl
+  filling now has a range-aware path so each project module lowers under its own
+  module scope while `next_type_param`/`next_class_id` remain project-global.
+- 2026-07-06: Enabled `m29_modules` project fixtures in conformance. Adjusted one
+  M29 `TK2345` marker substring to the checker's existing argument diagnostic
+  wording after cross-checking the project fixtures with `tsc --strict --noEmit
+  --module esnext --moduleResolution bundler`.
+- 2026-07-06 review fix: value-position identifier resolution now requires a
+  value slot, so type-only imports/exports used as values report `TK2304` while
+  missing-module/export value placeholders still suppress cascades. The CLI
+  `check` command now routes supplied paths through `check_project`; `check_files`
+  remains the old independent parallel API.

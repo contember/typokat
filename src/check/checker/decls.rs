@@ -10,8 +10,9 @@ use crate::types::repr::{ClassId, ObjectType, PropertyType, TypeParamId, TypeTag
 use crate::types::store::TypeId;
 use crate::types::{substitute, Interner};
 use oxc_ast::ast::{
-    Expression, Program, Statement, TSInterfaceHeritage, TSSignature, TSTypeName,
-    TSTypeParameterDeclaration, TSTypeParameterInstantiation,
+    Class, Declaration, Expression, Program, Statement, TSInterfaceDeclaration, TSSignature,
+    TSInterfaceHeritage, TSTypeAliasDeclaration, TSTypeName, TSTypeParameterDeclaration,
+    TSTypeParameterInstantiation,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -30,8 +31,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// opposite order purely to pre-warm aliases; correctness never depended on it,
     /// because resolution is lazy in both directions.)
     pub(in crate::check::checker) fn fill_type_decls(&mut self, scope: ScopeId) {
-        let count = self.type_decls.len();
+        self.fill_type_decls_range(scope, 0, self.type_decls.len());
+    }
 
+    pub(in crate::check::checker) fn fill_type_decls_range(
+        &mut self,
+        scope: ScopeId,
+        start: usize,
+        end: usize,
+    ) {
         // M25: everything lowered in phase 0 is a **template** (an alias / interface /
         // class body), so a concrete conditional must stay its interned node rather than
         // evaluate eagerly — evaluation is a value-position (phase 1) demand. Restored to
@@ -48,7 +56,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // id then holds a structural **template** (`{ value: T }`); an instantiation
         // `Box<number>` substitutes it. A non-generic interface fills with an empty
         // frame and stays nominal (filled in place, never re-interned).
-        for index in 0..count {
+        for index in start..end {
             self.ensure_interface_filled(scope, index);
         }
 
@@ -58,7 +66,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // parameter frame active and `resolving_conditional_alias` set (so a check that
         // surface-references the alias is `TK2456`); a self-recursive reference in a
         // branch resolves to the reserved id as a lazy instantiation (never expands).
-        for index in 0..count {
+        for index in start..end {
             let (placeholder, params, param_decl, annotation, name, name_span) =
                 match &self.type_decls[index] {
                     TypeDecl::Alias {
@@ -114,7 +122,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // stays the M26 `TK2456`); a self-recursive reference in the VALUE template
         // resolves to the reserved id as a lazy instantiation (never expands, never the
         // error type).
-        for index in 0..count {
+        for index in start..end {
             let (placeholder, params, param_decl, annotation, name, name_span) =
                 match &self.type_decls[index] {
                     TypeDecl::Alias {
@@ -175,14 +183,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // m5 named-recursive representation — never re-entering into the error type.
         // Idempotent per index — an interface whose heritage named the alias already
         // force-filled it ([`ensure_heritage_base_filled`]).
-        for index in 0..count {
+        for index in start..end {
             self.ensure_object_alias_filled(scope, index);
         }
 
         // Resolve every remaining alias (interfaces are now filled, so a generic alias
         // instantiating an interface substitutes over the filled template). Resolution
         // is on-demand and idempotent, so touching every alias resolves the whole DAG.
-        for index in 0..count {
+        for index in start..end {
             if matches!(self.type_decls[index], TypeDecl::Alias { .. }) {
                 self.resolve_type_decl(scope, DeclId(index as u32));
             }
@@ -201,7 +209,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Method/constructor **bodies** are checked later, in the statement walk
         // ([`check_class`]) where `this`/`super` are set and obligations are collected;
         // this step builds **types only**.
-        for index in 0..count {
+        for index in start..end {
             if matches!(self.type_decls[index], TypeDecl::Class { .. }) {
                 self.ensure_class_filled(scope, index);
             }
@@ -1096,26 +1104,32 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
     // `DeclId`s in that same order (`bind_type_declarations`), so pushing in order
     // keeps the decl table index-aligned with the `DeclId`s.
     for stmt in &program.body {
-        match stmt {
-            Statement::TSInterfaceDeclaration(iface) => {
+        match top_type_decl(stmt) {
+            Some(TopTypeDecl::Interface(iface)) => {
                 let reserved = interner.reserve_object();
-                if let Some(decl_id) = type_decl_id(binder, scope, iface.id.name.as_str()) {
+                let decl_id = type_decl_id(binder, scope, iface.id.name.as_str());
+                if let Some(decl_id) = decl_id {
                     if let Some(slot) = resolved.get_mut(decl_id.index()) {
                         *slot = Some(reserved);
                     }
+                    // M9: allocate one id per declared type parameter (in source order).
+                    let params =
+                        alloc_type_param_ids(iface.type_parameters.as_deref(), next_type_param);
+                    place_type_decl(
+                        decls,
+                        decl_id.index(),
+                        TypeDecl::Interface {
+                            reserved,
+                            params,
+                            param_decl: iface.type_parameters.as_deref(),
+                            members: &iface.body.body,
+                            extends: &iface.extends,
+                        },
+                    );
                 }
-                // M9: allocate one id per declared type parameter (in source order).
-                let params =
-                    alloc_type_param_ids(iface.type_parameters.as_deref(), next_type_param);
-                decls.push(TypeDecl::Interface {
-                    reserved,
-                    params,
-                    param_decl: iface.type_parameters.as_deref(),
-                    members: &iface.body.body,
-                    extends: &iface.extends,
-                });
             }
-            Statement::TSTypeAliasDeclaration(alias) => {
+            Some(TopTypeDecl::Alias(alias)) => {
+                let decl_id = type_decl_id(binder, scope, alias.id.name.as_str());
                 let params =
                     alloc_type_param_ids(alias.type_parameters.as_deref(), next_type_param);
                 // M25: a top-level conditional-type body reserves a conditional template
@@ -1128,9 +1142,7 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                         // M28 round 3: name the reserved row so a deferred
                         // instantiation renders by alias NAME, not the raw body.
                         interner.set_template_name(reserved, alias.id.name.as_str());
-                        if let Some(decl_id) =
-                            type_decl_id(binder, scope, alias.id.name.as_str())
-                        {
+                        if let Some(decl_id) = decl_id {
                             if let Some(slot) = resolved.get_mut(decl_id.index()) {
                                 *slot = Some(reserved);
                             }
@@ -1149,9 +1161,7 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                         let reserved = interner.reserve_mapped();
                         // M28 round 3: named for rendering, like the conditional row.
                         interner.set_template_name(reserved, alias.id.name.as_str());
-                        if let Some(decl_id) =
-                            type_decl_id(binder, scope, alias.id.name.as_str())
-                        {
+                        if let Some(decl_id) = decl_id {
                             if let Some(slot) = resolved.get_mut(decl_id.index()) {
                                 *slot = Some(reserved);
                             }
@@ -1171,9 +1181,7 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                     && matches!(alias.type_annotation, oxc_ast::ast::TSType::TSTypeLiteral(_))
                 {
                     let reserved = interner.reserve_object();
-                    if let Some(decl_id) =
-                        type_decl_id(binder, scope, alias.id.name.as_str())
-                    {
+                    if let Some(decl_id) = decl_id {
                         if let Some(slot) = resolved.get_mut(decl_id.index()) {
                             *slot = Some(reserved);
                         }
@@ -1182,17 +1190,23 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                 } else {
                     None
                 };
-                decls.push(TypeDecl::Alias {
-                    annotation: &alias.type_annotation,
-                    params,
-                    param_decl: alias.type_parameters.as_deref(),
-                    resolving: false,
-                    conditional_template,
-                    mapped_template,
-                    object_template,
-                    name: alias.id.name.to_string(),
-                    name_span: Span::from_oxc(alias.id.span),
-                });
+                if let Some(decl_id) = decl_id {
+                    place_type_decl(
+                        decls,
+                        decl_id.index(),
+                        TypeDecl::Alias {
+                            annotation: &alias.type_annotation,
+                            params,
+                            param_decl: alias.type_parameters.as_deref(),
+                            resolving: false,
+                            conditional_template,
+                            mapped_template,
+                            object_template,
+                            name: alias.id.name.to_string(),
+                            name_span: Span::from_oxc(alias.id.span),
+                        },
+                    );
+                }
             }
             // M11: a named `class` reserves its **instance type** id (an empty object,
             // filled in the fill step with the class's fields + methods) so a field
@@ -1200,34 +1214,71 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
             // class name in the type space in the *same source order*, so pushing here
             // keeps `decls` index-aligned with the type `DeclId`s. An anonymous class
             // declared no type name (the binder skipped it), so it is skipped here too.
-            Statement::ClassDeclaration(class) if class.id.is_some() => {
+            Some(TopTypeDecl::Class(class)) if class.id.is_some() => {
                 let reserved = interner.reserve_object();
                 // M13: a fresh stable `ClassId` for this declaration (source order),
                 // stamped onto its members in `fill_class`.
                 let class_id = ClassId(*next_class_id);
                 *next_class_id += 1;
                 if let Some(id) = &class.id {
-                    if let Some(decl_id) = type_decl_id(binder, scope, id.name.as_str()) {
+                    let decl_id = type_decl_id(binder, scope, id.name.as_str());
+                    if let Some(decl_id) = decl_id {
                         if let Some(slot) = resolved.get_mut(decl_id.index()) {
                             *slot = Some(reserved);
                         }
+                        // M16: allocate one id per declared type parameter (in source order),
+                        // paired with their names later when the class body is lowered with the
+                        // parameter frame in scope (`fill_class`) — exactly like an interface.
+                        let params =
+                            alloc_type_param_ids(class.type_parameters.as_deref(), next_type_param);
+                        place_type_decl(
+                            decls,
+                            decl_id.index(),
+                            TypeDecl::Class {
+                                reserved,
+                                class_id,
+                                params,
+                                param_decl: class.type_parameters.as_deref(),
+                                class,
+                            },
+                        );
                     }
                 }
-                // M16: allocate one id per declared type parameter (in source order),
-                // paired with their names later when the class body is lowered with the
-                // parameter frame in scope (`fill_class`) — exactly like an interface.
-                let params =
-                    alloc_type_param_ids(class.type_parameters.as_deref(), next_type_param);
-                decls.push(TypeDecl::Class {
-                    reserved,
-                    class_id,
-                    params,
-                    param_decl: class.type_parameters.as_deref(),
-                    class,
-                });
             }
             _ => {}
         }
+    }
+}
+
+fn place_type_decl<'ast>(decls: &mut Vec<TypeDecl<'ast>>, index: usize, decl: TypeDecl<'ast>) {
+    while decls.len() < index {
+        decls.push(TypeDecl::Resolved { params: Vec::new() });
+    }
+    if decls.len() == index {
+        decls.push(decl);
+    } else if let Some(slot) = decls.get_mut(index) {
+        *slot = decl;
+    }
+}
+
+enum TopTypeDecl<'ast> {
+    Interface(&'ast TSInterfaceDeclaration<'ast>),
+    Alias(&'ast TSTypeAliasDeclaration<'ast>),
+    Class(&'ast Class<'ast>),
+}
+
+fn top_type_decl<'ast>(stmt: &'ast Statement<'ast>) -> Option<TopTypeDecl<'ast>> {
+    match stmt {
+        Statement::TSInterfaceDeclaration(iface) => Some(TopTypeDecl::Interface(iface)),
+        Statement::TSTypeAliasDeclaration(alias) => Some(TopTypeDecl::Alias(alias)),
+        Statement::ClassDeclaration(class) => Some(TopTypeDecl::Class(class)),
+        Statement::ExportNamedDeclaration(export) => match &export.declaration {
+            Some(Declaration::TSInterfaceDeclaration(iface)) => Some(TopTypeDecl::Interface(iface)),
+            Some(Declaration::TSTypeAliasDeclaration(alias)) => Some(TopTypeDecl::Alias(alias)),
+            Some(Declaration::ClassDeclaration(class)) => Some(TopTypeDecl::Class(class)),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

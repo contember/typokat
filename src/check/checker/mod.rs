@@ -223,17 +223,24 @@
 //! `&mut Interner` while the relater borrows the store immutably — they cannot be
 //! held at once. No `unwrap`/`panic` on any path.
 
+use crate::binder::bind::{ImportPlaceholder, ImportedSymbol, ProjectBinderBuilder};
 use crate::binder::bind_module_with_prelude;
+use crate::binder::scope::ScopeId;
+use crate::binder::symbol::DeclId;
 use crate::binder::Binder;
 use crate::diagnostics::Diagnostic;
 use crate::relate::{Relater, Relation};
+use crate::span::Span;
 use crate::types::repr::TypeParamId;
 use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_allocator::Allocator;
-use oxc_ast::ast::Program;
+use oxc_ast::ast::{
+    Declaration, ExportSpecifier, ModuleExportName, Program, Statement,
+};
 use oxc_parser::Parser;
 use oxc_span::SourceType;
+use std::collections::BTreeMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 mod annotations;
@@ -438,6 +445,381 @@ pub fn check_program<'ast>(
     );
 
     diagnostics
+}
+
+/// One parsed project unit handed to the serial M29 project checker.
+pub struct ProjectProgram<'ast> {
+    pub program: &'ast Program<'ast>,
+    pub imports: Vec<ProjectImport>,
+}
+
+/// One named import after the driver has resolved its module specifier.
+pub struct ProjectImport {
+    pub local: String,
+    pub imported: String,
+    pub module: String,
+    pub source: ProjectImportSource,
+    pub type_only: bool,
+    pub span: Span,
+}
+
+pub enum ProjectImportSource {
+    Resolved(usize),
+    Missing(String),
+}
+
+#[derive(Clone, Copy)]
+struct ExportedSlots {
+    value: Option<DeclId>,
+    ty: Option<DeclId>,
+}
+
+type ExportSurface = BTreeMap<String, ExportedSlots>;
+
+/// Check a dependency-ordered project in one serial type universe.
+pub fn check_project_programs<'ast>(
+    interner: &mut Interner,
+    units: &[ProjectProgram<'ast>],
+) -> Vec<Vec<Diagnostic>> {
+    let prelude_allocator = Allocator::default();
+    let prelude_parsed = Parser::new(&prelude_allocator, PRELUDE_SOURCE, SourceType::ts()).parse();
+    debug_assert!(
+        !prelude_parsed.panicked && prelude_parsed.diagnostics.is_empty(),
+        "the prelude must parse clean: {:?}",
+        prelude_parsed.diagnostics
+    );
+
+    let mut builder = ProjectBinderBuilder::new(&prelude_parsed.program);
+    let mut module_scopes = Vec::with_capacity(units.len());
+    let mut module_placeholders: Vec<Vec<ImportPlaceholder>> = Vec::with_capacity(units.len());
+    let mut module_diagnostics: Vec<Vec<Diagnostic>> =
+        (0..units.len()).map(|_| Vec::new()).collect();
+    let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
+
+    for (index, unit) in units.iter().enumerate() {
+        let imports = imported_symbols(unit, &exports, &mut module_diagnostics[index]);
+        let (scope, placeholders) = builder.add_module(unit.program, &imports);
+        let surface = collect_exports(&builder, scope, unit.program);
+        module_scopes.push(scope);
+        module_placeholders.push(placeholders);
+        exports.push(surface);
+    }
+
+    let binder_module = module_scopes
+        .last()
+        .copied()
+        .unwrap_or(ScopeId(0));
+    let binder = builder.finish(binder_module);
+
+    let mut next_type_param: u32 = 0;
+    let mut next_class_id: u32 = 0;
+    let total_type_decls = binder.type_decl_count as usize;
+    let mut type_resolved: Vec<Option<TypeId>> = vec![None; total_type_decls];
+
+    let mut prelude_decls: Vec<TypeDecl> = Vec::new();
+    reserve_type_decls(
+        interner,
+        &binder,
+        binder.prelude_module,
+        &prelude_parsed.program,
+        &mut next_type_param,
+        &mut next_class_id,
+        &mut prelude_decls,
+        &mut type_resolved,
+    );
+    let mut prelude_pass = build_pass(
+        interner,
+        &binder,
+        prelude_decls,
+        type_resolved,
+        DeclTypes::new(0),
+        next_type_param,
+    );
+    prelude_pass.fill_type_decls(binder.prelude_module);
+    debug_assert!(
+        prelude_pass.diagnostics.is_empty(),
+        "the prelude must check clean: {:?}",
+        prelude_pass.diagnostics
+    );
+    let prelude_params: Vec<Vec<TypeParamId>> = prelude_pass
+        .type_decls
+        .iter()
+        .map(|decl| match decl {
+            TypeDecl::Interface { params, .. }
+            | TypeDecl::Alias { params, .. }
+            | TypeDecl::Class { params, .. }
+            | TypeDecl::Resolved { params } => params.clone(),
+        })
+        .collect();
+    let Pass {
+        mut type_resolved,
+        next_type_param: prelude_next_type_param,
+        ..
+    } = prelude_pass;
+    next_type_param = prelude_next_type_param;
+
+    seed_string_intrinsics(interner, &binder, &mut type_resolved);
+
+    let mut type_decls: Vec<TypeDecl<'ast>> = prelude_params
+        .into_iter()
+        .map(|params| TypeDecl::Resolved { params })
+        .collect();
+    let error = interner.well_known().error;
+    let mut type_decl_ranges = Vec::with_capacity(units.len());
+    for (scope, unit) in module_scopes.iter().copied().zip(units) {
+        let start = type_decls.len();
+        if let Some(placeholders) = module_placeholders.get(type_decl_ranges.len()) {
+            for placeholder in placeholders {
+                if let Some(decl_id) = placeholder.ty {
+                    seed_resolved_type(&mut type_decls, &mut type_resolved, decl_id, error);
+                }
+            }
+        }
+        reserve_type_decls(
+            interner,
+            &binder,
+            scope,
+            unit.program,
+            &mut next_type_param,
+            &mut next_class_id,
+            &mut type_decls,
+            &mut type_resolved,
+        );
+        type_decl_ranges.push((start, type_decls.len()));
+    }
+
+    let mut decl_types = DeclTypes::new(binder.decl_count);
+    for placeholders in &module_placeholders {
+        for placeholder in placeholders {
+            if let Some(decl_id) = placeholder.value {
+                decl_types.set(decl_id, error);
+            }
+        }
+    }
+    let mut pass = build_pass(
+        interner,
+        &binder,
+        type_decls,
+        type_resolved,
+        decl_types,
+        next_type_param,
+    );
+
+    for (index, scope) in module_scopes.iter().copied().enumerate() {
+        let (start, end) = type_decl_ranges
+            .get(index)
+            .copied()
+            .unwrap_or((0, pass.type_decls.len()));
+        pass.fill_type_decls_range(scope, start, end);
+        module_diagnostics[index].append(&mut pass.diagnostics);
+    }
+
+    for (index, (scope, unit)) in module_scopes.iter().copied().zip(units).enumerate() {
+        pass.build_flow_graph(scope, &unit.program.body);
+        pass.check_statements(scope, &unit.program.body);
+        emit_pending_checks(&mut pass);
+        module_diagnostics[index].append(&mut pass.diagnostics);
+    }
+
+    module_diagnostics
+}
+
+fn imported_symbols(
+    unit: &ProjectProgram<'_>,
+    exports: &[ExportSurface],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<ImportedSymbol> {
+    let mut imports = Vec::new();
+    for import in &unit.imports {
+        match &import.source {
+            ProjectImportSource::Missing(module) => {
+                diagnostics.push(Diagnostic::cannot_find_module(import.span, module));
+                imports.push(placeholder_import(&import.local, import.type_only));
+            }
+            ProjectImportSource::Resolved(module_index) => {
+                let slots = exports
+                    .get(*module_index)
+                    .and_then(|surface| surface.get(&import.imported))
+                    .copied();
+                match slots {
+                    Some(slots) => {
+                        let value = if import.type_only { None } else { slots.value };
+                        imports.push(ImportedSymbol::new(import.local.clone(), value, slots.ty));
+                    }
+                    None => {
+                        diagnostics.push(Diagnostic::no_exported_member(
+                            import.span,
+                            &import.module,
+                            &import.imported,
+                        ));
+                        imports.push(placeholder_import(&import.local, import.type_only));
+                    }
+                }
+            }
+        }
+    }
+    imports
+}
+
+fn placeholder_import(local: &str, type_only: bool) -> ImportedSymbol {
+    if type_only {
+        ImportedSymbol::placeholder_type(local.to_string())
+    } else {
+        ImportedSymbol::placeholder_value_and_type(local.to_string())
+    }
+}
+
+fn collect_exports(
+    builder: &ProjectBinderBuilder,
+    scope: ScopeId,
+    program: &Program<'_>,
+) -> ExportSurface {
+    let mut surface = ExportSurface::new();
+    for stmt in &program.body {
+        let Statement::ExportNamedDeclaration(export) = stmt else {
+            continue;
+        };
+        if export.source.is_some() {
+            continue;
+        }
+        if let Some(decl) = &export.declaration {
+            collect_declaration_export(builder, scope, decl, &mut surface);
+        } else {
+            for specifier in &export.specifiers {
+                collect_list_export(builder, scope, specifier, &mut surface);
+            }
+        }
+    }
+    surface
+}
+
+fn collect_declaration_export(
+    builder: &ProjectBinderBuilder,
+    scope: ScopeId,
+    decl: &Declaration<'_>,
+    surface: &mut ExportSurface,
+) {
+    match decl {
+        Declaration::VariableDeclaration(var) => {
+            for declarator in &var.declarations {
+                if let Some(name) = binding_name(&declarator.id) {
+                    let (value, _) = builder.symbol_slots(scope, name);
+                    surface.insert(name.to_string(), ExportedSlots { value, ty: None });
+                }
+            }
+        }
+        Declaration::FunctionDeclaration(func) => {
+            if let Some(id) = &func.id {
+                let (value, _) = builder.symbol_slots(scope, id.name.as_str());
+                surface.insert(id.name.to_string(), ExportedSlots { value, ty: None });
+            }
+        }
+        Declaration::ClassDeclaration(class) => {
+            if let Some(id) = &class.id {
+                let (value, ty) = builder.symbol_slots(scope, id.name.as_str());
+                surface.insert(id.name.to_string(), ExportedSlots { value, ty });
+            }
+        }
+        Declaration::TSTypeAliasDeclaration(alias) => {
+            let (_, ty) = builder.symbol_slots(scope, alias.id.name.as_str());
+            surface.insert(alias.id.name.to_string(), ExportedSlots { value: None, ty });
+        }
+        Declaration::TSInterfaceDeclaration(iface) => {
+            let (_, ty) = builder.symbol_slots(scope, iface.id.name.as_str());
+            surface.insert(iface.id.name.to_string(), ExportedSlots { value: None, ty });
+        }
+        _ => {}
+    }
+}
+
+fn collect_list_export(
+    builder: &ProjectBinderBuilder,
+    scope: ScopeId,
+    specifier: &ExportSpecifier<'_>,
+    surface: &mut ExportSurface,
+) {
+    let Some(local) = module_export_name(&specifier.local) else {
+        return;
+    };
+    let Some(exported) = module_export_name(&specifier.exported) else {
+        return;
+    };
+    let (value, ty) = builder.symbol_slots(scope, local);
+    surface.insert(exported.to_string(), ExportedSlots { value, ty });
+}
+
+fn module_export_name<'ast>(name: &'ast ModuleExportName<'ast>) -> Option<&'ast str> {
+    match name {
+        ModuleExportName::IdentifierName(id) => Some(id.name.as_str()),
+        ModuleExportName::IdentifierReference(id) => Some(id.name.as_str()),
+        ModuleExportName::StringLiteral(_) => None,
+    }
+}
+
+fn binding_name<'a>(pattern: &'a oxc_ast::ast::BindingPattern<'a>) -> Option<&'a str> {
+    match pattern {
+        oxc_ast::ast::BindingPattern::BindingIdentifier(ident) => Some(ident.name.as_str()),
+        _ => None,
+    }
+}
+
+fn seed_resolved_type<'ast>(
+    type_decls: &mut Vec<TypeDecl<'ast>>,
+    type_resolved: &mut [Option<TypeId>],
+    decl_id: DeclId,
+    ty: TypeId,
+) {
+    let index = decl_id.index();
+    while type_decls.len() < index {
+        type_decls.push(TypeDecl::Resolved { params: Vec::new() });
+    }
+    if type_decls.len() == index {
+        type_decls.push(TypeDecl::Resolved { params: Vec::new() });
+    }
+    if let Some(slot) = type_resolved.get_mut(index) {
+        *slot = Some(ty);
+    }
+}
+
+fn seed_string_intrinsics(
+    interner: &Interner,
+    binder: &Binder,
+    type_resolved: &mut [Option<TypeId>],
+) {
+    let wk = interner.well_known();
+    for (name, marker) in [
+        ("Uppercase", wk.uppercase),
+        ("Lowercase", wk.lowercase),
+        ("Capitalize", wk.capitalize),
+        ("Uncapitalize", wk.uncapitalize),
+    ] {
+        if let Some(decl_id) = type_decl_id(binder, binder.prelude_module, name) {
+            if let Some(slot) = type_resolved.get_mut(decl_id.index()) {
+                *slot = Some(marker);
+            }
+        }
+    }
+}
+
+fn emit_pending_checks(pass: &mut Pass<'_, '_>) {
+    let obligations = std::mem::take(&mut pass.obligations);
+    let override_checks = std::mem::take(&mut pass.override_checks);
+    let well_known = pass.interner.well_known();
+    let store = pass.interner.store();
+    let mut relater = Relater::new(store, well_known);
+
+    for ob in &obligations {
+        if let Relation::No(chain) = relater.is_assignable(ob.src, ob.tgt) {
+            emit_obligation_failure(store, ob, chain.head(), &mut pass.diagnostics);
+        }
+    }
+    emit_override_failures(
+        store,
+        well_known,
+        &mut relater,
+        &override_checks,
+        &mut pass.diagnostics,
+    );
 }
 
 /// Construct a fresh phase-1 [`Pass`] over the given decl tables (M28 — one for the

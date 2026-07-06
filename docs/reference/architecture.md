@@ -344,9 +344,16 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
 
 - **Stage 0 — per-file own interner (the baseline, in place today).** Each file is a
   self-contained universe = intrinsics + its own declarations. Sound and *lossless*
-  exactly while there is no cross-file resolution (today: modules out of scope, no
-  `lib.d.ts`). Maximal parallelism, zero sharing — the correct floor, not a stopgap.
+  exactly while there is no cross-file resolution (no `lib.d.ts`; the M29 project
+  checker deliberately leaves this API untouched). Maximal parallelism, zero sharing
+  — the correct floor, not a stopgap.
   Implemented as `driver::check_files` (rayon over a `check_source`-per-file).
+- **Stage 0.5 — correctness-first serial project checker (M29).** Local relative
+  `.ts` modules, named imports/exports, and simple export lists are checked in a
+  single serial `Interner`, so cross-file `TypeId` identity is ordinary run-local
+  identity. This proves module semantics before the parallel type-universe problem
+  is solved. It is implemented as `driver::check_project` and is the CLI path for
+  `typokat check <files...>`.
 - **Stage 1 — shared *read-only* prelude.** `lib.d.ts` + intrinsics form a large,
   immutable, universally-needed base; re-seeding them into N per-file interners is
   absurd. Freeze a base `Store` once and share it `&`-immutably across workers —
@@ -360,8 +367,9 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   across interners, so this needs the **stable structural hash** (§3.2): serialize an
   export by content-hash, re-intern in the consumer. The alternative is one shared
   *growing* interner — the full §3.4 knot (sharded, or per-thread arenas with a
-  deterministic merge at phase boundaries). This is the genuinely hard step, and the
-  one "module resolution out of scope" currently lets us defer.
+  deterministic merge at phase boundaries). This is the genuinely hard step; the M29
+  serial project checker exists specifically so this can remain a separate Stage 2
+  decision.
 
 ### 8.3 Invariant across all stages
 

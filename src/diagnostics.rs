@@ -20,6 +20,10 @@ use codespan_reporting::term::{self, Config};
 pub enum DiagnosticCode {
     /// Cannot find name (unresolved identifier).
     TK2304,
+    /// Module has no exported member.
+    TK2305,
+    /// Cannot find module.
+    TK2307,
     /// Type parameter has a circular constraint (`<T extends T>`) — M24.
     TK2313,
     /// Type X is not assignable to type Y.
@@ -71,6 +75,8 @@ impl DiagnosticCode {
     pub fn as_str(self) -> &'static str {
         match self {
             DiagnosticCode::TK2304 => "TK2304",
+            DiagnosticCode::TK2305 => "TK2305",
+            DiagnosticCode::TK2307 => "TK2307",
             DiagnosticCode::TK2313 => "TK2313",
             DiagnosticCode::TK2322 => "TK2322",
             DiagnosticCode::TK2339 => "TK2339",
@@ -142,6 +148,28 @@ impl Diagnostic {
             code: DiagnosticCode::TK2304,
             severity: Severity::Error,
             message: format!("Cannot find name '{name}'"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2305` "module has no exported member" error.
+    pub fn no_exported_member(span: Span, module: &str, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2305,
+            severity: Severity::Error,
+            message: format!("Module '{module}' has no exported member '{name}'"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2307` "cannot find module" error.
+    pub fn cannot_find_module(span: Span, module: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2307,
+            severity: Severity::Error,
+            message: format!("Cannot find module '{module}'"),
             span,
             elaboration: Vec::new(),
         }

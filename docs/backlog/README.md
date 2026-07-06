@@ -30,7 +30,7 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 
 **Long-term: real-world scale + IDE**
 - [`14`](14-libdts-loading.md) — full `lib.d.ts` loading (an earlier minimal ambient/prelude slice is allowed when useful).
-- [`15`](15-modules-imports.md) — modules / imports / module resolution, staged from correctness-first whole-repo checking to cross-file identity.
+- [`15`](15-modules-imports.md) — modules / imports / module resolution; M29 shipped the correctness-first local-relative slice, remaining work is resolver breadth + cross-file identity.
 - [`16`](16-parallelism-type-universe.md) — parallelism: shared type universe hardening (Stages 1 & 2) · blocked-by `14`, `15`.
 - [`17`](17-incrementality.md) — incrementality (Phase 5) · blocked-by `16`.
 - [`18`](18-duplicate-identifier-detection.md) — duplicate identifier detection (`TK2300`) for duplicate object/interface members.

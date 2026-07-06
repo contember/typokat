@@ -50,7 +50,7 @@ use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{DeclId, Symbol, SymbolId, SymbolTable};
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, BlockStatement, Class, ClassElement, Expression,
-    Function, FunctionBody, Program, Statement, SwitchStatement, VariableDeclarator,
+    Declaration, Function, FunctionBody, Program, Statement, SwitchStatement, VariableDeclarator,
 };
 use rustc_hash::FxHashMap;
 
@@ -93,6 +93,48 @@ pub struct Binder {
 }
 
 /// Mutable binder state threaded through the recursive walk.
+pub(crate) struct ImportedSymbol {
+    name: String,
+    value: Option<ImportedSlot>,
+    ty: Option<ImportedSlot>,
+}
+
+impl ImportedSymbol {
+    pub(crate) fn new(name: String, value: Option<DeclId>, ty: Option<DeclId>) -> Self {
+        ImportedSymbol {
+            name,
+            value: value.map(ImportedSlot::Existing),
+            ty: ty.map(ImportedSlot::Existing),
+        }
+    }
+
+    pub(crate) fn placeholder_type(name: String) -> Self {
+        ImportedSymbol {
+            name,
+            value: None,
+            ty: Some(ImportedSlot::Placeholder),
+        }
+    }
+
+    pub(crate) fn placeholder_value_and_type(name: String) -> Self {
+        ImportedSymbol {
+            name,
+            value: Some(ImportedSlot::Placeholder),
+            ty: Some(ImportedSlot::Placeholder),
+        }
+    }
+}
+
+pub(crate) enum ImportedSlot {
+    Existing(DeclId),
+    Placeholder,
+}
+
+pub(crate) struct ImportPlaceholder {
+    pub(crate) value: Option<DeclId>,
+    pub(crate) ty: Option<DeclId>,
+}
+
 struct BindState {
     graph: ScopeGraph,
     symbols: SymbolTable,
@@ -136,36 +178,91 @@ impl BindState {
 /// declarations and bodies, so forward/mutual references resolve regardless of
 /// textual order — the precondition for the checker's reserve-then-fill.
 pub fn bind_module_with_prelude(prelude: &Program<'_>, program: &Program<'_>) -> Binder {
-    let mut state = BindState {
-        graph: ScopeGraph::new(),
-        symbols: SymbolTable::new(),
-        fn_scopes: FxHashMap::default(),
-        block_scopes: FxHashMap::default(),
-        next_decl: 0,
-        next_type_decl: 0,
-    };
+    let mut builder = ProjectBinderBuilder::new(prelude);
+    let (module, _) = builder.add_module(program, &[]);
+    builder.finish(module)
+}
 
-    // Prelude unit — bound first so its DeclIds occupy the low range.
-    let prelude_module = state.graph.push(Scope::new(ScopeKind::Module, None));
-    bind_type_declarations(&mut state, prelude_module, &prelude.body);
-    bind_statements(&mut state, prelude_module, &prelude.body);
+/// Incremental binder for one serial project graph (M29 slice 1).
+pub(crate) struct ProjectBinderBuilder {
+    state: BindState,
+    prelude_module: ScopeId,
+}
 
-    // User unit — its module scope CHAINS to the prelude scope.
-    let module = state
-        .graph
-        .push(Scope::new(ScopeKind::Module, Some(prelude_module)));
-    bind_type_declarations(&mut state, module, &program.body);
-    bind_statements(&mut state, module, &program.body);
+impl ProjectBinderBuilder {
+    /// Bind the prelude first so its declarations keep the low `DeclId` ranges.
+    pub(crate) fn new(prelude: &Program<'_>) -> Self {
+        let mut state = BindState {
+            graph: ScopeGraph::new(),
+            symbols: SymbolTable::new(),
+            fn_scopes: FxHashMap::default(),
+            block_scopes: FxHashMap::default(),
+            next_decl: 0,
+            next_type_decl: 0,
+        };
 
-    Binder {
-        graph: state.graph,
-        symbols: state.symbols,
-        module,
-        prelude_module,
-        decl_count: state.next_decl,
-        type_decl_count: state.next_type_decl,
-        fn_scopes: state.fn_scopes,
-        block_scopes: state.block_scopes,
+        let prelude_module = state.graph.push(Scope::new(ScopeKind::Module, None));
+        bind_type_declarations(&mut state, prelude_module, &prelude.body);
+        bind_statements(&mut state, prelude_module, &prelude.body);
+
+        ProjectBinderBuilder {
+            state,
+            prelude_module,
+        }
+    }
+
+    /// Add one project module. Imported symbols are declared before local names so
+    /// declarations in this file can reference imports during reserve/fill.
+    pub(crate) fn add_module(
+        &mut self,
+        program: &Program<'_>,
+        imports: &[ImportedSymbol],
+    ) -> (ScopeId, Vec<ImportPlaceholder>) {
+        let module = self
+            .state
+            .graph
+            .push(Scope::new(ScopeKind::Module, Some(self.prelude_module)));
+        let mut placeholders = Vec::new();
+        for import in imports {
+            placeholders.push(declare_import(
+                &mut self.state,
+                module,
+                &import.name,
+                &import.value,
+                &import.ty,
+            ));
+        }
+        bind_type_declarations(&mut self.state, module, &program.body);
+        bind_statements(&mut self.state, module, &program.body);
+        (module, placeholders)
+    }
+
+    pub(crate) fn finish(self, module: ScopeId) -> Binder {
+        Binder {
+            graph: self.state.graph,
+            symbols: self.state.symbols,
+            module,
+            prelude_module: self.prelude_module,
+            decl_count: self.state.next_decl,
+            type_decl_count: self.state.next_type_decl,
+            fn_scopes: self.state.fn_scopes,
+            block_scopes: self.state.block_scopes,
+        }
+    }
+
+    pub(crate) fn symbol_slots(
+        &self,
+        scope: ScopeId,
+        name: &str,
+    ) -> (Option<DeclId>, Option<DeclId>) {
+        let Some(symbol_id) = self.state.graph.resolve(scope, name) else {
+            return (None, None);
+        };
+        self.state
+            .symbols
+            .get(symbol_id)
+            .map(|symbol| (symbol.value, symbol.ty))
+            .unwrap_or((None, None))
     }
 }
 
@@ -176,28 +273,57 @@ pub fn bind_module_with_prelude(prelude: &Program<'_>, program: &Program<'_>) ->
 /// `TypeId` and fills the body in its own two-phase pass).
 fn bind_type_declarations(state: &mut BindState, scope: ScopeId, statements: &[Statement<'_>]) {
     for stmt in statements {
-        match stmt {
-            Statement::TSTypeAliasDeclaration(alias) => {
-                let decl_id = state.fresh_type_decl();
-                declare_type(state, scope, alias.id.name.as_str(), decl_id);
-            }
-            Statement::TSInterfaceDeclaration(iface) => {
-                let decl_id = state.fresh_type_decl();
-                declare_type(state, scope, iface.id.name.as_str(), decl_id);
-            }
-            // M11: a `class` declares a **type-space** name (its instance type), so a
-            // self/sibling field reference (`next: Node | null`) resolves. The
-            // *value*-space name (the constructor) is declared in `bind_statement`
-            // alongside the rest of the value bindings. A class with no name is out
-            // of subset (an anonymous class expression statement); skip it.
-            Statement::ClassDeclaration(class) => {
-                if let Some(id) = &class.id {
-                    let decl_id = state.fresh_type_decl();
-                    declare_type(state, scope, id.name.as_str(), decl_id);
-                }
-            }
-            _ => {}
+        bind_type_declaration_statement(state, scope, stmt);
+    }
+}
+
+fn bind_type_declaration_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
+    match stmt {
+        Statement::TSTypeAliasDeclaration(alias) => {
+            let decl_id = state.fresh_type_decl();
+            declare_type(state, scope, alias.id.name.as_str(), decl_id);
         }
+        Statement::TSInterfaceDeclaration(iface) => {
+            let decl_id = state.fresh_type_decl();
+            declare_type(state, scope, iface.id.name.as_str(), decl_id);
+        }
+        // M11: a `class` declares a **type-space** name (its instance type), so a
+        // self/sibling field reference (`next: Node | null`) resolves. The
+        // *value*-space name (the constructor) is declared in `bind_statement`
+        // alongside the rest of the value bindings. A class with no name is out
+        // of subset (an anonymous class expression statement); skip it.
+        Statement::ClassDeclaration(class) => {
+            if let Some(id) = &class.id {
+                let decl_id = state.fresh_type_decl();
+                declare_type(state, scope, id.name.as_str(), decl_id);
+            }
+        }
+        Statement::ExportNamedDeclaration(export) => {
+            if let Some(decl) = &export.declaration {
+                bind_type_declaration(state, scope, decl);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn bind_type_declaration(state: &mut BindState, scope: ScopeId, decl: &Declaration<'_>) {
+    match decl {
+        Declaration::TSTypeAliasDeclaration(alias) => {
+            let decl_id = state.fresh_type_decl();
+            declare_type(state, scope, alias.id.name.as_str(), decl_id);
+        }
+        Declaration::TSInterfaceDeclaration(iface) => {
+            let decl_id = state.fresh_type_decl();
+            declare_type(state, scope, iface.id.name.as_str(), decl_id);
+        }
+        Declaration::ClassDeclaration(class) => {
+            if let Some(id) = &class.id {
+                let decl_id = state.fresh_type_decl();
+                declare_type(state, scope, id.name.as_str(), decl_id);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -225,6 +351,11 @@ fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
         // its parameters, and property initializers are walked for nested functions).
         Statement::ClassDeclaration(class) => {
             bind_class_declaration(state, scope, class);
+        }
+        Statement::ExportNamedDeclaration(export) => {
+            if let Some(decl) = &export.declaration {
+                bind_declaration(state, scope, decl);
+            }
         }
         Statement::ExpressionStatement(expr_stmt) => {
             bind_expression(state, scope, &expr_stmt.expression);
@@ -267,6 +398,23 @@ fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
         }
         // Other statements declare no names in the subset; their sub-expressions (if
         // any) are not in the subset either.
+        _ => {}
+    }
+}
+
+fn bind_declaration(state: &mut BindState, scope: ScopeId, decl: &Declaration<'_>) {
+    match decl {
+        Declaration::VariableDeclaration(var) => {
+            for declarator in &var.declarations {
+                bind_declarator(state, scope, declarator);
+            }
+        }
+        Declaration::FunctionDeclaration(func) => {
+            bind_function_declaration(state, scope, func);
+        }
+        Declaration::ClassDeclaration(class) => {
+            bind_class_declaration(state, scope, class);
+        }
         _ => {}
     }
 }
@@ -520,6 +668,50 @@ fn declare_type(state: &mut BindState, scope: ScopeId, name: &str, decl_id: Decl
     symbol.ty = Some(decl_id);
     let symbol_id: SymbolId = state.symbols.push(symbol);
     state.graph.declare(scope, name, symbol_id);
+}
+
+fn declare_import(
+    state: &mut BindState,
+    scope: ScopeId,
+    name: &str,
+    value: &Option<ImportedSlot>,
+    ty: &Option<ImportedSlot>,
+) -> ImportPlaceholder {
+    let (value_decl, value_placeholder) = match value {
+        Some(ImportedSlot::Existing(decl_id)) => (Some(*decl_id), None),
+        Some(ImportedSlot::Placeholder) => {
+            let decl_id = state.fresh_decl();
+            (Some(decl_id), Some(decl_id))
+        }
+        None => (None, None),
+    };
+    let (type_decl, type_placeholder) = match ty {
+        Some(ImportedSlot::Existing(decl_id)) => (Some(*decl_id), None),
+        Some(ImportedSlot::Placeholder) => {
+            let decl_id = state.fresh_type_decl();
+            (Some(decl_id), Some(decl_id))
+        }
+        None => (None, None),
+    };
+    if let Some(existing) = state.graph.get(scope).and_then(|s| s.lookup_local(name)) {
+        if let Some(symbol) = state.symbols.get_mut(existing) {
+            symbol.value = value_decl;
+            symbol.ty = type_decl;
+        }
+        return ImportPlaceholder {
+            value: value_placeholder,
+            ty: type_placeholder,
+        };
+    }
+    let mut symbol = Symbol::new(name);
+    symbol.value = value_decl;
+    symbol.ty = type_decl;
+    let symbol_id: SymbolId = state.symbols.push(symbol);
+    state.graph.declare(scope, name, symbol_id);
+    ImportPlaceholder {
+        value: value_placeholder,
+        ty: type_placeholder,
+    }
 }
 
 /// The bound name of a binding pattern, if it is a plain identifier. Returns
