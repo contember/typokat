@@ -58,6 +58,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // flat single-file fixtures. Registered false by the spec commit; the
     // implementation commit extends the harness before flipping this on.
     ("m29_modules", true),
+    ("m30_contextual_literals", false),
     // Bug-fix corpora (official-suite findings / backlog items). Each is
     // committed `false` as a behavior-neutral spec, then flipped `true` by the
     // commit that lands its fix. See tests/cases/README.md ("Bug-fix corpora").
