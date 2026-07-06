@@ -22,21 +22,19 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprints/sprint-2026-07-06-contextual-literals.md`](sprints/sprint-2026-07-06-contextual-literals.md) —
-  M30 contextual typing of fresh literals.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M29 shipped; M30 contextual literals active.** M28 completed the type-level
+- **M0–M30 shipped; no active sprint.** M28 completed the type-level
   evaluation phase (prelude utilities, deferred `keyof`, modifier-preserving Pick, recursive
   mapped-alias seeding, string intrinsics). M29 ships backlog `15` slice 1: correctness-first
   local-relative modules and cross-file named imports/exports in one serial type universe;
-  parallel Stage 2 identity and full resolver semantics remain deferred. Scoreboard stays
-  in-scope 506, clean-kept 171/219, error-exact 22/287, diag-recall 285/1691 (official module
-  gates remain closed). **Now:** backlog `31` / M30 target-aware contextual typing for fresh
-  object, array, and tuple literals. **Next:** the `13` profiling gate, then `14` full `lib.d.ts` /
+  parallel Stage 2 identity and full resolver semantics remain deferred. M30 ships
+  target-aware contextual typing for fresh object, array, and tuple literals. Scoreboard stays
+  in-scope 506, clean-kept 172/219, error-exact 22/287, diag-recall 285/1691 (official module
+  gates remain closed). **Next:** the `13` profiling gate, then `14` full `lib.d.ts` /
   parallelism Stage 1, then backlog `15` slice 2 / `16` cross-file identity. Known-gap items:
-  `24`–`27`, `30`–`37` (`33`–`37` are the M28 review byproducts; `31` object-literal contextual
-  typing unblocks literal-heavy corpora). Small warm-ups: `21`–`23`.
+  `24`–`27`, `30`, `32`–`37` (`33`–`37` are the M28 review byproducts). Small warm-ups:
+  `21`–`23`.

@@ -20,5 +20,3 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-07-06-contextual-literals.md`](sprint-2026-07-06-contextual-literals.md) —
-  M30 contextual typing of fresh literals.

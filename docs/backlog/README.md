@@ -12,11 +12,12 @@ documents something a future reader needs. Dependencies go in frontmatter:
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.
 
-This **is** the roadmap. Items `01`–`12` and `20` shipped — `01`–`04` (current-impl bugs), `05`
+This **is** the roadmap. Items `01`–`12`, `20`, `28`–`29`, and `31` shipped — `01`–`04` (current-impl bugs), `05`
 (object/interface signatures, F1), `06` + `20` (class completeness + constructor accessibility),
 `07` (unstructured-flow narrowing, M23), `08`–`12` (the generics + type-level run: constraints
 M24, conditional types M25, mapped types M26, template literals M27, utility types + prelude
-M28 — the type-level evaluation phase is complete); see
+M28 — the type-level evaluation phase is complete), `28`–`29` (soundness warm-ups), and `31`
+(M30 contextual fresh literals); see
 [`../archive/`](../archive/README.md). `13`–`17` are the milestone roadmap. Architecture §12 governs ordering — the relation
 engine + narrowing come **before** type-level evaluation, whose speed lives in the tree-walker's
 algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor — see
@@ -45,7 +46,6 @@ algorithms, not a VM (the bytecode VM is a deferred, profiling-gated refactor �
 - [`26`](26-cross-binder-nested-infer.md) — cross-binder nested `infer` (de Bruijn shifting on embed); M25 ships the conservative poisoned-deferral stopgap.
 - [`27`](27-template-buried-conditional-evaluation.md) — conditionals buried in named alias/interface/class bodies stay deferred (conservative); evaluate them.
 - [`30`](30-numeric-literal-correctness.md) — JS-exact number stringification (`String(n)` dtoa; the negative-literal half shipped in the warm-ups sprint).
-- [`31`](31-object-literal-contextual-typing.md) — object/tuple/array literal members widen against literal-typed targets (false positives on valid code; pre-existing, b28 warm-up).
 - [`32`](32-eager-keyof-forward-references.md) — eager `keyof` over forward-referenced declarations silently degrades (FN family; pre-existing, warm-up re-review).
 - [`33`](33-as-cast-assignability.md) — `as`-cast RHS bypasses initializer assignability (silent FN family; pre-existing, M28 review).
 - [`34`](34-fix-params-evaluate-before-gate.md) — `fix_params` gates deferred `keyof` without evaluating first (missed TS2345; pre-existing, M28 review).

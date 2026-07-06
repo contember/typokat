@@ -1,6 +1,44 @@
+# OUTCOME (closed 2026-07-06) — SHIPPED
+
+**M30 contextual fresh literals shipped.** Fresh object, array, and tuple literals
+now use concrete target context in declarations, identifier/member assignments,
+arguments, `new`/`super`, declared `return`s, and expression-body arrows. The
+source side stays context-free for generic inference, then final obligations use a
+contextually shaped fresh source. Excess-property checks are parenthesis-transparent
+and recurse through contextual object/array/tuple containers, including optional
+`T | undefined` targets. The empty object target `{}` remains open for excess
+purposes, matching TypeScript.
+
+**Commit map.** Spec/plan `2e617c3` · implementation `fbe1c2d` · official-suite
+scoreboard ratchet `7c99f95`.
+
+**Verification.** `cargo test` (203 unit tests + conformance; corpus 138 files /
+500 markers), `cargo clippy --all-targets -- -D warnings`, `tsc 6.0.3 --strict
+--noEmit` over all M30 fixtures (expected errors only), focused typokat
+`excess_properties.ts` check (23 `TK2353`, 0 `TK2322`), and official-suite
+`run --bin ../../target/debug/typokat --check` (0 regressions / 2 progress;
+scoreboard saved).
+
+**Review.** Independent review round 1 **FAIL**: direct excess-property checks
+were skipped outside declarations and parenthesized literals bypassed freshness.
+Round 2 **FAIL**: nested object literals inside contextual arrays/tuples missed
+excess checks. Round 3 **FAIL**: optional-style `T | undefined` targets were not
+peeled for contextual shaping/recursion. Fixes landed after each round; final
+re-review **PASS**. Official-suite regression audit then found the `{}` target
+over-report in `contextualTypeWithTuple.ts`; the narrow empty-object skip was
+reviewed and passed.
+
+**Deferred.** Generic-constraint contextual reshaping, contextual typing of
+function expressions/object methods/overload candidates, `as const`, readonly
+tuple inference, contextual branch selection through arbitrary object unions, full
+lib-driven contextual typing, and broader module resolver semantics remain out of
+scope.
+
+---
+
 # Sprint — contextual typing for fresh literals (2026-07-06)
 
-**Goal.** Ship backlog [`31`](../backlog/31-object-literal-contextual-typing.md):
+**Goal.** Ship backlog `31`:
 target-aware literal preservation for fresh object, array, and tuple literals in
 checked assignment positions.
 
