@@ -1,5 +1,6 @@
 //! calls module (extracted from checker/mod.rs).
 
+use super::assignment::check_excess_properties;
 use super::context::*;
 use super::decls::alloc_type_param_ids;
 use super::decls::value_decl_id;
@@ -275,11 +276,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // stay index-aligned even when an out-of-subset argument is skipped.
         let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(call.arguments.len());
         let mut arg_fresh: Vec<bool> = Vec::with_capacity(call.arguments.len());
+        let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(call.arguments.len());
         for arg in &call.arguments {
             if let Some(arg_expr) = arg.as_expression() {
                 if let Some(inferred) = self.infer_expr(scope, arg_expr) {
                     arg_types.push(inferred);
                     arg_fresh.push(is_fresh_literal(arg_expr));
+                    arg_exprs.push(arg_expr);
                 }
             }
             // A spread or an out-of-subset argument is not paired against a parameter.
@@ -329,7 +332,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .collect();
 
         // Arity (TK2554) + per-argument assignability (TK2345), shared with `new`.
-        self.check_call_arguments(&param_types, &arg_types, call_span);
+        self.check_call_arguments(scope, &param_types, &arg_types, &arg_exprs, call_span);
 
         // M25: a generic call's return type may be a conditional instantiated by the
         // inferred/explicit type arguments (`m("abc")` → `"abc" extends string ? … : …`).
@@ -386,10 +389,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Infer every argument up front (skipping spreads — out of subset); this descends
         // into nested calls/`new`/functions inside the arguments.
         let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(call.arguments.len());
+        let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(call.arguments.len());
         for arg in &call.arguments {
             if let Some(arg_expr) = arg.as_expression() {
                 if let Some(inferred) = self.infer_expr(scope, arg_expr) {
                     arg_types.push(inferred);
+                    arg_exprs.push(arg_expr);
                 }
             }
         }
@@ -406,7 +411,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         // Reuse the shared call-checking path: arity (TK2554) + argument assignability
         // (TK2345). The `super(...)` expression's value type is unused.
-        self.check_call_arguments(&param_types, &arg_types, call_span);
+        self.check_call_arguments(scope, &param_types, &arg_types, &arg_exprs, call_span);
 
         Some((wk.error, call_span))
     }
@@ -423,8 +428,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ///    error above).
     fn check_call_arguments(
         &mut self,
+        scope: ScopeId,
         param_types: &[TypeId],
         arg_types: &[(TypeId, Span)],
+        arg_exprs: &[&Expression<'_>],
         call_span: Span,
     ) {
         if arg_types.len() != param_types.len() {
@@ -435,11 +442,25 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             ));
         }
 
-        for ((arg_ty, arg_span), param_ty) in arg_types.iter().zip(param_types) {
+        for (((arg_ty, arg_span), arg_expr), param_ty) in
+            arg_types.iter().zip(arg_exprs).zip(param_types)
+        {
+            let (src, src_span) = self.infer_contextual_source_after_walked(
+                scope,
+                arg_expr,
+                *param_ty,
+                (*arg_ty, *arg_span),
+            );
+            check_excess_properties(
+                self.interner.store(),
+                arg_expr,
+                *param_ty,
+                &mut self.diagnostics,
+            );
             self.obligations.push(AssignObligation {
-                src: *arg_ty,
+                src,
                 tgt: *param_ty,
-                src_span: *arg_span,
+                src_span,
                 kind: ObligationKind::Argument,
             });
         }
@@ -518,11 +539,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // exemption), built in the same loop so the vecs stay index-aligned.
         let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(new_expr.arguments.len());
         let mut arg_fresh: Vec<bool> = Vec::with_capacity(new_expr.arguments.len());
+        let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(new_expr.arguments.len());
         for arg in &new_expr.arguments {
             if let Some(arg_expr) = arg.as_expression() {
                 if let Some(inferred) = self.infer_expr(scope, arg_expr) {
                     arg_types.push(inferred);
                     arg_fresh.push(is_fresh_literal(arg_expr));
+                    arg_exprs.push(arg_expr);
                 }
             }
         }
@@ -538,7 +561,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     };
                     let param_types: Vec<TypeId> = func.params.iter().map(|p| p.ty).collect();
                     let ret = func.ret;
-                    self.check_call_arguments(&param_types, &arg_types, new_span);
+                    self.check_call_arguments(
+                        scope,
+                        &param_types,
+                        &arg_types,
+                        &arg_exprs,
+                        new_span,
+                    );
                     return Some((ret, new_span));
                 }
             }
@@ -581,7 +610,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         // Reuse the M3 call-checking path: arity (TK2554) + argument assignability
         // (TK2345). The `new` expression's type is the (instantiated) instance type.
-        self.check_call_arguments(&param_types, &arg_types, new_span);
+        self.check_call_arguments(scope, &param_types, &arg_types, &arg_exprs, new_span);
 
         Some((instance, new_span))
     }
@@ -780,11 +809,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         let inferred_ret = if let Some(body_expr) = arrow.get_expression() {
             // Expression body `() => expr`: the return value is the expression.
-            let value = self.infer_expr(body_scope, body_expr);
+            let value = match declared_ret {
+                Some(ret) => self.infer_initializer(body_scope, body_expr, Some(ret)),
+                None => self.infer_expr(body_scope, body_expr),
+            };
             match (declared_ret, value) {
                 // With a declared return type, the body expression is checked against
                 // it (primary span = the expression), like a `return <expr>`.
                 (Some(ret), Some((src, src_span))) => {
+                    check_excess_properties(
+                        self.interner.store(),
+                        body_expr,
+                        ret,
+                        &mut self.diagnostics,
+                    );
                     self.obligations.push(AssignObligation {
                         src,
                         tgt: ret,

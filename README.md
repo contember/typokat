@@ -8,8 +8,10 @@ emit and JS runtime semantics are out of scope by design, while module resolutio
 type-checking slice (local relative `.ts` modules) — the goal is to preserve the
 **type model** (see [`docs/reference/architecture.md`](./docs/reference/architecture.md)).
 
-> Status: **M0–M29** implemented — M29 adds the first correctness-first cross-file
-> slice: local relative named imports/exports in one serial type universe. The type-level
+> Status: **M0–M30** implemented — M30 adds target-aware contextual typing of
+> fresh object/array/tuple literals in concrete declaration, assignment, parameter,
+> `new`/`super`, and declared-return positions; M29 adds the first correctness-first
+> cross-file slice: local relative named imports/exports in one serial type universe. The type-level
 > evaluation phase is complete: M24 generic constraints, M25 conditional types (demand-driven
 > evaluator: explicit work-stack, memoization, tsc-like instantiation budget, non-widening
 > `infer` mode), M26 mapped types (modifier arithmetic with tsc `Required` semantics,
@@ -18,7 +20,7 @@ type-checking slice (local relative `.ts` modules) — the goal is to preserve t
 > embedded prelude compilation unit, the `Uppercase`/`Lowercase`/`Capitalize`/
 > `Uncapitalize` intrinsics, a deferred `keyof` type node) — on top of the M23
 > flow-node CFG, class completeness, and constructor accessibility. ~26k lines of
-> Rust, 203 unit tests + a 134-file conformance corpus (463 expected diagnostics),
+> Rust, 203 unit tests + a 138-file conformance corpus (500 expected diagnostics),
 > `clippy -D warnings` clean. Every milestone was cross-checked against real
 > `tsc 6.0.3 --strict`.
 
@@ -51,7 +53,7 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 | **Generics** | type parameters, instantiation, **type-argument inference** from call arguments, **constraints** (`extends` — apparent types, declaration + call-site `TK2344`/`TK2345`, circularity `TK2313`) |
 | **Type-level evaluation** | conditional types (**distribution**, `infer` incl. anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, **the ten standard utility types as built-ins** (prelude compilation unit) + the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
 | **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract` (incl. **abstract-member completeness**); **generic classes**; **override compatibility** (tsc's base-keyed method bivariance); **constructor accessibility** on `new` |
-| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, contextual typing), index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), local relative modules with named imports/exports |
+| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, contextual typing), contextual fresh object/array/tuple literals, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), local relative modules with named imports/exports |
 | **Reporting** | nested reason chains (`Types of property 'x' are incompatible …`) |
 
 ### Diagnostics

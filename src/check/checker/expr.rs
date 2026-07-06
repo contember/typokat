@@ -271,33 +271,160 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.interner.intern_array(element)
     }
 
-    /// Infer an **initializer** expression, applying M18 contextual typing when a
-    /// **tuple** context is available. This is the contextual-typing hook (the key new
-    /// M18 mechanism):
-    ///
-    ///  - if the resolved `context` (the declared/annotation type) is a **tuple** and the
-    ///    initializer is an **array literal**, the literal is typed **positionally as a
-    ///    tuple** ([`infer_array_literal_as_tuple`]) so the obligation checks
-    ///    position-by-position and catches length mismatches;
-    ///  - otherwise the initializer is inferred exactly as before ([`infer_expr`]) — an
-    ///    array literal with no tuple context still infers an **array** (M17 unchanged),
-    ///    and every non-array expression is unaffected.
-    ///
-    /// Returning `None` (an expression shape outside the subset) leaves the position
-    /// unchecked, matching [`infer_expr`].
+    /// Infer an initializer/source expression with a known target type. Only fresh
+    /// object/array literals are contextually shaped; every other expression remains
+    /// context-free through [`infer_expr`].
     pub(in crate::check::checker) fn infer_initializer(
         &mut self,
         scope: ScopeId,
         init: &Expression<'_>,
         context: Option<TypeId>,
     ) -> Option<(TypeId, Span)> {
-        if let (Expression::ArrayExpression(array), Some(ctx)) = (init, context) {
-            if self.interner.store().tag(ctx) == TypeTag::Tuple {
-                let id = self.infer_array_literal_as_tuple(scope, array, ctx);
-                return Some((id, Span::from_oxc(array.span)));
+        let context = context.map(|ctx| contextual_literal_target(self.interner.store(), ctx));
+        match (init, context) {
+            (Expression::ParenthesizedExpression(paren), ctx) => {
+                self.infer_initializer(scope, &paren.expression, ctx)
             }
+            (Expression::ObjectExpression(obj), Some(ctx))
+                if self.interner.store().object_type(ctx).is_some() =>
+            {
+                let id = self.infer_object_literal_with_context(scope, obj, ctx);
+                Some((id, Span::from_oxc(obj.span)))
+            }
+            (Expression::ArrayExpression(array), Some(ctx))
+                if self.interner.store().tag(ctx) == TypeTag::Tuple =>
+            {
+                let id = self.infer_array_literal_as_tuple(scope, array, ctx);
+                Some((id, Span::from_oxc(array.span)))
+            }
+            (Expression::ArrayExpression(array), Some(ctx)) => {
+                if let Some(element_context) =
+                    self.interner.store().array_type(ctx).map(|a| a.element)
+                {
+                    let id = self.infer_array_literal_as_array(scope, array, element_context);
+                    Some((id, Span::from_oxc(array.span)))
+                } else {
+                    self.infer_expr(scope, init)
+                }
+            }
+            _ => self.infer_expr(scope, init),
         }
-        self.infer_expr(scope, init)
+    }
+
+    /// Re-infer an already-walked fresh literal against a known target without
+    /// duplicating diagnostics/obligations from nested expressions.
+    pub(in crate::check::checker) fn infer_contextual_source_after_walked(
+        &mut self,
+        scope: ScopeId,
+        expr: &Expression<'_>,
+        context: TypeId,
+        raw: (TypeId, Span),
+    ) -> (TypeId, Span) {
+        if !self.context_can_shape_fresh_literal(expr, context) {
+            return raw;
+        }
+
+        let diagnostic_len = self.diagnostics.len();
+        let obligation_len = self.obligations.len();
+        let override_len = self.override_checks.len();
+        let contextual = self.infer_initializer(scope, expr, Some(context));
+        self.diagnostics.truncate(diagnostic_len);
+        self.obligations.truncate(obligation_len);
+        self.override_checks.truncate(override_len);
+        contextual.unwrap_or(raw)
+    }
+
+    fn context_can_shape_fresh_literal(&self, expr: &Expression<'_>, context: TypeId) -> bool {
+        let context = contextual_literal_target(self.interner.store(), context);
+        match expr {
+            Expression::ParenthesizedExpression(paren) => {
+                self.context_can_shape_fresh_literal(&paren.expression, context)
+            }
+            Expression::ObjectExpression(_) => self.interner.store().object_type(context).is_some(),
+            Expression::ArrayExpression(_) => {
+                self.interner.store().tag(context) == TypeTag::Tuple
+                    || self.interner.store().array_type(context).is_some()
+            }
+            _ => false,
+        }
+    }
+
+    /// Infer an object literal against a concrete object target. Matched members use
+    /// the target member/index value as recursive context; unmatched members keep the
+    /// ordinary no-context widening behavior.
+    fn infer_object_literal_with_context(
+        &mut self,
+        scope: ScopeId,
+        obj: &ObjectExpression<'_>,
+        context: TypeId,
+    ) -> TypeId {
+        let mut properties: Vec<PropertyType> = Vec::with_capacity(obj.properties.len());
+        for member in &obj.properties {
+            let ObjectPropertyKind::ObjectProperty(prop) = member else {
+                continue;
+            };
+            let Some(name) = prop.key.static_name() else {
+                continue;
+            };
+            let value_context = self.object_literal_property_context(context, &name);
+            let value = match value_context {
+                Some(ctx) => self.infer_initializer(scope, &prop.value, Some(ctx)),
+                None => self.infer_expr(scope, &prop.value),
+            };
+            let Some((value_ty, _)) = value else {
+                continue;
+            };
+            let ty = if value_context.is_some() {
+                value_ty
+            } else {
+                widen(self.interner, value_ty)
+            };
+            properties.push(PropertyType::public(name.into_owned(), ty));
+        }
+
+        self.interner.intern_object(ObjectType {
+            properties,
+            ..Default::default()
+        })
+    }
+
+    fn object_literal_property_context(&self, context: TypeId, name: &str) -> Option<TypeId> {
+        let store = self.interner.store();
+        let context = contextual_literal_target(store, context);
+        let target = self.interner.store().object_type(context)?;
+        if let Some(prop) = target.property(name) {
+            return Some(contextual_literal_target(store, prop.ty));
+        }
+        let index_value = if is_numeric_property_name(name) {
+            target.number_index.or(target.string_index)
+        } else {
+            target.string_index
+        };
+        index_value.map(|ty| contextual_literal_target(store, ty))
+    }
+
+    /// Infer an array literal against a concrete array target. Element values are kept
+    /// narrow for the final obligation instead of being widened before the source array
+    /// type is formed.
+    fn infer_array_literal_as_array(
+        &mut self,
+        scope: ScopeId,
+        array: &ArrayExpression<'_>,
+        element_context: TypeId,
+    ) -> TypeId {
+        let mut element_types: Vec<TypeId> = Vec::with_capacity(array.elements.len());
+        for element in &array.elements {
+            let Some(expr) = element.as_expression() else {
+                continue;
+            };
+            let Some((elem_ty, _)) = self.infer_initializer(scope, expr, Some(element_context))
+            else {
+                continue;
+            };
+            element_types.push(elem_ty);
+        }
+        let element = self.interner.union(element_types);
+        self.interner.intern_array(element)
     }
 
     /// Type an array literal **positionally as a tuple** for an M18 tuple context
@@ -709,6 +836,31 @@ fn is_number_keyed(store: &Store, key: TypeId) -> bool {
         return matches!(lit.base_kind(), IntrinsicKind::Number);
     }
     store.intrinsic_kind(key) == Some(IntrinsicKind::Number)
+}
+
+pub(in crate::check::checker) fn contextual_literal_target(store: &Store, ty: TypeId) -> TypeId {
+    let Some(members) = store.union_members(ty) else {
+        return ty;
+    };
+    let mut shape = None;
+    for &member in members {
+        if is_contextual_literal_shape(store, member) {
+            if shape.replace(member).is_some() {
+                return ty;
+            }
+        } else if store.intrinsic_kind(member) != Some(IntrinsicKind::Undefined) {
+            return ty;
+        }
+    }
+    shape.unwrap_or(ty)
+}
+
+fn is_contextual_literal_shape(store: &Store, ty: TypeId) -> bool {
+    matches!(store.tag(ty), TypeTag::Object | TypeTag::Array | TypeTag::Tuple)
+}
+
+fn is_numeric_property_name(name: &str) -> bool {
+    name.parse::<f64>().map(|n| n.is_finite()).unwrap_or(false)
 }
 
 /// Read a **non-negative integer literal** index from an element-access index

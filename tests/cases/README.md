@@ -112,7 +112,7 @@ slots into a known later phase without rework:
   (`<T extends T | number>` is circular); a circular parameter records no constraint) are
   implemented (**M24**, corpus `m24_generic_constraints/`). Out of that scope (deferred):
   `K extends keyof T` (the generic-`keyof` deferral), contextual typing of object/array literals
-  against a constraint (tsc `TS2353` / fresh-literal reshaping — so a violating inference
+  against a generic constraint (tsc `TS2353` / fresh-literal reshaping — so a violating inference
   candidate that came from a **fresh object/array literal** argument is exempt from the clamp; a
   typed value, primitive or structural, clamps normally), type-parameter defaults, and
   intersection types entirely (`T extends T & X` is tsc `TS2313`, but `&` is not in the type
@@ -131,10 +131,9 @@ slots into a known later phase without rework:
   public structural shape is not yet rejected (a one-directional divergence from tsc TS2322).
 - **arrays**: `T[]` / `Array<T>`, array literals, element access, `length`, covariant
   assignability (**M17**) and **tuples** `[A, B]` (positional, indexed access, contextual typing)
-  (**M18**) are implemented (built-in, no lib). Array METHODS (`push`/`map`/…) and `ReadonlyArray`
-  follow. Tuple/array-literal **contextual typing** is currently declaration-position only — a
-  tuple literal `return`ed or passed as an argument, and array-of-literal-type targets
-  (`const a: 1[] = [1]`), are over-strict (false positive, safe direction); deferred.
+  (**M18**) are implemented (built-in, no lib). Fresh object/array/tuple literals are
+  contextually typed against concrete declaration, assignment, parameter, `new`/`super`, and
+  declared-return targets (**M30**). Array METHODS (`push`/`map`/…) and `ReadonlyArray` follow.
 - **index signatures** (`{ [k: string]: T }`, `{ [i: number]: T }`) land in **M19**; `keyof` +
   indexed-access types (`T[K]`) on concrete object types land in **M20** (evaluated eagerly).
   Generic `keyof` (over a type parameter) is a **deferred keyof node** since M28 (see the
@@ -327,7 +326,7 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m27_template_literals/` | M27 — template literal types (construction/distribution, patterns, `infer` extraction, deferred generics) |
 | `m28_utility_types/` | M28 — built-in utility types (prelude aliases: Partial…Omit/ReturnType; Uppercase-family intrinsics) |
 | `m29_modules/` | M29 — local relative modules / named imports + exports across files (project fixture subdirectories) |
-| `m30_contextual_literals/` | M30 — contextual typing of fresh object / array / tuple literals (disabled until implementation) |
+| `m30_contextual_literals/` | M30 — contextual typing of fresh object / array / tuple literals |
 
 ## Project fixture convention (M29+)
 

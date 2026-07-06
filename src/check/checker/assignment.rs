@@ -15,6 +15,7 @@ use oxc_ast::ast::{
 use oxc_span::GetSpan;
 use super::context::*;
 use super::calls::intrinsic_id;
+use super::expr::contextual_literal_target;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Check a reassignment `NAME = <expr>` (a simple `=` to an identifier target) in
@@ -84,7 +85,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .and_then(|s| s.value)
             .and_then(|decl_id| self.decl_types.get(decl_id));
 
-        if let (Some(tgt), Some((src, src_span))) = (target_ty, rhs) {
+        if let (Some(tgt), Some(raw)) = (target_ty, rhs) {
+            let (src, src_span) =
+                self.infer_contextual_source_after_walked(scope, &assign.right, tgt, raw);
+            check_excess_properties(
+                self.interner.store(),
+                &assign.right,
+                tgt,
+                &mut self.diagnostics,
+            );
             self.obligations.push(AssignObligation {
                 src,
                 tgt,
@@ -233,8 +242,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Type-assignability obligation: the RHS must be assignable to the property's type.
         // Skipped when the RHS type is the error type (incomplete inference — see the doc
         // comment); the primary span is the RHS.
-        if let Some((src, src_span)) = rhs {
+        if let Some(raw) = rhs {
+            let (src, src_span) =
+                self.infer_contextual_source_after_walked(scope, &assign.right, prop_ty, raw);
             if src != wk.error {
+                check_excess_properties(
+                    self.interner.store(),
+                    &assign.right,
+                    prop_ty,
+                    &mut self.diagnostics,
+                );
                 self.obligations.push(AssignObligation {
                     src,
                     tgt: prop_ty,
@@ -307,12 +324,38 @@ pub(in crate::check::checker) fn check_excess_properties(
     target_ty: TypeId,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Expression::ObjectExpression(literal) = expr else {
-        return;
-    };
+    let target_ty = contextual_literal_target(store, target_ty);
+    match expr {
+        Expression::ParenthesizedExpression(paren) => {
+            check_excess_properties(store, &paren.expression, target_ty, diagnostics);
+        }
+        Expression::ObjectExpression(literal) => {
+            check_object_excess_properties(store, literal, target_ty, diagnostics);
+        }
+        Expression::ArrayExpression(array) => {
+            check_array_excess_properties(store, array, target_ty, diagnostics);
+        }
+        _ => {}
+    }
+}
+
+fn check_object_excess_properties(
+    store: &Store,
+    literal: &oxc_ast::ast::ObjectExpression<'_>,
+    target_ty: TypeId,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let Some(target_obj) = store.object_type(target_ty) else {
         return;
     };
+    if target_obj.properties.is_empty()
+        && target_obj.string_index.is_none()
+        && target_obj.number_index.is_none()
+        && target_obj.call_signatures.is_empty()
+        && target_obj.construct_signatures.is_empty()
+    {
+        return;
+    }
     // M19: an index signature accepts arbitrary keys, so a property the target does
     // not name is not excess. A **string** index accepts any key; a **number** index
     // accepts only **numeric-named** keys (`{ 0: "a" }` against `{ [i: number]: T }`).
@@ -371,25 +414,43 @@ pub(in crate::check::checker) fn check_excess_properties(
     }
 }
 
-/// The object type to descend into for a freshness (excess) check on a matched
-/// member. An *optional* member's type is `T | undefined` (a union); freshness must
-/// still recurse through that container (the M19 "freshness recurses through a new
-/// container" rule), so return the union's lone object member. A non-union (or a
-/// union without exactly one object member — e.g. a primitive, or the pre-existing
-/// multi-object-union gap) is returned unchanged, and the recursive call simply
-/// finds no object and stops.
-fn excess_recursion_target(store: &Store, ty: TypeId) -> TypeId {
-    let Some(members) = store.union_members(ty) else {
-        return ty;
-    };
-    let mut objects = members
-        .iter()
-        .copied()
-        .filter(|&m| store.object_type(m).is_some());
-    match (objects.next(), objects.next()) {
-        (Some(obj), None) => obj,
-        _ => ty,
+fn check_array_excess_properties(
+    store: &Store,
+    array: &oxc_ast::ast::ArrayExpression<'_>,
+    target_ty: TypeId,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if let Some(tuple) = store.tuple_type(target_ty) {
+        for (index, element) in array.elements.iter().enumerate() {
+            let Some(expr) = element.as_expression() else {
+                continue;
+            };
+            let Some(target) = tuple.elements.get(index).copied() else {
+                continue;
+            };
+            let target = excess_recursion_target(store, target);
+            check_excess_properties(store, expr, target, diagnostics);
+        }
+        return;
     }
+
+    let Some(array_ty) = store.array_type(target_ty) else {
+        return;
+    };
+    let target = excess_recursion_target(store, array_ty.element);
+    for element in &array.elements {
+        let Some(expr) = element.as_expression() else {
+            continue;
+        };
+        check_excess_properties(store, expr, target, diagnostics);
+    }
+}
+
+/// The concrete target to descend into for a freshness (excess) check on a matched
+/// member or array element. Optional-style unions (`T | undefined`) recurse through
+/// their single object/array/tuple member; every other union stays unchanged.
+fn excess_recursion_target(store: &Store, ty: TypeId) -> TypeId {
+    contextual_literal_target(store, ty)
 }
 
 /// Whether a property name is **numeric-keyed** (M19) — governed by a number index
@@ -440,4 +501,3 @@ pub(in crate::check::checker) fn binding_decl_id(binder: &Binder, scope: ScopeId
     let symbol_id = binder.graph.resolve(scope, name)?;
     binder.symbols.get(symbol_id).and_then(|s| s.value)
 }
-

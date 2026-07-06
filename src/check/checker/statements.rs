@@ -135,12 +135,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let Some(arg) = &ret.argument else {
             return;
         };
-        let Some((src, src_span)) = self.infer_expr(scope, arg) else {
-            return;
-        };
         match declared_ret {
             // Declared return type: check the returned expression against it.
             Some(tgt) => {
+                let Some((src, src_span)) = self.infer_initializer(scope, arg, Some(tgt)) else {
+                    return;
+                };
+                check_excess_properties(
+                    self.interner.store(),
+                    arg,
+                    tgt,
+                    &mut self.diagnostics,
+                );
                 self.obligations.push(AssignObligation {
                     src,
                     tgt,
@@ -150,6 +156,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
             // No annotation: infer from the first value return, widened.
             None => {
+                let Some((src, _)) = self.infer_expr(scope, arg) else {
+                    return;
+                };
                 if inferred.is_none() {
                     *inferred = Some(widen(self.interner, src));
                 }

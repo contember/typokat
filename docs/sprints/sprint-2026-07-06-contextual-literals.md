@@ -126,3 +126,30 @@ not reject their own fresh literal initializers when a concrete target type is k
 ## Run log
 
 <!-- Append as you work. -->
+
+- 2026-07-06: Implemented target-aware fresh object/array/tuple literal inference in
+  `infer_initializer`, threaded contextual final obligations through declarations,
+  identifier/member assignments, declared returns, expression-body arrows, calls, `new`,
+  and `super`, while keeping generic type-argument inference on raw argument types.
+  Enabled `m30_contextual_literals`; verification passed with `cargo test`,
+  `cargo clippy --all-targets -- -D warnings`, and `tsc 6.0.3 --strict --noEmit`
+  over each M30 fixture (expected errors only).
+- 2026-07-06: Review fix: made excess-property checks parenthesis-transparent and ran
+  them for contextual final obligations in assignments, calls/`new`/`super`, declared
+  returns, and expression-body arrows. Added M30 TS2353 witnesses; verification passed
+  with the same command set.
+- 2026-07-06: Second review fix: extended excess-property recursion through
+  contextually typed array and tuple literals, matching `infer_initializer`'s array
+  element and tuple positional targets. Added nested array/tuple TS2353 witnesses;
+  `cargo test`, `cargo clippy --all-targets -- -D warnings`, and TypeScript 6.0.3
+  `--strict --noEmit` over each M30 fixture passed.
+- 2026-07-06: Third review fix: added a narrow optional-style contextual target peel
+  for `T | undefined` when `T` is the only object/array/tuple member. Reused it for
+  literal inference, recursive object member contexts, and excess-property recursion.
+  Added optional object/array/tuple TS2353 witnesses; the same verification commands
+  passed.
+- 2026-07-06: Official-suite regression fix: recursive tuple excess checks now treat
+  the truly empty object target `{}` as open for excess-property purposes, matching
+  `conformance/types/tuple/contextualTypeWithTuple.ts`. Added direct and nested tuple
+  clean witnesses; `python3 tsofficial.py run --bin ../../target/debug/typokat --check`
+  passed with zero regressions and two progress entries.
