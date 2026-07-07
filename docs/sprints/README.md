@@ -20,4 +20,3 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-07-07-intersection-types.md`](sprint-2026-07-07-intersection-types.md) — backlog `25` / M31: intersection types (`A & B`). Spec committed; implementation next.

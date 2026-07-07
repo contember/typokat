@@ -1,3 +1,51 @@
+# OUTCOME (closed 2026-07-07) — SHIPPED
+
+**M31 intersection types (`A & B`) shipped.** An interned, canonicalized member-set
+node (the structural dual of union: `never` absorbs, `X & unknown → X`, `any`/error
+absorb, flatten/sort/dedup, empty → `unknown`, single → bare). Relation is
+dual-directional — a **target** intersection requires every member; a **source**
+intersection relates through its **merged apparent object** (authoritative for object
+targets; single-member sufficiency only for non-object targets, since `A <: B` does
+not imply `A & C <: B` when the target penalizes a present property). Merged member
+access, merged-key excess, contextual fresh-literal shaping, and the M24
+circular-constraint walk (`T extends T & X` → `TK2313`) all see the merge; merged-source
+recursion terminates via the relation cycle stack (single-contributor) and a coinductive
+assume-true guard (multi-contributor).
+
+**Commit map.** Spec/plan `ce3e138` · implementation `f99c0f2` · official-suite
+scoreboard ratchet `40c6071`.
+
+**Verification.** `cargo test` (206 unit tests + conformance; corpus grew to 169 files /
+558 markers, `m31_intersections/` = 7 fixtures), `cargo clippy --all-targets -- -D
+warnings` clean, `tsc 6.0.3 --strict --noEmit` over every M31 fixture (expected errors
+only), and official-suite `run --bin ../../target/debug/typokat --check` → 0 regressions
+(deliberate ratchet: 10 moved files + 2 progress, all safe-direction — no `matched`
+drop, no false-negative rise).
+
+**Review.** Round 1 **FAIL** — a source-merge soundness hole (dropped errors on
+optional/index-signature targets: `A <: B` ⇏ `A & C <: B`), a nested-excess over-report
+(first-contributor only), and a contextual-literal over-report (intersection targets not
+peeled). Fixes landed. Round 2 **FAIL** — the source-merge rewrite recursed unguarded and
+**stack-overflowed** on recursive intersection targets (aborting the whole file). Fixed
+with cycle-guarded single-contributor delegation + a coinductive assume-true guard for the
+multi-contributor merge. Round 3 (focused, soundness-critical) **PASS** — verified the
+guard cannot poison the durable cache (8 random permutations → identical diagnostic sets),
+termination on the adversarial recursion battery, no buried mismatch dropped, and
+order-independence. Two review-driven regression fixtures added
+(`source_intersection_targets.ts`, `recursive_targets.ts`).
+
+**Deferred (documented safe-direction divergences).** Disjoint-primitive reduction
+(`string & number → never`) is not done — the per-member relation gives the same verdict
+(fixtures assert code-only); `&` is not distributed over unions (`(A | B) & C`);
+`keyof` / indexed-access over an intersection stay out of subset; an index-signature
+target of a source intersection is conservatively rejected; a nested optional target
+property contributed by a single member is checked more strictly than tsc; M25's
+contravariant `infer` still unions rather than intersects; overload-signature
+intersection is out of scope (backlog `40`). The pre-existing finite deep-nesting
+native stack overflow (non-cyclic, no intersection involved) is backlog `63(k)`.
+
+---
+
 # Sprint — intersection types `A & B` (2026-07-07)
 
 **Goal.** Ship backlog `25`: add intersection types to the type model — an interned,

@@ -22,21 +22,21 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-07-07-intersection-types.md`](sprints/sprint-2026-07-07-intersection-types.md) — backlog `25` / M31: intersection types (`A & B`). Spec committed; implementation next.
+*(none active)*
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M30 shipped; no active sprint.** The type-level evaluation phase is complete (M24–M28);
+- **M0–M31 shipped; no active sprint.** The type-level evaluation phase is complete (M24–M28);
   M29 shipped backlog `15` slice 1 (serial local-relative modules); M30 shipped contextual
-  literal typing. Scoreboard: in-scope 506, clean-kept 172/219, error-exact 22/287,
-  diag-recall 285/1691 (official `enum`/`namespace`/`satisfies`/`as const`/`module` gates
-  still closed; unchanged by the FN-fix sprint — its added diagnostics land on corpus not in
-  the committed scoreboard). The completion roadmap (refined 2026-07-07) lives in the backlog
-  README: a definition of done (checker 1.0) + four tracks (A model completeness `24` `25`
+  literal typing; **M31 shipped intersection types (`A & B`)** — backlog `25`, the first track-A
+  step (sprint archived). The completion roadmap (refined 2026-07-07) lives in the backlog
+  README: a definition of done (checker 1.0) + four tracks (A model completeness `24`
   `39`–`44` = the `lib.d.ts` critical path; B checker completeness `18` `19` `45`–`52`;
-  C known-gap tail; D scale ladder `38` `13` `14` `15` `16` `17`).
+  C known-gap tail; D scale ladder `38` `13` `14` `15` `16` `17`). **Next:** continue track A
+  (`24` rest elements, `39` optional/default params) toward `14`, interleaving the C silent-FN
+  tail (`56` `60` `62` `65` `54` `59` `64` `33` `34` `32` `21` `22`).
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
   invariants CLEAN and filed `53`–`65`; the five HIGH silent-FN families then shipped through
