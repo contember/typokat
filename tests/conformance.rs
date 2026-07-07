@@ -75,6 +75,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b29_alias_cycles", true),
     ("b30_negative_literals", true),
     ("b55_template_memo", true),
+    // Project fixtures (subdirectories, m29 convention); the fix commit extends
+    // the harness's project path beyond m29_modules before flipping this on.
+    ("b58_project_scopes", false),
 ];
 
 /// An expectation parsed from a single inline marker.

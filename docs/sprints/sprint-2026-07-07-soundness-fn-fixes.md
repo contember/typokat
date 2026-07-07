@@ -128,3 +128,16 @@ official-suite `run --check`) → commit → next.
 ## Run log
 
 <!-- Append as you work: discoveries, deviations, blockers. -->
+- **WU1 shipped** — spec `7c38dd4`, fix `6302ec7`. Opus impl + independent Opus review
+  (PASS: in-flight pairing traced on every exit path, no memo cross-contamination,
+  poison closed on all variants, official-suite `--check` exit 0, scoreboard unchanged).
+  Deviation of note: symbolic templates now memoize `ty → ty` (idempotent, mirrors the
+  undecidable-conditional discipline) — one unit test updated accordingly.
+- **WU2 spec prep** — probe finding: the review's "silent clean" collision layout (p9c)
+  was actually masked by the unrelated forward-ref/TDZ gap, not the collision; the
+  corpus uses collision-caused shapes instead (spurious TK2304 + dropped error, silent
+  TK2304 absorption, and a false TK2304 on fully-correct aligned code). Alignment is
+  kept by byte-identical file headers per project.
+- **WU5 spec prep** — tsc pins recorded; `h([1, "x"])` (mixed-element tuple-param call)
+  deliberately left out of the corpus: tsc reports a per-element contextual error whose
+  code/position depends on subtle inference-priority choices.

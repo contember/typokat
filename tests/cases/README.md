@@ -367,6 +367,18 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`).
 | `b29_alias_cycles/` | backlog `29` | surface alias cycles → `TK2456` (direct/mutual/through unions); legal member recursion resolves |
 | `b30_negative_literals/` | backlog `30` | negative numeric literal types are literals, not `any` (annotations, unions, template holes, extends) |
 | `b55_template_memo/` | backlog `55` | template evaluation must not memoize results computed under an exhausted TK2589 budget |
+| `b58_project_scopes/` | backlog `58` | project-mode scope maps keyed per module — offset-aligned files must not collide |
+
+`b58_project_scopes/` uses **project fixture subdirectories** (the m29 convention): every
+`.ts` file in a subdirectory is one project checked via `check_project`. Each project's
+two files carry byte-identical first-line headers so the tested constructs (function /
+arrow / method / block) start at the **same byte offset** in both files — the collision
+being specced keys on span starts, so the headers must stay identical when editing.
+Shapes: the wrong-scope descent (spurious `TK2304` + dropped real error) for functions,
+arrows, methods, and blocks; a genuine `TK2304` silently absorbed by the other file's
+aligned scope; and a fully-correct project that must check clean (at the buggy HEAD it
+false-errors). Markers pin the post-fix behavior, which equals each file's standalone
+verdicts; cross-checked vs `tsc 6.0.3 --strict`.
 
 `b55_template_memo/` pins the evaluator's memo discipline around budget exhaustion: a
 template-literal hole that resolves to the error type only because the shared TK2589
