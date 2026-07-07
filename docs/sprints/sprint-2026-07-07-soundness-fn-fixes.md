@@ -156,3 +156,10 @@ official-suite `run --check`) → commit → next.
   items): arrow/function initializers get no contextual param typing against a
   function-typed annotation (silent FN — the scope of backlog `39`/`40` signature work
   and M3 contextual rules); `TS2564` no-initializer diagnostics are backlog `47`.
+- **WU4 shipped** — spec `cdf2f6b`, fix `d3636c0`. All four surfaces joined properly;
+  switch/loop `break` routing moved to a shared `break_targets` stack; deviation beyond
+  the brief (accepted): `analyze_guard` gained an assignment-as-condition truthy arm,
+  required by the w2 fixture — review verified its falsy branch keeps the non-null
+  member (sound). Review PASS (~28 probes; fixpoint verified untouched; official-suite
+  unchanged). Review byproduct, pre-existing: `if (a && b)` compound conditions are not
+  recognized as guards (over-report, safe) — the backlog `51` narrowing-tail area.

@@ -370,6 +370,16 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`).
 | `b58_project_scopes/` | backlog `58` | project-mode scope maps keyed per module — offset-aligned files must not collide |
 | `b61_field_initializers/` | backlog `61` | class field initializers checked against the annotation (assignability, excess, contextual typing; instance + static) |
 | `b53_cfg_assignments/` | backlog `53` | assignments survive `&&`/`||`/ternary, `switch` clauses, `while` tests, and sequence expressions in the flow graph |
+| `b57_tuple_array_infer/` | backlog `57` | Tuple↔Array inference pairings: `(infer U)[]` over a tuple binds the element union; tuple/array cross-kind call inference |
+
+`b57_tuple_array_infer/` pins the Tuple↔Array inference pairings. Type-level:
+`T extends (infer U)[]` over a tuple binds `U` to the element union (non-widening —
+literals stay literals; the empty tuple yields `never`), and an ARRAY source keeps
+failing a TUPLE pattern (control). Call-site: a fresh array literal against a `[T, T]`
+parameter and a tuple value against a `T[]` parameter both produce element candidates
+(widened on fixing, so `T = number` for `[1, 2]`). Deliberately unpinned: a
+mixed-element literal against `[T, T]` (`h([1, "x"])`) — tsc reports a per-element
+contextual error whose code/position rides on subtle inference-priority choices.
 
 `b58_project_scopes/` uses **project fixture subdirectories** (the m29 convention): every
 `.ts` file in a subdirectory is one project checked via `check_project`. Each project's
