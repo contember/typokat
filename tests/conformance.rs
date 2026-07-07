@@ -74,7 +74,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b28_interface_extends", true),
     ("b29_alias_cycles", true),
     ("b30_negative_literals", true),
-    ("b55_template_memo", false),
+    ("b55_template_memo", true),
 ];
 
 /// An expectation parsed from a single inline marker.

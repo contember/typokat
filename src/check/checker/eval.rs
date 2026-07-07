@@ -914,9 +914,10 @@ impl<'a> ConditionalEvaluator<'a> {
     /// type parameter, an `infer` binder, or any still-symbolic type) leaves the template
     /// a **symbolic pattern** — returned unchanged. The cartesian product iterates under
     /// the shared per-root step budget, so a combinatorial blow-up trips `TK2589` (via
-    /// `exhausted`), never OOM. The result is memoized (a concrete collapse only — a
-    /// symbolic template is idempotent and left un-memoized, mirroring a deferred
-    /// conditional).
+    /// `exhausted`), never OOM. The result is committed through [`Task::SetMemo`], which
+    /// refuses to commit under an exhausted budget — so a hole that resolved to error
+    /// only because an unrelated earlier member drained the budget never poisons the
+    /// pass-wide memo (backlog 55). A symbolic survivor memoizes to itself, idempotent.
     fn eval_template(
         &mut self,
         ty: TypeId,
@@ -928,14 +929,31 @@ impl<'a> ConditionalEvaluator<'a> {
             values.push(ty);
             return;
         };
+        // A self-cycle, or a result reached under an already-exhausted budget, is the
+        // error type and is NOT memoized (backlog 55 — the template path formerly
+        // bypassed this gate and poisoned the shared memo; mirrors the other node
+        // kinds and invariants §1).
+        if self.in_flight.contains(&ty) || self.exhausted {
+            values.push(error);
+            return;
+        }
+        self.steps += 1;
+        if self.steps > self.budget {
+            self.exhausted = true;
+            values.push(error);
+            return;
+        }
+        self.in_flight.insert(ty);
 
         // M28: a hole may itself be a pending type-level computation (a substituted
         // string-intrinsic instantiation — the `Greet` composition — a conditional, a
         // keyof, …). Evaluate such holes through the shared work-stack FIRST, then
         // finish construction inline ([`Task::FinishTemplate`] never re-schedules, so
-        // a hole that stays deferred cannot loop).
+        // a hole that stays deferred cannot loop). The enclosing [`Task::SetMemo`]
+        // commits the result under `ty` (skipped when exhausted — backlog 55).
         let needs_eval = template.holes.iter().any(|&h| self.arg_needs_pre_eval(h));
         if needs_eval {
+            tasks.push(Task::SetMemo(ty));
             tasks.push(Task::FinishTemplate(ty));
             for &hole in template.holes.iter().rev() {
                 tasks.push(Task::Eval(hole));
@@ -943,6 +961,7 @@ impl<'a> ConditionalEvaluator<'a> {
             return;
         }
 
+        tasks.push(Task::SetMemo(ty));
         let holes = template.holes.clone();
         self.finish_template_with_holes(ty, &template, holes, values, error);
     }
@@ -961,9 +980,10 @@ impl<'a> ConditionalEvaluator<'a> {
 
     /// The template construction core (M27, factored for M28's hole pre-evaluation):
     /// classify the (possibly re-evaluated) `holes`, then collapse / short-circuit /
-    /// stay symbolic exactly as before. Results memoize under the ORIGINAL node id
-    /// `ty`; a symbolic survivor whose holes changed re-interns (un-memoized,
-    /// idempotent — mirroring the deferred-conditional discipline).
+    /// stay symbolic exactly as before. Pushes exactly one result value; the enclosing
+    /// [`Task::SetMemo`] (scheduled by [`Self::eval_template`]) commits it under the
+    /// ORIGINAL node id `ty` — but never under an exhausted budget (backlog 55). A
+    /// symbolic survivor whose holes changed re-interns over the resolved holes.
     fn finish_template_with_holes(
         &mut self,
         ty: TypeId,
@@ -976,9 +996,9 @@ impl<'a> ConditionalEvaluator<'a> {
 
         // M22 discipline: an error-typed hole (an unresolved name upstream) degrades the
         // whole template to the error type so cascades stay suppressed — mirroring
-        // `assemble_mapped`'s error/any key-source handling.
+        // `assemble_mapped`'s error/any key-source handling. Commit via the enclosing
+        // `Task::SetMemo` (backlog 55 — never a direct insert that ignores exhaustion).
         if holes.contains(&wk.error) {
-            self.memo.insert(ty, error);
             values.push(error);
             return;
         }
@@ -989,7 +1009,6 @@ impl<'a> ConditionalEvaluator<'a> {
         for &hole in &holes {
             match self.hole_parts(hole) {
                 HolePart::Never => {
-                    self.memo.insert(ty, wk.never);
                     values.push(wk.never);
                     return;
                 }
@@ -1039,7 +1058,6 @@ impl<'a> ConditionalEvaluator<'a> {
             .map(|s| self.interner.intern_literal(LiteralValue::String(s)))
             .collect();
         let result = self.interner.union(members);
-        self.memo.insert(ty, result);
         values.push(result);
     }
 
@@ -2526,14 +2544,20 @@ mod tests {
             })
         };
 
-        // `string` hole → symbolic pattern (unchanged, un-memoized).
+        // `string` hole → symbolic pattern (unchanged). It memoizes to itself via the
+        // SetMemo discipline (backlog 55) — idempotent, mirroring a conditional whose
+        // concrete operands stay undecidable.
         let pattern = template(&mut interner, wk.string);
         assert_eq!(
             eval(&mut interner, &mut next, &mut memo, pattern),
             pattern,
             "a `${{string}}` pattern stays symbolic"
         );
-        assert!(!memo.contains_key(&pattern), "a symbolic template is not memoized");
+        assert_eq!(
+            memo.get(&pattern).copied(),
+            Some(pattern),
+            "a symbolic template memoizes to itself (idempotent)"
+        );
 
         // Free type parameter hole → deferred (symbolic).
         let t = interner.intern_type_param(TypeParamId(0), "T");
