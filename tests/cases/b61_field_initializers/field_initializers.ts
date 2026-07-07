@@ -15,6 +15,7 @@ class C {
   inferred = "s";
   static sn: number = "bad"; // error[TK2322]: Type 'string' is not assignable to type 'number'
   static sok: string = "fine";
+  opt?: number = "s"; // error[TK2322]
 }
 const c = new C();
 const useInferred: number = c.inferred; // error[TK2322]: Type 'string' is not assignable to type 'number'

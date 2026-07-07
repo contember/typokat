@@ -10,6 +10,8 @@ class Ok {
   readonly r: number = 1;
   inferred = "s";
   static sok: string = "fine";
+  opt1?: number = undefined;
+  opt2?: number = 3;
 }
 const k = new Ok();
 const readBack: string = k.inferred;
