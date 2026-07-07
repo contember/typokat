@@ -78,7 +78,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Project fixtures (subdirectories, m29 convention) — see `PROJECT_DIRS`.
     ("b58_project_scopes", true),
     ("b61_field_initializers", true),
-    ("b53_cfg_assignments", false),
+    ("b53_cfg_assignments", true),
 ];
 
 /// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`

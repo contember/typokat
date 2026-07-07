@@ -474,9 +474,15 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// builder walks. Meaningless during the check walk (which resolves via
     /// [`reference_flow`](Pass::reference_flow)).
     pub(in crate::check::checker) flow_cursor: FlowNodeId,
-    /// The flow pre-pass's enclosing-loop stack, so a `break`/`continue` can find
-    /// its target loop label + collect its break edges.
+    /// The flow pre-pass's enclosing-loop stack, so a `continue` can find its target
+    /// loop label (the back-edge target). `break` uses [`break_targets`] instead — a
+    /// `break` exits the nearest loop **or** `switch`, `continue` only a loop.
     pub(in crate::check::checker) flow_loops: Vec<FlowLoopFrame>,
+    /// The flow pre-pass's enclosing-**breakable** stack (loops + switches): each
+    /// entry collects the `break` edges of one construct, joined into its exit flow.
+    /// Separate from [`flow_loops`] because a `break` targets the nearest loop or
+    /// `switch`, while a `continue` skips any intervening `switch` to the loop label.
+    pub(in crate::check::checker) break_targets: Vec<Vec<FlowNodeId>>,
     /// **Reference → flow node** map (M23), keyed by `(module scope, reference span
     /// start)`. Populated by the pre-pass; read by the check walk's
     /// [`resolve_identifier_type`] to resolve a reference against the flow node in
@@ -570,11 +576,10 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
 }
 
 /// One enclosing-loop frame for the flow pre-pass: the loop's label (the
-/// `continue`/back-edge target) and the `break` edges collected within it (joined
-/// into the post-loop flow so a `break` un-narrows the after-loop state).
+/// `continue`/back-edge target). `break` edges live on [`Pass::break_targets`]
+/// (shared with `switch`), not here.
 pub(in crate::check::checker) struct FlowLoopFrame {
     pub(in crate::check::checker) label: FlowNodeId,
-    pub(in crate::check::checker) break_edges: Vec<FlowNodeId>,
 }
 
 /// One mapped-type lowering context (M26): the node's key binder name. Lives on

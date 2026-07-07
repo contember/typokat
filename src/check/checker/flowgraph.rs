@@ -113,12 +113,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
             }
             Statement::BreakStatement(_) => {
-                // The break carries the current (narrowed) state out to the loop's
-                // exit join — this is what makes a `break` un-narrow the after-loop
-                // state (`breakTrap`).
+                // The break carries the current (narrowed) state out to the nearest
+                // breakable's exit join (loop or `switch`) — what un-narrows the
+                // after-loop state (`breakTrap`) and carries a clause's assignments
+                // out of a `switch` (backlog 53).
                 let cursor = self.flow_cursor;
-                if let Some(frame) = self.flow_loops.last_mut() {
-                    frame.break_edges.push(cursor);
+                if let Some(target) = self.break_targets.last_mut() {
+                    target.push(cursor);
                 }
                 self.flow_cursor = FlowNodeId::UNREACHABLE;
             }
@@ -181,12 +182,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.flow_cursor = self.flow_join(vec![then_end, else_end]);
     }
 
-    /// Build the flow for a `switch`: each clause body starts from its per-case
-    /// discriminant narrowing (`x.prop === label`), or from the wide pre-switch flow
-    /// when a preceding clause **falls through** into it (the M8 conservative rule).
-    /// `default:` narrows by the complement of all labels. Post-switch flow is the
-    /// wide pre-switch node (conservative — no fixture reads a symbol narrowed only
-    /// inside a `switch` after it).
+    /// Build the flow for a `switch` (backlog 53): each clause body starts from its
+    /// per-case discriminant narrowing (`x.prop === label`) joined with the previous
+    /// clause's fall-through end when it did not terminate; `default:` narrows by the
+    /// complement of all labels. Post-switch flow **joins** every clause's exit — the
+    /// last clause's fall-through end, every `break` edge, and (when there is no
+    /// `default`) the pre-switch no-match path — so an assignment in a clause reaches
+    /// the code after the `switch`. A `return`/`throw`-terminated clause contributes
+    /// [`FlowNodeId::UNREACHABLE`], filtered out by [`flow_join`].
     fn build_flow_switch(&mut self, scope: ScopeId, switch: &SwitchStatement<'_>) {
         self.build_flow_expr(scope, &switch.discriminant);
         let discriminant = self.member_discriminant(scope, &switch.discriminant);
@@ -205,21 +208,40 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .zip(&labels)
             .filter_map(|(case, label)| case.test.as_ref().and(*label))
             .collect();
+        let has_default = switch.cases.iter().any(|case| case.test.is_none());
 
-        let mut prev_fell_through = false;
+        // A `break` in a clause exits to the switch's own join, not the enclosing loop.
+        self.break_targets.push(Vec::new());
+        // The previous clause's fall-through edge, if it did not terminate.
+        let mut fell_through: Option<FlowNodeId> = None;
         for (case, label) in switch.cases.iter().zip(&labels) {
-            let entry = if prev_fell_through {
-                pre
-            } else {
-                self.switch_case_entry(pre, &discriminant, case.test.is_some(), *label, &case_labels)
+            let direct =
+                self.switch_case_entry(pre, &discriminant, case.test.is_some(), *label, &case_labels);
+            // Reachable by a direct label match OR by falling through the prior clause.
+            let entry = match fell_through {
+                Some(prev_end) => self.flow_join(vec![prev_end, direct]),
+                None => direct,
             };
             self.flow_cursor = entry;
             self.build_flow_stmts(scope, &case.consequent);
-            prev_fell_through = !clause_terminates(&case.consequent);
+            fell_through = if clause_terminates(&case.consequent) {
+                None
+            } else {
+                Some(self.flow_cursor)
+            };
         }
+        // The last clause's fall-through end (UNREACHABLE if it terminated).
+        let last_end = self.flow_cursor;
+        let breaks = self.break_targets.pop().unwrap_or_default();
 
-        // Conservative rejoin: post-switch sees the wide pre-switch flow.
-        self.flow_cursor = pre;
+        let mut post = vec![last_end];
+        post.extend(breaks);
+        // Without a `default`, the discriminant can match nothing: the pre-switch
+        // state flows straight to the post-switch join.
+        if !has_default {
+            post.push(pre);
+        }
+        self.flow_cursor = self.flow_join(post);
     }
 
     /// The flow node a `switch` clause body starts from, given the discriminant
@@ -282,25 +304,27 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         });
         self.flow_cursor = label;
 
+        // The test may create Assignment nodes (`while (x = next())`, backlog 53); the
+        // condition branches antecede the **post-test** cursor, not the bare label, so
+        // those assignments are not orphaned. Its antecedent chain still reaches the
+        // label, so the back-edge fixpoint (invariants §1) is preserved.
         self.build_flow_expr(scope, &while_stmt.test);
+        let post_test = self.flow_cursor;
         let fact = self.analyze_guard(scope, &while_stmt.test);
-        let cond_true = self.flow_condition(label, &fact, true);
-        let cond_false = self.flow_condition(label, &fact, false);
+        let cond_true = self.flow_condition(post_test, &fact, true);
+        let cond_false = self.flow_condition(post_test, &fact, false);
 
-        self.flow_loops.push(FlowLoopFrame {
-            label,
-            break_edges: Vec::new(),
-        });
+        self.flow_loops.push(FlowLoopFrame { label });
+        self.break_targets.push(Vec::new());
         self.flow_cursor = cond_true;
         self.build_flow_stmt(scope, &while_stmt.body);
         let body_end = self.flow_cursor;
         self.add_back_edge(label, body_end);
-        let frame = self.flow_loops.pop();
+        self.flow_loops.pop();
+        let breaks = self.break_targets.pop().unwrap_or_default();
 
         let mut post = vec![cond_false];
-        if let Some(frame) = frame {
-            post.extend(frame.break_edges);
-        }
+        post.extend(breaks);
         self.flow_cursor = self.flow_join(post);
     }
 
@@ -369,6 +393,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Expression::ArrowFunctionExpression(arrow) => {
                 self.build_flow_arrow_body(scope, arrow);
             }
+            // A sequence `(a, b, c)` (backlog 53): walk operands left-to-right so an
+            // inner assignment advances the cursor and survives the expression.
+            Expression::SequenceExpression(seq) => {
+                for operand in &seq.expressions {
+                    self.build_flow_expr(scope, operand);
+                }
+            }
             // Literals, `this`, and other shapes carry no narrowable reference.
             _ => {}
         }
@@ -376,25 +407,37 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
     /// `&&` / `||` (M23): the right operand is evaluated under the left operand's
     /// guard — `&&` when it holds (true branch), `||` when it fails (false branch).
-    /// The narrowing does not persist past the expression (its value is discarded in
-    /// the corpus), so the cursor is restored afterward.
+    /// The post-expression cursor **joins** the RHS-evaluated end with the RHS-skipped
+    /// branch (`&&` → the false branch, `||` → the true branch), so an assignment in
+    /// the RHS survives (backlog 53). Condition narrowing still does not persist past
+    /// the expression: both join inputs carry the condition's opposing senses, so it
+    /// widens back out naturally.
     fn build_flow_logical(&mut self, scope: ScopeId, logical: &LogicalExpression<'_>) {
         self.build_flow_expr(scope, &logical.left);
         let fact = self.analyze_guard(scope, &logical.left);
         let pre = self.flow_cursor;
-        let rhs_flow = match logical.operator {
-            LogicalOperator::And => self.flow_condition(pre, &fact, true),
-            LogicalOperator::Or => self.flow_condition(pre, &fact, false),
+        let (rhs_flow, skip_flow) = match logical.operator {
+            LogicalOperator::And => (
+                self.flow_condition(pre, &fact, true),
+                self.flow_condition(pre, &fact, false),
+            ),
+            LogicalOperator::Or => (
+                self.flow_condition(pre, &fact, false),
+                self.flow_condition(pre, &fact, true),
+            ),
             // `??` narrows on nullishness only — out of the recognized-guard subset.
-            LogicalOperator::Coalesce => pre,
+            LogicalOperator::Coalesce => (pre, pre),
         };
         self.flow_cursor = rhs_flow;
         self.build_flow_expr(scope, &logical.right);
-        self.flow_cursor = pre;
+        let rhs_end = self.flow_cursor;
+        self.flow_cursor = self.flow_join(vec![skip_flow, rhs_end]);
     }
 
     /// A ternary `test ? a : b` (M23): the consequent under the test's true branch,
-    /// the alternate under its false branch. The arm narrowing does not persist.
+    /// the alternate under its false branch. The post-expression cursor **joins** the
+    /// two arm ends, so an assignment in either arm survives (backlog 53); the arm
+    /// narrowing does not persist (the join carries both senses of the test).
     fn build_flow_conditional(&mut self, scope: ScopeId, cond: &ConditionalExpression<'_>) {
         self.build_flow_expr(scope, &cond.test);
         let fact = self.analyze_guard(scope, &cond.test);
@@ -404,9 +447,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         self.flow_cursor = then_flow;
         self.build_flow_expr(scope, &cond.consequent);
+        let then_end = self.flow_cursor;
+
         self.flow_cursor = else_flow;
         self.build_flow_expr(scope, &cond.alternate);
-        self.flow_cursor = pre;
+        let else_end = self.flow_cursor;
+
+        self.flow_cursor = self.flow_join(vec![then_end, else_end]);
     }
 
     /// An assignment `x = <rhs>` (M23). The RHS is built first (it sees the
@@ -609,10 +656,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn build_flow_boundary(&mut self, build: impl FnOnce(&mut Self)) {
         let saved_cursor = self.flow_cursor;
         let saved_loops = std::mem::take(&mut self.flow_loops);
+        let saved_breaks = std::mem::take(&mut self.break_targets);
         self.flow_cursor = FlowNodeId::START;
         build(self);
         self.flow_cursor = saved_cursor;
         self.flow_loops = saved_loops;
+        self.break_targets = saved_breaks;
     }
 
     /// Append a flow node, returning its id.

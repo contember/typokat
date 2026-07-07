@@ -892,6 +892,7 @@ fn build_pass<'a, 'ast>(
         ],
         flow_cursor: crate::check::flow::FlowNodeId::START,
         flow_loops: Vec::new(),
+        break_targets: Vec::new(),
         reference_flow: FxHashMap::default(),
         flow_memo: FxHashMap::default(),
         flow_provisional: FxHashMap::default(),

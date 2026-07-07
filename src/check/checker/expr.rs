@@ -113,6 +113,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 self.infer_expr(scope, &cond.alternate);
                 Some((well_known.error, Span::from_oxc(cond.span)))
             }
+            // A sequence `(a, b, …, z)` (backlog 53): walk every operand for its side
+            // effects (references, nested checks), and take the value/type of the
+            // **last** operand — the comma operator's result.
+            Expression::SequenceExpression(seq) => {
+                let mut result = None;
+                for operand in &seq.expressions {
+                    result = self.infer_expr(scope, operand);
+                }
+                result
+            }
             // M17: an array literal `[e1, e2, …]` infers `(<elem>)[]` where the element
             // type is the union of the (widened) element types (`[1,2,3]` → `number[]`,
             // `[1,"x"]` → `(number | string)[]`); `[]` → `never[]`.

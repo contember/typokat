@@ -15,8 +15,8 @@ use crate::check::flow::{NarrowOp, TypeofTag};
 use crate::types::repr::LiteralValue;
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
-    BinaryExpression, BinaryOperator, Expression, IfStatement, Statement, SwitchStatement,
-    UnaryOperator, WhileStatement,
+    AssignmentOperator, AssignmentTarget, BinaryExpression, BinaryOperator, Expression,
+    IfStatement, Statement, SwitchStatement, UnaryOperator, WhileStatement,
 };
 use super::context::*;
 
@@ -121,6 +121,24 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
             // A parenthesized condition is transparent.
             Expression::ParenthesizedExpression(paren) => self.analyze_guard(scope, &paren.expression),
+            // A plain assignment used as a condition (`while (x = e)`, backlog 53): the
+            // value is the assigned expression, so its truthiness narrows `x`. The
+            // Assignment node itself is created by the flow builder; here we only
+            // recognize the truthy guard on the target symbol.
+            Expression::AssignmentExpression(assign)
+                if assign.operator == AssignmentOperator::Assign =>
+            {
+                let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
+                    return None;
+                };
+                let symbol = self.binder.graph.resolve(scope, target.name.as_str())?;
+                self.binder.symbols.get(symbol)?.value?;
+                Some(GuardFact {
+                    symbol,
+                    op: NarrowOp::Truthy,
+                    then_positive: true,
+                })
+            }
             // Bare truthiness `if (x)`.
             Expression::Identifier(_) => {
                 let symbol = self.condition_symbol(scope, test)?;
