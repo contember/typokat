@@ -34,6 +34,11 @@ decisions → reference → archive.
   still closed). **The completion roadmap was refined 2026-07-07** — the backlog README now
   carries a definition of done (checker 1.0) and four tracks: A model completeness
   (`24` `25` `39`–`44`, the `lib.d.ts` critical path), B checker completeness (`18` `19`
-  `45`–`52`), C known-gap tail (`21`–`23`, `26` `27` `30` `32`–`37`), D scale ladder
-  (`38` `13` `14` `15` `16` `17`). **Next:** kill the silent-FN families (`33` `34` `32`
-  `21` `22`), then run track A toward `14`.
+  `45`–`52`), C known-gap tail (`21`–`23`, `26` `27` `30` `32`–`37`, `53`–`63`), D scale
+  ladder (`38` `13` `14` `15` `16` `17`). A cross-cutting soundness review ran 2026-07-07
+  (4 adversarial reviewers over relate/CFG/evaluator/M29+M30): the §6.3 relation-cache and
+  loop-fixpoint invariants verified CLEAN; findings filed as `53`–`63` — five HIGH silent-FN
+  families (`53` CFG assignment loss, `55` template memo poisoning, `57` tuple↔array
+  inference, `58` project scope-key collision, `61` class field initializers).
+  **Next:** kill the silent-FN families (`53` `55` `57` `58` `61`, then `56` `60` `62`
+  `54` `59` `33` `34` `32` `21` `22`), then run track A toward `14`.
