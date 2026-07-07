@@ -145,7 +145,7 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   track in [`docs/backlog/`](./docs/backlog/README.md) and the prerequisite for full
   `lib.d.ts` loading. (Intersections `A & B` landed in M31; `&` distribution over unions,
   `keyof`/indexed-access over an intersection, and overload-signature intersection remain
-  deferred — see `tests/cases/README.md`.)
+  deferred — see [`docs/reference/divergences.md`](./docs/reference/divergences.md).)
 - **Optional properties** (`a?: T`) on objects/interfaces/class fields are implemented (M21): a
   member may be absent, reads yield `T | undefined`, `keyof`/indexed-access include it. Still
   deferred: optional **methods**/accessors (`go?(): T`), the dedicated *possibly-undefined*
@@ -160,7 +160,7 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   args on a type parameter (`TS2315`), a wrong type-argument count such as bare `Array` (`TS2314`),
   and qualified names `A.B` (`TS2503`). (Backlog `14`, `15`, `38`, `43`, `52`.)
 - Minor `tsc` divergences, all in the safe (over-report) direction, are logged in
-  [`tests/cases/README.md`](./tests/cases/README.md).
+  [`docs/reference/divergences.md`](./docs/reference/divergences.md).
 
 ## Testing
 

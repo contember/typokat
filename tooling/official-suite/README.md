@@ -128,7 +128,7 @@ ratchets the numbers up; `--check` keeps them from sliding back.
 - Column positions aren't compared (line + code only) — typokat validates columns
   with its own snapshot tests, and columns are the most baseline-fragile field.
 - Message text isn't compared. Codes + lines are the robust contract; message
-  wording diverges by design in documented places (see `tests/cases/README.md`).
+  wording diverges by design in documented places (see `docs/reference/divergences.md`).
 - A test whose baseline has a non-default name (multi-variant baselines) is treated
   as expected-clean. Rare in the curated single-config dirs.
 

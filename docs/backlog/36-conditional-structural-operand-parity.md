@@ -35,8 +35,8 @@ Verify the hypothesis against the tsc source first (which shortcut fires per sha
 then model it: eager-false decision at template-build time where tsc makes one;
 demand-evaluation of nested deferred nodes where tsc instantiation evaluates them
 (keyof in structural positions, intrinsics in tuples). Acceptance: the five divergence
-markers in `conditional_positions.ts` flip to tsc-exact and the README divergence
-entry is deleted; no new FN on the rest of the fixture.
+markers in `conditional_positions.ts` flip to tsc-exact and the
+`docs/reference/divergences.md` entry is deleted; no new FN on the rest of the fixture.
 
 ## Touch points
 

@@ -9,8 +9,8 @@ project — the build loop that kept it sound, and the bug classes the reviews k
 Read first: [`README.md`](../../README.md) (what exists),
 [`architecture.md`](./architecture.md) (the design + §12 phased plan),
 [`../archive/mvp-plan.md`](../archive/mvp-plan.md) (how M0–M6 were scoped),
-[`tests/cases/README.md`](../../tests/cases/README.md) (the conformance/marker conventions + every
-documented `tsc` divergence).
+[`tests/cases/README.md`](../../tests/cases/README.md) (the conformance/marker conventions) and
+[`divergences.md`](./divergences.md) (every documented `tsc` divergence + deferred check).
 
 For each milestone you pick up, **prepare a per-milestone plan the same way it was built so far** —
 spec first, then implement, then independently review.
@@ -26,7 +26,8 @@ The build loop, per milestone `Mn`:
    fixtures are the acceptance spec and must be written **independently of** the implementation, so
    the review stays honest. Pick fixtures robust to subtle `tsc` choices (e.g. avoid depending on
    literal-widening; keep at most one mismatched argument per call). Update `tests/cases/README.md`
-   (milestone index, any new `TK` code, deferred-list changes). **Commit the spec on its own**
+   (milestone index, any new `TK` code) and record any new deferred check / `tsc` divergence in
+   [`divergences.md`](./divergences.md). **Commit the spec on its own**
    (`"Add Mn … corpus (spec)"`) — it does not change behavior because the dir is not yet enabled in
    `MILESTONE_DIRS`.
 2. **Dispatch an implementation subagent** (`Agent`, general-purpose). Give it: the fixtures, the
@@ -97,6 +98,7 @@ the **recommended order** — don't duplicate that ordering here; read it there.
 `20`, `28`–`29`, and `31` are shipped/closed; do not plan new work from those deleted backlog
 numbers.
 
-For each item you pick: write its fixture corpus first, update `tests/cases/README.md`, commit the
+For each item you pick: write its fixture corpus first, update `tests/cases/README.md` (and
+[`divergences.md`](./divergences.md) for any new divergence/deferral), commit the
 spec, dispatch the implementation subagent, dispatch the independent review, fix, and commit. Same
 loop, all the way up.

@@ -16,7 +16,7 @@ still caught by the construct-signature path.
 `ClassInfo` facts (`is_abstract`, `ctor_visibility`) are looked up from the callee identifier's
 value `DeclId`; any other callee expression falls to the object-construct-signature path, which
 carries neither flag. Consistent pre-existing boundary (the abstract check has always had it),
-documented in `tests/cases/README.md`; filed so it does not fossilize.
+documented in `docs/reference/divergences.md`; filed so it does not fossilize.
 
 ## Approach / acceptance
 

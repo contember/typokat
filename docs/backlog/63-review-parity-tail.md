@@ -41,7 +41,7 @@ probe-verified vs tsc 6.0.3.
 ## Acceptance
 
 Each entry: fixture pinning tsc behavior, fix, or an explicit divergence-ledger entry in
-`tests/cases/README.md`. Close the item when the list is empty.
+`docs/reference/divergences.md`. Close the item when the list is empty.
 
 ## Touch points
 

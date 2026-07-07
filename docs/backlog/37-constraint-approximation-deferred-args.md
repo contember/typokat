@@ -26,7 +26,7 @@ Model the upper-bound approximation of a deferred conditional (union of approxim
 branches; for `Extract`-shape `T extends U ? T : never` that yields `U`-bounded) and
 use it in the TK2344 argument check before falling back to the conservative verdict.
 Acceptance: the UE divergence marker flips to clean with no FN elsewhere in
-`constraint_arguments.ts`; README divergence entry deleted.
+`constraint_arguments.ts`; `docs/reference/divergences.md` entry deleted.
 
 ## Touch points
 

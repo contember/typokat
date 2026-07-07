@@ -35,7 +35,7 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
   numeric arena-index/discriminant conversions, no `#![allow(warnings)]`. `clippy -D warnings` is
   clean — keep it that way.
 - **Soundness > completeness**: when in doubt, **over-report** (a false positive in the safe
-  direction). Document any deliberate `tsc` divergence in `tests/cases/README.md`.
+  direction). Document any deliberate `tsc` divergence in [`divergences.md`](divergences.md).
 
 ## 2. Deliberate deferrals already taken (don't be surprised; plan for them)
 

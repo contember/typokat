@@ -25,7 +25,7 @@ first-candidate per its priority rules) and then checks every argument against t
 parameter; a mismatched argument fails `TS2345`. typokat's union-of-candidates makes the
 parameter as wide as the arguments demand, so every argument trivially satisfies it. The
 one fixture that touches this (`m10_inference/inference_multi.ts`) currently pins the
-typokat behavior as "ok" and the divergence is **not** in the `tests/cases/README.md`
+typokat behavior as "ok" and the divergence is **not** in the `docs/reference/divergences.md`
 ledger.
 
 ## Approach / acceptance
@@ -37,12 +37,12 @@ Object-literal candidates keep the fresh-literal reshaping exemption (existing M
 Corpus: same-`T` scalar pairs (literal + widened), tuple/array-plus-scalar mixes (the b57
 surface), contravariant-position candidates (must still intersect), cases that must STAY
 clean (genuinely-common-typed args). Cross-check tsc 6.0.3 --strict; update
-`inference_multi.ts` and delete the README divergence gap.
+`inference_multi.ts` and delete the `docs/reference/divergences.md` gap.
 
 ## Touch points
 
 `src/check/infer.rs` (`fix_candidates` / `infer_type_arguments` candidate resolution),
-`m10_inference/inference_multi.ts`, `tests/cases/README.md`.
+`m10_inference/inference_multi.ts`, `docs/reference/divergences.md`.
 
 <!-- Origin: cross-cutting review 2026-07-07 (was backlog 63 item j, reclassified from
      doc-ledger to silent-FN after the b57 WU5 review confirmed dropped TS2345). -->

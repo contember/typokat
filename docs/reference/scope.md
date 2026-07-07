@@ -146,4 +146,4 @@ tsconfig. Where a missing capability *would* otherwise change a verdict (e.g. an
 unresolved import feeding an expression), the **soundness > completeness** invariant
 applies — typokat over-reports rather than silently passing. See
 [`invariants.md`](invariants.md) and the divergence ledger in
-[`tests/cases/README.md`](../../tests/cases/README.md).
+[`divergences.md`](divergences.md).

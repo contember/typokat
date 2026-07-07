@@ -6,7 +6,7 @@ decisions → reference → archive.
 
 ## Folders
 
-- [`reference/`](reference/README.md) — how the system works now (architecture, dev method, invariants, scope map).
+- [`reference/`](reference/README.md) — how the system works now (architecture, dev method, invariants, scope map, `tsc` divergences).
 - [`ideas/`](ideas/README.md) — proposals, no commitment.
 - [`decisions/`](decisions/README.md) — ADRs (the *why*), immutable.
 - [`backlog/`](backlog/README.md) — decided work, not yet scheduled (the roadmap).
@@ -14,7 +14,8 @@ decisions → reference → archive.
 - [`archive/`](archive/README.md) — shipped sprints + reference-worthy records.
 
 > Two code-adjacent docs stay **outside** `docs/`: [`tests/cases/README.md`](../tests/cases/README.md)
-> (conformance corpus + marker conventions) and
+> (how to write/read the conformance fixtures — marker conventions, **not** the divergence ledger,
+> which lives in [`reference/divergences.md`](reference/divergences.md)) and
 > [`tooling/official-suite/README.md`](../tooling/official-suite/README.md) (the official-suite
 > harness). The public [`README.md`](../README.md) and the hard-rules
 > [`CLAUDE.md`](../CLAUDE.md) live at the repo root.

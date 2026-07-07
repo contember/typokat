@@ -439,7 +439,7 @@ pub struct ParameterType {
 /// declared type parameter by the checker and embedded in the type-parameter
 /// type so substitution can target it.
 ///
-/// FLAGGED DEVIATION (architecture §3.1 / `tests/cases/README.md` "generics"):
+/// FLAGGED DEVIATION (architecture §3.1 / ADR-0002):
 /// type parameters use a **named, unique-id** representation, **not de Bruijn
 /// indices**. §3.1 calls for de Bruijn so that alpha-equivalent generics
 /// (`<T>(x: T) => T` vs `<U>(x: U) => U`) hash-cons to the same node, and for the

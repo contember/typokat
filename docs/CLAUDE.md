@@ -20,9 +20,13 @@ invariants live in [`reference/invariants.md`](reference/invariants.md) and rank
 alongside the hard rules in the root `CLAUDE.md`. The **dev method** (the milestone build loop:
 spec → implement → independent review) is in [`reference/dev-method.md`](reference/dev-method.md) and
 is mandatory for all checker work. The **roadmap is the backlog** — each future milestone and known
-gap is a `backlog/NN-*.md` item, ordered by value and dependency. Two READMEs stay **with the code**,
-not under `docs/` (they describe test tooling, not the system): `tests/cases/README.md` (conformance
-corpus / marker conventions) and `tooling/official-suite/README.md` (the official-suite harness).
+gap is a `backlog/NN-*.md` item, ordered by value and dependency. The **`tsc` divergence +
+deferred-check ledger** — every place typokat's output deliberately differs from `tsc`, with the
+reasons — is [`reference/divergences.md`](reference/divergences.md); the code-range boundary (which
+`TK` codes are in scope) is [`reference/scope.md`](reference/scope.md). Two READMEs stay **with the
+code**, not under `docs/` (they describe test tooling, not the system): `tests/cases/README.md` (how
+to write/read the conformance fixtures — marker conventions and type-display rules, **not** the
+divergence ledger) and `tooling/official-suite/README.md` (the official-suite harness).
 
 ## The folders — one purpose each
 

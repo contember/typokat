@@ -47,7 +47,8 @@ in [docs/reference/architecture.md](docs/reference/architecture.md)):
   `checker/` submodules.
 
 **Soundness > completeness**: when in doubt, over-report (the safe direction). Every
-deliberate `tsc` divergence is documented in `tests/cases/README.md`.
+deliberate `tsc` divergence is documented in
+[docs/reference/divergences.md](docs/reference/divergences.md).
 
 ## How work is done here (mandatory method)
 
@@ -68,8 +69,9 @@ Two layers:
 
 1. **Conformance corpus (the spec)** — `tests/cases/mN_*/*.ts` fixtures carrying inline
    `// error[TK…]: substring` markers, diffed by `tests/conformance.rs`. Marker
-   conventions, type-display rules, and every documented `tsc` divergence:
-   [tests/cases/README.md](./tests/cases/README.md).
+   conventions and type-display rules: [tests/cases/README.md](./tests/cases/README.md);
+   the `tsc` divergence + deferred-check ledger:
+   [docs/reference/divergences.md](docs/reference/divergences.md).
 2. **Official TypeScript suite harness** — `tooling/official-suite/` runs typokat
    against the real microsoft/TypeScript conformance baselines as a triage dashboard
    plus a committed regression scoreboard (`run --check` exits 1 on any regression). It

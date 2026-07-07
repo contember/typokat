@@ -10,7 +10,7 @@ not an iterable object → defer" cases tsc computes: (a) `Pick`/`Omit` over a U
 operand (`Omit<A | B, "kind">` — common with discriminated unions), (b) `K = never`
 (`Pick<P, never>` should be `{}`), (c) `Record` with template-literal keys
 (`` Record<`p_${string}`, number> `` — a pattern index signature in tsc). Documented
-as divergences in `tests/cases/README.md` at M28 close; this item removes them.
+as divergences in `docs/reference/divergences.md` at M28 close; this item removes them.
 
 ## Problem
 

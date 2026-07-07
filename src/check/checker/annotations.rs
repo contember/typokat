@@ -293,7 +293,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// (tsc's one-char-first resolution is not modelled). The enclosing conditional is
     /// **poisoned** via the M25 mechanism (the innermost active `infer` frame), so it never
     /// evaluates and relates conservatively (documented over-report divergence,
-    /// `tests/cases/README.md`).
+    /// `docs/reference/divergences.md`).
     ///
     /// At a value-position demand site the built node is **constructed**
     /// ([`Pass::maybe_evaluate`]); inside a template body it stays the interned node.
