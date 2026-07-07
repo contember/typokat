@@ -464,6 +464,22 @@ impl InferenceContext {
             (TypeTag::Tuple, TypeTag::Tuple) => {
                 self.infer_tuples(interner, source, target, candidates);
             }
+            // b57: a TUPLE source against an ARRAY target mirrors the relation's
+            // tuple→array covariance — infer from each element into the array's element
+            // position (same-name candidates union). Serves `[1, 2] extends (infer U)[]`
+            // (type-level) and a tuple argument against a `T[]` parameter (call-site).
+            (TypeTag::Tuple, TypeTag::Array) => {
+                self.infer_tuple_into_array(interner, source, target, candidates);
+            }
+            // b57 (call-site only): an ARRAY source against a TUPLE target has NO
+            // relation-rule mirror (an array is not assignable to a tuple), so it models
+            // tsc contextually retyping a fresh array literal (`h([1, 2])` → `[T, T]`).
+            // Excluded from conditional mode (`union_target_descent`) so an array never
+            // matches a tuple `infer` pattern — `number[] extends [infer A, infer B]`
+            // stays on the false branch.
+            (TypeTag::Array, TypeTag::Tuple) if !self.union_target_descent => {
+                self.infer_array_into_tuple(interner, source, target, candidates);
+            }
             // Any other pairing (scalar, mismatched shapes, error type, …) yields
             // no candidate — inference simply learns nothing from it. Soundness is
             // preserved: the subsequent relation check still runs against whatever
@@ -540,6 +556,60 @@ impl InferenceContext {
         };
         for (&source_ty, &target_ty) in source_elems.iter().zip(&target_elems) {
             self.infer(interner, source_ty, target_ty, candidates);
+        }
+    }
+
+    /// b57 — a TUPLE source against an ARRAY target: infer from each tuple element into
+    /// the array's element position (candidates for a shared binder union naturally).
+    /// An **empty** tuple has element type `never` (a union of zero elements), seeded
+    /// explicitly so `[] extends (infer U)[]` binds `U = never` instead of falling
+    /// through to the unbound `unknown` fallback. Mirrors the relation's tuple→array
+    /// covariance.
+    fn infer_tuple_into_array(
+        &mut self,
+        interner: &mut Interner,
+        source: TypeId,
+        target: TypeId,
+        candidates: &mut Candidates,
+    ) {
+        let source_elems: Vec<TypeId> = match interner.store().tuple_type(source) {
+            Some(t) => t.elements.clone(),
+            None => return,
+        };
+        let Some(target_elem) = interner.store().array_type(target).map(|a| a.element) else {
+            return;
+        };
+        if source_elems.is_empty() {
+            let never = interner.well_known().never;
+            self.infer(interner, never, target_elem, candidates);
+            return;
+        }
+        for source_ty in source_elems {
+            self.infer(interner, source_ty, target_elem, candidates);
+        }
+    }
+
+    /// b57 (call-site only) — an ARRAY source against a TUPLE target: infer the array's
+    /// element type into every tuple element position. Models tsc contextually retyping
+    /// a fresh array literal (`[1, 2]` inferred as `number[]`) against a tuple parameter
+    /// (`[T, T]`); there is no relation rule to mirror (an array is not assignable to a
+    /// tuple), so it is gated out of conditional mode by the caller.
+    fn infer_array_into_tuple(
+        &mut self,
+        interner: &mut Interner,
+        source: TypeId,
+        target: TypeId,
+        candidates: &mut Candidates,
+    ) {
+        let Some(source_elem) = interner.store().array_type(source).map(|a| a.element) else {
+            return;
+        };
+        let target_elems: Vec<TypeId> = match interner.store().tuple_type(target) {
+            Some(t) => t.elements.clone(),
+            None => return,
+        };
+        for target_ty in target_elems {
+            self.infer(interner, source_elem, target_ty, candidates);
         }
     }
 

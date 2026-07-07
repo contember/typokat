@@ -11,11 +11,16 @@ type E2 = Elem<[1, "x"]>;
 const d: E2 = "x";
 const e: E2 = true; // error[TK2322]
 type E3 = Elem<[]>;
-const f: E3 = 1; // error[TK2322]: Type '1' is not assignable to type 'never'
+// Target-only substring (m25/m27 `never`-target convention): typokat widens the
+// source literal to `number` in the message where tsc keeps `1` — a pre-existing
+// assignment-message divergence (pinned at m0_assign_primitives/intrinsics.ts:9),
+// orthogonal to inference. What this pins is E3 = never.
+const f: E3 = 1; // error[TK2322]: not assignable to type 'never'
 // Control: an ARRAY source must keep failing a TUPLE pattern (false branch).
 type P<T> = T extends [infer A, infer B] ? A : never;
 type P1 = P<number[]>;
-const g: P1 = 1; // error[TK2322]: Type '1' is not assignable to type 'never'
+// Target-only substring again (see the E3 note above on the message divergence).
+const g: P1 = 1; // error[TK2322]: not assignable to type 'never'
 // Regression pin: tuple-vs-tuple positional extraction already works.
 type P2 = P<[1, 2]>;
 const h2: P2 = 1;
