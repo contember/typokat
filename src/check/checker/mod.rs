@@ -323,6 +323,7 @@ pub fn check_program<'ast>(
         DeclTypes::new(0),
         next_type_param,
     );
+    prelude_pass.current_module = binder.prelude_module;
     prelude_pass.fill_type_decls(binder.prelude_module);
     // The prelude is a TRUSTED asset: it must check clean (unit-tested + asserted
     // here in debug builds); anything a release build would produce is filtered by
@@ -536,6 +537,7 @@ pub fn check_project_programs<'ast>(
         DeclTypes::new(0),
         next_type_param,
     );
+    prelude_pass.current_module = binder.prelude_module;
     prelude_pass.fill_type_decls(binder.prelude_module);
     debug_assert!(
         prelude_pass.diagnostics.is_empty(),
@@ -611,11 +613,13 @@ pub fn check_project_programs<'ast>(
             .get(index)
             .copied()
             .unwrap_or((0, pass.type_decls.len()));
+        pass.current_module = scope;
         pass.fill_type_decls_range(scope, start, end);
         module_diagnostics[index].append(&mut pass.diagnostics);
     }
 
     for (index, (scope, unit)) in module_scopes.iter().copied().zip(units).enumerate() {
+        pass.current_module = scope;
         pass.build_flow_graph(scope, &unit.program.body);
         pass.check_statements(scope, &unit.program.body);
         emit_pending_checks(&mut pass);
@@ -860,6 +864,9 @@ fn build_pass<'a, 'ast>(
     Pass {
         interner,
         binder,
+        // Overwritten before each module's fill/flow/check phase; the user module is
+        // the single-file default (backlog 58).
+        current_module: binder.module,
         type_decls,
         type_resolved,
         type_param_scopes: Vec::new(),

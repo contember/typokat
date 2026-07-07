@@ -149,7 +149,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> TypeId {
         let flow = self
             .reference_flow
-            .get(&ref_start)
+            .get(&(self.current_module, ref_start))
             .copied()
             .unwrap_or(FlowNodeId::START);
         self.resolve_narrowed_type(flow, symbol_id)

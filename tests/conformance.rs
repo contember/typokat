@@ -75,10 +75,15 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b29_alias_cycles", true),
     ("b30_negative_literals", true),
     ("b55_template_memo", true),
-    // Project fixtures (subdirectories, m29 convention); the fix commit extends
-    // the harness's project path beyond m29_modules before flipping this on.
-    ("b58_project_scopes", false),
+    // Project fixtures (subdirectories, m29 convention) — see `PROJECT_DIRS`.
+    ("b58_project_scopes", true),
 ];
+
+/// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`
+/// files per project, checked together via [`check_project`]) rather than flat
+/// single-file fixtures. Every other dir is a flat corpus. Keep in sync with the
+/// project-shaped corpora in `MILESTONE_DIRS`.
+const PROJECT_DIRS: &[&str] = &["m29_modules", "b58_project_scopes"];
 
 /// An expectation parsed from a single inline marker.
 #[derive(Debug, Clone)]
@@ -101,7 +106,7 @@ fn conformance() {
             continue;
         }
         let dir_path = cases_root.join(dir);
-        if *dir == "m29_modules" {
+        if PROJECT_DIRS.contains(dir) {
             let mut projects = discover_project_dirs(&dir_path);
             projects.sort();
             assert!(

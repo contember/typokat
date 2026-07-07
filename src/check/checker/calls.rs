@@ -762,7 +762,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let fn_ty = self.with_type_params(frame, |pass| {
             // M24: lower the parameters' `extends` constraints with the frame active.
             pass.lower_type_param_constraints(enclosing, func.type_parameters.as_deref(), &param_ids);
-            let fn_scope = pass.binder.fn_scopes.get(&func.span.start).copied();
+            let fn_scope = pass
+                .binder
+                .fn_scopes
+                .get(&(pass.current_module, func.span.start))
+                .copied();
             let params = pass.lower_parameters(enclosing, fn_scope, &func.params);
 
             // Declared return type from the annotation, if any. Type references in the
@@ -822,7 +826,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         enclosing: ScopeId,
         arrow: &ArrowFunctionExpression<'_>,
     ) -> TypeId {
-        let fn_scope = self.binder.fn_scopes.get(&arrow.span.start).copied();
+        let fn_scope = self
+            .binder
+            .fn_scopes
+            .get(&(self.current_module, arrow.span.start))
+            .copied();
         let params = self.lower_parameters(enclosing, fn_scope, &arrow.params);
 
         let declared_ret = match arrow.return_type.as_ref() {

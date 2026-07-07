@@ -24,8 +24,8 @@
 //!  - **Function/arrow scopes.** Every function declaration, function expression,
 //!    and arrow gets its own [`ScopeKind::Function`] scope whose parent is the
 //!    enclosing scope, with each parameter declared as a value symbol inside it.
-//!    The scope is recorded in [`Binder::fn_scopes`], keyed by the function node's
-//!    span start, so the checker can descend into the body with the parameters in
+//!    The scope is recorded in [`Binder::fn_scopes`], keyed by `(module scope,
+//!    span start)`, so the checker can descend into the body with the parameters in
 //!    scope and resolve `return x`.
 //!
 //! M11 scope, on top of M5's type declarations:
@@ -79,17 +79,18 @@ pub struct Binder {
     /// `DeclId → TypeId` table. Keeping them separate lets one name occupy both
     /// slots (`namespace`/`interface`/`class` merging, §4.1) without collision.
     pub type_decl_count: u32,
-    /// Maps a function/arrow node's span start to the [`ScopeKind::Function`]
-    /// scope holding its parameters. The checker uses this to descend into the
-    /// body with parameters resolvable. Span starts are unique per node within a
-    /// file, so they are a stable key shared by the binder and the checker.
-    pub fn_scopes: FxHashMap<u32, ScopeId>,
-    /// Maps a `{ … }` block's span start to its [`ScopeKind::Block`] lexical scope
-    /// (M7). Each block gets its own scope so a `let`/`const` declared inside an
-    /// `if`/`else` branch lives in that branch, not the enclosing function scope —
-    /// keeping branch-local names from colliding across branches. Keyed by span
-    /// start, like `fn_scopes`, so the checker descends into the matching scope.
-    pub block_scopes: FxHashMap<u32, ScopeId>,
+    /// Maps a function/arrow node to the [`ScopeKind::Function`] scope holding its
+    /// parameters. The checker uses this to descend into the body with parameters
+    /// resolvable. Keyed by `(module scope, span start)`: span starts are unique
+    /// only *within a file*, so in a shared project `BindState` (many modules) the
+    /// module scope disambiguates offset-aligned nodes across files (backlog 58).
+    pub fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
+    /// Maps a `{ … }` block to its [`ScopeKind::Block`] lexical scope (M7). Each
+    /// block gets its own scope so a `let`/`const` declared inside an `if`/`else`
+    /// branch lives in that branch, not the enclosing function scope — keeping
+    /// branch-local names from colliding across branches. Keyed by
+    /// `(module scope, span start)`, like `fn_scopes` (backlog 58).
+    pub block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
 }
 
 /// Mutable binder state threaded through the recursive walk.
@@ -138,9 +139,12 @@ pub(crate) struct ImportPlaceholder {
 struct BindState {
     graph: ScopeGraph,
     symbols: SymbolTable,
-    fn_scopes: FxHashMap<u32, ScopeId>,
-    /// Per-block lexical scopes (M7), keyed by block span start.
-    block_scopes: FxHashMap<u32, ScopeId>,
+    fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
+    /// Per-block lexical scopes (M7), keyed by `(module scope, block span start)`.
+    block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
+    /// The module scope currently being bound — the disambiguating half of the
+    /// scope-map keys (backlog 58). Set before each module's body is walked.
+    current_module: ScopeId,
     /// Running `DeclId` counter for value declarations.
     next_decl: u32,
     /// Running `DeclId` counter for **type** declarations (separate space).
@@ -197,11 +201,13 @@ impl ProjectBinderBuilder {
             symbols: SymbolTable::new(),
             fn_scopes: FxHashMap::default(),
             block_scopes: FxHashMap::default(),
+            current_module: ScopeId(0),
             next_decl: 0,
             next_type_decl: 0,
         };
 
         let prelude_module = state.graph.push(Scope::new(ScopeKind::Module, None));
+        state.current_module = prelude_module;
         bind_type_declarations(&mut state, prelude_module, &prelude.body);
         bind_statements(&mut state, prelude_module, &prelude.body);
 
@@ -222,6 +228,7 @@ impl ProjectBinderBuilder {
             .state
             .graph
             .push(Scope::new(ScopeKind::Module, Some(self.prelude_module)));
+        self.state.current_module = module;
         let mut placeholders = Vec::new();
         for import in imports {
             placeholders.push(declare_import(
@@ -420,13 +427,15 @@ fn bind_declaration(state: &mut BindState, scope: ScopeId, decl: &Declaration<'_
 }
 
 /// Bind a `{ … }` block into its own [`ScopeKind::Block`] child scope under
-/// `parent`, recording it under the block's span start so the checker descends into
-/// the matching scope. The block's statements are bound inside the new scope.
+/// `parent`, recording it under `(module scope, block span start)` so the checker
+/// descends into the matching scope. The block's statements are bound inside it.
 fn bind_block(state: &mut BindState, parent: ScopeId, block: &BlockStatement<'_>) {
     let block_scope = state
         .graph
         .push(Scope::new(ScopeKind::Block, Some(parent)));
-    state.block_scopes.insert(block.span.start, block_scope);
+    state
+        .block_scopes
+        .insert((state.current_module, block.span.start), block_scope);
     bind_statements(state, block_scope, &block.body);
 }
 
@@ -535,7 +544,7 @@ fn bind_class(state: &mut BindState, parent: ScopeId, class: &Class<'_>) {
 
 /// Bind a function/arrow's own scope: create a [`ScopeKind::Function`] scope
 /// under `parent`, declare each parameter as a value symbol in it, record the
-/// scope under the function node's span start, and recurse into the body.
+/// scope under `(module scope, function span start)`, and recurse into the body.
 ///
 /// Each parameter gets a fresh `DeclId`; the checker fills its type from the
 /// parameter annotation when it descends into the function.
@@ -543,7 +552,9 @@ fn bind_function(state: &mut BindState, parent: ScopeId, func: &Function<'_>) {
     let fn_scope = state
         .graph
         .push(Scope::new(ScopeKind::Function, Some(parent)));
-    state.fn_scopes.insert(func.span.start, fn_scope);
+    state
+        .fn_scopes
+        .insert((state.current_module, func.span.start), fn_scope);
 
     for param in &func.params.items {
         if let Some(name) = binding_name(&param.pattern) {
@@ -564,7 +575,9 @@ fn bind_arrow(state: &mut BindState, parent: ScopeId, arrow: &ArrowFunctionExpre
     let fn_scope = state
         .graph
         .push(Scope::new(ScopeKind::Function, Some(parent)));
-    state.fn_scopes.insert(arrow.span.start, fn_scope);
+    state
+        .fn_scopes
+        .insert((state.current_module, arrow.span.start), fn_scope);
 
     for param in &arrow.params.items {
         if let Some(name) = binding_name(&param.pattern) {

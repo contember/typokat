@@ -6,7 +6,8 @@
 //! [`Pass::build_flow_graph`] walks the whole module — every function/method body
 //! and the top level — **before** the check walk, maintaining a `flow_cursor` (the
 //! flow node currently in effect) and recording, for each identifier reference, the
-//! cursor at that point ([`Pass::reference_flow`], keyed by span). It creates flow
+//! cursor at that point ([`Pass::reference_flow`], keyed by `(module scope, span)`).
+//! It creates flow
 //! nodes for assignments, condition branches (`if`/`switch`/`while`/`&&`/`||`/
 //! ternary), branch joins, and loop labels. Running it as a pre-pass is what makes
 //! **loop back edges complete** before any type is resolved (the check walk resolves
@@ -99,7 +100,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 let block_scope = self
                     .binder
                     .block_scopes
-                    .get(&block.span.start)
+                    .get(&(self.current_module, block.span.start))
                     .copied()
                     .unwrap_or(scope);
                 self.build_flow_stmts(block_scope, &block.body);
@@ -310,7 +311,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn build_flow_expr(&mut self, scope: ScopeId, expr: &Expression<'_>) {
         match expr {
             Expression::Identifier(ident) => {
-                self.reference_flow.insert(ident.span.start, self.flow_cursor);
+                self.reference_flow
+                    .insert((self.current_module, ident.span.start), self.flow_cursor);
             }
             Expression::ParenthesizedExpression(paren) => {
                 self.build_flow_expr(scope, &paren.expression)
@@ -560,7 +562,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let fn_scope = self
             .binder
             .fn_scopes
-            .get(&func.span.start)
+            .get(&(self.current_module, func.span.start))
             .copied()
             .unwrap_or(enclosing);
         self.build_flow_boundary(|pass| pass.build_flow_stmts(fn_scope, &body.statements));
@@ -570,7 +572,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let fn_scope = self
             .binder
             .fn_scopes
-            .get(&arrow.span.start)
+            .get(&(self.current_module, arrow.span.start))
             .copied()
             .unwrap_or(enclosing);
         self.build_flow_boundary(|pass| {

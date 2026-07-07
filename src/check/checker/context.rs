@@ -8,6 +8,7 @@
 //! blocks read and write, so their fields/variants are visible across the
 //! `checker` module tree (`pub(in crate::check::checker)`).
 
+use crate::binder::scope::ScopeId;
 use crate::binder::symbol::{DeclId, SymbolId};
 use crate::binder::Binder;
 use crate::check::flow::{FlowNode, FlowNodeId};
@@ -308,6 +309,13 @@ pub(in crate::check::checker) enum ClassFillState {
 pub(in crate::check::checker) struct Pass<'a, 'ast> {
     pub(in crate::check::checker) interner: &'a mut Interner,
     pub(in crate::check::checker) binder: &'a Binder,
+    /// The module scope currently being checked — the disambiguating half of the
+    /// binder's `(module scope, span start)` scope-map keys and of
+    /// [`reference_flow`](Pass::reference_flow) (backlog 58). Set before each
+    /// module's fill/flow/check phase; single-file checking keeps one module scope.
+    /// Correct only while bodies are walked strictly per-module — lazy cross-module
+    /// body/return inference would desynchronize insert vs lookup keys.
+    pub(in crate::check::checker) current_module: ScopeId,
     /// Named-type declarations (M5), indexed by type-space `DeclId`. Reserve-then-
     /// fill populates this in phase 0; a `TSTypeReference` resolves through the
     /// binder's type slot to a `DeclId`, then to a `TypeId` via `type_resolved`.
@@ -469,14 +477,16 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// The flow pre-pass's enclosing-loop stack, so a `break`/`continue` can find
     /// its target loop label + collect its break edges.
     pub(in crate::check::checker) flow_loops: Vec<FlowLoopFrame>,
-    /// **Reference → flow node** map (M23), keyed by an identifier reference's span
-    /// start. Populated by the pre-pass; read by the check walk's
+    /// **Reference → flow node** map (M23), keyed by `(module scope, reference span
+    /// start)`. Populated by the pre-pass; read by the check walk's
     /// [`resolve_identifier_type`] to resolve a reference against the flow node in
     /// effect at its position. A miss defaults to [`FlowNodeId::START`] (the
     /// declared type — the sound over-report), so partial pre-pass coverage never
     /// under-reports. Keying on `SymbolId` in the resolver keeps narrowing `x` from
-    /// touching another symbol / a property access / a shadowed binding.
-    pub(in crate::check::checker) reference_flow: FxHashMap<u32, FlowNodeId>,
+    /// touching another symbol / a property access / a shadowed binding. The module
+    /// scope disambiguates offset-aligned references across a project's files (it is
+    /// also rebuilt per module immediately before that module's check — backlog 58).
+    pub(in crate::check::checker) reference_flow: FxHashMap<(ScopeId, u32), FlowNodeId>,
     /// Resolver memo, keyed `(flow node, symbol) → narrowed type`. Durable across
     /// the whole check pass (ids are globally unique). A value that depended on an
     /// in-progress loop back edge is **never** written here (gated on

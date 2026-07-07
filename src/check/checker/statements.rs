@@ -180,7 +180,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let block_scope = self
             .binder
             .block_scopes
-            .get(&block.span.start)
+            .get(&(self.current_module, block.span.start))
             .copied()
             .unwrap_or(scope);
         for stmt in &block.body {
