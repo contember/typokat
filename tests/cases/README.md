@@ -377,9 +377,13 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`).
 literals stay literals; the empty tuple yields `never`), and an ARRAY source keeps
 failing a TUPLE pattern (control). Call-site: a fresh array literal against a `[T, T]`
 parameter and a tuple value against a `T[]` parameter both produce element candidates
-(widened on fixing, so `T = number` for `[1, 2]`). Deliberately unpinned: a
-mixed-element literal against `[T, T]` (`h([1, "x"])`) — tsc reports a per-element
-contextual error whose code/position rides on subtle inference-priority choices.
+(widened on fixing, so `T = number` for `[1, 2]`). The two `never`-target lines use the
+target-only substring (`not assignable to type 'never'`, the m25/m27 convention): typokat
+widens the assigned literal to `number` in the message where tsc keeps `1` — a pre-existing
+assignment-message divergence (pinned at `m0_assign_primitives/intrinsics.ts:9`), orthogonal
+to inference. Deliberately unpinned: a mixed-element literal against `[T, T]` (`h([1, "x"])`)
+— tsc reports a per-element contextual error whose code/position rides on subtle
+inference-priority choices.
 
 `b58_project_scopes/` uses **project fixture subdirectories** (the m29 convention): every
 `.ts` file in a subdirectory is one project checked via `check_project`. Each project's

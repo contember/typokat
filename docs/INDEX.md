@@ -22,7 +22,7 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprints/sprint-2026-07-07-soundness-fn-fixes.md`](sprints/sprint-2026-07-07-soundness-fn-fixes.md) — kill the five HIGH silent-FN families from the 2026-07-07 review (backlog `53` `55` `57` `58` `61`), sequential WUs.
+*(none active)*
 
 ## What's hot
 
@@ -32,14 +32,15 @@ decisions → reference → archive.
   M29 shipped backlog `15` slice 1 (serial local-relative modules); M30 shipped contextual
   literal typing. Scoreboard: in-scope 506, clean-kept 172/219, error-exact 22/287,
   diag-recall 285/1691 (official `enum`/`namespace`/`satisfies`/`as const`/`module` gates
-  still closed). **The completion roadmap was refined 2026-07-07** — the backlog README now
-  carries a definition of done (checker 1.0) and four tracks: A model completeness
-  (`24` `25` `39`–`44`, the `lib.d.ts` critical path), B checker completeness (`18` `19`
-  `45`–`52`), C known-gap tail (`21`–`23`, `26` `27` `30` `32`–`37`, `53`–`63`), D scale
-  ladder (`38` `13` `14` `15` `16` `17`). A cross-cutting soundness review ran 2026-07-07
-  (4 adversarial reviewers over relate/CFG/evaluator/M29+M30): the §6.3 relation-cache and
-  loop-fixpoint invariants verified CLEAN; findings filed as `53`–`63` — five HIGH silent-FN
-  families (`53` CFG assignment loss, `55` template memo poisoning, `57` tuple↔array
-  inference, `58` project scope-key collision, `61` class field initializers).
-  **Next:** kill the silent-FN families (`53` `55` `57` `58` `61`, then `56` `60` `62`
-  `54` `59` `33` `34` `32` `21` `22`), then run track A toward `14`.
+  still closed; unchanged by the FN-fix sprint — its added diagnostics land on corpus not in
+  the committed scoreboard). The completion roadmap (refined 2026-07-07) lives in the backlog
+  README: a definition of done (checker 1.0) + four tracks (A model completeness `24` `25`
+  `39`–`44` = the `lib.d.ts` critical path; B checker completeness `18` `19` `45`–`52`;
+  C known-gap tail; D scale ladder `38` `13` `14` `15` `16` `17`).
+- **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
+  reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
+  invariants CLEAN and filed `53`–`65`; the five HIGH silent-FN families then shipped through
+  the full dev-method loop (sprint archived — `53` CFG assignment loss, `55` template memo
+  poisoning, `57` Tuple↔Array inference, `58` project scope-key collision, `61` class field
+  initializers, all five reviews PASS). **Next:** the remaining C silent-FN tail
+  (`56` `60` `62` `65` `54` `59` `64` `33` `34` `32` `21` `22`), then track A toward `14`.

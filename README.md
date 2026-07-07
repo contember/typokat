@@ -20,7 +20,7 @@ type-checking slice (local relative `.ts` modules) — the goal is to preserve t
 > embedded prelude compilation unit, the `Uppercase`/`Lowercase`/`Capitalize`/
 > `Uncapitalize` intrinsics, a deferred `keyof` type node) — on top of the M23
 > flow-node CFG, class completeness, and constructor accessibility. ~26k lines of
-> Rust, 203 unit tests + a 138-file conformance corpus (500 expected diagnostics),
+> Rust, 203 unit tests + a 162-file conformance corpus (540 expected diagnostics),
 > `clippy -D warnings` clean. Every milestone was cross-checked against real
 > `tsc 6.0.3 --strict`.
 

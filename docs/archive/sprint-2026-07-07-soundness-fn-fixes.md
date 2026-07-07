@@ -1,3 +1,29 @@
+<!--
+> **OUTCOME — shipped 2026-07-07.** All five HIGH silent-false-negative families are
+> fixed, each through the full dev-method loop (spec committed alone → Opus implementation
+> subagent → independent Opus adversarial review → leader verify + commit), all five
+> reviews returned PASS. The two sharpest project invariants held throughout: the relation
+> engine's §6.3 durable-cache discipline and the CFG loop-fixpoint (no provisional-seed
+> memoization) — verified untouched by the CFG rework.
+>
+> Commit map (spec → fix):
+> - WU1 b55 template memo poisoning: `7c38dd4` → `6302ec7`
+> - WU2 b58 project scope-key collision: `683e813` → `124929c`
+> - WU3 b61 class field initializers: `047da38` (+ amend `039640a`) → `6c61216`
+> - WU4 b53 CFG assignment loss: `cdf2f6b` → `d3636c0`
+> - WU5 b57 Tuple↔Array inference: `762c59e` → `c450bc4`
+>
+> Verification (at each fix + final): `cargo test` 203 unit + conformance green (10 new
+> fixtures across 5 bug-fix corpora, all enabled), `cargo clippy -D warnings` clean,
+> official-suite `run --check` exit 0 with the scoreboard unchanged at every step.
+>
+> Backlog closed (deleted): `53` `55` `57` `58` `61`. Filed as review byproducts: `64`
+> (`readonly (infer U)[]` binder gap, `966cc7d`), `65` (multi-arg candidate-union FN,
+> reclassified out of `63`(j)). Deferred (in backlog, not this sprint): the MED/LOW review
+> findings `54` `56` `59` `60` `62` `63`; every fix's own review byproducts were
+> pre-existing and traced to already-filed items.
+-->
+
 # Sprint — soundness FN fixes (2026-07-07)
 
 **Goal.** Kill the five HIGH silent-false-negative families found by the 2026-07-07

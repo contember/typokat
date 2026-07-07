@@ -12,8 +12,9 @@ documents something a future reader needs. Dependencies go in frontmatter:
 This **is** the roadmap. Shipped so far: items `01`–`04` (current-impl bugs), `05` (object/interface
 signatures, F1), `06`+`20` (class completeness + ctor accessibility), `07` (unstructured-flow
 narrowing, M23), `08`–`12` (constraints M24 → utility types M28: the type-level evaluation phase,
-complete), `28`–`29` (soundness warm-ups), `31` (M30 contextual literals), and backlog `15` slice 1
-(M29 local-relative modules) — see [`../archive/`](../archive/README.md). Architecture §12 governs
+complete), `28`–`29` (soundness warm-ups), `31` (M30 contextual literals), backlog `15` slice 1
+(M29 local-relative modules), and `53` `55` `57` `58` `61` (the five HIGH silent-FN fixes,
+sprint-2026-07-07) — see [`../archive/`](../archive/README.md). Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). How each item
 is built: [`../reference/dev-method.md`](../reference/dev-method.md).
@@ -66,16 +67,13 @@ fillers.
 - [`52`](52-type-reference-tail.md) — type-reference tail (TS2749, TS2314/2315, TK2558).
 
 **C. Known-gap fixes — the soundness/parity tail.**
-Silent-FN kills (highest value per effort, schedule first; `53`–`62` are the 2026-07-07
-cross-cutting soundness review findings, leader-verified vs tsc 6.0.3):
-- [`53`](53-cfg-assignment-loss.md) — **HIGH** CFG drops assignments (`&&`/`||`/ternary, `switch`, `while` tests, sequences).
-- [`55`](55-template-memo-poisoning.md) — **HIGH** template memo poisoning under exhausted TK2589 budget.
-- [`57`](57-infer-tuple-array-pairings.md) — **HIGH** missing Tuple↔Array inference arms (`(infer U)[]` over tuples → `unknown`).
-- [`58`](58-project-scope-key-collision.md) — **HIGH** project mode: span-keyed scope maps collide across files.
-- [`61`](61-class-field-initializers-unchecked.md) — **HIGH** class field initializers never checked.
+Silent-FN kills (highest value per effort, schedule first; `54`–`65` are the 2026-07-07
+cross-cutting soundness review findings, leader-verified vs tsc 6.0.3). The five HIGH
+items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundness-fn-fixes.
 - [`56`](56-silent-instantiation-cycles.md) — instantiation cycles silently resolve to error.
 - [`60`](60-fresh-literal-union-targets.md) — fresh literals vs union targets: excess + assignability skipped.
 - [`62`](62-index-signature-relation-parity.md) — index-signature relation parity (implicit-index rule, numeric names).
+- [`65`](65-multi-arg-candidate-union-fn.md) — multi-argument inference unions candidates instead of fixing-then-checking (drops TS2345).
 - [`54`](54-labeled-statements-unchecked.md) — labeled statements entirely unchecked.
 - [`59`](59-m29-diagnostics-hygiene.md) — M29 hygiene: fill-phase drain attribution, `export { ghost }` validation.
 - [`21`](21-local-class-checking.md) — function-local classes entirely unchecked.
@@ -105,9 +103,9 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
 ## Recommended order
 
-1. **Kill the known silent-FN families** (C's first group, review HIGHs first: `53`, `55`, `57`,
-   `58`, `61`, then `56`, `60`, `62`, `54`, `59`, `33`, `34`, `32`, `21`, `22`) — every one is a
-   dropped-error class.
+1. **Kill the known silent-FN families** — the five HIGH review findings (`53` `55` `57` `58`
+   `61`) shipped in sprint-2026-07-07-soundness-fn-fixes; the remaining C group (`56`, `60`, `62`,
+   `65`, `54`, `59`, `33`, `34`, `32`, `21`, `22`, `64`) is next, every one a dropped-error class.
 2. **Run track A** to unblock `14`; interleave B items and C's parity tail as warm-ups between the
    A milestones. `38` (minimal prelude) and `13` (profiling gate) are independent — schedule
    whenever the signal is worth it; `13` is cheap now that `tooling/bench/` exists.

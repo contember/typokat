@@ -31,10 +31,9 @@ probe-verified vs tsc 6.0.3.
   reports "Expected 1, got 0" on a 1-arg call; (h) aliased guards
   (`const ok = typeof x === "string"; if (ok)`) narrow nothing — safe, but undocumented.
 - **Docs/messages:** (i) TK2741 renders "missing in type ⟨TARGET⟩" — semantically
-  inverted vs tsc's "missing in ⟨SRC⟩ but required in ⟨TGT⟩"; (j) the multi-candidate
-  inference union rule (`pair(1, "s")` silent where tsc errors per-argument) is pinned
-  in `m10_inference/inference_multi.ts` but missing from the README divergence ledger —
-  document or fix with `57`.
+  inverted vs tsc's "missing in ⟨SRC⟩ but required in ⟨TGT⟩". *(Item (j), the
+  multi-candidate inference union rule, graduated to backlog `65` — the b57 review
+  confirmed it is a dropped-error family, not a doc-ledger gap.)*
 - **Robustness:** (k) ~12k-deep nested type literals abort with a native stack overflow
   in lowering/interning (tsc 6.0.3 itself dies at ~3k) — add a depth guard with a
   proper diagnostic to honor the "no reachable panic" invariant on adversarial input.
@@ -48,6 +47,6 @@ Each entry: fixture pinning tsc behavior, fix, or an explicit divergence-ledger 
 
 `src/check/checker/eval.rs` / `annotations.rs` (a-c), `src/relate/relation.rs` (d-e),
 `src/check/checker/flowgraph.rs` / `calls.rs` (f-h), `src/diagnostics.rs` (i),
-`tests/cases/README.md` (j), lowering depth guard (k).
+lowering depth guard (k).
 
 <!-- Origin: cross-cutting soundness review 2026-07-07, low-severity batch. -->
