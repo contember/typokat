@@ -6,7 +6,7 @@
 //! the terminal rendering is a separate, presentation-only step.
 
 use crate::relate::Reason;
-use crate::span::Span;
+use crate::span::{LineIndex, Span};
 use crate::types::repr::TypeTag;
 use crate::types::store::{Store, TypeId};
 use codespan_reporting::diagnostic::{Diagnostic as CsDiagnostic, Label};
@@ -107,6 +107,14 @@ pub enum Severity {
     Error,
     #[allow(dead_code)] // TODO: reserved for non-error diagnostics.
     Warning,
+}
+
+/// Human-facing terminal rendering mode. `Rich` is the default CLI output;
+/// `Compact` is a lower-overhead, tsc-style line format useful for benchmarks.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum DiagnosticFormat {
+    Rich,
+    Compact,
 }
 
 /// A structured diagnostic. `span` is the **primary** span — its start is what
@@ -1124,6 +1132,41 @@ pub fn render_to_writer(
     source: &str,
     diagnostics: &[Diagnostic],
 ) -> std::io::Result<()> {
+    render_to_writer_with_format(
+        writer,
+        file_name,
+        source,
+        diagnostics,
+        DiagnosticFormat::Rich,
+    )
+}
+
+/// Render diagnostics in the requested human-facing format.
+pub fn render_to_writer_with_format(
+    writer: &mut impl std::io::Write,
+    file_name: &str,
+    source: &str,
+    diagnostics: &[Diagnostic],
+    format: DiagnosticFormat,
+) -> std::io::Result<()> {
+    if diagnostics.is_empty() {
+        return Ok(());
+    }
+
+    match format {
+        DiagnosticFormat::Rich => render_rich_to_writer(writer, file_name, source, diagnostics),
+        DiagnosticFormat::Compact => {
+            render_compact_to_writer(writer, file_name, source, diagnostics)
+        }
+    }
+}
+
+fn render_rich_to_writer(
+    writer: &mut impl std::io::Write,
+    file_name: &str,
+    source: &str,
+    diagnostics: &[Diagnostic],
+) -> std::io::Result<()> {
     let file = SimpleFile::new(file_name, source);
     let config = Config::default();
     for diag in diagnostics {
@@ -1132,6 +1175,36 @@ pub fn render_to_writer(
         // `()`) or an IO failure; map both to an IO error for the caller.
         term::emit_to_io_write(writer, &config, &file, &cs)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
+    }
+    Ok(())
+}
+
+fn render_compact_to_writer(
+    writer: &mut impl std::io::Write,
+    file_name: &str,
+    source: &str,
+    diagnostics: &[Diagnostic],
+) -> std::io::Result<()> {
+    let line_index = LineIndex::new(source);
+    for diag in diagnostics {
+        let pos = line_index.line_col(diag.span.start);
+        let severity = match diag.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+        };
+        writeln!(
+            writer,
+            "{}({},{}): {} {}: {}",
+            file_name,
+            pos.line,
+            pos.column,
+            severity,
+            diag.code.as_str(),
+            diag.message
+        )?;
+        for line in &diag.elaboration {
+            writeln!(writer, "{line}")?;
+        }
     }
     Ok(())
 }

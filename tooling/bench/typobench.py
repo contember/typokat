@@ -401,7 +401,10 @@ def default_tsgo():
 
 def build_tool_command(tool, args, path):
     if tool == "typokat":
-        return [*command_parts(args.typokat), "check", str(path)]
+        command = [*command_parts(args.typokat), "check"]
+        if args.typokat_format != "rich":
+            command.extend(["--format", args.typokat_format])
+        return [*command, str(path)]
     if tool == "tsgo":
         return [*command_parts(args.tsgo), *args.tsgo_flags, str(path)]
     if tool == "tsc":
@@ -547,6 +550,7 @@ def write_report(records, tools, families, sizes, args, raw_dir):
         "sizes": list(sizes),
         "runs": args.runs,
         "warmup": args.warmup,
+        "typokat_format": args.typokat_format,
         "raw_report_dir": str(raw_dir.relative_to(HERE)),
         "caveats": [
             "Single-file corpus keeps the benchmark inside typokat's module-free scope.",
@@ -564,6 +568,7 @@ def write_report(records, tools, families, sizes, args, raw_dir):
         f"- when: {when}",
         "- mode: single-file",
         f"- hyperfine: {args.runs} runs, {args.warmup} warmup",
+        f"- typokat diagnostics: {args.typokat_format}",
         "",
         "> Caveat: single-file mode keeps this in typokat's current scope, but it does",
         "> not exercise tsgo's cross-file parallelism. Treat multi-file measurements as",
@@ -686,6 +691,8 @@ def main():
                        help="comma-separated tools: typokat,tsgo,tsc (default: typokat,tsgo)")
     p_run.add_argument("--typokat", default=str(ROOT / "target/release/typokat"),
                        help="path to typokat binary")
+    p_run.add_argument("--typokat-format", choices=("rich", "compact"), default="rich",
+                       help="diagnostic renderer for typokat (default: rich)")
     p_run.add_argument("--tsgo", default=default_tsgo(),
                        help="path/name/command for tsgo (default: .tools tsc/tsgo if installed, else PATH)")
     p_run.add_argument("--tsc", default="tsc", help="path/name of tsc binary")

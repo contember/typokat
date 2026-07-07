@@ -6,6 +6,10 @@ scope and times a prebuilt `typokat` binary against `tsgo` with `hyperfine`.
 Most families are clean programs; `errors` is intentionally invalid and measures
 diagnostic construction/rendering.
 
+By default typokat is timed with its normal rich `codespan` terminal diagnostics.
+Use `--typokat-format compact` when you want to separate checker throughput from
+source-frame rendering overhead.
+
 The generated corpus is intentionally not committed: `corpus/` and `report/`
 are gitignored.
 
@@ -29,6 +33,9 @@ python3 typobench.py run --tools typokat,tsc --sizes 1000 --runs 3
 
 # Run only the diagnostics/error corpus.
 python3 typobench.py run --families errors --sizes 1000 --runs 3
+
+# Measure diagnostics with typokat's compact, low-overhead renderer.
+python3 typobench.py run --families errors --typokat-format compact
 ```
 
 As of 2026-07-06, `typescript@rc` exposes the native compiler as the `tsc`
