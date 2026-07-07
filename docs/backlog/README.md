@@ -83,6 +83,7 @@ cross-cutting soundness review findings, leader-verified vs tsc 6.0.3):
 - [`32`](32-eager-keyof-forward-references.md) — eager `keyof` over forward references.
 - [`33`](33-as-cast-assignability.md) — `as`-cast RHS bypasses assignability (broad real-world FN).
 - [`34`](34-fix-params-evaluate-before-gate.md) — `fix_params` gates deferred `keyof` without evaluating.
+- [`64`](64-readonly-array-infer-binder.md) — `infer` binder under `readonly` array raises spurious TK2304 + masks a downstream FN.
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - [`23`](23-static-method-type-params.md) — spurious TK2304 on static method type params (or close via `41`).
