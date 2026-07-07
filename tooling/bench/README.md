@@ -1,10 +1,11 @@
 # typokat synthetic benchmarks
 
 Black-box synthetic benchmark harness for the ADR-0001 profiling gate. It
-generates single-file TypeScript corpora inside typokat's current implemented
-scope and times a prebuilt `typokat` binary against `tsgo` with `hyperfine`.
-Most families are clean programs; `errors` is intentionally invalid and measures
-diagnostic construction/rendering.
+generates TypeScript corpora inside typokat's current implemented scope and
+times a prebuilt `typokat` binary against `tsgo` with `hyperfine`. Most families
+are single-file clean programs; `errors` is intentionally invalid and measures
+diagnostic construction/rendering; `modules` is a multi-file project that
+exercises the M29 cross-file pipeline (import resolution + cross-file checking).
 
 By default typokat is timed with its normal rich `codespan` terminal diagnostics.
 Use `--typokat-format compact` when you want to separate checker throughput from
@@ -34,6 +35,9 @@ python3 typobench.py run --tools typokat,tsc --sizes 1000 --runs 3
 # Run only the diagnostics/error corpus.
 python3 typobench.py run --families errors --sizes 1000 --runs 3
 
+# Run only the multi-file modules corpus (cross-file checking).
+python3 typobench.py run --families modules --sizes 1000,10000 --runs 3
+
 # Measure diagnostics with typokat's compact, low-overhead renderer.
 python3 typobench.py run --families errors --typokat-format compact
 ```
@@ -58,8 +62,11 @@ Default `tsgo`/`tsc` flags are exactly the no-lib checker flags:
 tsc --noEmit --noLib --skipLibCheck <file.ts>
 ```
 
-Each generated file starts with the minimal empty global interfaces needed to
-avoid `TS2318` under `--noLib` (`Array`, `Object`, `Function`, and friends).
+Each single-file corpus starts with the minimal empty global interfaces needed
+to avoid `TS2318` under `--noLib` (`Array`, `Object`, `Function`, and friends).
+The `modules` project puts those same globals in one non-module `globals.ts`
+script (a real module's own declarations are module-scoped and cannot satisfy
+the global lookup), passed alongside the module files.
 
 ## Corpus families
 
@@ -74,8 +81,18 @@ avoid `TS2318` under `--noLib` (`Array`, `Object`, `Function`, and friends).
 - `errors` - intentionally invalid assignments, calls, object literals, member
   access, readonly writes, and flow returns. This exercises relation failure
   paths, diagnostic reason chains, and renderer throughput.
+- `modules` - a multi-file project: many small modules, each importing the two
+  preceding ones (a DAG, not a bare chain) and composing their exported
+  types/values, plus a fan-in `main.ts` and a shared `globals.ts` script. This
+  exercises typokat's M29 cross-file pipeline (`scan_imports`, dependency order,
+  cross-file checking) and is the family where tsgo's cross-file parallelism
+  helps most. The `size` is the target total line count spread across the
+  modules, so `lines/s` stays comparable with the single-file families.
 
 The default sizes are `1000`, `10000`, and `100000` source lines per family.
+For `modules`, a size is roughly `size / 16` separate module files (e.g. ~6k
+files at 100000), so the tool is invoked with the whole file set on one command
+line.
 `run` also includes a small startup file by default so the process cold-start
 floor is visible next to throughput numbers.
 
@@ -94,16 +111,18 @@ that preflight passes.
 - `report/raw/<timestamp>/...json` - the raw per-file hyperfine exports.
 
 `hyperfine` launches a fresh process for every sample, so the timings include
-CLI startup and single-file parse/bind/check time. The runner uses
+CLI startup and whole-run parse/bind/check time. The runner uses
 `hyperfine --shell=none` by default so shell startup is not counted. The results
 do not model editor incrementality or long-lived server warm caches.
 
 ## Caveats
 
-This benchmark is deliberately single-file by default. That keeps it inside
-typokat's current module-free scope, but it also neutralizes tsgo's main
-advantage: goroutine parallelism across independent files. A future multi-file
-corpus should be reported separately and would be expected to favor tsgo more.
+The single-file families keep most of the corpus in a per-file scope, which
+neutralizes tsgo's main advantage: goroutine parallelism across independent
+files. The `modules` family is the multi-file counterpart and is where that
+parallelism shows up — as the module count grows, tsgo spreads work across
+cores and closes the gap, so read those rows as the cross-file comparison rather
+than lumping them with the single-file throughput numbers.
 
 Even with `--noEmit`, tsgo/tsc still carry compiler infrastructure that typokat
 does not. Treat these numbers as a profiling instrument and a broad external

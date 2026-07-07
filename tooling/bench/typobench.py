@@ -27,8 +27,11 @@ CORPUS = HERE / "corpus"
 REPORT = HERE / "report"
 RAW_REPORT = REPORT / "raw"
 
-FAMILIES = ("relation", "generics", "typelevel", "flow", "errors")
+SINGLE_FILE_FAMILIES = ("relation", "generics", "typelevel", "flow", "errors")
+MODULE_FAMILIES = ("modules",)
+FAMILIES = SINGLE_FILE_FAMILIES + MODULE_FAMILIES
 ERROR_FAMILIES = frozenset(("errors",))
+MODULE_MIN_COUNT = 3
 DEFAULT_SIZES = (1000, 10000, 100000)
 DEFAULT_TOOLS = ("typokat", "tsgo")
 TSGO_FLAGS = ("--noEmit", "--noLib", "--skipLibCheck")
@@ -93,6 +96,10 @@ def write_lines(path, lines):
 def line_count(path):
     with path.open() as f:
         return sum(1 for _ in f)
+
+
+def total_lines(paths):
+    return sum(line_count(p) for p in paths)
 
 
 def pad_to(lines, target, family):
@@ -323,6 +330,107 @@ def startup_lines():
     ]
 
 
+# --- multi-file "modules" family -----------------------------------------
+# A project of many small .ts modules that import/export across each other,
+# exercising typokat's M29 cross-file pipeline (scan_imports + dependency
+# order + cross-universe checking). Globals live in a single script file so
+# tsc/tsgo stay happy under --noLib; every module is a real module (has
+# import/export), so its own declarations never satisfy the global lookup.
+
+MODULE_STEM = "mod_{:05d}"
+MODULE_LINES_PER_MODULE = 16  # rough; used only to size the module count
+
+
+def module_name(i):
+    return MODULE_STEM.format(i)
+
+
+def module_chunk(i):
+    # Each module depends on the two preceding ones (a DAG, not a bare chain),
+    # composing their exported types/values so the check must resolve imports.
+    deps = [d for d in (i - 1, i - 2) if d >= 0]
+    lines = [f'import {{ Shape_{d}, seed_{d} }} from "./{module_name(d)}";' for d in deps]
+    left_type = f"Shape_{deps[0]}" if deps else "number"
+    right_type = f"Shape_{deps[1]}" if len(deps) > 1 else left_type
+    seed_expr = " + ".join([f"seed_{d}" for d in deps] + [str(i)])
+    lines += [
+        f"export type Shape_{i} = {{",
+        "  id: number;",
+        "  label: string;",
+        f"  left: {left_type};",
+        f"  right: {right_type};",
+        "};",
+        f"export interface Widget_{i} {{",
+        f"  shape: Shape_{i};",
+        "  weight: number;",
+        "}",
+        f"export const seed_{i}: number = {seed_expr};",
+        f"export function blend_{i}(w: Widget_{i}): number {{ return w.shape.id + w.weight; }}",
+        f"export function pick_{i}(s: Shape_{i}): {left_type} {{ return s.left; }}",
+        f"const probe_{i}: number = seed_{i};",
+        "",
+    ]
+    return lines
+
+
+def module_main(n_modules):
+    # Fan-in consumer: pull a value from a spread of modules, plus the top type.
+    last = n_modules - 1
+    step = max(1, n_modules // 16)
+    sample = sorted({0, *range(0, n_modules, step)} - {last})
+    lines = [f'import {{ seed_{d} }} from "./{module_name(d)}";' for d in sample]
+    lines.append(f'import {{ Shape_{last}, pick_{last} }} from "./{module_name(last)}";')
+    total = " + ".join(f"seed_{d}" for d in sample)
+    lines += [
+        f"export const grandTotal: number = {total};",
+        f"export function consumeTop(s: Shape_{last}): number {{ return pick_{last}(s).id; }}",
+        "",
+    ]
+    return lines
+
+
+def module_count_for_size(size):
+    reserve = len(GLOBAL_HEADER) + 24  # globals.ts + a generous main.ts budget
+    return max(MODULE_MIN_COUNT, (size - reserve) // MODULE_LINES_PER_MODULE)
+
+
+def module_dir(size):
+    return CORPUS / f"modules-{size}"
+
+
+def module_sort_key(path):
+    stem = path.stem
+    if stem == "globals":
+        return (0, 0)
+    if stem == "main":
+        return (2, 0)
+    return (1, int(stem.split("_")[1]))
+
+
+def module_project_paths(size):
+    directory = module_dir(size)
+    if not directory.is_dir():
+        return [directory]  # non-existent sentinel; ensure_files_exist reports it
+    files = sorted(directory.glob("*.ts"), key=module_sort_key)
+    return files or [directory]
+
+
+def generate_module_project(size):
+    directory = module_dir(size)
+    shutil.rmtree(directory, ignore_errors=True)
+    n = module_count_for_size(size)
+    paths = []
+    write_lines(directory / "globals.ts", GLOBAL_HEADER)
+    paths.append(directory / "globals.ts")
+    for i in range(n):
+        path = directory / f"{module_name(i)}.ts"
+        write_lines(path, module_chunk(i))
+        paths.append(path)
+    write_lines(directory / "main.ts", module_main(n))
+    paths.append(directory / "main.ts")
+    return paths
+
+
 def corpus_path(family, size):
     return CORPUS / f"{family}-{size}.ts"
 
@@ -333,14 +441,22 @@ def generate_files(families, sizes, include_startup=True):
         path = CORPUS / "startup.ts"
         lines = startup_lines()
         write_lines(path, lines)
-        records.append({"family": "startup", "size": len(lines), "path": str(path), "lines": len(lines)})
+        records.append({"family": "startup", "size": len(lines), "path": str(path),
+                        "paths": [str(path)], "files": 1, "lines": len(lines)})
 
     for family in families:
         for size in sizes:
-            path = corpus_path(family, size)
-            lines = GENERATORS[family](size)
-            write_lines(path, lines)
-            records.append({"family": family, "size": size, "path": str(path), "lines": len(lines)})
+            if family in MODULE_FAMILIES:
+                paths = generate_module_project(size)
+                lines = total_lines(paths)
+                records.append({"family": family, "size": size, "path": str(module_dir(size)),
+                                "paths": [str(p) for p in paths], "files": len(paths), "lines": lines})
+            else:
+                path = corpus_path(family, size)
+                lines = GENERATORS[family](size)
+                write_lines(path, lines)
+                records.append({"family": family, "size": size, "path": str(path),
+                                "paths": [str(path)], "files": 1, "lines": len(lines)})
 
     manifest = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
@@ -354,18 +470,20 @@ def generate_files(families, sizes, include_startup=True):
 
 
 def selected_files(families, sizes, include_startup):
-    files = []
+    items = []
     if include_startup:
-        files.append(("startup", "startup", CORPUS / "startup.ts"))
+        items.append(("startup", "startup", [CORPUS / "startup.ts"]))
     for family in families:
         for size in sizes:
-            path = corpus_path(family, size)
-            files.append((family, size, path))
-    return files
+            if family in MODULE_FAMILIES:
+                items.append((family, size, module_project_paths(size)))
+            else:
+                items.append((family, size, [corpus_path(family, size)]))
+    return items
 
 
-def ensure_files_exist(files):
-    missing = [path for _family, _size, path in files if not path.exists()]
+def ensure_files_exist(items):
+    missing = [path for _family, _size, paths in items for path in paths if not path.exists()]
     if missing:
         listed = "\n".join(f"  {p}" for p in missing[:12])
         if len(missing) > 12:
@@ -399,16 +517,17 @@ def default_tsgo():
     return "tsgo"
 
 
-def build_tool_command(tool, args, path):
+def build_tool_command(tool, args, paths):
+    path_args = [str(p) for p in paths]
     if tool == "typokat":
         command = [*command_parts(args.typokat), "check"]
         if args.typokat_format != "rich":
             command.extend(["--format", args.typokat_format])
-        return [*command, str(path)]
+        return [*command, *path_args]
     if tool == "tsgo":
-        return [*command_parts(args.tsgo), *args.tsgo_flags, str(path)]
+        return [*command_parts(args.tsgo), *args.tsgo_flags, *path_args]
     if tool == "tsc":
-        return [*command_parts(args.tsc), *args.tsgo_flags, str(path)]
+        return [*command_parts(args.tsc), *args.tsgo_flags, *path_args]
     raise AssertionError(tool)
 
 
@@ -430,6 +549,12 @@ def ensure_tool_available(tool, args):
 
 def expects_diagnostics(family):
     return family in ERROR_FAMILIES
+
+
+def item_display_path(paths):
+    if len(paths) == 1:
+        return paths[0].relative_to(HERE)
+    return paths[0].parent.relative_to(HERE)
 
 
 def shell_command(argv):
@@ -463,12 +588,12 @@ def validation_expectation(tool, family):
     return "expected clean exit 0"
 
 
-def validate_commands(tools, files, args):
+def validate_commands(tools, items, args):
     if args.no_validate:
         return
-    for family, size, path in files:
+    for family, size, paths in items:
         for tool in tools:
-            argv = build_tool_command(tool, args, path)
+            argv = build_tool_command(tool, args, paths)
             with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as output:
                 proc = subprocess.run(
                     argv,
@@ -485,12 +610,12 @@ def validate_commands(tools, files, args):
                 if excerpt:
                     excerpt = f"\n{excerpt}"
                 sys.exit(
-                    f"{tool} validation failed for {label} ({path}): "
+                    f"{tool} validation failed for {label} ({item_display_path(paths)}): "
                     f"{detail}, got exit {proc.returncode}{excerpt}"
                 )
 
 
-def run_hyperfine_for_file(tools, family, size, path, lines, args, raw_dir):
+def run_hyperfine_for_item(tools, family, size, paths, lines, args, raw_dir):
     stem = family if family == "startup" else f"{family}-{size}"
     raw = raw_dir / f"{stem}.json"
     cmd = [
@@ -510,7 +635,7 @@ def run_hyperfine_for_file(tools, family, size, path, lines, args, raw_dir):
         cmd.append("--ignore-failure")
     commands = []
     for tool in tools:
-        argv = build_tool_command(tool, args, path)
+        argv = build_tool_command(tool, args, paths)
         command = shell_command(argv)
         commands.append((tool, command))
         cmd.extend(["--command-name", tool, command])
@@ -524,7 +649,8 @@ def run_hyperfine_for_file(tools, family, size, path, lines, args, raw_dir):
         records.append({
             "family": family,
             "size": size,
-            "file": str(path.relative_to(HERE)),
+            "file": str(item_display_path(paths)),
+            "files": len(paths),
             "lines": lines,
             "expected": "diagnostics" if expects_diagnostics(family) else "clean",
             "tool": tool,
@@ -542,9 +668,17 @@ def run_hyperfine_for_file(tools, family, size, path, lines, args, raw_dir):
 def write_report(records, tools, families, sizes, args, raw_dir):
     REPORT.mkdir(parents=True, exist_ok=True)
     when = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    has_modules = any(f in MODULE_FAMILIES for f in families)
+    mode = "single-file + modules" if has_modules else "single-file"
+    caveats = [
+        "Single-file families keep most of the corpus inside a per-file scope.",
+        "The modules family is multi-file: it exercises typokat's M29 import resolution and cross-file checking, and is the row where tsgo's cross-file parallelism helps most. Read it as the multi-file comparison.",
+        "--noEmit disables emit output but tsgo/tsc still carry compiler infrastructure typokat does not.",
+        "The errors family intentionally exits with diagnostics; preflight validates that before hyperfine ignores the failure status.",
+    ]
     payload = {
         "when": when,
-        "mode": "single-file",
+        "mode": mode,
         "tools": list(tools),
         "families": list(families),
         "sizes": list(sizes),
@@ -552,12 +686,7 @@ def write_report(records, tools, families, sizes, args, raw_dir):
         "warmup": args.warmup,
         "typokat_format": args.typokat_format,
         "raw_report_dir": str(raw_dir.relative_to(HERE)),
-        "caveats": [
-            "Single-file corpus keeps the benchmark inside typokat's module-free scope.",
-            "Single-file mode neutralizes tsgo's cross-file goroutine parallelism; report multi-file results separately.",
-            "--noEmit disables emit output but tsgo/tsc still carry compiler infrastructure typokat does not.",
-            "The errors family intentionally exits with diagnostics; preflight validates that before hyperfine ignores the failure status.",
-        ],
+        "caveats": caveats,
         "results": records,
     }
     (REPORT / "latest.json").write_text(json.dumps(payload, indent=2) + "\n")
@@ -566,23 +695,23 @@ def write_report(records, tools, families, sizes, args, raw_dir):
         "# typokat synthetic benchmark",
         "",
         f"- when: {when}",
-        "- mode: single-file",
+        f"- mode: {mode}",
         f"- hyperfine: {args.runs} runs, {args.warmup} warmup",
         f"- typokat diagnostics: {args.typokat_format}",
         "",
-        "> Caveat: single-file mode keeps this in typokat's current scope, but it does",
-        "> not exercise tsgo's cross-file parallelism. Treat multi-file measurements as",
-        "> a separate, tsgo-friendlier benchmark.",
+        "> Caveat: single-file families stay in a per-file scope. The `modules` family",
+        "> is multi-file and is the one that exercises cross-file resolution and tsgo's",
+        "> cross-file parallelism — read those rows as the multi-file comparison.",
         "",
-        "| family | expected | lines | tool | median s | mean s | lines/s |",
-        "|---|---|---:|---|---:|---:|---:|",
+        "| family | expected | files | lines | tool | median s | mean s | lines/s |",
+        "|---|---|---:|---:|---|---:|---:|---:|",
     ]
     for rec in records:
         lps = rec["lines_per_second"]
         lps_text = f"{lps:,.0f}" if lps is not None else "-"
         lines.append(
-            f"| {rec['family']} | {rec['expected']} | {rec['lines']} | {rec['tool']} | "
-            f"{rec['median_seconds']:.6f} | {rec['mean_seconds']:.6f} | {lps_text} |"
+            f"| {rec['family']} | {rec['expected']} | {rec.get('files', 1)} | {rec['lines']} | "
+            f"{rec['tool']} | {rec['median_seconds']:.6f} | {rec['mean_seconds']:.6f} | {lps_text} |"
         )
     (REPORT / "latest.md").write_text("\n".join(lines) + "\n")
     return payload
@@ -590,19 +719,27 @@ def write_report(records, tools, families, sizes, args, raw_dir):
 
 def cmd_generate(args):
     records = generate_files(args.families, args.sizes, include_startup=True)
-    print(f"generated {len(records)} file(s) in {CORPUS.relative_to(HERE)}")
+    print(f"generated {len(records)} corpus item(s) in {CORPUS.relative_to(HERE)}")
     for rec in records:
-        print(f"  {Path(rec['path']).relative_to(HERE)}  {rec['lines']} lines")
+        files = rec.get("files", 1)
+        suffix = f"  ({files} files)" if files > 1 else ""
+        print(f"  {Path(rec['path']).relative_to(HERE)}  {rec['lines']} lines{suffix}")
 
 
 def cmd_list(args):
     if not CORPUS.exists():
         sys.exit("no corpus directory; run `python3 typobench.py generate` first")
     files = sorted(CORPUS.glob("*.ts"))
-    if not files:
+    dirs = sorted(CORPUS.glob("modules-*"))
+    if not files and not dirs:
         sys.exit("empty corpus directory; run `python3 typobench.py generate` first")
     for path in files:
         print(f"{path.relative_to(HERE)}\t{line_count(path)}")
+    for directory in dirs:
+        if not directory.is_dir():
+            continue
+        members = list(directory.glob("*.ts"))
+        print(f"{directory.relative_to(HERE)}/\t{total_lines(members)}\t({len(members)} files)")
 
 
 def cmd_clean(_args):
@@ -641,21 +778,22 @@ def cmd_run(args):
     if args.generate:
         generate_files(args.families, args.sizes, include_startup=True)
 
-    files = selected_files(args.families, args.sizes, args.include_startup)
-    ensure_files_exist(files)
+    items = selected_files(args.families, args.sizes, args.include_startup)
+    ensure_files_exist(items)
 
-    validate_commands(tools, files, args)
+    validate_commands(tools, items, args)
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     raw_dir = RAW_REPORT / stamp
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     records = []
-    for family, size, path in files:
-        lines = line_count(path)
+    for family, size, paths in items:
+        lines = total_lines(paths)
         label = family if family == "startup" else f"{family}/{size}"
-        print(f"\n== {label}: {path.relative_to(HERE)} ({lines} lines) ==", flush=True)
-        records.extend(run_hyperfine_for_file(tools, family, size, path, lines, args, raw_dir))
+        files_note = f", {len(paths)} files" if len(paths) > 1 else ""
+        print(f"\n== {label}: {item_display_path(paths)} ({lines} lines{files_note}) ==", flush=True)
+        records.extend(run_hyperfine_for_item(tools, family, size, paths, lines, args, raw_dir))
 
     write_report(records, tools, args.families, args.sizes, args, raw_dir)
     print(f"\nwrote {REPORT.relative_to(HERE)}/latest.json")
