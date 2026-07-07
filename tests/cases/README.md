@@ -327,6 +327,7 @@ first. Fixtures therefore keep at most one mismatched argument per call so the c
 | `m28_utility_types/` | M28 — built-in utility types (prelude aliases: Partial…Omit/ReturnType; Uppercase-family intrinsics) |
 | `m29_modules/` | M29 — local relative modules / named imports + exports across files (project fixture subdirectories) |
 | `m30_contextual_literals/` | M30 — contextual typing of fresh object / array / tuple literals |
+| `m31_intersections/` | M31 — intersection types (`A & B`): canonicalization, dual relation directions, merged member access + excess |
 
 ## Project fixture convention (M29+)
 

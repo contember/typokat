@@ -22,7 +22,7 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-*(none active)*
+- [`sprint-2026-07-07-intersection-types.md`](sprints/sprint-2026-07-07-intersection-types.md) — backlog `25` / M31: intersection types (`A & B`). Spec committed; implementation next.
 
 ## What's hot
 
