@@ -366,6 +366,16 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`).
 | `b28_interface_extends/` | backlog `28` | interface `extends` composition (inherited members in assignability/keyof/mapped; own overrides) |
 | `b29_alias_cycles/` | backlog `29` | surface alias cycles → `TK2456` (direct/mutual/through unions); legal member recursion resolves |
 | `b30_negative_literals/` | backlog `30` | negative numeric literal types are literals, not `any` (annotations, unions, template holes, extends) |
+| `b55_template_memo/` | backlog `55` | template evaluation must not memoize results computed under an exhausted TK2589 budget |
+
+`b55_template_memo/` pins the evaluator's memo discipline around budget exhaustion: a
+template-literal hole that resolves to the error type only because the shared TK2589
+budget was already exhausted must not be committed to the pass-wide memo (the fixed
+behavior reports both the TK2589 and the later line's real TK2322). The other node
+kinds (conditional / instantiation / mapped / eager keyof) already behave correctly and
+are pinned as the regression net, as is the healthy cross-alias template-reuse path.
+No new diagnostics; no tsc divergence expected (TK2589's span attribution divergence is
+documented in the conditional-types bullet above).
 
 `f1_object_interface_methods/` uses only existing diagnostics (`TK2322`, `TK2339`, `TK2345`).
 No deliberate `tsc` divergence is expected for plain non-generic method signatures with explicit
