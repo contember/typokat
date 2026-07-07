@@ -117,7 +117,7 @@ src/
   check/    checker (incl. flowgraph) · infer (inference engine) · flow (nodes + narrowing ops)   the checkers
   relate/   relation (is_assignable, cycle stack, reasons) · cache      the relation engine
 tests/
-  conformance.rs        marker-driven harness (MILESTONE_DIRS enables m0..m28 + bug-fix corpora)
+  conformance.rs        marker-driven harness (MILESTONE_DIRS enables m0..m30 + bug-fix corpora)
   cases/mN_*/           the conformance corpus (the spec)
 ```
 
@@ -128,17 +128,23 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
 - **Narrowing deferrals past M23** — assertion functions / type predicates (`x is T`),
   `for`/`for-of`/`do-while` loop forms (fall back to declared types — safe), closure narrowing of
   never-reassigned bindings, and member-path narrowing (`x.a` — narrowing is symbol-keyed).
-  Declaration initializers deliberately don't narrow.
-- **The type-level evaluation phase** — conditional types (`T extends U ? X : Y`), mapped types, and
-  utility types (`Partial`, `Record`, …) are not implemented; they will be tree-walked with the
-  algorithmic wins folded in (architecture §7). Generic `keyof`/`T[K]` over a bare type parameter
-  likewise defers to that phase. (A bytecode VM is a deferred, profiling-gated refactor, not a
-  planned step — see `docs/decisions/0001-…`.)
+  Declaration initializers deliberately don't narrow. (Backlog `50`/`51`.)
+- **Type-level evaluation edges** — the phase itself shipped (M24–M28); a conservative
+  (over-report) tail remains in the backlog: cross-binder nested `infer` stays a poisoned
+  deferral, conditionals buried in named alias/interface/class bodies stay deferred, and
+  `keyof` over unions/`never`/template-literal key sources plus two tsc-parity conditional
+  edges are documented divergences (backlog `26`, `27`, `35`–`37`). (A bytecode VM is a
+  deferred, profiling-gated refactor — see `docs/decisions/0001-…`.)
+- **Type-model gaps under construction** — rest elements, intersections (`A & B`),
+  optional/default parameters, overloads, generic methods, enums, namespaces + declaration
+  merging, and `satisfies`/`as const` are not modeled yet; they are the model-completeness
+  track in [`docs/backlog/`](./docs/backlog/README.md) and the prerequisite for full
+  `lib.d.ts` loading.
 - **Optional properties** (`a?: T`) on objects/interfaces/class fields are implemented (M21): a
   member may be absent, reads yield `T | undefined`, `keyof`/indexed-access include it. Still
   deferred: optional **methods**/accessors (`go?(): T`), the dedicated *possibly-undefined*
   diagnostics (tsc `TS2532`/`TS18048`/`TS2722`), and narrowing an optional through a member-access
-  guard (over-reports `T | undefined`, the safe direction).
+  guard (over-reports `T | undefined`, the safe direction). (Backlog `49`.)
 - **No `lib.d.ts`** (so `console`, array methods, `Promise`, … are absent). Modules/imports are
   implemented only for local relative `.ts` files with named imports/exports in one serial project
   check. Still deferred: packages / `node_modules`, `tsconfig` resolver options, `.d.ts`, default /
@@ -146,13 +152,13 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   graphs, and parallel cross-file type identity. An **unresolved type name** in type position is
   `TK2304` (M22); still deferred there (distinct tsc codes): a value used as a type (`TS2749`), type
   args on a type parameter (`TS2315`), a wrong type-argument count such as bare `Array` (`TS2314`),
-  and qualified names `A.B` (`TS2503`).
+  and qualified names `A.B` (`TS2503`). (Backlog `14`, `15`, `38`, `43`, `52`.)
 - Minor `tsc` divergences, all in the safe (over-report) direction, are logged in
   [`tests/cases/README.md`](./tests/cases/README.md).
 
 ## Testing
 
 ```sh
-cargo test                              # 172 unit tests + the conformance corpus
+cargo test                              # 203 unit tests + the conformance corpus
 cargo clippy --all-targets -- -D warnings
 ```

@@ -1,6 +1,6 @@
 # Dev method — how work is done here
 
-`typokat` is a from-scratch TypeScript type checker in Rust. **M0–M22** are done (see
+`typokat` is a from-scratch TypeScript type checker in Rust. **M0–M30** are done (see
 [`README.md`](../../README.md)). This document is the **method** to follow when continuing the
 project — the build loop that kept it sound, and the bug classes the reviews keep catching. The
 **invariants you must not break** live in [`invariants.md`](./invariants.md); the **next work** is in

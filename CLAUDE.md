@@ -6,9 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 typokat — a from-scratch **TypeScript type checker in Rust**. A *checker, not a
 compiler*: it parses, binds, and type-checks TS and reports `tsc`-style diagnostics.
-Error codes mirror tsc (`TK2322` ≡ `TS2322`). Emit, JS runtime semantics, and module
-resolution are out of scope **by design**; the goal is to preserve the type model.
-M0–M22 are implemented. Coverage: [README.md](./README.md). Full design:
+Error codes mirror tsc (`TK2322` ≡ `TS2322`). Emit and JS runtime semantics are out of
+scope **by design**; module resolution is a narrow type-checking slice (local relative
+`.ts` modules). The goal is to preserve the type model.
+M0–M30 are implemented. Coverage: [README.md](./README.md). Full design:
 [docs/reference/architecture.md](docs/reference/architecture.md).
 
 ## Commands
@@ -57,9 +58,9 @@ then implement, then run an **independent adversarial review** (hunts false nega
 against real `tsc --strict`). Implementation goes through subagents; the leader supervises and
 commits. The soundness/architecture **invariants you must not break** are in
 [docs/reference/invariants.md](docs/reference/invariants.md); the roadmap **is** the
-[docs/backlog/](docs/backlog/README.md) (next: unstructured-flow narrowing, generic constraints,
-then the type-level evaluation phase — tree-walked; the bytecode VM is a deferred, profiling-gated
-refactor, ADR-0001).
+[docs/backlog/](docs/backlog/README.md) (its README carries the definition of done and the
+recommended order — next: the model-completeness track that unblocks full `lib.d.ts`, then the
+scale ladder; the bytecode VM stays a deferred, profiling-gated refactor, ADR-0001).
 
 ## Testing
 
