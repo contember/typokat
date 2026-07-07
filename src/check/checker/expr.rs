@@ -9,7 +9,7 @@ use crate::types::repr::{
     IntrinsicKind, LiteralValue, ObjectType, PropertyType, TypeParamId, TypeTag,
 };
 use crate::types::store::{Store, TypeId};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use oxc_ast::ast::{
     ArrayExpression, BinaryExpression, BinaryOperator, ComputedMemberExpression, Expression, LogicalExpression, ObjectExpression, ObjectPropertyKind,
     StaticMemberExpression, UnaryExpression,
@@ -291,6 +291,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         context: Option<TypeId>,
     ) -> Option<(TypeId, Span)> {
         let context = context.map(|ctx| contextual_literal_target(self.interner.store(), ctx));
+        // M31: peel an intersection contextual target to its merged apparent object, so a
+        // fresh literal is shaped against the merged member set — `{ a: 1 } & { b: 2 }`
+        // keeps `a`/`b` at their literal member types instead of widening and then failing
+        // the literal-typed members (the finding-3 over-report). Mirrors the `T | undefined`
+        // peel; the recursion runs through here, so nested intersections resolve too.
+        let context = context.map(|ctx| self.intersection_apparent_object(ctx).unwrap_or(ctx));
         match (init, context) {
             (Expression::ParenthesizedExpression(paren), ctx) => {
                 self.infer_initializer(scope, &paren.expression, ctx)
@@ -350,7 +356,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Expression::ParenthesizedExpression(paren) => {
                 self.context_can_shape_fresh_literal(&paren.expression, context)
             }
-            Expression::ObjectExpression(_) => self.interner.store().object_type(context).is_some(),
+            // M31: an intersection whose members include an object type can shape a fresh
+            // object literal (via its merged apparent object — resolved in `infer_initializer`).
+            Expression::ObjectExpression(_) => {
+                let store = self.interner.store();
+                store.object_type(context).is_some()
+                    || store
+                        .intersection_members(context)
+                        .is_some_and(|ms| ms.iter().any(|&m| store.object_type(m).is_some()))
+            }
             Expression::ArrayExpression(_) => {
                 self.interner.store().tag(context) == TypeTag::Tuple
                     || self.interner.store().array_type(context).is_some()
@@ -650,6 +664,112 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         current
     }
 
+    /// The **merged apparent object** of an intersection type (M31), interned — the
+    /// structural view every object consumer resolves an `A & B` operand through
+    /// (member reads/writes; the excess check uses its own store-only key gather).
+    /// The property set is the **union** of the object-typed members' properties; a
+    /// property present in several members takes the **intersection** of its types
+    /// (`{ a: X } & { a: Y }.a` is `X & Y`), is optional only if optional in **all**
+    /// members, and is `readonly`/accessor if so in **any**. Index signatures merge the
+    /// same way (present if any member has one, value = intersection). Each member is
+    /// first resolved through [`Pass::apparent_type`] (a constrained-param member
+    /// contributes its constraint's object). Returns `None` when `ty` is not an
+    /// intersection or no member is an object type (e.g. `string & number`), so the
+    /// caller keeps the raw type.
+    pub(in crate::check::checker) fn intersection_apparent_object(
+        &mut self,
+        ty: TypeId,
+    ) -> Option<TypeId> {
+        if self.interner.store().tag(ty) != TypeTag::Intersection {
+            return None;
+        }
+        let members: Vec<TypeId> = self.interner.store().intersection_members(ty)?.to_vec();
+
+        // Snapshot each object member's properties + index signatures (owned) before any
+        // mutable interning borrow. A constrained-param member resolves through its
+        // apparent type first, mirroring the union member-access handling.
+        let mut snapshots: Vec<(Vec<PropertyType>, Option<TypeId>, Option<TypeId>)> = Vec::new();
+        for &member in &members {
+            let member = self.apparent_type(member);
+            if let Some(obj) = self.interner.store().object_type(member) {
+                snapshots.push((obj.properties.clone(), obj.string_index, obj.number_index));
+            }
+        }
+        if snapshots.is_empty() {
+            return None;
+        }
+
+        // Accumulate per property name: the base member (first seen, for its
+        // visibility/origin), the contributing value types, and the merged flags.
+        struct Acc {
+            base: PropertyType,
+            tys: Vec<TypeId>,
+            all_optional: bool,
+            any_readonly: bool,
+            any_accessor: bool,
+        }
+        let mut order: Vec<String> = Vec::new();
+        let mut props: FxHashMap<String, Acc> = FxHashMap::default();
+        let mut string_index_values: Vec<TypeId> = Vec::new();
+        let mut number_index_values: Vec<TypeId> = Vec::new();
+
+        for (member_props, string_index, number_index) in snapshots {
+            for prop in member_props {
+                match props.get_mut(&prop.name) {
+                    Some(acc) => {
+                        acc.tys.push(prop.ty);
+                        acc.all_optional &= prop.optional;
+                        acc.any_readonly |= prop.readonly;
+                        acc.any_accessor |= prop.is_accessor;
+                    }
+                    None => {
+                        order.push(prop.name.clone());
+                        props.insert(
+                            prop.name.clone(),
+                            Acc {
+                                all_optional: prop.optional,
+                                any_readonly: prop.readonly,
+                                any_accessor: prop.is_accessor,
+                                tys: vec![prop.ty],
+                                base: prop,
+                            },
+                        );
+                    }
+                }
+            }
+            string_index_values.extend(string_index);
+            number_index_values.extend(number_index);
+        }
+
+        // Build the merged property list (each value type is the intersection of its
+        // contributors — a single contributor collapses to itself).
+        let mut properties: Vec<PropertyType> = Vec::with_capacity(order.len());
+        for name in order {
+            let Some(acc) = props.remove(&name) else {
+                continue;
+            };
+            let ty = self.interner.intersection(acc.tys);
+            properties.push(PropertyType {
+                ty,
+                optional: acc.all_optional,
+                readonly: acc.any_readonly,
+                is_accessor: acc.any_accessor,
+                ..acc.base
+            });
+        }
+        let string_index = (!string_index_values.is_empty())
+            .then(|| self.interner.intersection(string_index_values));
+        let number_index = (!number_index_values.is_empty())
+            .then(|| self.interner.intersection(number_index_values));
+
+        Some(self.interner.intern_object(ObjectType {
+            properties,
+            string_index,
+            number_index,
+            ..Default::default()
+        }))
+    }
+
     /// Infer the type of a member access `obj.prop` in `scope`. A missing property is
     /// `TK2339` and yields the error type (no cascade); an `any`/error base yields the
     /// error type.
@@ -678,7 +798,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // resolved against this apparent type, but `base_ty` is kept for the `TK2339`
         // render so a missing member still names the parameter (`'T'`). For a non-parameter
         // base `lookup_ty == base_ty`, so M0–M23 behaviour is unchanged.
+        // M31: an intersection base resolves against its merged apparent object (a member
+        // present in ≥1 constituent → its intersected type; in none → `TK2339`).
         let lookup_ty = self.apparent_type(base_ty);
+        let lookup_ty = self
+            .intersection_apparent_object(lookup_ty)
+            .unwrap_or(lookup_ty);
 
         // Union base (M4): the property must exist on every member; its type is the
         // union of the per-member property types.

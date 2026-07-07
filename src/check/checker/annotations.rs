@@ -61,6 +61,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
             TSType::TSConstructorType(ctor) => return self.lower_constructor_type(scope, ctor),
             TSType::TSUnionType(union) => return self.lower_union_annotation(scope, &union.types),
+            // M31: an intersection type `A & B`. Each member is lowered recursively, then
+            // `Interner::intersection` canonicalizes (flatten, absorb, drop `unknown`,
+            // sort+dedup, collapse). Mirrors the union lowering — no `with_indirection`.
+            TSType::TSIntersectionType(intersection) => {
+                return self.lower_intersection_annotation(scope, &intersection.types);
+            }
             TSType::TSParenthesizedType(paren) => {
                 return self.lower_annotation(scope, &paren.type_annotation);
             }
@@ -514,6 +520,25 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(self.interner.union(lowered))
     }
 
+    /// Lower an intersection type annotation `A & B & …` to a canonical interned
+    /// `TypeId` (M31 — the structural dual of [`Pass::lower_union_annotation`]). Each
+    /// member is lowered recursively, then `Interner::intersection` flattens, absorbs
+    /// (`any`/error → `any`, `never` → `never`), drops `unknown`, sorts + dedups, and
+    /// collapses degenerate intersections. A member that cannot be lowered (out of
+    /// subset) aborts the whole annotation (`None`), matching the union lowering —
+    /// dropping a member silently would mis-state the intersection.
+    fn lower_intersection_annotation(
+        &mut self,
+        scope: ScopeId,
+        members: &[TSType<'_>],
+    ) -> Option<TypeId> {
+        let mut lowered: Vec<TypeId> = Vec::with_capacity(members.len());
+        for member in members {
+            lowered.push(self.lower_annotation(scope, member)?);
+        }
+        Some(self.interner.intersection(lowered))
+    }
+
     /// Lower a tuple type annotation `[A, B, …]` to a canonical interned `TypeId`
     /// (M18). Each element is lowered recursively (preserving order — `intern_tuple`
     /// never sorts), so nested tuples (`[[number], string]`) and array elements
@@ -889,6 +914,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     )
             }
             TSType::TSUnionType(union) => union
+                .types
+                .iter()
+                .all(|member| self.annotation_type_refs_are_locally_resolvable(scope, member)),
+            // M31: an intersection is locally resolvable iff every member is (mirrors union).
+            TSType::TSIntersectionType(intersection) => intersection
                 .types
                 .iter()
                 .all(|member| self.annotation_type_refs_are_locally_resolvable(scope, member)),

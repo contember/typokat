@@ -29,6 +29,13 @@ pub enum RelationKind {
     Assignable,
 }
 
+/// The assume-true cycle-guard set for the M31 merged-source recursion
+/// ([`Relater::relate_source_members_to`]): a key is `(canonical-sorted candidate set,
+/// target, relation kind)`. A run-local, per-query set (NOT the durable cache), so a
+/// recursive object-target property terminates coinductively without ever caching a
+/// provisional `Yes` (§6.3).
+type MergedInFlightSet = FxHashSet<(Vec<TypeId>, TypeId, RelationKind)>;
+
 /// One link in a failure explanation. M0 only ever produces a single
 /// `Leaf { src, tgt }`; M2 adds the two object-structural causes. The structure
 /// is recursive so the depth case nests "...because property `p`: <child reason>"
@@ -440,6 +447,26 @@ impl<'a> Relater<'a> {
         }
         if self.store.tag(tgt) == TypeTag::Union {
             return self.relate_union_target(src, tgt, kind, assumed);
+        }
+
+        // Intersection rules (M31) — the structural **dual** of the union rules, run
+        // right after them so a union side decomposes first (`(A | B) <: (C & D)`
+        // decomposes on the union source, then each member on the intersection
+        // target). The **target** rule is tried before the **source** rule so an
+        // intersection-to-intersection relation decomposes on the target (AND of
+        // "src relates to each member"), which is the correct, most-decomposed order.
+        //
+        //  - a **target** intersection `src <: A & B` requires `src` assignable to
+        //    **every** member (AND — mirror of union *source*), so `{a:1} <: {a}&{b}`
+        //    fails on the missing `{b}` member (the headline TK2741);
+        //  - a **source** intersection `A & B <: tgt` succeeds if **some** member is
+        //    assignable, OR the **merged apparent object** of the intersection is
+        //    (both sound — an `A & B` value structurally satisfies every member).
+        if self.store.tag(tgt) == TypeTag::Intersection {
+            return self.relate_intersection_target(src, tgt, kind, assumed);
+        }
+        if self.store.tag(src) == TypeTag::Intersection {
+            return self.relate_intersection_source(src, tgt, kind, assumed);
         }
 
         // `unknown` is the top type: everything is assignable TO it.
@@ -1144,6 +1171,240 @@ impl<'a> Relater<'a> {
         Relation::No(ReasonChain::of(Reason::NoUnionMember { src, tgt }))
     }
 
+    /// Intersection **target** relation (M31): `src` is assignable to `A & B` iff it is
+    /// assignable to **every** member (AND — the structural dual of a union *source*,
+    /// mirroring [`Relater::relate_union_source`]). The first failing member's own
+    /// reason is returned **directly** (unwrapped, like [`Relater::relate_conditional_source`]),
+    /// so a source missing a member's required property surfaces as that member's
+    /// `MissingProperty` (→ `TK2741`) and a value mismatch as its `Property` (→ `TK2322`)
+    /// — the headline the corpus pins.
+    ///
+    /// "Every member relates" is an AND, so all members' assume-true dependencies
+    /// genuinely contribute to the intersection's `Yes` and flow up through the shared
+    /// `assumed` accumulator (the cache-soundness discipline is unchanged — §6.3).
+    fn relate_intersection_target(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
+        // Snapshot the member ids so the immutable borrow does not overlap the
+        // recursive `self.relate` calls (see `relate_union_source` for the borrow note).
+        let Some(members) = self.store.intersection_members(tgt) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let members: Vec<TypeId> = members.to_vec();
+
+        for member in members {
+            if let Relation::No(child) = self.relate(src, member, kind, assumed) {
+                return Relation::No(child);
+            }
+        }
+        Relation::Yes
+    }
+
+    /// Intersection **source** relation (M31): whether `A & B & … <: tgt`. Delegates to
+    /// the sound merged-source engine [`Relater::relate_source_members_to`] over the
+    /// intersection's members.
+    ///
+    /// **The soundness subtlety** (review finding 1): `A <: T` does **not** imply
+    /// `A & C <: T` — a single member being assignable is enough ONLY when the target
+    /// cannot reject on a *sibling-contributed present* property. It can whenever the
+    /// target penalizes a present property: an **optional** property (`{a?:string}`
+    /// rejects a present `a:number`) or an **index signature**. So a naive
+    /// "some member assignable ⟹ intersection assignable" shortcut drops errors. The
+    /// merged engine below only takes the some-member OR for **non-object** targets
+    /// (which have no presence penalty) and sees ALL contributed properties for object
+    /// targets.
+    fn relate_intersection_source(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
+        let Some(members) = self.store.intersection_members(src) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let members: Vec<TypeId> = members.to_vec();
+        // The merged-source recursion's own assume-true cycle guard, seeded empty and
+        // scoped to THIS query — see `relate_source_members_to`.
+        let mut in_flight: MergedInFlightSet = FxHashSet::default();
+        self.relate_source_members_to(src, &members, tgt, kind, assumed, &mut in_flight)
+    }
+
+    /// Whether the **merged source** — the intersection of `cands` — relates to `tgt`
+    /// (M31, the sound core of the source-intersection rule; no interning, as the
+    /// relation engine holds the store read-only). Recursive, so the merge is decided at
+    /// every depth:
+    ///
+    ///  - **object `tgt`** (no index / call / construct signature): the merged source
+    ///    must satisfy **every** target property — an AND that sees ALL contributed
+    ///    properties, never a some-member shortcut. For a property named by exactly ONE
+    ///    member the merged value IS that member's type, so it delegates to the
+    ///    cycle-guarded main engine (`self.relate`, exact); a property named by SEVERAL
+    ///    members has a genuine merged (intersection) value, decided by **recursing** with
+    ///    those `subcands` — NOT a some-candidate shortcut (which would reintroduce the
+    ///    finding-1 hole one level down). An uncovered required property is a
+    ///    `MissingProperty` (`TK2741`); a covered-but-incompatible one a `Property`
+    ///    (`TK2322`). This threads the shared `assumed` (an AND — all contributions
+    ///    matter);
+    ///  - an object `tgt` carrying an **index / call / construct signature** is out of
+    ///    the merged subset → conservative `No` (a documented safe over-report; it is
+    ///    also a genuine rejection when a member's value violates the target's index);
+    ///  - **non-object `tgt`** (primitive / function / tuple / array / …): no presence
+    ///    penalty, so a **single** candidate assignable to `tgt` suffices (sound). An OR,
+    ///    so — like [`Relater::relate_union_target`] — each attempt uses its own local
+    ///    accumulator and only the winner's assumptions merge up (a union target was
+    ///    already decomposed by the earlier target-union dispatch, so `tgt` here is never
+    ///    a union).
+    ///
+    /// **Termination (§6.3-sound).** The multi-contributor per-property recursion can
+    /// re-enter the same `(merged source, target)` on a recursive object property
+    /// (`interface P { p: P }`; `P & Q <: P`). `in_flight` is an **assume-true** cycle
+    /// guard, exactly the coinductive rule the main cycle stack uses
+    /// (`relation.rs` §"Cycle stack FIRST"): re-entering a `(sorted cands, tgt, kind)`
+    /// already in flight returns `Yes`. The cycle is self-contained within one
+    /// `relate_intersection_source` query and discharged at its root (each object-target
+    /// entry removes its key on exit); this method **never** touches the durable cache,
+    /// and single-contributor properties flow through `self.relate` (so genuine
+    /// cross-relation cycles still bubble through `assumed`) — so no provisional `Yes` is
+    /// ever durably cached.
+    fn relate_source_members_to(
+        &mut self,
+        src: TypeId,
+        cands: &[TypeId],
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+        in_flight: &mut MergedInFlightSet,
+    ) -> Relation {
+        if self.store.tag(tgt) == TypeTag::Object {
+            // Assume-true cycle guard for the merged-source recursion (see the doc above).
+            // The key canonicalizes the candidate set (sorted) so `[P, Q]` and `[Q, P]`
+            // collide.
+            let mut key_cands = cands.to_vec();
+            key_cands.sort_unstable();
+            let key = (key_cands, tgt, kind);
+            if in_flight.contains(&key) {
+                return Relation::Yes;
+            }
+            in_flight.insert(key.clone());
+            let result = self.relate_merged_object_properties(src, cands, tgt, kind, assumed, in_flight);
+            in_flight.remove(&key);
+            return result;
+        }
+
+        // Non-object target: no presence penalty, so a single assignable candidate
+        // suffices (OR — per-attempt accumulator, merge only the winner).
+        let mut last_child: Option<ReasonChain> = None;
+        for &cand in cands {
+            let mut cand_assumed: FxHashSet<RelationKey> = FxHashSet::default();
+            match self.relate(cand, tgt, kind, &mut cand_assumed) {
+                Relation::Yes => {
+                    assumed.extend(cand_assumed);
+                    return Relation::Yes;
+                }
+                Relation::No(child) => last_child = Some(child),
+            }
+        }
+        Relation::No(last_child.unwrap_or_else(|| ReasonChain::leaf(src, tgt)))
+    }
+
+    /// The per-property body of the object-target branch of [`Relater::relate_source_members_to`]
+    /// (extracted so the caller can bracket it with the `in_flight` insert/remove). The
+    /// merged source (`cands`) must satisfy **every** target property.
+    fn relate_merged_object_properties(
+        &mut self,
+        src: TypeId,
+        cands: &[TypeId],
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+        in_flight: &mut MergedInFlightSet,
+    ) -> Relation {
+        let Some(tgt_obj) = self.store.object_type(tgt) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        if tgt_obj.string_index.is_some()
+            || tgt_obj.number_index.is_some()
+            || !tgt_obj.call_signatures.is_empty()
+            || !tgt_obj.construct_signatures.is_empty()
+        {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        }
+
+        // Snapshot (name, target type, optional, contributing source types) per target
+        // property BEFORE any recursive relate, so no store borrow is held across it. The
+        // contributor list is sorted + deduped, so a property named by one DISTINCT type
+        // takes the single-contributor path (exact `self.relate`) even if two members
+        // agree on it.
+        struct Obligation {
+            name: String,
+            tgt_ty: TypeId,
+            optional: bool,
+            subcands: Vec<TypeId>,
+        }
+        let obligations: Vec<Obligation> = tgt_obj
+            .properties
+            .iter()
+            .map(|tgt_prop| {
+                let mut subcands: Vec<TypeId> = cands
+                    .iter()
+                    .filter_map(|&m| {
+                        self.store
+                            .object_type(m)
+                            .and_then(|o| o.property(&tgt_prop.name))
+                            .map(|p| p.ty)
+                    })
+                    .collect();
+                subcands.sort_unstable();
+                subcands.dedup();
+                Obligation {
+                    name: tgt_prop.name.clone(),
+                    tgt_ty: tgt_prop.ty,
+                    optional: tgt_prop.optional,
+                    subcands,
+                }
+            })
+            .collect();
+
+        for ob in obligations {
+            if ob.subcands.is_empty() {
+                // An optional target property may be absent from the merged source;
+                // a required one is genuinely missing.
+                if ob.optional {
+                    continue;
+                }
+                return Relation::No(ReasonChain::of(Reason::MissingProperty {
+                    name: ob.name,
+                    src,
+                    tgt,
+                }));
+            }
+            // Part A — a single DISTINCT contributor: the merged value IS that type, so
+            // delegate to the cycle-guarded main engine (exact `(c) <: tgt_ty` ≡
+            // `relate(c, tgt_ty)`; reuses the cache + cycle stack, threads `assumed`).
+            // Part B — several contributors: a genuine merged value, recursed through the
+            // in-flight-guarded merged engine. Both thread the shared `assumed` (an AND).
+            let child = if let [only] = ob.subcands.as_slice() {
+                self.relate(*only, ob.tgt_ty, kind, assumed)
+            } else {
+                self.relate_source_members_to(src, &ob.subcands, ob.tgt_ty, kind, assumed, in_flight)
+            };
+            if let Relation::No(child) = child {
+                return Relation::No(ReasonChain::of(Reason::Property {
+                    name: ob.name,
+                    src,
+                    tgt,
+                    because: Box::new(child.head),
+                }));
+            }
+        }
+        Relation::Yes
+    }
+
     /// Deferred conditional as **source** (M25): assignable to `tgt` iff **both**
     /// branches are, but only when both branches are **closed** w.r.t. this node's own
     /// `infer` binders (a branch still containing an `infer` node is not a meaningful
@@ -1200,6 +1461,13 @@ impl<'a> Relater<'a> {
                 }
                 TypeTag::Union => {
                     if let Some(members) = self.store.union_members(t) {
+                        stack.extend(members.iter().copied());
+                    }
+                }
+                // M31: an intersection carries its `infer` binders in its members
+                // (`(infer U)[] & X` in an extends position) — descend into them.
+                TypeTag::Intersection => {
+                    if let Some(members) = self.store.intersection_members(t) {
                         stack.extend(members.iter().copied());
                     }
                 }
@@ -2606,6 +2874,105 @@ mod tests {
                 other => panic!("expected the `tag` Property failure, got {other:?}"),
             },
             Relation::Yes => unreachable!(),
+        }
+    }
+
+    /// M31 — the merged-source recursion over a **recursive object target** must
+    /// TERMINATE (the finding-1 fix's blocker: an unguarded per-property recursion
+    /// stack-overflows on a self-referential property). Covers the three paths:
+    ///
+    ///  1. a **single-contributor** recursive property (`Rec & { extra } <: Rec`,
+    ///     `Rec { next: Rec }`) — delegates to the cycle-guarded main engine (Part A);
+    ///  2. a **multi-contributor** recursive property (`P & Q <: P`, `P { p: P }` /
+    ///     `Q { p: Q }`) — the coinductive assume-true `in_flight` guard (Part B); tsc
+    ///     accepts this fixpoint, so it must stay CLEAN, not over-report;
+    ///  3. a recursive target with a leaf **mismatch** the walk must still REACH and
+    ///     report (`Cell & { extra } <: { next: Cell; value: string }`).
+    #[test]
+    fn merged_intersection_source_recurses_to_a_fixpoint() {
+        use crate::types::repr::ObjectType;
+
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // `interface Rec { next: Rec }` — self-referential (reserve-then-fill).
+        let rec = interner.reserve_object();
+        interner.fill_object(
+            rec,
+            ObjectType {
+                properties: vec![prop("next", rec)],
+                ..Default::default()
+            },
+        );
+        let extra = interner.intern_object(ObjectType {
+            properties: vec![prop("extra", wk.number)],
+            ..Default::default()
+        });
+        // `Rec & { extra: number }`.
+        let rec_and_extra = interner.intersection(vec![rec, extra]);
+
+        // `interface Cell { next: Cell; value: number }` and a target that wants
+        // `value: string` (a leaf mismatch behind the recursion).
+        let cell = interner.reserve_object();
+        interner.fill_object(
+            cell,
+            ObjectType {
+                properties: vec![prop("next", cell), prop("value", wk.number)],
+                ..Default::default()
+            },
+        );
+        let extra_str = interner.intern_object(ObjectType {
+            properties: vec![prop("extra", wk.string)],
+            ..Default::default()
+        });
+        let cell_and_extra = interner.intersection(vec![cell, extra_str]);
+        let cell_wrong = interner.intern_object(ObjectType {
+            properties: vec![prop("next", cell), prop("value", wk.string)],
+            ..Default::default()
+        });
+
+        // `interface P { p: P }` / `interface Q { p: Q }` — both contribute the
+        // recursive key `p`, so `P & Q <: P` exercises the multi-contributor guard.
+        let p = interner.reserve_object();
+        let q = interner.reserve_object();
+        interner.fill_object(
+            p,
+            ObjectType {
+                properties: vec![prop("p", p)],
+                ..Default::default()
+            },
+        );
+        interner.fill_object(
+            q,
+            ObjectType {
+                properties: vec![prop("p", q)],
+                ..Default::default()
+            },
+        );
+        let p_and_q = interner.intersection(vec![p, q]);
+
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+
+        // 1. Single-contributor recursive property — must terminate as success.
+        assert!(
+            rel.is_assignable(rec_and_extra, rec).is_yes(),
+            "Rec & {{ extra }} <: Rec must terminate (single-contributor Part A)"
+        );
+
+        // 2. Multi-contributor recursive property — coinductive fixpoint, stays clean.
+        assert!(
+            rel.is_assignable(p_and_q, p).is_yes(),
+            "P & Q <: P must terminate as success (multi-contributor Part B)"
+        );
+
+        // 3. The leaf mismatch behind the recursion must still be reached + reported.
+        match rel.is_assignable(cell_and_extra, cell_wrong) {
+            Relation::No(chain) => match chain.head() {
+                Reason::Property { name, .. } => assert_eq!(name, "value"),
+                other => panic!("expected the `value` Property failure, got {other:?}"),
+            },
+            Relation::Yes => panic!("the `value: number` vs `value: string` mismatch must be caught"),
         }
     }
 

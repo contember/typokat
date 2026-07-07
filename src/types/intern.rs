@@ -441,6 +441,81 @@ impl Interner {
         id
     }
 
+    /// Intern an intersection type from its (un-canonicalized) member ids, returning
+    /// the shared id of the canonical result (M31).
+    ///
+    /// The structural **dual** of [`Interner::union`]: same member-set canonicalization,
+    /// but with **inverted** absorption/identity (architecture §3.3 / sprint plan):
+    ///
+    ///  1. **flatten** nested intersections (`A & (B & C)` → `A & B & C`),
+    ///  2. **absorb**: any `any`/error member makes the whole intersection `any`
+    ///     (same as union — cascades stay suppressed); otherwise any `never` member
+    ///     makes it `never` (the DUAL of union's `unknown` absorption — `never` is the
+    ///     bottom of `&`),
+    ///  3. **drop** `unknown` members (`X & unknown` → `X`; `unknown` is the identity of
+    ///     `&` — the DUAL of union dropping `never`),
+    ///  4. **sort** by `TypeId` and **dedup** (`A & B` ≡ `B & A`; `A & A` → `A`),
+    ///  5. **collapse**: a 0-member intersection → `unknown` (the DUAL of union → `never`);
+    ///     a 1-member intersection → that member (no intersection node is created).
+    ///
+    /// Disjoint primitives (`string & number`) are **not** reduced to `never` (a
+    /// documented deferral — the per-member target relation gives the correct verdict).
+    /// Only a genuine ≥ 2-member intersection is hash-consed. The input `Vec` is consumed.
+    pub fn intersection(&mut self, mut members: Vec<TypeId>) -> TypeId {
+        let wk = self.well_known;
+
+        // 1. Flatten one level at a time until no member is itself an intersection.
+        let mut flat: Vec<TypeId> = Vec::with_capacity(members.len());
+        while let Some(member) = members.pop() {
+            match self.store.intersection_members(member) {
+                Some(nested) => members.extend_from_slice(nested),
+                None => flat.push(member),
+            }
+        }
+
+        // 2. Absorption: `any`/error absorbs to `any` (as in a union); failing that,
+        //    `never` absorbs the whole intersection to `never` (the dual of union's
+        //    `unknown`).
+        if flat.iter().any(|&m| m == wk.any || m == wk.error) {
+            return wk.any;
+        }
+        if flat.contains(&wk.never) {
+            return wk.never;
+        }
+
+        // 3. Drop `unknown` members — `unknown` is the identity element of `&`.
+        flat.retain(|&m| m != wk.unknown);
+
+        // 4. Sort by TypeId and dedup so member *order* and *multiplicity* do not
+        //    affect identity.
+        flat.sort_unstable();
+        flat.dedup();
+
+        // 5. Collapse the degenerate cases — an empty intersection is `unknown` (the
+        //    dual of union → `never`); a 1-member intersection is that bare member.
+        match flat.len() {
+            0 => return wk.unknown,
+            1 => return flat[0],
+            _ => {}
+        }
+
+        // Hash-cons the canonical ≥ 2-member intersection like the other constructors.
+        let key = StructuralKey::Intersection(&flat);
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store
+                .intersection_members(id)
+                .is_some_and(|existing| existing == flat.as_slice())
+        }) {
+            return existing;
+        }
+        let id = self
+            .store
+            .push_intersection(flat.into_boxed_slice(), TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
     /// Intern a **conditional** type `check extends extends_ty ? true : false` (M25).
     ///
     /// Identity is all four component ids **in order** plus `infer_count` and
@@ -1050,6 +1125,119 @@ mod tests {
         // Re-interning the same canonical union returns the same id (hash-cons).
         let nsb_again = interner.union(vec![wk.boolean, wk.string, wk.number]);
         assert_eq!(nsb_flat, nsb_again, "identical unions hash-cons to one id");
+    }
+
+    /// Intersection canonicalization + hash-consing (M31 — the structural dual of the
+    /// union test above). Order-independence, dedup, `unknown`-drop (`X & unknown` →
+    /// `X`), `never`-absorption (`X & never` → `never`), single-member collapse, empty
+    /// collapse to `unknown`, `any`-absorption, and flatten are all asserted against the
+    /// resulting `TypeId`s. A union and an intersection over the same set stay distinct.
+    #[test]
+    fn intersection_canonicalization_and_hash_consing() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // Two object members so a genuine ≥ 2-member node is built (disjoint primitives
+        // are NOT reduced, but two objects give a clean structural node).
+        let a = interner.intern_object(ObjectType {
+            properties: vec![prop("a", wk.number)],
+            ..Default::default()
+        });
+        let b = interner.intern_object(ObjectType {
+            properties: vec![prop("b", wk.string)],
+            ..Default::default()
+        });
+
+        // Order-independence: `A & B` and `B & A` are the same canonical `TypeId`.
+        let ab = interner.intersection(vec![a, b]);
+        let ba = interner.intersection(vec![b, a]);
+        assert_eq!(ab, ba, "intersection member order must not affect identity");
+        assert_eq!(
+            interner.store().tag(ab),
+            TypeTag::Intersection,
+            "a 2-member intersection must be an intersection node"
+        );
+        // The stored members are sorted by TypeId.
+        let members = interner
+            .store()
+            .intersection_members(ab)
+            .expect("ab is an intersection")
+            .to_vec();
+        let mut sorted = members.clone();
+        sorted.sort_unstable();
+        assert_eq!(members, sorted, "stored members must be TypeId-sorted");
+        assert_eq!(members.len(), 2);
+
+        // Dedup: `A & A` collapses to plain `A` (no intersection node).
+        let aa = interner.intersection(vec![a, a]);
+        assert_eq!(aa, a, "a duplicated single member collapses");
+
+        // `unknown` is dropped: `A & unknown` → `A` (unknown is the identity of `&`).
+        let a_unknown = interner.intersection(vec![a, wk.unknown]);
+        assert_eq!(a_unknown, a, "unknown must be dropped from an intersection");
+
+        // `never` absorbs: `A & never` → `never` (never is the bottom of `&`).
+        let a_never = interner.intersection(vec![a, wk.never]);
+        assert_eq!(a_never, wk.never, "never absorbs the whole intersection");
+
+        // A single distinct member collapses to that member.
+        let single = interner.intersection(vec![a]);
+        assert_eq!(single, a, "a 1-member intersection collapses to the member");
+
+        // An empty intersection (or one of only `unknown`s) collapses to `unknown`.
+        assert_eq!(
+            interner.intersection(vec![]),
+            wk.unknown,
+            "empty intersection → unknown"
+        );
+        assert_eq!(
+            interner.intersection(vec![wk.unknown, wk.unknown]),
+            wk.unknown,
+            "an intersection of only unknown → unknown"
+        );
+
+        // Absorption: `any` swallows the whole intersection (cascade suppression),
+        // winning over everything including `never`.
+        assert_eq!(
+            interner.intersection(vec![a, wk.any]),
+            wk.any,
+            "any absorbs the intersection"
+        );
+        assert_eq!(
+            interner.intersection(vec![wk.never, wk.any]),
+            wk.any,
+            "any wins over never"
+        );
+
+        // Flatten: `(A & B) & C` ≡ `A & B & C` (built directly), sharing one id.
+        let c = interner.intern_object(ObjectType {
+            properties: vec![prop("c", wk.boolean)],
+            ..Default::default()
+        });
+        let abc_nested = interner.intersection(vec![ab, c]);
+        let abc_flat = interner.intersection(vec![a, b, c]);
+        assert_eq!(abc_nested, abc_flat, "nested intersections must flatten");
+        assert_eq!(
+            interner
+                .store()
+                .intersection_members(abc_flat)
+                .expect("abc is an intersection")
+                .len(),
+            3,
+            "flattened intersection has all three members"
+        );
+
+        // Re-interning the same canonical intersection returns the same id (hash-cons).
+        let abc_again = interner.intersection(vec![c, b, a]);
+        assert_eq!(abc_flat, abc_again, "identical intersections hash-cons to one id");
+
+        // A union and an intersection over the same member set never collide (distinct
+        // discriminants), even though both are 2-member sets of {A, B}.
+        let union_ab = interner.union(vec![a, b]);
+        assert_ne!(
+            union_ab, ab,
+            "a union and an intersection over the same set must be distinct types"
+        );
     }
 
     /// Array hash-consing (M17): an array's identity is its element id alone, so

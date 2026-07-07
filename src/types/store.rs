@@ -49,6 +49,13 @@ pub struct Store {
     /// of a `Union`-tagged row. A union row always has at least two members — the
     /// 0- and 1-member cases collapse in the interner and never reach the store.
     unions: Vec<Box<[TypeId]>>,
+    /// Intersection members (M31), already canonicalized: flattened, sorted by
+    /// `TypeId`, deduped, with `unknown` dropped and (an) `any` absorbed (an
+    /// intersection containing `never` collapses to `never` in the interner, so
+    /// never reaches the store). Addressed by the `payload` of an
+    /// `Intersection`-tagged row. Like a union row, always at least two members —
+    /// the 0- and 1-member cases collapse in the interner (`Interner::intersection`).
+    intersections: Vec<Box<[TypeId]>>,
     /// Function types (M3). Addressed by the `payload` of a `Function`-tagged row.
     functions: Vec<FunctionType>,
     /// Type-parameter types (M9). Addressed by the `payload` of a
@@ -301,6 +308,18 @@ impl Store {
         self.unions.get(self.payload(id) as usize).map(|m| &m[..])
     }
 
+    /// The members of an intersection type (canonical: flattened, sorted by
+    /// `TypeId`, deduped, `unknown`-free), or `None` if `id` is not an intersection
+    /// (M31).
+    pub fn intersection_members(&self, id: TypeId) -> Option<&[TypeId]> {
+        if self.tag(id) != TypeTag::Intersection {
+            return None;
+        }
+        self.intersections
+            .get(self.payload(id) as usize)
+            .map(|m| &m[..])
+    }
+
     // --- raw append helpers (used only by the interner) ---
 
     /// Push a row with the given hot attributes and return its id. Internal;
@@ -370,6 +389,16 @@ impl Store {
         let payload = self.unions.len() as u32;
         self.unions.push(members);
         self.push(TypeTag::Union, flags, payload)
+    }
+
+    /// Append an intersection row (members into the side-table, index into
+    /// payload). Internal — `Interner` owns canonicalization and dedup; the caller
+    /// passes an already-canonical (flattened, sorted, deduped, `unknown`-free)
+    /// member slice of length ≥ 2 (M31).
+    pub(crate) fn push_intersection(&mut self, members: Box<[TypeId]>, flags: TypeFlags) -> TypeId {
+        let payload = self.intersections.len() as u32;
+        self.intersections.push(members);
+        self.push(TypeTag::Intersection, flags, payload)
     }
 
     /// Append a type-parameter row (M9). Internal — `Interner` owns dedup (by

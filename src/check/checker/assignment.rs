@@ -5,6 +5,7 @@ use crate::binder::symbol::DeclId;
 use crate::binder::Binder;
 use crate::diagnostics::{render_type, Diagnostic};
 use crate::span::Span;
+use crate::types::repr::TypeTag;
 use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
 use oxc_ast::ast::{
@@ -169,7 +170,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // M24 (review F1): a member WRITE resolves through the base's **apparent type**,
         // exactly like a read — `t.x = "s"` with `T extends { x: number }` checks the RHS
         // against `number`. For a non-parameter base this is the identity.
+        // M31: an intersection base resolves through its merged apparent object (mirroring
+        // the read side), so `(A & B).prop = …` checks against the merged property type.
         let base_ty = self.apparent_type(base_ty);
+        let base_ty = self
+            .intersection_apparent_object(base_ty)
+            .unwrap_or(base_ty);
 
         // Look up the property on the base **object** type. Snapshot the property's
         // type + `readonly` + `is_accessor` + origin before any `&mut` borrow for a
@@ -330,7 +336,13 @@ pub(in crate::check::checker) fn check_excess_properties(
             check_excess_properties(store, &paren.expression, target_ty, diagnostics);
         }
         Expression::ObjectExpression(literal) => {
-            check_object_excess_properties(store, literal, target_ty, diagnostics);
+            // M31: a fresh literal against an intersection target is excess-checked against
+            // the MERGED key set (a single check, never per-member — see the function).
+            if store.tag(target_ty) == TypeTag::Intersection {
+                check_intersection_object_excess(store, literal, target_ty, diagnostics);
+            } else {
+                check_object_excess_properties(store, literal, target_ty, diagnostics);
+            }
         }
         Expression::ArrayExpression(array) => {
             check_array_excess_properties(store, array, target_ty, diagnostics);
@@ -411,6 +423,127 @@ fn check_object_excess_properties(
                 }
             }
         }
+    }
+}
+
+/// Excess-property check against an **intersection** target (M31): a fresh object
+/// literal's allowed keys are the **merged** key set — a property named by ANY
+/// object-typed member (or accepted by any member's index signature) is allowed, and
+/// only a property in NO member and no accepting index signature is excess (`TK2353`).
+///
+/// This is a **single merged** check, never a per-member one: relating `{a:1, b:"s"}`
+/// separately against member `{b:string}` would spuriously flag `a`, so per-member
+/// excess is never run — the merged key set is the only correct target-key set (tsc's
+/// combined-property-set rule). Delegates to the set-based
+/// [`check_object_excess_against_members`].
+fn check_intersection_object_excess(
+    store: &Store,
+    literal: &oxc_ast::ast::ObjectExpression<'_>,
+    ty: TypeId,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(members) = store.intersection_members(ty) else {
+        return;
+    };
+    check_object_excess_against_members(store, literal, members, diagnostics);
+}
+
+/// Excess-check a fresh object literal against a **set** of object-typed targets (M31 —
+/// the merged view of an intersection). A key named by ANY member (or accepted by any
+/// member's index signature) is allowed; a key in NO member is excess (`TK2353`). A
+/// matched key recurses against the set of **all** members that name it, so nested
+/// freshness sees **every** contributor — not just the first (review finding 2): a
+/// property supplied by a *later* member must not be flagged. Store-only (no interning):
+/// the merged key set is all the excess check needs.
+fn check_object_excess_against_members(
+    store: &Store,
+    literal: &oxc_ast::ast::ObjectExpression<'_>,
+    members: &[TypeId],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    // The rendered target joins the members with ` & ` (matches the intersection's own
+    // render; excess targets are asserted code-only in the corpus).
+    let target_rendered = members
+        .iter()
+        .map(|&m| render_type(store, m, /* widen */ false))
+        .collect::<Vec<_>>()
+        .join(" & ");
+
+    for member in &literal.properties {
+        let ObjectPropertyKind::ObjectProperty(prop) = member else {
+            continue;
+        };
+        let Some(name) = prop.key.static_name() else {
+            continue;
+        };
+
+        // Every member that names this key contributes its property type (the merged
+        // source value is their intersection). A key named by ≥ 1 member is allowed —
+        // recurse against the WHOLE contributing set for nested freshness.
+        let contributors: Vec<TypeId> = members
+            .iter()
+            .filter_map(|&m| {
+                store
+                    .object_type(m)
+                    .and_then(|o| o.property(&name))
+                    .map(|p| p.ty)
+            })
+            .collect();
+        if !contributors.is_empty() {
+            check_excess_against_members(store, &prop.value, &contributors, diagnostics);
+            continue;
+        }
+
+        // Not a named member — an index signature on some member may accept it (a string
+        // index for any key, a number index for a numeric-named key).
+        let numeric = is_numeric_property_name(&name);
+        let index_value = members.iter().find_map(|&m| {
+            let obj = store.object_type(m)?;
+            if numeric {
+                obj.number_index.or(obj.string_index)
+            } else {
+                obj.string_index
+            }
+        });
+        match index_value {
+            Some(value_ty) => {
+                check_excess_against_members(store, &prop.value, &[value_ty], diagnostics);
+            }
+            None => {
+                diagnostics.push(Diagnostic::excess_property(
+                    Span::from_oxc(prop.key.span()),
+                    &name,
+                    &target_rendered,
+                ));
+            }
+        }
+    }
+}
+
+/// Recurse the excess check against a **set** of target types (M31 — a merged view). A
+/// singleton set delegates to the ordinary single-target [`check_excess_properties`]
+/// (which handles objects, arrays, tuples, and further intersection nesting uniformly);
+/// a multi-member set excess-checks an object literal against the merged member set
+/// ([`check_object_excess_against_members`]). Other value/target shapes vs a merged set
+/// are out of the M31 subset (no-op, safe).
+fn check_excess_against_members(
+    store: &Store,
+    expr: &Expression<'_>,
+    members: &[TypeId],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match members {
+        [] => {}
+        [single] => check_excess_properties(store, expr, *single, diagnostics),
+        _ => match expr {
+            Expression::ParenthesizedExpression(paren) => {
+                check_excess_against_members(store, &paren.expression, members, diagnostics);
+            }
+            Expression::ObjectExpression(literal) => {
+                check_object_excess_against_members(store, literal, members, diagnostics);
+            }
+            _ => {}
+        },
     }
 }
 

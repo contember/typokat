@@ -908,7 +908,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .into_iter()
                 .flatten()
                 .filter_map(|&member| store.type_param(member).map(|p| p.id));
-            for next in direct.into_iter().chain(members) {
+            // M31: an intersection constraint (`<T extends T & { x: number }>`) branches
+            // through its bare-`TypeParam` members too — the dual of the union branch, so
+            // `T extends T & X` is a circular constraint (TK2313).
+            let intersection = store
+                .intersection_members(constraint)
+                .into_iter()
+                .flatten()
+                .filter_map(|&member| store.type_param(member).map(|p| p.id));
+            for next in direct.into_iter().chain(members).chain(intersection) {
                 if next == start {
                     return true;
                 }

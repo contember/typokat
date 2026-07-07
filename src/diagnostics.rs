@@ -416,12 +416,17 @@ impl Diagnostic {
 
     /// Construct a `TK2353` excess-property error: a fresh object literal
     /// specifies a property `name` not present in the object-typed target `tgt`.
-    /// The primary span is the offending property.
+    /// The primary span is the offending property. The message mirrors tsc's TS2353
+    /// (`Object literal may only specify known properties, and '{name}' does not exist
+    /// in type '{tgt}'.`), of which the pre-existing `'{name}' does not exist in type`
+    /// substring the corpus asserts is a suffix.
     pub fn excess_property(span: Span, name: &str, tgt: &str) -> Self {
         Diagnostic {
             code: DiagnosticCode::TK2353,
             severity: Severity::Error,
-            message: format!("'{name}' does not exist in type '{tgt}'"),
+            message: format!(
+                "Object literal may only specify known properties, and '{name}' does not exist in type '{tgt}'."
+            ),
             span,
             elaboration: Vec::new(),
         }
@@ -864,11 +869,43 @@ fn render_type_inner(
             Some(members) => {
                 let parts: Vec<String> = members
                     .iter()
-                    .map(|&m| render_type_inner(store, m, false, rendering))
+                    .map(|&m| {
+                        let rendered = render_type_inner(store, m, false, rendering);
+                        // tsc parenthesizes an intersection element inside a union
+                        // (`(A & B) | C`), so the `&`/`|` precedence reads correctly.
+                        if store.tag(m) == TypeTag::Intersection {
+                            format!("({rendered})")
+                        } else {
+                            rendered
+                        }
+                    })
                     .collect();
                 parts.join(" | ")
             }
             // Defensive fallback; a union always has a side-table entry.
+            None => "<unsupported>".to_string(),
+        },
+        // Intersection (M31): `A & B` — members in stored (canonical, TypeId-sorted)
+        // order, ` & `-separated. That order is intern-order dependent, so
+        // intersection-typed targets are asserted code-only in the corpus. A **union**
+        // element is parenthesized (`(A | B) & C`) so `&`/`|` precedence reads
+        // correctly; members never widen (only a top-level literal *source* widens).
+        TypeTag::Intersection => match store.intersection_members(id) {
+            Some(members) => {
+                let parts: Vec<String> = members
+                    .iter()
+                    .map(|&m| {
+                        let rendered = render_type_inner(store, m, false, rendering);
+                        if matches!(store.tag(m), TypeTag::Union | TypeTag::Function) {
+                            format!("({rendered})")
+                        } else {
+                            rendered
+                        }
+                    })
+                    .collect();
+                parts.join(" & ")
+            }
+            // Defensive fallback; an intersection always has a side-table entry.
             None => "<unsupported>".to_string(),
         },
         // Type parameter (M9): render its source name (`T`). A type parameter only
@@ -1102,7 +1139,10 @@ fn render_function_parts(
 /// Everything else — intrinsics, literals, objects, type parameters, nested arrays —
 /// renders without parentheses.
 fn array_element_needs_parens(store: &Store, element: TypeId) -> bool {
-    matches!(store.tag(element), TypeTag::Union | TypeTag::Function)
+    matches!(
+        store.tag(element),
+        TypeTag::Union | TypeTag::Function | TypeTag::Intersection
+    )
 }
 
 fn render_literal(lit: &crate::types::repr::LiteralValue) -> String {
@@ -1506,6 +1546,43 @@ mod tests {
         assert_eq!(
             render_type(interner.store(), func_arr, false),
             "((x: number) => string)[]"
+        );
+    }
+
+    /// M31 intersection rendering: `A & B` joins members with ` & ` (canonical,
+    /// TypeId-sorted order — asserted order-independently, like unions), a **union**
+    /// member is parenthesized (`(A | B) & C`), and an intersection element inside an
+    /// array is parenthesized (`(A & B)[]`).
+    #[test]
+    fn intersection_type_renders_with_ampersand_and_parens() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+
+        // `string & number` — a bare two-member node (disjoint primitives are not
+        // reduced). Rendered with ` & `, in TypeId order (unstable, so accept either).
+        let sn = interner.intersection(vec![wk.string, wk.number]);
+        let rendered = render_type(interner.store(), sn, false);
+        assert!(
+            rendered == "string & number" || rendered == "number & string",
+            "an intersection joins members with ` & `, got {rendered:?}"
+        );
+
+        // A **union** member is parenthesized inside an intersection: `(number | string) & boolean`.
+        let union = interner.union(vec![wk.number, wk.string]);
+        let with_union = interner.intersection(vec![union, wk.boolean]);
+        let rendered = render_type(interner.store(), with_union, false);
+        assert!(
+            rendered.contains("(number | string)") || rendered.contains("(string | number)"),
+            "a union member must be parenthesized inside an intersection, got {rendered:?}"
+        );
+        assert!(rendered.contains(" & "), "still ` & `-joined, got {rendered:?}");
+
+        // An intersection element inside an array is parenthesized: `(string & number)[]`.
+        let sn_arr = interner.intern_array(sn);
+        let rendered = render_type(interner.store(), sn_arr, false);
+        assert!(
+            rendered == "(string & number)[]" || rendered == "(number & string)[]",
+            "an intersection array element must be parenthesized, got {rendered:?}"
         );
     }
 

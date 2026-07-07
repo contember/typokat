@@ -61,7 +61,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("m30_contextual_literals", true),
     // M31 intersection types. Registered false by the spec commit; the
     // implementation commit flips this on.
-    ("m31_intersections", false),
+    ("m31_intersections", true),
     // Bug-fix corpora (official-suite findings / backlog items). Each is
     // committed `false` as a behavior-neutral spec, then flipped `true` by the
     // commit that lands its fix. See tests/cases/README.md ("Bug-fix corpora").

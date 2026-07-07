@@ -451,6 +451,9 @@ fn member_matches_typeof(
         TypeTag::Object
         | TypeTag::Function
         | TypeTag::Union
+        // M31: an intersection never appears as a narrowable union member in the M7
+        // `typeof` subset — defensively false (like the other composites here).
+        | TypeTag::Intersection
         | TypeTag::TypeParam
         | TypeTag::Array
         | TypeTag::Tuple

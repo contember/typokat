@@ -114,9 +114,9 @@ slots into a known later phase without rework:
   `K extends keyof T` (the generic-`keyof` deferral), contextual typing of object/array literals
   against a generic constraint (tsc `TS2353` / fresh-literal reshaping — so a violating inference
   candidate that came from a **fresh object/array literal** argument is exempt from the clamp; a
-  typed value, primitive or structural, clamps normally), type-parameter defaults, and
-  intersection types entirely (`T extends T & X` is tsc `TS2313`, but `&` is not in the type
-  model — backlog `25`). The constraint is stored as a store-side column keyed by `TypeParamId`,
+  typed value, primitive or structural, clamps normally), and type-parameter defaults (intersection
+  types — including the `T extends T & X` circular-constraint case, tsc `TS2313` — landed in
+  **M31**). The constraint is stored as a store-side column keyed by `TypeParamId`,
   not folded into the interned type's identity. Type parameters keep the named representation:
   ADR-0002 scopes de Bruijn indices to `infer` binders within conditional nodes.
 - **classes**: fields/constructor/methods/`this`/`new`/structural instances (**M11**),
@@ -237,7 +237,8 @@ slots into a known later phase without rework:
   alias; `TK2589` on runaway instantiation depth. Documented divergences: `TK2589`'s span is the
   annotation that demanded evaluation (tsc points at the recursive reference inside the alias
   body); same-name `infer` in multiple contravariant positions unions where tsc intersects
-  (`&` is not in the model — backlog `25`); `infer X extends C` (TS 4.7) is out of scope; rest
+  (`&` is in the model since **M31**, but M25's contravariant `infer` still unions — a documented
+  divergence, not yet wired to intersect); `infer X extends C` (TS 4.7) is out of scope; rest
   elements are avoided throughout (backlog `24`); a deferred conditional whose branches still
   contain its own `infer` binders is conservatively non-assignable (over-report, safe); a nested
   conditional referencing an OUTER conditional's `infer` binder is **poisoned at lowering** —
@@ -272,6 +273,27 @@ slots into a known later phase without rework:
   module graphs, or parallel cross-file identity. The rest of **`lib.d.ts` globals** (`console`,
   string methods, `Promise`, …) are still out of scope — fixtures avoid the standard library
   otherwise.
+- **intersection types** (`A & B`): implemented in **M31** (`m31_intersections/`) as an interned,
+  canonicalized member-set node — the **dual** of union: `never` absorbs to `never`, `X & unknown`
+  drops the `unknown`, `any`/error absorb to `any`, members flatten/sort/dedup, an empty set is
+  `unknown` and a one-member set is the bare member. Relation: a **target** intersection requires the
+  value to satisfy **every** member (the headline `{a:1} <: {a}&{b}` → `TK2741`); a **source**
+  intersection relates through its **merged apparent object** — all members' properties, a property
+  named by several members being their intersection — and for an **object** target the merge is
+  authoritative (no some-member shortcut, because `A <: B` does **not** imply `A & C <: B` when the
+  target penalizes a *present* property — an optional or an index signature), while for a
+  **non-object** target a single assignable member suffices. Member access, excess-property checking
+  (against the **merged** key set), contextual fresh-literal shaping, and the M24 circular-constraint
+  walk (`T extends T & X` → `TK2313`) all see the merge. Recursion terminates via the relation cycle
+  stack (single-contributor properties) and a coinductive assume-true guard (multi-contributor).
+  Documented divergences, all safe (over-report) direction: disjoint primitives (`string & number`)
+  are **not** reduced to `never` — the per-member relation yields the same *verdict* with a different
+  message, so those fixtures assert **code-only**; `&` is **not distributed** over unions
+  (`(A | B) & C`); `keyof` / indexed-access **over an intersection** stay out of subset (the M20/M28
+  keyof-of-non-object deferral); an **index-signature target** of a source intersection is
+  conservatively rejected; a **nested optional** target property contributed by a single member is
+  checked more strictly than tsc (tsc is lenient only at the top level). Function / call-signature
+  intersection (overload intersection) is out of scope (backlog `40`).
 
 Other conventions: an unresolved name (`TK2304`) gets the **error type** (`any`-like), which
 **suppresses cascade** diagnostics on the same expression. As of **M22** this applies in **type

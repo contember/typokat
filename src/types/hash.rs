@@ -58,6 +58,11 @@ pub enum StructuralKey<'a> {
     /// by `TypeId`, deduped, `never`-free by the interner before hashing) so two
     /// unions with the same member set in any source order collide.
     Union(&'a [TypeId]),
+    /// An **intersection** type (M31), keyed over its **canonical** member list
+    /// (flattened, sorted by `TypeId`, deduped, `unknown`-free by the interner
+    /// before hashing). The discriminant is hashed distinctly from `Union`, so a
+    /// union and an intersection over the *same* member set never collide.
+    Intersection(&'a [TypeId]),
     /// A **type parameter** (M9), keyed over its [`TypeParamId`] alone. The name
     /// is **not** part of the key — identity is the declaration site's unique id,
     /// so re-interning the same parameter collides while two parameters from
@@ -219,6 +224,19 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
             for member in *members {
                 // Members arrive in canonical (TypeId-sorted) order, so this is
                 // order-independent across two structurally equal union types.
+                member.0.hash(&mut h);
+            }
+        }
+        StructuralKey::Intersection(members) => {
+            // Discriminant first (distinct from `Union`), so a union and an
+            // intersection over the same member set never collide.
+            TypeTag::Intersection.hash_discriminant(&mut h);
+            // Arity first so a shorter member list cannot collide with a prefix
+            // of a longer one under the streaming hasher.
+            members.len().hash(&mut h);
+            for member in *members {
+                // Members arrive in canonical (TypeId-sorted) order, so this is
+                // order-independent across two structurally equal intersections.
                 member.0.hash(&mut h);
             }
         }

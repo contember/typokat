@@ -1089,6 +1089,28 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // priv }: T)`) resolves through its apparent type, like every other structural
         // consumer. Identity for a non-parameter source.
         let source = self.apparent_type(source);
+        // M31: an intersection source — a property is present if **any** object member
+        // declares it; report a private/protected constituent's origin so access is still
+        // gated. Store-only (no interning), consistent with the merged apparent object
+        // used on the read/write side. Not exercised by the m31 corpus (no destructuring
+        // of an intersection) — present for soundness.
+        if let Some(members) = store.intersection_members(source) {
+            let mut result: Option<(Visibility, Option<ClassId>)> = None;
+            for &member in members {
+                let member = self.apparent_type(member);
+                if let Some(prop) = store.object_type(member).and_then(|o| o.property(name)) {
+                    if result.is_none()
+                        || matches!(
+                            prop.visibility,
+                            Visibility::Private | Visibility::Protected
+                        )
+                    {
+                        result = Some((prop.visibility, prop.declaring_class));
+                    }
+                }
+            }
+            return result;
+        }
         if let Some(members) = store.union_members(source) {
             // Require the property on every constituent; report the first non-public
             // origin found so the union still gates a private/protected member.

@@ -24,6 +24,13 @@ pub enum TypeTag {
     /// A union type. `payload` indexes `Store::unions`. Constructed and
     /// canonicalized by `Interner::union` (M4).
     Union,
+    /// An **intersection** type (`A & B` — M31). `payload` indexes
+    /// `Store::intersections`. The structural **dual** of `Union`: a canonical
+    /// member set (flattened, sorted by `TypeId`, deduped), but with **inverted**
+    /// canonicalization — `never` absorbs the whole thing, `unknown` is dropped
+    /// (the `&` identity), 0 members collapse to `unknown`, 1 to the bare member.
+    /// Constructed and canonicalized by `Interner::intersection`.
+    Intersection,
     /// A function type. `payload` indexes `Store::functions`.
     /// TODO(M3): constructed by the function checker.
     Function,

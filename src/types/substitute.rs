@@ -80,6 +80,7 @@ impl<'a> Substitution<'a> {
             TypeTag::Object => self.apply_object(interner, ty),
             TypeTag::Function => self.apply_function(interner, ty),
             TypeTag::Union => self.apply_union(interner, ty),
+            TypeTag::Intersection => self.apply_intersection(interner, ty),
             TypeTag::Array => self.apply_array(interner, ty),
             TypeTag::Tuple => self.apply_tuple(interner, ty),
             TypeTag::Conditional => self.apply_conditional(interner, ty),
@@ -253,6 +254,39 @@ impl<'a> Substitution<'a> {
 
         if changed {
             interner.union(substituted)
+        } else {
+            ty
+        }
+    }
+
+    /// Substitute through an intersection (M31), rewriting each member and re-interning
+    /// through `Interner::intersection` (so the result is re-canonicalized: a member
+    /// that substitutes to a duplicate, to `unknown`, or to `never` collapses correctly)
+    /// **only when a member changed**; otherwise the original id is returned. The
+    /// structural dual of [`Substitution::apply_union`].
+    fn apply_intersection(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
+        if self.in_progress.contains(&ty) {
+            return ty;
+        }
+        let Some(members) = interner.store().intersection_members(ty) else {
+            return ty;
+        };
+        let members: Vec<TypeId> = members.to_vec();
+
+        self.in_progress.insert(ty);
+        let mut changed = false;
+        let substituted: Vec<TypeId> = members
+            .iter()
+            .map(|&m| {
+                let new_m = self.apply(interner, m);
+                changed |= new_m != m;
+                new_m
+            })
+            .collect();
+        self.in_progress.remove(&ty);
+
+        if changed {
+            interner.intersection(substituted)
         } else {
             ty
         }

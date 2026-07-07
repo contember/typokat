@@ -474,6 +474,12 @@ impl<'a> ConditionalEvaluator<'a> {
                         stack.extend(members.iter().copied());
                     }
                 }
+                // M31: an intersection is undecidable iff a member is — descend.
+                TypeTag::Intersection => {
+                    if let Some(members) = store.intersection_members(t) {
+                        stack.extend(members.iter().copied());
+                    }
+                }
                 TypeTag::Array => {
                     if let Some(a) = store.array_type(t) {
                         stack.push(a.element);
@@ -1478,6 +1484,28 @@ impl<'a> ConditionalEvaluator<'a> {
                     ty
                 }
             }
+            // M31: descend into intersection members like a union, re-interning through
+            // `Interner::intersection` only when a member changed.
+            TypeTag::Intersection => {
+                let Some(members) = self.interner.store().intersection_members(ty) else {
+                    return ty;
+                };
+                let members: Vec<TypeId> = members.to_vec();
+                let mut changed = false;
+                let subst: Vec<TypeId> = members
+                    .iter()
+                    .map(|&m| {
+                        let nm = self.replace_mapped_value(m, value);
+                        changed |= nm != m;
+                        nm
+                    })
+                    .collect();
+                if changed {
+                    self.interner.intersection(subst)
+                } else {
+                    ty
+                }
+            }
             TypeTag::Array => {
                 let Some(element) = self.interner.store().array_type(ty).map(|a| a.element) else {
                     return ty;
@@ -1752,6 +1780,27 @@ impl<'a> ConditionalEvaluator<'a> {
                     ty
                 }
             }
+            // M31: freshen infer binders inside intersection members like a union.
+            TypeTag::Intersection => {
+                let Some(members) = self.interner.store().intersection_members(ty) else {
+                    return ty;
+                };
+                let members: Vec<TypeId> = members.to_vec();
+                let mut changed = false;
+                let subst: Vec<TypeId> = members
+                    .iter()
+                    .map(|&m| {
+                        let nm = self.substitute_infers(m, fresh);
+                        changed |= nm != m;
+                        nm
+                    })
+                    .collect();
+                if changed {
+                    self.interner.intersection(subst)
+                } else {
+                    ty
+                }
+            }
             TypeTag::Array => {
                 let Some(element) = self.interner.store().array_type(ty).map(|a| a.element) else {
                     return ty;
@@ -1942,6 +1991,11 @@ impl<'a> ConditionalEvaluator<'a> {
                 .union_members(ty)
                 .map(|m| m.to_vec())
                 .unwrap_or_default(),
+            // M31: an intersection is concrete once every member is.
+            TypeTag::Intersection => store
+                .intersection_members(ty)
+                .map(|m| m.to_vec())
+                .unwrap_or_default(),
             TypeTag::Array => store
                 .array_type(ty)
                 .map(|a| vec![a.element])
@@ -2091,6 +2145,12 @@ fn contains_nodes(
             }
             TypeTag::Union => {
                 if let Some(members) = store.union_members(t) {
+                    stack.extend(members.iter().copied());
+                }
+            }
+            // M31: descend into intersection members.
+            TypeTag::Intersection => {
+                if let Some(members) = store.intersection_members(t) {
                     stack.extend(members.iter().copied());
                 }
             }
