@@ -22,6 +22,7 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprints/sprint-2026-07-07-soundness-fn-fixes.md`](sprints/sprint-2026-07-07-soundness-fn-fixes.md) — kill the five HIGH silent-FN families from the 2026-07-07 review (backlog `53` `55` `57` `58` `61`), sequential WUs.
 
 ## What's hot
 
