@@ -1,21 +1,24 @@
 ---
 id: 14
 title: Full lib.d.ts loading (the standard library)
+blocked-by: [./24-rest-elements-in-type-model.md, ./25-intersection-types.md, ./39-optional-default-parameters.md, ./40-function-overloads.md, ./41-generic-methods.md, ./43-namespaces-declaration-merging.md]
 ---
 
 # 14 — full `lib.d.ts` loading
 
 **Summary.** The "mandatory core" (architecture §4) — unlocks checking real-world code. Big. Also
-where parallelism **Stage 1** lands. This item is the **full** standard-library load; an earlier
-minimal ambient/prelude slice is allowed before this item when it buys useful real-world feedback.
+where parallelism **Stage 1** lands. This item is the **full** standard-library load; the minimal
+ambient/prelude slice (`38`) is allowed before this item when it buys useful real-world feedback.
 
 ## Problem
 
 Without `lib.d.ts`, `console`, array methods, `Promise`, etc. are absent, so most real code can't be
-checked. The lib leans heavily on generics + conditional/mapped types, so those must land first.
-That dependency applies to the full library. A deliberately small prelude fixture set may be loaded
-earlier if it avoids conditional/mapped-heavy declarations and does not pretend to be full
-`lib.d.ts` support.
+checked. The lib's own source text uses nearly the whole type model, which is why this item is
+blocked by the model-completeness track: conditional/mapped types (shipped, M24–M28), plus rest
+elements (`24`), intersections (`25`), optional parameters (`39`), overloads (`40`), generic
+methods (`41`), and namespaces + declaration merging (`43`). Loading the lib with any of those
+still silently-permissive would poison every downstream check. A deliberately small prelude slice
+(`38`) may land earlier because it curates its declarations around the gaps.
 
 ## Approach / acceptance
 
@@ -24,7 +27,7 @@ prelude. This is also where parallelism **Stage 1** lands — the shared read-on
 per-file workers (architecture §8.2). Acceptance: fixtures using `console`, array methods, and
 `Promise` check correctly against tsc.
 
-If an earlier minimal prelude slice exists by the time this item starts, replace it rather than
+If the minimal prelude slice (`38`) exists by the time this item starts, replace it rather than
 forking a second ambient-loading path. The full library loader is the canonical mechanism.
 
 ## Touch points

@@ -91,13 +91,11 @@ relation engine + narrowing come **before** type-level evaluation, never the rev
 evaluation is tree-walked, with the bytecode VM a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)).
 
-Recommended next: the `13` profiling gate, then the real-world track (`14` lib.d.ts,
-`15` modules slice 2, `16` cross-file identity). Items `01`–`12`, `20`, `28`–`29`,
-and `31` are shipped/closed; do not plan new work from those deleted backlog numbers.
-The small review-finding items (`21`–`23`) make good warm-ups between milestones; the
-known-gap items (`24` rest elements, `25` intersections, `26` cross-binder infer, `27`
-template-buried conditionals, `30` dtoa, `32` eager-keyof forward refs, `33`–`37` M28
-review byproducts) kill false-negative/false-positive families when scheduled.
+The backlog README carries the **definition of done (checker 1.0)**, the four tracks (A model
+completeness → unblocks `lib.d.ts`; B checker completeness; C known-gap tail; D scale ladder), and
+the **recommended order** — don't duplicate that ordering here; read it there. Items `01`–`12`,
+`20`, `28`–`29`, and `31` are shipped/closed; do not plan new work from those deleted backlog
+numbers.
 
 For each item you pick: write its fixture corpus first, update `tests/cases/README.md`, commit the
 spec, dispatch the implementation subagent, dispatch the independent review, fix, and commit. Same

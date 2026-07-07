@@ -12,9 +12,9 @@ the IR → bytecode → stack VM is a **potential later refactor**, not a planne
 (tsgo ships ~10× with no VM; the cited VM "proofs" are stalled toys measuring warm caches; Zod-class
 pain is instantiation + relation, not evaluation) is in the ADR.
 
-## Decided work moved into `09`–`12`
+## Decided work moved into `09`–`12` (shipped as M25–M28)
 
-The algorithmic wins are **required acceptance inside the evaluator milestones themselves** so nobody
+The algorithmic wins were **required acceptance inside the evaluator milestones themselves** so nobody
 ships a naive O(n²) evaluator and hopes this item rescues it later:
 
 1. **Memoization** `(type-fn, args) → result`, keyed on hash-consed argument `TypeId`s. Biggest
@@ -26,13 +26,16 @@ ships a naive O(n²) evaluator and hopes this item rescues it later:
 4. **Arithmetic intrinsics** — intercept `Add`/`Sub`/`Lte`-style tuple/template math and compute it
    natively instead of recursing over tuple lengths.
 
-Acceptance for those lives in `09`–`12`. This item must not be used to postpone the basic evaluator
-guardrails.
+Acceptance for those lived in `09`–`12` (the type-level phase shipped as M24–M28). This item must
+not be used to postpone the basic evaluator guardrails.
 
 ## Acceptance for this item
 
-After `09`–`12` land, profile at least one deliberately type-level-heavy corpus and one ordinary
-application-style corpus. If the remaining hot path is relation/instantiation/allocation, close this
+**Unblocked and actionable**: `09`–`12` shipped, and the measuring instrument exists —
+`tooling/bench/` (the synthetic benchmark harness, committed 2026-07-06) times the release binary
+against tsgo per ADR-0001's gate. Profile at least one deliberately type-level-heavy corpus and one
+ordinary application-style corpus. If the remaining hot path is relation/instantiation/allocation,
+close this
 item with the profiling notes and do **not** build a VM. Carving type-level evaluation into IR →
 bytecode → stack VM (architecture §7.1) is undertaken **only if** profiling shows the *interpreter
 dispatch loop itself* — not the algorithm, not relation/instantiation — is the bottleneck. Trigger:
@@ -41,7 +44,8 @@ ever lands, architecture §7.1–7.4 is its design reference and the risk in §1
 
 ## Touch points
 
-Profiler setup and benchmark fixtures; optionally the conditional/mapped/template/utility evaluator
-if profiling proves dispatch overhead. No new IR/bytecode/VM unless the trigger above fires.
+`tooling/bench/` (extend with a type-level-heavy corpus if needed) + profiler runs; optionally the
+conditional/mapped/template/utility evaluator if profiling proves dispatch overhead. No new
+IR/bytecode/VM unless the trigger above fires.
 
 <!-- Origin: dev roadmap M29 (was HANDOFF §3, the type-level VM phase). Re-scoped by ADR-0001. -->

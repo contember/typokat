@@ -27,14 +27,13 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M30 shipped; no active sprint.** M28 completed the type-level
-  evaluation phase (prelude utilities, deferred `keyof`, modifier-preserving Pick, recursive
-  mapped-alias seeding, string intrinsics). M29 ships backlog `15` slice 1: correctness-first
-  local-relative modules and cross-file named imports/exports in one serial type universe;
-  parallel Stage 2 identity and full resolver semantics remain deferred. M30 ships
-  target-aware contextual typing for fresh object, array, and tuple literals. Scoreboard stays
-  in-scope 506, clean-kept 172/219, error-exact 22/287, diag-recall 285/1691 (official module
-  gates remain closed). **Next:** the `13` profiling gate, then `14` full `lib.d.ts` /
-  parallelism Stage 1, then backlog `15` slice 2 / `16` cross-file identity. Known-gap items:
-  `24`–`27`, `30`, `32`–`37` (`33`–`37` are the M28 review byproducts). Small warm-ups:
-  `21`–`23`.
+- **M0–M30 shipped; no active sprint.** The type-level evaluation phase is complete (M24–M28);
+  M29 shipped backlog `15` slice 1 (serial local-relative modules); M30 shipped contextual
+  literal typing. Scoreboard: in-scope 506, clean-kept 172/219, error-exact 22/287,
+  diag-recall 285/1691 (official `enum`/`namespace`/`satisfies`/`as const`/`module` gates
+  still closed). **The completion roadmap was refined 2026-07-07** — the backlog README now
+  carries a definition of done (checker 1.0) and four tracks: A model completeness
+  (`24` `25` `39`–`44`, the `lib.d.ts` critical path), B checker completeness (`18` `19`
+  `45`–`52`), C known-gap tail (`21`–`23`, `26` `27` `30` `32`–`37`), D scale ladder
+  (`38` `13` `14` `15` `16` `17`). **Next:** kill the silent-FN families (`33` `34` `32`
+  `21` `22`), then run track A toward `14`.
