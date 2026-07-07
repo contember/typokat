@@ -148,3 +148,11 @@ official-suite `run --check`) → commit → next.
   per-module body walking — guardrail comment added at `Pass.current_module`. Review
   byproduct (pre-existing, single-file reproducible): `.length` on `string` reports
   spurious TK2339 — the no-lib prelude gap, covered by backlog `38`/`14`, not filed anew.
+- **WU3 shipped** — spec `047da38` + amendment `039640a`, fix `6c61216`. Declarator core
+  extracted into shared `check_annotated_initializer`; review PASS with one LOW finding
+  (optional-field `= undefined` over-report vs the M21 model) fixed in the loop via a new
+  shared `optional_field_effective_type` helper (fill_class + initializer path).
+  Review byproducts, both pre-existing and mirrored in the declarator path (not new
+  items): arrow/function initializers get no contextual param typing against a
+  function-typed annotation (silent FN — the scope of backlog `39`/`40` signature work
+  and M3 contextual rules); `TS2564` no-initializer diagnostics are backlog `47`.

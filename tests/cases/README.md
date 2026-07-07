@@ -369,6 +369,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`).
 | `b55_template_memo/` | backlog `55` | template evaluation must not memoize results computed under an exhausted TK2589 budget |
 | `b58_project_scopes/` | backlog `58` | project-mode scope maps keyed per module — offset-aligned files must not collide |
 | `b61_field_initializers/` | backlog `61` | class field initializers checked against the annotation (assignability, excess, contextual typing; instance + static) |
+| `b53_cfg_assignments/` | backlog `53` | assignments survive `&&`/`||`/ternary, `switch` clauses, `while` tests, and sequence expressions in the flow graph |
 
 `b58_project_scopes/` uses **project fixture subdirectories** (the m29 convention): every
 `.ts` file in a subdirectory is one project checked via `check_project`. Each project's
