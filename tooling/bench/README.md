@@ -2,8 +2,9 @@
 
 Black-box synthetic benchmark harness for the ADR-0001 profiling gate. It
 generates single-file TypeScript corpora inside typokat's current implemented
-scope (M0-M28) and times a prebuilt `typokat` binary against `tsgo` with
-`hyperfine`.
+scope and times a prebuilt `typokat` binary against `tsgo` with `hyperfine`.
+Most families are clean programs; `errors` is intentionally invalid and measures
+diagnostic construction/rendering.
 
 The generated corpus is intentionally not committed: `corpus/` and `report/`
 are gitignored.
@@ -25,6 +26,9 @@ python3 typobench.py run --typokat ../../target/release/typokat
 
 # Quick local smoke run without tsgo.
 python3 typobench.py run --tools typokat,tsc --sizes 1000 --runs 3
+
+# Run only the diagnostics/error corpus.
+python3 typobench.py run --families errors --sizes 1000 --runs 3
 ```
 
 As of 2026-07-06, `typescript@rc` exposes the native compiler as the `tsc`
@@ -60,10 +64,18 @@ avoid `TS2318` under `--noLib` (`Array`, `Object`, `Function`, and friends).
   repeated alias instantiations.
 - `flow` - narrowing-heavy functions using `typeof`, `null`, and discriminated
   union checks.
+- `errors` - intentionally invalid assignments, calls, object literals, member
+  access, readonly writes, and flow returns. This exercises relation failure
+  paths, diagnostic reason chains, and renderer throughput.
 
 The default sizes are `1000`, `10000`, and `100000` source lines per family.
 `run` also includes a small startup file by default so the process cold-start
 floor is visible next to throughput numbers.
+
+Before timing, `run` validates the expected outcome for every selected file:
+positive families must exit cleanly, while `errors` must exit with diagnostics.
+For the `errors` family, hyperfine is invoked with `--ignore-failure` only after
+that preflight passes.
 
 ## Reports
 

@@ -10,7 +10,7 @@ takesFlags([1, 3]); // error[TK2345]
 
 declare function takesPair(pair: [1, "x"]): void;
 takesPair([1, "x"]);
-takesPair([2, "x"]); // error[TK2345]
+takesPair([2, "x"]); // error[TK2322]
 
 function pairOk(): [1, "x"] {
   return [1, "x"];

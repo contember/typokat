@@ -108,8 +108,9 @@ const mm: Box<Box<number>> = { value: { value: \"s\" } };
 }
 
 /// A generic type nested in a generic function: `unwrap<T>(b: Box<T>): T`
-/// substitutes `Box<T>` and the return, so the parameter drives `TK2345` and the
-/// return drives `TK2322` (the `nested.ts` headline).
+/// substitutes `Box<T>` and the return. A fresh object-literal argument reports
+/// assignment-style member mismatch (`TK2322`), matching tsc's contextual literal
+/// diagnostics.
 #[test]
 fn generic_type_nested_in_generic_function() {
     let src = "\
@@ -120,11 +121,11 @@ const m: number = unwrap<string>({ value: \"s\" });
 const bad = unwrap<number>({ value: \"s\" });
 ";
     // `unwrap<number>({value:1})` is clean (line 3); `unwrap<string>` returns
-    // string (line 4 TK2322); `{value:"s"}` is not a `Box<number>` (line 5
-    // TK2345).
+    // string (line 4 TK2322); `{value:"s"}` has a value member incompatible with
+    // `Box<number>` (line 5 TK2322).
     assert_eq!(
         diags(src),
-        vec![(4, "TK2322".to_string()), (5, "TK2345".to_string())]
+        vec![(4, "TK2322".to_string()), (5, "TK2322".to_string())]
     );
 }
 

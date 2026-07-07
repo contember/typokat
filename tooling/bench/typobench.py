@@ -2,10 +2,10 @@
 """
 Synthetic typokat benchmark harness.
 
-Generates deterministic TypeScript corpora inside the current M0-M28 checker
-scope and runs black-box timing with hyperfine. The generated files are valid
-under tsc/tsgo --noLib because they include the minimal empty global interfaces
-that suppress TS2318.
+Generates deterministic TypeScript corpora inside typokat's implemented checker
+scope and runs black-box timing with hyperfine. Positive corpora are valid under
+tsc/tsgo --noLib; the `errors` corpus intentionally produces diagnostics. Every
+generated file includes the minimal empty global interfaces that suppress TS2318.
 """
 
 import argparse
@@ -16,6 +16,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,7 +27,8 @@ CORPUS = HERE / "corpus"
 REPORT = HERE / "report"
 RAW_REPORT = REPORT / "raw"
 
-FAMILIES = ("relation", "generics", "typelevel", "flow")
+FAMILIES = ("relation", "generics", "typelevel", "flow", "errors")
+ERROR_FAMILIES = frozenset(("errors",))
 DEFAULT_SIZES = (1000, 10000, 100000)
 DEFAULT_TOOLS = ("typokat", "tsgo")
 TSGO_FLAGS = ("--noEmit", "--noLib", "--skipLibCheck")
@@ -259,11 +261,58 @@ def generate_flow(target):
     return lines
 
 
+def errors_chunk(i):
+    return [
+        f"type ErrUser_{i} = {{",
+        f"  id: number;",
+        f"  name: string;",
+        f"  active: boolean;",
+        f"  nested: {{ score: number; label: string }};",
+        f"}};",
+        f"type ErrSource_{i} = {{",
+        f"  id: string;",
+        f"  name: string;",
+        f"  active: boolean;",
+        f"  nested: {{ score: string; label: string }};",
+        f"  extra: number;",
+        f"}};",
+        f"function err_takes_user_{i}(value: ErrUser_{i}): ErrUser_{i} {{ return value; }}",
+        f"declare const err_src_{i}: ErrSource_{i};",
+        f"const err_assign_{i}: ErrUser_{i} = err_src_{i};",
+        f"const err_missing_{i}: ErrUser_{i} = {{ id: {i}, name: \"u_{i}\", active: true }};",
+        f"const err_excess_{i}: ErrUser_{i} = {{ id: {i}, name: \"u_{i}\", active: true, nested: {{ score: {i}, label: \"ok\" }}, extra: {i} }};",
+        f"const err_arg_{i} = err_takes_user_{i}({{ id: {i}, name: {i}, active: true, nested: {{ score: {i}, label: \"ok\" }} }});",
+        f"const err_member_{i}: number = err_src_{i}.missing;",
+        f"type ErrReadonly_{i} = {{ readonly locked: number; mutable: number }};",
+        f"declare const err_readonly_{i}: ErrReadonly_{i};",
+        f"err_readonly_{i}.locked = {i};",
+        f"function err_flow_{i}(x: string | null): string {{",
+        f"  if (x === null) {{ return x; }}",
+        f"  return x;",
+        f"}}",
+        "",
+    ]
+
+
+def generate_errors(target):
+    lines = [
+        *GLOBAL_HEADER,
+        "const err_seed: number = \"not a number\";",
+        "",
+    ]
+    i = 0
+    while append_if_fits(lines, errors_chunk(i), target):
+        i += 1
+    pad_to(lines, target, "errors")
+    return lines
+
+
 GENERATORS = {
     "relation": generate_relation,
     "generics": generate_generics,
     "typelevel": generate_typelevel,
     "flow": generate_flow,
+    "errors": generate_errors,
 }
 
 
@@ -376,8 +425,39 @@ def ensure_tool_available(tool, args):
         sys.exit(f"{tool} binary not found: {binary}{hint}")
 
 
+def expects_diagnostics(family):
+    return family in ERROR_FAMILIES
+
+
 def shell_command(argv):
     return " ".join(shlex.quote(str(part)) for part in argv)
+
+
+def validation_output_excerpt(output_file):
+    output_file.seek(0)
+    lines = []
+    for _ in range(40):
+        line = output_file.readline()
+        if not line:
+            break
+        lines.append(line.rstrip("\n"))
+    return "\n".join(lines).strip()
+
+
+def validate_returncode(tool, family, returncode):
+    if expects_diagnostics(family):
+        if tool == "typokat":
+            return returncode == 1
+        return returncode != 0
+    return returncode == 0
+
+
+def validation_expectation(tool, family):
+    if expects_diagnostics(family):
+        if tool == "typokat":
+            return "expected typokat diagnostics exit 1"
+        return "expected diagnostics exit non-zero"
+    return "expected clean exit 0"
 
 
 def validate_commands(tools, files, args):
@@ -386,12 +466,25 @@ def validate_commands(tools, files, args):
     for family, size, path in files:
         for tool in tools:
             argv = build_tool_command(tool, args, path)
-            proc = subprocess.run(argv, cwd=ROOT, capture_output=True, text=True, timeout=args.validate_timeout)
-            if proc.returncode != 0:
+            with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as output:
+                proc = subprocess.run(
+                    argv,
+                    cwd=ROOT,
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                    timeout=args.validate_timeout,
+                )
+                if validate_returncode(tool, family, proc.returncode):
+                    continue
                 label = f"{family}/{size}"
-                output = (proc.stderr + proc.stdout).strip()
-                excerpt = "\n".join(output.splitlines()[:40])
-                sys.exit(f"{tool} validation failed for {label} ({path}):\n{excerpt}")
+                excerpt = validation_output_excerpt(output)
+                detail = validation_expectation(tool, family)
+                if excerpt:
+                    excerpt = f"\n{excerpt}"
+                sys.exit(
+                    f"{tool} validation failed for {label} ({path}): "
+                    f"{detail}, got exit {proc.returncode}{excerpt}"
+                )
 
 
 def run_hyperfine_for_file(tools, family, size, path, lines, args, raw_dir):
@@ -410,6 +503,8 @@ def run_hyperfine_for_file(tools, family, size, path, lines, args, raw_dir):
         "--export-json",
         str(raw),
     ]
+    if expects_diagnostics(family):
+        cmd.append("--ignore-failure")
     commands = []
     for tool in tools:
         argv = build_tool_command(tool, args, path)
@@ -428,6 +523,7 @@ def run_hyperfine_for_file(tools, family, size, path, lines, args, raw_dir):
             "size": size,
             "file": str(path.relative_to(HERE)),
             "lines": lines,
+            "expected": "diagnostics" if expects_diagnostics(family) else "clean",
             "tool": tool,
             "command": command,
             "mean_seconds": mean,
@@ -456,6 +552,7 @@ def write_report(records, tools, families, sizes, args, raw_dir):
             "Single-file corpus keeps the benchmark inside typokat's module-free scope.",
             "Single-file mode neutralizes tsgo's cross-file goroutine parallelism; report multi-file results separately.",
             "--noEmit disables emit output but tsgo/tsc still carry compiler infrastructure typokat does not.",
+            "The errors family intentionally exits with diagnostics; preflight validates that before hyperfine ignores the failure status.",
         ],
         "results": records,
     }
@@ -472,14 +569,14 @@ def write_report(records, tools, families, sizes, args, raw_dir):
         "> not exercise tsgo's cross-file parallelism. Treat multi-file measurements as",
         "> a separate, tsgo-friendlier benchmark.",
         "",
-        "| family | lines | tool | median s | mean s | lines/s |",
-        "|---|---:|---|---:|---:|---:|",
+        "| family | expected | lines | tool | median s | mean s | lines/s |",
+        "|---|---|---:|---|---:|---:|---:|",
     ]
     for rec in records:
         lps = rec["lines_per_second"]
         lps_text = f"{lps:,.0f}" if lps is not None else "-"
         lines.append(
-            f"| {rec['family']} | {rec['lines']} | {rec['tool']} | "
+            f"| {rec['family']} | {rec['expected']} | {rec['lines']} | {rec['tool']} | "
             f"{rec['median_seconds']:.6f} | {rec['mean_seconds']:.6f} | {lps_text} |"
         )
     (REPORT / "latest.md").write_text("\n".join(lines) + "\n")

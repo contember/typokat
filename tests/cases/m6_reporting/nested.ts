@@ -10,5 +10,5 @@ const nested: { a: { b: number } } = { a: { b: "x" } }; // error[TK2322]: Type '
 //         Type 'string' is not assignable to type 'number'
 
 function takesObj(o: { a: number }): number { return o.a; }
-const r = takesObj({ a: "x" }); // error[TK2345]: Type 'string' is not assignable to type 'number'
-// chain: Argument ... -> Types of property 'a' are incompatible -> 'string' not assignable to 'number'
+const r = takesObj({ a: "x" }); // error[TK2322]: Type 'string' is not assignable to type 'number'
+// chain: Types of property 'a' are incompatible -> 'string' not assignable to 'number'

@@ -227,7 +227,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 );
             if !(base_is_this(&member.object) && in_declaring_ctor) {
                 self.diagnostics.push(Diagnostic::readonly_assignment(
-                    Span::from_oxc(member.span),
+                    Span::from_oxc(member.property.span),
                     member.property.name.as_str(),
                 ));
                 // `TK2540` is the assignment error for this target; do not also collect a

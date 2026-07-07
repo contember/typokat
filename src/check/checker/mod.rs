@@ -17,9 +17,9 @@
 //!    member.
 //!  - **`new ClassName(args)`** ([`infer_new`]): resolves the class via its value
 //!    slot, checks the constructor signature's **arity** (`TK2554`) and argument
-//!    **assignability** (`TK2345`) exactly like an M3 call ([`check_call_arguments`]),
-//!    and yields the **instance type**. A class with no explicit `constructor`
-//!    defaults to zero parameters.
+//!    **assignability** like an M3 call ([`check_call_arguments`]), including
+//!    contextual fresh-literal diagnostics, and yields the **instance type**. A class
+//!    with no explicit `constructor` defaults to zero parameters.
 //!  - **`this`** ([`Pass::current_this`]): inside a method/constructor body, a
 //!    `ThisExpression` resolves to the instance type (so `this.field`/`this.method()`
 //!    resolve). It is set by [`check_class`] (save/restore) and does **not leak** — a
@@ -204,9 +204,10 @@
 //!  - **Calls.** A `CallExpression` whose callee is a function type is checked for
 //!    **arity** (no optional params in M3: too many or too few arguments →
 //!    `TK2554`, primary span = the call) and **argument assignability** (each
-//!    argument assignable to the corresponding parameter → `TK2345`, primary span
-//!    = the argument). The call's type is the function's return type. A
-//!    non-function callee is out of scope (no diagnostic; the error type).
+//!    argument assignable to the corresponding parameter; context-free failures are
+//!    `TK2345`, while fresh object/tuple literal member failures use assignment-style
+//!    diagnostics). The call's type is the function's return type. A non-function
+//!    callee is out of scope (no diagnostic; the error type).
 //!
 //! M2 scope: object type annotations, object-literal inference (widened members),
 //! member access (`TK2339`), structural assignability (`TK2741`/`TK2322`),

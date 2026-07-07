@@ -27,7 +27,9 @@ pub(in crate::check::checker) enum ObligationKind {
     /// Annotation-vs-initializer, reassignment, or `return`-vs-declared-return.
     /// Maps a missing-property reason to `TK2741`, everything else to `TK2322`.
     Assignment,
-    /// A call argument vs its parameter. Any failure maps to `TK2345`.
+    /// A call argument vs its parameter. Context-free argument failures map to
+    /// `TK2345`; contextually typed fresh object/tuple literals use assignment-style
+    /// diagnostics for their member/element mismatch parity with tsc.
     Argument,
 }
 

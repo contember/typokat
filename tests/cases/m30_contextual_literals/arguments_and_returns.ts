@@ -6,7 +6,7 @@ type Shape = { kind: "circle"; radius: number };
 declare function takesShape(shape: Shape): void;
 
 takesShape({ kind: "circle", radius: 1 });
-takesShape({ kind: "square", radius: 1 }); // error[TK2345]
+takesShape({ kind: "square", radius: 1 }); // error[TK2322]
 
 function makeShape(): Shape {
   return { kind: "circle", radius: 1 };

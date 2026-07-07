@@ -5,6 +5,7 @@ use super::context::*;
 use super::decls::alloc_type_param_ids;
 use super::decls::value_decl_id;
 use super::eval::{contains_deferred_argument, contains_deferred_keyof};
+use super::expr::contextual_literal_target;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::DeclId;
 use crate::check::infer;
@@ -423,9 +424,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ///  - **arity** (no optional/rest params in the subset): the argument and parameter
     ///    counts must match exactly, else `TK2554` (primary span = the call/`new`), and
     ///  - each **argument** is collected as an assignability obligation against the
-    ///    corresponding parameter → `TK2345` (primary span = the argument), paired up to
-    ///    the lesser of the two counts (the surplus is already reported by the arity
-    ///    error above).
+    ///    corresponding parameter. Context-free failures are `TK2345`; fresh object and
+    ///    tuple literals contextually typed by the parameter use assignment-style
+    ///    diagnostics (`TK2322`/`TK2741`), matching tsc's literal-member reporting.
     fn check_call_arguments(
         &mut self,
         scope: ScopeId,
@@ -461,8 +462,32 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 src,
                 tgt: *param_ty,
                 src_span,
-                kind: ObligationKind::Argument,
+                kind: self.call_argument_obligation_kind(arg_expr, *param_ty),
             });
+        }
+    }
+
+    fn call_argument_obligation_kind(
+        &self,
+        arg_expr: &Expression<'_>,
+        param_ty: TypeId,
+    ) -> ObligationKind {
+        let context = contextual_literal_target(self.interner.store(), param_ty);
+        match arg_expr {
+            Expression::ParenthesizedExpression(paren) => {
+                self.call_argument_obligation_kind(&paren.expression, context)
+            }
+            Expression::ObjectExpression(_)
+                if self.interner.store().object_type(context).is_some() =>
+            {
+                ObligationKind::Assignment
+            }
+            Expression::ArrayExpression(_)
+                if self.interner.store().tag(context) == TypeTag::Tuple =>
+            {
+                ObligationKind::Assignment
+            }
+            _ => ObligationKind::Argument,
         }
     }
 
