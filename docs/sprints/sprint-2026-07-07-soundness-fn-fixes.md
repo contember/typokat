@@ -141,3 +141,10 @@ official-suite `run --check`) → commit → next.
 - **WU5 spec prep** — tsc pins recorded; `h([1, "x"])` (mixed-element tuple-param call)
   deliberately left out of the corpus: tsc reports a per-element contextual error whose
   code/position depends on subtle inference-priority choices.
+- **WU2 shipped** — spec `683e813`, fix `124929c`. Key = `(module ScopeId, span start)`;
+  `reference_flow` re-keyed too; harness `PROJECT_DIRS` generalization. Review PASS
+  (insert/lookup module proven equal at every read site; CLI-order permutation probes
+  identical; official-suite clean). Graduated note: the fix relies on strictly
+  per-module body walking — guardrail comment added at `Pass.current_module`. Review
+  byproduct (pre-existing, single-file reproducible): `.length` on `string` reports
+  spurious TK2339 — the no-lib prelude gap, covered by backlog `38`/`14`, not filed anew.
