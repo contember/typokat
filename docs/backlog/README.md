@@ -36,7 +36,7 @@ typokat is **complete** when all four hold:
    is decided either way with recorded numbers.
 4. **Parity hygiene** — track C is empty: no known silent-FN family remains, and every
    remaining tsc divergence is deliberate, safe-direction, and documented in
-   `tests/cases/README.md`.
+   `docs/reference/divergences.md`.
 
 The official-suite scoreboard is the ratchet on the way there — its syntax gates (`enum`,
 `namespace`, `satisfies`, `as const`, `module`) flip from OOS to IN as features land — not a
@@ -83,6 +83,8 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 - [`33`](33-as-cast-assignability.md) — `as`-cast RHS bypasses assignability (broad real-world FN).
 - [`34`](34-fix-params-evaluate-before-gate.md) — `fix_params` gates deferred `keyof` without evaluating.
 - [`64`](64-readonly-array-infer-binder.md) — `infer` binder under `readonly` array raises spurious TK2304 + masks a downstream FN.
+- [`66`](66-protected-override-compat.md) — protected↔protected incompatible override skips TK2416 (dropped TS2416).
+- [`67`](67-utility-alias-constraint-enforcement.md) — utility/prelude alias type-param constraints unenforced (`ReturnType<number>` drops TS2344) · blocked-by `24`.
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - [`23`](23-static-method-type-params.md) — spurious TK2304 on static method type params (or close via `41`).
@@ -92,6 +94,7 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - [`35`](35-keyof-union-and-key-source-edges.md) — `keyof` over unions + edge key sources.
 - [`36`](36-conditional-structural-operand-parity.md) — conditional parity for structurally-wrapped operands.
 - [`37`](37-constraint-approximation-deferred-args.md) — TK2344 constraint approximation for deferred args.
+- [`68`](68-contravariant-infer-intersection.md) — same-name contravariant `infer` over-reports to `never` (should intersect).
 - [`63`](63-review-parity-tail.md) — 2026-07-07 review parity tail (batched small FPs, messages, depth guard).
 
 **D. Scale + IDE — the §12 phase ladder.**
@@ -106,7 +109,7 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
 1. **Kill the known silent-FN families** — the five HIGH review findings (`53` `55` `57` `58`
    `61`) shipped in sprint-2026-07-07-soundness-fn-fixes; the remaining C group (`56`, `60`, `62`,
-   `65`, `54`, `59`, `33`, `34`, `32`, `21`, `22`, `64`) is next, every one a dropped-error class.
+   `65`, `54`, `59`, `33`, `34`, `32`, `21`, `22`, `64`, `66`, `67`) is next, every one a dropped-error class.
 2. **Run track A** to unblock `14` (`25` intersections shipped as M31 — the first step; `24` rest
    elements and `39` optional/default params are the natural next); interleave B items and C's
    parity tail as warm-ups between the A milestones. `38` (minimal prelude) and `13` (profiling
