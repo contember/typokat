@@ -576,8 +576,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     // public fields has a structural instance type, so the optional then
                     // behaves exactly like an optional member on an object type.
                     let ty = if prop.optional {
-                        let undefined = self.interner.well_known().undefined;
-                        self.interner.union(vec![ty, undefined])
+                        self.optional_field_effective_type(ty)
                     } else {
                         ty
                     };
@@ -902,6 +901,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// and the `constructor` body flagged for the M14 `readonly`-assignment carve-out. Each
     /// per-member `this`/in-constructor override is saved/restored so it does not leak to the
     /// next member.
+    /// M21: the **effective** type of an optional class field — its annotation with
+    /// `| undefined` baked in. The single rule shared by the member built in
+    /// [`fill_class`] and the initializer target in [`check_class_member_bodies`], so
+    /// the read side and the initializer check cannot drift.
+    fn optional_field_effective_type(&mut self, ty: TypeId) -> TypeId {
+        let undefined = self.interner.well_known().undefined;
+        self.interner.union(vec![ty, undefined])
+    }
+
     fn check_class_member_bodies(
         &mut self,
         scope: ScopeId,
@@ -926,7 +934,25 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                                 self.current_this = Some(static_this);
                             }
                         }
-                        self.infer_expr(scope, init);
+                        // backlog 61: an annotated field initializer is checked exactly like
+                        // a variable-declaration initializer (assignability, fresh-literal
+                        // excess, M30 contextual typing); an unannotated field keeps plain
+                        // inference. `readonly` is irrelevant here — the relation ignores it,
+                        // and the field is being initialized in its own declaration. An
+                        // optional field's target is its M21 effective type (`T | undefined`),
+                        // matching the member `fill_class` built.
+                        let annotation = prop
+                            .type_annotation
+                            .as_ref()
+                            .and_then(|ann| self.lower_annotation(scope, &ann.type_annotation))
+                            .map(|ty| {
+                                if prop.optional {
+                                    self.optional_field_effective_type(ty)
+                                } else {
+                                    ty
+                                }
+                            });
+                        self.check_annotated_initializer(scope, annotation, init);
                         self.current_this = saved_member_this;
                     }
                 }

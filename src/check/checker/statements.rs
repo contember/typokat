@@ -3,6 +3,7 @@
 use crate::binder::scope::ScopeId;
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::{Reason, ReasonChain, Relater, Relation};
+use crate::span::Span;
 use crate::types::store::{Store, TypeId};
 use crate::types::WellKnown;
 use oxc_ast::ast::{
@@ -188,6 +189,36 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
+    /// Check an initializer expression against an optional declared annotation exactly the
+    /// way a variable-declaration initializer is: M18/M30 contextual typing of a fresh
+    /// object/array/tuple literal against the annotation ([`infer_initializer`]), the
+    /// TK2322 assignability obligation, and the fresh-literal TK2353 excess-property check.
+    /// Returns the initializer's inferred `(type, span)` for the caller to record a declared
+    /// type. Shared by [`check_declarator`] and class field initializers (backlog 61) so the
+    /// two declaration positions cannot drift apart.
+    pub(in crate::check::checker) fn check_annotated_initializer(
+        &mut self,
+        scope: ScopeId,
+        annotation: Option<TypeId>,
+        init: &Expression<'_>,
+    ) -> Option<(TypeId, Span)> {
+        let initializer = self.infer_initializer(scope, init, annotation);
+
+        // Both sides present: the initializer must be assignable to the annotation (primary
+        // span = the initializer), and a fresh object literal gets an excess-property check.
+        if let (Some(ann), Some((init_ty, init_span))) = (annotation, initializer) {
+            self.obligations.push(AssignObligation {
+                src: init_ty,
+                tgt: ann,
+                src_span: init_span,
+                kind: ObligationKind::Assignment,
+            });
+            check_excess_properties(self.interner.store(), init, ann, &mut self.diagnostics);
+        }
+
+        initializer
+    }
+
     /// Check one variable declarator and record its declared/inferred type.
     ///
     /// The declared type is the annotation if present, otherwise the (possibly
@@ -219,13 +250,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         };
 
         // Infer the initializer (it may resolve references / emit TK2304 and descends
-        // into any nested function body). M18: in a **tuple** context an array literal is
+        // into any nested function body), then run its assignability obligation + excess
+        // check against the annotation. M18: in a **tuple** context an array literal is
         // typed positionally as a tuple; otherwise it infers an array (M17) — and every
         // other expression is inferred exactly as before.
         let initializer = declarator
             .init
             .as_ref()
-            .and_then(|init| self.infer_initializer(scope, init, annotation));
+            .and_then(|init| self.check_annotated_initializer(scope, annotation, init));
 
         // F4 — access control through an **object** destructuring binding
         // (`let { priv } = k;`). Run M13's private/protected check for each destructured
@@ -247,22 +279,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         };
         if let (Some(decl_id), Some(ty)) = (decl_id, declared) {
             self.decl_types.set(decl_id, ty);
-        }
-
-        // When both sides are present, the initializer must be assignable to the
-        // annotation (primary span = the initializer).
-        if let (Some(ann), Some((init_ty, init_span))) = (annotation, initializer) {
-            self.obligations.push(AssignObligation {
-                src: init_ty,
-                tgt: ann,
-                src_span: init_span,
-                kind: ObligationKind::Assignment,
-            });
-
-            // Excess-property check (freshness) for a fresh object literal target.
-            if let Some(init_expr) = declarator.init.as_ref() {
-                check_excess_properties(self.interner.store(), init_expr, ann, &mut self.diagnostics);
-            }
         }
     }
 
