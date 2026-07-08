@@ -87,7 +87,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b34_fix_params_keyof", true),
     ("b33_as_cast_assignability", true),
     ("b54_labeled_statements", true),
-    ("b59_modules_hygiene", false),
+    ("b59_modules_hygiene", true),
 ];
 
 /// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`

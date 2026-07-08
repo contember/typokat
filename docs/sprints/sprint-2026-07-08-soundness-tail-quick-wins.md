@@ -211,3 +211,14 @@ broader inference-policy work.
   regressions / 0 progress), `tsc 6.0.3 --strict` over the b54 corpus, and focused
   M23/B53 flow probes. Out of scope remains JavaScript invalid-label / duplicate-label
   early errors.
+- **WU5 shipped** — spec `b749ddb`; implementation validates local names in export
+  lists and drains fill-phase pending override checks per module so diagnostics keep
+  the owning source file/span. Review PASS confirmed `fill_type_decls_range` does not
+  produce ordinary body obligations; fill-time initializer inference snapshots and
+  truncates obligations before returning, so the early drain is scoped to pending
+  class checks. Verification: b59 direct project checks (`ghost.ts:1` `TK2304`,
+  `derived.ts:4` `TK2416`), `cargo test conformance`, `cargo test`,
+  `cargo clippy --all-targets -- -D warnings`, `cargo build --release`, and
+  official-suite `run --check` (0 regressions / 0 progress). Non-blocking safe
+  over-report: if an importer references a renamed invalid export, typokat reports
+  both export-site `TK2304` and importer `TK2305`.

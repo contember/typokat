@@ -240,7 +240,7 @@ use oxc_ast::ast::{
     Declaration, ExportSpecifier, ModuleExportName, Program, Statement,
 };
 use oxc_parser::Parser;
-use oxc_span::SourceType;
+use oxc_span::{GetSpan, SourceType};
 use std::collections::BTreeMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -501,7 +501,12 @@ pub fn check_project_programs<'ast>(
     for (index, unit) in units.iter().enumerate() {
         let imports = imported_symbols(unit, &exports, &mut module_diagnostics[index]);
         let (scope, placeholders) = builder.add_module(unit.program, &imports);
-        let surface = collect_exports(&builder, scope, unit.program);
+        let surface = collect_exports(
+            &builder,
+            scope,
+            unit.program,
+            &mut module_diagnostics[index],
+        );
         module_scopes.push(scope);
         module_placeholders.push(placeholders);
         exports.push(surface);
@@ -615,6 +620,7 @@ pub fn check_project_programs<'ast>(
             .unwrap_or((0, pass.type_decls.len()));
         pass.current_module = scope;
         pass.fill_type_decls_range(scope, start, end);
+        emit_pending_checks(&mut pass);
         module_diagnostics[index].append(&mut pass.diagnostics);
     }
 
@@ -678,6 +684,7 @@ fn collect_exports(
     builder: &ProjectBinderBuilder,
     scope: ScopeId,
     program: &Program<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> ExportSurface {
     let mut surface = ExportSurface::new();
     for stmt in &program.body {
@@ -691,7 +698,7 @@ fn collect_exports(
             collect_declaration_export(builder, scope, decl, &mut surface);
         } else {
             for specifier in &export.specifiers {
-                collect_list_export(builder, scope, specifier, &mut surface);
+                collect_list_export(builder, scope, specifier, &mut surface, diagnostics);
             }
         }
     }
@@ -742,6 +749,7 @@ fn collect_list_export(
     scope: ScopeId,
     specifier: &ExportSpecifier<'_>,
     surface: &mut ExportSurface,
+    diagnostics: &mut Vec<Diagnostic>,
 ) {
     let Some(local) = module_export_name(&specifier.local) else {
         return;
@@ -750,6 +758,13 @@ fn collect_list_export(
         return;
     };
     let (value, ty) = builder.symbol_slots(scope, local);
+    if value.is_none() && ty.is_none() {
+        diagnostics.push(Diagnostic::cannot_find_name(
+            Span::from_oxc(specifier.local.span()),
+            local,
+        ));
+        return;
+    }
     surface.insert(exported.to_string(), ExportedSlots { value, ty });
 }
 
