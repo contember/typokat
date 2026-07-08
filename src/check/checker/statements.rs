@@ -89,6 +89,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Statement::WhileStatement(while_stmt) => {
                 self.check_while(scope, while_stmt, declared_ret, inferred);
             }
+            // A label is transparent to the type-check walk; any block inside it still
+            // enters its own binder-created block scope through the usual block case.
+            Statement::LabeledStatement(labeled) => {
+                self.check_stmt(scope, &labeled.body, declared_ret, inferred);
+            }
             Statement::ExportNamedDeclaration(export) => {
                 if let Some(decl) = &export.declaration {
                     self.check_declaration(scope, decl);

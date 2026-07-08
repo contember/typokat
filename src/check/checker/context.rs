@@ -483,6 +483,9 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// Separate from [`flow_loops`] because a `break` targets the nearest loop or
     /// `switch`, while a `continue` skips any intervening `switch` to the loop label.
     pub(in crate::check::checker) break_targets: Vec<Vec<FlowNodeId>>,
+    /// The flow pre-pass's named label stack. Labeled `break` edges exit the matching
+    /// label's statement; labeled `continue` uses the matching labeled loop's target.
+    pub(in crate::check::checker) label_targets: Vec<FlowLabelFrame>,
     /// **Reference → flow node** map (M23), keyed by `(module scope, reference span
     /// start)`. Populated by the pre-pass; read by the check walk's
     /// [`resolve_identifier_type`] to resolve a reference against the flow node in
@@ -580,6 +583,14 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
 /// (shared with `switch`), not here.
 pub(in crate::check::checker) struct FlowLoopFrame {
     pub(in crate::check::checker) label: FlowNodeId,
+}
+
+/// One named label frame for the flow pre-pass.
+pub(in crate::check::checker) struct FlowLabelFrame {
+    pub(in crate::check::checker) name: String,
+    pub(in crate::check::checker) breaks: Vec<FlowNodeId>,
+    pub(in crate::check::checker) continue_target: Option<FlowNodeId>,
+    pub(in crate::check::checker) allows_continue: bool,
 }
 
 /// One mapped-type lowering context (M26): the node's key binder name. Lives on

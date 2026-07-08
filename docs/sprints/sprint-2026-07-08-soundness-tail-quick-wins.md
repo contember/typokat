@@ -198,3 +198,16 @@ broader inference-policy work.
   official-suite `run --check` (0 regressions, three progress files), and
   `tsc 6.0.3 --strict` over the b33 corpus. Deferred parity: assertions inside guard
   conditions such as `(x !== null) as boolean` do not yet feed narrowing.
+- **WU4 shipped** — spec `ef131c5`; implementation makes labeled statements
+  transparent in the statement checker, adds named flow-label frames for `break label`
+  exits, and routes `continue label` to directly labeled `while` loop back edges.
+  Review loop: round 1 FAIL caught stacked labels on the same loop
+  (`outer: inner: while`) losing the outer continue target; focused round 2 PASS after
+  routing the loop target to the contiguous eligible label suffix and pinning the
+  stacked-label repro. Verification: focused b54 check (exactly three `TK2322`
+  diagnostics), `cargo test conformance`, `cargo test`,
+  `cargo clippy --all-targets -- -D warnings`, `cargo build --release`,
+  official-suite `run --check` (0
+  regressions / 0 progress), `tsc 6.0.3 --strict` over the b54 corpus, and focused
+  M23/B53 flow probes. Out of scope remains JavaScript invalid-label / duplicate-label
+  early errors.

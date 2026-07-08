@@ -33,9 +33,10 @@ use crate::check::flow::{narrow, FlowNode, FlowNodeId};
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, AssignmentOperator, AssignmentTarget,
-    AssignmentTargetMaybeDefault, AssignmentTargetProperty, Class, ClassElement,
-    ConditionalExpression, Declaration, Expression, Function, IfStatement, LogicalExpression,
-    LogicalOperator, ObjectPropertyKind, Statement, SwitchStatement, WhileStatement,
+    AssignmentTargetMaybeDefault, AssignmentTargetProperty, BreakStatement, Class, ClassElement,
+    ConditionalExpression, ContinueStatement, Declaration, Expression, Function, IfStatement,
+    LabeledStatement, LogicalExpression, LogicalOperator, ObjectPropertyKind, Statement,
+    SwitchStatement, WhileStatement,
 };
 use rustc_hash::FxHashMap;
 
@@ -107,31 +108,23 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
             Statement::SwitchStatement(switch) => self.build_flow_switch(scope, switch),
             Statement::WhileStatement(while_stmt) => self.build_flow_while(scope, while_stmt),
+            Statement::LabeledStatement(labeled) => self.build_flow_labeled(scope, labeled),
             Statement::ExportNamedDeclaration(export) => {
                 if let Some(decl) = &export.declaration {
                     self.build_flow_declaration(scope, decl);
                 }
             }
-            Statement::BreakStatement(_) => {
+            Statement::BreakStatement(break_stmt) => {
                 // The break carries the current (narrowed) state out to the nearest
                 // breakable's exit join (loop or `switch`) — what un-narrows the
                 // after-loop state (`breakTrap`) and carries a clause's assignments
                 // out of a `switch` (backlog 53).
-                let cursor = self.flow_cursor;
-                if let Some(target) = self.break_targets.last_mut() {
-                    target.push(cursor);
-                }
-                self.flow_cursor = FlowNodeId::UNREACHABLE;
+                self.build_flow_break(break_stmt);
             }
-            Statement::ContinueStatement(_) => {
+            Statement::ContinueStatement(continue_stmt) => {
                 // A `continue` is a back edge to the loop label (re-checks the
                 // condition), not an exit edge.
-                let cursor = self.flow_cursor;
-                let label = self.flow_loops.last().map(|f| f.label);
-                if let Some(label) = label {
-                    self.add_back_edge(label, cursor);
-                }
-                self.flow_cursor = FlowNodeId::UNREACHABLE;
+                self.build_flow_continue(continue_stmt);
             }
             // Out of subset (`for`/`for-of`/`do-while`/`try`, …): not walked by the
             // check pass either, so no references are resolved inside them — a miss in
@@ -153,6 +146,45 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Declaration::ClassDeclaration(class) => self.build_flow_class(scope, class),
             _ => {}
         }
+    }
+
+    fn build_flow_labeled(&mut self, scope: ScopeId, labeled: &LabeledStatement<'_>) {
+        let allows_continue = labeled_statement_allows_continue(&labeled.body);
+        self.label_targets.push(FlowLabelFrame {
+            name: labeled.label.name.as_str().to_owned(),
+            breaks: Vec::new(),
+            continue_target: None,
+            allows_continue,
+        });
+
+        self.build_flow_stmt(scope, &labeled.body);
+        let body_end = self.flow_cursor;
+        let label = self.label_targets.pop().unwrap();
+        let mut post = vec![body_end];
+        post.extend(label.breaks);
+        self.flow_cursor = self.flow_join(post);
+    }
+
+    fn build_flow_break(&mut self, break_stmt: &BreakStatement<'_>) {
+        let cursor = self.flow_cursor;
+        if let Some(label) = &break_stmt.label {
+            self.add_labeled_break(label.name.as_str(), cursor);
+        } else if let Some(target) = self.break_targets.last_mut() {
+            target.push(cursor);
+        }
+        self.flow_cursor = FlowNodeId::UNREACHABLE;
+    }
+
+    fn build_flow_continue(&mut self, continue_stmt: &ContinueStatement<'_>) {
+        let cursor = self.flow_cursor;
+        let label = match &continue_stmt.label {
+            Some(label) => self.labeled_continue_target(label.name.as_str()),
+            None => self.flow_loops.last().map(|frame| frame.label),
+        };
+        if let Some(label) = label {
+            self.add_back_edge(label, cursor);
+        }
+        self.flow_cursor = FlowNodeId::UNREACHABLE;
     }
 
     /// Build the flow for an `if`/`else`: two condition nodes (the guard's positive /
@@ -256,6 +288,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         label: Option<TypeId>,
         case_labels: &[TypeId],
     ) -> FlowNodeId {
+        if pre == FlowNodeId::UNREACHABLE {
+            return FlowNodeId::UNREACHABLE;
+        }
         let Some((symbol, property)) = discriminant else {
             return pre;
         };
@@ -298,10 +333,21 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// label* so its references see the back-edge fixpoint (each iteration).
     fn build_flow_while(&mut self, scope: ScopeId, while_stmt: &WhileStatement<'_>) {
         let pre = self.flow_cursor;
+        if pre == FlowNodeId::UNREACHABLE {
+            return;
+        }
         let label = self.new_flow(FlowNode::LoopLabel {
             pre: vec![pre],
             back: Vec::new(),
         });
+        for target in self.label_targets.iter_mut().rev() {
+            if !target.allows_continue {
+                break;
+            }
+            if target.continue_target.is_none() {
+                target.continue_target = Some(label);
+            }
+        }
         self.flow_cursor = label;
 
         // The test may create Assignment nodes (`while (x = next())`, backlog 53); the
@@ -472,6 +518,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// A member target binds no symbol (member paths are not narrowed).
     fn build_flow_assignment(&mut self, scope: ScopeId, assign: &AssignmentExpression<'_>) {
         self.build_flow_expr(scope, &assign.right);
+        if self.flow_cursor == FlowNodeId::UNREACHABLE {
+            return;
+        }
 
         let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
             // Array/object pattern: reset each bound identifier. A member target
@@ -583,6 +632,25 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
+    fn add_labeled_break(&mut self, name: &str, cursor: FlowNodeId) {
+        if let Some(target) = self
+            .label_targets
+            .iter_mut()
+            .rev()
+            .find(|target| target.name == name)
+        {
+            target.breaks.push(cursor);
+        }
+    }
+
+    fn labeled_continue_target(&self, name: &str) -> Option<FlowNodeId> {
+        self.label_targets
+            .iter()
+            .rev()
+            .find(|target| target.name == name)
+            .and_then(|target| target.continue_target)
+    }
+
     /// The narrowed type a `x = <rhs>` assignment installs: a literal's **widened**
     /// base (`"s"` → `string`, `5` → `number`), `null`/`undefined` as-is, or `None`
     /// (reset to the declared type) for any richer RHS — the sound over-report, and
@@ -663,11 +731,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let saved_cursor = self.flow_cursor;
         let saved_loops = std::mem::take(&mut self.flow_loops);
         let saved_breaks = std::mem::take(&mut self.break_targets);
+        let saved_labels = std::mem::take(&mut self.label_targets);
         self.flow_cursor = FlowNodeId::START;
         build(self);
         self.flow_cursor = saved_cursor;
         self.flow_loops = saved_loops;
         self.break_targets = saved_breaks;
+        self.label_targets = saved_labels;
     }
 
     /// Append a flow node, returning its id.
@@ -687,6 +757,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         fact: &Option<GuardFact>,
         then_branch: bool,
     ) -> FlowNodeId {
+        if antecedent == FlowNodeId::UNREACHABLE {
+            return FlowNodeId::UNREACHABLE;
+        }
         match fact {
             Some(fact) => {
                 let positive = if then_branch {
@@ -973,6 +1046,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Some(FlowNode::LoopLabel { .. }) => FlowStep::Loop,
             _ => FlowStep::Terminal(self.interner.well_known().error),
         }
+    }
+}
+
+fn labeled_statement_allows_continue(stmt: &Statement<'_>) -> bool {
+    match stmt {
+        Statement::WhileStatement(_) => true,
+        Statement::LabeledStatement(labeled) => labeled_statement_allows_continue(&labeled.body),
+        _ => false,
     }
 }
 

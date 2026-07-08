@@ -45,3 +45,13 @@ function labeledContinueTargetsOuter(y: string | null) {
   }
   const done: null = x;
 }
+
+function stackedLabelsShareLoopTarget() {
+  let x: string | number = 1;
+  x = 1;
+  outer: inner: while (cond) {
+    const n: number = x; // error[TK2322]: not assignable to type 'number'
+    x = "next";
+    continue outer;
+  }
+}
