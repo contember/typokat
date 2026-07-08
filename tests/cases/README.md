@@ -189,6 +189,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b64_readonly_infer_binder/` | backlog `64` | `infer` binders under `readonly` array/tuple syntax are collected and do not degrade aliases to error |
 | `b34_fix_params_keyof/` | backlog `34` | `fix_params` evaluates substituted `keyof` constraints before deciding whether to gate them as deferred |
 | `b33_as_cast_assignability/` | backlog `33` | `as` / angle-bracket assertions participate in normal assignment and call-argument assignability |
+| `b54_labeled_statements/` | backlog `54` | labeled statements are checked and labeled `break` / `continue` participate in flow |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):
 
@@ -249,3 +250,11 @@ declaration initializers, reassignments, and call arguments; the asserted expres
 is still walked so nested diagnostics such as `TK2304` are not lost. Cast validity
 itself (`TS2352`) is deliberately out of scope, so every cast in this corpus is
 valid and the expected errors come from the surrounding target relation.
+
+`b54_labeled_statements/` pins labels as transparent statement wrappers for
+ordinary checking, plus the flow-sensitive edges that make labels observable:
+`break label` carries the current assignment state to the labeled statement's
+exit, and `continue label` targets the labeled loop's back edge rather than the
+innermost loop. The corpus intentionally stays on labeled blocks and `while`
+loops; duplicate-label and invalid-label diagnostics are JavaScript semantic
+checks outside typokat's current diagnostic surface.
