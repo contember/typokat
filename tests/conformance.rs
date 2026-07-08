@@ -87,13 +87,14 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b34_fix_params_keyof", true),
     ("b33_as_cast_assignability", true),
     ("b54_labeled_statements", true),
+    ("b59_modules_hygiene", false),
 ];
 
 /// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`
 /// files per project, checked together via [`check_project`]) rather than flat
 /// single-file fixtures. Every other dir is a flat corpus. Keep in sync with the
 /// project-shaped corpora in `MILESTONE_DIRS`.
-const PROJECT_DIRS: &[&str] = &["m29_modules", "b58_project_scopes"];
+const PROJECT_DIRS: &[&str] = &["m29_modules", "b58_project_scopes", "b59_modules_hygiene"];
 
 /// An expectation parsed from a single inline marker.
 #[derive(Debug, Clone)]

@@ -190,6 +190,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b34_fix_params_keyof/` | backlog `34` | `fix_params` evaluates substituted `keyof` constraints before deciding whether to gate them as deferred |
 | `b33_as_cast_assignability/` | backlog `33` | `as` / angle-bracket assertions participate in normal assignment and call-argument assignability |
 | `b54_labeled_statements/` | backlog `54` | labeled statements are checked and labeled `break` / `continue` participate in flow |
+| `b59_modules_hygiene/` | backlog `59` | project-mode pending diagnostics are attributed to the owning module, and export lists validate local names |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):
 
@@ -258,3 +259,10 @@ exit, and `continue label` targets the labeled loop's back edge rather than the
 innermost loop. The corpus intentionally stays on labeled blocks and `while`
 loops; duplicate-label and invalid-label diagnostics are JavaScript semantic
 checks outside typokat's current diagnostic surface.
+
+`b59_modules_hygiene/` uses project fixture subdirectories. `override_attribution`
+pins class-fill override checks to the derived module that owns the member span
+(the buggy behavior drains the pending check into another module and renders at a
+clamped nonsense location). `export_ghost` pins local export-list validation:
+`export { ghost }` must report `TK2304` at the export site even when no importer
+mentions the missing export.
