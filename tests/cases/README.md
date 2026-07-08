@@ -186,6 +186,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b61_field_initializers/` | backlog `61` | class field initializers checked against the annotation (assignability, excess, contextual typing; instance + static) |
 | `b53_cfg_assignments/` | backlog `53` | assignments survive `&&`/`||`/ternary, `switch` clauses, `while` tests, and sequence expressions in the flow graph |
 | `b57_tuple_array_infer/` | backlog `57` | Tuple↔Array inference pairings: `(infer U)[]` over a tuple binds the element union; tuple/array cross-kind call inference |
+| `b64_readonly_infer_binder/` | backlog `64` | `infer` binders under `readonly` array/tuple syntax are collected and do not degrade aliases to error |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):
 
@@ -220,3 +221,8 @@ behavior reports both the TK2589 and the later line's real TK2322). The other no
 kinds (conditional / instantiation / mapped / eager keyof) already behave correctly and
 are pinned as the regression net, as is the healthy cross-alias template-reuse path.
 No new diagnostics.
+
+`b64_readonly_infer_binder/` pins the `readonly (infer U)[]` traversal gap. The
+mutable `(infer U)[]` control already worked; the readonly array, readonly tuple,
+and nested readonly-array forms must produce the same downstream assignment
+errors as tsc instead of an alias-site `TK2304` plus an error-typed alias.
