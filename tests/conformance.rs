@@ -85,7 +85,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b57_tuple_array_infer", true),
     ("b64_readonly_infer_binder", true),
     ("b34_fix_params_keyof", true),
-    ("b33_as_cast_assignability", false),
+    ("b33_as_cast_assignability", true),
 ];
 
 /// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`

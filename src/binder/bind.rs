@@ -642,6 +642,12 @@ fn bind_expression(state: &mut BindState, scope: ScopeId, expr: &Expression<'_>)
         Expression::ParenthesizedExpression(paren) => {
             bind_expression(state, scope, &paren.expression);
         }
+        Expression::TSAsExpression(assertion) => {
+            bind_expression(state, scope, &assertion.expression);
+        }
+        Expression::TSTypeAssertion(assertion) => {
+            bind_expression(state, scope, &assertion.expression);
+        }
         // Literals, identifiers, and other expression shapes hold no nested
         // function in the M3 subset.
         _ => {}

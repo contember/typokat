@@ -341,6 +341,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Expression::ParenthesizedExpression(paren) => {
                 self.build_flow_expr(scope, &paren.expression)
             }
+            Expression::TSAsExpression(assertion) => {
+                self.build_flow_expr(scope, &assertion.expression)
+            }
+            Expression::TSTypeAssertion(assertion) => {
+                self.build_flow_expr(scope, &assertion.expression)
+            }
             Expression::LogicalExpression(logical) => self.build_flow_logical(scope, logical),
             Expression::ConditionalExpression(cond) => self.build_flow_conditional(scope, cond),
             Expression::AssignmentExpression(assign) => self.build_flow_assignment(scope, assign),

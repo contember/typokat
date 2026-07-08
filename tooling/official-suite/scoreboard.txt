@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
 # corpus 874  in-scope 506  out-of-scope 368
-# clean-kept 171/219  error-exact 24/287  diag-recall 304/1691
+# clean-kept 172/219  error-exact 24/287  diag-recall 305/1691
 # cols: status<TAB>matched fn fp expected<TAB>rel  (status=IN | OOS:<bucket>; '-' = n/a)
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -457,7 +457,7 @@ IN	4 0 1 4	conformance/types/intersection/intersectionTypeReadonly.ts
 IN	3 1 2 4	conformance/types/intersection/intersectionWithIndexSignatures.ts
 OOS:unresolved	- - - -	conformance/types/intersection/intersectionWithUnionConstraint.ts
 OOS:multifile	- - - -	conformance/types/intersection/intersectionsAndEmptyObjects.ts
-IN	0 0 2 0	conformance/types/intersection/operatorsAndIntersectionTypes.ts
+IN	0 0 0 0	conformance/types/intersection/operatorsAndIntersectionTypes.ts
 IN	0 6 1 6	conformance/types/intersection/recursiveIntersectionTypes.ts
 IN	0 9 0 9	conformance/types/keyof/circularIndexedAccessErrors.ts
 IN	0 0 0 0	conformance/types/keyof/keyofAndForIn.ts
@@ -581,7 +581,7 @@ OOS:syntax:module	- - - -	conformance/types/objectTypeLiteral/constructSignature
 IN	0 0 0 0	conformance/types/objectTypeLiteral/constructSignatures/constructSignaturesWithOverloadsThatDifferOnlyByReturnType.ts
 IN	0 14 0 14	conformance/types/objectTypeLiteral/indexSignatures/multipleNumericIndexers.ts
 IN	0 12 0 12	conformance/types/objectTypeLiteral/indexSignatures/multipleStringIndexers.ts
-IN	0 6 10 6	conformance/types/objectTypeLiteral/indexSignatures/numericIndexerConstrainsPropertyDeclarations.ts
+IN	1 5 10 6	conformance/types/objectTypeLiteral/indexSignatures/numericIndexerConstrainsPropertyDeclarations.ts
 IN	0 4 1 4	conformance/types/objectTypeLiteral/indexSignatures/numericIndexerConstrainsPropertyDeclarations2.ts
 IN	0 18 0 18	conformance/types/objectTypeLiteral/indexSignatures/numericIndexingResults.ts
 IN	0 28 1 28	conformance/types/objectTypeLiteral/indexSignatures/stringIndexerConstrainsPropertyDeclarations.ts
@@ -657,7 +657,7 @@ IN	0 0 0 0	conformance/types/tuple/tupleElementTypes2.ts
 IN	0 0 0 0	conformance/types/tuple/tupleElementTypes3.ts
 IN	0 0 0 0	conformance/types/tuple/tupleElementTypes4.ts
 IN	0 2 0 2	conformance/types/tuple/tupleLengthCheck.ts
-IN	1 5 4 6	conformance/types/tuple/typeInferenceWithTupleType.ts
+IN	1 5 2 6	conformance/types/tuple/typeInferenceWithTupleType.ts
 IN	0 8 0 8	conformance/types/tuple/unionsOfTupleTypes1.ts
 OOS:syntax:as-const	- - - -	conformance/types/tuple/variadicTuples1.ts
 OOS:parse-error	- - - -	conformance/types/tuple/variadicTuples2.ts

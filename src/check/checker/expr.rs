@@ -11,9 +11,9 @@ use crate::types::repr::{
 use crate::types::store::{Store, TypeId};
 use rustc_hash::{FxHashMap, FxHashSet};
 use oxc_ast::ast::{
-    ArrayExpression, BinaryExpression, BinaryOperator, ComputedMemberExpression, Expression, LogicalExpression, ObjectExpression, ObjectPropertyKind,
-    StaticMemberExpression, UnaryExpression,
-    UnaryOperator,
+    ArrayExpression, BinaryExpression, BinaryOperator, ComputedMemberExpression, Expression,
+    LogicalExpression, ObjectExpression, ObjectPropertyKind, StaticMemberExpression, TSType,
+    TSTypeName, UnaryExpression, UnaryOperator,
 };
 use super::context::*;
 use super::calls::widen;
@@ -72,6 +72,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 Some((id, Span::from_oxc(arrow.span)))
             }
             Expression::ParenthesizedExpression(paren) => self.infer_expr(scope, &paren.expression),
+            Expression::TSAsExpression(assertion) => self.infer_assertion(
+                scope,
+                &assertion.expression,
+                &assertion.type_annotation,
+                Span::from_oxc(assertion.span),
+            ),
+            Expression::TSTypeAssertion(assertion) => self.infer_assertion(
+                scope,
+                &assertion.expression,
+                &assertion.type_annotation,
+                Span::from_oxc(assertion.span),
+            ),
             Expression::Identifier(ident) => {
                 let span = Span::from_oxc(ident.span);
                 // The `undefined` keyword parses as an identifier reference.
@@ -138,6 +150,25 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
             _ => None,
         }
+    }
+
+    /// Infer a TypeScript assertion (`expr as T` / `<T>expr`). The source expression is
+    /// still walked for nested diagnostics; the value type is the asserted type.
+    fn infer_assertion(
+        &mut self,
+        scope: ScopeId,
+        expression: &Expression<'_>,
+        type_annotation: &TSType<'_>,
+        span: Span,
+    ) -> Option<(TypeId, Span)> {
+        let source = self.infer_expr(scope, expression);
+        if is_const_assertion_type(type_annotation) {
+            return source;
+        }
+        let asserted = self
+            .lower_annotation(scope, type_annotation)
+            .unwrap_or_else(|| self.interner.well_known().error);
+        Some((asserted, span))
     }
 
     /// Resolve a value symbol's *narrowed* type at a reference (M23). The reference's
@@ -955,6 +986,19 @@ fn is_comparison_operator(op: BinaryOperator) -> bool {
             | BinaryOperator::GreaterThan
             | BinaryOperator::GreaterEqualThan
     )
+}
+
+fn is_const_assertion_type(ts_type: &TSType<'_>) -> bool {
+    let TSType::TSTypeReference(reference) = ts_type else {
+        return false;
+    };
+    if reference.type_arguments.is_some() {
+        return false;
+    }
+    let TSTypeName::IdentifierReference(ident) = &reference.type_name else {
+        return false;
+    };
+    ident.name.as_str() == "const"
 }
 
 /// Read a **string-literal** key from an element-access index expression

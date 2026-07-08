@@ -186,3 +186,15 @@ broader inference-policy work.
   `intersectionTypeInference2` progress), and `tsc 6.0.3 --strict` over the b34 corpus.
   Backlog 35 is narrowed: concrete object-union common keys are implemented, while
   `K = never` and template-literal key sources remain deferred.
+- **WU3 shipped** — spec `3bd833b`; implementation types `as` / angle-bracket
+  assertions as the asserted annotation while still walking the source operand in
+  binder, flowgraph, and expression checking. `as const` stays transparent for now,
+  and annotationless interface properties lower to `any` to match tsc's object-literal
+  tests. Review loop: worker round caught an official-suite regression in
+  `propertyNameWithoutTypeAnnotation.ts`; final adversarial review PASS over direct
+  b33 diagnostics, nested diagnostics, flow references under assertions, and `as const`
+  controls. Verification: `cargo test conformance`, `cargo test`,
+  `cargo clippy --all-targets -- -D warnings`, `cargo build --release`,
+  official-suite `run --check` (0 regressions, three progress files), and
+  `tsc 6.0.3 --strict` over the b33 corpus. Deferred parity: assertions inside guard
+  conditions such as `(x !== null) as boolean` do not yet feed narrowing.

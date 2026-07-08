@@ -980,11 +980,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     if overloaded_method_names.contains(name.as_ref()) {
                         continue;
                     }
-                    let Some(annotation) = sig.type_annotation.as_ref() else {
-                        continue;
-                    };
-                    let Some(ty) = self.lower_annotation(scope, &annotation.type_annotation) else {
-                        continue;
+                    let ty = match sig.type_annotation.as_ref() {
+                        Some(annotation) => {
+                            let Some(ty) = self.lower_annotation(scope, &annotation.type_annotation)
+                            else {
+                                continue;
+                            };
+                            ty
+                        }
+                        // tsc treats annotationless interface properties as `any`.
+                        None => self.interner.well_known().any,
                     };
                     // M21: an optional property (`b?: T`) is a real member whose effective
                     // type bakes in `| undefined` (model `exactOptionalPropertyTypes` OFF).
