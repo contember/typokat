@@ -188,6 +188,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b57_tuple_array_infer/` | backlog `57` | Tuple↔Array inference pairings: `(infer U)[]` over a tuple binds the element union; tuple/array cross-kind call inference |
 | `b64_readonly_infer_binder/` | backlog `64` | `infer` binders under `readonly` array/tuple syntax are collected and do not degrade aliases to error |
 | `b34_fix_params_keyof/` | backlog `34` | `fix_params` evaluates substituted `keyof` constraints before deciding whether to gate them as deferred |
+| `b33_as_cast_assignability/` | backlog `33` | `as` / angle-bracket assertions participate in normal assignment and call-argument assignability |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):
 
@@ -241,3 +242,10 @@ is concrete: disjoint union keys reject as `never`, common keys stay valid,
 covered by a string index signature contributes the index value. The generic
 `wrapper<T>` and intersection-wrapper controls stay clean because those `keyof`
 constraints are still genuinely deferred/out of subset.
+
+`b33_as_cast_assignability/` pins assertion expressions as normal expression
+sources: the asserted type, not the untyped/out-of-subset fallback, must flow into
+declaration initializers, reassignments, and call arguments; the asserted expression
+is still walked so nested diagnostics such as `TK2304` are not lost. Cast validity
+itself (`TS2352`) is deliberately out of scope, so every cast in this corpus is
+valid and the expected errors come from the surrounding target relation.
