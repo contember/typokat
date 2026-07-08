@@ -187,6 +187,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b53_cfg_assignments/` | backlog `53` | assignments survive `&&`/`||`/ternary, `switch` clauses, `while` tests, and sequence expressions in the flow graph |
 | `b57_tuple_array_infer/` | backlog `57` | Tuple↔Array inference pairings: `(infer U)[]` over a tuple binds the element union; tuple/array cross-kind call inference |
 | `b64_readonly_infer_binder/` | backlog `64` | `infer` binders under `readonly` array/tuple syntax are collected and do not degrade aliases to error |
+| `b34_fix_params_keyof/` | backlog `34` | `fix_params` evaluates substituted `keyof` constraints before deciding whether to gate them as deferred |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):
 
@@ -230,3 +231,8 @@ regressions also pin the non-erasure boundaries: readonly sources must not match
 mutable array/tuple infer patterns, user object shapes must not mimic the internal
 readonly wrapper, and read/indexed access through readonly array/tuple types must
 return the element type rather than the error type.
+
+`b34_fix_params_keyof/` pins the M24/M28 asymmetry in generic call inference:
+after `T` is inferred to a concrete object type, `K extends keyof T` must evaluate
+to that object's key union before the candidate for `K` is accepted. The generic
+`wrapper<T>` control stays clean because `keyof T` is still genuinely deferred.
