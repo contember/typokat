@@ -20,6 +20,3 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-07-08-soundness-tail-quick-wins.md`](sprint-2026-07-08-soundness-tail-quick-wins.md)
-  — closes small/low-coupling silent-FN tail items (`64`, `34`, `33`, `54`, `59`; `65` stretch)
-  before the next signature-shape sprint.

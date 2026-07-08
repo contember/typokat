@@ -1,5 +1,34 @@
 # Sprint — soundness tail quick wins (2026-07-08)
 
+## OUTCOME
+
+Shipped five low-coupling soundness/parity fixes and left the stretch item as a
+dedicated future inference-policy sprint.
+
+**Commit map.**
+- Plan: `7de1c5e`.
+- WU1 b64 readonly infer binder: spec `8376eb5`, implementation `a1b2168`.
+- WU2 b34 evaluated `keyof` constraints in inference fixing: spec `54af4ba`,
+  implementation `1fdb41b`.
+- WU3 b33 assertion expressions: spec `3bd833b`, implementation `827869e`.
+- Backlog cleanup for shipped `33`/`34`/`64`: `70253d4`.
+- WU4 b54 labeled statement checking/flow: spec `ef131c5`, implementation
+  `382b06c`.
+- WU5 b59 module diagnostics hygiene: spec `b749ddb`, implementation `8da4d6d`.
+
+**Verification.** Each implementation went through the spec-first loop, worker
+subagent, independent adversarial review, focused `typokat`/`tsc 6.0.3 --strict`
+probes, `cargo test conformance`, `cargo test`,
+`cargo clippy --all-targets -- -D warnings`, `cargo build --release`, and
+official-suite `run --check`. Final
+official-suite status for WU5: 0 regressions / 0 progress. WU3 intentionally saved
+scoreboard progress from three files.
+
+**Deferred.** WU6 / backlog `65` stays open. Feasibility review showed that fixing
+multi-argument candidate unioning correctly needs candidate priority/origin/variance
+metadata and tsc-like fixing rules, not a local `fix_candidates` tweak. The current
+backlog item remains the source of truth for that dedicated sprint.
+
 **Goal.** Close a batch of remaining known silent-false-negative families that are
 small or low-coupling enough to ship before the next signature-shape/model sprint.
 
@@ -222,3 +251,9 @@ broader inference-policy work.
   official-suite `run --check` (0 regressions / 0 progress). Non-blocking safe
   over-report: if an importer references a renamed invalid export, typokat reports
   both export-site `TK2304` and importer `TK2305`.
+- **WU6 deferred** — b65 feasibility review recommended DEFER. `tsc 6.0.3` probes
+  show non-local candidate priority behavior (`pair(1, "s")` targets `1`,
+  `pair(1, 2)` stays valid as `1 | 2`, widened values widen, tuple/array scalar mixes
+  keep tuple element unions). Current inference stores only raw `Vec<TypeId>`
+  candidates and deliberately unions multi-candidates, with no origin/priority/variance
+  metadata; changing that safely belongs in a dedicated inference-policy sprint.
