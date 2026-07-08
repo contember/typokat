@@ -18,7 +18,8 @@ sprint-2026-07-07), and `25` (M31 intersection types, sprint-2026-07-07) — see
 [`../archive/`](../archive/README.md). Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). How each item
-is built: [`../reference/dev-method.md`](../reference/dev-method.md).
+is built: [`../reference/dev-method.md`](../reference/dev-method.md). Items `33`, `34`, and `64`
+shipped in the active [`2026-07-08 soundness-tail sprint`](../sprints/sprint-2026-07-08-soundness-tail-quick-wins.md).
 
 ## Definition of done (checker 1.0)
 
@@ -80,9 +81,6 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 - [`21`](21-local-class-checking.md) — function-local classes entirely unchecked.
 - [`22`](22-new-callee-forms.md) — `new (C)()` / aliased `new` miss class-keyed checks.
 - [`32`](32-eager-keyof-forward-references.md) — eager `keyof` over forward references.
-- [`33`](33-as-cast-assignability.md) — `as`-cast RHS bypasses assignability (broad real-world FN).
-- [`34`](34-fix-params-evaluate-before-gate.md) — `fix_params` gates deferred `keyof` without evaluating.
-- [`64`](64-readonly-array-infer-binder.md) — `infer` binder under `readonly` array raises spurious TK2304 + masks a downstream FN.
 - [`66`](66-protected-override-compat.md) — protected↔protected incompatible override skips TK2416 (dropped TS2416).
 - [`67`](67-utility-alias-constraint-enforcement.md) — utility/prelude alias type-param constraints unenforced (`ReturnType<number>` drops TS2344) · blocked-by `24`.
 
@@ -109,7 +107,7 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
 1. **Kill the known silent-FN families** — the five HIGH review findings (`53` `55` `57` `58`
    `61`) shipped in sprint-2026-07-07-soundness-fn-fixes; the remaining C group (`56`, `60`, `62`,
-   `65`, `54`, `59`, `33`, `34`, `32`, `21`, `22`, `64`, `66`, `67`) is next, every one a dropped-error class.
+   `65`, `54`, `59`, `32`, `21`, `22`, `66`, `67`) is next, every one a dropped-error class.
 2. **Run track A** to unblock `14` (`25` intersections shipped as M31 — the first step; `24` rest
    elements and `39` optional/default params are the natural next); interleave B items and C's
    parity tail as warm-ups between the A milestones. `38` (minimal prelude) and `13` (profiling
