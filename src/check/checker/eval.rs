@@ -490,6 +490,11 @@ impl<'a> ConditionalEvaluator<'a> {
                         stack.extend(tup.elements.iter().copied());
                     }
                 }
+                TypeTag::Readonly => {
+                    if let Some(operand) = store.readonly_operand(t) {
+                        stack.push(operand);
+                    }
+                }
                 // Decidable leaves — see the doc above (templates deliberately
                 // excluded per the round-2 deviation).
                 TypeTag::Template
@@ -1538,6 +1543,17 @@ impl<'a> ConditionalEvaluator<'a> {
                     ty
                 }
             }
+            TypeTag::Readonly => {
+                let Some(operand) = self.interner.store().readonly_operand(ty) else {
+                    return ty;
+                };
+                let no = self.replace_mapped_value(operand, value);
+                if no != operand {
+                    self.interner.intern_readonly(no)
+                } else {
+                    ty
+                }
+            }
             TypeTag::Conditional => {
                 let Some(cond) = self.interner.store().conditional_type(ty).copied() else {
                     return ty;
@@ -1832,6 +1848,17 @@ impl<'a> ConditionalEvaluator<'a> {
                     ty
                 }
             }
+            TypeTag::Readonly => {
+                let Some(operand) = self.interner.store().readonly_operand(ty) else {
+                    return ty;
+                };
+                let no = self.substitute_infers(operand, fresh);
+                if no != operand {
+                    self.interner.intern_readonly(no)
+                } else {
+                    ty
+                }
+            }
             TypeTag::Instantiation => {
                 let Some(inst) = self.interner.store().instantiation_type(ty).cloned() else {
                     return ty;
@@ -2004,6 +2031,10 @@ impl<'a> ConditionalEvaluator<'a> {
                 .tuple_type(ty)
                 .map(|t| t.elements.clone())
                 .unwrap_or_default(),
+            TypeTag::Readonly => store
+                .readonly_operand(ty)
+                .map(|operand| vec![operand])
+                .unwrap_or_default(),
             TypeTag::Conditional => store
                 .conditional_type(ty)
                 .map(|c| vec![c.check, c.extends_ty, c.true_branch, c.false_branch])
@@ -2162,6 +2193,11 @@ fn contains_nodes(
             TypeTag::Tuple => {
                 if let Some(tup) = store.tuple_type(t) {
                     stack.extend(tup.elements.iter().copied());
+                }
+            }
+            TypeTag::Readonly => {
+                if let Some(operand) = store.readonly_operand(t) {
+                    stack.push(operand);
                 }
             }
             TypeTag::Conditional => {

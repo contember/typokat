@@ -46,6 +46,12 @@ pub enum TypeTag {
     /// list (order is significant — unlike a union, `[A, B]` ≠ `[B, A]`).
     /// Constructed by `Interner::intern_tuple` (M18).
     Tuple,
+    /// A **readonly** array/tuple wrapper (`readonly T[]` / `readonly [A, B]`).
+    /// `payload` is the wrapped mutable array/tuple `TypeId`, stored inline like
+    /// [`TypeTag::Keyof`]. This is intentionally non-structural with respect to
+    /// object shapes: user-written objects cannot satisfy a readonly array pattern by
+    /// declaring a synthetic property.
+    Readonly,
     /// A **conditional** type (`C extends E ? T : F` — M25). `payload` indexes
     /// `Store::conditionals`. Carries the four component ids (check, extends, true,
     /// false), the count of `infer` binders it introduces, and whether its check was a

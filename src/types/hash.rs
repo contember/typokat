@@ -78,6 +78,9 @@ pub enum StructuralKey<'a> {
     /// `[number]` (length differs). Each element is itself canonical (interned), so
     /// the key is decided by the ordered sequence of ids.
     Tuple(&'a [TypeId]),
+    /// A **readonly** wrapper over an array/tuple operand. Identity is the operand
+    /// id alone, with its own discriminant so it never collides with the operand.
+    Readonly(TypeId),
     /// A **conditional** type (`C extends E ? T : F` — M25), keyed over its four
     /// component ids **in order** (position is meaning — the branches are not
     /// interchangeable), plus `infer_count` and `distributive`. So
@@ -262,6 +265,10 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
                 // hash differently.
                 element.0.hash(&mut h);
             }
+        }
+        StructuralKey::Readonly(operand) => {
+            TypeTag::Readonly.hash_discriminant(&mut h);
+            operand.0.hash(&mut h);
         }
         StructuralKey::Conditional {
             check,

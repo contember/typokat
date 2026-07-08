@@ -135,12 +135,15 @@ completeness (`TK2515`/`TK2654`) (b06); private/protected constructor accessibil
 ## Arrays & tuples (M17 / M18 / M30)
 
 Implemented: `T[]` / `Array<T>`, array literals, element access, `length`, covariant assignability
-(M17); tuples `[A, B]` (positional, indexed access, contextual typing) (M18); contextual typing of
-fresh object/array/tuple literals against concrete declaration, assignment, parameter, `new`/
-`super`, and declared-return targets (M30).
+(M17); tuples `[A, B]` (positional, indexed access, contextual typing) (M18); readonly
+array/tuple syntax for relation, read/indexed access, and conditional-`infer` matching (b64);
+contextual typing of fresh object/array/tuple literals against concrete declaration, assignment,
+parameter, `new`/`super`, and declared-return targets (M30).
 
-- **Deferred:** array METHODS (`push`/`map`/…) and `ReadonlyArray` (need `lib.d.ts`); optional
-  tuple elements (`[number?]`) remain deferred with the rest of M18's tuple gaps.
+- **Deferred:** array METHODS (`push`/`map`/…) and the `ReadonlyArray` interface surface (need
+  `lib.d.ts`); contextual fresh-literal shaping against readonly tuple targets is still a safe
+  over-report; optional tuple elements (`[number?]`) remain deferred with the rest of M18's tuple
+  gaps.
 
 ## Index signatures & keyof (M19 / M20)
 

@@ -457,6 +457,7 @@ fn member_matches_typeof(
         | TypeTag::TypeParam
         | TypeTag::Array
         | TypeTag::Tuple
+        | TypeTag::Readonly
         // M25/M26/M28: a conditional / lazy instantiation / infer binder / mapped type /
         // mapped-value placeholder / deferred keyof never appears as a narrowable union
         // member in the M7 `typeof` subset — defensively false.
@@ -480,7 +481,7 @@ fn is_always_truthy(store: &crate::types::store::Store, member: TypeId) -> bool 
     // `T[]` in the truthy branch and `null` in the falsy one.
     matches!(
         store.tag(member),
-        TypeTag::Object | TypeTag::Function | TypeTag::Array
+        TypeTag::Object | TypeTag::Function | TypeTag::Array | TypeTag::Readonly
     )
 }
 

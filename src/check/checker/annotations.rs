@@ -96,16 +96,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     reference.type_arguments.as_deref(),
                 );
             }
-            // M20: `keyof T`. Only the `keyof` operator is in scope (`unique`/`readonly`
-            // operators are not); it is computed eagerly on a concrete object type
-            // ([`keyof_type`]). A generic/deferred `keyof` (over a type parameter) is a
-            // VM-phase feature → error type (no crash).
+            // M20: `keyof T` is computed eagerly on a concrete object type
+            // ([`keyof_type`]). b64: `readonly` over array/tuple syntax is lowered to a
+            // readonly-only wrapper so conditional `infer` binders under that syntax are
+            // traversed without making readonly sources behave like mutable arrays.
             TSType::TSTypeOperatorType(op) => {
-                if op.operator != TSTypeOperatorOperator::Keyof {
-                    return None;
+                if op.operator == TSTypeOperatorOperator::Keyof {
+                    let operand = self.lower_annotation(scope, &op.type_annotation)?;
+                    return Some(self.keyof_type(operand));
                 }
-                let operand = self.lower_annotation(scope, &op.type_annotation)?;
-                return Some(self.keyof_type(operand));
+                if op.operator == TSTypeOperatorOperator::Readonly {
+                    return self.lower_readonly_array_or_tuple(scope, &op.type_annotation);
+                }
+                return None;
             }
             // M20: an indexed-access type `T[K]`. Both sides are lowered, then the
             // member type(s) named by `K` are looked up on `T` eagerly
@@ -1193,6 +1196,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         if object == wk.error || object == wk.any || index == wk.error || index == wk.any {
             return wk.error;
         }
+        let object = self
+            .interner
+            .store()
+            .readonly_operand(object)
+            .unwrap_or(object);
 
         let store = self.interner.store();
 
@@ -1246,6 +1254,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
                 return wk.error;
             }
+            if let Some(array) = store.array_type(object) {
+                return array.element;
+            }
             if let Some(value) = store.object_type(object).and_then(|o| o.number_index) {
                 return value;
             }
@@ -1254,6 +1265,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         // The bare `number` intrinsic key → the number index value type (or error).
         if index == wk.number {
+            if let Some(array) = store.array_type(object) {
+                return array.element;
+            }
             if let Some(value) = store.object_type(object).and_then(|o| o.number_index) {
                 return value;
             }
@@ -1295,6 +1309,39 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             params: lowered,
             ret,
         }))
+    }
+
+    fn lower_readonly_array_or_tuple(
+        &mut self,
+        scope: ScopeId,
+        operand: &TSType<'_>,
+    ) -> Option<TypeId> {
+        match operand {
+            TSType::TSArrayType(array) => {
+                let element =
+                    self.with_indirection(|p| p.lower_annotation(scope, &array.element_type))?;
+                Some(self.intern_readonly_array(element))
+            }
+            TSType::TSTupleType(tuple) => {
+                let mut elements = Vec::with_capacity(tuple.element_types.len());
+                for element in &tuple.element_types {
+                    let ts_type = element.as_ts_type()?;
+                    elements.push(self.with_indirection(|p| p.lower_annotation(scope, ts_type))?);
+                }
+                Some(self.intern_readonly_tuple(elements))
+            }
+            _ => None,
+        }
+    }
+
+    fn intern_readonly_array(&mut self, element: TypeId) -> TypeId {
+        let array = self.interner.intern_array(element);
+        self.interner.intern_readonly(array)
+    }
+
+    fn intern_readonly_tuple(&mut self, elements: Vec<TypeId>) -> TypeId {
+        let tuple = self.interner.intern_tuple(elements);
+        self.interner.intern_readonly(tuple)
     }
 }
 

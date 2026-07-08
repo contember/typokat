@@ -165,3 +165,11 @@ broader inference-policy work.
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
      trim to a one-line pointer ("→ ADR-0007"). -->
+- **WU1 shipped** — spec `8376eb5`; implementation uses a real internal `Readonly`
+  wrapper for `readonly T[]` / `readonly [..]`, not transparent erasure. Review loop:
+  round 1 FAIL caught readonly sources matching mutable infer patterns and readonly
+  returns flowing to mutable arrays; round 2 FAIL caught read/indexed access returning
+  error and masking downstream `TK2322`; focused round 3 PASS. Verification:
+  `cargo test conformance`, `cargo test`, `cargo clippy --all-targets -- -D warnings`,
+  and `tsc 6.0.3 --strict` over the b64 corpus. Deferred safe over-report: contextual
+  fresh literals against readonly tuple targets remain outside this WU.

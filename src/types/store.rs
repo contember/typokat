@@ -208,6 +208,15 @@ impl Store {
         self.tuples.get(self.payload(id) as usize)
     }
 
+    /// The wrapped array/tuple operand of a readonly wrapper, or `None` if `id` is
+    /// not a readonly node. The operand id is stored inline in the payload.
+    pub fn readonly_operand(&self, id: TypeId) -> Option<TypeId> {
+        if self.tag(id) != TypeTag::Readonly {
+            return None;
+        }
+        Some(TypeId(self.payload(id)))
+    }
+
     /// The `ConditionalType` of a conditional type (M25), or `None` if `id` is not a
     /// conditional.
     pub fn conditional_type(&self, id: TypeId) -> Option<&ConditionalType> {
@@ -422,6 +431,12 @@ impl Store {
         let payload = self.tuples.len() as u32;
         self.tuples.push(tuple);
         self.push(TypeTag::Tuple, flags, payload)
+    }
+
+    /// Append a readonly wrapper row. Internal — `Interner` owns dedup by operand.
+    /// The wrapped array/tuple id is stored inline in `payload`.
+    pub(crate) fn push_readonly(&mut self, operand: TypeId, flags: TypeFlags) -> TypeId {
+        self.push(TypeTag::Readonly, flags, operand.0)
     }
 
     /// Append a conditional row (M25). Internal — `Interner` owns dedup (by all four

@@ -552,6 +552,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // — `t["x"]` with `T extends { x: number }` and `t[0]` with `T extends number[]`
         // read through the constraint. For a non-parameter base this is the identity.
         let base_ty = self.apparent_type(base_ty);
+        let base_ty = self
+            .interner
+            .store()
+            .readonly_operand(base_ty)
+            .unwrap_or(base_ty);
 
         // Array base (M17): the result is the element type (any index).
         if let Some(array) = self.interner.store().array_type(base_ty) {

@@ -952,6 +952,13 @@ fn render_type_inner(
             // Defensive fallback; a tuple always has a side-table entry.
             None => "<unsupported>".to_string(),
         },
+        TypeTag::Readonly => match store.readonly_operand(id) {
+            Some(operand) => {
+                let rendered = render_type_inner(store, operand, false, rendering);
+                format!("readonly {rendered}")
+            }
+            None => "<unsupported>".to_string(),
+        },
         // Conditional (M25): `C extends E ? T : F`. Conditional-typed targets are
         // asserted code-only in the corpus, so the exact form only has to be stable and
         // sanely parenthesized (branches never widen — only a top-level literal source
@@ -1141,7 +1148,7 @@ fn render_function_parts(
 fn array_element_needs_parens(store: &Store, element: TypeId) -> bool {
     matches!(
         store.tag(element),
-        TypeTag::Union | TypeTag::Function | TypeTag::Intersection
+        TypeTag::Union | TypeTag::Function | TypeTag::Intersection | TypeTag::Readonly
     )
 }
 

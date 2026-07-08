@@ -83,6 +83,7 @@ impl<'a> Substitution<'a> {
             TypeTag::Intersection => self.apply_intersection(interner, ty),
             TypeTag::Array => self.apply_array(interner, ty),
             TypeTag::Tuple => self.apply_tuple(interner, ty),
+            TypeTag::Readonly => self.apply_readonly(interner, ty),
             TypeTag::Conditional => self.apply_conditional(interner, ty),
             TypeTag::Instantiation => self.apply_instantiation(interner, ty),
             TypeTag::Mapped => self.apply_mapped(interner, ty),
@@ -335,6 +336,18 @@ impl<'a> Substitution<'a> {
 
         if changed {
             interner.intern_tuple(substituted)
+        } else {
+            ty
+        }
+    }
+
+    fn apply_readonly(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
+        let Some(operand) = interner.store().readonly_operand(ty) else {
+            return ty;
+        };
+        let new_operand = self.apply(interner, operand);
+        if new_operand != operand {
+            interner.intern_readonly(new_operand)
         } else {
             ty
         }

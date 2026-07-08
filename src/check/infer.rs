@@ -439,6 +439,21 @@ impl InferenceContext {
             return;
         }
 
+        if interner.store().tag(target) == TypeTag::Readonly {
+            let Some(target_operand) = interner.store().readonly_operand(target) else {
+                self.visited.remove(&(source, target));
+                return;
+            };
+            let source_operand = if interner.store().tag(source) == TypeTag::Readonly {
+                interner.store().readonly_operand(source).unwrap_or(source)
+            } else {
+                source
+            };
+            self.infer(interner, source_operand, target_operand, candidates);
+            self.visited.remove(&(source, target));
+            return;
+        }
+
         match (interner.store().tag(source), interner.store().tag(target)) {
             (TypeTag::Object, TypeTag::Object) => {
                 self.infer_objects(interner, source, target, candidates);

@@ -365,6 +365,22 @@ impl Interner {
         id
     }
 
+    /// Intern a readonly array/tuple wrapper. Identity is the wrapped operand id,
+    /// but the tag is distinct from the operand so readonly sources cannot be treated
+    /// as mutable arrays/tuples by structural accident.
+    pub fn intern_readonly(&mut self, operand: TypeId) -> TypeId {
+        let key = StructuralKey::Readonly(operand);
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store.readonly_operand(id) == Some(operand)
+        }) {
+            return existing;
+        }
+        let id = self.store.push_readonly(operand, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
     /// Intern a union type from its (un-canonicalized) member ids, returning the
     /// shared id of the canonical result.
     ///

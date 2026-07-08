@@ -514,6 +514,24 @@ impl<'a> Relater<'a> {
             return self.relate_template_target(src, tgt);
         }
 
+        // b64 readonly array/tuple wrapper: readonly sources are not mutable arrays,
+        // but a readonly target accepts another readonly wrapper by its operand and
+        // accepts a mutable array/tuple source through the wrapped target shape.
+        if self.store.tag(tgt) == TypeTag::Readonly {
+            let Some(tgt_operand) = self.store.readonly_operand(tgt) else {
+                return Relation::No(ReasonChain::leaf(src, tgt));
+            };
+            let src_operand = if self.store.tag(src) == TypeTag::Readonly {
+                self.store.readonly_operand(src).unwrap_or(src)
+            } else {
+                src
+            };
+            return self.relate(src_operand, tgt_operand, kind, assumed);
+        }
+        if self.store.tag(src) == TypeTag::Readonly {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        }
+
         // Object structural rule (mvp-plan §6/§9, M2): `src` is assignable to
         // `tgt` iff every property of `tgt` is present in `src` with the src
         // property type assignable to the tgt property type. Width is allowed
@@ -1479,6 +1497,11 @@ impl<'a> Relater<'a> {
                 TypeTag::Tuple => {
                     if let Some(tup) = self.store.tuple_type(t) {
                         stack.extend(tup.elements.iter().copied());
+                    }
+                }
+                TypeTag::Readonly => {
+                    if let Some(operand) = self.store.readonly_operand(t) {
+                        stack.push(operand);
                     }
                 }
                 TypeTag::Instantiation => {

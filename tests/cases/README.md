@@ -225,4 +225,8 @@ No new diagnostics.
 `b64_readonly_infer_binder/` pins the `readonly (infer U)[]` traversal gap. The
 mutable `(infer U)[]` control already worked; the readonly array, readonly tuple,
 and nested readonly-array forms must produce the same downstream assignment
-errors as tsc instead of an alias-site `TK2304` plus an error-typed alias.
+errors as tsc instead of an alias-site `TK2304` plus an error-typed alias. The
+regressions also pin the non-erasure boundaries: readonly sources must not match
+mutable array/tuple infer patterns, user object shapes must not mimic the internal
+readonly wrapper, and read/indexed access through readonly array/tuple types must
+return the element type rather than the error type.
