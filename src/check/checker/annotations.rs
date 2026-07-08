@@ -1135,11 +1135,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
     /// Compute `keyof T` (M20, extended for M28). `T` is the already-lowered operand.
     ///
-    /// A concrete **object** operand keys **eagerly** through the shared
-    /// [`keyof_of_object`] computation (the SAME one the evaluator's deferred path
-    /// uses — single source of truth): the `union(...)` of its property names as
-    /// string-literal types, plus `string`/`number` for the respective index
-    /// signatures (`keyof {}` → `never` via the union collapse).
+    /// A concrete **object** operand, or a union of object operands, keys **eagerly**
+    /// through the shared [`keyof_of_type`] computation (the SAME one the evaluator's
+    /// deferred path uses — single source of truth): object keys are property names
+    /// plus index signatures, while union keys are the keys common to every member.
     ///
     /// M28: an operand that is a **pending type-level computation** — a free type
     /// parameter, a deferred conditional / mapped / instantiation / template / keyof,
@@ -1152,7 +1151,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// out-of-scope error type** (no crash; the error type suppresses cascade), as
     /// does an error/`any` operand.
     fn keyof_type(&mut self, operand: TypeId) -> TypeId {
-        if let Some(keys) = super::eval::keyof_of_object(self.interner, operand) {
+        if let Some(keys) = super::eval::keyof_of_type(self.interner, operand) {
             return keys;
         }
         let wk = self.interner.well_known();

@@ -38,8 +38,8 @@ use crate::diagnostics::Diagnostic;
 use crate::relate::Relater;
 use crate::span::Span;
 use crate::types::repr::{
-    ConditionalType, LiteralValue, MappedType, ModifierOp, ObjectType, PropertyType, TemplateType,
-    TypeParamId, TypeTag,
+    ConditionalType, FunctionType, LiteralValue, MappedType, ModifierOp, ObjectType, ParameterType,
+    PropertyType, TemplateType, TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
 use crate::types::{substitute, Interner};
@@ -85,6 +85,302 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             self.diagnostics.push(Diagnostic::excessively_deep(span));
         }
         result
+    }
+}
+
+pub(in crate::check) struct InferenceConstraintEvaluation {
+    pub(in crate::check) result: TypeId,
+    pub(in crate::check) exhausted: bool,
+}
+
+/// Demand-evaluate a constraint while fixing inferred type arguments. This mirrors
+/// [`Pass::evaluate_type`] without a diagnostic span; callers use `exhausted` to avoid
+/// accepting the budget-exhaustion error type as a real constraint value.
+pub(in crate::check) fn evaluate_inference_constraint(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    ty: TypeId,
+) -> InferenceConstraintEvaluation {
+    let mut memo = FxHashMap::default();
+    let mut ev = InferenceConstraintEvaluator::new(interner, next_type_param, &mut memo);
+    let result = ev.evaluate(ty);
+    InferenceConstraintEvaluation {
+        result,
+        exhausted: ev.exhausted,
+    }
+}
+
+struct InferenceConstraintEvaluator<'a> {
+    interner: &'a mut Interner,
+    next_type_param: &'a mut u32,
+    memo: &'a mut FxHashMap<TypeId, TypeId>,
+    in_progress: FxHashSet<TypeId>,
+    exhausted: bool,
+}
+
+impl<'a> InferenceConstraintEvaluator<'a> {
+    fn new(
+        interner: &'a mut Interner,
+        next_type_param: &'a mut u32,
+        memo: &'a mut FxHashMap<TypeId, TypeId>,
+    ) -> Self {
+        InferenceConstraintEvaluator {
+            interner,
+            next_type_param,
+            memo,
+            in_progress: FxHashSet::default(),
+            exhausted: false,
+        }
+    }
+
+    fn evaluate(&mut self, ty: TypeId) -> TypeId {
+        if self.exhausted || self.in_progress.contains(&ty) {
+            return ty;
+        }
+        match self.interner.store().tag(ty) {
+            TypeTag::Conditional
+            | TypeTag::Instantiation
+            | TypeTag::Mapped
+            | TypeTag::Template
+            | TypeTag::Keyof => self.evaluate_pending(ty),
+            TypeTag::Object => self.evaluate_object(ty),
+            TypeTag::Function => self.evaluate_function(ty),
+            TypeTag::Union => self.evaluate_union(ty),
+            TypeTag::Intersection => self.evaluate_intersection(ty),
+            TypeTag::Array => self.evaluate_array(ty),
+            TypeTag::Tuple => self.evaluate_tuple(ty),
+            TypeTag::Readonly => self.evaluate_readonly(ty),
+            TypeTag::Intrinsic
+            | TypeTag::Literal
+            | TypeTag::TypeParam
+            | TypeTag::Infer
+            | TypeTag::MappedValue => ty,
+        }
+    }
+
+    fn evaluate_pending(&mut self, ty: TypeId) -> TypeId {
+        let result;
+        let exhausted;
+        {
+            let mut ev = ConditionalEvaluator::new(
+                self.interner,
+                self.next_type_param,
+                self.memo,
+                DEFAULT_STEP_BUDGET,
+            );
+            result = ev.evaluate(ty);
+            exhausted = ev.exhausted;
+        }
+        if exhausted {
+            self.exhausted = true;
+            return ty;
+        }
+        if result == ty {
+            ty
+        } else {
+            self.evaluate(result)
+        }
+    }
+
+    fn evaluate_object(&mut self, ty: TypeId) -> TypeId {
+        let Some(object) = self.interner.store().object_type(ty).cloned() else {
+            return ty;
+        };
+        self.in_progress.insert(ty);
+        let mut changed = false;
+        let properties: Vec<PropertyType> = object
+            .properties
+            .into_iter()
+            .map(|prop| {
+                let new_ty = self.evaluate(prop.ty);
+                changed |= new_ty != prop.ty;
+                PropertyType { ty: new_ty, ..prop }
+            })
+            .collect();
+        let string_index = object.string_index.map(|index_ty| {
+            let new_ty = self.evaluate(index_ty);
+            changed |= new_ty != index_ty;
+            new_ty
+        });
+        let number_index = object.number_index.map(|index_ty| {
+            let new_ty = self.evaluate(index_ty);
+            changed |= new_ty != index_ty;
+            new_ty
+        });
+        let call_signatures: Vec<TypeId> = object
+            .call_signatures
+            .into_iter()
+            .map(|signature| {
+                let new_ty = self.evaluate(signature);
+                changed |= new_ty != signature;
+                new_ty
+            })
+            .collect();
+        let construct_signatures: Vec<TypeId> = object
+            .construct_signatures
+            .into_iter()
+            .map(|signature| {
+                let new_ty = self.evaluate(signature);
+                changed |= new_ty != signature;
+                new_ty
+            })
+            .collect();
+        self.in_progress.remove(&ty);
+
+        if changed {
+            self.interner.intern_object(ObjectType {
+                properties,
+                string_index,
+                number_index,
+                call_signatures,
+                construct_signatures,
+            })
+        } else {
+            ty
+        }
+    }
+
+    fn evaluate_function(&mut self, ty: TypeId) -> TypeId {
+        let Some(function) = self.interner.store().function_type(ty).cloned() else {
+            return ty;
+        };
+        self.in_progress.insert(ty);
+        let mut changed = false;
+        let params: Vec<ParameterType> = function
+            .params
+            .into_iter()
+            .map(|param| {
+                let new_ty = self.evaluate(param.ty);
+                changed |= new_ty != param.ty;
+                ParameterType {
+                    ty: new_ty,
+                    ..param
+                }
+            })
+            .collect();
+        let ret = self.evaluate(function.ret);
+        changed |= ret != function.ret;
+        self.in_progress.remove(&ty);
+
+        if changed {
+            self.interner.intern_function(FunctionType { params, ret })
+        } else {
+            ty
+        }
+    }
+
+    fn evaluate_union(&mut self, ty: TypeId) -> TypeId {
+        let Some(members) = self.interner.store().union_members(ty).map(|m| m.to_vec()) else {
+            return ty;
+        };
+        self.in_progress.insert(ty);
+        let mut changed = false;
+        let members: Vec<TypeId> = members
+            .into_iter()
+            .map(|member| {
+                let new_ty = self.evaluate(member);
+                changed |= new_ty != member;
+                new_ty
+            })
+            .collect();
+        self.in_progress.remove(&ty);
+
+        if changed {
+            self.interner.union(members)
+        } else {
+            ty
+        }
+    }
+
+    fn evaluate_intersection(&mut self, ty: TypeId) -> TypeId {
+        let Some(members) = self
+            .interner
+            .store()
+            .intersection_members(ty)
+            .map(|m| m.to_vec())
+        else {
+            return ty;
+        };
+        self.in_progress.insert(ty);
+        let mut changed = false;
+        let members: Vec<TypeId> = members
+            .into_iter()
+            .map(|member| {
+                let new_ty = self.evaluate(member);
+                changed |= new_ty != member;
+                new_ty
+            })
+            .collect();
+        self.in_progress.remove(&ty);
+
+        if changed {
+            self.interner.intersection(members)
+        } else {
+            ty
+        }
+    }
+
+    fn evaluate_array(&mut self, ty: TypeId) -> TypeId {
+        let Some(element) = self
+            .interner
+            .store()
+            .array_type(ty)
+            .map(|array| array.element)
+        else {
+            return ty;
+        };
+        let element = self.evaluate(element);
+        if self
+            .interner
+            .store()
+            .array_type(ty)
+            .map(|array| array.element)
+            == Some(element)
+        {
+            ty
+        } else {
+            self.interner.intern_array(element)
+        }
+    }
+
+    fn evaluate_tuple(&mut self, ty: TypeId) -> TypeId {
+        let Some(elements) = self
+            .interner
+            .store()
+            .tuple_type(ty)
+            .map(|tuple| tuple.elements.clone())
+        else {
+            return ty;
+        };
+        self.in_progress.insert(ty);
+        let mut changed = false;
+        let elements: Vec<TypeId> = elements
+            .into_iter()
+            .map(|element| {
+                let new_ty = self.evaluate(element);
+                changed |= new_ty != element;
+                new_ty
+            })
+            .collect();
+        self.in_progress.remove(&ty);
+
+        if changed {
+            self.interner.intern_tuple(elements)
+        } else {
+            ty
+        }
+    }
+
+    fn evaluate_readonly(&mut self, ty: TypeId) -> TypeId {
+        let Some(operand) = self.interner.store().readonly_operand(ty) else {
+            return ty;
+        };
+        let new_operand = self.evaluate(operand);
+        if new_operand == operand {
+            ty
+        } else {
+            self.interner.intern_readonly(new_operand)
+        }
     }
 }
 
@@ -585,7 +881,10 @@ impl<'a> ConditionalEvaluator<'a> {
     /// The check argument of a distributive-conditional instantiation (M28): the value
     /// mapped to the base's naked check parameter, or `None` when the base is not a
     /// (non-poisoned) distributive conditional or the parameter is not in the args.
-    fn distributive_check_arg(&self, inst: &crate::types::repr::InstantiationType) -> Option<TypeId> {
+    fn distributive_check_arg(
+        &self,
+        inst: &crate::types::repr::InstantiationType,
+    ) -> Option<TypeId> {
         let check_param = self
             .interner
             .store()
@@ -683,22 +982,27 @@ impl<'a> ConditionalEvaluator<'a> {
         };
         let mut results: Vec<TypeId> = Vec::with_capacity(members.len());
         for member in members {
-            let transformed = self
-                .interner
-                .store()
-                .literal_value(member)
-                .and_then(|lit| match lit {
-                    LiteralValue::String(s) => {
-                        Some(transform_string_intrinsic(&self.interner.well_known(), inst.base, s))
-                    }
-                    _ => None,
-                });
+            let transformed =
+                self.interner
+                    .store()
+                    .literal_value(member)
+                    .and_then(|lit| match lit {
+                        LiteralValue::String(s) => Some(transform_string_intrinsic(
+                            &self.interner.well_known(),
+                            inst.base,
+                            s,
+                        )),
+                        _ => None,
+                    });
             match transformed {
                 Some(out) => results.push(self.interner.intern_literal(LiteralValue::String(out))),
                 // A non-string-literal member stays a symbolic per-member application.
                 // Hash-consing makes a rebuild over the unchanged single argument THE
                 // original node, so identical-node relations stay total.
-                None => results.push(self.interner.intern_instantiation(inst.base, vec![(param, member)])),
+                None => results.push(
+                    self.interner
+                        .intern_instantiation(inst.base, vec![(param, member)]),
+                ),
             }
         }
         // A 1-member list collapses through `union` to that member.
@@ -891,12 +1195,11 @@ impl<'a> ConditionalEvaluator<'a> {
     }
 
     /// Resolve a deferred `keyof` whose operand has been evaluated (M28 — the operand
-    /// result is on top of the value stack). An **object** operand keys through the
-    /// shared [`keyof_of_object`] computation; an error/any operand degrades to the
-    /// error type (M22 cascade suppression); any other shape (a primitive after
-    /// substitution, a union, a still-deferred node) is **not** computable in this
-    /// subset — the node stays a deferred value (rebuilt over the evaluated operand),
-    /// never a permissive fallback.
+    /// result is on top of the value stack). A concrete object or union-of-objects
+    /// operand keys through the shared [`keyof_of_type`] computation; an error/any
+    /// operand degrades to the error type (M22 cascade suppression); any other shape
+    /// stays a deferred value (rebuilt over the evaluated operand), never a permissive
+    /// fallback.
     fn build_keyof(&mut self, ty: TypeId, values: &mut Vec<TypeId>, error: TypeId) {
         let operand = values.pop().unwrap_or(error);
         let wk = self.interner.well_known();
@@ -904,7 +1207,7 @@ impl<'a> ConditionalEvaluator<'a> {
             values.push(error);
             return;
         }
-        if let Some(keys) = keyof_of_object(self.interner, operand) {
+        if let Some(keys) = keyof_of_type(self.interner, operand) {
             values.push(keys);
             return;
         }
@@ -1191,12 +1494,9 @@ impl<'a> ConditionalEvaluator<'a> {
             // both. Without one (Record's bare `V`), or for a key the source lacks
             // (`Pick<P, "q">` after its TK2344 — tsc still instantiates), the M26
             // behavior is unchanged: placeholder → error type, flags start absent.
-            let ms_object = modifiers_source
-                .and_then(|ms| self.interner.store().object_type(ms).cloned());
             for name in names {
-                let source_prop = ms_object
-                    .as_ref()
-                    .and_then(|object| object.property(&name).cloned());
+                let source_prop = modifiers_source
+                    .and_then(|source| self.modifiers_source_property(source, &name));
                 match source_prop {
                     Some(prop) => {
                         let value = self.replace_mapped_value(mapped.value_template, prop.ty);
@@ -1233,6 +1533,81 @@ impl<'a> ConditionalEvaluator<'a> {
         }
     }
 
+    fn modifiers_source_property(&mut self, source: TypeId, name: &str) -> Option<PropertyType> {
+        if let Some(prop) = self
+            .interner
+            .store()
+            .object_type(source)
+            .and_then(|object| Self::named_source_property(object, name))
+        {
+            return Some(prop);
+        }
+
+        if let Some(members) = self
+            .interner
+            .store()
+            .intersection_members(source)
+            .map(|m| m.to_vec())
+        {
+            return self.intersection_source_property(&members, name);
+        }
+
+        let members = self.interner.store().union_members(source)?.to_vec();
+        let mut tys = Vec::with_capacity(members.len());
+        let mut optional = false;
+        let mut readonly = false;
+        for member in members {
+            let prop = self
+                .interner
+                .store()
+                .object_type(member)
+                .and_then(|object| Self::named_source_property(object, name))?;
+            tys.push(prop.ty);
+            optional |= prop.optional;
+            readonly |= prop.readonly;
+        }
+
+        let mut prop = PropertyType::public(name.to_string(), self.interner.union(tys));
+        prop.optional = optional;
+        prop.readonly = readonly;
+        Some(prop)
+    }
+
+    fn named_source_property(object: &ObjectType, name: &str) -> Option<PropertyType> {
+        if let Some(prop) = object.property(name) {
+            return Some(prop.clone());
+        }
+        object
+            .string_index
+            .map(|ty| PropertyType::public(name.to_string(), ty))
+    }
+
+    fn intersection_source_property(
+        &mut self,
+        members: &[TypeId],
+        name: &str,
+    ) -> Option<PropertyType> {
+        let mut tys = Vec::with_capacity(members.len());
+        let mut optional = true;
+        let mut readonly = false;
+        {
+            let store = self.interner.store();
+            for &member in members {
+                let prop = store
+                    .object_type(member)
+                    .and_then(|object| Self::named_source_property(object, name))?;
+                tys.push(prop.ty);
+                optional &= prop.optional;
+                readonly |= prop.readonly;
+            }
+        }
+
+        let mut prop = PropertyType::public(name.to_string(), self.interner.intersection(tys));
+        prop.optional = optional;
+        prop.readonly = readonly;
+        Some(prop)
+    }
+
     /// The source properties a homomorphic map iterates (M26), or `None` when the key
     /// source is not iterable in this subset (the node then stays deferred):
     ///
@@ -1244,24 +1619,36 @@ impl<'a> ConditionalEvaluator<'a> {
     ///    intersection (tsc: `keyof (A | B)` = `keyof A & keyof B`), each common
     ///    property's type the union of the members' types, `?`/`readonly` OR-ed across
     ///    members (matching tsc's union-property synthesis);
+    ///  - an **intersection of plain objects** → all member properties, duplicate keys
+    ///    intersected;
     ///  - an object **with** index signatures (no `K in string` production), a
     ///    primitive, or any other shape → `None`.
     fn homomorphic_source_props(&mut self, key_source: TypeId) -> Option<Vec<PropertyType>> {
-        let store = self.interner.store();
-        if let Some(object) = store.object_type(key_source) {
+        if let Some(object) = self.interner.store().object_type(key_source) {
             if object.string_index.is_some() || object.number_index.is_some() {
                 return None;
             }
             return Some(object.properties.clone());
         }
-        let members = store.union_members(key_source)?.to_vec();
+        if let Some(members) = self
+            .interner
+            .store()
+            .intersection_members(key_source)
+            .map(|m| m.to_vec())
+        {
+            return self.intersection_source_props(&members);
+        }
+        let members = self.interner.store().union_members(key_source)?.to_vec();
         let mut member_objects: Vec<Vec<PropertyType>> = Vec::with_capacity(members.len());
-        for member in &members {
-            let object = store.object_type(*member)?;
-            if object.string_index.is_some() || object.number_index.is_some() {
-                return None;
+        {
+            let store = self.interner.store();
+            for member in &members {
+                let object = store.object_type(*member)?;
+                if object.string_index.is_some() || object.number_index.is_some() {
+                    return None;
+                }
+                member_objects.push(object.properties.clone());
             }
-            member_objects.push(object.properties.clone());
         }
         // Intersect: keep the first member's keys present in EVERY member, collecting
         // each member's value type + flags. (A union always has ≥ 2 members.)
@@ -1299,6 +1686,46 @@ impl<'a> ConditionalEvaluator<'a> {
             out.push(prop);
         }
         Some(out)
+    }
+
+    fn intersection_source_props(&mut self, members: &[TypeId]) -> Option<Vec<PropertyType>> {
+        let mut entries: Vec<(String, Vec<TypeId>, bool, bool)> = Vec::new();
+        {
+            let store = self.interner.store();
+            for &member in members {
+                let object = store.object_type(member)?;
+                if object.string_index.is_some() || object.number_index.is_some() {
+                    return None;
+                }
+                for prop in &object.properties {
+                    match entries
+                        .iter_mut()
+                        .find(|(name, _, _, _)| *name == prop.name)
+                    {
+                        Some((_, tys, optional, readonly)) => {
+                            tys.push(prop.ty);
+                            *optional &= prop.optional;
+                            *readonly |= prop.readonly;
+                        }
+                        None => entries.push((
+                            prop.name.clone(),
+                            vec![prop.ty],
+                            prop.optional,
+                            prop.readonly,
+                        )),
+                    }
+                }
+            }
+        }
+
+        let mut props = Vec::with_capacity(entries.len());
+        for (name, tys, optional, readonly) in entries {
+            let mut prop = PropertyType::public(name, self.interner.intersection(tys));
+            prop.optional = optional;
+            prop.readonly = readonly;
+            props.push(prop);
+        }
+        Some(props)
     }
 
     /// Build the result object of a mapped evaluation (M26): pair each property's
@@ -1344,9 +1771,11 @@ impl<'a> ConditionalEvaluator<'a> {
             return wk.never;
         }
         let filtered: Vec<TypeId> = match self.interner.store().union_members(ty) {
-            Some(members) if members.contains(&wk.undefined) => {
-                members.iter().copied().filter(|&m| m != wk.undefined).collect()
-            }
+            Some(members) if members.contains(&wk.undefined) => members
+                .iter()
+                .copied()
+                .filter(|&m| m != wk.undefined)
+                .collect(),
             _ => return ty,
         };
         self.interner.union(filtered)
@@ -1523,8 +1952,11 @@ impl<'a> ConditionalEvaluator<'a> {
                 }
             }
             TypeTag::Tuple => {
-                let Some(elements) =
-                    self.interner.store().tuple_type(ty).map(|t| t.elements.clone())
+                let Some(elements) = self
+                    .interner
+                    .store()
+                    .tuple_type(ty)
+                    .map(|t| t.elements.clone())
                 else {
                     return ty;
                 };
@@ -1663,7 +2095,13 @@ impl<'a> ConditionalEvaluator<'a> {
             .collect();
         let fresh_ids: Vec<TypeParamId> = fresh
             .iter()
-            .map(|&t| self.interner.store().type_param(t).map(|p| p.id).unwrap_or(TypeParamId(0)))
+            .map(|&t| {
+                self.interner
+                    .store()
+                    .type_param(t)
+                    .map(|p| p.id)
+                    .unwrap_or(TypeParamId(0))
+            })
             .collect();
 
         let extends_f = self.substitute_infers(cond.extends_ty, &fresh);
@@ -1829,7 +2267,11 @@ impl<'a> ConditionalEvaluator<'a> {
                 }
             }
             TypeTag::Tuple => {
-                let Some(elements) = self.interner.store().tuple_type(ty).map(|t| t.elements.clone())
+                let Some(elements) = self
+                    .interner
+                    .store()
+                    .tuple_type(ty)
+                    .map(|t| t.elements.clone())
                 else {
                     return ty;
                 };
@@ -2070,13 +2512,36 @@ impl<'a> ConditionalEvaluator<'a> {
     }
 }
 
-/// Compute `keyof` over an **object** operand — the single source of truth shared by
-/// the eager lowering path ([`crate::check::checker::Pass::keyof_type`]) and the
-/// evaluator's deferred-keyof resolution ([`ConditionalEvaluator::build_keyof`]), per
-/// the M28 contract (no second keyof semantics). The result is the `union(...)` of the
-/// property names as string-literal types, plus `string`/`number` for the respective
-/// index signatures (an empty object yields `never` via the union collapse). `None`
-/// when the operand is not an object — the caller decides the out-of-scope handling.
+/// Compute `keyof` over a concrete object or union of objects. Object operands use
+/// [`keyof_of_object`]; union operands intersect the members' known keys (`keyof (A | B)`
+/// is the keys common to every member). `None` means the operand shape is outside this
+/// subset and the caller decides the fallback.
+pub(in crate::check::checker) fn keyof_of_type(
+    interner: &mut Interner,
+    operand: TypeId,
+) -> Option<TypeId> {
+    if interner.store().object_type(operand).is_some() {
+        return keyof_of_object(interner, operand);
+    }
+    if let Some(members) = interner
+        .store()
+        .intersection_members(operand)
+        .map(|m| m.to_vec())
+    {
+        let mut keys = Vec::with_capacity(members.len());
+        for member in members {
+            keys.push(keyof_of_type(interner, member)?);
+        }
+        return Some(interner.union(keys));
+    }
+    let members = interner.store().union_members(operand)?.to_vec();
+    keyof_of_union(interner, &members)
+}
+
+/// Compute `keyof` over an **object** operand — shared by eager lowering and deferred
+/// evaluation. The result is the `union(...)` of property names as string-literal
+/// types, plus `string`/`number` for the respective index signatures (an empty object
+/// yields `never` via the union collapse). `None` when the operand is not an object.
 pub(in crate::check::checker) fn keyof_of_object(
     interner: &mut Interner,
     operand: TypeId,
@@ -2103,16 +2568,190 @@ pub(in crate::check::checker) fn keyof_of_object(
     Some(interner.union(members))
 }
 
-/// Whether `ty` transitively contains a deferred [`TypeTag::Keyof`] node (M28) — the
-/// TK2344 **constraint-side** gate: a substituted constraint still carrying one cannot
-/// be decided by the identical-node relation, so the constraint check is skipped (tsc
-/// defers it; scoped to the NEW node kind only, leaving pre-M28 constraint behavior
-/// untouched). Also gates the inference clamp ([`crate::check::infer`]).
+struct UnionKeyInfo {
+    names: Vec<String>,
+    name_set: FxHashSet<String>,
+    has_string_index: bool,
+    has_number_index: bool,
+}
+
+fn keyof_of_union(interner: &mut Interner, members: &[TypeId]) -> Option<TypeId> {
+    let infos: Vec<UnionKeyInfo> = {
+        let store = interner.store();
+        let mut infos = Vec::with_capacity(members.len());
+        for &member in members {
+            let object = store.object_type(member)?;
+            let names: Vec<String> = object.properties.iter().map(|p| p.name.clone()).collect();
+            let name_set = names.iter().cloned().collect();
+            infos.push(UnionKeyInfo {
+                names,
+                name_set,
+                has_string_index: object.string_index.is_some(),
+                has_number_index: object.number_index.is_some(),
+            });
+        }
+        infos
+    };
+
+    let wk = interner.well_known();
+    let mut seen = FxHashSet::default();
+    let mut all_names = Vec::new();
+    for info in &infos {
+        for name in &info.names {
+            if seen.insert(name.clone()) {
+                all_names.push(name.clone());
+            }
+        }
+    }
+
+    let mut keys = Vec::new();
+    for name in all_names {
+        if infos
+            .iter()
+            .all(|info| info.name_set.contains(&name) || info.has_string_index)
+        {
+            keys.push(interner.intern_literal(LiteralValue::String(name)));
+        }
+    }
+    if infos.iter().all(|info| info.has_string_index) {
+        keys.push(wk.string);
+    }
+    if infos.iter().all(|info| info.has_number_index) {
+        keys.push(wk.number);
+    }
+    Some(interner.union(keys))
+}
+
+/// Whether `ty` transitively contains a genuinely deferred [`TypeTag::Keyof`] node
+/// (M28) — the constraint-side gate for a `keyof` whose operand still contains a free
+/// declaration type parameter. Concrete-but-unsupported `keyof` nodes must not be
+/// skipped; they relate conservatively instead of accepting bad arguments.
 pub(in crate::check) fn contains_deferred_keyof(
     store: &crate::types::store::Store,
     ty: TypeId,
 ) -> bool {
-    contains_nodes(store, ty, |tag| tag == TypeTag::Keyof)
+    contains_deferred_keyof_node(store, ty)
+}
+
+fn contains_deferred_keyof_node(store: &crate::types::store::Store, ty: TypeId) -> bool {
+    let mut stack = vec![ty];
+    let mut visited: FxHashSet<TypeId> = FxHashSet::default();
+    while let Some(t) = stack.pop() {
+        if !visited.insert(t) {
+            continue;
+        }
+        if store.tag(t) == TypeTag::Keyof {
+            if let Some(operand) = store.keyof_operand(t) {
+                if contains_free_keyof_operand(store, operand) {
+                    return true;
+                }
+                stack.push(operand);
+            }
+            continue;
+        }
+        push_node_children(store, t, &mut stack, false);
+    }
+    false
+}
+
+fn contains_free_keyof_operand(store: &crate::types::store::Store, ty: TypeId) -> bool {
+    let mut stack = vec![ty];
+    let mut visited: FxHashSet<TypeId> = FxHashSet::default();
+    while let Some(t) = stack.pop() {
+        if !visited.insert(t) {
+            continue;
+        }
+        match store.tag(t) {
+            TypeTag::TypeParam | TypeTag::Infer | TypeTag::MappedValue => return true,
+            _ => push_node_children(store, t, &mut stack, false),
+        }
+    }
+    false
+}
+
+fn push_node_children(
+    store: &crate::types::store::Store,
+    ty: TypeId,
+    stack: &mut Vec<TypeId>,
+    include_instantiation_base: bool,
+) {
+    match store.tag(ty) {
+        TypeTag::Keyof => {
+            if let Some(operand) = store.keyof_operand(ty) {
+                stack.push(operand);
+            }
+        }
+        TypeTag::Object => {
+            if let Some(object) = store.object_type(ty) {
+                stack.extend(object.properties.iter().map(|p| p.ty));
+                stack.extend(object.string_index);
+                stack.extend(object.number_index);
+                stack.extend(object.call_signatures.iter().copied());
+                stack.extend(object.construct_signatures.iter().copied());
+            }
+        }
+        TypeTag::Function => {
+            if let Some(f) = store.function_type(ty) {
+                stack.extend(f.params.iter().map(|p| p.ty));
+                stack.push(f.ret);
+            }
+        }
+        TypeTag::Union => {
+            if let Some(members) = store.union_members(ty) {
+                stack.extend(members.iter().copied());
+            }
+        }
+        TypeTag::Intersection => {
+            if let Some(members) = store.intersection_members(ty) {
+                stack.extend(members.iter().copied());
+            }
+        }
+        TypeTag::Array => {
+            if let Some(a) = store.array_type(ty) {
+                stack.push(a.element);
+            }
+        }
+        TypeTag::Tuple => {
+            if let Some(tup) = store.tuple_type(ty) {
+                stack.extend(tup.elements.iter().copied());
+            }
+        }
+        TypeTag::Readonly => {
+            if let Some(operand) = store.readonly_operand(ty) {
+                stack.push(operand);
+            }
+        }
+        TypeTag::Conditional => {
+            if let Some(c) = store.conditional_type(ty) {
+                stack.extend([c.check, c.extends_ty, c.true_branch, c.false_branch]);
+            }
+        }
+        TypeTag::Instantiation => {
+            if let Some(inst) = store.instantiation_type(ty) {
+                if include_instantiation_base {
+                    stack.push(inst.base);
+                }
+                stack.extend(inst.args.iter().map(|(_, v)| *v));
+            }
+        }
+        TypeTag::Mapped => {
+            if let Some(m) = store.mapped_type(ty) {
+                stack.push(m.key_source);
+                stack.push(m.value_template);
+                stack.extend(m.modifiers_source);
+            }
+        }
+        TypeTag::Template => {
+            if let Some(template) = store.template_type(ty) {
+                stack.extend(template.holes.iter().copied());
+            }
+        }
+        TypeTag::Intrinsic
+        | TypeTag::Literal
+        | TypeTag::TypeParam
+        | TypeTag::Infer
+        | TypeTag::MappedValue => {}
+    }
 }
 
 /// Whether `ty` transitively contains a **deferred type-level node** — a deferred
@@ -2153,82 +2792,7 @@ fn contains_nodes(
         if is_target(store.tag(t)) {
             return true;
         }
-        match store.tag(t) {
-            TypeTag::Keyof => {
-                if let Some(operand) = store.keyof_operand(t) {
-                    stack.push(operand);
-                }
-            }
-            TypeTag::Object => {
-                if let Some(object) = store.object_type(t) {
-                    stack.extend(object.properties.iter().map(|p| p.ty));
-                    stack.extend(object.string_index);
-                    stack.extend(object.number_index);
-                    stack.extend(object.call_signatures.iter().copied());
-                    stack.extend(object.construct_signatures.iter().copied());
-                }
-            }
-            TypeTag::Function => {
-                if let Some(f) = store.function_type(t) {
-                    stack.extend(f.params.iter().map(|p| p.ty));
-                    stack.push(f.ret);
-                }
-            }
-            TypeTag::Union => {
-                if let Some(members) = store.union_members(t) {
-                    stack.extend(members.iter().copied());
-                }
-            }
-            // M31: descend into intersection members.
-            TypeTag::Intersection => {
-                if let Some(members) = store.intersection_members(t) {
-                    stack.extend(members.iter().copied());
-                }
-            }
-            TypeTag::Array => {
-                if let Some(a) = store.array_type(t) {
-                    stack.push(a.element);
-                }
-            }
-            TypeTag::Tuple => {
-                if let Some(tup) = store.tuple_type(t) {
-                    stack.extend(tup.elements.iter().copied());
-                }
-            }
-            TypeTag::Readonly => {
-                if let Some(operand) = store.readonly_operand(t) {
-                    stack.push(operand);
-                }
-            }
-            TypeTag::Conditional => {
-                if let Some(c) = store.conditional_type(t) {
-                    stack.extend([c.check, c.extends_ty, c.true_branch, c.false_branch]);
-                }
-            }
-            TypeTag::Instantiation => {
-                if let Some(inst) = store.instantiation_type(t) {
-                    stack.push(inst.base);
-                    stack.extend(inst.args.iter().map(|(_, v)| *v));
-                }
-            }
-            TypeTag::Mapped => {
-                if let Some(m) = store.mapped_type(t) {
-                    stack.push(m.key_source);
-                    stack.push(m.value_template);
-                    stack.extend(m.modifiers_source);
-                }
-            }
-            TypeTag::Template => {
-                if let Some(template) = store.template_type(t) {
-                    stack.extend(template.holes.iter().copied());
-                }
-            }
-            TypeTag::Intrinsic
-            | TypeTag::Literal
-            | TypeTag::TypeParam
-            | TypeTag::Infer
-            | TypeTag::MappedValue => {}
-        }
+        push_node_children(store, t, &mut stack, true);
     }
     false
 }
@@ -2326,7 +2890,10 @@ mod tests {
         );
         let result = ev.evaluate(root);
         assert!(!ev.exhausted, "the raised budget must not be exhausted");
-        assert_eq!(result, wk.number, "Unwrap fully descends to the innermost `number`");
+        assert_eq!(
+            result, wk.number,
+            "Unwrap fully descends to the innermost `number`"
+        );
     }
 
     /// A terminating shallow `Unwrap` resolves, and its memo is populated (a repeat
@@ -2368,7 +2935,12 @@ mod tests {
 
         let mut next_type_param: u32 = 1;
         let mut memo = FxHashMap::default();
-        let mut ev = ConditionalEvaluator::new(&mut interner, &mut next_type_param, &mut memo, DEFAULT_STEP_BUDGET);
+        let mut ev = ConditionalEvaluator::new(
+            &mut interner,
+            &mut next_type_param,
+            &mut memo,
+            DEFAULT_STEP_BUDGET,
+        );
         assert_eq!(ev.evaluate(root), wk.number);
         assert!(memo.contains_key(&root), "the root evaluation is memoized");
     }
@@ -2474,7 +3046,12 @@ mod tests {
 
         let mut next_type_param: u32 = 1;
         let mut memo = FxHashMap::default();
-        let mut ev = ConditionalEvaluator::new(&mut interner, &mut next_type_param, &mut memo, DEFAULT_STEP_BUDGET);
+        let mut ev = ConditionalEvaluator::new(
+            &mut interner,
+            &mut next_type_param,
+            &mut memo,
+            DEFAULT_STEP_BUDGET,
+        );
         let _ = ev.evaluate(root);
         assert!(ev.exhausted, "a runaway alias must exhaust the step budget");
     }
@@ -2482,7 +3059,12 @@ mod tests {
     /// M26 — a homomorphic identity mapped type `{ [K in keyof T]: T[K] }` over a
     /// concrete source evaluates to the source's shape (per-property `T[K]` = the source
     /// property's type), and its result is memoized.
-    fn eval(interner: &mut Interner, next: &mut u32, memo: &mut FxHashMap<TypeId, TypeId>, ty: TypeId) -> TypeId {
+    fn eval(
+        interner: &mut Interner,
+        next: &mut u32,
+        memo: &mut FxHashMap<TypeId, TypeId>,
+        ty: TypeId,
+    ) -> TypeId {
         let mut ev = ConditionalEvaluator::new(interner, next, memo, DEFAULT_STEP_BUDGET);
         ev.evaluate(ty)
     }
@@ -2513,7 +3095,10 @@ mod tests {
             result, source,
             "an identity map over a concrete source yields the source shape"
         );
-        assert!(memo.contains_key(&ident), "the mapped evaluation is memoized");
+        assert!(
+            memo.contains_key(&ident),
+            "the mapped evaluation is memoized"
+        );
     }
 
     /// M26 — modifier arithmetic: `readonly` (Add) sets every result property readonly;
@@ -2554,7 +3139,10 @@ mod tests {
         // Effective type is `number | null | undefined` (value `number | null`, plus the
         // optional `| undefined` baked in).
         let expected = interner.union(vec![wk.number, wk.null, wk.undefined]);
-        assert_eq!(a.ty, expected, "value template `T[K] | null` + optional `| undefined`");
+        assert_eq!(
+            a.ty, expected,
+            "value template `T[K] | null` + optional `| undefined`"
+        );
     }
 
     /// M27 — template construction: all-literal holes **collapse** (`` `a-${"b"}` `` →
@@ -2658,7 +3246,10 @@ mod tests {
         // Free type parameter hole → deferred (symbolic).
         let t = interner.intern_type_param(TypeParamId(0), "T");
         let deferred = template(&mut interner, t);
-        assert_eq!(eval(&mut interner, &mut next, &mut memo, deferred), deferred);
+        assert_eq!(
+            eval(&mut interner, &mut next, &mut memo, deferred),
+            deferred
+        );
 
         // Error hole → error type (M22 cascade suppression).
         let err = template(&mut interner, wk.error);
@@ -2689,7 +3280,10 @@ mod tests {
         let mut next = 1u32;
         let mut memo = FxHashMap::default();
         let result = eval(&mut interner, &mut next, &mut memo, mapped);
-        assert_eq!(result, mapped, "a deferred mapped type is returned unchanged");
+        assert_eq!(
+            result, mapped,
+            "a deferred mapped type is returned unchanged"
+        );
         assert!(
             !memo.contains_key(&mapped),
             "a deferred mapped type is not memoized"
@@ -2713,7 +3307,10 @@ mod tests {
         let t = interner.intern_type_param(TypeParamId(0), "T");
         let keyof_t = interner.intern_keyof(t);
         assert_eq!(eval(&mut interner, &mut next, &mut memo, keyof_t), keyof_t);
-        assert!(!memo.contains_key(&keyof_t), "a deferred keyof is not memoized");
+        assert!(
+            !memo.contains_key(&keyof_t),
+            "a deferred keyof is not memoized"
+        );
 
         // Concrete object operand: the key-literal union (same as the eager path).
         let obj = interner.intern_object(ObjectType {
@@ -2726,15 +3323,24 @@ mod tests {
         let expect = interner.union(vec![a, b]);
         assert_eq!(eval(&mut interner, &mut next, &mut memo, keyof_obj), expect);
         let eager = keyof_of_object(&mut interner, obj).expect("object operand keys");
-        assert_eq!(eager, expect, "single source of truth: eager == deferred result");
+        assert_eq!(
+            eager, expect,
+            "single source of truth: eager == deferred result"
+        );
 
         // Error operand: the error type (M22 cascade suppression).
         let keyof_err = interner.intern_keyof(wk.error);
-        assert_eq!(eval(&mut interner, &mut next, &mut memo, keyof_err), wk.error);
+        assert_eq!(
+            eval(&mut interner, &mut next, &mut memo, keyof_err),
+            wk.error
+        );
 
         // Concrete non-object operand: stays deferred (conservative, not permissive).
         let keyof_num = interner.intern_keyof(wk.number);
-        assert_eq!(eval(&mut interner, &mut next, &mut memo, keyof_num), keyof_num);
+        assert_eq!(
+            eval(&mut interner, &mut next, &mut memo, keyof_num),
+            keyof_num
+        );
     }
 
     /// M28 — the four string intrinsics: a literal argument transforms
@@ -2774,7 +3380,10 @@ mod tests {
         ];
         for (base, arg, expect) in cases {
             let expect = lit(&mut interner, expect);
-            assert_eq!(apply(&mut interner, &mut next, &mut memo, base, arg), expect);
+            assert_eq!(
+                apply(&mut interner, &mut next, &mut memo, base, arg),
+                expect
+            );
         }
         // The empty string is unchanged (no first char to map).
         let empty = lit(&mut interner, "");
@@ -2915,10 +3524,17 @@ mod tests {
         // template-added one) → exactly `string`, and required.
         let b_out = get("b");
         assert!(!b_out.optional, "-? clears optionality");
-        assert_eq!(b_out.ty, wk.string, "undefined stripped from the evaluated value");
+        assert_eq!(
+            b_out.ty, wk.string,
+            "undefined stripped from the evaluated value"
+        );
         // Exactly-undefined optional source `u`: maps to `never` (leader-arbitrated
         // tsc probe m26_arb.ts — filtering `undefined` by not-undefined leaves nothing).
-        assert_eq!(get("u").ty, wk.never, "an exactly-undefined value maps to never");
+        assert_eq!(
+            get("u").ty,
+            wk.never,
+            "an exactly-undefined value maps to never"
+        );
         // NON-optional source `a`: never strips — keeps `string | undefined`.
         assert_eq!(
             get("a").ty,

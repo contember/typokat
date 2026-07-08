@@ -173,3 +173,16 @@ broader inference-policy work.
   `cargo test conformance`, `cargo test`, `cargo clippy --all-targets -- -D warnings`,
   and `tsc 6.0.3 --strict` over the b64 corpus. Deferred safe over-report: contextual
   fresh literals against readonly tuple targets remain outside this WU.
+- **WU2 shipped** — spec `54af4ba`; implementation demand-evaluates substituted
+  inference constraints before the deferred-`keyof` gate, and keeps exhausted
+  evaluation from becoming an accepted error-typed constraint. Review loop: round 1
+  FAIL caught budget exhaustion being accepted and concrete union `keyof` staying
+  gated; round 2 FAIL caught nested concrete `keyof` inside object constraints;
+  round 3 FAIL caught `Pick<A | B, "shared">` degrading the value to error type;
+  round 4 FAIL caught string-index-covered union keys and official-suite
+  `intersectionTypeInference2` over-report; final focused review PASS. Verification:
+  `cargo test conformance`, `cargo test`, `cargo clippy --all-targets -- -D warnings`,
+  `cargo build --release`, official-suite `run --check` (0 regressions, one
+  `intersectionTypeInference2` progress), and `tsc 6.0.3 --strict` over the b34 corpus.
+  Backlog 35 is narrowed: concrete object-union common keys are implemented, while
+  `K = never` and template-literal key sources remain deferred.

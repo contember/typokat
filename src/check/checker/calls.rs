@@ -220,6 +220,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // M24 clamp exemption for fresh object/array literal arguments.
         let map = infer::infer_type_arguments(
             self.interner,
+            &mut self.next_type_param,
             &sig.params,
             &param_types,
             &args,
@@ -724,6 +725,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 let args: Vec<TypeId> = arg_types.iter().map(|(ty, _)| *ty).collect();
                 infer::infer_type_arguments(
                     self.interner,
+                    &mut self.next_type_param,
                     &type_params,
                     &param_types,
                     &args,

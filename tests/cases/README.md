@@ -234,5 +234,10 @@ return the element type rather than the error type.
 
 `b34_fix_params_keyof/` pins the M24/M28 asymmetry in generic call inference:
 after `T` is inferred to a concrete object type, `K extends keyof T` must evaluate
-to that object's key union before the candidate for `K` is accepted. The generic
-`wrapper<T>` control stays clean because `keyof T` is still genuinely deferred.
+to that object's key union before the candidate for `K` is accepted. The corpus
+also pins the follow-on union-key edges that became observable once `keyof (A | B)`
+is concrete: disjoint union keys reject as `never`, common keys stay valid,
+`Pick` over a concrete union preserves common-key value types, and a named key
+covered by a string index signature contributes the index value. The generic
+`wrapper<T>` and intersection-wrapper controls stay clean because those `keyof`
+constraints are still genuinely deferred/out of subset.

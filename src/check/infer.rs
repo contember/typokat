@@ -59,7 +59,9 @@
 //! substitution engine's `in_progress` guard.)
 
 use crate::relate::Relater;
-use crate::types::repr::{IntrinsicKind, LiteralValue, TemplateType, TypeParamId, TypeTag};
+use crate::types::repr::{
+    IntrinsicKind, LiteralValue, ModifierOp, TemplateType, TypeParamId, TypeTag,
+};
 use crate::types::store::{Store, TypeId};
 use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -96,6 +98,9 @@ pub fn infer_from_types_for_conditional(
 /// downstream error the way `any` would). The returned map is fed straight to the
 /// existing M9 substitution.
 ///
+/// `next_type_param` is the module-wide allocator used when constraint evaluation
+/// freshens `infer` binders while fixing parameters.
+///
 /// `fresh_args` marks, positionally (parallel to `args`), which arguments are
 /// **fresh object/array literals** at the call site. A parameter is exempt from the
 /// M24 clamp-to-constraint (see [`fix_params`]) only when **EVERY** candidate it
@@ -109,6 +114,7 @@ pub fn infer_from_types_for_conditional(
 /// tests).
 pub fn infer_type_arguments(
     interner: &mut Interner,
+    next_type_param: &mut u32,
     type_params: &[crate::types::repr::TypeParamId],
     params: &[TypeId],
     args: &[TypeId],
@@ -137,12 +143,10 @@ pub fn infer_type_arguments(
         }
     }
     // Exempt = candidates came from fresh literals ONLY (review F4).
-    let exempt: FxHashSet<crate::types::repr::TypeParamId> = fresh_params
-        .difference(&nonfresh_params)
-        .copied()
-        .collect();
+    let exempt: FxHashSet<crate::types::repr::TypeParamId> =
+        fresh_params.difference(&nonfresh_params).copied().collect();
     let fixed = fix_candidates(interner, candidates);
-    fix_params(interner, type_params, fixed, &exempt)
+    fix_params(interner, next_type_param, type_params, fixed, &exempt)
 }
 
 /// Fix raw candidate lists to one type per parameter (M10, refined for M24/M27's
@@ -266,6 +270,7 @@ fn infer_from_types_raw(
 /// or `unknown`), so existing generic inference is untouched.
 fn fix_params(
     interner: &mut Interner,
+    next_type_param: &mut u32,
     type_params: &[crate::types::repr::TypeParamId],
     fixed: FxHashMap<crate::types::repr::TypeParamId, TypeId>,
     fresh_exempt: &FxHashSet<crate::types::repr::TypeParamId>,
@@ -281,13 +286,22 @@ fn fix_params(
         // (releases the immutable borrow before the `&mut` substitute). `None` when the
         // parameter is unconstrained.
         let raw_constraint = interner.store().type_param_constraint(param);
-        let constraint = raw_constraint.map(|c| substitute(interner, c, &map));
-        // M28 gate (mirroring the TK2344 gate in `check_type_argument_constraints`): a
-        // substituted constraint still carrying a deferred `keyof` (`Key extends
-        // keyof T` with `T` fixed to `unknown`) is undecidable — the relation is
-        // identical-node-only on it, so clamping/falling back to it would fabricate
-        // failures tsc defers. Treat the parameter as unconstrained here (exactly the
-        // pre-M28 behavior, when such a constraint was never recorded).
+        let constraint = raw_constraint.map(|c| {
+            let substituted = substitute(interner, c, &map);
+            let evaluated = crate::check::checker::eval::evaluate_inference_constraint(
+                interner,
+                next_type_param,
+                substituted,
+            );
+            if evaluated.exhausted {
+                substituted
+            } else {
+                evaluated.result
+            }
+        });
+        // M28 gate (mirroring the TK2344 gate in `check_type_argument_constraints`):
+        // evaluate first so concrete `keyof` constraints relate by value, then skip
+        // only constraints that still carry a deferred `keyof`.
         let constraint = constraint.filter(|&c| {
             !crate::check::checker::eval::contains_deferred_keyof(interner.store(), c)
         });
@@ -454,6 +468,11 @@ impl InferenceContext {
             return;
         }
 
+        if self.infer_identity_mapped_target(interner, source, target, candidates) {
+            self.visited.remove(&(source, target));
+            return;
+        }
+
         match (interner.store().tag(source), interner.store().tag(target)) {
             (TypeTag::Object, TypeTag::Object) => {
                 self.infer_objects(interner, source, target, candidates);
@@ -503,6 +522,29 @@ impl InferenceContext {
         }
 
         self.visited.remove(&(source, target));
+    }
+
+    fn infer_identity_mapped_target(
+        &mut self,
+        interner: &mut Interner,
+        source: TypeId,
+        target: TypeId,
+        candidates: &mut Candidates,
+    ) -> bool {
+        let Some(mapped) = interner.store().mapped_type(target).copied() else {
+            return false;
+        };
+        if !mapped.homomorphic
+            || mapped.modifiers_source.is_some()
+            || mapped.optional_modifier != ModifierOp::Keep
+            || mapped.readonly_modifier != ModifierOp::Keep
+            || interner.store().tag(mapped.value_template) != TypeTag::MappedValue
+            || interner.store().tag(mapped.key_source) != TypeTag::TypeParam
+        {
+            return false;
+        }
+        self.infer(interner, source, mapped.key_source, candidates);
+        true
     }
 
     /// Both objects: recurse on the type of each property present in **both**. A
@@ -750,9 +792,13 @@ impl InferenceContext {
 
 /// The `(name, type)` pairs of an object type, or `None` if `ty` is not an object.
 fn property_pairs(store: &Store, ty: TypeId) -> Option<Vec<(String, TypeId)>> {
-    store
-        .object_type(ty)
-        .map(|object| object.properties.iter().map(|p| (p.name.clone(), p.ty)).collect())
+    store.object_type(ty).map(|object| {
+        object
+            .properties
+            .iter()
+            .map(|p| (p.name.clone(), p.ty))
+            .collect()
+    })
 }
 
 /// The (parameter types, return type) of a function type, or `None` if `ty` is not
@@ -866,8 +912,16 @@ mod tests {
         let t = interner.intern_type_param(TypeParamId(0), "T");
         // The argument `5` is a literal type.
         let five = interner.intern_literal(LiteralValue::Number(5.0));
+        let mut next_type_param = 1;
 
-        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[t], &[five], &[]);
+        let map = infer_type_arguments(
+            &mut interner,
+            &mut next_type_param,
+            &[TypeParamId(0)],
+            &[t],
+            &[five],
+            &[],
+        );
         assert_eq!(
             map.get(&TypeParamId(0)).copied(),
             Some(wk.number),
@@ -990,16 +1044,26 @@ mod tests {
         let b = interner.intern_type_param(TypeParamId(1), "B");
         let one = interner.intern_literal(LiteralValue::Number(1.0));
         let x = interner.intern_literal(LiteralValue::String("x".to_string()));
+        let mut next_type_param = 2;
 
         let map = infer_type_arguments(
             &mut interner,
+            &mut next_type_param,
             &[TypeParamId(0), TypeParamId(1)],
             &[a, b],
             &[one, x],
             &[],
         );
-        assert_eq!(map.get(&TypeParamId(0)).copied(), Some(wk.number), "A = number");
-        assert_eq!(map.get(&TypeParamId(1)).copied(), Some(wk.string), "B = string");
+        assert_eq!(
+            map.get(&TypeParamId(0)).copied(),
+            Some(wk.number),
+            "A = number"
+        );
+        assert_eq!(
+            map.get(&TypeParamId(1)).copied(),
+            Some(wk.string),
+            "B = string"
+        );
     }
 
     /// A type parameter nested inside an object parameter is inferred from the
@@ -1021,9 +1085,21 @@ mod tests {
             properties: vec![prop("value", wk.number)],
             ..Default::default()
         });
+        let mut next_type_param = 1;
 
-        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[box_t], &[arg], &[]);
-        assert_eq!(map.get(&TypeParamId(0)).copied(), Some(wk.number), "T = number");
+        let map = infer_type_arguments(
+            &mut interner,
+            &mut next_type_param,
+            &[TypeParamId(0)],
+            &[box_t],
+            &[arg],
+            &[],
+        );
+        assert_eq!(
+            map.get(&TypeParamId(0)).copied(),
+            Some(wk.number),
+            "T = number"
+        );
     }
 
     /// A type parameter under a function parameter is inferred from both the
@@ -1051,9 +1127,21 @@ mod tests {
             }],
             ret: wk.number,
         });
+        let mut next_type_param = 1;
 
-        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[target], &[source], &[]);
-        assert_eq!(map.get(&TypeParamId(0)).copied(), Some(wk.number), "T = number");
+        let map = infer_type_arguments(
+            &mut interner,
+            &mut next_type_param,
+            &[TypeParamId(0)],
+            &[target],
+            &[source],
+            &[],
+        );
+        assert_eq!(
+            map.get(&TypeParamId(0)).copied(),
+            Some(wk.number),
+            "T = number"
+        );
     }
 
     /// Two distinct candidates for one type parameter fix to their **union**:
@@ -1066,8 +1154,16 @@ mod tests {
         let one = interner.intern_literal(LiteralValue::Number(1.0));
         let s = interner.intern_literal(LiteralValue::String("s".to_string()));
         let expected = interner.union(vec![wk.number, wk.string]);
+        let mut next_type_param = 1;
 
-        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[t, t], &[one, s], &[]);
+        let map = infer_type_arguments(
+            &mut interner,
+            &mut next_type_param,
+            &[TypeParamId(0)],
+            &[t, t],
+            &[one, s],
+            &[],
+        );
         assert_eq!(
             map.get(&TypeParamId(0)).copied(),
             Some(expected),
@@ -1084,8 +1180,16 @@ mod tests {
         let t = interner.intern_type_param(TypeParamId(0), "T");
         let one = interner.intern_literal(LiteralValue::Number(1.0));
         let two = interner.intern_literal(LiteralValue::Number(2.0));
+        let mut next_type_param = 1;
 
-        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[t, t], &[one, two], &[]);
+        let map = infer_type_arguments(
+            &mut interner,
+            &mut next_type_param,
+            &[TypeParamId(0)],
+            &[t, t],
+            &[one, two],
+            &[],
+        );
         assert_eq!(
             map.get(&TypeParamId(0)).copied(),
             Some(wk.number),
@@ -1106,8 +1210,16 @@ mod tests {
             properties: vec![prop("value", t)],
             ..Default::default()
         });
+        let mut next_type_param = 1;
 
-        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[box_t], &[wk.number], &[]);
+        let map = infer_type_arguments(
+            &mut interner,
+            &mut next_type_param,
+            &[TypeParamId(0)],
+            &[box_t],
+            &[wk.number],
+            &[],
+        );
         assert_eq!(
             map.get(&TypeParamId(0)).copied(),
             Some(wk.unknown),
@@ -1128,7 +1240,15 @@ mod tests {
         // `<T extends string>`: literal preserved.
         let t = interner.intern_type_param(TypeParamId(0), "T");
         interner.set_type_param_constraint(TypeParamId(0), wk.string);
-        let map = infer_type_arguments(&mut interner, &[TypeParamId(0)], &[t], &[x], &[]);
+        let mut next_type_param = 1;
+        let map = infer_type_arguments(
+            &mut interner,
+            &mut next_type_param,
+            &[TypeParamId(0)],
+            &[t],
+            &[x],
+            &[],
+        );
         assert_eq!(
             map.get(&TypeParamId(0)).copied(),
             Some(x),
@@ -1137,7 +1257,15 @@ mod tests {
 
         // `<U>` (unconstrained): widened.
         let u = interner.intern_type_param(TypeParamId(1), "U");
-        let map = infer_type_arguments(&mut interner, &[TypeParamId(1)], &[u], &[x], &[]);
+        let mut next_type_param = 2;
+        let map = infer_type_arguments(
+            &mut interner,
+            &mut next_type_param,
+            &[TypeParamId(1)],
+            &[u],
+            &[x],
+            &[],
+        );
         assert_eq!(
             map.get(&TypeParamId(1)).copied(),
             Some(wk.string),
@@ -1168,14 +1296,25 @@ mod tests {
         infer_from_types_for_conditional(&mut interner, check, pattern, &mut candidates);
         let a = interner.intern_literal(LiteralValue::String("a".to_string()));
         let bc = interner.intern_literal(LiteralValue::String("b:c".to_string()));
-        assert_eq!(candidates.get(&TypeParamId(0)).map(|c| c.as_slice()), Some(&[a][..]), "L = \"a\"");
-        assert_eq!(candidates.get(&TypeParamId(1)).map(|c| c.as_slice()), Some(&[bc][..]), "R = \"b:c\"");
+        assert_eq!(
+            candidates.get(&TypeParamId(0)).map(|c| c.as_slice()),
+            Some(&[a][..]),
+            "L = \"a\""
+        );
+        assert_eq!(
+            candidates.get(&TypeParamId(1)).map(|c| c.as_slice()),
+            Some(&[bc][..]),
+            "R = \"b:c\""
+        );
 
         // A source with no `:` separator records nothing (no match → false branch).
         let no_sep = interner.intern_literal(LiteralValue::String("abc".to_string()));
         let mut candidates = Candidates::default();
         infer_from_types_for_conditional(&mut interner, no_sep, pattern, &mut candidates);
-        assert!(candidates.is_empty(), "a non-matching source records no candidate");
+        assert!(
+            candidates.is_empty(),
+            "a non-matching source records no candidate"
+        );
     }
 
     /// A self-referential argument/parameter pair terminates (cycle guard): a
@@ -1197,7 +1336,18 @@ mod tests {
 
         // Matching `list` against itself must terminate; it has no type parameter,
         // so it infers nothing.
-        let map = infer_type_arguments(&mut interner, &[], &[list], &[list], &[]);
-        assert!(map.is_empty(), "no type params → empty map, and no infinite loop");
+        let mut next_type_param = 0;
+        let map = infer_type_arguments(
+            &mut interner,
+            &mut next_type_param,
+            &[],
+            &[list],
+            &[list],
+            &[],
+        );
+        assert!(
+            map.is_empty(),
+            "no type params → empty map, and no infinite loop"
+        );
     }
 }

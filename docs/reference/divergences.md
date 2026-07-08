@@ -148,11 +148,13 @@ parameter, `new`/`super`, and declared-return targets (M30).
 ## Index signatures & keyof (M19 / M20)
 
 Implemented: index signatures (`{ [k: string]: T }`, `{ [i: number]: T }`) (M19); `keyof T` +
-indexed-access types (`T[K]`) on concrete object types, evaluated eagerly (M20).
+indexed-access types (`T[K]`) on concrete object types, plus `keyof (A | B)` for unions of concrete
+object types as the common-key set (b34), evaluated eagerly (M20/M28).
 
 - **Deferred:** generic `keyof` (over a type parameter) is a **deferred keyof node** since M28
-  (see Utility types); a generic/deferred `T[K]` outside a mapped value template remains the error
-  type (silent, out of scope).
+  (see Utility types); `keyof` over intersections/non-objects stays out of subset; a
+  generic/deferred `T[K]` outside a mapped value template remains the error type (silent, out of
+  scope).
 
 ## Mapped types (M26)
 
@@ -199,7 +201,9 @@ including multi-char expansions like `ß` → `"SS"`).
   - tsc's `TS2820` did-you-mean variant of 2322 is not produced.
   - A constraint check is **skipped** only when the substituted CONSTRAINT still carries a deferred
     keyof (the canonical Omit idiom, `Pick<T, Exclude<keyof T, K>>` with `T` free — that check
-    lands at concrete instantiation; conditional/mapped constraints keep their pre-M28 behavior).
+    lands at concrete instantiation). Generic-call inference uses the same evaluate-then-gate
+    discipline, so `K extends keyof T` rejects bad concrete keys while genuinely free wrappers stay
+    deferred.
   - `TK2344` **argument** checks EVALUATE first, then always run: a decidable composition checks
     precisely (`Pick<P, Exclude<"a" | 1, "a">>` → `1` → `TK2344`, tsc-exact); a still-deferred
     argument checks conservatively — tsc-exact on unprovable shapes
@@ -217,9 +221,9 @@ including multi-char expansions like `ß` → `"SS"`).
     tuple-wrapped intrinsics evaluate; object-wrapped and array-wrapped intrinsics eager-false), so
     the five tsc-clean lines in `conditional_positions.ts`'s nested block are documented
     sound-direction over-reports — exact parity is backlog `36`.
-  - `Pick`/`Omit` stay DEFERRED over **union** operands and for **`K = never`** (a keyof-of-union /
-    `never` key source is not iterable in this subset — over-report; tsc computes the
-    common-key/empty results).
+  - `Pick`/`Omit` now resolve concrete object-union operands through common keys, including named
+    keys covered by a string index signature; **`K = never`** still stays DEFERRED (over-report; tsc
+    computes the empty result).
   - `Record` iterates **literal-union key sets only** — template-literal keys
     (`` Record<`k${string}`, V> ``) stay deferred (over-report; tsc produces the pattern index
     signature).
