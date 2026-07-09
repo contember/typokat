@@ -20,3 +20,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+- [`sprint-2026-07-09-inference-candidate-policy.md`](sprint-2026-07-09-inference-candidate-policy.md) — backlog `65`, call-site inference candidate policy.
