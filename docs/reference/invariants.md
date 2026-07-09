@@ -20,6 +20,10 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
   assignment targets). `substitute` must carry **all** `PropertyType` fields through.
 - **Nominal classes**: a `private`/`protected` member makes a type nominal — the relation requires
   same-name + same `declaring_class` + same visibility. Generic class *instances* are structural.
+- **Type-parameter constraints**: circular chains through bare type parameters, unions, or
+  intersections must report `TK2313` and clear the recorded constraint before any relation query can
+  treat the cycle as assignable. Structural indirection such as `{ self: T }` is legal recursion and
+  must terminate through the relation engine instead.
 - **Narrowing** (`src/check/flow.rs` ops + the **flow-node CFG** in `src/check/checker/flowgraph.rs`):
   keyed on `SymbolId`, never escapes its branch, unknown guard narrows nothing, resets at function
   boundaries. The flow-node CFG (M23) is the **single** narrowing model — `if`/`else`/`switch` *and*

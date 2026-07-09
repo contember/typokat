@@ -186,6 +186,39 @@ type, type-argument inference for generic calls). It needs its own candidate-col
 constraint-solving path, and it is roughly as large as the relation engine. Calling it out
 so it doesn't get silently folded into either neighbor.
 
+### 5.2 Current checker shape
+
+The implementation keeps type construction and relation queries separated because the interner
+requires `&mut Interner` while the relation engine borrows the store immutably:
+
+1. **Prelude unit.** `src/prelude.ts` is parsed, bound, reserved, and filled first in the same type
+   universe as the user program. The user pass keeps only lifetime-free resolved placeholders for
+   those declarations; string intrinsic aliases are then seeded to well-known marker types.
+2. **Declaration fill.** Type declarations are reserve-then-fill. Interfaces, classes, conditional
+   aliases, mapped aliases, and recursive object-literal aliases reserve stable ids before their
+   bodies lower, so self and sibling references store ids rather than expanding inline. Generic
+   declarations lower as templates with named type-parameter ids embedded; references with type
+   arguments instantiate by substitution, except conditional/mapped/intrinsic templates which stay
+   lazy until evaluation is demanded.
+3. **Flow graph.** A pre-pass builds flow nodes for module and function bodies before checking, so
+   loop back edges are complete when identifier reads ask for narrowed types.
+4. **Statement walk.** The checker lowers annotations, infers expressions, checks bodies, records
+   assignability and override obligations, and emits immediate name/arity/access diagnostics.
+5. **Relation phase.** Obligations run through one relater instance, so assignability diagnostics and
+   class override diagnostics share the same immutable store view and relation cache discipline.
+
+Named type declarations are intentionally id-based. Interfaces and class instances reserve object ids;
+transparent aliases memoize their resolved target; object-literal aliases seed a reserved object only
+for the non-generic recursive shape. Type parameters are named unique ids, while `infer` binders use
+the scoped de Bruijn representation described in ADR-0002.
+
+Classes bind both spaces: the type slot is the instance type, and the value slot is the static side /
+constructor lookup key. Instance and static members are composed base-first with own declarations
+overriding by name. Private/protected members carry `visibility` plus `declaring_class` identity for
+access control and nominal relation checks; `readonly` and accessor metadata gate assignments but do
+not affect assignability. Constructor signatures, abstract-member state, override-kind state, and
+constructor accessibility live beside `ClassInfo` when they are not part of the copyable `new` path.
+
 ---
 
 ## 6. Relation engine — probably the biggest single piece

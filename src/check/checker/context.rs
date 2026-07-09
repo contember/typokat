@@ -93,106 +93,40 @@ impl DeclTypes {
     }
 }
 
-/// How a top-level type declaration lowers (M5, extended for M9 generics), indexed
-/// by its type-space `DeclId`. Collected up front so every declaration's `TypeId`
-/// is reserved before any body is resolved — the reserve-then-fill that makes
-/// recursive/mutual references lowerable (mvp-plan M5, §6.3). The `'ast` borrows
-/// the AST bodies.
-///
-/// M9: a declaration may be **generic** — carry an ordered list of type-parameter
-/// ids ([`type_params`](TypeDecl::params)). While the body is resolved those
-/// parameters are pushed onto [`Pass::type_param_scopes`] so a reference to one
-/// (`value: T`) lowers to its interned [`TypeTag::TypeParam`] type; the parameters
-/// leave scope when the body is done (a type parameter is in scope **only** within
-/// its own declaration). A generic declaration's resolved id is its **template**
-/// (a structural type containing the parameter types); a `TSTypeReference` with
-/// type arguments instantiates it by substitution ([`instantiate_type_reference`]).
+/// A top-level type declaration's reserve-then-fill plan, indexed by type-space
+/// `DeclId`. Generic declarations carry ordered type-parameter ids and resolve to
+/// templates instantiated by substitution.
 pub(in crate::check::checker) enum TypeDecl<'ast> {
-    /// An `interface`. `reserved` is its id (allocated empty via
-    /// `Interner::reserve_object`, filled once the members are lowered); `members`
-    /// is the interface body, lowered in the fill step. A **non-generic** interface
-    /// is **nominal** (its reserved id is filled in place and never re-interned). A
-    /// **generic** interface (`params` non-empty) is filled with its parameter types
-    /// embedded, becoming a structural **template**; instantiating `Box<number>`
-    /// substitutes the template to `{ value: number }` — see the structural-vs-
-    /// nominal FLAG on [`instantiate_type_reference`].
+    /// An interface reserves an object id, then fills own and inherited members into it.
+    /// Generic interfaces fill a template that type references instantiate later.
     Interface {
         reserved: TypeId,
         params: Vec<TypeParamId>,
         param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
         members: &'ast [oxc_ast::ast::TSSignature<'ast>],
-        /// B28: the interface's `extends` heritage clauses. Their members are folded
-        /// into the reserved object at fill time (own members override by name; bases
-        /// merged left-to-right), so inherited members are part of the interface's
-        /// type for assignability / member access / `keyof` / mapped sources.
+        /// Heritage clauses are composed into the reserved object during fill.
         extends: &'ast [TSInterfaceHeritage<'ast>],
     },
-    /// A `type` alias — **transparent**. `annotation` is the aliased type, lowered
-    /// on demand to the target id; `resolving` guards a recursive alias (out of the
-    /// M5 subset — broken by yielding the error type rather than looping). A generic
-    /// alias (`params` non-empty) lowers its annotation with the parameters in scope
-    /// to a **template**; `Pair<number, string>` substitutes it.
-    ///
-    /// M25: a top-level **conditional-type** body reserves a conditional template id
-    /// ([`conditional_template`](TypeDecl::Alias::conditional_template)) so a
-    /// self-recursive reference (`type Unwrap<T> = … Unwrap<U> …`) lowers to a lazy
-    /// instantiation of it rather than expanding (which would loop); it is filled in the
-    /// fill step. `name`/`name_span` phrase the `TK2456` circular-alias diagnostic.
+    /// A transparent alias lowers on demand. Template placeholders keep recursive
+    /// conditional, mapped, and object-literal alias shapes from expanding inline.
     Alias {
         annotation: &'ast TSType<'ast>,
         params: Vec<TypeParamId>,
         param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
         resolving: bool,
-        /// The reserved conditional template id when the top body is a conditional
-        /// (M25), else `None`. `type_resolved` is seeded with it so a self-reference
-        /// resolves here; the fill step lowers the body and fills it.
+        /// Reserved conditional template id, seeded before the body is lowered.
         conditional_template: Option<TypeId>,
-        /// M28: the reserved **mapped** template id when the top body is a mapped type
-        /// (`type DeepPartial<T> = { [K in keyof T]?: DeepPartial<T[K]> }`), else
-        /// `None`. Mirrors `conditional_template`: `type_resolved` is seeded with it so
-        /// a self-recursive reference resolves to a lazy instantiation of the reserved
-        /// id (never the error type); the fill step lowers the body and fills it, and
-        /// every instantiation of a mapped-template alias is **lazy** (an
-        /// [`crate::types::repr::InstantiationType`] the evaluator expands on demand —
-        /// faithful to the conditional-template machinery).
+        /// Reserved mapped template id, kept lazy for recursive mapped aliases.
         mapped_template: Option<TypeId>,
-        /// B29: the reserved object id when the top body is an **object type literal**
-        /// (`type X = { a: X | null }`), else `None`. Mirrors `conditional_template`:
-        /// `type_resolved` is seeded with it so a self-reference **through a member**
-        /// resolves to this stable id (the m5 named-recursive representation) rather than
-        /// re-entering into the error type; the fill step lowers the members and fills it.
-        /// This is what keeps legal member recursion resolving correctly (and off the
-        /// surface-cycle path — a seeded alias never re-enters `resolve_type_decl`).
+        /// Reserved object id for legal member recursion in non-generic object aliases.
         object_template: Option<TypeId>,
-        /// The alias name (M25) — for the `TK2456` message.
+        /// Alias name for circular-alias diagnostics.
         name: String,
-        /// The alias name-declaration span (M25) — the `TK2456` primary span.
+        /// Alias name span for circular-alias diagnostics.
         name_span: Span,
     },
-    /// A `class` (M11, extended for M13/M16). `reserved` is its **instance type** id: an
-    /// object id allocated empty via `Interner::reserve_object`, filled with the
-    /// class's fields and methods once they are lowered. Reserving up front lets a
-    /// field reference the class's own type (`next: Node | null`) or a sibling,
-    /// exactly like an interface. The instance type is a (nominal) object — member
-    /// access and the structural relation reuse the M2 object rules; M13 adds member
-    /// **visibility** + **declaring class** to those members (a class with a
-    /// `private`/`protected` member becomes nominal). The constructor signature is
-    /// **not** an instance member; it is built in the fill step and registered under
-    /// the class's *value* `DeclId` (see [`Pass::class_ctors`]). `class_id` is this
-    /// class's stable [`ClassId`], stamped onto every member it declares (the origin
-    /// the access-control + nominal rules key on).
-    ///
-    /// M16: a **generic** class (`class Box<T>`) carries an ordered list of
-    /// type-parameter ids ([`params`](TypeDecl::Class::params)), allocated up front like a
-    /// generic interface's. While the class's instance type, static side, constructor,
-    /// methods, and accessors are lowered ([`fill_class`]) those parameters are pushed
-    /// onto [`Pass::type_param_scopes`] (the M9 frame), so a field/return/parameter
-    /// referencing `T` (`value: T`, `get(): T`) lowers to its interned
-    /// [`TypeTag::TypeParam`] type. The reserved instance id then holds a structural
-    /// **template** (`{ value: T; get: () => T }`); a `TSTypeReference` `Box<number>`
-    /// instantiates it by the M9 [`instantiate_type_reference`], and `new Box<number>(…)` /
-    /// `new Box(…)` substitute into the constructor + instance ([`infer_new`]). A
-    /// non-generic class has an empty list and behaves exactly as in M11.
+    /// A class reserves its instance object id up front; fill builds the instance,
+    /// static side, constructor signature, and class metadata.
     Class {
         reserved: TypeId,
         class_id: ClassId,
@@ -200,12 +134,7 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
         param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
         class: &'ast Class<'ast>,
     },
-    /// M28 — a declaration **already fully resolved in a previous compilation unit**
-    /// (the prelude): its `type_resolved` slot is seeded, so nothing is ever lowered
-    /// from it again — only its ordered type-parameter ids are needed (for
-    /// instantiation by substitution). Lifetime-free by design: the prelude's AST does
-    /// not outlive the prelude pass, so the user pass's `TypeDecl<'ast>` table holds
-    /// this variant for prelude indices instead of AST borrows.
+    /// A declaration already resolved by an earlier compilation unit, such as the prelude.
     Resolved { params: Vec<TypeParamId> },
 }
 
@@ -220,66 +149,24 @@ pub(in crate::check::checker) struct GenericSig {
     pub(in crate::check::checker) fn_ty: TypeId,
 }
 
-/// A class's `new`-relevant types (M11, extended for M12 inheritance), keyed by the
-/// class's **value-space** `DeclId`. `new ClassName(args)` looks the class up via its
-/// value slot, checks the arguments against [`ctor`](ClassInfo::ctor) (the
-/// constructor signature — a function type whose parameters are the constructor's,
-/// defaulting to zero when there is no explicit `constructor`), exactly like an M3
-/// call, and yields [`instance`](ClassInfo::instance) (the class's instance type) as
-/// the expression type. The constructor's return type is irrelevant to `new`; only
-/// its parameters drive the arity/argument checks, so `ctor`'s return is `void` by
-/// construction.
-///
-/// M12: with `extends`, [`instance`](ClassInfo::instance) is the **composed** type
-/// (the base's members plus the subclass's own, the subclass overriding on a name
-/// conflict — see [`fill_class`]). A derived class with **no own `constructor`**
-/// inherits the base's signature, so [`ctor`](ClassInfo::ctor) is then the base's
-/// constructor (driving `new Derived(...)`). [`super_ctor`](ClassInfo::super_ctor) is
-/// the **base** class's constructor signature, used to check a `super(args)` call
-/// inside this class's constructor body; it is `None` for a class with no `extends`.
+/// A class's copyable `new` metadata, keyed by value-space `DeclId`.
 #[derive(Copy, Clone)]
 pub(in crate::check::checker) struct ClassInfo {
-    /// The constructor signature as a function type (its parameters are the
-    /// constructor's; the return is `void` and unused — `new` yields `instance`). For
-    /// a derived class with no own `constructor`, this is the base's signature (M12).
+    /// Constructor parameters as a function type; `new` yields `instance`, not this return.
     pub(in crate::check::checker) ctor: TypeId,
-    /// The class's instance type (its fields + methods, a nominal object). For a
-    /// derived class this is the composed (base + own) type (M12).
+    /// Composed instance type.
     pub(in crate::check::checker) instance: TypeId,
-    /// The class's **static side** (M13): an object type holding the `static` fields
-    /// and `static` methods (as function-typed properties). This is what the class
-    /// **value** (`C` used as a value, the base of `C.staticMember`) resolves to; an
-    /// instance member is *not* on it (cross-access → `TK2339`) and a static member
-    /// is *not* on the instance type (also `TK2339`). For a derived class this is the
-    /// composition of the base's static side with the class's own static members
-    /// (own overriding on a name conflict), mirroring the instance side.
+    /// Composed static side used when the class name is read as a value.
     pub(in crate::check::checker) static_side: TypeId,
-    /// This class's stable [`ClassId`] (M13) — the origin stamped onto its members
-    /// and the key the access-control + nominal rules use.
+    /// Stable class identity used by access-control and nominal rules.
     pub(in crate::check::checker) class_id: ClassId,
-    /// The **base** class's constructor signature (M12), for checking `super(args)`
-    /// inside this class's constructor. `None` when the class has no `extends`.
+    /// Base constructor signature for `super(args)`, if any.
     pub(in crate::check::checker) super_ctor: Option<TypeId>,
-    /// Whether this class was declared `abstract` (M15). Read from the AST
-    /// (`class.r#abstract`) in [`fill_class`] and consulted by [`infer_new`]:
-    /// `new C(...)` on an `abstract` `C` is `TK2511`. **Only the directly-named
-    /// class's flag matters** — a concrete subclass of an abstract class is *not*
-    /// abstract (its own flag is `false`), so it instantiates fine. The flag is not
-    /// part of the instance type's structural identity; it gates `new`, nothing else.
+    /// Whether directly constructing this class reports `TK2511`.
     pub(in crate::check::checker) is_abstract: bool,
-    /// The **constructor's visibility** (backlog 20), for gating a direct `new C(...)`
-    /// ([`infer_new`]): `private` is constructable only lexically inside the declaring
-    /// class, `protected` also inside its subclasses. A derived class with **no own
-    /// `constructor`** inherits the base's constructor visibility (mirroring
-    /// [`ctor`](ClassInfo::ctor)); a class with an explicit or implicit public
-    /// constructor is `Public`. Distinct from the F1/WU3 static-side construct-signature
-    /// gating (`has_public_constructor`), which stays on the AST.
+    /// Constructor visibility for direct `new` accessibility checks.
     pub(in crate::check::checker) ctor_visibility: Visibility,
-    /// The [`ClassId`] that **declares** the constructor gating this class's `new`
-    /// (backlog 20). For a derived class inheriting the base's constructor this is the
-    /// **base** class (so the `TK2673`/`TK2674` message names the declaring class, and
-    /// the `protected` subclass walk keys on it); otherwise this class itself. The
-    /// declaring class's *name* is looked up in [`Pass::class_names`] for the message.
+    /// Class that declares the constructor used for direct `new` accessibility checks.
     pub(in crate::check::checker) ctor_declaring_class: ClassId,
 }
 

@@ -20,14 +20,10 @@ use super::calls::{parameter_name, widen};
 use super::decls::type_decl_id;
 use super::decls::value_decl_id;
 
-/// One accessor (`get`/`set`) being assembled in [`fill_class`] (M15). A getter and a
-/// same-named setter are combined into **one** property: the getter contributes the
-/// property's type (its return type), the setter contributes it (its parameter type),
-/// and a getter **with no setter** is `readonly` (a get-only accessor behaves like a
-/// read-only property → assigning it is `TK2540`, reusing the M14 `readonly` flag).
+/// One accessor pair being assembled into a single property.
 ///
-/// The accessibility is taken from whichever accessor is seen (a getter's wins if both
-/// are present); valid TS keeps them consistent, and the fixtures use no modifier.
+/// Getter type wins, getter-only is `readonly`, and getter accessibility wins when a
+/// pair is present.
 struct AccessorBuild {
     name: String,
     /// The getter's return type, if a `get` accessor of this name was seen and its
@@ -44,12 +40,7 @@ struct AccessorBuild {
 }
 
 impl<'a, 'ast> Pass<'a, 'ast> {
-    /// Fill a class's instance type + constructor (M12), filling its **base first** on
-    /// demand and recording its [`ClassInfo`]. Idempotent (a `Done` class returns
-    /// immediately) and **cycle-guarded** (a class re-entered while `Filling` — only
-    /// reachable via an `extends` cycle — does not recurse; see [`ClassFillState`]), so
-    /// it can be called in any order and any number of times. `index` is the class's
-    /// position in [`Pass::type_decls`].
+    /// Fill a class on demand, base first, without recursing through `extends` cycles.
     pub(in crate::check::checker) fn ensure_class_filled(&mut self, scope: ScopeId, index: usize) {
         match self.class_fill.get(index).copied() {
             // Already filled, or filling (an `extends` cycle re-entered this class) — do
@@ -87,17 +78,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Resolve a class's **base class** [`ClassInfo`] from its `extends` clause (M12),
-    /// filling the base first (on demand) so its instance type / constructor are ready to
-    /// compose against.
-    ///
-    /// The base is the `super_class` expression when it is a plain identifier resolving
-    /// (through the scope graph's value slot) to a known class. Returns `None` when the
-    /// class has no `extends`, the clause is not a plain identifier (out of subset — e.g.
-    /// `extends mixin(Base)`), the name does not resolve to a class, or the base is
-    /// re-entered mid-fill (an `extends` cycle — the base's [`ClassInfo`] is not yet
-    /// registered, so composition proceeds with no base contribution, breaking the cycle
-    /// without a panic).
+    /// Resolve and fill a plain-identifier base class; out-of-subset or cyclic bases
+    /// contribute no base class info.
     fn resolve_base_class(&mut self, scope: ScopeId, class: &Class<'_>) -> Option<ClassInfo> {
         let Expression::Identifier(ident) = class.super_class.as_ref()? else {
             return None;
@@ -119,98 +101,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.class_ctors.get(&decl_id).copied()
     }
 
-    /// Build a class's instance type, **static side**, and constructor signature (M11,
-    /// extended for M12 inheritance and M13 modifiers/`static`), filling the reserved
-    /// instance-type object in place and registering its [`ClassInfo`] under the class's
-    /// value `DeclId`. **Types only** — method/constructor bodies are checked later in
-    /// the walk ([`check_class`]).
+    /// Build the class instance type, static side, constructor signature, and class metadata.
     ///
-    /// The instance type's members are the class's **non-static** fields (each
-    /// `PropertyDefinition` with a type annotation) plus its **non-static** methods (each
-    /// `MethodDefinition` of kind `method`) as **function-typed properties** — so member
-    /// access (`p.x`, `p.method`) and the structural relation reuse the M2 object rules
-    /// unchanged. M13 partitions out the **static** fields/methods into a separate
-    /// **static-side** object type (registered as [`ClassInfo::static_side`]); the class
-    /// value resolves to it, so `C.staticMember` lands on the static side while an
-    /// instance member does not (cross-access → `TK2339`). The constructor (kind
-    /// `Constructor`) is on neither side; its parameters become the constructor signature
-    /// (zero parameters when there is no explicit `constructor`).
-    ///
-    /// M13 (modifiers): every member this class declares is stamped with its
-    /// `accessibility` ([`Visibility`]) and this class's [`ClassId`] (`class_id`) — the
-    /// *origin* the access-control (`TK2341`/`TK2445`) and nominal relation rules key on.
-    /// A `private`/`protected` member therefore makes the class **nominal** (the member's
-    /// visibility + origin are part of its interned identity). Inherited base members keep
-    /// the base's stamp (so an inherited `protected` member is still attributed to the
-    /// base), exactly as built when the base was filled.
-    ///
-    /// M12 (`extends`): the instance type is the **composition** of the base's members
-    /// with the class's own — the base's members first, then the class's own members
-    /// **overriding** the base's on a name conflict ([`compose_members`]); the static side
-    /// is composed the same way from the base's static side. Because the composed object
-    /// is a width-superset of the base, subclass→base assignability falls out of the
-    /// existing structural relation. A derived class with **no own `constructor`** inherits
-    /// the base's constructor signature (so `new Derived(...)` checks against it); a class
-    /// **with** its own constructor uses that. [`super_ctor`](ClassInfo::super_ctor)
-    /// records the base's constructor for `super(args)` checking in the derived
-    /// constructor body, and [`class_parents`](Pass::class_parents) records the base's
-    /// `ClassId` for the `protected` subclass walk.
-    ///
-    /// M15 (getters/setters + `abstract`): a `get`/`set` accessor becomes ONE instance
-    /// property — its type is the getter's return type (else the setter's parameter type)
-    /// and it is `readonly` when get-only ([`record_accessor`]/[`build_accessor_members`]),
-    /// so member read/assignment reuse the M2/M14 paths unchanged. An `abstract method(): T;`
-    /// (no body) is built as a function-typed property by the ordinary `Method` arm (its body
-    /// is simply absent). The class's `abstract` keyword is recorded on its [`ClassInfo`]
-    /// ([`ClassInfo::is_abstract`]) and enforced at `new` ([`infer_new`] → `TK2511`).
-    ///
-    /// M16 (generic classes): the class's type parameters (`type_params`/`param_decl`) are
-    /// scoped via the M9 [`with_type_params`] frame for the **whole** member-lowering pass, so
-    /// a field/method/accessor/constructor annotation referencing `T` lowers to its interned
-    /// [`TypeTag::TypeParam`] type. The reserved instance id then holds a structural
-    /// **template** (`{ value: T; get: () => T }`) and the constructor signature embeds `T`
-    /// too. The type-parameter ids are recorded on the class's [`ClassInfo`] sibling map
-    /// ([`Pass::class_type_params`]) so `new Box<number>(…)` / `new Box(…)` can substitute them
-    /// into the constructor + instance ([`infer_new`]); a `Box<number>` *type reference*
-    /// instantiates the template through the M9 [`instantiate_type_reference`]. A non-generic
-    /// class lowers with an empty frame and is unchanged.
-    ///
-    /// F3 / backlog 01: constructor **parameter properties** (`constructor(private x: number)`)
-    /// now declare instance members (param's modifier + annotated type) on top of remaining
-    /// constructor parameters, and a field with **no annotation but an initializer**
-    /// (`g = 2`, `f = () => 1`) declares a member whose type is **inferred** from the
-    /// initializer (widened when non-`readonly`). See [`collect_class_own_members`].
-    ///
-    /// Backlog 06 (class completeness): after composing, an own **public** instance
-    /// member that overrides a same-named **public** base member is related
-    /// (own→base) through the phase-2 obligation engine — a failure is `TK2416` on the
-    /// derived member's name ([`collect_override_checks`], keyed on the **base**
-    /// member's declaration kind via [`Pass::class_member_kinds`]). Independently, each
-    /// class's own abstract members are composed into a **pending** list down the
-    /// `extends` chain ([`collect_abstract_members`] + [`Pass::class_pending_abstract`]);
-    /// a non-abstract class that leaves any pending reports `TK2515` (one) / `TK2654`
-    /// (aggregated) on the class name ([`report_missing_abstract_members`]). Both skip
-    /// the generic-base / free-type-parameter shape (see below).
-    ///
-    /// Backlog 20 (constructor accessibility): the constructor's **visibility** and its
-    /// **declaring class** are recorded on the class's [`ClassInfo`]
-    /// ([`ClassInfo::ctor_visibility`] / [`ClassInfo::ctor_declaring_class`]) — a derived
-    /// class with no own `constructor` **inherits** the base's, mirroring
-    /// [`ctor`](ClassInfo::ctor). A direct `new C(...)` is then gated on them
-    /// ([`check_new_accessibility`] → `TK2673`/`TK2674`), independent of the F1/WU3
-    /// static-side `has_public_constructor` gating (which stays on the AST).
-    ///
-    /// DEFERRED (out of scope, skipped without error): set-only / differing-get-set-type /
-    /// `static` accessors, `implements`, visibility-narrowing / private-redeclaration
-    /// override errors (`TS2415`) and static-side override incompatibility (`TS2417`),
-    /// `super.method()` (super property access), generic **method-level** type parameters
-    /// on a class, and **generic
-    /// class inheritance** with a base's type arguments substituted (`class S extends Box<string>`
-    /// composes against `Box`'s *unsubstituted* template, so a `super(...)`/inherited-member
-    /// check sees the base's free `T` — no crash, terminates, but over-reports; none of the M16
-    /// fixtures extend a generic base). A field with neither annotation nor initializer, a
-    /// computed key, or a member whose type cannot be lowered, is skipped — each side keeps
-    /// the members it can express.
+    /// This is type-only lowering. Bodies are checked later by [`check_class`] after
+    /// `this`, `super`, and the class type-parameter frame are bound. Deferrals and
+    /// deliberate divergences are tracked in `docs/reference/divergences.md`.
     fn fill_class(
         &mut self,
         scope: ScopeId,
@@ -222,26 +117,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) {
         let void_ty = self.interner.well_known().void;
 
-        // M12: resolve the base class (filling it first) so its members + constructor are
-        // available to compose against. `None` for a class with no `extends` (or an
-        // out-of-subset / cyclic base — composition then proceeds with no base part).
+        // Fill the base before composition; unresolved or cyclic bases contribute nothing.
         let base = self.resolve_base_class(scope, class);
 
-        // M13: record the base's `ClassId` as this class's parent (for the `protected`
-        // subclass walk). A class with no resolvable base has no parent entry.
+        // `protected` access walks this stable parent chain, not object identities.
         if let Some(base_info) = base {
             self.class_parents.insert(class_id, base_info.class_id);
         }
 
-        // Backlog 06 — abstract-member completeness. Compose this class's **pending**
-        // (unimplemented) abstract members: its own abstract members (declaration
-        // order) first, then the direct base's pending members that this class does
-        // not implement with an own concrete member. The base was already filled
-        // (base-first, above), so its pending list is available; an unresolvable base
-        // contributes nothing (existing deferral). Stored below so subclasses inherit
-        // it; a NON-abstract class with a non-empty list reports here (`TK2515`/`TK2654`).
-        // The direct base's value-space `DeclId` — the key of the backlog-06 sibling
-        // maps (pending abstract members, member kinds, type params).
+        // Compose pending abstract members now so subclasses inherit the same list.
         let base_decl_id = base_class_name(class)
             .and_then(|name| value_decl_id(self.binder, scope, name));
         let (own_abstract, own_concrete) = collect_abstract_members(class);
@@ -260,29 +144,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             self.report_missing_abstract_members(class, &pending);
         }
 
-        // M16: the class's type-parameter frame (name → interned `TypeParam`). Built before
-        // lowering so a field/method/ctor/accessor annotation referencing `T` resolves to its
-        // parameter type; pushed for the whole member-lowering pass below (an empty frame for
-        // a non-generic class — harmless). The frame must be built BEFORE the closure (it
-        // borrows `&mut pass` to intern the parameter types), then moved into
-        // `with_type_params`.
+        // Build before the closure because interning the frame needs `&mut self`.
         let frame = self.build_type_param_frame(param_decl, type_params);
 
-        // The class's **own** instance members and **own** static members, plus the
-        // constructor parameters, collected **inside** the type-parameter frame so `T`
-        // resolves (M16). For a non-generic class the empty frame is a no-op and the
-        // collection is exactly the M11–M15 behaviour.
+        // Lower own members inside the class type-parameter frame.
         let (own_instance, own_static, ctor_params) = self.with_type_params(frame, |pass| {
             // M24: lower the parameters' `extends` constraints with the frame active.
             pass.lower_type_param_constraints(scope, param_decl, type_params);
             pass.collect_class_own_members(scope, class_id, class)
         });
 
-        // M12: compose the base's members with the class's own (own overriding base on a
-        // name conflict), for BOTH the instance side and the static side. Snapshot the
-        // base's properties into owned Vecs first — the immutable store borrow must not
-        // overlap the `&mut` `fill_object`/`intern_object` below. A class with no
-        // resolvable base contributes no base members (plain M11).
+        // Snapshot base members so the immutable store borrow ends before interning.
         let base_instance: Vec<PropertyType> = base
             .and_then(|info| self.interner.store().object_type(info.instance))
             .map(|obj| obj.properties.clone())
@@ -292,26 +164,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .map(|obj| obj.properties.clone())
             .unwrap_or_default();
 
-        // Backlog 06 — the chain's member **declaration kinds** (name → declared with
-        // method syntax), composed like the pending list: the direct base's map
-        // overlaid with this class's own members (own wins), so an inherited member
-        // keeps the kind of wherever it was last declared. tsc keys the TK2416
-        // method-bivariance rule on the BASE member's kind, so the base's map is read
-        // below and this class's composed map is stored for its own subclasses.
+        // Keep declaration kinds for subclasses; TK2416 variance keys on the base kind.
         let base_member_kinds = base_decl_id
             .and_then(|decl_id| self.class_member_kinds.get(&decl_id).cloned())
             .unwrap_or_default();
         let mut member_kinds = base_member_kinds.clone();
         member_kinds.extend(own_instance_member_kinds(class));
 
-        // Backlog 06 — TK2416 override compatibility. Relate each own PUBLIC instance
-        // member to a same-named PUBLIC base member (public↔public only — a
-        // private/protected override is TS2415 territory, deferred, and the nominal
-        // relation would otherwise reject a legal protected redeclaration). Skipped
-        // when either side is generic: a member type may then carry a free type
-        // parameter (the generic-base composition deferral), where the relation would
-        // over-report — safe to under-report a NEW check rather than regress. The
-        // relation itself runs in phase 2 via the shared obligation engine.
+        // Public override checks run later; generic bases are deferred to avoid false positives.
         let base_is_generic = base_decl_id
             .map(|decl_id| self.class_type_params.contains_key(&decl_id))
             .unwrap_or(false);
@@ -332,12 +192,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             },
         );
 
-        // Backlog 20: the constructor's visibility + declaring class, for gating a direct
-        // `new C(...)` ([`infer_new`]). An explicit own constructor contributes its own
-        // visibility, declared by this class; with no own constructor a derived class
-        // **inherits** the base's (mirroring `ctor` below), and a class with no base has
-        // the implicit public constructor. `ctor_params.is_some()` iff an explicit
-        // constructor is present (only that arm of `collect_class_own_members` sets it).
+        // A class with no own constructor inherits the base constructor's accessibility.
         let (ctor_visibility, ctor_declaring_class) = if ctor_params.is_some() {
             (constructor_visibility(class), class_id)
         } else {
@@ -347,12 +202,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         };
 
-        // The constructor signature. With an explicit constructor, its parameters. With
-        // none, M12: **inherit the base's constructor** (so `new Derived(...)` checks
-        // against the base signature); for a class with no base either, the implicit
-        // zero-parameter constructor. The return is `void` (unused — `new` yields the
-        // instance type), built through the normal function interner so the call path can
-        // read its parameters back out.
+        // `new` reads only the parameters; the function return is unused.
         let ctor = match ctor_params {
             Some(params) => self.interner.intern_function(FunctionType {
                 params,
@@ -781,40 +631,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.lower_signature_function_type(scope, &func.params, func.return_type.as_deref())
     }
 
-    /// Check a class declaration's member **bodies** (M11). The class's types (instance
-    /// type + constructor signature) are already built in phase 0 ([`fill_class`]); this
-    /// walks each method/constructor body so `return <expr>` is checked against the
-    /// method's declared return type (`TK2322`) and any nested construct (including
-    /// `this.x = …` member-assignments and binary expressions) is resolved.
+    /// Check class member bodies after type-only class lowering has completed.
     ///
-    /// `this` is bound to the class's **instance type** for the duration of each member
-    /// body and **restored** afterward (save/restore around the whole class), so
-    /// `this.field`/`this.method()` resolve inside but `this` never leaks past the class.
-    /// A method/constructor body is checked via [`infer_function`] — the same machine as
-    /// a free function (parameters into the method scope, return obligations) — whose
-    /// returned function *type* is discarded here (only the body-check side effects
-    /// matter; the property type was built from the annotation in `fill_class`).
-    ///
-    /// M13: a **static** member's body (a `static` method body, or a static field
-    /// initializer) is checked **too** — statics are real members now, so leaving their
-    /// bodies unchecked would be a false negative (a bad return / unresolved name / wrong
-    /// call inside a static body would be silently accepted). A static body's `this` is
-    /// the **static side** (the class value, [`ClassInfo::static_side`]), not an instance;
-    /// it is bound per static member and restored after, so it does not leak into a
-    /// following instance member. `current_class` stays the class throughout, so
-    /// same-class static member access is allowed.
-    ///
-    /// M12: the **base constructor signature** ([`ClassInfo::super_ctor`]) is bound to
-    /// [`Pass::current_super_ctor`] for the same duration (same save/restore), so a
-    /// `super(args)` call inside the derived constructor body is checked against it
-    /// ([`infer_call`]). It is `None` for a class with no `extends`, and never leaks.
-    ///
-    /// M15: a **getter/setter** body is a `MethodDefinition` like any method, so it is
-    /// checked here through the same [`infer_function`] path — the getter body's `return`
-    /// is checked against its declared return type (`TK2322`), the setter's parameter binds
-    /// in its own scope, and `this` is the instance type — with no accessor-specific code.
-    /// An **abstract method** (`abstract m(): T;`) has no body; `infer_function` simply walks
-    /// nothing for it (its property type was already built in `fill_class`).
+    /// Per-class context is save/restored so `this`, `super`, access-control context,
+    /// constructor-only readonly writes, and class type parameters do not leak.
     pub(in crate::check::checker) fn check_class(&mut self, scope: ScopeId, class: &Class<'_>) {
         // The class's `new`-info, looked up via its value slot. Absent only for an
         // anonymous class (out of subset) or an unrecognized declaration — then `this`
@@ -835,16 +655,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .as_ref()
             .and_then(|id| value_decl_id(self.binder, scope, id.name.as_str()));
 
-        // Save/restore `this`, the class context, and the base-constructor signature
-        // around the class so none leak (and a nested class's own values do not clobber an
-        // enclosing one permanently).
+        // Save class context so nested classes do not permanently clobber enclosing state.
         let saved_this = self.current_this;
         let saved_class = self.current_class;
         let saved_super_ctor = self.current_super_ctor;
-        // M14: a class body is not itself a constructor — reset the in-constructor flag on
-        // entry (it is set `true` per-member only for the `constructor` body below) and
-        // restore it on exit, so a class declared inside an outer constructor body does not
-        // wrongly mark this class's members as constructor-scoped.
+        // A nested class inside a constructor must not inherit constructor-only writes.
         let saved_in_ctor = self.current_in_ctor;
         self.current_in_ctor = false;
         if let Some(info) = info {
@@ -864,21 +679,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // `this`, the same defensive choice as for instance bodies above).
         let static_this = info.map(|info| info.static_side);
 
-        // M16: push the class's type-parameter frame for the whole body-checking pass, so a
-        // method/constructor body annotation referencing `T` (a parameter or return type)
-        // resolves to the same parameter type the instance template embeds. The frame is
-        // rebuilt from the class's stored ids (allocated once in phase 0) paired with the
-        // AST names — re-interning a `TypeParam` is idempotent, so this yields the identical
-        // ids. An empty frame for a non-generic class (harmless). The frame is popped at the
-        // end (a parameter never leaks past the class body).
+        // Rebuild the class type-parameter frame so body annotations resolve to template ids.
         let type_params = value_decl
             .and_then(|decl_id| self.class_type_params.get(&decl_id).cloned())
             .unwrap_or_default();
         let frame = self.build_type_param_frame(class.type_parameters.as_deref(), &type_params);
 
-        // M16: check every member body with the type-parameter frame pushed, so a body
-        // annotation referencing `T` resolves. An empty frame for a non-generic class — then
-        // this is exactly the M11–M15 body-checking pass.
+        // Member bodies share the class type-parameter frame.
         self.with_type_params(frame, |pass| {
             pass.check_class_member_bodies(scope, class, static_this)
         });
@@ -889,27 +696,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.current_in_ctor = saved_in_ctor;
     }
 
-    /// Check every member **body** of a class (M11–M16), with `this`/`current_class`/
-    /// `current_super_ctor` already bound by the caller ([`check_class`]) and any M16
-    /// type-parameter frame already pushed. Extracted so the caller can run it inside
-    /// [`with_type_params`] without a deeply-indented closure; it walks the bodies and
-    /// collects their obligations/diagnostics, returning nothing.
-    ///
-    /// A field initializer is walked (with a `static` initializer's `this` bound to the
-    /// static side, M13); a method/constructor/accessor body is checked via the shared
-    /// [`infer_function`] machine, with a `static` method's `this` bound to the static side
-    /// and the `constructor` body flagged for the M14 `readonly`-assignment carve-out. Each
-    /// per-member `this`/in-constructor override is saved/restored so it does not leak to the
-    /// next member.
-    /// M21: the **effective** type of an optional class field — its annotation with
-    /// `| undefined` baked in. The single rule shared by the member built in
-    /// [`fill_class`] and the initializer target in [`check_class_member_bodies`], so
-    /// the read side and the initializer check cannot drift.
+    /// Effective optional-field type shared by member construction and initializer checks.
     fn optional_field_effective_type(&mut self, ty: TypeId) -> TypeId {
         let undefined = self.interner.well_known().undefined;
         self.interner.union(vec![ty, undefined])
     }
 
+    /// Check member bodies with class context already bound by [`check_class`].
+    ///
+    /// Per-member `this` and constructor-readonly state are save/restored so static
+    /// and instance bodies cannot leak context into each other.
     fn check_class_member_bodies(
         &mut self,
         scope: ScopeId,

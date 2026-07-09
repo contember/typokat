@@ -18,18 +18,10 @@ use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 impl<'a, 'ast> Pass<'a, 'ast> {
-    /// Phase 0b — **fill**. Fill every interface body in place, then force every alias
-    /// to resolve. After this returns, `pass.type_resolved` is complete, so every
-    /// `TSTypeReference` encountered in the obligation walk is a plain id lookup.
+    /// Fill named type declarations so later annotation reads are plain id lookups.
     ///
-    /// **Interfaces are filled BEFORE aliases are resolved** (M9): a generic alias body
-    /// can *instantiate* a generic interface (`type Wrap<T> = Box<T>`), and
-    /// instantiation substitutes over the interface's **template** — which must already
-    /// be filled, not the empty reserved object. An interface body that references an
-    /// alias still resolves that alias lazily on demand (`resolve_type_decl` is
-    /// memoized), so the reverse dependency is unaffected by the order. (M5 had the
-    /// opposite order purely to pre-warm aliases; correctness never depended on it,
-    /// because resolution is lazy in both directions.)
+    /// Interfaces fill before aliases because alias instantiation must substitute over
+    /// an already-filled generic interface template; reverse dependencies stay lazy.
     pub(in crate::check::checker) fn fill_type_decls(&mut self, scope: ScopeId) {
         self.fill_type_decls_range(scope, 0, self.type_decls.len());
     }
@@ -40,32 +32,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         start: usize,
         end: usize,
     ) {
-        // M25: everything lowered in phase 0 is a **template** (an alias / interface /
-        // class body), so a concrete conditional must stay its interned node rather than
-        // evaluate eagerly — evaluation is a value-position (phase 1) demand. Restored to
-        // `false` before the check walk.
+        // Template lowering keeps conditionals lazy until value-position demand.
         self.building_template = true;
 
-        // Fill each interface's reserved id with its lowered members. Members are
-        // lowered with the full resolver available; a self/sibling reference resolves
-        // to a reserved/resolved id (stored, never inlined); a referenced alias is
-        // resolved lazily right here.
-        //
-        // M9: a **generic** interface is filled with its type parameters in scope, so a
-        // member referencing `T` (`value: T`) carries the parameter type. The reserved
-        // id then holds a structural **template** (`{ value: T }`); an instantiation
-        // `Box<number>` substitutes it. A non-generic interface fills with an empty
-        // frame and stays nominal (filled in place, never re-interned).
+        // Fill interfaces first so generic interface templates are ready to instantiate.
         for index in start..end {
             self.ensure_interface_filled(scope, index);
         }
 
-        // M25: fill each **conditional-alias** template (its reserved conditional id)
-        // BEFORE resolving ordinary aliases, so a plain alias instantiating a conditional
-        // one (`type WU = Wrap<U>`) sees the filled template. The body is lowered with the
-        // parameter frame active and `resolving_conditional_alias` set (so a check that
-        // surface-references the alias is `TK2456`); a self-recursive reference in a
-        // branch resolves to the reserved id as a lazy instantiation (never expands).
+        // Fill conditional-alias placeholders before ordinary aliases can instantiate them.
         for index in start..end {
             let (placeholder, params, param_decl, annotation, name, name_span) =
                 match &self.type_decls[index] {
@@ -115,13 +90,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         }
 
-        // M28: fill each **mapped-alias** template (its reserved mapped id), mirroring
-        // the conditional-template step above. The body is lowered with the parameter
-        // frame active and the `resolving_alias` context set (so a key source that
-        // surface-references the alias itself — `type M = { [K in keyof M]: number }` —
-        // stays the M26 `TK2456`); a self-recursive reference in the VALUE template
-        // resolves to the reserved id as a lazy instantiation (never expands, never the
-        // error type).
+        // Fill mapped-alias placeholders before ordinary aliases can instantiate them.
         for index in start..end {
             let (placeholder, params, param_decl, annotation, name, name_span) =
                 match &self.type_decls[index] {
@@ -176,47 +145,26 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         }
 
-        // B29: fill each **object-literal alias** template (its reserved object id) BEFORE
-        // resolving ordinary aliases, mirroring the conditional-template step. The reserved
-        // id is already seeded in `type_resolved`, so a self-reference through a member
-        // (`type X = { a: X | null }`, mutual `Even`/`Odd`) resolves to the stable id — the
-        // m5 named-recursive representation — never re-entering into the error type.
-        // Idempotent per index — an interface whose heritage named the alias already
-        // force-filled it ([`ensure_heritage_base_filled`]).
+        // Fill seeded object aliases so legal member recursion resolves to the reserved id.
         for index in start..end {
             self.ensure_object_alias_filled(scope, index);
         }
 
-        // Resolve every remaining alias (interfaces are now filled, so a generic alias
-        // instantiating an interface substitutes over the filled template). Resolution
-        // is on-demand and idempotent, so touching every alias resolves the whole DAG.
+        // Touch remaining aliases to resolve the whole memoized DAG.
         for index in start..end {
             if matches!(self.type_decls[index], TypeDecl::Alias { .. }) {
                 self.resolve_type_decl(scope, DeclId(index as u32));
             }
         }
 
-        // M11/M12: fill each class's reserved **instance type** with its fields + methods
-        // (M12: composed with its base's members), and register its constructor signature
-        // under the class's *value* `DeclId`. Done after interfaces/aliases so a
-        // field/method/constructor annotation referencing a named type resolves to a
-        // filled id; a self/sibling class reference resolves to a reserved class id
-        // (stored, never inlined — so a recursive field like `next: Node | null` lowers).
-        //
-        // M12: a derived class needs its base filled first. [`ensure_class_filled`] fills
-        // the base on demand (in any declaration order) and is idempotent + cycle-guarded,
-        // so iterating every class index fills the whole `extends` DAG exactly once.
-        // Method/constructor **bodies** are checked later, in the statement walk
-        // ([`check_class`]) where `this`/`super` are set and obligations are collected;
-        // this step builds **types only**.
+        // Fill class types after named annotations are available; bodies are checked later.
         for index in start..end {
             if matches!(self.type_decls[index], TypeDecl::Class { .. }) {
                 self.ensure_class_filled(scope, index);
             }
         }
 
-        // M25: template building is done — value-position annotations (phase 1) now
-        // evaluate their conditionals.
+        // Value-position annotations may evaluate conditionals after fill.
         self.building_template = false;
     }
 
@@ -809,31 +757,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// `T` to its parameter type. Every generic declaration site (functions, classes,
     /// interfaces, aliases) calls this once.
     ///
-    /// The annotation's diagnostics surface normally: an unresolved constraint name
-    /// (`T extends Bogus`) reports `TK2304` at the annotation, exactly like a
-    /// value-position annotation (tsc parity — suppressing it would be a false negative,
-    /// the unsafe direction; see the spec amendment, 162a78b). Only the *recording* is
-    /// gated: a constraint that does not lower to a real type (unresolved name → error
-    /// type, or out of subset → `None`) records **no constraint** — so explicit type
-    /// arguments are then unchecked (no `TK2344` cascade off an error-type constraint)
-    /// and inference proceeds, while a missing constraint never rejects an argument or
-    /// drops a member. The constraint is a side column, not part of the interned
-    /// `TypeParamType` identity, so it survives the de Bruijn re-key (invariants §2).
-    ///
-    /// **Circularity (`TK2313`, spec amendments 02f58a5 + c54bd47).** After the whole
-    /// list is lowered, each parameter's constraint chain is followed through **bare
-    /// type-parameter constraints and the bare-parameter MEMBERS of union constraints**
-    /// (`<T extends T | number>` is circular too — the union-source assume-true rule
-    /// would otherwise make it assignable-to-anything). Structural indirection —
-    /// `<T extends { self: T }>` — ends a branch and stays legal; intersection
-    /// composites are out of the type model (backlog 25). A chain that revisits the
-    /// parameter itself (`<T extends T>`, the mutual `<T extends U, U extends T>` —
-    /// BOTH flagged) reports `TK2313` at the constraint annotation and the parameter
-    /// records **no constraint**. Without this, the degenerate cycle would hit the
-    /// relation engine's assume-true stack and make `T` assignable to *everything* — a
-    /// dropped error. Detection runs on the recorded columns **after** the full list is
-    /// lowered (a later param's constraint isn't recorded yet mid-list), and clearing
-    /// happens **after** all detections (so the mutual cycle is seen from both sides).
+    /// Constraint annotation diagnostics surface normally, but only real lowered types
+    /// are recorded. Circular chains through bare parameters, unions, or intersections
+    /// report `TK2313` and clear their constraints before relation queries can see them.
     pub(in crate::check::checker) fn lower_type_param_constraints(
         &mut self,
         scope: ScopeId,
@@ -844,7 +770,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return;
         };
         let error_ty = self.interner.well_known().error;
-        // Pass 1 — lower + record every constraint in the list.
+        // Pass 1: lower and record every constraint in the list.
         for (param, &id) in param_decl.params.iter().zip(ids) {
             let Some(constraint) = param.constraint.as_ref() else {
                 continue;
@@ -855,9 +781,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
             }
         }
-        // Pass 2 — circularity detection over the now-complete columns. Collect ALL
-        // circular parameters before clearing any, so `<T extends U, U extends T>`
-        // flags both (clearing `T` first would hide the cycle from `U`'s walk).
+        // Collect all circular parameters before clearing any mutual-cycle participant.
         let mut circular: Vec<(TypeParamId, Span, String)> = Vec::new();
         for (param, &id) in param_decl.params.iter().zip(ids) {
             let Some(constraint) = param.constraint.as_ref() else {
@@ -882,8 +806,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// chain follows, per step, the **bare-parameter successors** of a constraint: a
     /// bare `TypeParam` constraint continues to that parameter, and a **union**
     /// constraint continues through each of its bare-`TypeParam` MEMBERS
-    /// (`<T extends T | number>` is circular — spec amendment c54bd47; a union can
-    /// branch, so this is a DFS, not a single-successor walk). Any other constraint
+    /// (`<T extends T | number>` is circular; a union can branch, so this is a DFS,
+    /// not a single-successor walk). Any other constraint
     /// shape (object, array, function, …) ends that branch: structural self-reference
     /// is legal and terminates via the relation engine's cycle stack. A cycle that does
     /// NOT pass through `start` (the walk dead-ends into some other pair's loop) stops
