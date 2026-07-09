@@ -1,15 +1,9 @@
-//! Type-argument inference (M10 — the *generative* inference engine, architecture
-//! §5.1).
+//! Type-argument inference (M10; architecture §5.1).
 //!
-//! When a generic function is called **without** explicit type arguments
-//! (`identity(5)` rather than `identity<number>(5)`), the type arguments must be
-//! *inferred* from the call arguments. This is a separate machine from the
-//! relation engine: the relater **decides** whether one type is assignable to
-//! another; this engine **produces** types (the type-parameter bindings) from a
-//! set of constraints. Architecture §5.1 sizes it roughly as large as the relation
-//! engine; M10 is its first, deliberately small slice (type-argument inference
-//! only — contextual typing, `extends`-constraint–guided inference, inference
-//! priorities, and variance-aware inference are later milestones).
+//! This engine **produces** type-parameter bindings from call arguments; the
+//! relation engine still **decides** assignability after substitution. M10 covers
+//! call-site inference only; contextual typing, richer constraint-guided
+//! inference, priorities, and variance-aware inference remain separate work.
 //!
 //! ## Shape
 //!
@@ -25,11 +19,8 @@
 //!     candidates → their **union** ([`Interner::union`]). Literal candidates widen
 //!     here (per parameter — see the Soundness note below).
 //!
-//! The resulting `TypeParamId → TypeId` map is then fed to the **existing** M9
-//! substitution to instantiate the signature, after which the **existing**
-//! arity/argument/return checks run unchanged. Inference only *decides* the type
-//! arguments; assignability is still verified by the relation engine — inference
-//! never bypasses a check.
+//! The resulting `TypeParamId → TypeId` map feeds M9 substitution; the existing
+//! arity/argument/return checks then run unchanged.
 //!
 //! ## Soundness
 //!
@@ -49,14 +40,9 @@
 //!
 //! ## Termination
 //!
-//! Structural matching recurses through objects/functions/unions, which — via the
-//! M5 reserve-then-fill — can be **self-referential** (`interface List { tail: List
-//! | null }`). A naive walk would loop. [`InferenceContext`] therefore carries a
-//! `visited` set of the `(source, target)` id pairs currently on the recursion
-//! stack and short-circuits on re-entry. This is sound: re-entering a pair means it
-//! is already contributing its candidates further up the stack, so revisiting adds
-//! nothing. (Mirrors the relation engine's assume-true cycle stack and the
-//! substitution engine's `in_progress` guard.)
+//! [`InferenceContext`] guards structural matching with the current `(source,
+//! target)` pairs. Re-entering a pair adds no new candidates because the same pair
+//! is already contributing further up the stack.
 
 use crate::relate::Relater;
 use crate::types::repr::{
@@ -66,10 +52,8 @@ use crate::types::store::{Store, TypeId};
 use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-/// The accumulating candidate set: for each type parameter, the **raw** (un-widened)
-/// argument types matched against it. A `Vec` rather than a set keeps the code
-/// simple; duplicates are collapsed by [`Interner::union`] in [`fix_candidates`], so
-/// an over-count never affects the fixed result.
+/// The raw candidates per type parameter; [`fix_candidates`] handles widening and
+/// duplicate collapse.
 pub type Candidates = FxHashMap<crate::types::repr::TypeParamId, Vec<TypeId>>;
 
 /// Structurally match a source against a target in **conditional-`infer` mode** (M25):
@@ -120,17 +104,15 @@ pub fn infer_type_arguments(
     args: &[TypeId],
     fresh_args: &[bool],
 ) -> FxHashMap<crate::types::repr::TypeParamId, TypeId> {
-    // Collect candidates per (arg, param) pair, tracking — per parameter — whether it
-    // received a candidate from a FRESH argument and from a NON-fresh one (provenance
-    // for the clamp exemption: exempt iff fresh-only).
+    // Track candidate provenance so the constraint clamp can exempt fresh-only
+    // object/array literal arguments.
     let mut candidates: Candidates = FxHashMap::default();
     let mut fresh_params: FxHashSet<crate::types::repr::TypeParamId> = FxHashSet::default();
     let mut nonfresh_params: FxHashSet<crate::types::repr::TypeParamId> = FxHashSet::default();
     for (index, (&arg, &param)) in args.iter().zip(params).enumerate() {
         let mut local: Candidates = FxHashMap::default();
-        // Collect **raw** (un-widened) candidates; widening is decided per parameter at
-        // fix time, so a primitive-constrained parameter can keep its literal (see
-        // `fix_candidates` / `has_primitive_constraint`).
+        // Keep candidates raw here; primitive-constrained parameters decide literal
+        // preservation at fix time.
         infer_from_types_raw(interner, arg, param, &mut local);
         let is_fresh = fresh_args.get(index).copied().unwrap_or(false);
         for (param_id, cands) in local {

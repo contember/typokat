@@ -1,15 +1,10 @@
-//! The relation cache (architecture §6.1, mvp-plan §4.4).
+//! Relation verdict cache (architecture §6.1).
 //!
-//! With stable `TypeId`s the cache key is three `u32`s — extremely cheap — and
-//! good hash-consing makes it brutally effective because structurally equal
-//! types collapse to one key. This may be the single largest perf element of the
-//! whole checker, so it gets its own module from day 1 even though M0 barely
-//! populates it.
+//! Stable `TypeId`s make the key three cheap integers; hash-consing collapses
+//! structurally equal types to the same key.
 //!
 //! Cache *lifetime* (architecture §6.2) — separating durable relations from the
-//! swarm of short-lived narrowed types — is a known later concern. For the MVP a
-//! single map is correct (no narrowing yet); the seam is the `RelationCache`
-//! boundary, so introducing a volatile/durable split later is a local change.
+//! swarm of short-lived narrowed types — remains a local `RelationCache` concern.
 
 use crate::relate::relation::RelationKind;
 use crate::types::store::TypeId;
@@ -35,10 +30,8 @@ impl RelationKey {
     }
 }
 
-/// Maps a decided relation to its boolean verdict. The reason chain for a
-/// failure is reconstructed by the engine (M0 reasons are leaves); when reason
-/// caching becomes worthwhile the value type is widened here without touching
-/// call sites.
+/// Maps a decided relation to its boolean verdict; failure reasons are rebuilt by
+/// the engine so the hot cache stays compact.
 #[derive(Default)]
 pub struct RelationCache {
     entries: FxHashMap<RelationKey, bool>,

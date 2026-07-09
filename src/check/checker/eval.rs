@@ -1,36 +1,20 @@
-//! The conditional-type **evaluator** (M25, architecture §7 — the type-level
-//! evaluation phase's first slice).
+//! Conditional-type evaluation (M25; architecture §7).
 //!
 //! A conditional `C extends E ? T : F` is *evaluated* once its check type `C` is
-//! **concrete** (contains no free declaration type parameter). Evaluation:
+//! **concrete** (contains no free declaration type parameter):
 //!
-//!  1. **Distribution** (of a distributive conditional applied via an
-//!     [`crate::types::repr::InstantiationType`]): if the check argument is a union it
-//!     distributes over its members, `never` distributes to zero members (→ `never`),
-//!     and the `boolean` intrinsic expands to `true | false` first.
-//!  2. **The `extends` test** runs through the **existing** relation engine
-//!     ([`Relater`]); `infer` binders are extracted through the **existing** inference
-//!     machinery in its conditional collection mode
-//!     ([`infer_from_types_for_conditional`] — literals never widen, union extends
-//!     targets descend) after freshening the node's de Bruijn binders to transient
-//!     [`TypeParamId`]s (ADR-0002 — the acceptable fallback recorded in the sprint run
-//!     log).
-//!  3. **Branch selection**: the true branch (with matched `infer` candidates
-//!     substituted) on success, the false branch on failure.
+//!  1. distributive instantiations split union checks (`never` distributes to zero
+//!     members, and `boolean` expands to `true | false` first);
+//!  2. the `extends` test uses [`Relater`] and conditional-mode
+//!     [`infer_from_types_for_conditional`] after freshening `infer` binders;
+//!  3. the selected branch is evaluated with matched `infer` candidates substituted.
 //!
-//! ## Required machinery (architecture §7.2)
+//! ## Soundness / termination
 //!
-//!  - **Memoization** keyed on the interned conditional/instantiation `TypeId` → result.
-//!    Sound because hash-consing makes the key *total* (one id ⇒ one type ⇒ one result).
-//!    A result computed while the per-root step budget is **exhausted**, or one that
-//!    re-entered an *in-flight* id (a genuine cycle), is **not** committed to the memo —
-//!    mirroring the relation cache's provisional discipline (invariants §1).
-//!  - An explicit **work-stack** — no host recursion per evaluation step, so a deeply
-//!    recursive `Unwrap`-style descent cannot overflow the native stack (witnessed by
-//!    the 10 000-deep unit test below).
-//!  - A per-root **step budget** (`~1000`, tsc's tail-iteration order): exhaustion sets
-//!    [`ConditionalEvaluator::exhausted`], which the caller turns into `TK2589` at the
-//!    annotation that demanded evaluation.
+//! Memoization is keyed by interned `TypeId`, but exhausted or in-flight results are
+//! never committed (same provisional-result discipline as the relation cache). The
+//! explicit work-stack prevents host-stack overflow; the per-root step budget reports
+//! `TK2589` via [`ConditionalEvaluator::exhausted`].
 
 use super::context::Pass;
 use crate::check::infer::infer_from_types_for_conditional;
@@ -427,14 +411,8 @@ enum Task {
     /// transforms, a union distributes per member, anything else stays a (rebuilt)
     /// symbolic instantiation.
     ApplyStringIntrinsic(TypeId),
-    /// M28 (review round 2): the conditional `id`'s check and extends OPERANDS are on
-    /// the value stack (freshly evaluated — they were pending computations, e.g.
-    /// `Uppercase<S> extends S` / `K extends keyof T` after substitution). Pop both,
-    /// run the extends test against the VALUES, and pick the branch — with the
-    /// no-false-on-undecidable rule: a `No` verdict where either evaluated operand
-    /// still carries an unevaluable deferred node does NOT pick the false branch (the
-    /// relation is conservative there, so `No` may mean "cannot prove"); the whole
-    /// conditional stays deferred instead. A `Yes` is always sound → true branch.
+    /// M28: pop pre-evaluated check/extends operands and decide the branch; see
+    /// [`ConditionalEvaluator::operand_undecidable`] for the conservative `No` gate.
     DecideConditional(TypeId),
 }
 
@@ -632,13 +610,8 @@ impl<'a> ConditionalEvaluator<'a> {
             return;
         }
         self.in_flight.insert(ty);
-        // M28 (review round 2): a check/extends OPERAND may itself be a pending
-        // computation — substituted concrete but unevaluated (`Uppercase<S> extends S`
-        // at `IsUpper<"ABC">`, `K extends keyof T` at `Has<{a:1}, "a">`). Relating the
-        // raw node would be a conservative `No` → the FALSE branch forced → the
-        // true-branch error silently dropped (review HIGH-1/HIGH-2). Demand-evaluate
-        // BOTH operands through the shared work-stack first; the extends test then
-        // runs against the VALUES ([`Task::DecideConditional`]).
+        // Demand-evaluate top-level pending operands before the extends test; relating
+        // the raw nodes would turn "not proven" into a false-branch choice.
         if self.arg_needs_pre_eval(cond.check) || self.arg_needs_pre_eval(cond.extends_ty) {
             tasks.push(Task::SetMemo(ty));
             tasks.push(Task::DecideConditional(ty));
@@ -646,13 +619,7 @@ impl<'a> ConditionalEvaluator<'a> {
             tasks.push(Task::Eval(cond.extends_ty));
             return;
         }
-        // Direct path — the operands are not top-level pending computations. The
-        // no-false-on-undecidable rule still applies (review round 3, HIGH): a deferred
-        // node NESTED inside a composite operand (`{ v: keyof T } extends { v: "a" }`)
-        // makes the relation's `No` unprovable at depth, and deep PRE-evaluation is
-        // forbidden (leader arbitration — tsc's own resolution of these shapes is
-        // mixed; backlog 36), so an unmatched conditional with a deep-deferred operand
-        // stays deferred rather than forcing the false branch.
+        // The deep undecidable gate below remains the canonical no-false safeguard.
         let (matched, true_final) = self.run_extends_test(&cond);
         // The result memoizes under this id once it resolves (tail step — a chain of
         // conditionals is a loop here).
@@ -670,21 +637,9 @@ impl<'a> ConditionalEvaluator<'a> {
     }
 
     /// Decide a conditional whose check/extends operands were pre-evaluated (M28
-    /// review round 2): pop the two evaluated operands, run the extends test against
-    /// the VALUES (the `ConditionalType` is `Copy` — the test needs no re-interning),
-    /// and schedule the taken branch. The enclosing [`Task::SetMemo`] (pushed by
-    /// [`ConditionalEvaluator::eval_conditional`]) commits the result under the
-    /// ORIGINAL node id.
-    ///
-    /// **No-false-on-undecidable:** a `Yes` verdict is always sound (the relation
-    /// never proves spuriously) → true branch. A `No` where either evaluated operand
-    /// still carries an unevaluable deferred node (a symbolic intrinsic application,
-    /// a deferred keyof / mapped / conditional — at ANY structural depth, see
-    /// [`ConditionalEvaluator::operand_undecidable`], review round 3) may mean
-    /// "cannot prove", not "provably false": the conditional must NOT pick the
-    /// false branch — it stays a deferred value (conservative relations, the sound
-    /// over-report). Template patterns are NOT gated: the M27 anchored-matching model
-    /// decides them, and gating would regress the pattern-extends fixtures.
+    /// review round 2). The enclosing [`Task::SetMemo`] commits the result under the
+    /// original node id; [`ConditionalEvaluator::operand_undecidable`] owns the
+    /// no-false-on-undecidable invariant.
     fn decide_conditional(
         &mut self,
         ty: TypeId,

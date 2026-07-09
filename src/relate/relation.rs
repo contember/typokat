@@ -1,16 +1,11 @@
-//! The relation engine: `is_assignable` / `is_subtype` / `is_identical`.
+//! Relation queries (`is_assignable` today; subtype/identity kinds are reserved).
 //!
-//! Architecture §6, mvp-plan §4.4. This is "probably the biggest single piece"
-//! and three of its properties are built correct-from-day-1 because retrofitting
-//! them is a rewrite (mvp-plan §1.3):
+//! The soundness-critical machinery is built into the core driver, not bolted onto
+//! individual rules:
 //!
-//!  1. the relation cache keyed on `(u32, u32, RelationKind)` (see `cache.rs`),
-//!  2. an assume-true-until-disproven cycle stack consulted on re-entry,
-//!  3. a result type that returns a **reason chain on failure**, not `bool`.
-//!
-//! M0 only exercises the intrinsic lattice + literal widening (no objects, no
-//! cycles), but the cache, the cycle stack, and the reason chain are all wired
-//! in now so M2–M6 add rules, not infrastructure.
+//!  1. a durable cache keyed on `(src, tgt, RelationKind)`,
+//!  2. an assume-true cycle stack for recursive types,
+//!  3. `Relation::No(ReasonChain)`, never a bare failure boolean.
 
 use crate::relate::cache::{RelationCache, RelationKey};
 use crate::types::repr::{IntrinsicKind, LiteralValue, PropertyType, TemplateType, TypeTag, Visibility};
@@ -18,9 +13,7 @@ use crate::types::store::{Store, TypeId};
 use crate::types::WellKnown;
 use rustc_hash::FxHashSet;
 
-/// The relations we cache. They are *different* relations with different rules
-/// and must not share a cache (architecture §6.1). M0 uses `Assignable`;
-/// `Identity`/`Subtype` are defined for the M4/M5 work that needs them.
+/// Distinct relation kinds must not share cache entries (architecture §6.1).
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 #[repr(u8)]
 pub enum RelationKind {
@@ -36,101 +29,67 @@ pub enum RelationKind {
 /// provisional `Yes` (§6.3).
 type MergedInFlightSet = FxHashSet<(Vec<TypeId>, TypeId, RelationKind)>;
 
-/// One link in a failure explanation. M0 only ever produces a single
-/// `Leaf { src, tgt }`; M2 adds the two object-structural causes. The structure
-/// is recursive so the depth case nests "...because property `p`: <child reason>"
-/// (architecture §6.4) — the chain M6 renders.
+/// One link in a failure explanation; recursive variants wrap the first nested
+/// cause so reporting can render a deterministic reason chain.
 #[derive(Clone, Debug)]
 pub enum Reason {
     /// The base mismatch: `src` is not assignable to `tgt`.
     Leaf { src: TypeId, tgt: TypeId },
-    /// A **required target property is absent in the source** object. `src`/`tgt`
-    /// are the two object types; `name` is the missing property. The checker maps
-    /// this to `TK2741`.
+    /// Required target property missing from the source object (`TK2741`).
     MissingProperty {
         name: String,
         src: TypeId,
         tgt: TypeId,
     },
-    /// A property is **present but its type is incompatible**, wrapping the inner
-    /// reason for that property's types. `src`/`tgt` are the two object types. The
-    /// checker maps this to `TK2322`.
+    /// Present property has an incompatible value type (`TK2322`).
     Property {
         name: String,
         src: TypeId,
         tgt: TypeId,
         because: Box<Reason>,
     },
-    /// Two function types have **different arity** (M3 has no optional/rest
-    /// params, so arity must match exactly). `src`/`tgt` are the two function
-    /// types. The checker maps this to `TK2322`.
+    /// Function source requires more parameters than the target can supply (`TK2322`).
     ParameterCount { src: TypeId, tgt: TypeId },
-    /// A parameter is **contravariantly incompatible**: the target's parameter is
-    /// not assignable to the source's parameter at position `index`, wrapping the
-    /// inner reason (built in the contravariant `tgt_param → src_param`
-    /// direction). `src`/`tgt` are the two function types. The checker maps this
-    /// to `TK2322`.
+    /// Function parameter mismatch; `because` was built in the contravariant
+    /// `tgt_param → src_param` direction (`TK2322`).
     Parameter {
         index: usize,
         src: TypeId,
         tgt: TypeId,
         because: Box<Reason>,
     },
-    /// The **return types are covariantly incompatible**: the source return type
-    /// is not assignable to the target return type, wrapping the inner reason.
-    /// `src`/`tgt` are the two function types. The checker maps this to `TK2322`.
+    /// Function return mismatch in the covariant `src_ret → tgt_ret` direction
+    /// (`TK2322`).
     ReturnType {
         src: TypeId,
         tgt: TypeId,
         because: Box<Reason>,
     },
-    /// A **union source has a member that is not assignable to the target** (a
-    /// union `src <: tgt` requires *every* member to be assignable). `src` is the
-    /// union, `tgt` the target; `member` is the first offending member, wrapping
-    /// the inner reason for `member <: tgt`. The checker maps this to `TK2322`.
+    /// First union-source member that fails against the target (`TK2322`).
     UnionSourceMember {
         member: TypeId,
         src: TypeId,
         tgt: TypeId,
         because: Box<Reason>,
     },
-    /// A **source is not assignable to any member of a union target** (a `src <:`
-    /// union requires *some* member to accept it). `src` is the source, `tgt` the
-    /// union target. No single member is "the cause", so this is a flat leaf-like
-    /// reason over the whole union. The checker maps this to `TK2322`.
+    /// Source fits no union-target member; no single member is the cause (`TK2322`).
     NoUnionMember { src: TypeId, tgt: TypeId },
-    /// Two **array** types have **covariantly-incompatible elements** (M17): the
-    /// source array's element is not assignable to the target array's element.
-    /// `src`/`tgt` are the two array types (`S[]`/`T[]`), wrapping the inner reason
-    /// for `S <: T`. The checker maps this to `TK2322`.
+    /// Array element mismatch in the covariant `S → T` direction (`TK2322`).
     ArrayElement {
         src: TypeId,
         tgt: TypeId,
         because: Box<Reason>,
     },
-    /// Two **tuple** types have a **different length** (M18): tuples are
-    /// fixed-length and positional, so `[A, B]` and `[A]` are never assignable.
-    /// `src`/`tgt` are the two tuple types. The checker maps this to `TK2322`. This
-    /// is a terminal reason — the length mismatch is the whole cause.
+    /// Tuple length mismatch; a terminal reason (`TK2322`).
     TupleLength { src: TypeId, tgt: TypeId },
-    /// Two **tuple** types have an **incompatible element at a position** (M18): the
-    /// source element at `index` is not assignable to the target element at the same
-    /// position (positional, **first failing position** only — a single nested
-    /// reason, like the object relation, not one-per-element). `src`/`tgt` are the
-    /// two tuple types, wrapping the inner reason for `S[index] <: T[index]`. The
-    /// checker maps this to `TK2322`.
+    /// First positional tuple element mismatch (`TK2322`).
     TupleElement {
         index: usize,
         src: TypeId,
         tgt: TypeId,
         because: Box<Reason>,
     },
-    /// A value does **not fit the target's index signature** (M19): the source has a
-    /// named property (or its own index signature) whose value type is not assignable
-    /// to the target object's string/number index value type. `src`/`tgt` are the two
-    /// object types, wrapping the inner reason for `<value> <: <index value type>`.
-    /// The checker maps this to `TK2322`. A single failing value wins (first one
-    /// found), mirroring the object relation's one-cause-per-failure shape.
+    /// First source value that violates a target index signature (`TK2322`).
     IndexSignature {
         src: TypeId,
         tgt: TypeId,
@@ -532,17 +491,13 @@ impl<'a> Relater<'a> {
             return Relation::No(ReasonChain::leaf(src, tgt));
         }
 
-        // Object structural rule (mvp-plan §6/§9, M2): `src` is assignable to
-        // `tgt` iff every property of `tgt` is present in `src` with the src
-        // property type assignable to the tgt property type. Width is allowed
-        // (extra `src` props are fine); depth recurses. This is the only rule
-        // that can fail with a *structured* (non-leaf) reason.
+        // Object structural rule; `relate_objects` owns width/depth, nominal, optional,
+        // call/construct, and index-signature details.
         if self.store.tag(src) == TypeTag::Object && self.store.tag(tgt) == TypeTag::Object {
             return self.relate_objects(src, tgt, kind, assumed);
         }
 
-        // Function structural rule (mvp-plan §6.5, M3): parameters are
-        // contravariant, the return is covariant, with matching arity.
+        // Function structural rule; `relate_functions` owns arity and variance.
         if self.store.tag(src) == TypeTag::Function && self.store.tag(tgt) == TypeTag::Function {
             return self.relate_functions(src, tgt, kind, assumed);
         }
@@ -558,33 +513,17 @@ impl<'a> Relater<'a> {
             return self.relate_function_to_object(src, tgt, kind, assumed);
         }
 
-        // Array structural rule (M17): `S[]` is assignable to `T[]` iff `S` is
-        // assignable to `T` — **covariant** in the element (matching tsc's
-        // deliberate array covariance). Nested arrays recurse through the same rule
-        // (`number[][] <: number[][]` decomposes element-by-element). Only fires when
-        // both sides are arrays; a mismatched array/non-array pairing falls through
-        // to the leaf below.
+        // Array structural rule; `relate_arrays` owns element covariance.
         if self.store.tag(src) == TypeTag::Array && self.store.tag(tgt) == TypeTag::Array {
             return self.relate_arrays(src, tgt, kind, assumed);
         }
 
-        // Tuple structural rule (M18): `[S0, S1, …]` is assignable to `[T0, T1, …]`
-        // iff they have the **same length** AND each `Si` is assignable to `Ti`
-        // (**positional**, like a function's parameters — *not* a set like a union).
-        // Fires only when both sides are tuples; a length mismatch or a positional
-        // element failure is reported as a **single** nested reason (first failing
-        // position), mirroring the object relation's one-cause-per-failure shape.
+        // Tuple structural rule; `relate_tuples` owns length and positional checks.
         if self.store.tag(src) == TypeTag::Tuple && self.store.tag(tgt) == TypeTag::Tuple {
             return self.relate_tuples(src, tgt, kind, assumed);
         }
 
-        // Tuple → array rule (M18): a tuple `[A, B, …]` is assignable to an array
-        // `T[]` iff **every** element is assignable to `T` (the tuple is a
-        // fixed-length array of the appropriate element type). This runs after the
-        // tuple→tuple rule, so it only fires for a tuple **source** against an array
-        // **target** (`[1, 2] <: number[]`, `t <: (number | string)[]`). The reverse
-        // (array → tuple) is generally unsound and deferred — it falls through to the
-        // leaf below.
+        // Tuple → array rule; the reverse remains the conservative fallthrough.
         if self.store.tag(src) == TypeTag::Tuple && self.store.tag(tgt) == TypeTag::Array {
             return self.relate_tuple_to_array(src, tgt, kind, assumed);
         }
@@ -1610,14 +1549,6 @@ impl<'a> Relater<'a> {
     }
 }
 
-/// Whether the source member satisfies the target member's **nominal origin**
-/// requirement (M13). A `public` target member imposes none (pure structural
-/// width/depth). A `private`/`protected` target member requires the source's
-/// same-named member to have the **same visibility AND the same declaring class**
-/// — i.e. to be the *very same* declared member. This is the soundness-critical
-/// gate: when it returns `false`, the relation must fail (a structurally-identical
-/// object literal, or another class's same-named non-public member, is not
-/// assignable to a class with a `private`/`protected` member).
 /// Whether a property name is **numeric-keyed** (M19) — i.e. governed by a number
 /// index signature. A property whose name is a canonical number string (`"0"`,
 /// `"1"`, …) counts as a numeric key, matching TS's rule that a number index
@@ -1629,6 +1560,9 @@ fn is_numeric_property_name(name: &str) -> bool {
     name.parse::<f64>().map(|n| n.is_finite()).unwrap_or(false)
 }
 
+/// Whether the source member satisfies the target member's nominal-origin
+/// requirement (M13). Non-public target members require the same visibility and
+/// declaring class; a failed check must make the relation fail.
 fn nominal_origin_ok(tgt_prop: &PropertyType, src_prop: &PropertyType) -> bool {
     match tgt_prop.visibility {
         // Public target member: structural only — no origin constraint.
