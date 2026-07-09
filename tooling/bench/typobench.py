@@ -639,6 +639,16 @@ def shell_command(argv):
     return " ".join(shlex.quote(str(part)) for part in argv)
 
 
+def hyperfine_command(argv, raw_dir, stem, tool):
+    command = shell_command(argv)
+    if len(command) < 100_000:
+        return command
+    script = raw_dir / f"{stem}-{tool}.sh"
+    script.write_text("#!/bin/sh\nexec " + command + "\n")
+    script.chmod(0o755)
+    return str(script)
+
+
 def validation_output_excerpt(output_file):
     output_file.seek(0)
     lines = []
@@ -715,8 +725,9 @@ def run_hyperfine_for_item(tools, family, size, paths, lines, args, raw_dir):
     for tool in tools:
         argv = build_tool_command(tool, args, paths)
         command = shell_command(argv)
+        bench_command = hyperfine_command(argv, raw_dir, stem, tool)
         commands.append((tool, command, argv))
-        cmd.extend(["--command-name", tool, command])
+        cmd.extend(["--command-name", tool, bench_command])
 
     subprocess.run(cmd, cwd=ROOT, check=True)
     data = json.loads(raw.read_text())
