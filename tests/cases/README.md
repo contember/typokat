@@ -193,6 +193,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b33_as_cast_assignability/` | backlog `33` | `as` / angle-bracket assertions participate in normal assignment and call-argument assignability |
 | `b54_labeled_statements/` | backlog `54` | labeled statements are checked and labeled `break` / `continue` participate in flow |
 | `b59_modules_hygiene/` | backlog `59` | project-mode pending diagnostics are attributed to the owning module, and export lists validate local names |
+| `b65_inference_candidate_policy/` | backlog `65` | call-site inference fixes same-parameter candidates before replaying each argument, rather than unioning incompatible candidates |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):
 
@@ -268,3 +269,11 @@ pins class-fill override checks to the derived module that owns the member span
 clamped nonsense location). `export_ghost` pins local export-list validation:
 `export { ghost }` must report `TK2304` at the export site even when no importer
 mentions the missing export.
+
+`b65_inference_candidate_policy/` pins ordinary call-site inference for multiple
+arguments that bind the same type parameter. tsc fixes a type parameter and then
+checks every argument against the substituted signature; typokat must not infer a
+too-wide union solely to make incompatible arguments fit. Markers are mostly
+code-only because the exact fixed target can be literal-, primitive-, or
+union-shaped depending on candidate priority and contextual use. The corpus keeps
+at most one mismatched argument per call, per the general call-marker rule above.
