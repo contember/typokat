@@ -287,28 +287,13 @@ pub enum Visibility {
 /// M2 properties are all required (`optional` is always `false`); the field is
 /// kept so optional members (`a?: T`) slot in later without a struct change.
 ///
-/// M13 adds the member's **visibility** (`public`/`private`/`protected`) and the
-/// **declaring class** it originated from. Both are part of the property's
-/// structural identity (hashed + compared by the interner): a `private x` and a
-/// public `x` of the same name/type are distinct members, and a `private`/
-/// `protected` member from one class differs from a same-named one from another
-/// (distinct [`ClassId`]). An ordinary structural object literal / interface
-/// member is `Public` with no declaring class (`None`), so M0–M12 behaviour is
-/// unchanged — those members hash and compare exactly as before.
-///
-/// M14 adds the [`readonly`](PropertyType::readonly) flag. Like visibility/origin
-/// it is part of the property's **structural identity** (hashed + compared by the
-/// interner), so it is preserved through interning rather than silently dropped —
-/// but, unlike visibility, the **relation engine ignores it** for assignability (a
-/// `readonly x` and a mutable `x` relate freely, both directions). It only gates
-/// assignment *targets*: assigning to a `readonly` member is `TK2540` (except in
-/// the declaring class's constructor). An object-literal / interface member is
-/// non-readonly.
-///
-/// M15 adds the [`is_accessor`](PropertyType::is_accessor) flag, treated identically
-/// at the type-store level (folded into the identity, ignored by the relation), to
-/// distinguish a get-only accessor (read-only **everywhere**) from a `readonly` data
-/// field (read-only except in its declaring constructor).
+/// M13–M15 fields (`visibility`, `declaring_class`, `readonly`, `is_accessor`)
+/// are part of structural identity, so interning preserves nominal access origins
+/// and assignment-target metadata. The relation engine uses visibility/origin for
+/// nominal class typing, but ignores `readonly`/`is_accessor` for assignability;
+/// those two only gate writes (`readonly` fields keep the constructor carve-out,
+/// get-only accessors are read-only everywhere). Plain object/interface members
+/// use the M0–M12 defaults: public, no declaring class, mutable data field.
 #[derive(Clone, Debug)]
 pub struct PropertyType {
     pub name: String,
@@ -323,13 +308,8 @@ pub struct PropertyType {
     /// *origin* the nominal relation rule keys on for `private`/`protected`
     /// members.
     pub declaring_class: Option<ClassId>,
-    /// Whether the member was declared `readonly` (M14), read from the AST
-    /// modifier (`readonly x: number`). Part of the property's structural identity
-    /// (hashed + compared by the interner, like [`visibility`](PropertyType::visibility)),
-    /// so it survives interning — but the **relation engine ignores it** for
-    /// assignability. It gates only assignment targets: a `readonly` target is
-    /// `TK2540` unless it is `this.prop` inside the declaring class's constructor.
-    /// `false` for object-literal / interface / unannotated members and methods.
+    /// Whether the member was declared `readonly` (M14). Identity-bearing, but
+    /// relation-ignored; it only gates assignment targets (`TK2540`).
     pub readonly: bool,
     /// Whether this member is a **get/set accessor** rather than a data field (M15).
     /// A **get-only** accessor is modelled as `readonly: true` so member-assignment
@@ -339,11 +319,8 @@ pub struct PropertyType {
     /// constructor carve-out (`this.prop` assignable in the declaring constructor)
     /// applies to `readonly` fields **only**, never to a get-only accessor.
     ///
-    /// Like [`readonly`](PropertyType::readonly) it is part of the property's
-    /// structural identity (hashed + compared by the interner) so it survives
-    /// interning, and the **relation engine ignores it** for assignability (an
-    /// accessor property and a same-typed data field relate freely, both ways).
-    /// `false` for every data field and for object-literal / interface members.
+    /// Identity-bearing like [`readonly`](PropertyType::readonly), but
+    /// relation-ignored. `false` for data fields and object/interface members.
     pub is_accessor: bool,
 }
 

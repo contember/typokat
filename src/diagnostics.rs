@@ -750,7 +750,8 @@ fn parameter_name_at(store: &Store, id: TypeId, index: usize) -> Option<String> 
 /// (`"hello"` → `string`, `42` → `number`, `true` → `boolean`). This is how the
 /// **source** side of an assignability message is shown — assignability *logic*
 /// uses the literal type, but the *message* widens it (mvp-plan M0 spec). The
-/// target side renders with `widen = false`.
+/// target side renders with `widen = false`. Recursive render calls pass
+/// `widen = false`; widening is only a top-level source-display convention.
 ///
 /// Rendering is **cycle-safe** (M5): a recursive named type (`interface List {
 /// tail: List | null }`) would otherwise expand forever. An object type already
@@ -790,9 +791,7 @@ fn render_type_inner(
             }
         }
         // Object: `{ a: number; b: string }` — members in stored (canonical)
-        // order, `; `-separated (README "Type display format"). Property *types*
-        // never widen (they are already the object type's members); only a
-        // top-level *literal source* widens, which never recurses into here.
+        // order, `; `-separated (README "Type display format").
         TypeTag::Object => {
             // Break a cycle: a recursive object already being rendered is `...`.
             if rendering.contains(&id) {
@@ -850,8 +849,7 @@ fn render_type_inner(
         }
         // Function: `(x: number) => string` — parameters as `name: type`,
         // `, `-separated, always parenthesized, then ` => ` and the return type
-        // (README "Type display format"). Parameter and return types never widen
-        // (only a top-level literal *source* widens, which never recurses here).
+        // (README "Type display format").
         TypeTag::Function => match store.function_type(id) {
             Some(func) => {
                 let (params, ret) = render_function_parts(store, func, rendering);
@@ -862,9 +860,7 @@ fn render_type_inner(
         },
         // Union: `number | string` — members in stored (canonical, TypeId-sorted)
         // order, ` | `-separated (README "Type display format"). That order is
-        // intern-order dependent, so union-typed targets are asserted code-only in
-        // the corpus. Members never widen (only a top-level literal *source*
-        // widens, which never recurses here).
+        // intern-order dependent, so union-typed targets are asserted code-only.
         TypeTag::Union => match store.union_members(id) {
             Some(members) => {
                 let parts: Vec<String> = members
@@ -887,9 +883,8 @@ fn render_type_inner(
         },
         // Intersection (M31): `A & B` — members in stored (canonical, TypeId-sorted)
         // order, ` & `-separated. That order is intern-order dependent, so
-        // intersection-typed targets are asserted code-only in the corpus. A **union**
-        // element is parenthesized (`(A | B) & C`) so `&`/`|` precedence reads
-        // correctly; members never widen (only a top-level literal *source* widens).
+        // intersection-typed targets are asserted code-only. A **union** element is
+        // parenthesized (`(A | B) & C`) so `&`/`|` precedence reads correctly.
         TypeTag::Intersection => match store.intersection_members(id) {
             Some(members) => {
                 let parts: Vec<String> = members
@@ -917,12 +912,8 @@ fn render_type_inner(
             .map(|p| p.name.clone())
             // Defensive fallback; a type parameter always has a side-table entry.
             .unwrap_or_else(|| "unknown".to_string()),
-        // Array (M17): `<elem>[]`. The element is parenthesized where the bare
-        // postfix `[]` would otherwise bind ambiguously — a **union** or **function**
-        // element (`(number | string)[]`, `((x: number) => string)[]`) — matching
-        // tsc's display. Intrinsics, literals, objects, type parameters, and nested
-        // arrays need no parentheses. The element never widens (only a top-level
-        // literal *source* widens, which never recurses here).
+        // Array (M17): `<elem>[]`. Parenthesize union/function elements where bare
+        // postfix `[]` would bind ambiguously, matching tsc display.
         TypeTag::Array => match store.array_type(id) {
             Some(array) => {
                 let elem = render_type_inner(store, array.element, false, rendering);
@@ -935,11 +926,8 @@ fn render_type_inner(
             // Defensive fallback; an array always has a side-table entry.
             None => "<unsupported>".to_string(),
         },
-        // Tuple (M18): `[A, B]` — elements in source order, `, `-separated, wrapped in
-        // square brackets (README "Type display format"). The empty tuple renders as
-        // `[]`. Elements never widen (only a top-level literal *source* widens, which
-        // never recurses here); no element ever needs parenthesizing (the `[…]`
-        // brackets already delimit each).
+        // Tuple (M18): `[A, B]` — source-order elements, `, `-separated. The empty
+        // tuple renders as `[]`; brackets already delimit every element.
         TypeTag::Tuple => match store.tuple_type(id) {
             Some(tuple) => {
                 let elems: Vec<String> = tuple
@@ -960,9 +948,7 @@ fn render_type_inner(
             None => "<unsupported>".to_string(),
         },
         // Conditional (M25): `C extends E ? T : F`. Conditional-typed targets are
-        // asserted code-only in the corpus, so the exact form only has to be stable and
-        // sanely parenthesized (branches never widen — only a top-level literal source
-        // widens, which never recurses here).
+        // asserted code-only, so the exact form only has to be stable.
         TypeTag::Conditional => match store.conditional_type(id) {
             Some(cond) => {
                 if rendering.contains(&id) {
@@ -1054,10 +1040,9 @@ fn render_type_inner(
             }
             None => "<unsupported>".to_string(),
         },
-        // Template literal type (M27): the backtick form `` `a${T}b` `` — text segments
-        // interleaved with `${hole}`. Template-typed targets are asserted code-only in
-        // the corpus, so the exact form only has to be stable (holes never widen — only a
-        // top-level literal source widens, which never recurses here).
+        // Template literal type (M27): the backtick form `` `a${T}b` `` — text
+        // segments interleaved with `${hole}`. Template-typed targets are asserted
+        // code-only, so the exact form only has to be stable.
         TypeTag::Template => match store.template_type(id) {
             Some(template) => {
                 if rendering.contains(&id) {

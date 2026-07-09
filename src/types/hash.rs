@@ -180,27 +180,11 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
                 prop.name.hash(&mut h);
                 prop.optional.hash(&mut h);
                 prop.ty.0.hash(&mut h);
-                // M13: visibility + declaring class are part of a member's
-                // identity, so a `private x` and a public `x` of the same name/type
-                // hash differently, and a `private`/`protected` member from one
-                // class differs from a same-named one from another. This is what
-                // gives a class with a non-public member its **nominal** identity
-                // (distinct interned `TypeId`) and keeps the relation cache sound
-                // (distinct origins ⇒ distinct ids ⇒ distinct cache keys).
+                // Property identity fields are hashed here so non-public origins
+                // keep nominal ids and relation-cache keys sound; see `PropertyType`.
                 (prop.visibility as u8).hash(&mut h);
                 prop.declaring_class.map(|c| c.0).hash(&mut h);
-                // M14: `readonly` is part of a member's structural identity too, so
-                // a `readonly x` and a mutable `x` of the same name/type hash to
-                // distinct objects (the flag is preserved through interning rather
-                // than dropped). It does NOT affect assignability — the relation
-                // engine ignores it — but keeping it in the identity is what lets the
-                // assignment-target check read it back off the interned type.
                 prop.readonly.hash(&mut h);
-                // M15: `is_accessor` is folded in identically (preserved through
-                // interning, ignored by the relation), so a get-only accessor is
-                // distinct from a same-shape `readonly` field and the assignment-target
-                // check can tell them apart (accessor = read-only everywhere; readonly
-                // field = assignable in its declaring constructor).
                 prop.is_accessor.hash(&mut h);
             }
         }

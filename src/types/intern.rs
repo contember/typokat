@@ -404,10 +404,7 @@ impl Interner {
     pub fn union(&mut self, mut members: Vec<TypeId>) -> TypeId {
         let wk = self.well_known;
 
-        // 1. Flatten one level at a time until no member is itself a union. Union
-        //    members are themselves canonical (interned through here), so a single
-        //    expansion pass cannot reintroduce a nested union, but the loop is
-        //    written defensively in case an un-interned union id is ever passed.
+        // Flatten defensively until no member is itself a union.
         let mut flat: Vec<TypeId> = Vec::with_capacity(members.len());
         while let Some(member) = members.pop() {
             match self.store.union_members(member) {
@@ -416,8 +413,7 @@ impl Interner {
             }
         }
 
-        // 2. Absorption: `any`/error absorbs everything; failing that, `unknown`
-        //    does. Either short-circuits the whole union to that top type.
+        // Top-like members absorb the whole union and suppress cascades.
         if flat.iter().any(|&m| m == wk.any || m == wk.error) {
             return wk.any;
         }
@@ -425,15 +421,14 @@ impl Interner {
             return wk.unknown;
         }
 
-        // 3. Drop `never` members — `never` is the identity element of `|`.
+        // `never` is the identity element of `|`.
         flat.retain(|&m| m != wk.never);
 
-        // 4. Sort by TypeId and dedup so member *order* and *multiplicity* do not
-        //    affect identity.
+        // Canonical member sets ignore order and multiplicity.
         flat.sort_unstable();
         flat.dedup();
 
-        // 5. Collapse the degenerate cases — never create a 0- or 1-member union.
+        // Collapse 0-/1-member cases before store insertion.
         match flat.len() {
             0 => return wk.never,
             1 => return flat[0],
@@ -480,7 +475,7 @@ impl Interner {
     pub fn intersection(&mut self, mut members: Vec<TypeId>) -> TypeId {
         let wk = self.well_known;
 
-        // 1. Flatten one level at a time until no member is itself an intersection.
+        // Flatten until no member is itself an intersection.
         let mut flat: Vec<TypeId> = Vec::with_capacity(members.len());
         while let Some(member) = members.pop() {
             match self.store.intersection_members(member) {
@@ -489,9 +484,7 @@ impl Interner {
             }
         }
 
-        // 2. Absorption: `any`/error absorbs to `any` (as in a union); failing that,
-        //    `never` absorbs the whole intersection to `never` (the dual of union's
-        //    `unknown`).
+        // `any`/error suppress cascades; otherwise `never` absorbs the intersection.
         if flat.iter().any(|&m| m == wk.any || m == wk.error) {
             return wk.any;
         }
@@ -499,16 +492,14 @@ impl Interner {
             return wk.never;
         }
 
-        // 3. Drop `unknown` members — `unknown` is the identity element of `&`.
+        // `unknown` is the identity element of `&`.
         flat.retain(|&m| m != wk.unknown);
 
-        // 4. Sort by TypeId and dedup so member *order* and *multiplicity* do not
-        //    affect identity.
+        // Canonical member sets ignore order and multiplicity.
         flat.sort_unstable();
         flat.dedup();
 
-        // 5. Collapse the degenerate cases — an empty intersection is `unknown` (the
-        //    dual of union → `never`); a 1-member intersection is that bare member.
+        // Collapse 0-/1-member cases before store insertion.
         match flat.len() {
             0 => return wk.unknown,
             1 => return flat[0],
@@ -765,16 +756,7 @@ impl Interner {
 fn object_props_eq(a: &[PropertyType], b: &[PropertyType]) -> bool {
     a.len() == b.len()
         && a.iter().zip(b).all(|(x, y)| {
-            // M13: visibility + declaring class are part of a member's identity, so
-            // two members that differ only in access modifier or origin do not
-            // dedup (matching the hash above). This keeps a `private x` distinct
-            // from a public `x`, and a non-public member of one class distinct from
-            // a same-named one of another — the basis of nominal class typing.
-            // M14: `readonly` is part of the identity too (so a `readonly x` and a
-            // mutable `x` do not dedup), matching the hash — even though the relation
-            // engine ignores `readonly` for assignability.
-            // M15: `is_accessor` likewise (so a get-only accessor and a same-shape
-            // `readonly` field do not dedup), matching the hash; also relation-ignored.
+            // Match every identity-bearing property field; see `PropertyType`.
             x.name == y.name
                 && x.optional == y.optional
                 && x.ty == y.ty
