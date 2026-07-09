@@ -8,5 +8,11 @@ gets pulled into a `../sprints/` plan) or it's **deleted**. It is never a place 
 decided work or status.
 
 <!-- index the ideas here, one line each -->
-*(empty — `benchmark-harness` shipped as `tooling/bench/`; `minimal-prelude-slice`
-graduated to backlog `38`.)*
+- [`phpstan-architecture-lessons.md`](phpstan-architecture-lessons.md) — PHPStan comparison
+  survey + adversarial peer-review verdicts (adopted → backlog `17` Stage A; rejected
+  proposals recorded so they aren't re-proposed).
+- [`type-assertion-markers.md`](type-assertion-markers.md) — `// type:` corpus markers
+  compared as interned `TypeId`s (string-compare form explicitly rejected).
+
+*(shipped/graduated: `benchmark-harness` → `tooling/bench/`; `minimal-prelude-slice` →
+backlog `38`.)*
