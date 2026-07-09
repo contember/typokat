@@ -7,7 +7,8 @@ sameVoid(1, 2);
 
 declare function sameReturn<T>(a: T, b: T): T;
 sameReturn(1, "s"); // error[TK2345]
-const sameReturnOk: number = sameReturn(1, 2);
+const sameReturnLiteralOk: 1 | 2 = sameReturn(1, 2);
+const sameReturnLiteralBad: 1 = sameReturn(1, 2); // error[TK2322]
 
 declare function sameConstrained<T extends string | number>(a: T, b: T): void;
 sameConstrained(1, "s"); // error[TK2345]

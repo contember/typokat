@@ -22,3 +22,7 @@ constrainedSame(hasOnlyY, { x: 1 }); // error[TK2345]
 
 declare function sameShape<T>(a: T, b: T): void;
 sameShape({ x: 1 }, { x: 2 });
+
+declare function valueAndScalar<T>(box: { value: T }, value: T): void;
+valueAndScalar({ value: 1 }, "s"); // error[TK2345]
+valueAndScalar({ value: 1 }, 2);
