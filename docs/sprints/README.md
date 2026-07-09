@@ -20,4 +20,3 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-07-09-function-overloads.md`](sprint-2026-07-09-function-overloads.md) - M33 / backlog `40`: ordered overload declarations and overload call resolution (`TK2769`).

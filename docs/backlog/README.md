@@ -16,7 +16,8 @@ complete), `28`–`29` (soundness warm-ups), `31` (M30 contextual literals), bac
 (M29 local-relative modules), `53` `55` `57` `58` `61` (the five HIGH silent-FN fixes,
 sprint-2026-07-07), `25` (M31 intersection types, sprint-2026-07-07), `33` `34`
 `54` `59` `64` (soundness-tail quick wins, sprint-2026-07-08), `24` `39`
-(M32 signature shape, sprint-2026-07-09), and `65` (inference candidate policy,
+(M32 signature shape, sprint-2026-07-09), `65` (inference candidate policy,
+sprint-2026-07-09), and `40` (M33 function overloads,
 sprint-2026-07-09) — see
 [`../archive/`](../archive/README.md). Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
@@ -28,9 +29,9 @@ is built: [`../reference/dev-method.md`](../reference/dev-method.md).
 typokat is **complete** when all four hold:
 
 1. **Model completeness** — track A is empty: no construct left that lowers to something
-   silently permissive (overloads,
-   generic methods, enums, namespaces + declaration merging, `satisfies`/`as const` —
-   intersections `A & B` shipped as M31, signature shape shipped as M32).
+   silently permissive (generic methods, enums, namespaces + declaration merging,
+   `satisfies`/`as const` — intersections `A & B` shipped as M31, signature shape shipped as
+   M32, overloads shipped as M33).
 2. **Checker completeness** — the scope map ([`../reference/scope.md`](../reference/scope.md))
    is exhausted: every Tier S + Tier A code is emitted with fixture coverage; every Tier B
    code is either shipped or explicitly reclassified out-of-scope in `scope.md`.
@@ -49,7 +50,6 @@ numeric pass/fail gate.
 
 **A. Model completeness — the `lib.d.ts` critical path.** Each kills a silently-permissive
 family; together they unblock `14`, whose source text uses all of them.
-- [`40`](40-function-overloads.md) — overloads (declarations + resolution, TK2769).
 - [`41`](41-generic-methods.md) — generic methods (method-level type params; subsumes `23`).
 - [`42`](42-enums-type-side.md) — enums, type side (not needed by lib.d.ts itself; same family).
 - [`43`](43-namespaces-declaration-merging.md) — namespaces (type side) + declaration merging.
@@ -96,7 +96,7 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 **D. Scale + IDE — the §12 phase ladder.**
 - [`38`](38-minimal-ambient-prelude.md) — minimal ambient prelude slice (early real-world signal; replaced by `14`).
 - [`13`](13-bytecode-vm.md) — post-evaluator profiling gate (instrument shipped: `tooling/bench/`).
-- [`14`](14-libdts-loading.md) — full `lib.d.ts` + parallelism Stage 1 · blocked-by `24` `39` `40` `41` `43`.
+- [`14`](14-libdts-loading.md) — full `lib.d.ts` + parallelism Stage 1 · blocked-by `41` `43`.
 - [`15`](15-modules-imports.md) — module-resolver breadth (slice 2; slice 1 shipped as M29).
 - [`16`](16-parallelism-type-universe.md) — parallelism Stage 2 (cross-file identity) · blocked-by `14`, `15`.
 - [`17`](17-incrementality.md) — incrementality (Phase 5) · blocked-by `16`.
@@ -107,8 +107,8 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
    `61`) shipped in sprint-2026-07-07-soundness-fn-fixes; `64` `34` `33` `54` `59` `65`
    shipped in follow-up sprints; the remaining C group (`56`, `60`, `62`, `32`, `21`, `22`,
    `66`, `67`) is next, every one a dropped-error class.
-2. **Run track A** to unblock `14` (`25` intersections shipped as M31 and `24`/`39` signature
-   shape shipped as M32); interleave B items and C's
+2. **Run track A** to unblock `14` (`25` intersections shipped as M31, `24`/`39` signature
+   shape shipped as M32, and `40` overloads shipped as M33); interleave B items and C's
    parity tail as warm-ups between the remaining A milestones. `38` (minimal prelude) and `13` (profiling
    gate) are independent — schedule whenever the signal is worth it; `13` is cheap now that
    `tooling/bench/` exists.

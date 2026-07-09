@@ -315,7 +315,10 @@ resolved to provided `.ts` files; named imports, `import type`, exported declara
   default imports, namespace imports, star imports/re-exports, re-export-from, CommonJS, ambient
   modules, cyclic module graphs, and parallel cross-file identity. The rest of **`lib.d.ts`
   globals** (`console`, string methods, `Promise`, …) are still out of scope — fixtures avoid the
-  standard library otherwise. (Backlog `14`, `15`, `38`, `43`, `52`.)
+  standard library otherwise. Since M33 preserves overload annotations instead of skipping them,
+  official files such as `assignFromStringInterface2.ts` and `unionTypeCallSignatures2.ts` can
+  self-gate as `OOS:unresolved` on missing lib names (`RegExp`, `RegExpMatchArray`, `Date`) that
+  were previously hidden behind skipped overloads. (Backlog `14`, `15`, `38`, `43`, `52`.)
 
 ## Intersection types (M31)
 
@@ -334,15 +337,19 @@ set), contextual fresh-literal shaping, and the M24 circular-constraint walk (`T
   - An **index-signature target** of a source intersection is conservatively rejected.
   - A **nested optional** target property contributed by a single member is checked more strictly
     than tsc (tsc is lenient only at the top level).
-- **Out of scope:** function / call-signature intersection (overload intersection), backlog `40`.
+- **Out of scope:** function / call-signature intersection (overload intersection). M33 overload
+  resolution is carried by explicit overload lists, not by synthesizing callable intersections.
 
 ## Object / interface signatures (F1 corpora)
 
-Method signatures become function-typed properties; single call/construct signatures make values
-callable/constructable (F1, backlog `05`). Optional method signatures are deferred (out of the WU1
-subset on the sound side, so accessing a dropped optional method member over-reports instead of
-dropping a possibly-undefined call error). `tsc --strict` 6.0.3 reports `TS7010` for a method
-signature whose return annotation is omitted — not part of the corpus.
+Method signatures become function-typed properties; call/construct signatures make values
+callable/constructable (F1, backlog `05`). Since M33, ordered overload lists are preserved for
+object/interface call and construct signatures plus non-generic method overloads. Method-level type
+parameters are still deferred to backlog `41`; such method overloads stay represented
+conservatively instead of becoming permissive calls. Optional method signatures are deferred (out of
+the WU1 subset on the sound side, so accessing a dropped optional method member over-reports
+instead of dropping a possibly-undefined call error). `tsc --strict` 6.0.3 reports `TS7010` for a
+method signature whose return annotation is omitted — not part of the corpus.
 
 - **Accepted official-suite over-reports** (safe direction, recorded in the scoreboard rather than
   dropped errors):
@@ -354,6 +361,21 @@ signature whose return annotation is omitted — not part of the corpus.
     primitive-to/from-boxed interface assignability (`number` to/from `Number`).
   - `assignmentCompatWithCallSignatures2.ts` — `TK2322`: typokat does not model
     generic-function-to-specific-signature assignability.
+  - M33 overload preservation moves several official overload files from "skipped shape" to
+    conservative checking:
+    `interfaceWithOverloadedCallAndConstructSignatures.ts`,
+    `interfaceWithSpecializedCallAndConstructSignatures.ts`,
+    `constructSignaturesWithIdenticalOverloads.ts`,
+    `constructSignaturesWithOverloads.ts`, and `methodSignaturesWithOverloads2.ts` keep their
+    pre-existing missing `TK2454` definite-assignment baseline errors, but now also report
+    safe-direction `TK2554`/`TK2345`/`TK2769`/`TK2322` on represented overload calls or
+    assignments.
+  - `typesWithSpecializedCallSignatures.ts` and
+    `stringLiteralTypesInImplementationSignatures2.ts` — `TK2394`: tsc accepts specialized
+    string-literal overload signatures against a broader implementation signature in these
+    non-strict files; typokat conservatively checks them through the ordinary overload
+    compatibility path and over-reports. The latter still has the pre-existing missing `TK2300`
+    duplicate-name diagnostic.
 - Construct signatures: ordinary function values are deliberately out of scope — `tsc --strict`
   6.0.3 does not treat a plain `(x: number) => Box` value as satisfying a construct signature, and
   `new makeBox(1)` reports `TS7009`. typokat does not model JavaScript runtime constructability.

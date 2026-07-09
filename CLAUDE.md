@@ -9,7 +9,7 @@ compiler*: it parses, binds, and type-checks TS and reports `tsc`-style diagnost
 Error codes mirror tsc (`TK2322` ≡ `TS2322`). Emit and JS runtime semantics are out of
 scope **by design**; module resolution is a narrow type-checking slice (local relative
 `.ts` modules). The goal is to preserve the type model.
-M0–M30 are implemented. Coverage: [README.md](./README.md). Full design:
+M0–M33 are implemented. Coverage: [README.md](./README.md). Full design:
 [docs/reference/architecture.md](docs/reference/architecture.md).
 
 ## Commands

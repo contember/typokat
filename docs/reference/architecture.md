@@ -493,7 +493,7 @@ design targets the former.
    engine (§5.1). Type-level eval still in the interpreter for now (slow but correct). Goal:
    a usable checker on a real repo as early as possible. Completability is decided here.
 3. **Phase 2 — Scope hardening.** Variance, declaration merging (multi-slot), contextual
-   typing, overloads, reporting mode (§6.4), and a minimal ambient/prelude loading slice when it
+   typing, overload-bearing signatures, reporting mode (§6.4), and a minimal ambient/prelude loading slice when it
    buys real-world feedback before the full standard library is viable. Catching up on model
    coverage is the §11.1 wall.
 4. **Phase 3 — Type-level evaluator (tree-walked).** Once the core stands, build conditional/

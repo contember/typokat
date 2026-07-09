@@ -1,10 +1,21 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME - shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU1 -> <sha>,
-> WU2 -> <sha>, ... Verification: <the gate command + numbers>. Backlog closed:
-> <ids deleted/rescoped>. Deferred: <honest notes>.
--->
+> **OUTCOME - shipped 2026-07-09.** Shipped M33 / backlog `40`: ordered function
+> overload declarations, hidden implementation signatures, implementation
+> compatibility (`TK2394`), no-match overload diagnostics (`TK2769`), overload
+> resolution for free functions, object/interface call and construct signatures,
+> class constructors/methods, and generic free-function overloads.
+> Commit map: sprint plan `df2e409`; WU1 corpus `fcee1a3`; WU2-WU4 implementation
+> `de97799`; WU5 docs/ratchet closure in the archive commit. Verification:
+> `cargo test conformance` passed during closure; full gate before implementation
+> commit was `cargo test conformance`, focused M33 checker run, `cargo test`,
+> `cargo clippy --all-targets -- -D warnings`, and `git diff --check`. Closure
+> reran `cargo test`, `cargo clippy --all-targets -- -D warnings`,
+> `cargo build --release`, and official-suite `run --check` after saving the audited M33
+> scoreboard baseline (`505` in-scope tests; final regression check:
+> `regressions: 0`, `progress: 0`, `missing-from-corpus: 0`). Independent
+> adversarial review PASS after two implementation fix rounds. Backlog closed:
+> `40` deleted; `14` now blocked by `41` and `43`. Deferred: generic methods /
+> method-level type parameters (`41`), namespaces + declaration merging (`43`),
+> overload intersections, callability diagnostics (`19`), and the existing C-tail.
 
 # Sprint - function overloads (2026-07-09)
 
@@ -182,8 +193,8 @@ than scattered special cases.
   `cargo clippy --all-targets -- -D warnings`, focused typokat/tsc probes, and
   official-suite `run --check` are green or have an audited safe-direction ratchet.
 - **Touch points.** `README.md`, `docs/reference/divergences.md`,
-  `docs/reference/scope.md`, `docs/backlog/40-function-overloads.md`,
-  `docs/INDEX.md`, `tests/cases/README.md`, `tooling/official-suite/`.
+  `docs/reference/scope.md`, deleted backlog item `40`, `docs/INDEX.md`,
+  `tests/cases/README.md`, `tooling/official-suite/`.
 
 ## Out of scope (explicit)
 

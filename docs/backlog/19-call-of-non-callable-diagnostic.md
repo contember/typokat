@@ -11,18 +11,19 @@ can distinguish true non-callable values from unsupported signatures.
 
 ## Problem
 
-WU2 makes a single in-subset object/interface call signature callable, but deliberately drops
-overloads, generic signatures, optional/rest/default parameters, and signatures whose annotations do
-not lower. Emitting a not-callable diagnostic for every value without represented callability would
-therefore create false positives: some values are genuinely non-callable, while others only lost
-their call signature because it is outside typokat's current subset. Unions need the same care.
+F1 made object/interface call signatures callable and M32/M33 added signature shape plus overload
+lists, but typokat still deliberately defers generic method signatures and signatures whose
+annotations do not lower. Emitting a not-callable diagnostic for every value without represented
+callability would therefore create false positives: some values are genuinely non-callable, while
+others only lost their call signature because it is outside typokat's current subset. Unions need
+the same care.
 
 ## Approach / acceptance
 
 Introduce a `TK2349` diagnostic when the checker can prove the callee is not callable, while staying
 silent for values whose callability was dropped as out-of-subset. Acceptance should cover plain
-object/non-function calls, overloaded or optional-parameter call signatures that must not produce a
-false positive, and union callability once the checker can model it soundly.
+object/non-function calls, represented overloaded/optional/rest call signatures that must not
+produce a false positive, and union callability once the checker can model it soundly.
 
 ## Touch points
 

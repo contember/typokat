@@ -23,21 +23,20 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-07-09-function-overloads.md`](sprints/sprint-2026-07-09-function-overloads.md) - M33 / backlog `40`: ordered overload declarations and overload call resolution (`TK2769`).
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M32 shipped; signature shape shipped; M33 overloads active.** The type-level evaluation phase is complete (M24–M28);
+- **M0–M33 shipped; function overloads shipped.** The type-level evaluation phase is complete (M24–M28);
   M29 shipped backlog `15` slice 1 (serial local-relative modules); M30 shipped contextual
   literal typing; M31 shipped intersection types (`A & B`) — backlog `25`, the first track-A
   step; M32 shipped backlog `24` rest elements and `39` optional/default parameters; the
-  2026-07-09 inference-policy sprint shipped `65`. The completion roadmap (refined 2026-07-07) lives in the backlog
-  README: a definition of done (checker 1.0) + four tracks (A model completeness `40`–`44`
+  2026-07-09 inference-policy sprint shipped `65`; M33 shipped backlog `40` overloads. The completion roadmap (refined 2026-07-07) lives in the backlog
+  README: a definition of done (checker 1.0) + four tracks (A model completeness `41`–`44`
   = the remaining `lib.d.ts` critical path; B checker completeness `18` `19` `45`–`52`;
   C known-gap tail; D scale ladder `38` `13` `14` `15` `16` `17`). **Now:** continue
-  the active overload sprint, then continue track A with generic methods/namespaces before full `lib.d.ts`.
+  track A with generic methods/namespaces before full `lib.d.ts`.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
   invariants CLEAN and filed `53`–`65`; the five HIGH silent-FN families then shipped through

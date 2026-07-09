@@ -54,6 +54,8 @@ already emitted.
 - `TK2322` Type '{0}' is not assignable to type '{1}'.
 - `TK2345` Argument of type '{0}' is not assignable to parameter of type '{1}'.
 - `TK2554` Expected {0} arguments, but got {1}. · `TK2555` Expected at least {0} arguments, but got {1}.
+- `TK2391` Function implementation is missing or not immediately following the declaration.
+- `TK2394` Overload signature is not compatible with its implementation signature.
 - `TK2769` No overload matches this call.
 - `TK2741` Property '{0}' is missing in type '{1}' but required in type '{2}'. · `TK2739`/`TK2740` (missing **multiple** properties).
 - `TK2353` Object literal may only specify known properties… (excess property).

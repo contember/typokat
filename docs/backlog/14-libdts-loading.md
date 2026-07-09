@@ -1,7 +1,7 @@
 ---
 id: 14
 title: Full lib.d.ts loading (the standard library)
-blocked-by: [./40-function-overloads.md, ./41-generic-methods.md, ./43-namespaces-declaration-merging.md]
+blocked-by: [./41-generic-methods.md, ./43-namespaces-declaration-merging.md]
 ---
 
 # 14 — full `lib.d.ts` loading
@@ -14,8 +14,8 @@ ambient/prelude slice (`38`) is allowed before this item when it buys useful rea
 
 Without `lib.d.ts`, `console`, array methods, `Promise`, etc. are absent, so most real code can't be
 checked. The lib's own source text uses nearly the whole type model, which is why this item is
-blocked by the remaining model-completeness track: overloads (`40`), generic
-methods (`41`), and namespaces + declaration merging (`43`). Loading the lib with any of those
+blocked by the remaining model-completeness track: generic methods (`41`) and
+namespaces + declaration merging (`43`). Loading the lib with any of those
 still silently-permissive would poison every downstream check. A deliberately small prelude slice
 (`38`) may land earlier because it curates its declarations around the gaps.
 
