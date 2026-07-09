@@ -7,7 +7,7 @@ baselines. It is the project's "cross-check vs real `tsc --strict`" step
 **false negatives** (dropped errors, the project's #1 fear).
 
 It is a **triage dashboard, not a pass/fail gate**: typokat is a deliberate
-subset of tsc (no `lib.d.ts`, no modules, no emit, only M0–M22 constructs), so a
+subset of tsc (no full `lib.d.ts`, narrow local-relative modules, no emit), so a
 1:1 match across the whole suite is neither expected nor the goal. The number that
 matters is the in-scope **matched %** rising as milestones land, and the
 **false-negative list** shrinking.
@@ -56,8 +56,9 @@ python3 tsofficial.py run --save     # accept current results as the new baselin
 2. **Gating ("discover").** Each test lands in exactly one bucket:
    - `multifile` — more than one `@filename` unit (modules / cross-file).
    - `syntax:<feature>` — uses a checking feature typokat doesn't model and that
-     wouldn't self-report (conditional/mapped/template-literal types, `infer`,
-     `enum`, decorators, `namespace`/`import`/`export`, `satisfies`, `as const`).
+     wouldn't self-report (`enum`, decorators, `namespace`/`import`/`export`,
+     `satisfies`, `as const`, user-defined type predicates/assertions, or
+     `instanceof` narrowing).
      Heuristic regex — see `OUT_OF_SCOPE_SYNTAX`.
    - `parse-error` — typokat's own parser rejected it.
    - `unresolved` — typokat raised a `TK2304 (cannot find name)` the baseline does
@@ -125,6 +126,11 @@ ratchets the numbers up; `--check` keeps them from sliding back.
 
 - Syntax bucketing is regex-heuristic; a few tests may be mis-bucketed. The
   `unresolved` and `parse-error` self-gates catch most real out-of-scope cases.
+- `parse-error` is a whole-file gate. A mixed official file can stay out of scope
+  when it contains parser-level syntax diagnostics even if other cases in that
+  file use constructs typokat now models. Promote those by adding focused
+  typokat fixtures or by curating a split official slice, not by globally
+  ignoring parser diagnostics.
 - Column positions aren't compared (line + code only) — typokat validates columns
   with its own snapshot tests, and columns are the most baseline-fragile field.
 - Message text isn't compared. Codes + lines are the robust contract; message

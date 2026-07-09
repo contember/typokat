@@ -27,7 +27,7 @@ CORPUS = HERE / "corpus"
 REPORT = HERE / "report"
 RAW_REPORT = REPORT / "raw"
 
-SINGLE_FILE_FAMILIES = ("relation", "generics", "typelevel", "flow", "errors")
+SINGLE_FILE_FAMILIES = ("relation", "generics", "typelevel", "shape", "flow", "errors")
 MODULE_FAMILIES = ("modules",)
 FAMILIES = SINGLE_FILE_FAMILIES + MODULE_FAMILIES
 ERROR_FAMILIES = frozenset(("errors",))
@@ -241,6 +241,60 @@ def generate_typelevel(target):
     return lines
 
 
+def shape_prelude():
+    return [
+        "type ShapeBenchArgs<T> = T extends (...args: infer A) => unknown ? A : never;",
+        "type ShapeBenchTail<T> = T extends [unknown, ...infer R] ? R : never;",
+        "",
+    ]
+
+
+def shape_chunk(i):
+    return [
+        f"type ShapeBase_{i} = {{ id: number; name: string; }};",
+        f"type ShapeMeta_{i} = {{ active: boolean; score: number; }};",
+        f"type ShapeRecord_{i} = ShapeBase_{i} & ShapeMeta_{i};",
+        f"type ShapeMerged_{i} = {{ id: number; active: boolean; }};",
+        f"type ShapeRest_{i} = [string, ...number[]];",
+        f"type ShapeArgs_{i} = [...[number, string], boolean];",
+        f"type ShapeCtor_{i} = new (id: number, name?: string, ...scores: number[]) => ShapeRecord_{i};",
+        f"interface ShapeNode_{i} {{ next: ShapeNode_{i}; value: number; }}",
+        f"declare const shape_record_{i}: ShapeRecord_{i};",
+        f"declare const shape_node_{i}: ShapeNode_{i} & {{ extra: string; }};",
+        f"declare const shape_ctor_{i}: ShapeCtor_{i};",
+        f"declare const shape_optional_{i}: (id: number, name?: string) => void;",
+        f"declare function shape_make_{i}(id: number, name?: string, ...scores: number[]): ShapeRecord_{i};",
+        f"function shape_default_{i}(id: number, name: string = \"shape_{i}\"): string {{ return name; }}",
+        f"declare function shape_tuple_{i}(...args: ShapeArgs_{i}): ShapeArgs_{i};",
+        f"const shape_literal_{i}: ShapeRecord_{i} = {{ id: {i}, name: \"shape_{i}\", active: true, score: {i} }};",
+        f"const shape_base_{i}: ShapeBase_{i} = shape_record_{i};",
+        f"const shape_meta_{i}: ShapeMeta_{i} = shape_record_{i};",
+        f"const shape_merged_{i}: ShapeMerged_{i} = shape_record_{i};",
+        f"const shape_node_ok_{i}: ShapeNode_{i} = shape_node_{i};",
+        f"const shape_active_{i}: boolean = shape_record_{i}.active;",
+        f"const shape_name_{i}: string = shape_record_{i}.name;",
+        f"const shape_call_min_{i}: ShapeRecord_{i} = shape_make_{i}({i});",
+        f"const shape_call_rest_{i}: ShapeRecord_{i} = shape_make_{i}({i}, \"shape_{i}\", {i}, {i});",
+        f"const shape_construct_{i}: ShapeRecord_{i} = new shape_ctor_{i}({i}, \"shape_{i}\", {i});",
+        f"const shape_default_val_{i}: string = shape_default_{i}({i});",
+        f"const shape_tuple_val_{i}: ShapeArgs_{i} = shape_tuple_{i}({i}, \"shape_{i}\", true);",
+        f"const shape_rest_val_{i}: ShapeRest_{i} = [\"shape_{i}\", {i}, {i}];",
+        f"const shape_args_infer_{i}: ShapeBenchArgs<(x: string, y: number) => void> = [\"shape_{i}\", {i}];",
+        f"const shape_tail_infer_{i}: ShapeBenchTail<[string, number, boolean]> = [{i}, true];",
+        f"const shape_required_target_{i}: (id: number, name: string) => void = shape_optional_{i};",
+        "",
+    ]
+
+
+def generate_shape(target):
+    lines = [*GLOBAL_HEADER, *shape_prelude()]
+    i = 0
+    while append_if_fits(lines, shape_chunk(i), target):
+        i += 1
+    pad_to(lines, target, "shape")
+    return lines
+
+
 def flow_chunk(i):
     return [
         f"type FlowShape_{i} =",
@@ -318,6 +372,7 @@ GENERATORS = {
     "relation": generate_relation,
     "generics": generate_generics,
     "typelevel": generate_typelevel,
+    "shape": generate_shape,
     "flow": generate_flow,
     "errors": generate_errors,
 }

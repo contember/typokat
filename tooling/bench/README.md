@@ -35,6 +35,9 @@ python3 typobench.py run --tools typokat,tsc --sizes 1000 --runs 3
 # Run only the diagnostics/error corpus.
 python3 typobench.py run --families errors --sizes 1000 --runs 3
 
+# Run the M31/M32 model-shape corpus (intersections + signature shape).
+python3 typobench.py run --families shape --sizes 1000,10000 --runs 3
+
 # Run only the multi-file modules corpus (cross-file checking).
 python3 typobench.py run --families modules --sizes 1000,10000 --runs 3
 
@@ -76,6 +79,10 @@ the global lookup), passed alongside the module files.
   call-site inference.
 - `typelevel` - conditional, mapped, and template-literal type evaluation, with
   repeated alias instantiations.
+- `shape` - M31/M32 model-shape cases: intersection source/target reads and
+  assignments, recursive intersection sources, optional/default parameters,
+  function rest parameters, construct signatures, tuple rest aliases,
+  conditional rest `infer`, and rest-aware calls.
 - `flow` - narrowing-heavy functions using `typeof`, `null`, and discriminated
   union checks.
 - `errors` - intentionally invalid assignments, calls, object literals, member

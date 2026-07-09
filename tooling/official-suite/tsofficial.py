@@ -45,9 +45,9 @@ from datetime import datetime, timezone
 PINNED_SHA = "050880ce59e30b356b686bd3144efe24f875ebc8"
 REPO = "microsoft/TypeScript"
 
-# Curated conformance subtrees that map onto typokat's M0–M22 scope. The harness
-# auto-buckets whatever is still out of scope, so this list errs broad. Paths are
-# under tests/cases/. Override per-run with repeated --dir.
+# Curated conformance subtrees that map onto typokat's implemented checker scope.
+# The harness auto-buckets whatever is still out of scope, so this list errs
+# broad. Paths are under tests/cases/. Override per-run with repeated --dir.
 DEFAULT_DIRS = [
     "conformance/types/typeRelationships/assignmentCompatibility",
     "conformance/types/typeRelationships/comparable",
