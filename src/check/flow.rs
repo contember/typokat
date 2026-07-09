@@ -1,45 +1,13 @@
-//! Flow analysis & narrowing operations (architecture §5, mvp-plan §3/§5).
+//! Flow analysis and narrowing operations (architecture §5).
 //!
-//! Control-flow narrowing (`typeof`, `in`, truthiness, equality, discriminated
-//! unions, assertion functions) is *the* reason people love TS DX and must never
-//! be sacrificed. It is flow-sensitive and needs a native interpreter model, so
-//! the checker is structured around flow facts from the start (mvp-plan §5).
+//! This module contains the reusable narrowing functions and the CFG node model
+//! used by the checker. Narrowing operations are intentionally flow-model-agnostic:
+//! they filter a type under a guard and re-intern the result, while the statement
+//! checker decides which symbol and branch polarity apply.
 //!
-//! ## What lives here (M7, extended in M8)
-//!
-//! The **reusable narrowing operations**: pure `(type, polarity) -> type`
-//! functions that refine a union by filtering its members (typeof tag,
-//! truthiness, `null`/`undefined` equality; M8 adds the **literal discriminant**
-//! `x.prop === <lit>` and the **`in`-operator** `"prop" in x`). They take a
-//! [`crate::types::Interner`] so the narrowed result is re-interned through
-//! [`crate::types::Interner::union`] — `string | number` minus `number` collapses
-//! to `string`, `{a} | null` minus `null` collapses to `{a}`. These are
-//! intentionally **flow-model-agnostic**: they know nothing about `if`/`else`/
-//! `switch`, scopes, or symbols, so they survive unchanged when the
-//! structured-statement driver (in `checker.rs`) is eventually replaced by a full
-//! flow-node CFG (see below).
-//!
-//! ## What is M7's structured-flow slice (in `checker.rs`, not here)
-//!
-//! M7 implements narrowing as a **structured narrowing environment** layered on the
-//! existing in-order statement walk — the first, structured-control-flow slice of
-//! the §5 flow interpreter. The driver (a `SymbolId -> TypeId` overlay, the
-//! `if`/`else` fork-and-restore, and the guard analysis that turns a condition into
-//! a `GuardFact`) lives in `checker.rs` because it is specific to the structured
-//! walk. Only the operations below are general.
-//!
-//! ## Deferred to M8+ (the full flow-node CFG)
-//!
-//! [`FlowNode`] is the eventual general model for **unstructured** flow that the
-//! structured driver cannot express: narrowing via early `return`/`throw`
-//! (control-flow join), loops, and definite-assignment (`TK2454`) / reachability
-//! (`TK2355`). When that lands, the binder/checker will build a flow graph and the
-//! narrowing pass will refine a declared type along a given flow path — reusing the
-//! operations in this module verbatim. The following narrowings are still deferred
-//! (mvp-plan, README "Deferred checks"): assertion functions / type predicates
-//! (`x is T`), `typeof`-discriminant combined with `in`, non-literal discriminants,
-//! and `&&`/`||`/ternary condition narrowing. (M8 added the literal-discriminant,
-//! `in`-operator, and `switch` narrowings via the structured driver in `checker.rs`.)
+//! Still-deferred narrowings include assertion functions/type predicates, combined
+//! `typeof`+`in` discriminants, non-literal discriminants, and expression-level
+//! `&&`/`||`/ternary condition narrowing.
 
 use crate::binder::symbol::SymbolId;
 use crate::relate::{Relater, Relation};

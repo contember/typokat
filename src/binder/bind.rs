@@ -1,50 +1,13 @@
-//! AST → scope graph + symbols (architecture §4, mvp-plan §3).
+//! AST → scope graph + multi-slot symbols (architecture §4).
 //!
-//! The binder walks the program, builds the scope graph, and declares a
-//! value-space [`Symbol`] for each binding. A `DeclId` is assigned per value
-//! declaration; the checker later keys its `DeclId → TypeId` table on it
-//! (architecture §4.1: the declared/inferred type lives with the declaration).
+//! The binder declares value/type-space names, assigns separate `DeclId` ranges for
+//! those spaces, and records function/block scopes keyed by `(module scope, span
+//! start)`. Type names are declared before bodies are walked so the checker can run
+//! its reserve-then-fill pass for recursive and mutually-referential types.
 //!
-//! M5 scope, on top of M3's value bindings:
-//!
-//!  - **Type declarations.** A `type X = …` and a single-declaration
-//!    `interface X { … }` declare `X` in the **type space** (`Symbol.ty`), using a
-//!    separate `DeclId` numbering space (`type_decl_count`) so a name can occupy
-//!    both the value and type slots without their `DeclId`s colliding. The checker
-//!    keys a `type DeclId → TypeId` table on it. Type-declaration names are bound
-//!    **before** any body is walked (declared up front in [`bind_module`]), so a
-//!    body can reference itself or a sibling — the two-phase reserve-then-fill the
-//!    recursive-type fixture relies on lives in the checker, but the *names* must
-//!    already resolve, which is what the up-front type-space declarations give it.
-//!
-//! M3 scope, on top of M1's top-level variable bindings:
-//!
-//!  - **Function declarations.** A `function foo(...) {...}` declares `foo` in the
-//!    value space of its enclosing scope (so a call `foo()` resolves).
-//!  - **Function/arrow scopes.** Every function declaration, function expression,
-//!    and arrow gets its own [`ScopeKind::Function`] scope whose parent is the
-//!    enclosing scope, with each parameter declared as a value symbol inside it.
-//!    The scope is recorded in [`Binder::fn_scopes`], keyed by `(module scope,
-//!    span start)`, so the checker can descend into the body with the parameters in
-//!    scope and resolve `return x`.
-//!
-//! M11 scope, on top of M5's type declarations:
-//!
-//!  - **Class declarations.** A `class C { … }` declares `C` in **both** the type
-//!    space (its instance type — up front in [`bind_type_declarations`], so a field
-//!    can reference the class's own type or a sibling) and the value space (its
-//!    constructor — in [`bind_class_declaration`]). Each method/constructor is a
-//!    [`Function`], so it gets its own [`ScopeKind::Function`] scope with parameters
-//!    bound, exactly like a free function; field initializers are walked for nested
-//!    functions. Inheritance, `static`/accessor members, and parameter properties
-//!    are out of the M11 subset (see [`bind_class`]).
-//!
-//! The walk recurses through expression positions and statement bodies so that
-//! nested functions (an arrow inside a `const`, a function expression in a call
-//! argument, …) each get a scope. Destructuring patterns, namespace declarations,
-//! and control-flow statements outside the subset contribute no bindings (their
-//! sub-expressions are still walked for nested functions where the AST shape is in
-//! the subset).
+//! The recursive walk visits statement bodies and expression positions that can hold
+//! nested functions, arrows, classes, or initializer expressions needing their own
+//! scopes. The checker owns type construction and all semantic diagnostics.
 
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{DeclId, Symbol, SymbolId, SymbolTable};
@@ -294,11 +257,7 @@ fn bind_type_declaration_statement(state: &mut BindState, scope: ScopeId, stmt: 
             let decl_id = state.fresh_type_decl();
             declare_type(state, scope, iface.id.name.as_str(), decl_id);
         }
-        // M11: a `class` declares a **type-space** name (its instance type), so a
-        // self/sibling field reference (`next: Node | null`) resolves. The
-        // *value*-space name (the constructor) is declared in `bind_statement`
-        // alongside the rest of the value bindings. A class with no name is out
-        // of subset (an anonymous class expression statement); skip it.
+        // Class type-side names are reserved up front so self/sibling type references resolve.
         Statement::ClassDeclaration(class) => {
             if let Some(id) = &class.id {
                 let decl_id = state.fresh_type_decl();
@@ -353,9 +312,7 @@ fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
         Statement::FunctionDeclaration(func) => {
             bind_function_declaration(state, scope, func);
         }
-        // M11: a `class` declares its name in the value space (the constructor) and
-        // binds its body (each method/constructor gets its own function scope with
-        // its parameters, and property initializers are walked for nested functions).
+        // Class value-side names live in the constructor slot; the body still needs scopes.
         Statement::ClassDeclaration(class) => {
             bind_class_declaration(state, scope, class);
         }
@@ -372,9 +329,7 @@ fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
                 bind_expression(state, scope, arg);
             }
         }
-        // M7: control-flow statements. The `if` test is bound for nested functions;
-        // each branch statement is bound recursively (a `{ … }` branch gets its own
-        // block scope via the `BlockStatement` arm below).
+        // Bind tests/branches so nested functions and branch-local block scopes are visible.
         Statement::IfStatement(if_stmt) => {
             bind_expression(state, scope, &if_stmt.test);
             bind_statement(state, scope, &if_stmt.consequent);
@@ -382,23 +337,15 @@ fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
                 bind_statement(state, scope, alternate);
             }
         }
-        // M7: a `{ … }` block opens its own lexical scope (so branch-local
-        // `let`/`const` do not leak into the enclosing scope or collide across
-        // branches). A bare block statement (not an `if` branch) is handled the
-        // same way.
+        // Blocks always get lexical scopes; this keeps branch-local names local.
         Statement::BlockStatement(block) => {
             bind_block(state, scope, block);
         }
-        // M8: a `switch` binds its discriminant (for nested functions) and each
-        // clause's statements in the enclosing scope — a block-bodied clause
-        // (`case x: { … }`) opens its own scope via the `BlockStatement` arm above.
+        // Switch clauses share the enclosing scope unless they contain an explicit block.
         Statement::SwitchStatement(switch) => {
             bind_switch(state, scope, switch);
         }
-        // M23: a `while` loop binds its condition (for nested functions) and its body
-        // recursively (a `{ … }` body opens its own block scope via the
-        // `BlockStatement` arm above, so a `let`/`const` declared in the loop body is
-        // resolvable — the flow checker now walks these bodies).
+        // Loop conditions/bodies are walked so nested functions and body-local blocks bind.
         Statement::WhileStatement(while_stmt) => {
             bind_expression(state, scope, &while_stmt.test);
             bind_statement(state, scope, &while_stmt.body);
@@ -490,41 +437,16 @@ fn bind_class_declaration(state: &mut BindState, scope: ScopeId, class: &Class<'
     bind_class(state, scope, class);
 }
 
-/// Bind a class's body (M11): each method/constructor is a [`Function`] value, so
-/// it gets its own [`ScopeKind::Function`] scope with its parameters bound (via
-/// [`bind_function`]) — the checker descends into the method body with the
-/// parameters resolvable, exactly like a free function. Each property
-/// initializer expression is walked for nested functions.
+/// Bind a class body: method-like elements get function scopes, and field
+/// initializers are walked for nested functions.
 ///
-/// M12 (`extends`/`super`) needs **no** binder change: the `super_class` clause is a
-/// type/value *reference* resolved later by the checker (it declares no name and holds
-/// no nested function in the subset), and a `super(args)` call inside the constructor
-/// body is reached through the normal `CallExpression` walk (its `Super` callee binds
-/// to nothing; its arguments are walked for nested functions). So inheritance is
-/// handled entirely in the checker.
-///
-/// M15: `get`/`set` accessors are `MethodDefinition`s, so they already get a function
-/// scope here (the loop binds **every** `MethodDefinition`) — a setter's parameter and
-/// an accessor body resolve exactly like a method's, with no binder change. An
-/// `abstract method(): T;` is also a `MethodDefinition` (with no body); `bind_function`
-/// handles the absent body. `abstract` on the class itself declares no name and is
-/// recorded by the checker, so it needs nothing here either.
-///
-/// F3 / backlog 01: constructor **parameter properties** (`constructor(private x: T)`) need
-/// **no** binder change — the constructor is a `MethodDefinition`, so `bind_function` already
-/// binds its parameters (and body) like any method's; the *member* a parameter property
-/// declares is synthesized later by the checker ([`collect_class_own_members`]) and accessed
-/// through the instance type (`this.x`), not via a name bound here.
-///
-/// DEFERRED (still out of scope): `implements`. That element kind is skipped here (no
-/// binding); its sub-expressions in the subset are still safe.
+/// `extends`/`super`, abstract flags, accessor merging, and parameter-property
+/// members are checker-owned; the binder only provides the scopes their bodies need.
+/// `implements` remains deferred and declares no binder name.
 fn bind_class(state: &mut BindState, parent: ScopeId, class: &Class<'_>) {
     for element in &class.body.body {
         match element {
-            // A method/constructor/accessor: bind its `Function` value (own scope +
-            // parameters + body). A `get`/`set` accessor (M15) is bound the same way, so
-            // its body and a setter's parameter resolve; an `abstract` method has no body
-            // (handled by `bind_function`).
+            // Method-like elements need a function scope even when the body is absent.
             ClassElement::MethodDefinition(method) => {
                 bind_function(state, parent, &method.value);
             }
@@ -596,17 +518,12 @@ fn bind_function_body(state: &mut BindState, fn_scope: ScopeId, body: &FunctionB
     bind_statements(state, fn_scope, &body.statements);
 }
 
-/// Recurse into an expression, binding any nested function/arrow scopes. Only the
-/// expression shapes in the M3 subset are descended; others are left untouched
-/// (no nested function there in the corpus).
+/// Recurse into expression shapes that can contain nested scopes or initializers.
 fn bind_expression(state: &mut BindState, scope: ScopeId, expr: &Expression<'_>) {
     match expr {
         Expression::FunctionExpression(func) => bind_function(state, scope, func),
         Expression::ArrowFunctionExpression(arrow) => bind_arrow(state, scope, arrow),
-        // M11: a class expression (`const C = class { … }`) binds its body so a
-        // method gets a function scope. Class *expressions* are out of the M11
-        // fixture subset (their instance type is not named), but binding keeps the
-        // walk uniform and never panics.
+        // Class expressions still need method scopes even when their instance type is unnamed.
         Expression::ClassExpression(class) => bind_class(state, scope, class),
         // M11: `new C(args)` — bind the callee and each argument for nested
         // functions, mirroring the call-expression arm.

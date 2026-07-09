@@ -1,5 +1,4 @@
-//! Span handling: a byte-offset range and offset → 1-based line/column mapping
-//! over the source (mvp-plan §3).
+//! Span handling: byte-offset ranges and 1-based line/column mapping.
 //!
 //! oxc spans are zero-based byte offsets (`oxc_span::Span { start, end: u32 }`).
 //! We keep our own tiny `Span` so the rest of the checker doesn't depend on oxc

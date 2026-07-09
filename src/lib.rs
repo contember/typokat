@@ -2,9 +2,7 @@
 //!
 //! Library crate exposing the checker pipeline so it can be driven both by the
 //! `typokat` binary (`main.rs`) and by the conformance harness
-//! (`tests/conformance.rs`). The module layout mirrors the architecture layers
-//! 1:1 (mvp-plan §3), so promotion to a cargo workspace in Phase 2 is a
-//! mechanical split, not a redesign.
+//! (`tests/conformance.rs`). The module layout mirrors the architecture layers.
 
 pub mod binder;
 pub mod check;

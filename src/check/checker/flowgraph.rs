@@ -1,31 +1,22 @@
-//! The flow-node CFG: construction (a pre-pass) + resolution (the backward walk).
-//! This is the **single** narrowing model since M23 (architecture §5, backlog 07).
+//! The flow-node CFG: construction pre-pass plus backward resolution (architecture §5).
 //!
 //! ## Construction (the pre-pass)
 //!
-//! [`Pass::build_flow_graph`] walks the whole module — every function/method body
-//! and the top level — **before** the check walk, maintaining a `flow_cursor` (the
-//! flow node currently in effect) and recording, for each identifier reference, the
-//! cursor at that point ([`Pass::reference_flow`], keyed by `(module scope, span)`).
-//! It creates flow
-//! nodes for assignments, condition branches (`if`/`switch`/`while`/`&&`/`||`/
-//! ternary), branch joins, and loop labels. Running it as a pre-pass is what makes
-//! **loop back edges complete** before any type is resolved (the check walk resolves
-//! against the finished graph) — the ordering the backward walk needs. A function
-//! body starts at [`FlowNodeId::START`] (function boundaries stay narrowing barriers,
-//! the documented closure divergence). Declarations create **no** flow node (a
-//! reference reads its declared type until a real `=` reassigns it — the M0–M22
-//! behavior, preserved); only `x = …` assignments narrow.
+//! [`Pass::build_flow_graph`] walks the top level and every function/method body
+//! before checking, recording the current flow node for each identifier reference
+//! in [`Pass::reference_flow`]. The pre-pass makes loop back edges complete before
+//! any narrowed type is resolved. Function bodies start at [`FlowNodeId::START`]
+//! (the documented closure divergence), and declarations create no flow node: a
+//! reference reads its declared type until a real `=` assignment narrows it.
 //!
 //! ## Resolution (the backward walk)
 //!
-//! [`Pass::resolve_narrowed_type`] walks backward from a reference's flow node
-//! applying the flow-model-agnostic [`narrow`](crate::check::flow::narrow) ops,
-//! memoized per `(flow node, symbol)`. It is **iterative** (an explicit stack) for
-//! the non-loop graph so a deep `if`/statement nest cannot overflow the host stack;
-//! a loop label is a bounded-recursion single-unroll fixpoint. The provisional loop
-//! seed is **never** durably memoized (invariants §1 — a pre-loop narrow state cached
-//! across a back edge is a dropped-error false negative).
+//! [`Pass::resolve_narrowed_type`] walks backward from a reference's flow node,
+//! applying [`narrow`](crate::check::flow::narrow) and memoizing by
+//! `(flow node, symbol)`. Non-loop resolution is iterative to avoid host-stack
+//! overflow; loop labels use a bounded single-unroll fixpoint. The provisional loop
+//! seed is **never** durably memoized (invariants §1 — caching it across a back edge
+//! is a dropped-error false negative).
 
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;

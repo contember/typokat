@@ -1,4 +1,4 @@
-//! statements module (extracted from checker/mod.rs).
+//! Statement checking.
 
 use crate::binder::scope::ScopeId;
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
@@ -27,13 +27,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Check one statement in `scope` — the **unified, flow-sensitive** statement
-    /// walker (M7). It handles every statement kind in the subset, threading an
-    /// optional return context (`declared_ret` + the accumulating inferred return
-    /// `inferred`) so the same code serves both the module top level (empty context)
-    /// and a function body. It is the structured-flow driver of the §5 interpreter:
-    /// `if`/`else` is the only construct that touches the narrowing environment, via
-    /// [`check_if`]'s fork-and-restore.
+    /// Check one statement in `scope`, threading the optional function return context.
+    /// Flow-sensitive narrowing comes from the pre-built flow graph; this walker just
+    /// descends through the syntax that can contain checked expressions or returns.
     ///
     /// `inferred` accumulates the first value-return's widened type when no return is
     /// declared (used only by [`check_function_body`]); at module level it is a

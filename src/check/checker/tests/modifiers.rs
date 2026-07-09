@@ -64,8 +64,6 @@ return this.balance;
   }
 }
 ";
-    // Inside `Account` (line 9) ok; outside: private (13) TK2341, protected (14)
-    // TK2445; inside subclass: protected ok (20), private (23) TK2341.
     assert_eq!(
         diags(src),
         vec![
@@ -91,7 +89,6 @@ return this.v === other.v;
   }
 }
 ";
-    // `other.v` (line 7) is a private access inside the *declaring* class → ok.
     assert!(diags(src).is_empty(), "got {:?}", diags(src));
 }
 
@@ -117,8 +114,6 @@ this.x = 1;
 }
 const c: Secret = new Other();
 ";
-    // Own instance (line 7) ok; object literal (8) and a different class (15) are
-    // not assignable → TK2322 each.
     assert_eq!(
         diags(src),
         vec![(8, "TK2322".to_string()), (15, "TK2322".to_string())]
@@ -164,10 +159,6 @@ const v: number = c.value;
 const x = c.total;
 const z = Counter.value;
 ";
-    // `Counter.total` (9) + `Counter.reset()` (10) + `c.value` (13) ok;
-    // `Counter.total` mistyped to string (11) TK2322; `c.total` (14) — static not
-    // on instance → TK2339; `Counter.value` (15) — instance not on static side →
-    // TK2339.
     assert_eq!(
         diags(src),
         vec![
@@ -198,8 +189,6 @@ function leak(a: Account) {
   return 0;
 }
 ";
-    // Inside a free function (no class context): private (10) TK2341, protected
-    // (11) TK2445.
     assert_eq!(
         diags(src),
         vec![(10, "TK2341".to_string()), (11, "TK2445".to_string())]
@@ -238,9 +227,6 @@ helper(\"s\");
   }
 }
 ";
-    // static field init unresolved (3) TK2304; static bad return (15) TK2322;
-    // static unresolved name (18) TK2304; static wrong-arg call (21) TK2345. The
-    // well-typed static + instance bodies are clean.
     assert_eq!(
         diags(src),
         vec![
@@ -273,8 +259,6 @@ return this.value;
   }
 }
 ";
-    // `this.total` inside the static method (static side) and `this.value` inside
-    // the instance method (instance side) both resolve → clean.
     assert!(diags(src).is_empty(), "got {:?}", diags(src));
 }
 
@@ -301,8 +285,5 @@ return this.a;
 const x = new C(1, 2, 3);
 const y: number = x.a;
 ";
-    // `public a` is the default (no access error); `x.a` is reachable. The
-    // constructor-scoped `this.b = b` to the `readonly` field is allowed (M14), and
-    // getters are inert. The run completes without panicking and is clean.
     assert!(diags(src).is_empty(), "got {:?}", diags(src));
 }

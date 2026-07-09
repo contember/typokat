@@ -1,9 +1,7 @@
-//! Pipeline orchestration (mvp-plan §3): source → parse → check → diagnostics.
+//! Pipeline orchestration: source → parse → check → diagnostics.
 //!
-//! The driver owns the per-run state — the bumpalo `Allocator` that backs the
-//! AST and the type `Interner` — and runs the vertical slice end-to-end. Every
-//! milestone keeps this end-to-end shape (mvp-plan §1.1: "vertical slice,
-//! always").
+//! The driver owns the per-run allocator that backs the AST and the type
+//! `Interner`, keeping borrowed parser data inside the parse/check call.
 
 use crate::check::{
     check_program, check_project_programs, ProjectImport, ProjectImportSource, ProjectProgram,
@@ -25,9 +23,7 @@ use std::path::{Component, Path, PathBuf};
 pub struct CheckOutput {
     /// Type diagnostics produced by the checker (empty == clean).
     pub diagnostics: Vec<Diagnostic>,
-    /// Parser/syntax errors rendered to strings. M0 fixtures are syntactically
-    /// valid, so this is normally empty; surfaced so the CLI can report a
-    /// malformed file instead of silently checking an empty AST.
+    /// Parser/syntax errors rendered to strings so the CLI can report malformed input.
     pub parse_errors: Vec<String>,
 }
 
@@ -47,7 +43,7 @@ impl CheckOutput {
 /// encoded directly in the relation rules, not a parser flag.
 pub fn check_source(source: &str) -> CheckOutput {
     let allocator = Allocator::default();
-    // TypeScript, non-JSX, module semantics — the M0 subset.
+    // TypeScript, non-JSX, module semantics.
     let source_type = SourceType::ts();
 
     let parsed = Parser::new(&allocator, source, source_type).parse();

@@ -58,8 +58,6 @@ const bad: string = t.celsius;
 t.celsius = 25;
 t.celsius = \"hot\";
 ";
-    // Read OK (14); wrong-typed read (15) TK2322; assign OK (16); wrong assign (17)
-    // TK2322. The accessor bodies are clean (getter returns `number`, setter binds `v`).
     assert_eq!(
         diags(src),
         vec![(15, "TK2322".to_string()), (17, "TK2322".to_string())]
@@ -84,7 +82,6 @@ const t = new Temperature(20);
 const f: number = t.fahrenheit;
 t.fahrenheit = 100;
 ";
-    // Read OK (11); assigning the get-only accessor (12) is TK2540.
     assert_eq!(diags(src), vec![(12, "TK2540".to_string())]);
 }
 
@@ -108,9 +105,6 @@ return this._n;
   }
 }
 ";
-    // `this._n = n` (5) ok; `this.id = n` (6) ok — a `readonly` FIELD is assignable in
-    // its declaring constructor (M14 carve-out, unchanged); `this.value = n` (7) is
-    // TK2540 — a get-only ACCESSOR is read-only even inside the constructor.
     assert_eq!(diags(src), vec![(7, "TK2540".to_string())]);
 }
 
@@ -143,8 +137,6 @@ const a: number = c.area();
 const n: string = c.name;
 const w: string = c.area();
 ";
-    // `new Shape(...)` (8) TK2511; `new Circle(5)` (19) ok; `c.area()`/`c.name` ok;
-    // wrong-typed `const w: string = c.area()` (22) TK2322.
     assert_eq!(
         diags(src),
         vec![(8, "TK2511".to_string()), (22, "TK2322".to_string())]
@@ -175,9 +167,6 @@ const a = new A();
 const b = new B();
 const c = new C();
 ";
-    // `new A()` (14) TK2511 (abstract); `new B()` (15) ok (concrete subclass of an
-    // abstract base); `new C()` (16) TK2511 (C is itself abstract though its base B is
-    // concrete).
     assert_eq!(
         diags(src),
         vec![(14, "TK2511".to_string()), (16, "TK2511".to_string())]
@@ -203,7 +192,5 @@ this._n = v;
   }
 }
 ";
-    // The getter `bad` returns `number` but is declared `: string` → TK2322 on the
-    // returned expression (line 7). The setter body is clean.
     assert_eq!(diags(src), vec![(7, "TK2322".to_string())]);
 }

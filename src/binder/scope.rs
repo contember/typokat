@@ -1,12 +1,8 @@
-//! The scope graph (architecture §4, mvp-plan §4.3).
+//! The scope graph (architecture §4).
 //!
 //! Name resolution is modelled as a scope graph (the Visser/Delft line): a tree
 //! of scopes with parent-walk resolution, giving a unified resolution model and
 //! a basis for later incrementality and per-unit parallel checking.
-//!
-//! M1 builds only the module scope (its fixtures are all top-level), but the
-//! parent-walk machinery is real from day 1 so nested function/block scopes
-//! (M3+) drop in without restructuring resolution.
 
 use crate::binder::symbol::SymbolId;
 use rustc_hash::FxHashMap;
@@ -22,17 +18,15 @@ impl ScopeId {
     }
 }
 
-/// What kind of region a scope covers. Drives hoisting and shadowing rules in
-/// later milestones. Only the variants needed first are listed; more are added
-/// as the subset grows.
+/// What kind of region a scope covers; drives hoisting and shadowing rules.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum ScopeKind {
     /// The top-level module scope.
     Module,
-    /// A function/arrow body scope, holding the function's parameters (M3).
+    /// A function/arrow body scope, holding the function's parameters.
     Function,
     /// A lexical block `{ … }`.
-    #[allow(dead_code)] // TODO(M7): needed for flow/narrowing.
+    #[allow(dead_code)] // Kept for lexical block scopes recorded by the binder.
     Block,
 }
 
@@ -89,9 +83,7 @@ impl ScopeGraph {
         self.scopes.get_mut(id.index())
     }
 
-    /// Declare `name → symbol` directly in `scope`. Returns the previous
-    /// `SymbolId` if the name was already declared there (redeclaration handling
-    /// is deferred — `TK2451`, mvp-plan; M1 fixtures use unique names).
+    /// Declare `name → symbol` directly in `scope`; duplicate-name diagnostics are deferred.
     pub fn declare(&mut self, scope: ScopeId, name: impl Into<String>, symbol: SymbolId) -> Option<SymbolId> {
         match self.get_mut(scope) {
             Some(s) => s.symbols.insert(name.into(), symbol),
@@ -99,10 +91,7 @@ impl ScopeGraph {
         }
     }
 
-    /// Resolve `name` starting at `scope` and walking parent links until a
-    /// declaration is found (the scope-graph resolution model, architecture §4).
-    /// Returns `None` if no enclosing scope declares the name — the caller then
-    /// reports `TK2304`.
+    /// Resolve `name` by walking parent links; the caller reports `TK2304` on `None`.
     pub fn resolve(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
         let mut current = Some(scope);
         while let Some(id) = current {

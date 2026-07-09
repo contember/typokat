@@ -1,21 +1,12 @@
-//! Multi-slot symbols (architecture §4.1, mvp-plan §4.3).
+//! Multi-slot symbols (architecture §4.1).
 //!
 //! A symbol is NOT a single binding but a set of slots over **separate
 //! declaration spaces** — value / type / namespace. One name can occupy several
 //! (the canonical `namespace A {} interface A {} class A {}` case, and the
 //! `namespace`+`interface` merges in `lib.d.ts` itself). This multiplicity is
-//! built in from day 1 because a clean scope graph only carries it cleanly if
-//! designed for it — retrofitting it is a rewrite (mvp-plan §1.3).
-//!
-//! M1 only ever fills the **value** slot (`const`/`let`/`var`); the `ty`/`ns`
-//! slots exist so M2+ (`interface`/`type`/`namespace`) fill them without any
-//! structural change.
+//! baked into the scope graph so declaration merging never needs a parallel model.
 
-/// Index of a declaration site (an AST node). A value declaration's `DeclId`
-/// keys the checker's `DeclId → TypeId` table — the seam where a symbol's
-/// declared/inferred type is looked up (architecture §4.1: the type lives with
-/// the declaration, not the symbol). A newtype so the declaration-space slots
-/// are typed.
+/// Index of a declaration site; the checker stores declared/inferred types by `DeclId`.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct DeclId(pub u32);
 
@@ -44,13 +35,9 @@ impl SymbolId {
 pub struct Symbol {
     /// The bound name.
     pub name: String,
-    /// Value-space declaration (`const`/`let`/`var`/`function`/`class` value
-    /// side). The only slot M1 fills.
+    /// Value-space declaration (`const`/`let`/`var`/`function`/`class` value side).
     pub value: Option<DeclId>,
-    /// Type-space declaration (`interface`/`type`/`class` type side). Filled by
-    /// the type-declaration binder (M5). The `DeclId` here is from the **type**
-    /// numbering space (`Binder::type_decl_count`), distinct from the value slot's,
-    /// and keys the checker's `type DeclId → TypeId` table.
+    /// Type-space declaration; uses the binder's separate type `DeclId` range.
     pub ty: Option<DeclId>,
     /// Namespace-space declaration (`namespace`/module).
     /// TODO(post-MVP): filled by the namespace binder.

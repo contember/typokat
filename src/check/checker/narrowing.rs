@@ -1,13 +1,10 @@
-//! Guard analysis + the structural statement walkers (M7/M8, refactored for M23).
+//! Guard analysis plus structural statement walkers.
 //!
-//! Since M23 there is a **single** narrowing model — the flow-node CFG (built by
-//! [`build_flow_graph`](super::Pass::build_flow_graph) in `flowgraph.rs`). The
-//! `if`/`else`/`switch`/`while` **check** walkers here no longer fork-and-restore a
-//! narrowing environment; they just descend into the condition + branches so every
-//! sub-expression is checked, and each reference resolves its narrowed type against
-//! its recorded flow node. The **guard analysis** ([`analyze_guard`] and friends)
-//! that turns a condition into a [`GuardFact`] is shared: the flow builder uses it
-//! to construct the condition nodes.
+//! The flow-node CFG is the single narrowing model. The `if`/`else`/`switch`/`while`
+//! check walkers here only descend into sub-expressions; references resolve their
+//! narrowed type from the flow node recorded by the pre-pass. Guard analysis is
+//! shared with the flow builder, which turns [`GuardFact`] values into condition
+//! nodes.
 
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
