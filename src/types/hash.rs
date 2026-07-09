@@ -4,7 +4,8 @@
 //! cross-run content hash slot and deliberately returns a zero digest today.
 
 use crate::types::repr::{
-    IntrinsicKind, LiteralValue, ModifierOp, ParameterType, PropertyType, TypeParamId, TypeTag,
+    IntrinsicKind, LiteralValue, ModifierOp, ParameterType, PropertyType, TupleType, TypeParamId,
+    TypeTag,
 };
 use crate::types::store::TypeId;
 use rustc_hash::FxHasher;
@@ -27,7 +28,7 @@ pub enum StructuralKey<'a> {
     },
     /// A function type, keyed over its **positional** parameter list (never
     /// sorted) and return type. Two function types collide only when their
-    /// parameters match in order (name, optionality, type) and their return types
+    /// parameters match in order (name, shape flags, type) and their return types
     /// are the same interned id.
     Function {
         params: &'a [ParameterType],
@@ -51,9 +52,9 @@ pub enum StructuralKey<'a> {
     /// `number[]` collides with `number[]`; `number[]` and `string[]` do not. The
     /// element is itself canonical (interned), so the key is decided by its id.
     Array(TypeId),
-    /// A **tuple** type (`[A, B]` — M18), keyed over its ordered element ids.
-    /// Order and arity are identity-bearing; the list is never sorted.
-    Tuple(&'a [TypeId]),
+    /// A **tuple** type (`[A, B]` — M18), keyed over its ordered fixed element ids
+    /// plus any M32 rest segment.
+    Tuple(&'a TupleType),
     /// A **readonly** wrapper over an array/tuple operand. Identity is the operand
     /// id alone, with its own discriminant so it never collides with the operand.
     Readonly(TypeId),
@@ -175,6 +176,8 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
                 // order remain distinct.
                 param.name.hash(&mut h);
                 param.optional.hash(&mut h);
+                param.has_default.hash(&mut h);
+                param.rest.hash(&mut h);
                 param.ty.0.hash(&mut h);
             }
             ret.0.hash(&mut h);
@@ -213,17 +216,25 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
             // Identity is the (canonical) element id alone.
             element.0.hash(&mut h);
         }
-        StructuralKey::Tuple(elements) => {
+        StructuralKey::Tuple(tuple) => {
             TypeTag::Tuple.hash_discriminant(&mut h);
             // Length first so a shorter element list cannot collide with a prefix
             // of a longer one under the streaming hasher (and so `[number]` differs
             // from `[number, string]`).
-            elements.len().hash(&mut h);
-            for element in *elements {
+            tuple.elements.len().hash(&mut h);
+            for element in &tuple.elements {
                 // Elements are hashed in **source order** (never sorted), so order
                 // is part of identity: `[number, string]` and `[string, number]`
                 // hash differently.
                 element.0.hash(&mut h);
+            }
+            match tuple.rest {
+                Some(rest) => {
+                    true.hash(&mut h);
+                    rest.position.hash(&mut h);
+                    rest.ty.0.hash(&mut h);
+                }
+                None => false.hash(&mut h),
             }
         }
         StructuralKey::Readonly(operand) => {

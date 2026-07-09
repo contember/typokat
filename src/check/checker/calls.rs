@@ -87,7 +87,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
         for (src, tgt, span, elaboration) in failures {
             self.diagnostics.push(
-                Diagnostic::constraint_not_satisfied(span, &src, &tgt).with_elaboration(elaboration),
+                Diagnostic::constraint_not_satisfied(span, &src, &tgt)
+                    .with_elaboration(elaboration),
             );
         }
     }
@@ -119,7 +120,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // inferred callee path.
         let mut arg_infos: Vec<(TypeId, Span)> = Vec::with_capacity(args.params.len());
         for arg in &args.params {
-            arg_infos.push((self.lower_annotation(scope, arg)?, Span::from_oxc(arg.span())));
+            arg_infos.push((
+                self.lower_annotation(scope, arg)?,
+                Span::from_oxc(arg.span()),
+            ));
         }
 
         // Substitute the generic's parameters with the arguments (graceful on an arity
@@ -597,7 +601,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         let fn_ty = self.with_type_params(frame, |pass| {
             // M24: lower the parameters' `extends` constraints with the frame active.
-            pass.lower_type_param_constraints(enclosing, func.type_parameters.as_deref(), &param_ids);
+            pass.lower_type_param_constraints(
+                enclosing,
+                func.type_parameters.as_deref(),
+                &param_ids,
+            );
             let fn_scope = pass
                 .binder
                 .fn_scopes
@@ -751,11 +759,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
             }
 
-            lowered.push(ParameterType {
-                name,
-                ty,
-                optional: false,
-            });
+            lowered.push(ParameterType::required(name, ty));
         }
         lowered
     }

@@ -1,7 +1,9 @@
 use super::*;
 use crate::relate::Reason;
 use crate::span::Span;
-use crate::types::repr::{FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType};
+use crate::types::repr::{
+    FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TupleRestType, TupleType,
+};
 use crate::types::store::TypeId;
 use crate::types::Interner;
 
@@ -101,8 +103,7 @@ fn nested_property_chain_renders_leaf_last() {
     // diagnostic text (headline + elaboration).
     let rendered = Diagnostic::not_assignable(
         Span::new(0, 1),
-        "Type '{ a: { b: string } }' is not assignable to type '{ a: { b: number } }'"
-            .to_string(),
+        "Type '{ a: { b: string } }' is not assignable to type '{ a: { b: number } }'".to_string(),
     )
     .with_elaboration(lines)
     .rendered_text();
@@ -141,19 +142,11 @@ fn parameter_chain_names_parameter_and_nests_leaf() {
     let wk = interner.well_known();
 
     let str_to_num = interner.intern_function(FunctionType {
-        params: vec![ParameterType {
-            name: "x".to_string(),
-            ty: wk.string,
-            optional: false,
-        }],
+        params: vec![ParameterType::required("x", wk.string)],
         ret: wk.number,
     });
     let num_to_num = interner.intern_function(FunctionType {
-        params: vec![ParameterType {
-            name: "x".to_string(),
-            ty: wk.number,
-            optional: false,
-        }],
+        params: vec![ParameterType::required("x", wk.number)],
         ret: wk.number,
     });
     let store = interner.store();
@@ -265,17 +258,35 @@ fn array_type_renders_with_parenthesized_element() {
 
     // A function element IS parenthesized.
     let func = interner.intern_function(FunctionType {
-        params: vec![ParameterType {
-            name: "x".to_string(),
-            ty: wk.number,
-            optional: false,
-        }],
+        params: vec![ParameterType::required("x", wk.number)],
         ret: wk.string,
     });
     let func_arr = interner.intern_array(func);
     assert_eq!(
         render_type(interner.store(), func_arr, false),
         "((x: number) => string)[]"
+    );
+}
+
+/// M32/WU2 signature-shape rendering: required-only rendering stays unchanged,
+/// while optional/rest parameters have a stable TS-like display.
+#[test]
+fn function_signature_shape_renders_optional_and_rest_params() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let string_array = interner.intern_array(wk.string);
+    let func = interner.intern_function(FunctionType {
+        params: vec![
+            ParameterType::required("x", wk.number),
+            ParameterType::optional("y", wk.boolean),
+            ParameterType::rest("args", string_array),
+        ],
+        ret: wk.void,
+    });
+
+    assert_eq!(
+        render_type(interner.store(), func, false),
+        "(x: number, y?: boolean, ...args: string[]) => void"
     );
 }
 
@@ -305,7 +316,10 @@ fn intersection_type_renders_with_ampersand_and_parens() {
         rendered.contains("(number | string)") || rendered.contains("(string | number)"),
         "a union member must be parenthesized inside an intersection, got {rendered:?}"
     );
-    assert!(rendered.contains(" & "), "still ` & `-joined, got {rendered:?}");
+    assert!(
+        rendered.contains(" & "),
+        "still ` & `-joined, got {rendered:?}"
+    );
 
     // An intersection element inside an array is parenthesized: `(string & number)[]`.
     let sn_arr = interner.intern_array(sn);
@@ -345,6 +359,16 @@ fn tuple_type_renders_in_brackets() {
     assert_eq!(
         render_type(interner.store(), nested, false),
         "[[number, string], boolean]"
+    );
+
+    let string_array = interner.intern_array(wk.string);
+    let rest_tuple = interner.intern_tuple_type(TupleType::with_rest(
+        vec![wk.number, wk.boolean],
+        TupleRestType::new(1, string_array),
+    ));
+    assert_eq!(
+        render_type(interner.store(), rest_tuple, false),
+        "[number, ...string[], boolean]"
     );
 }
 

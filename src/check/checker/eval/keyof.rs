@@ -269,6 +269,9 @@ fn push_node_children(
         TypeTag::Tuple => {
             if let Some(tup) = store.tuple_type(ty) {
                 stack.extend(tup.elements.iter().copied());
+                if let Some(rest) = tup.rest {
+                    stack.push(rest.ty);
+                }
             }
         }
         TypeTag::Readonly => {

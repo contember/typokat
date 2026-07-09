@@ -215,20 +215,12 @@ fn infers_through_function_parameter() {
     let t = interner.intern_type_param(TypeParamId(0), "T");
     // Parameter type `(x: T) => T`.
     let target = interner.intern_function(FunctionType {
-        params: vec![ParameterType {
-            name: "x".to_string(),
-            ty: t,
-            optional: false,
-        }],
+        params: vec![ParameterType::required("x", t)],
         ret: t,
     });
     // Argument type `(x: number) => number`.
     let source = interner.intern_function(FunctionType {
-        params: vec![ParameterType {
-            name: "x".to_string(),
-            ty: wk.number,
-            optional: false,
-        }],
+        params: vec![ParameterType::required("x", wk.number)],
         ret: wk.number,
     });
     let mut next_type_param = 1;

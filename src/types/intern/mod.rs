@@ -214,7 +214,8 @@ impl Interner {
     pub fn intern_infer(&mut self, index: u32) -> TypeId {
         let key = StructuralKey::Infer(index);
         let hash = structural_hash(&key);
-        if let Some(existing) = self.lookup(hash, |store, id| store.infer_index(id) == Some(index)) {
+        if let Some(existing) = self.lookup(hash, |store, id| store.infer_index(id) == Some(index))
+        {
             return existing;
         }
         let id = self.store.push_infer(index, TypeFlags::EMPTY);
@@ -253,10 +254,7 @@ fn object_props_eq(a: &[PropertyType], b: &[PropertyType]) -> bool {
 /// by `TypeId` (canonical via hash-consing), so nested function/object equality
 /// is decided by id without recursing.
 fn function_params_eq(a: &[ParameterType], b: &[ParameterType]) -> bool {
-    a.len() == b.len()
-        && a.iter()
-            .zip(b)
-            .all(|(x, y)| x.name == y.name && x.optional == y.optional && x.ty == y.ty)
+    a == b
 }
 
 impl TypeTag {

@@ -11,7 +11,7 @@ use crate::relate::Relater;
 use crate::span::Span;
 use crate::types::repr::{
     ConditionalType, FunctionType, LiteralValue, MappedType, ModifierOp, ObjectType, ParameterType,
-    PropertyType, TemplateType, TypeParamId, TypeTag,
+    PropertyType, TemplateType, TupleRestType, TupleType, TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
 use crate::types::{substitute, Interner};
@@ -26,8 +26,8 @@ mod template;
 mod tests;
 
 pub(in crate::check) use extends::evaluate_inference_constraint;
-pub(in crate::check) use keyof::{contains_deferred_argument, contains_deferred_keyof};
 pub(in crate::check::checker) use keyof::keyof_of_type;
+pub(in crate::check) use keyof::{contains_deferred_argument, contains_deferred_keyof};
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Evaluate a lowered type at a value-position demand site. Concrete
@@ -436,6 +436,9 @@ impl<'a> ConditionalEvaluator<'a> {
                 TypeTag::Tuple => {
                     if let Some(tup) = store.tuple_type(t) {
                         stack.extend(tup.elements.iter().copied());
+                        if let Some(rest) = tup.rest {
+                            stack.push(rest.ty);
+                        }
                     }
                 }
                 TypeTag::Readonly => {
@@ -456,4 +459,3 @@ impl<'a> ConditionalEvaluator<'a> {
         false
     }
 }
-

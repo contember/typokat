@@ -1,5 +1,7 @@
 use super::*;
-use crate::types::repr::{FunctionType, ObjectType, ParameterType, PropertyType};
+use crate::types::repr::{
+    FunctionType, ObjectType, ParameterType, PropertyType, TupleRestType, TupleType,
+};
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
@@ -42,11 +44,7 @@ fn substitution_recurses_into_object_function_union() {
     });
     // (x: T) => T
     let fn_t = interner.intern_function(FunctionType {
-        params: vec![ParameterType {
-            name: "x".to_string(),
-            ty: t,
-            optional: false,
-        }],
+        params: vec![ParameterType::required("x", t)],
         ret: t,
     });
     // T | null
@@ -61,11 +59,7 @@ fn substitution_recurses_into_object_function_union() {
         ..Default::default()
     });
     let fn_num = interner.intern_function(FunctionType {
-        params: vec![ParameterType {
-            name: "x".to_string(),
-            ty: wk.number,
-            optional: false,
-        }],
+        params: vec![ParameterType::required("x", wk.number)],
         ret: wk.number,
     });
     let num_or_null = interner.union(vec![wk.number, wk.null]);
@@ -73,6 +67,44 @@ fn substitution_recurses_into_object_function_union() {
     assert_eq!(substitute(&mut interner, box_t, &map), box_num);
     assert_eq!(substitute(&mut interner, fn_t, &map), fn_num);
     assert_eq!(substitute(&mut interner, t_or_null, &map), num_or_null);
+}
+
+/// M32/WU2: substitution rewrites every function parameter child while preserving
+/// required/optional/default/rest shape.
+#[test]
+fn substitution_preserves_function_signature_shape() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(0), "T");
+    let u = interner.intern_type_param(TypeParamId(1), "U");
+    let t_array = interner.intern_array(t);
+
+    let shaped = interner.intern_function(FunctionType {
+        params: vec![
+            ParameterType::required("a", t),
+            ParameterType::optional("b", u),
+            ParameterType::defaulted("c", t),
+            ParameterType::rest("args", t_array),
+        ],
+        ret: u,
+    });
+
+    let mut map = FxHashMap::default();
+    map.insert(TypeParamId(0), wk.number);
+    map.insert(TypeParamId(1), wk.string);
+
+    let number_array = interner.intern_array(wk.number);
+    let expected = interner.intern_function(FunctionType {
+        params: vec![
+            ParameterType::required("a", wk.number),
+            ParameterType::optional("b", wk.string),
+            ParameterType::defaulted("c", wk.number),
+            ParameterType::rest("args", number_array),
+        ],
+        ret: wk.string,
+    });
+
+    assert_eq!(substitute(&mut interner, shaped, &map), expected);
 }
 
 /// Substitution rewrites an array's element (M17): `T[]` → `number[]`, nested
@@ -159,6 +191,43 @@ fn substitution_rewrites_tuple_elements_positionally() {
         substitute(&mut interner, str_bool, &map),
         str_bool,
         "a tuple with no mapped element is unchanged"
+    );
+}
+
+/// M32/WU2: substitution rewrites tuple rest child types as well as fixed elements.
+#[test]
+fn substitution_rewrites_tuple_rest_shape() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(0), "T");
+    let u = interner.intern_type_param(TypeParamId(1), "U");
+    let t_array = interner.intern_array(t);
+
+    let tuple = interner.intern_tuple_type(TupleType::with_rest(
+        vec![u],
+        TupleRestType::new(0, t_array),
+    ));
+
+    let mut map = FxHashMap::default();
+    map.insert(TypeParamId(0), wk.number);
+    map.insert(TypeParamId(1), wk.string);
+
+    let number_array = interner.intern_array(wk.number);
+    let expected = interner.intern_tuple_type(TupleType::with_rest(
+        vec![wk.string],
+        TupleRestType::new(0, number_array),
+    ));
+
+    assert_eq!(substitute(&mut interner, tuple, &map), expected);
+
+    let no_mapped = interner.intern_tuple_type(TupleType::with_rest(
+        vec![wk.boolean],
+        TupleRestType::new(1, number_array),
+    ));
+    assert_eq!(
+        substitute(&mut interner, no_mapped, &map),
+        no_mapped,
+        "a tuple rest shape with no mapped child is unchanged"
     );
 }
 
@@ -270,7 +339,9 @@ fn substitute_does_not_capture_infer_binders_under_nesting() {
     // The result: `number extends string ? <inner'> : number` where inner' is
     // `number extends (infer U)[] ? U : number` — the infer nodes UNCHANGED.
     let store = interner.store();
-    let outer_c = store.conditional_type(result).expect("outer is conditional");
+    let outer_c = store
+        .conditional_type(result)
+        .expect("outer is conditional");
     assert_eq!(outer_c.check, wk.number, "T → number in outer check");
     assert_eq!(outer_c.false_branch, wk.number, "T → number in outer false");
     let inner_c = store
@@ -279,8 +350,14 @@ fn substitute_does_not_capture_infer_binders_under_nesting() {
     assert_eq!(inner_c.check, wk.number, "T → number in inner check");
     assert_eq!(inner_c.false_branch, wk.number, "T → number in inner false");
     // No capture: the infer binder is untouched in both extends and true positions.
-    assert_eq!(inner_c.extends_ty, arr_infer0, "infer extends unchanged (no capture)");
-    assert_eq!(inner_c.true_branch, infer0, "infer true branch unchanged (no capture)");
+    assert_eq!(
+        inner_c.extends_ty, arr_infer0,
+        "infer extends unchanged (no capture)"
+    );
+    assert_eq!(
+        inner_c.true_branch, infer0,
+        "infer true branch unchanged (no capture)"
+    );
 }
 
 /// M25 distribution guard: union/`never`/`boolean` check arguments defer to lazy
@@ -323,7 +400,10 @@ fn distributive_conditional_defers_on_union_plain_on_single() {
     never_map.insert(TypeParamId(0), wk.never);
     let deferred_never = substitute(&mut interner, cond, &never_map);
     assert!(
-        interner.store().instantiation_type(deferred_never).is_some(),
+        interner
+            .store()
+            .instantiation_type(deferred_never)
+            .is_some(),
         "a `never` check argument must defer (it distributes to `never`)"
     );
 
@@ -421,7 +501,11 @@ fn substitute_rewrites_modifiers_source_and_keyof_operand() {
         .copied()
         .expect("result is a mapped type");
     assert_eq!(out.key_source, a_key, "K → \"a\" in the key source");
-    assert_eq!(out.modifiers_source, Some(p), "T → P in the modifiers source");
+    assert_eq!(
+        out.modifiers_source,
+        Some(p),
+        "T → P in the modifiers source"
+    );
     assert_eq!(
         out.value_template, placeholder,
         "the bound placeholder is never captured"

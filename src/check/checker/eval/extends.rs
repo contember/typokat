@@ -256,17 +256,13 @@ impl<'a> InferenceConstraintEvaluator<'a> {
     }
 
     fn evaluate_tuple(&mut self, ty: TypeId) -> TypeId {
-        let Some(elements) = self
-            .interner
-            .store()
-            .tuple_type(ty)
-            .map(|tuple| tuple.elements.clone())
-        else {
+        let Some(tuple) = self.interner.store().tuple_type(ty).cloned() else {
             return ty;
         };
         self.in_progress.insert(ty);
         let mut changed = false;
-        let elements: Vec<TypeId> = elements
+        let elements: Vec<TypeId> = tuple
+            .elements
             .into_iter()
             .map(|element| {
                 let new_ty = self.evaluate(element);
@@ -274,10 +270,16 @@ impl<'a> InferenceConstraintEvaluator<'a> {
                 new_ty
             })
             .collect();
+        let rest = tuple.rest.map(|rest| {
+            let new_ty = self.evaluate(rest.ty);
+            changed |= new_ty != rest.ty;
+            TupleRestType { ty: new_ty, ..rest }
+        });
         self.in_progress.remove(&ty);
 
         if changed {
-            self.interner.intern_tuple(elements)
+            self.interner
+                .intern_tuple_type(TupleType { elements, rest })
         } else {
             ty
         }
@@ -465,7 +467,13 @@ impl<'a> ConditionalEvaluator<'a> {
                 .unwrap_or_default(),
             TypeTag::Tuple => store
                 .tuple_type(ty)
-                .map(|t| t.elements.clone())
+                .map(|t| {
+                    let mut out = t.elements.clone();
+                    if let Some(rest) = t.rest {
+                        out.push(rest.ty);
+                    }
+                    out
+                })
                 .unwrap_or_default(),
             TypeTag::Readonly => store
                 .readonly_operand(ty)
@@ -505,4 +513,3 @@ impl<'a> ConditionalEvaluator<'a> {
         }
     }
 }
-

@@ -3,8 +3,7 @@
 
 use super::*;
 use crate::types::repr::{
-    ConditionalType, FunctionType, MappedType, ObjectType, ParameterType, PropertyType,
-    TemplateType,
+    ConditionalType, FunctionType, MappedType, ObjectType, PropertyType, TemplateType, TupleType,
 };
 
 impl<'a> Substitution<'a> {
@@ -100,25 +99,19 @@ impl<'a> Substitution<'a> {
         let Some(function) = interner.store().function_type(ty) else {
             return ty;
         };
-        let params: Vec<(String, bool, TypeId)> = function
-            .params
-            .iter()
-            .map(|p| (p.name.clone(), p.optional, p.ty))
-            .collect();
+        let params = function.params.clone();
         let ret = function.ret;
 
         self.in_progress.insert(ty);
         let mut changed = false;
-        let lowered: Vec<ParameterType> = params
+        let lowered = params
             .into_iter()
-            .map(|(name, optional, param_ty)| {
-                let new_ty = self.apply(interner, param_ty);
-                changed |= new_ty != param_ty;
-                ParameterType {
-                    name,
-                    ty: new_ty,
-                    optional,
-                }
+            .map(|mut param| {
+                let old_ty = param.ty;
+                let new_ty = self.apply(interner, old_ty);
+                changed |= new_ty != old_ty;
+                param.ty = new_ty;
+                param
             })
             .collect();
         let new_ret = self.apply(interner, ret);
@@ -218,10 +211,11 @@ impl<'a> Substitution<'a> {
         let Some(tuple) = interner.store().tuple_type(ty) else {
             return ty;
         };
-        let elements: Vec<TypeId> = tuple.elements.clone();
+        let tuple = tuple.clone();
 
         let mut changed = false;
-        let substituted: Vec<TypeId> = elements
+        let elements = tuple
+            .elements
             .iter()
             .map(|&e| {
                 let new_e = self.apply(interner, e);
@@ -229,9 +223,14 @@ impl<'a> Substitution<'a> {
                 new_e
             })
             .collect();
+        let rest = tuple.rest.map(|rest| {
+            let new_ty = self.apply(interner, rest.ty);
+            changed |= new_ty != rest.ty;
+            crate::types::repr::TupleRestType { ty: new_ty, ..rest }
+        });
 
         if changed {
-            interner.intern_tuple(substituted)
+            interner.intern_tuple_type(TupleType { elements, rest })
         } else {
             ty
         }

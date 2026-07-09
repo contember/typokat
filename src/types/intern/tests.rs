@@ -1,5 +1,8 @@
     use super::*;
-    use crate::types::repr::{LiteralValue, ObjectType, PropertyType};
+    use crate::types::repr::{
+        FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TupleRestType,
+        TupleType,
+    };
 
     /// Build a required public property `name: ty`.
     fn prop(name: &str, ty: TypeId) -> PropertyType {
@@ -169,11 +172,7 @@
 
     /// Build a required parameter `name: ty`.
     fn param(name: &str, ty: TypeId) -> crate::types::repr::ParameterType {
-        crate::types::repr::ParameterType {
-            name: name.to_string(),
-            ty,
-            optional: false,
-        }
+        crate::types::repr::ParameterType::required(name, ty)
     }
 
     /// Function hash-consing (M3): structurally identical function types share one
@@ -182,8 +181,6 @@
     /// appear in a different order remain distinct.
     #[test]
     fn function_interning_dedups_by_signature() {
-        use crate::types::repr::FunctionType;
-
         let mut interner = Interner::with_intrinsics();
         let wk = interner.well_known();
 
@@ -235,6 +232,60 @@
             ret: wk.void,
         });
         assert_ne!(ab, ba, "parameter order is part of function identity");
+    }
+
+    /// M32/WU2: optional/default/rest parameter shape is part of function identity.
+    #[test]
+    fn function_interning_includes_signature_shape() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let string_array = interner.intern_array(wk.string);
+
+        let required = interner.intern_function(FunctionType {
+            params: vec![ParameterType::required("x", wk.number)],
+            ret: wk.void,
+        });
+        let optional = interner.intern_function(FunctionType {
+            params: vec![ParameterType::optional("x", wk.number)],
+            ret: wk.void,
+        });
+        let optional_again = interner.intern_function(FunctionType {
+            params: vec![ParameterType::optional("x", wk.number)],
+            ret: wk.void,
+        });
+        let defaulted = interner.intern_function(FunctionType {
+            params: vec![ParameterType::defaulted("x", wk.number)],
+            ret: wk.void,
+        });
+        let rest = interner.intern_function(FunctionType {
+            params: vec![ParameterType::rest("x", string_array)],
+            ret: wk.void,
+        });
+
+        assert_eq!(optional, optional_again, "identical optional shape dedups");
+        assert_ne!(required, optional, "required and optional are distinct");
+        assert_ne!(optional, defaulted, "optional and defaulted are distinct");
+        assert_ne!(required, rest, "required and rest are distinct");
+
+        let mixed = interner.intern_function(FunctionType {
+            params: vec![
+                ParameterType::required("a", wk.number),
+                ParameterType::optional("b", wk.boolean),
+                ParameterType::rest("args", string_array),
+            ],
+            ret: wk.void,
+        });
+        let stored = interner
+            .store()
+            .function_type(mixed)
+            .expect("mixed is a function");
+        assert_eq!(stored.required_param_count(), 1);
+        assert_eq!(stored.total_fixed_param_count(), 2);
+        assert!(stored.has_rest_param());
+        assert_eq!(
+            stored.rest_param().map(|param| param.ty),
+            Some(string_array)
+        );
     }
 
     /// Union canonicalization + hash-consing (mvp-plan §3.3, M4 — a
@@ -553,6 +604,57 @@
         assert_eq!(
             nested_a, nested_b,
             "nested tuple identity propagates by element id"
+        );
+    }
+
+    /// M32/WU2: tuple rest position and rest type are part of tuple identity.
+    #[test]
+    fn tuple_interning_includes_rest_shape() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let string_array = interner.intern_array(wk.string);
+        let number_array = interner.intern_array(wk.number);
+
+        let fixed_number = interner.intern_tuple(vec![wk.number]);
+        let trailing = interner.intern_tuple_type(TupleType::with_rest(
+            vec![wk.number],
+            TupleRestType::new(1, string_array),
+        ));
+        let trailing_again = interner.intern_tuple_type(TupleType::with_rest(
+            vec![wk.number],
+            TupleRestType::new(1, string_array),
+        ));
+        let leading = interner.intern_tuple_type(TupleType::with_rest(
+            vec![wk.number],
+            TupleRestType::new(0, string_array),
+        ));
+        let different_rest_type = interner.intern_tuple_type(TupleType::with_rest(
+            vec![wk.number],
+            TupleRestType::new(1, number_array),
+        ));
+
+        assert_eq!(trailing, trailing_again, "identical rest tuple dedups");
+        assert_ne!(fixed_number, trailing, "fixed tuple and rest tuple differ");
+        assert_ne!(trailing, leading, "rest position is identity-bearing");
+        assert_ne!(
+            trailing, different_rest_type,
+            "rest type is identity-bearing"
+        );
+
+        let leading_with_tail = interner.intern_tuple_type(TupleType::with_rest(
+            vec![wk.boolean],
+            TupleRestType::new(0, string_array),
+        ));
+        let stored = interner
+            .store()
+            .tuple_type(leading_with_tail)
+            .expect("leading_with_tail is a tuple");
+        assert_eq!(stored.fixed_len(), 1);
+        assert!(stored.has_rest());
+        assert_eq!(
+            stored.rest,
+            Some(TupleRestType::new(0, string_array)),
+            "[...T, X] stores rest before the fixed tail"
         );
     }
 

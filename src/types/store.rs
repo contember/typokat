@@ -54,10 +54,9 @@ pub struct Store {
     /// entry's identity is its element `TypeId` (so `number[]` hash-conses to one id
     /// and `number[]` ≠ `string[]`).
     arrays: Vec<ArrayType>,
-    /// Tuple types (M18). Addressed by the `payload` of a `Tuple`-tagged row. Each
-    /// entry's identity is its **ordered** element list (so `[number, string]`
-    /// hash-conses to one id and `[number, string]` ≠ `[string, number]` ≠
-    /// `[number]`).
+    /// Tuple types (M18, rest-shape expanded in M32/WU2). Addressed by the
+    /// `payload` of a `Tuple`-tagged row. Each entry's identity is its ordered
+    /// fixed element list plus any rest position/type.
     tuples: Vec<TupleType>,
     /// Conditional types (M25). Addressed by the `payload` of a `Conditional`-tagged
     /// row. Field order is significant (position is meaning); a recursive alias
@@ -137,9 +136,7 @@ impl Store {
         let raw = self.payload(id);
         // The payload is exactly `IntrinsicKind as u32`; map it back via the
         // canonical list so the match stays exhaustive and panic-free.
-        IntrinsicKind::ALL
-            .into_iter()
-            .find(|k| *k as u32 == raw)
+        IntrinsicKind::ALL.into_iter().find(|k| *k as u32 == raw)
     }
 
     /// The `LiteralValue` of a literal type, or `None` if `id` is not a literal.
@@ -184,8 +181,7 @@ impl Store {
         self.arrays.get(self.payload(id) as usize)
     }
 
-    /// The `TupleType` (its ordered element list) of a tuple type, or `None` if
-    /// `id` is not a tuple (M18).
+    /// The `TupleType` of a tuple type, or `None` if `id` is not a tuple (M18).
     pub fn tuple_type(&self, id: TypeId) -> Option<&TupleType> {
         if self.tag(id) != TypeTag::Tuple {
             return None;

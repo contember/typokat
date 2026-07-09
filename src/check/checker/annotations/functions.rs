@@ -12,8 +12,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         if ctor.r#abstract || ctor.type_parameters.is_some() {
             return None;
         }
-        if !self.signature_annotations_are_locally_resolvable(scope, &ctor.params, &ctor.return_type)
-        {
+        if !self.signature_annotations_are_locally_resolvable(
+            scope,
+            &ctor.params,
+            &ctor.return_type,
+        ) {
             return None;
         }
         let signature =
@@ -36,13 +39,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let name = parameter_name(&param.pattern)?;
             let annotation = param.type_annotation.as_ref()?;
             // B29: a parameter/return is a legal-recursion boundary.
-            let ty = self
-                .with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation))?;
-            lowered.push(ParameterType {
-                name,
-                ty,
-                optional: false,
-            });
+            let ty =
+                self.with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation))?;
+            lowered.push(ParameterType::required(name, ty));
         }
         let ret =
             self.with_indirection(|p| p.lower_annotation(scope, &return_type.type_annotation))?;
@@ -59,12 +58,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         return_type: &TSTypeAnnotation<'_>,
     ) -> bool {
         let params_ok = params.items.iter().all(|param| {
-            param
-                .type_annotation
-                .as_ref()
-                .is_some_and(|ann| {
-                    self.annotation_type_refs_are_locally_resolvable(scope, &ann.type_annotation)
-                })
+            param.type_annotation.as_ref().is_some_and(|ann| {
+                self.annotation_type_refs_are_locally_resolvable(scope, &ann.type_annotation)
+            })
         });
         params_ok
             && self.annotation_type_refs_are_locally_resolvable(scope, &return_type.type_annotation)
@@ -106,15 +102,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     })
             }
             TSType::TSTypeLiteral(lit) => lit.members.iter().all(|member| match member {
-                TSSignature::TSPropertySignature(sig) => sig
-                    .type_annotation
-                    .as_ref()
-                    .is_some_and(|ann| {
+                TSSignature::TSPropertySignature(sig) => {
+                    sig.type_annotation.as_ref().is_some_and(|ann| {
                         self.annotation_type_refs_are_locally_resolvable(
                             scope,
                             &ann.type_annotation,
                         )
-                    }),
+                    })
+                }
                 TSSignature::TSIndexSignature(sig) => {
                     sig.parameters.iter().all(|param| {
                         self.annotation_type_refs_are_locally_resolvable(
@@ -126,9 +121,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         &sig.type_annotation.type_annotation,
                     )
                 }
-                TSSignature::TSMethodSignature(sig) => sig.return_type.as_ref().is_some_and(|ret| {
-                    self.signature_annotations_are_locally_resolvable(scope, &sig.params, ret)
-                }),
+                TSSignature::TSMethodSignature(sig) => {
+                    sig.return_type.as_ref().is_some_and(|ret| {
+                        self.signature_annotations_are_locally_resolvable(scope, &sig.params, ret)
+                    })
+                }
                 TSSignature::TSCallSignatureDeclaration(sig) => {
                     sig.return_type.as_ref().is_some_and(|ret| {
                         self.signature_annotations_are_locally_resolvable(scope, &sig.params, ret)
@@ -140,13 +137,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     })
                 }
             }),
-            TSType::TSFunctionType(func) => {
-                self.signature_annotations_are_locally_resolvable(
-                    scope,
-                    &func.params,
-                    &func.return_type,
-                )
-            }
+            TSType::TSFunctionType(func) => self.signature_annotations_are_locally_resolvable(
+                scope,
+                &func.params,
+                &func.return_type,
+            ),
             TSType::TSConstructorType(ctor) => {
                 !ctor.r#abstract
                     && ctor.type_parameters.is_none()
@@ -203,11 +198,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let name = parameter_name(&param.pattern)?;
             let annotation = param.type_annotation.as_ref()?;
             let ty = self.lower_annotation(scope, &annotation.type_annotation)?;
-            lowered.push(ParameterType {
-                name,
-                ty,
-                optional: false,
-            });
+            lowered.push(ParameterType::required(name, ty));
         }
         let ret = match return_type {
             Some(ann) => self.lower_annotation(scope, &ann.type_annotation)?,

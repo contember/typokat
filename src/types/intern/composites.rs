@@ -104,21 +104,24 @@ impl Interner {
         id
     }
 
-    /// Intern a tuple type. Identity is the ordered element-id list: order and
-    /// arity are significant, and elements are stored in source order.
+    /// Intern a fixed tuple type. Identity is the ordered element-id list: order
+    /// and arity are significant, and elements are stored in source order.
     pub fn intern_tuple(&mut self, elements: Vec<TypeId>) -> TypeId {
-        let key = StructuralKey::Tuple(&elements);
+        self.intern_tuple_type(TupleType::fixed(elements))
+    }
+
+    /// Intern a tuple type, including an optional rest segment.
+    pub fn intern_tuple_type(&mut self, tuple: TupleType) -> TypeId {
+        let key = StructuralKey::Tuple(&tuple);
         let hash = structural_hash(&key);
         if let Some(existing) = self.lookup(hash, |store, id| {
             store
                 .tuple_type(id)
-                .is_some_and(|existing| existing.elements == elements)
+                .is_some_and(|existing| existing == &tuple)
         }) {
             return existing;
         }
-        let id = self
-            .store
-            .push_tuple(TupleType { elements }, TypeFlags::EMPTY);
+        let id = self.store.push_tuple(tuple, TypeFlags::EMPTY);
         self.dedup.entry(hash).or_default().push(id);
         id
     }

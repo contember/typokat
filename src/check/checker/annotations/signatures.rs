@@ -89,11 +89,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     .unwrap_or(error_ty),
                 None => error_ty,
             };
-            lowered.push(ParameterType {
-                name,
-                ty,
-                optional: false,
-            });
+            lowered.push(ParameterType::required(name, ty));
         }
         lowered
     }
@@ -167,8 +163,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // B29: an index-signature VALUE is a legal-recursion boundary (the canonical
         // `type Json = … | { [k: string]: Json }`), so it lowers one indirection deeper.
         // The key stays at surface depth (recursion through a key is never legal).
-        let value = self
-            .with_indirection(|p| p.lower_annotation(scope, &sig.type_annotation.type_annotation))?;
+        let value = self.with_indirection(|p| {
+            p.lower_annotation(scope, &sig.type_annotation.type_annotation)
+        })?;
         let wk = self.interner.well_known();
         if key == wk.string {
             object.string_index = Some(value);

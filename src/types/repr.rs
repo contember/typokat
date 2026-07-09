@@ -34,8 +34,9 @@ pub enum TypeTag {
     /// that element id. Constructed by `Interner::intern_array` (M17).
     Array,
     /// A **tuple** type (`[A, B]`). `payload` indexes `Store::tuples`. Carries an
-    /// **ordered** `Vec<TypeId>` of element types; interned/hashed by that ordered
-    /// list (order is significant — unlike a union, `[A, B]` ≠ `[B, A]`).
+    /// ordered fixed element list plus an optional rest segment; interned/hashed
+    /// by that full shape (order is significant — unlike a union,
+    /// `[A, B]` ≠ `[B, A]`).
     /// Constructed by `Interner::intern_tuple` (M18).
     Tuple,
     /// A **readonly** array/tuple wrapper. `payload` stores the wrapped operand
@@ -330,12 +331,12 @@ impl ObjectType {
     }
 }
 
-/// A single function parameter (M3).
+/// A single function parameter (M3, signature-shape-expanded in M32/WU2).
 ///
-/// `optional` is always `false` in the M3 subset (optional/rest params are
-/// deferred); the field is kept so they slot in later without a struct change.
 /// The `name` is retained for the renderer — function types display their
 /// parameter names (`(x: number) => string`, README "Type display format").
+/// Required-only parameters should be built with [`ParameterType::required`] so
+/// the shape flags default consistently.
 ///
 /// FLAG: keeping the name in the interned function type means two function types
 /// that differ only in a parameter *name* (`(a: number) => void` vs
@@ -345,11 +346,74 @@ impl ObjectType {
 /// renderer print the source parameter names, and no fixture relies on
 /// name-insensitive function identity. The relation engine ignores names (it
 /// matches parameters positionally), so assignability is unaffected.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParameterType {
     pub name: String,
     pub ty: TypeId,
+    /// Whether the parameter may be omitted at call sites (`x?: T`). Defaulted
+    /// parameters also set this because their call-shape semantics are optional.
     pub optional: bool,
+    /// Whether this optional parameter came from a default initializer (`x = v`).
+    /// The initializer expression is not a type child, but the shape identity is.
+    pub has_default: bool,
+    /// Whether this is the signature's rest parameter (`...args: T`).
+    pub rest: bool,
+}
+
+impl ParameterType {
+    /// Build a required fixed parameter `name: ty`.
+    pub fn required(name: impl Into<String>, ty: TypeId) -> Self {
+        ParameterType {
+            name: name.into(),
+            ty,
+            optional: false,
+            has_default: false,
+            rest: false,
+        }
+    }
+
+    /// Build an optional fixed parameter `name?: ty`.
+    pub fn optional(name: impl Into<String>, ty: TypeId) -> Self {
+        ParameterType {
+            name: name.into(),
+            ty,
+            optional: true,
+            has_default: false,
+            rest: false,
+        }
+    }
+
+    /// Build a defaulted fixed parameter `name = ...`.
+    pub fn defaulted(name: impl Into<String>, ty: TypeId) -> Self {
+        ParameterType {
+            name: name.into(),
+            ty,
+            optional: true,
+            has_default: true,
+            rest: false,
+        }
+    }
+
+    /// Build a rest parameter `...name: ty`.
+    pub fn rest(name: impl Into<String>, ty: TypeId) -> Self {
+        ParameterType {
+            name: name.into(),
+            ty,
+            optional: false,
+            has_default: false,
+            rest: true,
+        }
+    }
+
+    /// Whether this fixed parameter contributes to the required call arity.
+    pub fn is_required_fixed(&self) -> bool {
+        !self.rest && !self.optional
+    }
+
+    /// Whether this parameter is a non-rest positional slot.
+    pub fn is_fixed(&self) -> bool {
+        !self.rest
+    }
 }
 
 /// A unique identifier for one type-parameter **declaration site** (the `T` in
@@ -406,6 +470,35 @@ pub struct FunctionType {
     pub ret: TypeId,
 }
 
+impl FunctionType {
+    /// Required positional parameter count, excluding rest parameters.
+    pub fn required_param_count(&self) -> usize {
+        self.params
+            .iter()
+            .filter(|param| param.is_required_fixed())
+            .count()
+    }
+
+    /// Total number of non-rest positional parameters.
+    pub fn total_fixed_param_count(&self) -> usize {
+        self.params.iter().filter(|param| param.is_fixed()).count()
+    }
+
+    /// Fixed parameters in source order.
+    pub fn fixed_params(&self) -> impl Iterator<Item = &ParameterType> {
+        self.params.iter().filter(|param| param.is_fixed())
+    }
+
+    /// The represented rest parameter, if any.
+    pub fn rest_param(&self) -> Option<&ParameterType> {
+        self.params.iter().find(|param| param.rest)
+    }
+
+    pub fn has_rest_param(&self) -> bool {
+        self.rest_param().is_some()
+    }
+}
+
 /// An array type (`T[]` / `Array<T>`) — M17. Identity is the element id; arrays
 /// relate covariantly (matching tsc), and substitution rewrites the element.
 #[derive(Copy, Clone, Debug)]
@@ -414,14 +507,57 @@ pub struct ArrayType {
     pub element: TypeId,
 }
 
-/// A tuple type (`[A, B]`) — M18. Identity is the ordered element list; elements
-/// are never sorted. Tuple relation is positional, and substitution rewrites each
-/// element.
-#[derive(Clone, Debug, Default)]
+/// A tuple rest segment (`...T`) at a source-order position among fixed elements.
+/// The type is the represented rest container (`B[]`, `T`, or a tuple type), not
+/// an optional tuple element. Optional tuple elements remain out of scope.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct TupleRestType {
+    /// Insertion position among [`TupleType::elements`]. `0` represents
+    /// `[...T, X]`, `elements.len()` represents `[X, ...T]`.
+    pub position: usize,
+    pub ty: TypeId,
+}
+
+impl TupleRestType {
+    pub fn new(position: usize, ty: TypeId) -> Self {
+        TupleRestType { position, ty }
+    }
+}
+
+/// A tuple type (`[A, B]`) — M18, extended in M32/WU2 with one represented rest
+/// segment. Identity is the ordered fixed element list plus the optional rest
+/// position/type; fixed elements are never sorted.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TupleType {
-    /// The element types in **source order** (`[A, B]` → `[A, B]`). The tuple's
-    /// entire structural identity; never sorted.
+    /// Fixed element types in source order, excluding the optional rest segment.
     pub elements: Vec<TypeId>,
+    pub rest: Option<TupleRestType>,
+}
+
+impl TupleType {
+    /// Build a fixed tuple `[A, B]`.
+    pub fn fixed(elements: Vec<TypeId>) -> Self {
+        TupleType {
+            elements,
+            rest: None,
+        }
+    }
+
+    /// Build a tuple with one rest segment.
+    pub fn with_rest(elements: Vec<TypeId>, rest: TupleRestType) -> Self {
+        TupleType {
+            elements,
+            rest: Some(rest),
+        }
+    }
+
+    pub fn fixed_len(&self) -> usize {
+        self.elements.len()
+    }
+
+    pub fn has_rest(&self) -> bool {
+        self.rest.is_some()
+    }
 }
 
 /// A conditional type `check extends extends_ty ? true_branch : false_branch` (M25).

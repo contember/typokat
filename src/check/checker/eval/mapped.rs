@@ -166,7 +166,11 @@ impl<'a> ConditionalEvaluator<'a> {
         }
     }
 
-    pub(super) fn modifiers_source_property(&mut self, source: TypeId, name: &str) -> Option<PropertyType> {
+    pub(super) fn modifiers_source_property(
+        &mut self,
+        source: TypeId,
+        name: &str,
+    ) -> Option<PropertyType> {
         if let Some(prop) = self
             .interner
             .store()
@@ -256,7 +260,10 @@ impl<'a> ConditionalEvaluator<'a> {
     ///    intersected;
     ///  - an object **with** index signatures (no `K in string` production), a
     ///    primitive, or any other shape → `None`.
-    pub(super) fn homomorphic_source_props(&mut self, key_source: TypeId) -> Option<Vec<PropertyType>> {
+    pub(super) fn homomorphic_source_props(
+        &mut self,
+        key_source: TypeId,
+    ) -> Option<Vec<PropertyType>> {
         if let Some(object) = self.interner.store().object_type(key_source) {
             if object.string_index.is_some() || object.number_index.is_some() {
                 return None;
@@ -321,7 +328,10 @@ impl<'a> ConditionalEvaluator<'a> {
         Some(out)
     }
 
-    pub(super) fn intersection_source_props(&mut self, members: &[TypeId]) -> Option<Vec<PropertyType>> {
+    pub(super) fn intersection_source_props(
+        &mut self,
+        members: &[TypeId],
+    ) -> Option<Vec<PropertyType>> {
         let mut entries: Vec<(String, Vec<TypeId>, bool, bool)> = Vec::new();
         {
             let store = self.interner.store();
@@ -583,16 +593,12 @@ impl<'a> ConditionalEvaluator<'a> {
                 }
             }
             TypeTag::Tuple => {
-                let Some(elements) = self
-                    .interner
-                    .store()
-                    .tuple_type(ty)
-                    .map(|t| t.elements.clone())
-                else {
+                let Some(tuple) = self.interner.store().tuple_type(ty).cloned() else {
                     return ty;
                 };
                 let mut changed = false;
-                let subst: Vec<TypeId> = elements
+                let elements = tuple
+                    .elements
                     .iter()
                     .map(|&e| {
                         let ne = self.replace_mapped_value(e, value);
@@ -600,8 +606,14 @@ impl<'a> ConditionalEvaluator<'a> {
                         ne
                     })
                     .collect();
+                let rest = tuple.rest.map(|rest| {
+                    let nt = self.replace_mapped_value(rest.ty, value);
+                    changed |= nt != rest.ty;
+                    TupleRestType { ty: nt, ..rest }
+                });
                 if changed {
-                    self.interner.intern_tuple(subst)
+                    self.interner
+                        .intern_tuple_type(TupleType { elements, rest })
                 } else {
                     ty
                 }

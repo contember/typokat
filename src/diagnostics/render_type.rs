@@ -82,9 +82,11 @@ fn render_type_inner(
                             .iter()
                             .map(|&signature| render_call_signature(store, signature, rendering)),
                     );
-                    members.extend(obj.construct_signatures.iter().map(|&signature| {
-                        render_construct_signature(store, signature, rendering)
-                    }));
+                    members.extend(
+                        obj.construct_signatures.iter().map(|&signature| {
+                            render_construct_signature(store, signature, rendering)
+                        }),
+                    );
                     members.extend(obj.properties.iter().map(|p| {
                         format!(
                             "{}: {}",
@@ -182,11 +184,7 @@ fn render_type_inner(
         // tuple renders as `[]`; brackets already delimit every element.
         TypeTag::Tuple => match store.tuple_type(id) {
             Some(tuple) => {
-                let elems: Vec<String> = tuple
-                    .elements
-                    .iter()
-                    .map(|&e| render_type_inner(store, e, false, rendering))
-                    .collect();
+                let elems = render_tuple_parts(store, tuple, rendering);
                 format!("[{}]", elems.join(", "))
             }
             // Defensive fallback; a tuple always has a side-table entry.
@@ -366,15 +364,56 @@ fn render_function_parts(
         .params
         .iter()
         .map(|p| {
+            let name = render_parameter_name(p);
             format!(
                 "{}: {}",
-                p.name,
+                name,
                 render_type_inner(store, p.ty, false, rendering)
             )
         })
         .collect();
     let ret = render_type_inner(store, func.ret, false, rendering);
     (params, ret)
+}
+
+fn render_parameter_name(param: &crate::types::repr::ParameterType) -> String {
+    if param.rest {
+        format!("...{}", param.name)
+    } else if param.optional {
+        format!("{}?", param.name)
+    } else {
+        param.name.clone()
+    }
+}
+
+fn render_tuple_parts(
+    store: &Store,
+    tuple: &crate::types::repr::TupleType,
+    rendering: &mut Vec<TypeId>,
+) -> Vec<String> {
+    let mut parts = Vec::with_capacity(tuple.elements.len() + usize::from(tuple.rest.is_some()));
+    for (index, &element) in tuple.elements.iter().enumerate() {
+        if let Some(rest) = tuple.rest {
+            if rest.position == index {
+                parts.push(render_tuple_rest(store, rest, rendering));
+            }
+        }
+        parts.push(render_type_inner(store, element, false, rendering));
+    }
+    if let Some(rest) = tuple.rest {
+        if rest.position >= tuple.elements.len() {
+            parts.push(render_tuple_rest(store, rest, rendering));
+        }
+    }
+    parts
+}
+
+fn render_tuple_rest(
+    store: &Store,
+    rest: crate::types::repr::TupleRestType,
+    rendering: &mut Vec<TypeId>,
+) -> String {
+    format!("...{}", render_type_inner(store, rest.ty, false, rendering))
 }
 
 /// Whether an array element type must be parenthesized before postfix `[]`.

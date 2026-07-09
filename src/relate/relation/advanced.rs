@@ -76,6 +76,9 @@ impl<'a> Relater<'a> {
                 TypeTag::Tuple => {
                     if let Some(tup) = self.store.tuple_type(t) {
                         stack.extend(tup.elements.iter().copied());
+                        if let Some(rest) = tup.rest {
+                            stack.push(rest.ty);
+                        }
                     }
                 }
                 TypeTag::Readonly => {
@@ -298,8 +301,7 @@ fn template_subsumes(store: &Store, src: TypeId, tgt: TypeId) -> bool {
     if is_bare_string_hole(store, tgt_t) {
         return true;
     }
-    if tgt_t.holes.len() == 1
-        && store.intrinsic_kind(tgt_t.holes[0]) == Some(IntrinsicKind::String)
+    if tgt_t.holes.len() == 1 && store.intrinsic_kind(tgt_t.holes[0]) == Some(IntrinsicKind::String)
     {
         let tgt_prefix = tgt_t.texts.first().map(String::as_str).unwrap_or("");
         let tgt_suffix = tgt_t.texts.get(1).map(String::as_str).unwrap_or("");

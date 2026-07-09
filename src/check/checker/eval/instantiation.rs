@@ -119,7 +119,12 @@ impl<'a> ConditionalEvaluator<'a> {
     /// Finish a distributive instantiation after pre-evaluating its check
     /// argument: re-derive per-member conditionals from the evaluated value, then
     /// let the enclosing [`Task::SetMemo`] commit under the original id.
-    pub(super) fn expand_distributive(&mut self, ty: TypeId, tasks: &mut Vec<Task>, values: &mut Vec<TypeId>) {
+    pub(super) fn expand_distributive(
+        &mut self,
+        ty: TypeId,
+        tasks: &mut Vec<Task>,
+        values: &mut Vec<TypeId>,
+    ) {
         let evaluated_arg = values.pop().unwrap_or(self.interner.well_known().error);
         let Some(inst) = self.interner.store().instantiation_type(ty).cloned() else {
             // Defensive: leave the node as its own (deferred) value; SetMemo pops it.
@@ -221,7 +226,12 @@ impl<'a> ConditionalEvaluator<'a> {
     /// Schedule evaluation of a union's members (re-unioning the results) — the shape a
     /// distributive conditional collapses to before its members are individually
     /// evaluated. A union with no conditional/instantiation member is already a value.
-    pub(super) fn eval_union(&mut self, ty: TypeId, tasks: &mut Vec<Task>, values: &mut Vec<TypeId>) {
+    pub(super) fn eval_union(
+        &mut self,
+        ty: TypeId,
+        tasks: &mut Vec<Task>,
+        values: &mut Vec<TypeId>,
+    ) {
         let Some(members) = self.interner.store().union_members(ty) else {
             values.push(ty);
             return;
@@ -383,16 +393,12 @@ impl<'a> ConditionalEvaluator<'a> {
                 }
             }
             TypeTag::Tuple => {
-                let Some(elements) = self
-                    .interner
-                    .store()
-                    .tuple_type(ty)
-                    .map(|t| t.elements.clone())
-                else {
+                let Some(tuple) = self.interner.store().tuple_type(ty).cloned() else {
                     return ty;
                 };
                 let mut changed = false;
-                let subst: Vec<TypeId> = elements
+                let elements = tuple
+                    .elements
                     .iter()
                     .map(|&e| {
                         let ne = self.substitute_infers(e, fresh);
@@ -400,8 +406,14 @@ impl<'a> ConditionalEvaluator<'a> {
                         ne
                     })
                     .collect();
+                let rest = tuple.rest.map(|rest| {
+                    let nt = self.substitute_infers(rest.ty, fresh);
+                    changed |= nt != rest.ty;
+                    TupleRestType { ty: nt, ..rest }
+                });
                 if changed {
-                    self.interner.intern_tuple(subst)
+                    self.interner
+                        .intern_tuple_type(TupleType { elements, rest })
                 } else {
                     ty
                 }

@@ -438,11 +438,7 @@ fn function_variance_arity_and_void_return() {
     use crate::types::repr::{FunctionType, ParameterType};
 
     fn param(name: &str, ty: TypeId) -> ParameterType {
-        ParameterType {
-            name: name.to_string(),
-            ty,
-            optional: false,
-        }
+        ParameterType::required(name, ty)
     }
 
     let mut interner = Interner::with_intrinsics();
@@ -1313,19 +1309,43 @@ fn template_pattern_assignability() {
     };
 
     // Literal → pattern (anchored matching).
-    assert!(yes(&interner, hello_world, greeting), "\"hello world\" <: `hello ${{string}}`");
-    assert!(!yes(&interner, goodbye, greeting), "\"goodbye world\" not <: `hello ${{string}}`");
+    assert!(
+        yes(&interner, hello_world, greeting),
+        "\"hello world\" <: `hello ${{string}}`"
+    );
+    assert!(
+        !yes(&interner, goodbye, greeting),
+        "\"goodbye world\" not <: `hello ${{string}}`"
+    );
     assert!(yes(&interner, n42, num_hole), "\"n42\" <: `n${{number}}`");
     assert!(yes(&interner, n35, num_hole), "\"n3.5\" <: `n${{number}}`");
-    assert!(!yes(&interner, nx, num_hole), "\"nx\" not <: `n${{number}}` (non-numeric)");
+    assert!(
+        !yes(&interner, nx, num_hole),
+        "\"nx\" not <: `n${{number}}` (non-numeric)"
+    );
 
     // `string` → pattern: only the bare `${string}` hole.
-    assert!(!yes(&interner, wk.string, greeting), "string not <: `hello ${{string}}`");
+    assert!(
+        !yes(&interner, wk.string, greeting),
+        "string not <: `hello ${{string}}`"
+    );
     assert!(yes(&interner, wk.string, bare), "string <: `${{string}}`");
 
     // Pattern → string, and pattern subsumption.
-    assert!(yes(&interner, greeting, wk.string), "`hello ${{string}}` <: string");
-    assert!(yes(&interner, greeting, bare), "`hello ${{string}}` <: `${{string}}`");
-    assert!(yes(&interner, greeting, h_hole), "`hello ${{string}}` <: `h${{string}}`");
-    assert!(!yes(&interner, greeting, x_hole), "`hello ${{string}}` not <: `x${{string}}`");
+    assert!(
+        yes(&interner, greeting, wk.string),
+        "`hello ${{string}}` <: string"
+    );
+    assert!(
+        yes(&interner, greeting, bare),
+        "`hello ${{string}}` <: `${{string}}`"
+    );
+    assert!(
+        yes(&interner, greeting, h_hole),
+        "`hello ${{string}}` <: `h${{string}}`"
+    );
+    assert!(
+        !yes(&interner, greeting, x_hole),
+        "`hello ${{string}}` not <: `x${{string}}`"
+    );
 }

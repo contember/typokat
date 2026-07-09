@@ -3,7 +3,11 @@ use super::*;
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Lower `A | B | …` to a canonical interned union. Any unlowerable member
     /// aborts the whole annotation; dropping it would mis-state the union.
-    pub(super) fn lower_union_annotation(&mut self, scope: ScopeId, members: &[TSType<'_>]) -> Option<TypeId> {
+    pub(super) fn lower_union_annotation(
+        &mut self,
+        scope: ScopeId,
+        members: &[TSType<'_>],
+    ) -> Option<TypeId> {
         let mut lowered: Vec<TypeId> = Vec::with_capacity(members.len());
         for member in members {
             lowered.push(self.lower_annotation(scope, member)?);
@@ -53,9 +57,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             TSLiteral::BooleanLiteral(b) => LiteralValue::Boolean(b.value),
             // `-<numeric literal>` is a negative number literal type. tsc interns `-0`
             // and `0` to the same literal (SameValueZero), so collapse `-0.0` to `0.0`.
-            TSLiteral::UnaryExpression(unary)
-                if unary.operator == UnaryOperator::UnaryNegation =>
-            {
+            TSLiteral::UnaryExpression(unary) if unary.operator == UnaryOperator::UnaryNegation => {
                 let Expression::NumericLiteral(n) = &unary.argument else {
                     return None;
                 };
@@ -93,8 +95,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     let annotation = sig.type_annotation.as_ref()?;
                     // B29: an object member is a legal-recursion boundary (`type W = { a: W
                     // } | null`), so lower it at a deeper indirection level.
-                    let ty = self
-                        .with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation))?;
+                    let ty = self.with_indirection(|p| {
+                        p.lower_annotation(scope, &annotation.type_annotation)
+                    })?;
                     // M21: optional properties intern `T | undefined` here, matching
                     // interface members and keeping this out of the relation engine.
                     let ty = if sig.optional {
@@ -156,13 +159,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let name = parameter_name(&param.pattern)?;
             let annotation = param.type_annotation.as_ref()?;
             // B29: a parameter/return is a legal-recursion boundary (`type Fn = () => Fn`).
-            let ty = self
-                .with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation))?;
-            lowered.push(ParameterType {
-                name,
-                ty,
-                optional: false,
-            });
+            let ty =
+                self.with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation))?;
+            lowered.push(ParameterType::required(name, ty));
         }
         let ret = self.with_indirection(|p| p.lower_annotation(scope, return_type))?;
         Some(self.interner.intern_function(FunctionType {
