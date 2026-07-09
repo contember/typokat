@@ -23,6 +23,7 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-07-09-signature-shape.md`](sprints/sprint-2026-07-09-signature-shape.md) - M32 signature shape: backlog `24` rest elements + backlog `39` optional/default parameters.
 
 ## What's hot
 
@@ -35,9 +36,9 @@ decisions → reference → archive.
   to a dedicated inference-policy sprint. The completion roadmap (refined 2026-07-07) lives in the backlog
   README: a definition of done (checker 1.0) + four tracks (A model completeness `24`
   `39`–`44` = the `lib.d.ts` critical path; B checker completeness `18` `19` `45`–`52`;
-  C known-gap tail; D scale ladder `38` `13` `14` `15` `16` `17`). **Now:** track A
-  signature shape (`24` rest elements, `39` optional/default params) toward `14`; schedule `65`
-  separately when inference candidate priority/variance is the sprint theme.
+  C known-gap tail; D scale ladder `38` `13` `14` `15` `16` `17`). **Now:** the active M32
+  signature-shape sprint plans `24` rest elements and `39` optional/default params toward `14`;
+  schedule `65` separately when inference candidate priority/variance is the sprint theme.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
   invariants CLEAN and filed `53`–`65`; the five HIGH silent-FN families then shipped through

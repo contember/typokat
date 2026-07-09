@@ -20,3 +20,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+- [`sprint-2026-07-09-signature-shape.md`](sprint-2026-07-09-signature-shape.md) - M32 signature shape: backlog `24` rest elements + backlog `39` optional/default parameters.
