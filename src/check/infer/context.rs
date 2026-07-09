@@ -1,6 +1,8 @@
 use super::helpers::{function_shape, property_pairs, segment_matches_hole};
 use super::*;
-use crate::types::repr::{LiteralValue, ModifierOp, TemplateType};
+use crate::types::repr::{
+    FunctionType, LiteralValue, ModifierOp, TemplateType, TupleRestType, TupleType,
+};
 
 /// The per-inference recursion state: the cycle guard for structural matching, plus
 /// the **collection mode** (M25). Built once per entry-point call and dropped after.
@@ -261,17 +263,65 @@ impl InferenceContext {
         target: TypeId,
         candidates: &mut Candidates,
     ) {
-        let source_elems: Vec<TypeId> = match interner.store().tuple_type(source) {
-            Some(t) => t.elements.clone(),
+        let source_tuple = match interner.store().tuple_type(source) {
+            Some(t) => t.clone(),
             None => return,
         };
-        let target_elems: Vec<TypeId> = match interner.store().tuple_type(target) {
-            Some(t) => t.elements.clone(),
+        let target_tuple = match interner.store().tuple_type(target) {
+            Some(t) => t.clone(),
             None => return,
         };
-        for (&source_ty, &target_ty) in source_elems.iter().zip(&target_elems) {
+        let source_elems = source_tuple.elements;
+        let Some(rest) = target_tuple.rest else {
+            for (&source_ty, &target_ty) in source_elems.iter().zip(&target_tuple.elements) {
+                self.infer(interner, source_ty, target_ty, candidates);
+            }
+            return;
+        };
+        if source_elems.len() < target_tuple.elements.len() {
+            return;
+        }
+        for index in 0..rest.position {
+            let Some(&source_ty) = source_elems.get(index) else {
+                return;
+            };
+            let Some(&target_ty) = target_tuple.elements.get(index) else {
+                return;
+            };
             self.infer(interner, source_ty, target_ty, candidates);
         }
+        let suffix_len = target_tuple.elements.len().saturating_sub(rest.position);
+        let middle_end = source_elems.len().saturating_sub(suffix_len);
+        for suffix_index in 0..suffix_len {
+            let source_index = middle_end + suffix_index;
+            let target_index = rest.position + suffix_index;
+            let Some(&source_ty) = source_elems.get(source_index) else {
+                return;
+            };
+            let Some(&target_ty) = target_tuple.elements.get(target_index) else {
+                return;
+            };
+            self.infer(interner, source_ty, target_ty, candidates);
+        }
+        let middle = &source_elems[rest.position..middle_end];
+        let rest_ty = interner
+            .store()
+            .readonly_operand(rest.ty)
+            .unwrap_or(rest.ty);
+        if interner.store().tag(rest_ty) == TypeTag::TypeParam {
+            let captured = interner.intern_tuple(middle.to_vec());
+            self.infer(interner, captured, rest_ty, candidates);
+            return;
+        }
+        if let Some(array) = interner.store().array_type(rest_ty) {
+            let elem = array.element;
+            for &source_ty in middle {
+                self.infer(interner, source_ty, elem, candidates);
+            }
+            return;
+        }
+        let captured = interner.intern_tuple(middle.to_vec());
+        self.infer(interner, captured, rest_ty, candidates);
     }
 
     /// b57: infer tuple elements into an array target's element position. Empty
@@ -404,16 +454,24 @@ impl InferenceContext {
         target: TypeId,
         candidates: &mut Candidates,
     ) {
-        let Some((source_params, source_ret)) = function_shape(interner.store(), source) else {
+        let Some(source_fn) = interner.store().function_type(source).cloned() else {
             return;
         };
-        let Some((target_params, target_ret)) = function_shape(interner.store(), target) else {
+        let Some(target_fn) = interner.store().function_type(target).cloned() else {
             return;
         };
-        for (&source_ty, &target_ty) in source_params.iter().zip(&target_params) {
-            self.infer(interner, source_ty, target_ty, candidates);
+        if let Some(rest_ty) = direct_infer_rest(&target_fn) {
+            let captured = source_parameter_tuple(interner, &source_fn);
+            self.infer(interner, captured, rest_ty, candidates);
+        } else if let (Some((source_params, _)), Some((target_params, _))) = (
+            function_shape(interner.store(), source),
+            function_shape(interner.store(), target),
+        ) {
+            for (&source_ty, &target_ty) in source_params.iter().zip(&target_params) {
+                self.infer(interner, source_ty, target_ty, candidates);
+            }
         }
-        self.infer(interner, source_ret, target_ret, candidates);
+        self.infer(interner, source_fn.ret, target_fn.ret, candidates);
     }
 
     /// Both unions: a best-effort pairwise match. Only when the two unions have the
@@ -442,5 +500,28 @@ impl InferenceContext {
         for (&source_ty, &target_ty) in source_members.iter().zip(&target_members) {
             self.infer(interner, source_ty, target_ty, candidates);
         }
+    }
+}
+
+fn direct_infer_rest(function: &FunctionType) -> Option<TypeId> {
+    if function.total_fixed_param_count() != 0 {
+        return None;
+    }
+    if function.params.iter().filter(|param| param.rest).count() != 1 {
+        return None;
+    }
+    let rest = function.rest_param()?;
+    Some(rest.ty)
+}
+
+fn source_parameter_tuple(interner: &mut Interner, function: &FunctionType) -> TypeId {
+    let fixed: Vec<TypeId> = function.fixed_params().map(|param| param.ty).collect();
+    if let Some(rest) = function.rest_param() {
+        interner.intern_tuple_type(TupleType::with_rest(
+            fixed,
+            TupleRestType::new(function.total_fixed_param_count(), rest.ty),
+        ))
+    } else {
+        interner.intern_tuple(fixed)
     }
 }

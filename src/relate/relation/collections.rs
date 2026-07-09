@@ -1,4 +1,55 @@
 use super::*;
+use crate::types::repr::TupleType;
+
+#[derive(Clone)]
+struct TupleShape {
+    prefix: Vec<TypeId>,
+    variadic: Option<TypeId>,
+    suffix: Vec<TypeId>,
+}
+
+impl TupleShape {
+    fn fixed(elements: Vec<TypeId>) -> Self {
+        TupleShape {
+            prefix: elements,
+            variadic: None,
+            suffix: Vec::new(),
+        }
+    }
+
+    fn min_len(&self) -> usize {
+        self.prefix.len() + self.suffix.len()
+    }
+
+    fn fixed_len(&self) -> Option<usize> {
+        if self.variadic.is_some() {
+            None
+        } else {
+            Some(self.prefix.len() + self.suffix.len())
+        }
+    }
+
+    fn accepts_len(&self, len: usize) -> bool {
+        if len < self.min_len() {
+            return false;
+        }
+        self.variadic.is_some() || len == self.min_len()
+    }
+
+    fn element_at(&self, index: usize, len: usize) -> Option<TypeId> {
+        if !self.accepts_len(len) || index >= len {
+            return None;
+        }
+        if index < self.prefix.len() {
+            return self.prefix.get(index).copied();
+        }
+        let suffix_start = len.saturating_sub(self.suffix.len());
+        if index >= suffix_start {
+            return self.suffix.get(index - suffix_start).copied();
+        }
+        self.variadic
+    }
+}
 
 impl<'a> Relater<'a> {
     /// Array assignability is covariant in the element type (M17). The element
@@ -53,25 +104,28 @@ impl<'a> Relater<'a> {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
 
-        // Length must match exactly — tuples are fixed-length and positional (M18
-        // has no optional/rest elements, so a different arity is unsatisfiable).
-        if src_tuple.elements.len() != tgt_tuple.elements.len() {
+        let Some(src_shape) = self.tuple_shape(src_tuple) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let Some(tgt_shape) = self.tuple_shape(tgt_tuple) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+
+        let Some(src_len) = src_shape.fixed_len() else {
+            return self
+                .relate_variadic_tuple_to_tuple(src, tgt, src_shape, tgt_shape, kind, assumed);
+        };
+        if !tgt_shape.accepts_len(src_len) {
             return Relation::No(ReasonChain::of(Reason::TupleLength { src, tgt }));
         }
 
-        // Snapshot the per-position element ids up front so the immutable borrow of
-        // the store does not overlap the recursive `self.relate` calls below (which
-        // also borrow it). `zip` pairs equal-length lists element-by-element.
-        let element_pairs: Vec<(TypeId, TypeId)> = src_tuple
-            .elements
-            .iter()
-            .zip(&tgt_tuple.elements)
-            .map(|(&s, &t)| (s, t))
-            .collect();
-
-        // Positional: each source element must be assignable to the target element at
-        // the same position. First failing position wins (single nested reason).
-        for (index, (src_elem, tgt_elem)) in element_pairs.into_iter().enumerate() {
+        for index in 0..src_len {
+            let Some(src_elem) = src_shape.element_at(index, src_len) else {
+                return Relation::No(ReasonChain::of(Reason::TupleLength { src, tgt }));
+            };
+            let Some(tgt_elem) = tgt_shape.element_at(index, src_len) else {
+                return Relation::No(ReasonChain::of(Reason::TupleLength { src, tgt }));
+            };
             if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
                 return Relation::No(ReasonChain::of(Reason::TupleElement {
                     index,
@@ -103,12 +157,25 @@ impl<'a> Relater<'a> {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
         let tgt_elem = tgt_arr.element;
-        // Snapshot the element ids before the recursive `self.relate` (borrow note as
-        // in `relate_tuples`).
-        let elements: Vec<TypeId> = src_tuple.elements.clone();
+        let Some(src_shape) = self.tuple_shape(src_tuple) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
 
-        // Every tuple element must be assignable to the array's element type.
-        for src_elem in elements {
+        for src_elem in src_shape
+            .prefix
+            .iter()
+            .chain(src_shape.suffix.iter())
+            .copied()
+        {
+            if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
+                return Relation::No(ReasonChain::of(Reason::ArrayElement {
+                    src,
+                    tgt,
+                    because: Box::new(child.head),
+                }));
+            }
+        }
+        if let Some(src_elem) = src_shape.variadic {
             if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
                 return Relation::No(ReasonChain::of(Reason::ArrayElement {
                     src,
@@ -118,5 +185,99 @@ impl<'a> Relater<'a> {
             }
         }
         Relation::Yes
+    }
+
+    fn relate_variadic_tuple_to_tuple(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        src_shape: TupleShape,
+        tgt_shape: TupleShape,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
+        if tgt_shape.variadic.is_none()
+            || src_shape.min_len() < tgt_shape.min_len()
+            || src_shape.prefix.len() != tgt_shape.prefix.len()
+            || src_shape.suffix.len() != tgt_shape.suffix.len()
+        {
+            return Relation::No(ReasonChain::of(Reason::TupleLength { src, tgt }));
+        }
+
+        for (index, (&src_elem, &tgt_elem)) in
+            src_shape.prefix.iter().zip(&tgt_shape.prefix).enumerate()
+        {
+            if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
+                return Relation::No(ReasonChain::of(Reason::TupleElement {
+                    index,
+                    src,
+                    tgt,
+                    because: Box::new(child.head),
+                }));
+            }
+        }
+        let suffix_offset = src_shape.prefix.len();
+        for (offset, (&src_elem, &tgt_elem)) in
+            src_shape.suffix.iter().zip(&tgt_shape.suffix).enumerate()
+        {
+            if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
+                return Relation::No(ReasonChain::of(Reason::TupleElement {
+                    index: suffix_offset + offset,
+                    src,
+                    tgt,
+                    because: Box::new(child.head),
+                }));
+            }
+        }
+        let Some(src_elem) = src_shape.variadic else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let Some(tgt_elem) = tgt_shape.variadic else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
+            return Relation::No(ReasonChain::of(Reason::TupleElement {
+                index: src_shape.prefix.len(),
+                src,
+                tgt,
+                because: Box::new(child.head),
+            }));
+        }
+        Relation::Yes
+    }
+
+    fn tuple_shape(&self, tuple: &TupleType) -> Option<TupleShape> {
+        let Some(rest) = tuple.rest else {
+            return Some(TupleShape::fixed(tuple.elements.clone()));
+        };
+        if rest.position > tuple.elements.len() {
+            return None;
+        }
+        let mut prefix = tuple.elements[..rest.position].to_vec();
+        let suffix = tuple.elements[rest.position..].to_vec();
+        let rest_shape = self.rest_tuple_shape(rest.ty)?;
+        prefix.extend(rest_shape.prefix);
+        let mut combined_suffix = rest_shape.suffix;
+        combined_suffix.extend(suffix);
+        Some(TupleShape {
+            prefix,
+            variadic: rest_shape.variadic,
+            suffix: combined_suffix,
+        })
+    }
+
+    fn rest_tuple_shape(&self, ty: TypeId) -> Option<TupleShape> {
+        let ty = self.store.readonly_operand(ty).unwrap_or(ty);
+        if let Some(array) = self.store.array_type(ty) {
+            return Some(TupleShape {
+                prefix: Vec::new(),
+                variadic: Some(array.element),
+                suffix: Vec::new(),
+            });
+        }
+        if let Some(tuple) = self.store.tuple_type(ty) {
+            return self.tuple_shape(tuple);
+        }
+        None
     }
 }

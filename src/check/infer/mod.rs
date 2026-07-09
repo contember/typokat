@@ -14,7 +14,7 @@ use context::InferenceContext;
 use helpers::widen;
 
 use crate::relate::Relater;
-use crate::types::repr::{IntrinsicKind, TypeParamId, TypeTag};
+use crate::types::repr::{IntrinsicKind, ParameterType, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
 use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -67,12 +67,39 @@ pub fn infer_type_arguments(
     args: &[TypeId],
     fresh_args: &[bool],
 ) -> FxHashMap<crate::types::repr::TypeParamId, TypeId> {
+    let shaped_params: Vec<ParameterType> = params
+        .iter()
+        .enumerate()
+        .map(|(index, &ty)| ParameterType::required(format!("p{index}"), ty))
+        .collect();
+    infer_type_arguments_from_params(
+        interner,
+        next_type_param,
+        type_params,
+        &shaped_params,
+        args,
+        fresh_args,
+    )
+}
+
+pub fn infer_type_arguments_from_params(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    type_params: &[crate::types::repr::TypeParamId],
+    params: &[ParameterType],
+    args: &[TypeId],
+    fresh_args: &[bool],
+) -> FxHashMap<crate::types::repr::TypeParamId, TypeId> {
     // Track candidate provenance so the constraint clamp can exempt fresh-only
     // object/array literal arguments.
     let mut candidates: Candidates = FxHashMap::default();
     let mut fresh_params: FxHashSet<crate::types::repr::TypeParamId> = FxHashSet::default();
     let mut nonfresh_params: FxHashSet<crate::types::repr::TypeParamId> = FxHashSet::default();
-    for (index, (&arg, &param)) in args.iter().zip(params).enumerate() {
+    let targets = inference_argument_targets(interner, params, args);
+    for (index, (&arg, param)) in args.iter().zip(&targets).enumerate() {
+        let Some(param) = *param else {
+            continue;
+        };
         let mut local: Candidates = FxHashMap::default();
         // Keep candidates raw here; primitive-constrained parameters decide literal
         // preservation at fix time.
@@ -87,11 +114,116 @@ pub fn infer_type_arguments(
             candidates.entry(param_id).or_default().extend(cands);
         }
     }
+    if let Some((rest_ty, rest_start)) = direct_rest_type_param(interner, params) {
+        if rest_start <= args.len() {
+            let tuple = interner.intern_tuple(args[rest_start..].to_vec());
+            let mut local: Candidates = FxHashMap::default();
+            infer_from_types_raw(interner, tuple, rest_ty, &mut local);
+            let is_fresh = (rest_start..args.len())
+                .all(|index| fresh_args.get(index).copied().unwrap_or(false));
+            for (param_id, cands) in local {
+                if is_fresh {
+                    fresh_params.insert(param_id);
+                } else {
+                    nonfresh_params.insert(param_id);
+                }
+                candidates.entry(param_id).or_default().extend(cands);
+            }
+        }
+    }
     // Exempt = candidates came from fresh literals ONLY (review F4).
     let exempt: FxHashSet<crate::types::repr::TypeParamId> =
         fresh_params.difference(&nonfresh_params).copied().collect();
     let fixed = fix_candidates(interner, candidates);
     fix_params(interner, next_type_param, type_params, fixed, &exempt)
+}
+
+fn inference_argument_targets(
+    interner: &mut Interner,
+    params: &[ParameterType],
+    args: &[TypeId],
+) -> Vec<Option<TypeId>> {
+    let fixed: Vec<&ParameterType> = params.iter().filter(|param| param.is_fixed()).collect();
+    let rest = params.iter().find(|param| param.rest);
+    let mut targets: Vec<Option<TypeId>> = Vec::with_capacity(args.len());
+    for index in 0..args.len() {
+        if let Some(param) = fixed.get(index) {
+            targets.push(Some(param.ty));
+            continue;
+        }
+        let Some(rest) = rest else {
+            targets.push(None);
+            continue;
+        };
+        let rest_offset = index.saturating_sub(fixed.len());
+        let total_rest_args = args.len().saturating_sub(fixed.len());
+        targets.push(rest_inference_target(
+            interner,
+            rest.ty,
+            rest_offset,
+            total_rest_args,
+        ));
+    }
+    targets
+}
+
+fn direct_rest_type_param(
+    interner: &Interner,
+    params: &[ParameterType],
+) -> Option<(TypeId, usize)> {
+    let rest = params.iter().find(|param| param.rest)?;
+    let rest_ty = interner
+        .store()
+        .readonly_operand(rest.ty)
+        .unwrap_or(rest.ty);
+    if interner.store().tag(rest_ty) != TypeTag::TypeParam {
+        return None;
+    }
+    let fixed = params.iter().filter(|param| param.is_fixed()).count();
+    Some((rest_ty, fixed))
+}
+
+fn rest_inference_target(
+    interner: &Interner,
+    rest_ty: TypeId,
+    offset: usize,
+    total_rest_args: usize,
+) -> Option<TypeId> {
+    let rest_ty = interner
+        .store()
+        .readonly_operand(rest_ty)
+        .unwrap_or(rest_ty);
+    if interner.store().tag(rest_ty) == TypeTag::TypeParam {
+        return None;
+    }
+    if let Some(array) = interner.store().array_type(rest_ty) {
+        return Some(array.element);
+    }
+    if let Some(tuple) = interner.store().tuple_type(rest_ty) {
+        return tuple_inference_target(interner, tuple, offset, total_rest_args);
+    }
+    Some(rest_ty)
+}
+
+fn tuple_inference_target(
+    interner: &Interner,
+    tuple: &crate::types::repr::TupleType,
+    offset: usize,
+    total_rest_args: usize,
+) -> Option<TypeId> {
+    let Some(rest) = tuple.rest else {
+        return tuple.elements.get(offset).copied();
+    };
+    if offset < rest.position {
+        return tuple.elements.get(offset).copied();
+    }
+    let fixed_after = tuple.elements.len().saturating_sub(rest.position);
+    let tail_start = total_rest_args.saturating_sub(fixed_after);
+    if offset >= tail_start {
+        let tail_index = rest.position + (offset - tail_start);
+        return tuple.elements.get(tail_index).copied();
+    }
+    rest_inference_target(interner, rest.ty, offset - rest.position, total_rest_args)
 }
 
 /// Fix raw candidate lists to one type per parameter. Call-site literals widen

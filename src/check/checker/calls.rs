@@ -161,8 +161,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         // The template signature's parameter types — the inference targets (they carry
         // the type parameters to be solved). Snapshot before the mutable inference call.
-        let param_types: Vec<TypeId> = match self.interner.store().function_type(sig.fn_ty) {
-            Some(func) => func.params.iter().map(|p| p.ty).collect(),
+        let params: Vec<ParameterType> = match self.interner.store().function_type(sig.fn_ty) {
+            Some(func) => func.params.clone(),
             None => return None,
         };
         let args: Vec<TypeId> = arg_types.iter().map(|(ty, _)| *ty).collect();
@@ -170,11 +170,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Run the generative inference engine to fix the type arguments, then
         // instantiate the template by the same M9 substitution. `arg_fresh` feeds the
         // M24 clamp exemption for fresh object/array literal arguments.
-        let map = infer::infer_type_arguments(
+        let map = infer::infer_type_arguments_from_params(
             self.interner,
             &mut self.next_type_param,
             &sig.params,
-            &param_types,
+            &params,
             &args,
             arg_fresh,
         );
@@ -717,17 +717,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // targets are the *uninstantiated* constructor parameter types (they carry the
             // type parameters). Snapshot them before the mutable inference call.
             None => {
-                let param_types: Vec<TypeId> = match self.interner.store().function_type(info.ctor)
-                {
-                    Some(func) => func.params.iter().map(|p| p.ty).collect(),
-                    None => Vec::new(),
-                };
+                let params: Vec<ParameterType> =
+                    match self.interner.store().function_type(info.ctor) {
+                        Some(func) => func.params.clone(),
+                        None => Vec::new(),
+                    };
                 let args: Vec<TypeId> = arg_types.iter().map(|(ty, _)| *ty).collect();
-                infer::infer_type_arguments(
+                infer::infer_type_arguments_from_params(
                     self.interner,
                     &mut self.next_type_param,
                     &type_params,
-                    &param_types,
+                    &params,
                     &args,
                     arg_fresh,
                 )

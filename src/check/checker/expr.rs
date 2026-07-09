@@ -901,6 +901,11 @@ fn is_number_keyed(store: &Store, key: TypeId) -> bool {
 }
 
 pub(in crate::check::checker) fn contextual_literal_target(store: &Store, ty: TypeId) -> TypeId {
+    if let Some(operand) = store.readonly_operand(ty) {
+        if is_contextual_literal_shape(store, operand) {
+            return operand;
+        }
+    }
     let Some(members) = store.union_members(ty) else {
         return ty;
     };

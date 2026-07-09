@@ -1,6 +1,7 @@
 use super::*;
 use crate::types::repr::{
-    FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TypeParamId,
+    FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TupleRestType, TupleType,
+    TypeParamId,
 };
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
@@ -410,6 +411,81 @@ fn template_infer_captures_segments() {
     assert!(
         candidates.is_empty(),
         "a non-matching source records no candidate"
+    );
+}
+
+#[test]
+fn conditional_tuple_rest_infer_captures_middle_as_tuple() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let r = interner.intern_type_param(TypeParamId(0), "R");
+    let source = interner.intern_tuple(vec![wk.string, wk.number, wk.boolean]);
+    let target = interner.intern_tuple_type(TupleType::with_rest(
+        vec![wk.unknown],
+        TupleRestType::new(1, r),
+    ));
+    let expected = interner.intern_tuple(vec![wk.number, wk.boolean]);
+
+    let mut candidates = Candidates::default();
+    infer_from_types_for_conditional(&mut interner, source, target, &mut candidates);
+
+    assert_eq!(
+        candidates.get(&TypeParamId(0)).map(|c| c.as_slice()),
+        Some(&[expected][..]),
+        "`[unknown, ...infer R]` captures the remaining tuple segment"
+    );
+}
+
+#[test]
+fn conditional_function_rest_infer_captures_parameter_tuple() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let a = interner.intern_type_param(TypeParamId(0), "A");
+    let source = interner.intern_function(FunctionType {
+        params: vec![
+            ParameterType::required("x", wk.string),
+            ParameterType::required("y", wk.number),
+        ],
+        ret: wk.boolean,
+    });
+    let target = interner.intern_function(FunctionType {
+        params: vec![ParameterType::rest("args", a)],
+        ret: wk.unknown,
+    });
+    let expected = interner.intern_tuple(vec![wk.string, wk.number]);
+
+    let mut candidates = Candidates::default();
+    infer_from_types_for_conditional(&mut interner, source, target, &mut candidates);
+
+    assert_eq!(
+        candidates.get(&TypeParamId(0)).map(|c| c.as_slice()),
+        Some(&[expected][..]),
+        "`(...args: infer A)` captures fixed parameters as a tuple"
+    );
+}
+
+#[test]
+fn call_site_rest_array_infers_from_each_variadic_argument() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(0), "T");
+    let t_array = interner.intern_array(t);
+    let expected = interner.union(vec![wk.number, wk.string]);
+    let mut next_type_param = 1;
+
+    let map = infer_type_arguments_from_params(
+        &mut interner,
+        &mut next_type_param,
+        &[TypeParamId(0)],
+        &[ParameterType::rest("args", t_array)],
+        &[wk.number, wk.string],
+        &[],
+    );
+
+    assert_eq!(
+        map.get(&TypeParamId(0)).copied(),
+        Some(expected),
+        "T[] rest parameters infer T from every rest argument"
     );
 }
 

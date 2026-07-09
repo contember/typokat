@@ -556,6 +556,50 @@ fn function_variance_arity_and_void_return() {
     assert!(rel.is_assignable(num_to_num, num_to_num).is_yes());
 }
 
+/// M32 function-shape relation: optional/default slots lower required arity, rest
+/// parameters compare by their element slots, and an optional target contributes an
+/// explicit `undefined` possibility in the contravariant parameter direction.
+#[test]
+fn function_optional_and_rest_shape_assignability() {
+    use crate::types::repr::{FunctionType, ParameterType};
+
+    fn req(name: &str, ty: TypeId) -> ParameterType {
+        ParameterType::required(name, ty)
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let string_arr = interner.intern_array(wk.string);
+    let number_arr = interner.intern_array(wk.number);
+
+    let required = interner.intern_function(FunctionType {
+        params: vec![req("a", wk.number), req("b", wk.string)],
+        ret: wk.void,
+    });
+    let optional = interner.intern_function(FunctionType {
+        params: vec![req("a", wk.number), ParameterType::optional("b", wk.string)],
+        ret: wk.void,
+    });
+    let rest = interner.intern_function(FunctionType {
+        params: vec![req("a", wk.number), ParameterType::rest("b", string_arr)],
+        ret: wk.void,
+    });
+    let number_rest = interner.intern_function(FunctionType {
+        params: vec![req("a", wk.number), ParameterType::rest("b", number_arr)],
+        ret: wk.void,
+    });
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    assert!(rel.is_assignable(optional, required).is_yes());
+    assert!(rel.is_assignable(optional, rest).is_yes());
+
+    assert!(!rel.is_assignable(required, optional).is_yes());
+    assert!(!rel.is_assignable(rest, optional).is_yes());
+    assert!(!rel.is_assignable(rest, number_rest).is_yes());
+}
+
 /// M17 array assignability is covariant in the element and recurses through
 /// nested arrays; arrays and non-arrays do not relate.
 #[test]
@@ -766,6 +810,50 @@ fn tuple_to_array_assignability() {
         !rel.is_assignable(num_arr, num_str_tuple).is_yes(),
         "number[] is NOT assignable to [number, string] (array → tuple deferred)"
     );
+}
+
+/// M32 tuple rest relation: fixed source tuples may satisfy array-rest and tuple-rest
+/// targets, including fixed suffixes; tuple-to-array checks the variadic element too.
+#[test]
+fn tuple_rest_assignability() {
+    use crate::types::repr::{TupleRestType, TupleType};
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let number_arr = interner.intern_array(wk.number);
+
+    let source = interner.intern_tuple(vec![wk.string, wk.number, wk.number]);
+    let resty = interner.intern_tuple_type(TupleType::with_rest(
+        vec![wk.string],
+        TupleRestType::new(1, number_arr),
+    ));
+    let middle = interner.intern_tuple_type(TupleType::with_rest(
+        vec![wk.string, wk.boolean],
+        TupleRestType::new(1, number_arr),
+    ));
+    let middle_source = interner.intern_tuple(vec![wk.string, wk.number, wk.boolean]);
+    let fixed_rest = interner.intern_tuple(vec![wk.string, wk.number]);
+    let with_tail = interner.intern_tuple_type(TupleType::with_rest(
+        vec![wk.boolean],
+        TupleRestType::new(0, fixed_rest),
+    ));
+    let with_tail_source = interner.intern_tuple(vec![wk.string, wk.number, wk.boolean]);
+    let bad_rest_source = interner.intern_tuple(vec![wk.string, wk.string]);
+    let string_or_number = interner.union(vec![wk.string, wk.number]);
+    let string_or_number_arr = interner.intern_array(string_or_number);
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    assert!(rel.is_assignable(source, resty).is_yes());
+    assert!(rel.is_assignable(middle_source, middle).is_yes());
+    assert!(rel.is_assignable(with_tail_source, with_tail).is_yes());
+    assert!(rel.is_assignable(with_tail, with_tail_source).is_yes());
+    assert!(!rel.is_assignable(bad_rest_source, resty).is_yes());
+    assert!(!rel.is_assignable(with_tail, fixed_rest).is_yes());
+
+    assert!(rel.is_assignable(resty, string_or_number_arr).is_yes());
+    assert!(!rel.is_assignable(resty, number_arr).is_yes());
 }
 
 /// M19 index signatures: every governed source property must fit the target

@@ -1,5 +1,57 @@
 use super::*;
-use crate::types::repr::{PropertyType, Visibility};
+use crate::types::repr::{FunctionType, PropertyType, TupleType, Visibility};
+
+#[derive(Copy, Clone)]
+struct ParamSlot {
+    ty: TypeId,
+    accepts_undefined: bool,
+}
+
+#[derive(Clone)]
+struct ParamShape {
+    prefix: Vec<ParamSlot>,
+    variadic: Option<ParamSlot>,
+    suffix: Vec<ParamSlot>,
+}
+
+impl ParamShape {
+    fn min_len(&self) -> usize {
+        self.prefix
+            .iter()
+            .filter(|slot| !slot.accepts_undefined)
+            .count()
+            + self.suffix.len()
+    }
+
+    fn max_len(&self) -> Option<usize> {
+        if self.variadic.is_some() {
+            None
+        } else {
+            Some(self.prefix.len() + self.suffix.len())
+        }
+    }
+
+    fn can_have_index(&self, index: usize) -> bool {
+        match self.max_len() {
+            Some(max) => index < max,
+            None => true,
+        }
+    }
+
+    fn slot_at(&self, index: usize, len: usize) -> Option<ParamSlot> {
+        if index >= len {
+            return None;
+        }
+        if index < self.prefix.len() {
+            return self.prefix.get(index).copied();
+        }
+        let suffix_start = len.saturating_sub(self.suffix.len());
+        if index >= suffix_start {
+            return self.suffix.get(index - suffix_start).copied();
+        }
+        self.variadic
+    }
+}
 
 impl<'a> Relater<'a> {
     /// Property-wise object relation. Returns the **first** failing target
@@ -337,41 +389,27 @@ impl<'a> Relater<'a> {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
 
-        // Arity: a source with FEWER parameters than the target is fine — the
-        // target's callers may pass extra arguments the source simply ignores
-        // (`() => void` is assignable to `(x: number) => void`). It is a failure
-        // only when the source needs MORE parameters than the target supplies
-        // (M3 has no optional/rest params, so a surplus source parameter is
-        // genuinely unsatisfiable). The contravariant check below runs over the
-        // common positions `0..src.len()`; any extra *target* parameters are
-        // ignored.
-        if src_fn.params.len() > tgt_fn.params.len() {
+        let Some(src_params) = self.function_param_shape(src_fn) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let Some(tgt_params) = self.function_param_shape(tgt_fn) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+
+        if src_params.min_len() > tgt_params.min_len()
+            && tgt_params
+                .variadic
+                .is_none_or(|slot| slot.ty != self.well_known.never)
+        {
             return Relation::No(ReasonChain::of(Reason::ParameterCount { src, tgt }));
         }
 
-        // Collect the per-position parameter type ids and the return ids up front
-        // so the immutable borrow of the store does not overlap the recursive
-        // `self.relate` calls below (which also borrow the store). `zip` truncates
-        // to the shorter (source) list, i.e. the common positions `0..src.len()`.
-        let param_pairs: Vec<(TypeId, TypeId)> = src_fn
-            .params
-            .iter()
-            .zip(&tgt_fn.params)
-            .map(|(s, t)| (s.ty, t.ty))
-            .collect();
         let (src_ret, tgt_ret) = (src_fn.ret, tgt_fn.ret);
 
-        // Parameters: CONTRAVARIANT — the target parameter must be assignable to
-        // the source parameter (`tgt_param → src_param`).
-        for (index, (src_param, tgt_param)) in param_pairs.into_iter().enumerate() {
-            if let Relation::No(child) = self.relate(tgt_param, src_param, kind, assumed) {
-                return Relation::No(ReasonChain::of(Reason::Parameter {
-                    index,
-                    src,
-                    tgt,
-                    because: Box::new(child.head),
-                }));
-            }
+        if let Relation::No(child) =
+            self.relate_function_parameters(src, tgt, &src_params, &tgt_params, kind, assumed)
+        {
+            return Relation::No(child);
         }
 
         // Return: COVARIANT — the source return must be assignable to the target
@@ -392,6 +430,202 @@ impl<'a> Relater<'a> {
         }
 
         Relation::Yes
+    }
+
+    fn relate_function_parameters(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        src_params: &ParamShape,
+        tgt_params: &ParamShape,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
+        for index in 0..src_params.prefix.len() {
+            if !tgt_params.can_have_index(index) {
+                continue;
+            }
+            let len = tgt_params.min_len().max(index + 1);
+            let Some(src_slot) = src_params.slot_at(index, len) else {
+                continue;
+            };
+            let Some(tgt_slot) = tgt_params.slot_at(index, len) else {
+                continue;
+            };
+            if let Relation::No(child) =
+                self.relate_parameter_slot(tgt_slot, src_slot, kind, assumed)
+            {
+                return Relation::No(ReasonChain::of(Reason::Parameter {
+                    index,
+                    src,
+                    tgt,
+                    because: Box::new(child.head),
+                }));
+            }
+        }
+
+        let Some(src_rest) = src_params.variadic else {
+            return Relation::Yes;
+        };
+        if let Some(max) = tgt_params.max_len() {
+            for index in src_params.prefix.len()..max {
+                let Some(tgt_slot) = tgt_params.slot_at(index, max) else {
+                    continue;
+                };
+                if let Relation::No(child) =
+                    self.relate_parameter_slot(tgt_slot, src_rest, kind, assumed)
+                {
+                    return Relation::No(ReasonChain::of(Reason::Parameter {
+                        index,
+                        src,
+                        tgt,
+                        because: Box::new(child.head),
+                    }));
+                }
+            }
+            return Relation::Yes;
+        }
+
+        if let Some(tgt_rest) = tgt_params.variadic {
+            if let Relation::No(child) =
+                self.relate_parameter_slot(tgt_rest, src_rest, kind, assumed)
+            {
+                return Relation::No(ReasonChain::of(Reason::Parameter {
+                    index: src_params.prefix.len(),
+                    src,
+                    tgt,
+                    because: Box::new(child.head),
+                }));
+            }
+        }
+        for (offset, tgt_slot) in tgt_params.suffix.iter().copied().enumerate() {
+            if let Relation::No(child) =
+                self.relate_parameter_slot(tgt_slot, src_rest, kind, assumed)
+            {
+                return Relation::No(ReasonChain::of(Reason::Parameter {
+                    index: src_params.prefix.len() + offset,
+                    src,
+                    tgt,
+                    because: Box::new(child.head),
+                }));
+            }
+        }
+        Relation::Yes
+    }
+
+    fn relate_parameter_slot(
+        &mut self,
+        src_slot: ParamSlot,
+        tgt_slot: ParamSlot,
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
+        if let Relation::No(child) = self.relate(src_slot.ty, tgt_slot.ty, kind, assumed) {
+            if tgt_slot.accepts_undefined
+                && self
+                    .relate(src_slot.ty, self.well_known.undefined, kind, assumed)
+                    .is_yes()
+            {
+                return Relation::Yes;
+            }
+            return Relation::No(child);
+        }
+        if src_slot.accepts_undefined && !tgt_slot.accepts_undefined {
+            return self.relate(self.well_known.undefined, tgt_slot.ty, kind, assumed);
+        }
+        Relation::Yes
+    }
+
+    fn function_param_shape(&self, function: &FunctionType) -> Option<ParamShape> {
+        let mut prefix: Vec<ParamSlot> = function
+            .fixed_params()
+            .map(|param| ParamSlot {
+                ty: param.ty,
+                accepts_undefined: param.optional || param.has_default,
+            })
+            .collect();
+        let Some(rest) = function.rest_param() else {
+            return Some(ParamShape {
+                prefix,
+                variadic: None,
+                suffix: Vec::new(),
+            });
+        };
+        let rest_shape = self.rest_param_shape(rest.ty)?;
+        prefix.extend(rest_shape.prefix);
+        Some(ParamShape {
+            prefix,
+            variadic: rest_shape.variadic,
+            suffix: rest_shape.suffix,
+        })
+    }
+
+    fn rest_param_shape(&self, ty: TypeId) -> Option<ParamShape> {
+        let ty = self.store.readonly_operand(ty).unwrap_or(ty);
+        if let Some(array) = self.store.array_type(ty) {
+            return Some(ParamShape {
+                prefix: Vec::new(),
+                variadic: Some(ParamSlot {
+                    ty: array.element,
+                    accepts_undefined: false,
+                }),
+                suffix: Vec::new(),
+            });
+        }
+        if let Some(tuple) = self.store.tuple_type(ty) {
+            return self.tuple_param_shape(tuple);
+        }
+        Some(ParamShape {
+            prefix: Vec::new(),
+            variadic: Some(ParamSlot {
+                ty,
+                accepts_undefined: false,
+            }),
+            suffix: Vec::new(),
+        })
+    }
+
+    fn tuple_param_shape(&self, tuple: &TupleType) -> Option<ParamShape> {
+        let Some(rest) = tuple.rest else {
+            return Some(ParamShape {
+                prefix: tuple
+                    .elements
+                    .iter()
+                    .map(|&ty| ParamSlot {
+                        ty,
+                        accepts_undefined: false,
+                    })
+                    .collect(),
+                variadic: None,
+                suffix: Vec::new(),
+            });
+        };
+        if rest.position > tuple.elements.len() {
+            return None;
+        }
+        let mut prefix: Vec<ParamSlot> = tuple.elements[..rest.position]
+            .iter()
+            .map(|&ty| ParamSlot {
+                ty,
+                accepts_undefined: false,
+            })
+            .collect();
+        let suffix: Vec<ParamSlot> = tuple.elements[rest.position..]
+            .iter()
+            .map(|&ty| ParamSlot {
+                ty,
+                accepts_undefined: false,
+            })
+            .collect();
+        let rest_shape = self.rest_param_shape(rest.ty)?;
+        prefix.extend(rest_shape.prefix);
+        let mut combined_suffix = rest_shape.suffix;
+        combined_suffix.extend(suffix);
+        Some(ParamShape {
+            prefix,
+            variadic: rest_shape.variadic,
+            suffix: combined_suffix,
+        })
     }
 
     /// Whether the **merged source** — the intersection of `cands` — relates to `tgt`
@@ -451,7 +685,8 @@ impl<'a> Relater<'a> {
                 return Relation::Yes;
             }
             in_flight.insert(key.clone());
-            let result = self.relate_merged_object_properties(src, cands, tgt, kind, assumed, in_flight);
+            let result =
+                self.relate_merged_object_properties(src, cands, tgt, kind, assumed, in_flight);
             in_flight.remove(&key);
             return result;
         }
@@ -551,7 +786,14 @@ impl<'a> Relater<'a> {
             let child = if let [only] = ob.subcands.as_slice() {
                 self.relate(*only, ob.tgt_ty, kind, assumed)
             } else {
-                self.relate_source_members_to(src, &ob.subcands, ob.tgt_ty, kind, assumed, in_flight)
+                self.relate_source_members_to(
+                    src,
+                    &ob.subcands,
+                    ob.tgt_ty,
+                    kind,
+                    assumed,
+                    in_flight,
+                )
             };
             if let Relation::No(child) = child {
                 return Relation::No(ReasonChain::of(Reason::Property {
