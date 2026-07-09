@@ -8,10 +8,13 @@ emit and JS runtime semantics are out of scope by design, while module resolutio
 type-checking slice (local relative `.ts` modules) — the goal is to preserve the
 **type model** (see [`docs/reference/architecture.md`](./docs/reference/architecture.md)).
 
-> Status: **M0–M31** implemented — M31 adds intersection types (`A & B`): an interned,
-> canonicalized member-set node (the structural dual of union) with dual relation directions
-> (target = every member, source = merged apparent object), merged member access + excess
-> checking, and the `T extends T & X` circular-constraint case; M30 adds target-aware
+> Status: **M0–M32** implemented — M32 adds signature shape: optional/default
+> parameters, function rest parameters, tuple rest elements, rest-aware calls/constructors,
+> tuple/function relation, conditional rest `infer`, and a rest-based `ReturnType`; M31 adds
+> intersection types (`A & B`): an interned, canonicalized member-set node (the structural dual
+> of union) with dual relation directions (target = every member, source = merged apparent
+> object), merged member access + excess checking, and the `T extends T & X`
+> circular-constraint case; M30 adds target-aware
 > contextual typing of
 > fresh object/array/tuple literals in concrete declaration, assignment, parameter,
 > `new`/`super`, and declared-return positions; M29 adds the first correctness-first
@@ -24,7 +27,7 @@ type-checking slice (local relative `.ts` modules) — the goal is to preserve t
 > embedded prelude compilation unit, the `Uppercase`/`Lowercase`/`Capitalize`/
 > `Uncapitalize` intrinsics, a deferred `keyof` type node) — on top of the M23
 > flow-node CFG, class completeness, and constructor accessibility. ~26k lines of
-> Rust, 206 unit tests + a 169-file conformance corpus (558 expected diagnostics),
+> Rust, 217 unit tests + a 183-file conformance corpus (684 expected diagnostics),
 > `clippy -D warnings` clean. Every milestone was cross-checked against real
 > `tsc 6.0.3 --strict`.
 
@@ -52,12 +55,12 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 
 | Area | Coverage |
 |---|---|
-| **Foundation** | primitives & intrinsics (`any`/`unknown`/`never`/`void`, strict null), objects (structural, excess/missing/depth, **optional members `a?: T`**), functions (arity, contravariant params, void-return rule), unions (canonicalized), **intersections (`A & B`)** (canonicalized, merged relation + member access + excess), recursive & mutually-recursive named types, literal types |
+| **Foundation** | primitives & intrinsics (`any`/`unknown`/`never`/`void`, strict null), objects (structural, excess/missing/depth, **optional members `a?: T`**), functions (arity, optional/default/rest params, contravariant params, void-return rule), unions (canonicalized), **intersections (`A & B`)** (canonicalized, merged relation + member access + excess), recursive & mutually-recursive named types, literal types |
 | **Narrowing** | `typeof`, truthiness, `null`/`undefined` equality, **discriminated unions**, `in`, `switch`; **unstructured flow** via the flow-node CFG — early `return`/`throw`, `&&`/`\|\|`/ternary, assignment narrowing, `while` loop edges (back edge / exit / `break` / `continue`) |
 | **Generics** | type parameters, instantiation, **type-argument inference** from call arguments, **constraints** (`extends` — apparent types, declaration + call-site `TK2344`/`TK2345`, circularity `TK2313`) |
-| **Type-level evaluation** | conditional types (**distribution**, `infer` incl. anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, **the ten standard utility types as built-ins** (prelude compilation unit) + the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
+| **Type-level evaluation** | conditional types (**distribution**, `infer` incl. tuple/function rest capture and anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, **the ten standard utility types as built-ins** (prelude compilation unit) + the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
 | **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract` (incl. **abstract-member completeness**); **generic classes**; **override compatibility** (tsc's base-keyed method bivariance); **constructor accessibility** on `new` |
-| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, contextual typing), contextual fresh object/array/tuple literals, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), local relative modules with named imports/exports |
+| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, rest elements, contextual typing), contextual fresh object/array/tuple literals, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), local relative modules with named imports/exports |
 | **Reporting** | nested reason chains (`Types of property 'x' are incompatible …`) |
 
 ### Diagnostics
@@ -69,7 +72,7 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 not satisfied), `TK2345` (argument), `TK2353` (excess property), `TK2416` (incompatible
 override), `TK2456` (circular type alias), `TK2511` (instantiate abstract),
 `TK2515`/`TK2654` (abstract member not implemented), `TK2540` (assign read-only),
-`TK2554` (arity), `TK2589` (instantiation excessively deep), `TK2673`/`TK2674`
+`TK2554`/`TK2555` (arity), `TK2589` (instantiation excessively deep), `TK2673`/`TK2674`
 (private/protected constructor), `TK2741` (missing property).
 
 ## Architecture
@@ -95,7 +98,7 @@ and fast:
 
 ## How it was built
 
-Milestone by milestone (M0 = a literal-to-primitive "walking skeleton" → M22), each as a **vertical
+Milestone by milestone (M0 = a literal-to-primitive "walking skeleton" → M32), each as a **vertical
 slice** that runs end-to-end. The conformance corpus in [`tests/cases/`](./tests/cases/) is the
 spec: each `.ts` fixture carries inline `// error[TK…]` markers, and the harness diffs the checker's
 diagnostics against them (see [`tests/cases/README.md`](./tests/cases/README.md)). Process:
@@ -121,7 +124,7 @@ src/
   check/    checker (incl. flowgraph) · infer (inference engine) · flow (nodes + narrowing ops)   the checkers
   relate/   relation (is_assignable, cycle stack, reasons) · cache      the relation engine
 tests/
-  conformance.rs        marker-driven harness (MILESTONE_DIRS enables m0..m30 + bug-fix corpora)
+  conformance.rs        marker-driven harness (MILESTONE_DIRS enables m0..m32 + bug-fix corpora)
   cases/mN_*/           the conformance corpus (the spec)
 ```
 
@@ -139,11 +142,11 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   `keyof` over unions/`never`/template-literal key sources plus two tsc-parity conditional
   edges are documented divergences (backlog `26`, `27`, `35`–`37`). (A bytecode VM is a
   deferred, profiling-gated refactor — see `docs/decisions/0001-…`.)
-- **Type-model gaps under construction** — rest elements, optional/default parameters,
-  overloads, generic methods, enums, namespaces + declaration merging, and
+- **Remaining type-model gaps** — overloads, generic methods, enums, namespaces + declaration merging, and
   `satisfies`/`as const` are not modeled yet; they are the model-completeness
   track in [`docs/backlog/`](./docs/backlog/README.md) and the prerequisite for full
-  `lib.d.ts` loading. (Intersections `A & B` landed in M31; `&` distribution over unions,
+  `lib.d.ts` loading. (Intersections `A & B` landed in M31; signature shape landed in M32;
+  `&` distribution over unions,
   `keyof`/indexed-access over an intersection, and overload-signature intersection remain
   deferred — see [`docs/reference/divergences.md`](./docs/reference/divergences.md).)
 - **Optional properties** (`a?: T`) on objects/interfaces/class fields are implemented (M21): a
@@ -165,6 +168,6 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
 ## Testing
 
 ```sh
-cargo test                              # 203 unit tests + the conformance corpus
+cargo test                              # unit tests + the conformance corpus
 cargo clippy --all-targets -- -D warnings
 ```

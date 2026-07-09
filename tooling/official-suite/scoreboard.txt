@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
-# corpus 874  in-scope 506  out-of-scope 368
-# clean-kept 172/219  error-exact 24/287  diag-recall 305/1691
+# corpus 874  in-scope 507  out-of-scope 367
+# clean-kept 174/220  error-exact 27/287  diag-recall 335/1691
 # cols: status<TAB>matched fn fp expected<TAB>rel  (status=IN | OOS:<bucket>; '-' = n/a)
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -251,9 +251,9 @@ IN	0 1 0 1	conformance/classes/propertyMemberDeclarations/memberAccessorDeclarat
 IN	2 1 0 3	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/derivedTypeAccessesHiddenBaseCallViaSuperPropertyAccess.ts
 IN	0 1 4 1	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/instanceMemberAssignsToClassPrototype.ts
 IN	0 8 0 8	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/memberFunctionOverloadMixingStaticAndInstance.ts
-IN	4 0 4 4	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/memberFunctionsWithPrivateOverloads.ts
+IN	4 0 0 4	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/memberFunctionsWithPrivateOverloads.ts
 IN	0 0 0 0	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/memberFunctionsWithPublicOverloads.ts
-IN	2 13 2 15	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/memberFunctionsWithPublicPrivateOverloads.ts
+IN	2 13 0 15	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/memberFunctionsWithPublicPrivateOverloads.ts
 IN	0 0 1 0	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/staticFactory1.ts
 IN	1 0 0 1	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/staticMemberAssignsToConstructorFunctionMembers.ts
 OOS:unresolved	- - - -	conformance/classes/propertyMemberDeclarations/memberFunctionDeclarations/typeOfThisInMemberFunctions.ts
@@ -525,11 +525,11 @@ OOS:unresolved	- - - -	conformance/types/members/objectTypeHidingMembersOfObject
 IN	0 9 3 9	conformance/types/members/objectTypePropertyAccess.ts
 IN	0 4 2 4	conformance/types/members/objectTypeWithCallSignatureAppearsToBeFunctionType.ts
 OOS:unresolved	- - - -	conformance/types/members/objectTypeWithCallSignatureHidingMembersOfExtendedFunction.ts
-IN	0 6 3 6	conformance/types/members/objectTypeWithCallSignatureHidingMembersOfFunction.ts
+IN	0 6 2 6	conformance/types/members/objectTypeWithCallSignatureHidingMembersOfFunction.ts
 OOS:unresolved	- - - -	conformance/types/members/objectTypeWithCallSignatureHidingMembersOfFunctionAssignmentCompat.ts
 IN	0 2 2 2	conformance/types/members/objectTypeWithConstructSignatureAppearsToBeFunctionType.ts
 OOS:unresolved	- - - -	conformance/types/members/objectTypeWithConstructSignatureHidingMembersOfExtendedFunction.ts
-IN	0 6 3 6	conformance/types/members/objectTypeWithConstructSignatureHidingMembersOfFunction.ts
+IN	0 6 2 6	conformance/types/members/objectTypeWithConstructSignatureHidingMembersOfFunction.ts
 OOS:unresolved	- - - -	conformance/types/members/objectTypeWithConstructSignatureHidingMembersOfFunctionAssignmentCompat.ts
 IN	0 14 0 14	conformance/types/members/objectTypeWithDuplicateNumericProperty.ts
 IN	0 12 0 12	conformance/types/members/objectTypeWithNumericProperty.ts
@@ -551,9 +551,9 @@ IN	1 1 0 2	conformance/types/objectTypeLiteral/callSignatures/callSignaturesThat
 IN	0 0 0 0	conformance/types/objectTypeLiteral/callSignatures/callSignaturesThatDifferOnlyByReturnType3.ts
 OOS:parse-error	- - - -	conformance/types/objectTypeLiteral/callSignatures/callSignaturesWithAccessibilityModifiersOnParameters.ts
 OOS:unresolved	- - - -	conformance/types/objectTypeLiteral/callSignatures/callSignaturesWithDuplicateParameters.ts
-IN	0 0 9 0	conformance/types/objectTypeLiteral/callSignatures/callSignaturesWithOptionalParameters.ts
-IN	0 0 7 0	conformance/types/objectTypeLiteral/callSignatures/callSignaturesWithOptionalParameters2.ts
-IN	0 4 9 4	conformance/types/objectTypeLiteral/callSignatures/callSignaturesWithParameterInitializers.ts
+IN	0 0 0 0	conformance/types/objectTypeLiteral/callSignatures/callSignaturesWithOptionalParameters.ts
+IN	0 0 3 0	conformance/types/objectTypeLiteral/callSignatures/callSignaturesWithOptionalParameters2.ts
+IN	0 4 2 4	conformance/types/objectTypeLiteral/callSignatures/callSignaturesWithParameterInitializers.ts
 OOS:parse-error	- - - -	conformance/types/objectTypeLiteral/callSignatures/callSignaturesWithParameterInitializers2.ts
 OOS:parse-error	- - - -	conformance/types/objectTypeLiteral/callSignatures/constructSignatureWithAccessibilityModifiersOnParameters.ts
 OOS:parse-error	- - - -	conformance/types/objectTypeLiteral/callSignatures/constructSignatureWithAccessibilityModifiersOnParameters2.ts
@@ -638,7 +638,7 @@ IN	1 0 0 1	conformance/types/primitives/void/validVoidValues.ts
 IN	13 4 4 17	conformance/types/tuple/arityAndOrderCompatibility01.ts
 OOS:syntax:enum	- - - -	conformance/types/tuple/castingTuple.ts
 OOS:syntax:module	- - - -	conformance/types/tuple/contextualTypeTupleEnd.ts
-IN	4 4 5 8	conformance/types/tuple/contextualTypeWithTuple.ts
+IN	4 4 6 8	conformance/types/tuple/contextualTypeWithTuple.ts
 IN	0 1 0 1	conformance/types/tuple/emptyTuples/emptyTuplesTypeAssertion01.ts
 IN	0 1 0 1	conformance/types/tuple/emptyTuples/emptyTuplesTypeAssertion02.ts
 IN	0 6 0 6	conformance/types/tuple/indexerWithTuple.ts
@@ -646,7 +646,7 @@ OOS:syntax:module	- - - -	conformance/types/tuple/named/namedTupleMembers.ts
 OOS:syntax:module	- - - -	conformance/types/tuple/named/namedTupleMembersErrors.ts
 OOS:unresolved	- - - -	conformance/types/tuple/named/partiallyNamedTuples.ts
 OOS:unresolved	- - - -	conformance/types/tuple/named/partiallyNamedTuples2.ts
-OOS:unresolved	- - - -	conformance/types/tuple/named/partiallyNamedTuples3.ts
+IN	0 0 0 0	conformance/types/tuple/named/partiallyNamedTuples3.ts
 OOS:parse-error	- - - -	conformance/types/tuple/optionalTupleElements1.ts
 OOS:parse-error	- - - -	conformance/types/tuple/readonlyArraysAndTuples.ts
 OOS:syntax:decorator	- - - -	conformance/types/tuple/readonlyArraysAndTuples2.ts
@@ -679,15 +679,15 @@ OOS:unresolved	- - - -	conformance/types/typeRelationships/assignmentCompatibili
 OOS:syntax:module	- - - -	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignatures4.ts
 OOS:unresolved	- - - -	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignatures5.ts
 OOS:unresolved	- - - -	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignatures6.ts
-IN	5 12 16 17	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignaturesWithOptionalParameters.ts
-IN	0 11 0 11	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignaturesWithRestParameters.ts
+IN	17 0 0 17	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignaturesWithOptionalParameters.ts
+IN	10 1 2 11	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithCallSignaturesWithRestParameters.ts
 IN	8 0 0 8	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignatures.ts
 IN	12 0 0 12	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignatures2.ts
 IN	0 19 0 19	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignatures3.ts
 OOS:syntax:module	- - - -	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignatures4.ts
 IN	0 8 0 8	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignatures5.ts
 IN	0 7 7 7	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignatures6.ts
-IN	3 8 15 11	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts
+IN	11 0 0 11	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithConstructSignaturesWithOptionalParameters.ts
 OOS:syntax:module	- - - -	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithDiscriminatedUnion.ts
 OOS:syntax:enum	- - - -	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithEnumIndexer.ts
 OOS:unresolved	- - - -	conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithGenericCallSignatures.ts

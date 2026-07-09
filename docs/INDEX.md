@@ -23,22 +23,22 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-07-09-signature-shape.md`](sprints/sprint-2026-07-09-signature-shape.md) - M32 signature shape: backlog `24` rest elements + backlog `39` optional/default parameters.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **M0–M31 shipped; soundness-tail quick wins shipped.** The type-level evaluation phase is complete (M24–M28);
+- **M0–M32 shipped; signature shape shipped.** The type-level evaluation phase is complete (M24–M28);
   M29 shipped backlog `15` slice 1 (serial local-relative modules); M30 shipped contextual
   literal typing; M31 shipped intersection types (`A & B`) — backlog `25`, the first track-A
-  step; the 2026-07-08 soundness-tail sprint shipped `64` `34` `33` `54` `59` and deferred `65`
+  step; M32 shipped backlog `24` rest elements and `39` optional/default parameters; the
+  2026-07-08 soundness-tail sprint shipped `64` `34` `33` `54` `59` and deferred `65`
   to a dedicated inference-policy sprint. The completion roadmap (refined 2026-07-07) lives in the backlog
-  README: a definition of done (checker 1.0) + four tracks (A model completeness `24`
-  `39`–`44` = the `lib.d.ts` critical path; B checker completeness `18` `19` `45`–`52`;
-  C known-gap tail; D scale ladder `38` `13` `14` `15` `16` `17`). **Now:** the active M32
-  signature-shape sprint plans `24` rest elements and `39` optional/default params toward `14`;
-  schedule `65` separately when inference candidate priority/variance is the sprint theme.
+  README: a definition of done (checker 1.0) + four tracks (A model completeness `40`–`44`
+  = the remaining `lib.d.ts` critical path; B checker completeness `18` `19` `45`–`52`;
+  C known-gap tail; D scale ladder `38` `13` `14` `15` `16` `17`). **Now:** schedule `65`
+  separately when inference candidate priority/variance is the sprint theme, and continue track A
+  with overloads/generic methods/namespaces before full `lib.d.ts`.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
   invariants CLEAN and filed `53`–`65`; the five HIGH silent-FN families then shipped through

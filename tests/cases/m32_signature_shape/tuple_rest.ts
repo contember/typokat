@@ -10,7 +10,7 @@ const t4: Resty = ["x", "no"]; // error[TK2322]
 
 type WithTail<T extends unknown[]> = [...T, boolean];
 const v1: WithTail<[string, number]> = ["x", 1, true];
-const v2: WithTail<[string, number]> = ["x", true]; // error[TK2322]: Type 'boolean' is not assignable to type 'number'
+const v2: WithTail<[string, number]> = ["x", true]; // error[TK2322]
 
 type Middle = [string, ...number[], boolean];
 const m1: Middle = ["x", true];

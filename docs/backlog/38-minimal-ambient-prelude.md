@@ -22,9 +22,10 @@ usability ceiling worth an upward ratchet target).
 ## Approach / acceptance
 
 Extend the M28 embedded-prelude mechanism (`src/prelude.ts`) with a small ambient
-value/type set. Declarations must stay inside the implemented model — dodge or simplify
-overload-, optional-param-, and generic-method-shaped signatures until `39`–`41` land (the
-slice makes no lib-fidelity promise). Acceptance: fixtures using the curated names check
+value/type set. Declarations must stay inside the implemented model — optional/default/rest
+signature shape is available since M32, but overload- and generic-method-shaped signatures still
+need to be dodged or simplified until `40`–`41` land (the slice makes no lib-fidelity promise).
+Acceptance: fixtures using the curated names check
 correctly vs tsc; the official-suite `unresolved` bucket shrinks; `clean-kept` ratchets
 up. When `14` starts, the full loader **replaces** this slice — no second ambient-loading
 path.

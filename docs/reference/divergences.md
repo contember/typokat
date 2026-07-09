@@ -111,11 +111,11 @@ completeness (`TK2515`/`TK2654`) (b06); private/protected constructor accessibil
   protected-over-protected override (a declared false negative — **dropped error**, backlog `66`;
   the nominal relation would otherwise also reject a *legal* protected redeclaration, which is why
   it was scoped out). Further deferrals:
-  - **Unequal-arity base-method overrides are skipped** — typokat models neither optional nor rest
-    parameters, so an override of a base **method** that drops or adds a parameter (`m()` over
-    `m(x)`, `m(x?)` over `m()`) is out of subset and not checked (tsc usually accepts these, so
-    skipping avoids over-reporting, at the cost of missing a genuinely-incompatible arity-changing
-    override). Over a base **field** the strict query's arity rule still applies.
+  - **Unequal raw-arity base-method overrides are skipped** on the bespoke method-bivariance path.
+    Signature shape is modeled since M32, but override compatibility still keeps this narrow
+    out-of-subset gate to avoid mixing tsc's bivariant method rule with represented rest/optional
+    shapes without a dedicated override review. Over a base **field** the strict relation query
+    still applies.
   - **Generic bases are skipped** — an override against a generic base / from within a generic
     class may carry a free type parameter (the generic-base composition deferral), where the
     relation would over-report. Relatedly, `TK2515`/`TK2654` render a generic direct base as its
@@ -138,11 +138,11 @@ Implemented: `T[]` / `Array<T>`, array literals, element access, `length`, covar
 (M17); tuples `[A, B]` (positional, indexed access, contextual typing) (M18); readonly
 array/tuple syntax for relation, read/indexed access, and conditional-`infer` matching (b64);
 contextual typing of fresh object/array/tuple literals against concrete declaration, assignment,
-parameter, `new`/`super`, and declared-return targets (M30).
+parameter, `new`/`super`, and declared-return targets (M30); tuple rest elements plus
+function rest/optional/default signature shape (M32).
 
 - **Deferred:** array METHODS (`push`/`map`/…) and the `ReadonlyArray` interface surface (need
-  `lib.d.ts`); contextual fresh-literal shaping against readonly tuple targets is still a safe
-  over-report; optional tuple elements (`[number?]`) remain deferred with the rest of M18's tuple
+  `lib.d.ts`); optional tuple elements (`[number?]`) remain deferred with the rest of M18's tuple
   gaps.
 
 ## Index signatures & keyof (M19 / M20)
@@ -186,14 +186,14 @@ matching tsc). Uppercase/Lowercase/Capitalize/Uncapitalize are evaluator intrins
 literals (distributing over unions; Rust char-wise case mapping — agrees with JS for the corpus,
 including multi-char expansions like `ß` → `"SS"`).
 
-- **Out of scope:** `Parameters`/`ConstructorParameters` (need rest elements, backlog `24`),
+- **Out of scope:** `Parameters`/`ConstructorParameters`,
   `InstanceType`/`ThisType`, `Awaited`, `NoInfer`, and the `intrinsic` keyword outside the four (a
   user `= intrinsic` alias silently degrades to the error type).
 - **Documented divergences:**
-  - The prelude `ReturnType` matches a **zero-arity** `() => infer R` (rest parameters are out of
-    the type model), so `ReturnType<(x: X) => R>` is `never` — over-report vs tsc — and its lib
-    constraint is dropped (`ReturnType<number>` is `never`, not `TS2344` — a documented
-    under-report, **dropped error**, backlog `67`).
+  - The prelude `ReturnType` uses a strict/sound `(...args: never[]) => infer R` match, so it handles
+    non-nullary and rest functions without introducing the lib's permissive `any[]` constraint.
+    Its lib constraint is still dropped (`ReturnType<number>` is `never`, not `TS2344` — a
+    documented under-report, **dropped error**, backlog `67`).
   - A **symbolic** intrinsic application (`Uppercase<S>` over a pattern/`string`/free param)
     relates conservatively — assignable to `string` (and an identical node) only, nothing flows
     INTO it — rejecting values tsc's string-mapping algebra accepts (over-report; witnessed by the
@@ -270,7 +270,10 @@ property, fixed tuple positions, function param/return; same-name covariant cand
     the model since M31 but this path is not yet wired to intersect (backlog `68`). Verified vs tsc
     6.0.3; the divergence only shows on *overlapping* candidates (disjoint candidates yield `never`
     in both). (An earlier note claiming this *unions* was corrected in the 2026-07-07 audit.)
-  - `infer X extends C` (TS 4.7) is out of scope; rest elements are avoided throughout (backlog `24`).
+  - `infer X extends C` (TS 4.7) is out of scope.
+  - Rest-based conditional `infer` is implemented for fixed tuple/function rest patterns, but a
+    variadic source tuple such as `Tail<[string, ...number[]]>` is still a safe-direction
+    over-report (tracked in backlog `69`).
   - A deferred conditional whose branches still contain its own `infer` binders is conservatively
     non-assignable (over-report, safe).
   - A nested conditional referencing an OUTER conditional's `infer` binder is **poisoned at

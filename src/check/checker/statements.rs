@@ -337,7 +337,8 @@ pub(in crate::check::checker) fn emit_obligation_failure(
 /// Emit `TK2416` override failures. The base member kind decides variance: base
 /// methods use tsc's bivariant-parameter/covariant-return rule, while fields,
 /// accessors, and data properties use one strict `own → base` relation query.
-/// Method arity mismatches are deferred because optional/rest params are unmodeled.
+/// Unequal raw-arity base methods stay deferred until this bespoke bivariant path is
+/// reviewed against represented optional/rest signature shape.
 pub(in crate::check::checker) fn emit_override_failures(
     store: &Store,
     well_known: WellKnown,
@@ -386,7 +387,7 @@ fn override_failure_reason(
         store.function_type(own_ty),
         store.function_type(base_ty),
     ) {
-        // Differing arity is out of subset (optional/rest params unmodeled) — skip.
+        // Differing raw arity is still out of subset for the method-bivariance path.
         if own_fn.params.len() != base_fn.params.len() {
             return None;
         }

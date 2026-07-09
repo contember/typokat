@@ -1,10 +1,16 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME - shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU1 -> <sha>,
-> WU2 -> <sha>, ... Verification: <the gate command + numbers>. Backlog closed:
-> <ids deleted/rescoped>. Deferred: <honest notes>.
--->
+> **OUTCOME - shipped 2026-07-09.** Shipped M32 signature shape: identity-bearing
+> optional/default/rest parameters and tuple rest, syntax lowering, call/new/super
+> arity, relation/inference parity, and rest-based `ReturnType`. Commit map: sprint
+> plan -> `b224058`, WU1 -> `03c0e45`, WU2 -> `3883807`, WU3 -> `0e3c746`,
+> WU4 -> `94208a5`, review fix -> `dc30516`, WU5 ratchet/docs -> final ratchet
+> commit. Verification: `cargo test` (217 unit tests + 183-file conformance corpus,
+> 684 expected diagnostics), `cargo clippy --all-targets -- -D warnings`,
+> `git diff --check`, `tsc 6.0.3 --strict --noEmit` per M32 fixture, and
+> official-suite `run --check` after an audited scoreboard ratchet (874 corpus,
+> 507 in-scope, 0 regressions). Backlog closed: `24`, `39`. Deferred: utility alias
+> constraints remain backlog `67`; embedded tuple-rest inference and variadic source
+> tuple infer parity are filed as backlog `69`; overloads/generic methods/namespaces
+> remain on track A.
 
 # Sprint - signature shape: rest + optional parameters (2026-07-09)
 
