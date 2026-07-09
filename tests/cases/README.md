@@ -58,6 +58,7 @@ fixture (keeps fixtures robust to author miscounting).
 | `TK2540` | Cannot assign to a read-only property |
 | `TK2353` | Object literal may only specify known properties (excess property) |
 | `TK2554` | Wrong number of arguments (arity) |
+| `TK2555` | Too few arguments for a rest/min-arity call |
 | `TK2589` | Type instantiation is excessively deep and possibly infinite |
 | `TK2673` | Constructor of class is private (direct `new` outside the declaring class) |
 | `TK2674` | Constructor of class is protected (direct `new` outside the declaring class/subclasses) |
@@ -141,6 +142,7 @@ keep at most one mismatched argument per call.
 | `m29_modules/` | M29 — local relative modules / named imports + exports across files (project fixture subdirectories) |
 | `m30_contextual_literals/` | M30 — contextual typing of fresh object / array / tuple literals |
 | `m31_intersections/` | M31 — intersection types (`A & B`): canonicalization, dual relation directions, merged member access + excess |
+| `m32_signature_shape/` | M32 — signature shape: rest elements plus optional/default parameters |
 
 ## Project fixture convention (M29+)
 

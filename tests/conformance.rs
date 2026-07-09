@@ -62,6 +62,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // M31 intersection types. Registered false by the spec commit; the
     // implementation commit flips this on.
     ("m31_intersections", true),
+    // M32 signature shape (rest elements + optional/default parameters). Registered
+    // false by the spec commit; the implementation commit flips this on.
+    ("m32_signature_shape", false),
     // Bug-fix corpora (official-suite findings / backlog items). Each is
     // committed `false` as a behavior-neutral spec, then flipped `true` by the
     // commit that lands its fix. See tests/cases/README.md ("Bug-fix corpora").
