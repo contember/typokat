@@ -12,7 +12,9 @@ use crate::check::infer;
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::{Relater, Relation};
 use crate::span::Span;
-use crate::types::repr::{FunctionType, IntrinsicKind, ParameterType, TypeParamId, TypeTag};
+use crate::types::repr::{
+    FunctionType, IntrinsicKind, ParameterType, TupleType, TypeParamId, TypeTag,
+};
 use crate::types::store::TypeId;
 use crate::types::{substitute, Interner, WellKnown};
 use oxc_ast::ast::{
@@ -448,18 +450,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     }
 
     fn rest_parameter_arity(&self, rest_ty: TypeId) -> RestArity {
-        let rest_ty = self
-            .interner
-            .store()
-            .readonly_operand(rest_ty)
-            .unwrap_or(rest_ty);
-        if self.interner.store().array_type(rest_ty).is_some() {
-            return RestArity { min: 0, max: None };
-        }
-        if let Some(tuple) = self.interner.store().tuple_type(rest_ty) {
-            let min = tuple.elements.len();
-            let max = if tuple.has_rest() { None } else { Some(min) };
-            return RestArity { min, max };
+        if let Some(shape) = self.rest_call_shape(rest_ty) {
+            return RestArity {
+                min: shape.min_len(),
+                max: shape.max_len(),
+            };
         }
         RestArity { min: 0, max: None }
     }
@@ -489,51 +484,55 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         offset: usize,
         total_rest_args: usize,
     ) -> Option<TypeId> {
+        self.rest_call_shape(rest_ty)?
+            .element_at(offset, total_rest_args)
+    }
+
+    fn rest_call_shape(&self, rest_ty: TypeId) -> Option<RestCallShape> {
         let rest_ty = self
             .interner
             .store()
             .readonly_operand(rest_ty)
             .unwrap_or(rest_ty);
         if let Some(array) = self.interner.store().array_type(rest_ty) {
-            return Some(array.element);
+            return Some(RestCallShape {
+                prefix: Vec::new(),
+                variadic: Some(array.element),
+                suffix: Vec::new(),
+            });
         }
         if let Some(tuple) = self.interner.store().tuple_type(rest_ty) {
-            return self.tuple_rest_argument_target(tuple, offset, total_rest_args);
+            return self.tuple_call_shape(tuple);
         }
-        Some(rest_ty)
+        Some(RestCallShape {
+            prefix: Vec::new(),
+            variadic: Some(rest_ty),
+            suffix: Vec::new(),
+        })
     }
 
-    fn tuple_rest_argument_target(
-        &self,
-        tuple: &crate::types::repr::TupleType,
-        offset: usize,
-        total_rest_args: usize,
-    ) -> Option<TypeId> {
+    fn tuple_call_shape(&self, tuple: &TupleType) -> Option<RestCallShape> {
         let Some(rest) = tuple.rest else {
-            return tuple.elements.get(offset).copied();
+            return Some(RestCallShape {
+                prefix: tuple.elements.clone(),
+                variadic: None,
+                suffix: Vec::new(),
+            });
         };
-        if offset < rest.position {
-            return tuple.elements.get(offset).copied();
+        if rest.position > tuple.elements.len() {
+            return None;
         }
-        let fixed_after = tuple.elements.len().saturating_sub(rest.position);
-        let tail_start = total_rest_args.saturating_sub(fixed_after);
-        if offset >= tail_start {
-            let tail_index = rest.position + (offset - tail_start);
-            return tuple.elements.get(tail_index).copied();
-        }
-        self.rest_segment_element(rest.ty)
-    }
-
-    fn rest_segment_element(&self, rest_ty: TypeId) -> Option<TypeId> {
-        let rest_ty = self
-            .interner
-            .store()
-            .readonly_operand(rest_ty)
-            .unwrap_or(rest_ty);
-        if let Some(array) = self.interner.store().array_type(rest_ty) {
-            return Some(array.element);
-        }
-        Some(rest_ty)
+        let mut prefix = tuple.elements[..rest.position].to_vec();
+        let suffix = tuple.elements[rest.position..].to_vec();
+        let rest_shape = self.rest_call_shape(rest.ty)?;
+        prefix.extend(rest_shape.prefix);
+        let mut combined_suffix = rest_shape.suffix;
+        combined_suffix.extend(suffix);
+        Some(RestCallShape {
+            prefix,
+            variadic: rest_shape.variadic,
+            suffix: combined_suffix,
+        })
     }
 
     fn call_argument_obligation_kind(
@@ -985,6 +984,47 @@ struct CallArity {
 struct RestArity {
     min: usize,
     max: Option<usize>,
+}
+
+struct RestCallShape {
+    prefix: Vec<TypeId>,
+    variadic: Option<TypeId>,
+    suffix: Vec<TypeId>,
+}
+
+impl RestCallShape {
+    fn min_len(&self) -> usize {
+        self.prefix.len() + self.suffix.len()
+    }
+
+    fn max_len(&self) -> Option<usize> {
+        if self.variadic.is_some() {
+            None
+        } else {
+            Some(self.min_len())
+        }
+    }
+
+    fn accepts_len(&self, len: usize) -> bool {
+        if len < self.min_len() {
+            return false;
+        }
+        self.variadic.is_some() || len == self.min_len()
+    }
+
+    fn element_at(&self, index: usize, len: usize) -> Option<TypeId> {
+        if !self.accepts_len(len) || index >= len {
+            return None;
+        }
+        if index < self.prefix.len() {
+            return self.prefix.get(index).copied();
+        }
+        let suffix_start = len.saturating_sub(self.suffix.len());
+        if index >= suffix_start {
+            return self.suffix.get(index - suffix_start).copied();
+        }
+        self.variadic
+    }
 }
 
 /// The function's return type: a declared annotation always wins; otherwise the
