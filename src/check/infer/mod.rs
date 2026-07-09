@@ -1,9 +1,10 @@
 //! Type-argument inference (M10; architecture §5.1).
 //! Produces type-parameter bindings from call arguments; the relation engine still
-//! decides assignability after substitution. No candidate fixes to `unknown`, one
-//! candidate fixes to itself, and multiple distinct candidates fix to their union.
-//! Soundness rule: inference may be too wide, but never too narrow or `any`; the
-//! `(source, target)` guard makes recursive matching terminate.
+//! decides assignability after substitution. Call-site candidates keep their source
+//! contribution so incompatible arguments cannot be accepted by unioning every
+//! source into a too-wide target. No candidate fixes to `unknown`; no candidate
+//! still falls back to the parameter constraint or `unknown`. The `(source, target)`
+//! guard makes recursive matching terminate.
 
 mod context;
 mod helpers;
@@ -19,9 +20,41 @@ use crate::types::store::{Store, TypeId};
 use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-/// The raw candidates per type parameter; [`fix_candidates`] handles widening and
-/// duplicate collapse.
+/// The raw candidates per type parameter for conditional-`infer` mode. Call-site
+/// inference uses [`CallSiteCandidates`] so it can keep source provenance separate
+/// from conditional same-name union behavior.
 pub type Candidates = FxHashMap<crate::types::repr::TypeParamId, Vec<TypeId>>;
+
+type CallSiteCandidates = FxHashMap<crate::types::repr::TypeParamId, Vec<CallSiteCandidate>>;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct CallSiteCandidate {
+    ty: TypeId,
+    source: CallSiteSource,
+    fresh: bool,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum CallSiteSource {
+    Argument { index: usize, occurrence: usize },
+    DirectRest { start: usize, occurrence: usize },
+}
+
+struct CandidateContribution {
+    source: CallSiteSource,
+    fresh: bool,
+    candidates: Vec<TypeId>,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum PrimitiveFamily {
+    String,
+    Number,
+    Boolean,
+    Null,
+    Undefined,
+    Void,
+}
 
 /// Structurally match in conditional-`infer` mode (M25). Unlike call-site
 /// inference, union targets descend into members, template patterns capture
@@ -90,11 +123,19 @@ pub fn infer_type_arguments_from_params(
     args: &[TypeId],
     fresh_args: &[bool],
 ) -> FxHashMap<crate::types::repr::TypeParamId, TypeId> {
-    // Track candidate provenance so the constraint clamp can exempt fresh-only
-    // object/array literal arguments.
-    let mut candidates: Candidates = FxHashMap::default();
-    let mut fresh_params: FxHashSet<crate::types::repr::TypeParamId> = FxHashSet::default();
-    let mut nonfresh_params: FxHashSet<crate::types::repr::TypeParamId> = FxHashSet::default();
+    let candidates = collect_call_site_candidates(interner, params, args, fresh_args);
+    let exempt = fresh_exempt_params(&candidates);
+    let fixed = fix_call_site_candidates(interner, candidates);
+    fix_params(interner, next_type_param, type_params, fixed, &exempt)
+}
+
+fn collect_call_site_candidates(
+    interner: &mut Interner,
+    params: &[ParameterType],
+    args: &[TypeId],
+    fresh_args: &[bool],
+) -> CallSiteCandidates {
+    let mut candidates: CallSiteCandidates = FxHashMap::default();
     let targets = inference_argument_targets(interner, params, args);
     for (index, (&arg, param)) in args.iter().zip(&targets).enumerate() {
         let Some(param) = *param else {
@@ -105,14 +146,12 @@ pub fn infer_type_arguments_from_params(
         // preservation at fix time.
         infer_from_types_raw(interner, arg, param, &mut local);
         let is_fresh = fresh_args.get(index).copied().unwrap_or(false);
-        for (param_id, cands) in local {
-            if is_fresh {
-                fresh_params.insert(param_id);
-            } else {
-                nonfresh_params.insert(param_id);
-            }
-            candidates.entry(param_id).or_default().extend(cands);
-        }
+        record_call_site_candidates(
+            &mut candidates,
+            local,
+            |occurrence| CallSiteSource::Argument { index, occurrence },
+            is_fresh,
+        );
     }
     if let Some((rest_ty, rest_start)) = direct_rest_type_param(interner, params) {
         if rest_start <= args.len() {
@@ -121,21 +160,54 @@ pub fn infer_type_arguments_from_params(
             infer_from_types_raw(interner, tuple, rest_ty, &mut local);
             let is_fresh = (rest_start..args.len())
                 .all(|index| fresh_args.get(index).copied().unwrap_or(false));
-            for (param_id, cands) in local {
-                if is_fresh {
-                    fresh_params.insert(param_id);
-                } else {
-                    nonfresh_params.insert(param_id);
-                }
-                candidates.entry(param_id).or_default().extend(cands);
-            }
+            record_call_site_candidates(
+                &mut candidates,
+                local,
+                |occurrence| CallSiteSource::DirectRest {
+                    start: rest_start,
+                    occurrence,
+                },
+                is_fresh,
+            );
         }
     }
-    // Exempt = candidates came from fresh literals ONLY (review F4).
-    let exempt: FxHashSet<crate::types::repr::TypeParamId> =
-        fresh_params.difference(&nonfresh_params).copied().collect();
-    let fixed = fix_candidates(interner, candidates);
-    fix_params(interner, next_type_param, type_params, fixed, &exempt)
+    candidates
+}
+
+fn record_call_site_candidates(
+    candidates: &mut CallSiteCandidates,
+    local: Candidates,
+    source: impl Fn(usize) -> CallSiteSource,
+    fresh: bool,
+) {
+    for (param_id, cands) in local {
+        candidates
+            .entry(param_id)
+            .or_default()
+            .extend(
+                cands
+                    .into_iter()
+                    .enumerate()
+                    .map(|(occurrence, ty)| CallSiteCandidate {
+                        ty,
+                        source: source(occurrence),
+                        fresh,
+                    }),
+            );
+    }
+}
+
+fn fresh_exempt_params(candidates: &CallSiteCandidates) -> FxHashSet<TypeParamId> {
+    candidates
+        .iter()
+        .filter_map(|(&param, cands)| {
+            if !cands.is_empty() && cands.iter().all(|cand| cand.fresh) {
+                Some(param)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn inference_argument_targets(
@@ -226,31 +298,295 @@ fn tuple_inference_target(
     rest_inference_target(interner, rest.ty, offset - rest.position, total_rest_args)
 }
 
-/// Fix raw candidate lists to one type per parameter. Call-site literals widen
-/// unless the parameter has tsc's primitive constraint shape (M24/M27), where tsc
-/// preserves the literal; several prepared candidates fix to their union.
-fn fix_candidates(
+/// Fix call-site candidate contributions to one type per parameter. A single
+/// source keeps the old M10 widening behavior; multiple sources fix to a candidate
+/// that can expose incompatible later arguments to the ordinary relation replay.
+fn fix_call_site_candidates(
     interner: &mut Interner,
-    candidates: Candidates,
+    candidates: CallSiteCandidates,
 ) -> FxHashMap<crate::types::repr::TypeParamId, TypeId> {
     let mut map = FxHashMap::default();
     for (param, cands) in candidates {
-        if cands.is_empty() {
-            continue;
+        if let Some(fixed) = fix_call_site_candidates_for_param(interner, param, &cands) {
+            map.insert(param, fixed);
         }
-        let prepared: Vec<TypeId> = if has_primitive_constraint(interner, param) {
-            cands
-        } else {
-            cands.iter().map(|&c| widen(interner, c)).collect()
-        };
-        let fixed = if prepared.len() == 1 {
-            prepared[0]
-        } else {
-            interner.union(prepared)
-        };
-        map.insert(param, fixed);
     }
     map
+}
+
+fn fix_call_site_candidates_for_param(
+    interner: &mut Interner,
+    param: TypeParamId,
+    cands: &[CallSiteCandidate],
+) -> Option<TypeId> {
+    let contributions = candidate_contributions(cands);
+    let mut iter = contributions.iter();
+    let first = iter.next()?;
+    let primitive_constraint = has_primitive_constraint(interner, param);
+    if contributions.len() == 1 {
+        return Some(fix_candidate_set(
+            interner,
+            param,
+            first.candidates.iter().copied(),
+        ));
+    }
+
+    let mut current = raw_candidate_set(interner, first.candidates.iter().copied());
+    let mut current_prepared = fix_candidate_set(interner, param, first.candidates.iter().copied());
+    let mut preserve_current = primitive_constraint || first.candidates.len() > 1;
+    let mut current_fresh = first.fresh;
+
+    for contribution in iter {
+        let next = raw_candidate_set(interner, contribution.candidates.iter().copied());
+        let next_prepared =
+            fix_candidate_set(interner, param, contribution.candidates.iter().copied());
+
+        if is_assignable_type(interner, next, current) {
+            if current_fresh
+                && !contribution.fresh
+                && should_prefer_nonfresh_structural(interner.store(), current, next)
+            {
+                current = next;
+                current_prepared = next_prepared;
+                preserve_current = primitive_constraint || contribution.candidates.len() > 1;
+                current_fresh = false;
+            }
+            continue;
+        }
+        if is_assignable_type(interner, current, next) {
+            if !current_fresh
+                && contribution.fresh
+                && should_prefer_nonfresh_structural(interner.store(), next, current)
+            {
+                continue;
+            }
+            current = next;
+            current_prepared = next_prepared;
+            preserve_current = primitive_constraint || contribution.candidates.len() > 1;
+            current_fresh = contribution.fresh;
+            continue;
+        }
+
+        if mergeable_nullish_primitive(interner.store(), current, next) {
+            current = interner.union(vec![current, next]);
+            current_prepared = interner.union(vec![current_prepared, next_prepared]);
+            preserve_current = true;
+            current_fresh = current_fresh && contribution.fresh;
+            continue;
+        }
+
+        if let Some(family) = same_primitive_family(interner.store(), current, next) {
+            current = merge_same_primitive_family(interner, current, next, family);
+            current_prepared =
+                merge_same_primitive_family(interner, current_prepared, next_prepared, family);
+            preserve_current = true;
+            current_fresh = current_fresh && contribution.fresh;
+            continue;
+        }
+
+        if should_union_fresh_unrelated(
+            interner.store(),
+            current,
+            next,
+            current_fresh,
+            contribution.fresh,
+        ) {
+            current = interner.union(vec![current, next]);
+            current_prepared = interner.union(vec![current_prepared, next_prepared]);
+            preserve_current = true;
+            current_fresh = true;
+            continue;
+        }
+
+        return Some(if preserve_current {
+            current
+        } else {
+            current_prepared
+        });
+    }
+
+    Some(current)
+}
+
+fn candidate_contributions(cands: &[CallSiteCandidate]) -> Vec<CandidateContribution> {
+    let mut groups: Vec<CandidateContribution> = Vec::new();
+    for cand in cands {
+        if let Some(group) = groups.iter_mut().find(|group| group.source == cand.source) {
+            group.fresh = group.fresh && cand.fresh;
+            group.candidates.push(cand.ty);
+            continue;
+        }
+        groups.push(CandidateContribution {
+            source: cand.source,
+            fresh: cand.fresh,
+            candidates: vec![cand.ty],
+        });
+    }
+    groups
+}
+
+fn raw_candidate_set(interner: &mut Interner, cands: impl Iterator<Item = TypeId>) -> TypeId {
+    interner.union(cands.collect())
+}
+
+fn fix_candidate_set(
+    interner: &mut Interner,
+    param: TypeParamId,
+    cands: impl Iterator<Item = TypeId>,
+) -> TypeId {
+    let prepared: Vec<TypeId> = if has_primitive_constraint(interner, param) {
+        cands.collect()
+    } else {
+        cands.map(|c| widen(interner, c)).collect()
+    };
+    interner.union(prepared)
+}
+
+fn is_assignable_type(interner: &Interner, source: TypeId, target: TypeId) -> bool {
+    let store = interner.store();
+    let mut relater = Relater::new(store, interner.well_known());
+    relater.is_assignable(source, target).is_yes()
+}
+
+fn should_union_fresh_unrelated(
+    store: &Store,
+    left: TypeId,
+    right: TypeId,
+    left_fresh: bool,
+    right_fresh: bool,
+) -> bool {
+    left_fresh && right_fresh && !is_primitive_like(store, left) && !is_primitive_like(store, right)
+}
+
+fn should_prefer_nonfresh_structural(store: &Store, fresh_ty: TypeId, nonfresh_ty: TypeId) -> bool {
+    !is_primitive_like(store, fresh_ty) && !is_primitive_like(store, nonfresh_ty)
+}
+
+fn mergeable_nullish_primitive(store: &Store, left: TypeId, right: TypeId) -> bool {
+    let Some(mut families) = primitive_families(store, left) else {
+        return false;
+    };
+    let Some(right_families) = primitive_families(store, right) else {
+        return false;
+    };
+    for family in right_families {
+        if !families.contains(&family) {
+            families.push(family);
+        }
+    }
+    let has_nullish = families
+        .iter()
+        .any(|family| matches!(family, PrimitiveFamily::Null | PrimitiveFamily::Undefined));
+    if !has_nullish {
+        return false;
+    }
+
+    let mut non_nullish: Vec<PrimitiveFamily> = Vec::new();
+    for family in families {
+        if matches!(family, PrimitiveFamily::Null | PrimitiveFamily::Undefined) {
+            continue;
+        }
+        if !non_nullish.contains(&family) {
+            non_nullish.push(family);
+        }
+    }
+    non_nullish.len() <= 1
+}
+
+fn same_primitive_family(store: &Store, left: TypeId, right: TypeId) -> Option<PrimitiveFamily> {
+    let mut families = primitive_families(store, left)?;
+    for family in primitive_families(store, right)? {
+        if !families.contains(&family) {
+            families.push(family);
+        }
+    }
+    match families.as_slice() {
+        [family] => Some(*family),
+        _ => None,
+    }
+}
+
+fn is_primitive_like(store: &Store, ty: TypeId) -> bool {
+    primitive_families(store, ty).is_some()
+}
+
+fn primitive_families(store: &Store, ty: TypeId) -> Option<Vec<PrimitiveFamily>> {
+    match store.tag(ty) {
+        TypeTag::Literal => {
+            let lit = store.literal_value(ty)?;
+            Some(vec![primitive_family_from_intrinsic(lit.base_kind())?])
+        }
+        TypeTag::Intrinsic => Some(vec![primitive_family_from_intrinsic(
+            store.intrinsic_kind(ty)?,
+        )?]),
+        TypeTag::Union => {
+            let mut families: Vec<PrimitiveFamily> = Vec::new();
+            for &member in store.union_members(ty)? {
+                for family in primitive_families(store, member)? {
+                    if !families.contains(&family) {
+                        families.push(family);
+                    }
+                }
+            }
+            Some(families)
+        }
+        _ => None,
+    }
+}
+
+fn primitive_family_from_intrinsic(kind: IntrinsicKind) -> Option<PrimitiveFamily> {
+    match kind {
+        IntrinsicKind::String => Some(PrimitiveFamily::String),
+        IntrinsicKind::Number => Some(PrimitiveFamily::Number),
+        IntrinsicKind::Boolean => Some(PrimitiveFamily::Boolean),
+        IntrinsicKind::Null => Some(PrimitiveFamily::Null),
+        IntrinsicKind::Undefined => Some(PrimitiveFamily::Undefined),
+        IntrinsicKind::Void => Some(PrimitiveFamily::Void),
+        _ => None,
+    }
+}
+
+fn merge_same_primitive_family(
+    interner: &mut Interner,
+    left: TypeId,
+    right: TypeId,
+    family: PrimitiveFamily,
+) -> TypeId {
+    if contains_primitive_base(interner.store(), left, family)
+        || contains_primitive_base(interner.store(), right, family)
+    {
+        return primitive_base(interner, family);
+    }
+    interner.union(vec![left, right])
+}
+
+fn contains_primitive_base(store: &Store, ty: TypeId, family: PrimitiveFamily) -> bool {
+    match store.tag(ty) {
+        TypeTag::Intrinsic => {
+            store
+                .intrinsic_kind(ty)
+                .and_then(primitive_family_from_intrinsic)
+                == Some(family)
+        }
+        TypeTag::Union => store.union_members(ty).is_some_and(|members| {
+            members
+                .iter()
+                .any(|&member| contains_primitive_base(store, member, family))
+        }),
+        _ => false,
+    }
+}
+
+fn primitive_base(interner: &Interner, family: PrimitiveFamily) -> TypeId {
+    let wk = interner.well_known();
+    match family {
+        PrimitiveFamily::String => wk.string,
+        PrimitiveFamily::Number => wk.number,
+        PrimitiveFamily::Boolean => wk.boolean,
+        PrimitiveFamily::Null => wk.null,
+        PrimitiveFamily::Undefined => wk.undefined,
+        PrimitiveFamily::Void => wk.void,
+    }
 }
 
 /// Whether a type parameter has a **primitive constraint** (tsc `hasPrimitiveConstraint`),
@@ -288,7 +624,7 @@ fn is_primitive_ish(store: &Store, ty: TypeId) -> bool {
 }
 
 /// Structurally match an argument source against a parameter target, recording raw
-/// candidates later fixed by [`fix_candidates`]. Call-site mode deliberately has
+/// candidates later fixed by [`fix_call_site_candidates`]. Call-site mode deliberately has
 /// no union-target descent: ambiguous matches infer nothing, which is sound.
 ///
 /// The small sound subset records direct type-parameter hits, shared object

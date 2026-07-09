@@ -89,7 +89,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b33_as_cast_assignability", true),
     ("b54_labeled_statements", true),
     ("b59_modules_hygiene", true),
-    ("b65_inference_candidate_policy", false),
+    ("b65_inference_candidate_policy", true),
 ];
 
 /// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`

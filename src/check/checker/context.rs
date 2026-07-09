@@ -26,6 +26,10 @@ pub(in crate::check::checker) enum ObligationKind {
     /// `TK2345`; contextually typed fresh object/tuple literals use assignment-style
     /// diagnostics for their member/element mismatch parity with tsc.
     Argument,
+    /// A contextually typed fresh literal in a call argument. Most structural
+    /// mismatches stay assignment-style, but missing required properties and
+    /// tuple length mismatches remain call-argument failures.
+    FreshArgument,
 }
 
 /// One assignability obligation: `src` must be assignable to `tgt`, with the

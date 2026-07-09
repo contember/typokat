@@ -1,5 +1,10 @@
 //! Statement checking.
 
+use super::assignment::binding_decl_id;
+use super::assignment::check_excess_properties;
+use super::assignment::declared_from_init;
+use super::calls::widen;
+use super::context::*;
 use crate::binder::scope::ScopeId;
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::{Reason, ReasonChain, Relater, Relation};
@@ -7,20 +12,19 @@ use crate::span::Span;
 use crate::types::store::{Store, TypeId};
 use crate::types::WellKnown;
 use oxc_ast::ast::{
-    BindingPattern, BlockStatement, Declaration, Expression,
-    Function, Statement, VariableDeclarationKind, VariableDeclarator,
+    BindingPattern, BlockStatement, Declaration, Expression, Function, Statement,
+    VariableDeclarationKind, VariableDeclarator,
 };
-use super::context::*;
-use super::assignment::binding_decl_id;
-use super::assignment::check_excess_properties;
-use super::assignment::declared_from_init;
-use super::calls::widen;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Check a list of statements in `scope` at the **module top level** (no enclosing
     /// function, so no return context). Each statement flows through the unified
     /// statement walker with an empty return context.
-    pub(in crate::check::checker) fn check_statements(&mut self, scope: ScopeId, statements: &[Statement<'_>]) {
+    pub(in crate::check::checker) fn check_statements(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+    ) {
         let mut no_return: Option<TypeId> = None;
         for stmt in statements {
             self.check_stmt(scope, stmt, None, &mut no_return);
@@ -95,11 +99,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    fn check_declaration(
-        &mut self,
-        scope: ScopeId,
-        decl: &Declaration<'_>,
-    ) {
+    fn check_declaration(&mut self, scope: ScopeId, decl: &Declaration<'_>) {
         match decl {
             Declaration::VariableDeclaration(var) => {
                 for declarator in &var.declarations {
@@ -134,12 +134,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 let Some((src, src_span)) = self.infer_initializer(scope, arg, Some(tgt)) else {
                     return;
                 };
-                check_excess_properties(
-                    self.interner.store(),
-                    arg,
-                    tgt,
-                    &mut self.diagnostics,
-                );
+                check_excess_properties(self.interner.store(), arg, tgt, &mut self.diagnostics);
                 self.obligations.push(AssignObligation {
                     src,
                     tgt,
@@ -267,12 +262,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             {
                 self.decl_types.set(decl_id, fn_ty);
                 if !params.is_empty() {
-                    self.generic_fns.insert(decl_id, GenericSig { params, fn_ty });
+                    self.generic_fns
+                        .insert(decl_id, GenericSig { params, fn_ty });
                 }
             }
         }
     }
-
 }
 
 /// Map a relation failure to `TK2741`/`TK2322`/`TK2345`. M6 keeps a flat headline
@@ -331,6 +326,35 @@ pub(in crate::check::checker) fn emit_obligation_failure(
                     .with_elaboration(elaboration),
             );
         }
+        ObligationKind::FreshArgument => match head {
+            Reason::MissingProperty { .. } | Reason::TupleLength { .. } => {
+                let widen = !is_literal_target(store, ob.tgt);
+                let src = render_type(store, headline_src(ob, head), widen);
+                let tgt = render_type(store, ob.tgt, /* widen */ false);
+                diagnostics.push(
+                    Diagnostic::argument_not_assignable(ob.src_span, &src, &tgt)
+                        .with_elaboration(elaboration),
+                );
+            }
+            Reason::Leaf { .. }
+            | Reason::Property { .. }
+            | Reason::ParameterCount { .. }
+            | Reason::Parameter { .. }
+            | Reason::ReturnType { .. }
+            | Reason::UnionSourceMember { .. }
+            | Reason::NoUnionMember { .. }
+            | Reason::ArrayElement { .. }
+            | Reason::TupleElement { .. }
+            | Reason::IndexSignature { .. } => {
+                let widen = !is_literal_target(store, ob.tgt);
+                let src = render_type(store, headline_src(ob, head), widen);
+                let tgt = render_type(store, ob.tgt, /* widen */ false);
+                let message = format!("Type '{src}' is not assignable to type '{tgt}'");
+                diagnostics.push(
+                    Diagnostic::not_assignable(ob.src_span, message).with_elaboration(elaboration),
+                );
+            }
+        },
     }
 }
 

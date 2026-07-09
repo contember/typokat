@@ -30,7 +30,7 @@ impl InferenceContext {
 
     /// Call-site **raw** mode (M10, refined M24/M27): no union-target descent.
     /// Candidates are always recorded **un-widened** in both modes — call-site
-    /// widening is [`fix_candidates`]'s job (per parameter, skipping a
+    /// widening is the call-site fixer job (per parameter, skipping a
     /// primitive-constrained one); the conditional evaluator never widens.
     pub(super) fn for_call_raw() -> Self {
         InferenceContext {
@@ -50,7 +50,7 @@ impl InferenceContext {
         candidates: &mut Candidates,
     ) {
         // A target type parameter is the one place a candidate is recorded — always
-        // AS-IS (raw). Call-site widening happens at fix time ([`fix_candidates`], per
+        // AS-IS (raw). Call-site widening happens at fix time (per
         // parameter); conditional-`infer` extraction never widens (tsc keeps `"x"` —
         // M25 review HIGH-1/HIGH-2).
         if interner.store().tag(target) == TypeTag::TypeParam {

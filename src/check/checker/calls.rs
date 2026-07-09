@@ -148,6 +148,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         call: &CallExpression<'_>,
         arg_types: &[(TypeId, Span)],
         arg_fresh: &[bool],
+        arg_exprs: &[&Expression<'_>],
     ) -> Option<TypeId> {
         // The callee must be a plain identifier naming a generic function declaration.
         let Expression::Identifier(ident) = &call.callee else {
@@ -167,7 +168,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Some(func) => func.params.clone(),
             None => return None,
         };
-        let args: Vec<TypeId> = arg_types.iter().map(|(ty, _)| *ty).collect();
+        let args = self.contextual_inference_args(scope, &params, arg_types, arg_exprs);
 
         // Run the generative inference engine to fix the type arguments, then
         // instantiate the template by the same M9 substitution. `arg_fresh` feeds the
@@ -181,6 +182,33 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             arg_fresh,
         );
         Some(substitute(self.interner, sig.fn_ty, &map))
+    }
+
+    fn contextual_inference_args(
+        &mut self,
+        scope: ScopeId,
+        params: &[ParameterType],
+        arg_types: &[(TypeId, Span)],
+        arg_exprs: &[&Expression<'_>],
+    ) -> Vec<TypeId> {
+        let targets = self.call_argument_targets(params, arg_types.len());
+        arg_types
+            .iter()
+            .zip(arg_exprs)
+            .zip(targets)
+            .map(|(((arg_ty, arg_span), arg_expr), target)| {
+                let Some(target) = target else {
+                    return *arg_ty;
+                };
+                self.infer_contextual_source_after_walked(
+                    scope,
+                    arg_expr,
+                    target,
+                    (*arg_ty, *arg_span),
+                )
+                .0
+            })
+            .collect()
     }
 
     /// Infer and check a call. Callable callees are function types or objects with
@@ -231,7 +259,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // M10 inference runs only when M9 explicit instantiation did not; a
         // non-generic call falls through to the inferred callee unchanged.
         let inferred_generic_callee = if instantiated_callee.is_none() {
-            self.infer_generic_callee(scope, call, &arg_types, &arg_fresh)
+            self.infer_generic_callee(scope, call, &arg_types, &arg_fresh, &arg_exprs)
         } else {
             None
         };
@@ -548,12 +576,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Expression::ObjectExpression(_)
                 if self.interner.store().object_type(context).is_some() =>
             {
-                ObligationKind::Assignment
+                ObligationKind::FreshArgument
             }
             Expression::ArrayExpression(_)
                 if self.interner.store().tag(context) == TypeTag::Tuple =>
             {
-                ObligationKind::Assignment
+                ObligationKind::FreshArgument
             }
             _ => ObligationKind::Argument,
         }
@@ -643,8 +671,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // checks. For a non-generic class this is the identity (`ctor`/`instance` unchanged),
         // so M11 behaviour is preserved. Explicit type arguments substitute directly; no type
         // arguments infer the parameters from the constructor argument types (M10 engine).
-        let (ctor, instance) =
-            self.new_class_substitution(scope, decl_id, &info, new_expr, &arg_types, &arg_fresh);
+        let (ctor, instance) = self.new_class_substitution(
+            scope,
+            decl_id,
+            &info,
+            new_expr,
+            (&arg_types, &arg_fresh, &arg_exprs),
+        );
 
         // The (instantiated) constructor signature's parameter types (zero for an implicit
         // constructor).
@@ -685,9 +718,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         decl_id: DeclId,
         info: &ClassInfo,
         new_expr: &NewExpression<'_>,
-        arg_types: &[(TypeId, Span)],
-        arg_fresh: &[bool],
+        args: (&[(TypeId, Span)], &[bool], &[&Expression<'_>]),
     ) -> (TypeId, TypeId) {
+        let (arg_types, arg_fresh, arg_exprs) = args;
         // Non-generic class: no parameters to substitute — the M11 identity.
         let Some(type_params) = self.class_type_params.get(&decl_id).cloned() else {
             return (info.ctor, info.instance);
@@ -721,7 +754,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         Some(func) => func.params.clone(),
                         None => Vec::new(),
                     };
-                let args: Vec<TypeId> = arg_types.iter().map(|(ty, _)| *ty).collect();
+                let args = self.contextual_inference_args(scope, &params, arg_types, arg_exprs);
                 infer::infer_type_arguments_from_params(
                     self.interner,
                     &mut self.next_type_param,

@@ -241,16 +241,16 @@ fn infers_through_function_parameter() {
     );
 }
 
-/// Two distinct candidates for one type parameter fix to their **union**:
-/// `both(1, \"s\")` (both parameters typed `T`) infers `T = number | string`.
+/// Incompatible candidates from different arguments do not union into a target
+/// wide enough to accept both; fixing keeps a replay target that will reject the
+/// later string argument.
 #[test]
-fn multiple_distinct_candidates_union() {
+fn incompatible_multi_source_candidates_fix_to_first_prepared() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
     let t = interner.intern_type_param(TypeParamId(0), "T");
     let one = interner.intern_literal(LiteralValue::Number(1.0));
     let s = interner.intern_literal(LiteralValue::String("s".to_string()));
-    let expected = interner.union(vec![wk.number, wk.string]);
     let mut next_type_param = 1;
 
     let map = infer_type_arguments(
@@ -263,20 +263,20 @@ fn multiple_distinct_candidates_union() {
     );
     assert_eq!(
         map.get(&TypeParamId(0)).copied(),
-        Some(expected),
-        "T = number | string"
+        Some(wk.number),
+        "T fixes to number so the replayed string argument can fail"
     );
 }
 
-/// Two **equal** candidates collapse to that one type (not a 2-member union):
-/// `both(1, 2)` infers `T = number`.
+/// Compatible same-family literal candidates from different arguments keep their
+/// literal union, matching `both(1, 2)` returning `1 | 2`.
 #[test]
-fn duplicate_candidates_collapse() {
+fn same_family_literal_candidates_union() {
     let mut interner = Interner::with_intrinsics();
-    let wk = interner.well_known();
     let t = interner.intern_type_param(TypeParamId(0), "T");
     let one = interner.intern_literal(LiteralValue::Number(1.0));
     let two = interner.intern_literal(LiteralValue::Number(2.0));
+    let expected = interner.union(vec![one, two]);
     let mut next_type_param = 1;
 
     let map = infer_type_arguments(
@@ -289,8 +289,8 @@ fn duplicate_candidates_collapse() {
     );
     assert_eq!(
         map.get(&TypeParamId(0)).copied(),
-        Some(wk.number),
-        "T = number (duplicates collapse)"
+        Some(expected),
+        "T = 1 | 2"
     );
 }
 
@@ -323,6 +323,283 @@ fn no_candidate_falls_back_to_unknown() {
         "no candidate → unknown, never any"
     );
     assert_ne!(map.get(&TypeParamId(0)).copied(), Some(wk.any));
+}
+
+#[test]
+fn call_site_candidates_remember_argument_sources() {
+    let mut interner = Interner::with_intrinsics();
+    let t = interner.intern_type_param(TypeParamId(0), "T");
+    let one = interner.intern_literal(LiteralValue::Number(1.0));
+    let s = interner.intern_literal(LiteralValue::String("s".to_string()));
+
+    let candidates = collect_call_site_candidates(
+        &mut interner,
+        &[
+            ParameterType::required("a", t),
+            ParameterType::required("b", t),
+        ],
+        &[one, s],
+        &[true, false],
+    );
+
+    let cands = candidates
+        .get(&TypeParamId(0))
+        .expect("T receives candidates");
+    assert_eq!(cands.len(), 2);
+    assert_eq!(cands[0].ty, one);
+    assert_eq!(
+        cands[0].source,
+        CallSiteSource::Argument {
+            index: 0,
+            occurrence: 0
+        }
+    );
+    assert!(cands[0].fresh);
+    assert_eq!(cands[1].ty, s);
+    assert_eq!(
+        cands[1].source,
+        CallSiteSource::Argument {
+            index: 1,
+            occurrence: 0
+        }
+    );
+    assert!(!cands[1].fresh);
+}
+
+#[test]
+fn call_site_tuple_expansion_keeps_distinct_occurrences() {
+    let mut interner = Interner::with_intrinsics();
+    let t = interner.intern_type_param(TypeParamId(0), "T");
+    let t_array = interner.intern_array(t);
+    let one = interner.intern_literal(LiteralValue::Number(1.0));
+    let two = interner.intern_literal(LiteralValue::Number(2.0));
+    let tuple = interner.intern_tuple(vec![one, two]);
+
+    let candidates = collect_call_site_candidates(
+        &mut interner,
+        &[ParameterType::required("items", t_array)],
+        &[tuple],
+        &[false],
+    );
+
+    let cands = candidates
+        .get(&TypeParamId(0))
+        .expect("T receives tuple element candidates");
+    assert_eq!(cands.len(), 2);
+    assert_eq!(cands[0].ty, one);
+    assert_eq!(
+        cands[0].source,
+        CallSiteSource::Argument {
+            index: 0,
+            occurrence: 0
+        }
+    );
+    assert_eq!(cands[1].ty, two);
+    assert_eq!(
+        cands[1].source,
+        CallSiteSource::Argument {
+            index: 0,
+            occurrence: 1
+        }
+    );
+}
+
+#[test]
+fn single_argument_occurrences_do_not_union_incompatible_candidates() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(0), "T");
+    let target = interner.intern_object(ObjectType {
+        properties: vec![prop("a", t), prop("b", t)],
+        ..Default::default()
+    });
+    let source = interner.intern_object(ObjectType {
+        properties: vec![prop("a", wk.number), prop("b", wk.string)],
+        ..Default::default()
+    });
+    let mut next_type_param = 1;
+
+    let map = infer_type_arguments(
+        &mut interner,
+        &mut next_type_param,
+        &[TypeParamId(0)],
+        &[target],
+        &[source],
+        &[],
+    );
+
+    assert_eq!(
+        map.get(&TypeParamId(0)).copied(),
+        Some(wk.number),
+        "the second property replays against number and fails"
+    );
+}
+
+#[test]
+fn nonprimitive_multi_source_candidates_do_not_union() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(0), "T");
+    let object_x = interner.intern_object(ObjectType {
+        properties: vec![prop("x", wk.number)],
+        ..Default::default()
+    });
+    let object_y = interner.intern_object(ObjectType {
+        properties: vec![prop("y", wk.number)],
+        ..Default::default()
+    });
+    let mut next_type_param = 1;
+
+    let map = infer_type_arguments(
+        &mut interner,
+        &mut next_type_param,
+        &[TypeParamId(0)],
+        &[t, t],
+        &[object_x, object_y],
+        &[],
+    );
+
+    assert_eq!(
+        map.get(&TypeParamId(0)).copied(),
+        Some(object_x),
+        "typed object candidates from separate arguments must replay"
+    );
+}
+
+#[test]
+fn fresh_structural_candidate_yields_to_typed_candidate() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(0), "T");
+    let fresh_object = interner.intern_object(ObjectType {
+        properties: vec![prop("x", wk.number)],
+        ..Default::default()
+    });
+    let typed_object = interner.intern_object(ObjectType {
+        properties: vec![prop("x", wk.number), prop("y", wk.number)],
+        ..Default::default()
+    });
+    let mut next_type_param = 1;
+
+    let map = infer_type_arguments(
+        &mut interner,
+        &mut next_type_param,
+        &[TypeParamId(0)],
+        &[t, t],
+        &[fresh_object, typed_object],
+        &[true, false],
+    );
+
+    assert_eq!(
+        map.get(&TypeParamId(0)).copied(),
+        Some(typed_object),
+        "the typed structural candidate replays the earlier fresh literal"
+    );
+}
+
+#[test]
+fn nullish_multi_source_candidates_merge() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(0), "T");
+    let expected = interner.union(vec![wk.null, wk.undefined]);
+    let mut next_type_param = 1;
+
+    let map = infer_type_arguments(
+        &mut interner,
+        &mut next_type_param,
+        &[TypeParamId(0)],
+        &[t, t, t],
+        &[wk.null, wk.null, wk.undefined],
+        &[],
+    );
+
+    assert_eq!(
+        map.get(&TypeParamId(0)).copied(),
+        Some(expected),
+        "null and undefined same-T candidates merge"
+    );
+}
+
+#[test]
+fn nullish_and_single_primitive_family_candidates_merge() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(0), "T");
+    let s = interner.intern_literal(LiteralValue::String("s".to_string()));
+    let expected = interner.union(vec![wk.null, s]);
+    let mut next_type_param = 1;
+
+    let map = infer_type_arguments(
+        &mut interner,
+        &mut next_type_param,
+        &[TypeParamId(0)],
+        &[t, t],
+        &[wk.null, s],
+        &[],
+    );
+
+    assert_eq!(
+        map.get(&TypeParamId(0)).copied(),
+        Some(expected),
+        "nullish plus one primitive family merges, unlike number plus string"
+    );
+
+    let u = interner.intern_type_param(TypeParamId(1), "U");
+    let constrained = interner.union(vec![wk.null, wk.undefined, wk.string]);
+    interner.set_type_param_constraint(TypeParamId(1), constrained);
+    let expected = interner.union(vec![s, wk.undefined]);
+    let mut next_type_param = 2;
+
+    let map = infer_type_arguments(
+        &mut interner,
+        &mut next_type_param,
+        &[TypeParamId(1)],
+        &[u, u],
+        &[s, wk.undefined],
+        &[],
+    );
+
+    assert_eq!(
+        map.get(&TypeParamId(1)).copied(),
+        Some(expected),
+        "primitive-constrained nullish candidates still merge with string"
+    );
+}
+
+#[test]
+fn call_site_rest_array_candidates_keep_argument_sources() {
+    let mut interner = Interner::with_intrinsics();
+    let t = interner.intern_type_param(TypeParamId(0), "T");
+    let t_array = interner.intern_array(t);
+    let one = interner.intern_literal(LiteralValue::Number(1.0));
+    let two = interner.intern_literal(LiteralValue::Number(2.0));
+
+    let candidates = collect_call_site_candidates(
+        &mut interner,
+        &[ParameterType::rest("args", t_array)],
+        &[one, two],
+        &[false, false],
+    );
+
+    let cands = candidates
+        .get(&TypeParamId(0))
+        .expect("T receives rest element candidates");
+    assert_eq!(cands.len(), 2);
+    assert_eq!(
+        cands[0].source,
+        CallSiteSource::Argument {
+            index: 0,
+            occurrence: 0
+        }
+    );
+    assert_eq!(
+        cands[1].source,
+        CallSiteSource::Argument {
+            index: 1,
+            occurrence: 0
+        }
+    );
 }
 
 /// M24/M27 — a parameter with a **primitive constraint** keeps the inferred literal
@@ -470,7 +747,6 @@ fn call_site_rest_array_infers_from_each_variadic_argument() {
     let wk = interner.well_known();
     let t = interner.intern_type_param(TypeParamId(0), "T");
     let t_array = interner.intern_array(t);
-    let expected = interner.union(vec![wk.number, wk.string]);
     let mut next_type_param = 1;
 
     let map = infer_type_arguments_from_params(
@@ -484,8 +760,8 @@ fn call_site_rest_array_infers_from_each_variadic_argument() {
 
     assert_eq!(
         map.get(&TypeParamId(0)).copied(),
-        Some(expected),
-        "T[] rest parameters infer T from every rest argument"
+        Some(wk.number),
+        "incompatible rest arguments fix to number so the string replay can fail"
     );
 }
 
