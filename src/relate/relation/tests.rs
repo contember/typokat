@@ -1,0 +1,1331 @@
+use super::*;
+use crate::types::repr::{ClassId, LiteralValue, ObjectType, PropertyType, Visibility};
+use crate::types::Interner;
+
+fn prop(name: &str, ty: TypeId) -> PropertyType {
+    PropertyType::public(name, ty)
+}
+
+/// Build an optional member `name?: ty` (M21). The caller passes the *effective*
+/// type — i.e. already `T | undefined`, as it is unioned in at lowering — exactly
+/// as the relation engine sees it (it never interns `| undefined` itself).
+fn optional_prop(name: &str, ty: TypeId) -> PropertyType {
+    PropertyType {
+        optional: true,
+        ..PropertyType::public(name, ty)
+    }
+}
+
+/// Build a member `name: ty` with an explicit visibility + declaring class
+/// (M13), for the nominal-relation tests.
+fn nominal_prop(
+    name: &str,
+    ty: TypeId,
+    visibility: Visibility,
+    declaring_class: Option<ClassId>,
+) -> PropertyType {
+    PropertyType {
+        name: name.to_string(),
+        ty,
+        optional: false,
+        visibility,
+        declaring_class,
+        readonly: false,
+        is_accessor: false,
+    }
+}
+
+/// The M2 object structural rule: width (extra src props ok), depth (prop
+/// types checked, recursing), and the precise missing-vs-mismatch reason.
+#[test]
+fn object_width_depth_and_reason_kinds() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    // { a: number; b: string }
+    let ab = interner.intern_object(ObjectType {
+        properties: vec![prop("a", wk.number), prop("b", wk.string)],
+        ..Default::default()
+    });
+    // { a: number } — a width-narrower target.
+    let a_only = interner.intern_object(ObjectType {
+        properties: vec![prop("a", wk.number)],
+        ..Default::default()
+    });
+    // { a: string } — same key, incompatible type.
+    let a_str = interner.intern_object(ObjectType {
+        properties: vec![prop("a", wk.string)],
+        ..Default::default()
+    });
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    // Width: { a; b } is assignable to { a } (extra `b` ignored).
+    assert!(rel.is_assignable(ab, a_only).is_yes());
+    // Exact identity short-circuits.
+    assert!(rel.is_assignable(ab, ab).is_yes());
+
+    // Missing required property: { a } is NOT assignable to { a; b }.
+    match rel.is_assignable(a_only, ab) {
+        Relation::No(chain) => match chain.head() {
+            Reason::MissingProperty { name, .. } => assert_eq!(name, "b"),
+            other => panic!("expected MissingProperty, got {other:?}"),
+        },
+        Relation::Yes => panic!("expected a missing-property failure"),
+    }
+
+    // Depth mismatch: { a: number } is NOT assignable to { a: string }.
+    match rel.is_assignable(a_only, a_str) {
+        Relation::No(chain) => match chain.head() {
+            Reason::Property { name, because, .. } => {
+                assert_eq!(name, "a");
+                assert!(matches!(**because, Reason::Leaf { .. }));
+            }
+            other => panic!("expected Property, got {other:?}"),
+        },
+        Relation::Yes => panic!("expected a depth mismatch failure"),
+    }
+}
+
+/// M21 — the optional-property soundness core. With an optional member's
+/// effective type unioned to `T | undefined` at lowering and `optional: true`,
+/// the relation must: (1) let a REQUIRED source satisfy an OPTIONAL target — the
+/// optional target may be absent in the source, so its absence is allowed; and
+/// (2) reject an OPTIONAL source against a REQUIRED target — the source's value
+/// is `T | undefined`, whose `undefined` arm fails the required `T`. Pinning both
+/// directions guards against a dropped error (the worst outcome for a checker).
+#[test]
+fn optional_target_absent_ok_optional_source_to_required_fails() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    // The effective type of an optional `a?: number` — `number | undefined`.
+    let num_or_undef = interner.union(vec![wk.number, wk.undefined]);
+
+    // `{ a: number }` — a required member.
+    let required = interner.intern_object(ObjectType {
+        properties: vec![prop("a", wk.number)],
+        ..Default::default()
+    });
+    // `{ a?: number }` — an optional member (effective type `number | undefined`).
+    let optional = interner.intern_object(ObjectType {
+        properties: vec![optional_prop("a", num_or_undef)],
+        ..Default::default()
+    });
+    // `{}` — the empty object (`a` absent).
+    let empty = interner.intern_object(ObjectType::default());
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    // (1a) A required `a` satisfies an optional `a` (present source, related
+    // against `number | undefined` via the union-target logic).
+    assert!(
+        rel.is_assignable(required, optional).is_yes(),
+        "a required `a` must satisfy an optional `a`"
+    );
+    // (1b) An ABSENT optional target is allowed — `{}` is assignable to `{ a? }`.
+    assert!(
+        rel.is_assignable(empty, optional).is_yes(),
+        "an absent optional target property must be allowed"
+    );
+
+    // (2) An optional `a` does NOT satisfy a required `a` — presence is independent
+    // of the value type: the source may OMIT `a` entirely, which the required target
+    // forbids. This is an object-level structural failure (a `Leaf`), NOT a
+    // value-depth `Property` failure — the gate fires before the value relation, so
+    // it holds even when the value types would relate (a required `a: number |
+    // undefined` is likewise rejected). Maps to `TK2322` (assignment) / `TK2345`
+    // (argument), like the nominal-origin leaf.
+    match rel.is_assignable(optional, required) {
+        Relation::No(chain) => {
+            assert!(
+                matches!(chain.head(), Reason::Leaf { .. }),
+                "expected an object-level Leaf failure, got {:?}",
+                chain.head()
+            );
+            // The root pins the two object types.
+            assert_eq!(chain.root(), (optional, required));
+        }
+        Relation::Yes => panic!("an optional source must NOT satisfy a required target"),
+    }
+}
+
+/// M13 — nominal class typing via a `private`/`protected` member. A
+/// `private`/`protected` **target** member breaks pure structural
+/// assignability: a structurally-identical public object is NOT assignable, and
+/// a same-named non-public member from a *different* declaring class is NOT
+/// assignable; only the class's own instances (same interned id) are. This pins
+/// the soundness-critical rule (a non-matching origin must FAIL the relation).
+#[test]
+fn nominal_private_member_breaks_structural_assignability() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let secret = ClassId(0);
+    let other = ClassId(1);
+
+    // `class Secret { private x: number }` (its instance type, nominal object).
+    let secret_ty = interner.intern_object(ObjectType {
+        properties: vec![nominal_prop(
+            "x",
+            wk.number,
+            Visibility::Private,
+            Some(secret),
+        )],
+        ..Default::default()
+    });
+    // A structurally identical *public* object literal `{ x: number }`.
+    let public_obj = interner.intern_object(ObjectType {
+        properties: vec![prop("x", wk.number)],
+        ..Default::default()
+    });
+    // `class Other { private x: number }` — same shape, DIFFERENT origin.
+    let other_ty = interner.intern_object(ObjectType {
+        properties: vec![nominal_prop(
+            "x",
+            wk.number,
+            Visibility::Private,
+            Some(other),
+        )],
+        ..Default::default()
+    });
+
+    // The three are distinct interned ids (origin/visibility are part of
+    // identity), so the relation cache keys them apart.
+    assert_ne!(
+        secret_ty, public_obj,
+        "private member ⇒ distinct from public"
+    );
+    assert_ne!(secret_ty, other_ty, "different declaring class ⇒ distinct");
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    // Same class (same id): assignable via the identity fast path.
+    assert!(
+        rel.is_assignable(secret_ty, secret_ty).is_yes(),
+        "a class's own instance type is assignable to itself"
+    );
+
+    // Public `{ x: number }` is NOT assignable to `Secret` (the private member
+    // has no public counterpart) — an object-level `Leaf` failure (the member
+    // type is fine; only the visibility/origin differs).
+    match rel.is_assignable(public_obj, secret_ty) {
+        Relation::No(chain) => {
+            assert!(
+                matches!(chain.head(), Reason::Leaf { .. }),
+                "expected an object-level Leaf failure, got {:?}",
+                chain.head()
+            );
+            // The root pins the two object types.
+            assert_eq!(chain.root(), (public_obj, secret_ty));
+        }
+        Relation::Yes => {
+            panic!("a public object must NOT be assignable to a private-member class")
+        }
+    }
+
+    // `Other` (different origin) is NOT assignable to `Secret`.
+    assert!(
+        !rel.is_assignable(other_ty, secret_ty).is_yes(),
+        "a different class's private member must not satisfy Secret's"
+    );
+
+    // Symmetry: `Secret` is also not assignable to `Other` (origin differs).
+    assert!(
+        !rel.is_assignable(secret_ty, other_ty).is_yes(),
+        "Secret's private member must not satisfy Other's"
+    );
+}
+
+/// M13 — a `protected` target member is nominal exactly like `private`: a
+/// structurally-identical public object is not assignable, while the class's own
+/// instance is. Separated from the `private` test so each uses a clean interner.
+#[test]
+fn nominal_protected_member_breaks_structural_assignability() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let owner = ClassId(0);
+
+    let prot_ty = interner.intern_object(ObjectType {
+        properties: vec![nominal_prop(
+            "owner",
+            wk.string,
+            Visibility::Protected,
+            Some(owner),
+        )],
+        ..Default::default()
+    });
+    let public_obj = interner.intern_object(ObjectType {
+        properties: vec![prop("owner", wk.string)],
+        ..Default::default()
+    });
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    assert!(
+        rel.is_assignable(prot_ty, prot_ty).is_yes(),
+        "own instance ok"
+    );
+    assert!(
+        !rel.is_assignable(public_obj, prot_ty).is_yes(),
+        "a public object must NOT be assignable to a protected-member class"
+    );
+}
+
+/// M14 — `readonly` is part of a member's structural identity (a `{ readonly x }`
+/// interns to a *distinct* id from `{ x }`), but it must **NOT** affect
+/// assignability: a readonly-bearing object and a mutable one relate **both ways**.
+/// The relation engine deliberately ignores the flag (it gates assignment targets
+/// only); this pins that it is neither added to the nominal-origin gate nor the
+/// structural depth check.
+#[test]
+fn readonly_does_not_affect_assignability() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    // `{ readonly x: number }` and `{ x: number }`.
+    let readonly_obj = interner.intern_object(ObjectType {
+        properties: vec![PropertyType {
+            name: "x".to_string(),
+            ty: wk.number,
+            optional: false,
+            visibility: Visibility::Public,
+            declaring_class: None,
+            readonly: true,
+            is_accessor: false,
+        }],
+        ..Default::default()
+    });
+    let mutable_obj = interner.intern_object(ObjectType {
+        properties: vec![prop("x", wk.number)],
+        ..Default::default()
+    });
+
+    // The flag is part of identity, so the two ids differ...
+    assert_ne!(
+        readonly_obj, mutable_obj,
+        "`readonly` is part of structural identity ⇒ distinct interned ids"
+    );
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    // ...yet they relate freely in BOTH directions (readonly ignored for relation).
+    assert!(
+        rel.is_assignable(readonly_obj, mutable_obj).is_yes(),
+        "{{ readonly x }} must be assignable to {{ x }}"
+    );
+    assert!(
+        rel.is_assignable(mutable_obj, readonly_obj).is_yes(),
+        "{{ x }} must be assignable to {{ readonly x }}"
+    );
+}
+
+/// M15 — `is_accessor` mirrors `readonly`: it is part of a member's structural
+/// identity (so a get-only-accessor property and a same-typed `readonly` data field
+/// are distinct interned ids) but is **ignored** by the relation engine — an accessor
+/// property and a plain field relate freely, both ways. This pins that the assignment
+/// distinction (accessor read-only everywhere vs. field assignable in its ctor) lives
+/// purely in the checker, never leaking into assignability.
+#[test]
+fn is_accessor_does_not_affect_assignability() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    // A get-only accessor models as `readonly: true, is_accessor: true`.
+    let accessor_obj = interner.intern_object(ObjectType {
+        properties: vec![PropertyType {
+            name: "x".to_string(),
+            ty: wk.number,
+            optional: false,
+            visibility: Visibility::Public,
+            declaring_class: None,
+            readonly: true,
+            is_accessor: true,
+        }],
+        ..Default::default()
+    });
+    // A `readonly` data field: same shape but `is_accessor: false`.
+    let readonly_field_obj = interner.intern_object(ObjectType {
+        properties: vec![PropertyType {
+            name: "x".to_string(),
+            ty: wk.number,
+            optional: false,
+            visibility: Visibility::Public,
+            declaring_class: None,
+            readonly: true,
+            is_accessor: false,
+        }],
+        ..Default::default()
+    });
+    let mutable_obj = interner.intern_object(ObjectType {
+        properties: vec![prop("x", wk.number)],
+        ..Default::default()
+    });
+
+    // `is_accessor` is part of identity, so the accessor object differs from the
+    // same-shape `readonly` field object (and from a plain field object).
+    assert_ne!(
+        accessor_obj, readonly_field_obj,
+        "`is_accessor` is part of structural identity ⇒ distinct interned ids"
+    );
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    // ...yet the accessor relates freely with a plain field, both directions.
+    assert!(
+        rel.is_assignable(accessor_obj, mutable_obj).is_yes(),
+        "accessor `{{ x }}` must be assignable to field `{{ x }}`"
+    );
+    assert!(
+        rel.is_assignable(mutable_obj, accessor_obj).is_yes(),
+        "field `{{ x }}` must be assignable to accessor `{{ x }}`"
+    );
+}
+
+/// Nested depth: a mismatch one level deep nests under the outer property
+/// (the chain M6 renders).
+#[test]
+fn object_nested_depth_reason_nests() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    // inner targets: { b: number } vs source { b: string }
+    let inner_num = interner.intern_object(ObjectType {
+        properties: vec![prop("b", wk.number)],
+        ..Default::default()
+    });
+    let inner_str = interner.intern_object(ObjectType {
+        properties: vec![prop("b", wk.string)],
+        ..Default::default()
+    });
+    let outer_src = interner.intern_object(ObjectType {
+        properties: vec![prop("a", inner_str)],
+        ..Default::default()
+    });
+    let outer_tgt = interner.intern_object(ObjectType {
+        properties: vec![prop("a", inner_num)],
+        ..Default::default()
+    });
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    match rel.is_assignable(outer_src, outer_tgt) {
+        Relation::No(chain) => match chain.head() {
+            Reason::Property { name, because, .. } => {
+                assert_eq!(name, "a");
+                // Inner reason is the property `b` mismatch.
+                match &**because {
+                    Reason::Property { name, .. } => assert_eq!(name, "b"),
+                    other => panic!("expected nested Property, got {other:?}"),
+                }
+            }
+            other => panic!("expected outer Property, got {other:?}"),
+        },
+        Relation::Yes => panic!("expected nested depth failure"),
+    }
+}
+
+/// M3 function assignability: contravariant parameters, covariant return,
+/// fewer source params allowed, surplus source params rejected, and `void`
+/// target return accepts any source return.
+#[test]
+fn function_variance_arity_and_void_return() {
+    use crate::types::repr::{FunctionType, ParameterType};
+
+    fn param(name: &str, ty: TypeId) -> ParameterType {
+        ParameterType {
+            name: name.to_string(),
+            ty,
+            optional: false,
+        }
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    // Reference: `(x: number) => number`.
+    let num_to_num = interner.intern_function(FunctionType {
+        params: vec![param("x", wk.number)],
+        ret: wk.number,
+    });
+    // `(x: unknown) => number`.
+    let unknown_to_num = interner.intern_function(FunctionType {
+        params: vec![param("x", wk.unknown)],
+        ret: wk.number,
+    });
+    // `(x: string) => number`.
+    let str_to_num = interner.intern_function(FunctionType {
+        params: vec![param("x", wk.string)],
+        ret: wk.number,
+    });
+    // `() => number` (FEWER params than `num_to_num`).
+    let nullary_to_num = interner.intern_function(FunctionType {
+        params: vec![],
+        ret: wk.number,
+    });
+    // `(x: number) => string` (incompatible return).
+    let num_to_str = interner.intern_function(FunctionType {
+        params: vec![param("x", wk.number)],
+        ret: wk.string,
+    });
+    // `(x: number, y: number) => number` (MORE params than `num_to_num`).
+    let two_to_num = interner.intern_function(FunctionType {
+        params: vec![param("x", wk.number), param("y", wk.number)],
+        ret: wk.number,
+    });
+    // `() => void` and `() => number` for the void-return rule.
+    let nullary_to_void = interner.intern_function(FunctionType {
+        params: vec![],
+        ret: wk.void,
+    });
+    let nullary_to_num_only = interner.intern_function(FunctionType {
+        params: vec![],
+        ret: wk.number,
+    });
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    // CONTRAVARIANT params: `(x: unknown) => number` IS assignable to
+    // `(x: number) => number`, because the target param `number` is
+    // assignable to the source param `unknown` (tgt → src).
+    assert!(
+        rel.is_assignable(unknown_to_num, num_to_num).is_yes(),
+        "contravariant: wider param (unknown) accepts a narrower target param (number)"
+    );
+
+    // `(x: string) => number` is NOT assignable to `(x: number) => number`:
+    // the target param `number` is not assignable to the source param
+    // `string`.
+    match rel.is_assignable(str_to_num, num_to_num) {
+        Relation::No(chain) => match chain.head() {
+            Reason::Parameter { index, because, .. } => {
+                assert_eq!(*index, 0);
+                // The contravariant child compares `number` (tgt) → `string`
+                // (src) and fails as a leaf.
+                assert!(matches!(**because, Reason::Leaf { .. }));
+            }
+            other => panic!("expected a Parameter reason, got {other:?}"),
+        },
+        Relation::Yes => panic!("expected a contravariant parameter failure"),
+    }
+
+    // COVARIANT return: `(x: number) => string` is NOT assignable to
+    // `(x: number) => number` — the source return `string` is not assignable
+    // to the target return `number`.
+    match rel.is_assignable(num_to_str, num_to_num) {
+        Relation::No(chain) => match chain.head() {
+            Reason::ReturnType { because, .. } => {
+                assert!(matches!(**because, Reason::Leaf { .. }));
+            }
+            other => panic!("expected a ReturnType reason, got {other:?}"),
+        },
+        Relation::Yes => panic!("expected a covariant return failure"),
+    }
+
+    // FEWER source params: `() => number` IS assignable to
+    // `(x: number) => number` — the source ignores the extra argument.
+    assert!(
+        rel.is_assignable(nullary_to_num, num_to_num).is_yes(),
+        "a source with fewer parameters is assignable (extra args ignored)"
+    );
+
+    // MORE source params: `(x: number, y: number) => number` is NOT assignable
+    // to `(x: number) => number` — the target cannot supply the surplus
+    // parameter.
+    match rel.is_assignable(two_to_num, num_to_num) {
+        Relation::No(chain) => {
+            assert!(matches!(chain.head(), Reason::ParameterCount { .. }));
+        }
+        Relation::Yes => panic!("expected a surplus-source-parameter arity failure"),
+    }
+
+    // VOID target return: `() => number` IS assignable to `() => void` — the
+    // returned value is discarded.
+    assert!(
+        rel.is_assignable(nullary_to_num_only, nullary_to_void)
+            .is_yes(),
+        "a value-returning function is assignable to a void-returning function type"
+    );
+    // `() => void` is assignable to itself (identity), and a void source is
+    // fine for a void target.
+    assert!(rel.is_assignable(nullary_to_void, nullary_to_void).is_yes());
+
+    // Identity short-circuits.
+    assert!(rel.is_assignable(num_to_num, num_to_num).is_yes());
+}
+
+/// M17 array assignability is covariant in the element and recurses through
+/// nested arrays; arrays and non-arrays do not relate.
+#[test]
+fn array_covariant_assignability() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    let num_arr = interner.intern_array(wk.number);
+    let str_arr = interner.intern_array(wk.string);
+    let never_arr = interner.intern_array(wk.never);
+    let unknown_arr = interner.intern_array(wk.unknown);
+    // Nested: number[][] and string[][].
+    let num_arr_arr = interner.intern_array(num_arr);
+    let str_arr_arr = interner.intern_array(str_arr);
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    // Identity.
+    assert!(
+        rel.is_assignable(num_arr, num_arr).is_yes(),
+        "number[] <: number[]"
+    );
+
+    // Covariant element: never[] <: number[] (never <: number); number[] NOT <:
+    // never[] (number is not <: never).
+    assert!(
+        rel.is_assignable(never_arr, num_arr).is_yes(),
+        "never[] <: number[]"
+    );
+    assert!(
+        !rel.is_assignable(num_arr, never_arr).is_yes(),
+        "number[] is NOT assignable to never[]"
+    );
+
+    // Covariant: number[] <: unknown[] (number <: unknown), but not the reverse.
+    assert!(
+        rel.is_assignable(num_arr, unknown_arr).is_yes(),
+        "number[] <: unknown[]"
+    );
+    assert!(
+        !rel.is_assignable(unknown_arr, num_arr).is_yes(),
+        "unknown[] is NOT assignable to number[]"
+    );
+
+    // string[] is NOT assignable to number[] — the element fails as a leaf,
+    // wrapped in an `ArrayElement` reason.
+    match rel.is_assignable(str_arr, num_arr) {
+        Relation::No(chain) => match chain.head() {
+            Reason::ArrayElement { because, .. } => {
+                assert!(matches!(**because, Reason::Leaf { .. }));
+            }
+            other => panic!("expected an ArrayElement reason, got {other:?}"),
+        },
+        Relation::Yes => panic!("string[] must NOT be assignable to number[]"),
+    }
+
+    // Nested recurses: number[][] <: number[][]; string[][] NOT <: number[][].
+    assert!(
+        rel.is_assignable(num_arr_arr, num_arr_arr).is_yes(),
+        "number[][] <: number[][]"
+    );
+    assert!(
+        !rel.is_assignable(str_arr_arr, num_arr_arr).is_yes(),
+        "string[][] is NOT assignable to number[][]"
+    );
+
+    // An array is not assignable to a non-array, nor a non-array to an array.
+    assert!(
+        !rel.is_assignable(num_arr, wk.number).is_yes(),
+        "number[] is NOT assignable to number"
+    );
+    assert!(
+        !rel.is_assignable(wk.number, num_arr).is_yes(),
+        "number is NOT assignable to number[]"
+    );
+}
+
+/// M18 tuple assignability is positional and same-length; length mismatches are
+/// terminal, and the first element mismatch is the single nested reason.
+#[test]
+fn tuple_positional_and_length_assignability() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let lit_one = interner.intern_literal(LiteralValue::Number(1.0));
+    let lit_x = interner.intern_literal(LiteralValue::String("x".to_string()));
+
+    // [number, string], [string, number] (order swapped), [number] (shorter),
+    // and the literal tuples [1, "x"] / ["x", 1].
+    let num_str = interner.intern_tuple(vec![wk.number, wk.string]);
+    let str_num = interner.intern_tuple(vec![wk.string, wk.number]);
+    let num_only = interner.intern_tuple(vec![wk.number]);
+    let lit_num_str = interner.intern_tuple(vec![lit_one, lit_x]);
+    let lit_str_num = interner.intern_tuple(vec![lit_x, lit_one]);
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    // Identity.
+    assert!(
+        rel.is_assignable(num_str, num_str).is_yes(),
+        "[number, string] <: [number, string]"
+    );
+
+    // Positional widening: [1, "x"] <: [number, string] (each literal widens at
+    // its position).
+    assert!(
+        rel.is_assignable(lit_num_str, num_str).is_yes(),
+        "[1, \"x\"] <: [number, string] (positional literal widening)"
+    );
+
+    // Positional MISMATCH: ["x", 1] <: [number, string] fails at position 0
+    // (string literal `\"x\"` not assignable to `number`) — a SINGLE TupleElement
+    // reason at the first failing index, not one per element.
+    match rel.is_assignable(lit_str_num, num_str) {
+        Relation::No(chain) => match chain.head() {
+            Reason::TupleElement { index, because, .. } => {
+                assert_eq!(*index, 0, "first failing position is 0");
+                assert!(matches!(**because, Reason::Leaf { .. }));
+            }
+            other => panic!("expected a TupleElement reason, got {other:?}"),
+        },
+        Relation::Yes => panic!("[\"x\", 1] must NOT be assignable to [number, string]"),
+    }
+
+    // Order is significant: [string, number] is NOT assignable to
+    // [number, string] (position 0 string→number fails).
+    assert!(
+        !rel.is_assignable(str_num, num_str).is_yes(),
+        "[string, number] is NOT assignable to [number, string] (positional)"
+    );
+
+    // LENGTH mismatch: [number] is NOT assignable to [number, string] — a
+    // terminal TupleLength reason (too few), and the reverse is too many.
+    match rel.is_assignable(num_only, num_str) {
+        Relation::No(chain) => assert!(
+            matches!(chain.head(), Reason::TupleLength { .. }),
+            "expected a TupleLength reason, got {:?}",
+            chain.head()
+        ),
+        Relation::Yes => panic!("[number] must NOT be assignable to [number, string] (length)"),
+    }
+    match rel.is_assignable(num_str, num_only) {
+        Relation::No(chain) => assert!(
+            matches!(chain.head(), Reason::TupleLength { .. }),
+            "expected a TupleLength reason for the too-many direction"
+        ),
+        Relation::Yes => panic!("[number, string] must NOT be assignable to [number] (length)"),
+    }
+
+    // A tuple is not assignable to a scalar.
+    assert!(
+        !rel.is_assignable(num_str, wk.number).is_yes(),
+        "[number, string] is NOT assignable to number"
+    );
+}
+
+/// M18 tuple → array: a tuple is assignable to the array of (a supertype of)
+/// every element. `[number, string]` <: `(number | string)[]` and <: `unknown[]`;
+/// `[number, string]` is NOT <: `number[]` (the `string` element fails); the empty
+/// tuple `[]` <: any `T[]`; and array → tuple is NOT assignable (deferred).
+#[test]
+fn tuple_to_array_assignability() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    let num_str_tuple = interner.intern_tuple(vec![wk.number, wk.string]);
+    let empty_tuple = interner.intern_tuple(vec![]);
+    let num_union = interner.union(vec![wk.number, wk.string]);
+    let union_arr = interner.intern_array(num_union);
+    let num_arr = interner.intern_array(wk.number);
+    let unknown_arr = interner.intern_array(wk.unknown);
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    // [number, string] <: (number | string)[] (each element lands in the union).
+    assert!(
+        rel.is_assignable(num_str_tuple, union_arr).is_yes(),
+        "[number, string] <: (number | string)[]"
+    );
+    // [number, string] <: unknown[] (every element <: unknown).
+    assert!(
+        rel.is_assignable(num_str_tuple, unknown_arr).is_yes(),
+        "[number, string] <: unknown[]"
+    );
+
+    // [number, string] is NOT <: number[] — the `string` element fails, wrapped
+    // as an ArrayElement reason.
+    match rel.is_assignable(num_str_tuple, num_arr) {
+        Relation::No(chain) => assert!(
+            matches!(chain.head(), Reason::ArrayElement { .. }),
+            "expected an ArrayElement reason, got {:?}",
+            chain.head()
+        ),
+        Relation::Yes => panic!("[number, string] must NOT be assignable to number[]"),
+    }
+
+    // The empty tuple [] is assignable to any T[] (no element can fail).
+    assert!(
+        rel.is_assignable(empty_tuple, num_arr).is_yes(),
+        "[] <: number[]"
+    );
+
+    // Array → tuple is NOT assignable (deferred): number[] is not <:
+    // [number, string].
+    assert!(
+        !rel.is_assignable(num_arr, num_str_tuple).is_yes(),
+        "number[] is NOT assignable to [number, string] (array → tuple deferred)"
+    );
+}
+
+/// M19 index signatures: every governed source property must fit the target
+/// index value. Empty objects fit string indexes, dictionaries compare index
+/// values, and number indexes govern only numeric-named members.
+#[test]
+fn index_signature_assignability() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    // Targets: `{ [k: string]: number }` and `{ [i: number]: string }`.
+    let str_dict_num = interner.intern_object(ObjectType {
+        string_index: Some(wk.number),
+        ..Default::default()
+    });
+    let num_dict_str = interner.intern_object(ObjectType {
+        number_index: Some(wk.string),
+        ..Default::default()
+    });
+
+    // Sources.
+    // `{ a: number; b: number }` — all values fit the string index (number).
+    let ab_num = interner.intern_object(ObjectType {
+        properties: vec![prop("a", wk.number), prop("b", wk.number)],
+        ..Default::default()
+    });
+    // `{ a: number; b: string }` — `b` (string) does NOT fit `number`.
+    let ab_mixed = interner.intern_object(ObjectType {
+        properties: vec![prop("a", wk.number), prop("b", wk.string)],
+        ..Default::default()
+    });
+    // The empty object `{}`.
+    let empty = interner.intern_object(ObjectType::default());
+    // A string dictionary `{ [k: string]: string }`.
+    let str_dict_str = interner.intern_object(ObjectType {
+        string_index: Some(wk.string),
+        ..Default::default()
+    });
+    // A numeric-named member object `{ 0: string }` (its name is numeric).
+    let numeric_member = interner.intern_object(ObjectType {
+        properties: vec![prop("0", wk.string)],
+        ..Default::default()
+    });
+    // A number dictionary whose value is `number` (for the bad-value direction).
+    let num_dict_num = interner.intern_object(ObjectType {
+        number_index: Some(wk.number),
+        ..Default::default()
+    });
+    // An object with a **non-numeric** named member `{ a: string }` — a number
+    // index signature must NOT constrain it (it is a pure string key).
+    let a_str = interner.intern_object(ObjectType {
+        properties: vec![prop("a", wk.string)],
+        ..Default::default()
+    });
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    // OK: every value fits the string index value type.
+    assert!(
+        rel.is_assignable(ab_num, str_dict_num).is_yes(),
+        "{{ a: number; b: number }} <: {{ [k: string]: number }}"
+    );
+    // OK: the empty object trivially fits (no value can fail).
+    assert!(
+        rel.is_assignable(empty, str_dict_num).is_yes(),
+        "{{}} <: {{ [k: string]: number }}"
+    );
+
+    // BAD value: `b: string` is not assignable to the index value type `number`
+    // — one `IndexSignature` reason wrapping the leaf cause.
+    match rel.is_assignable(ab_mixed, str_dict_num) {
+        Relation::No(chain) => match chain.head() {
+            Reason::IndexSignature { because, .. } => {
+                assert!(matches!(**because, Reason::Leaf { .. }));
+            }
+            other => panic!("expected an IndexSignature reason, got {other:?}"),
+        },
+        Relation::Yes => {
+            panic!("{{ a: number; b: string }} must NOT be assignable to {{ [k: string]: number }}")
+        }
+    }
+
+    // Dictionary → dictionary: identity holds; a string dict is NOT assignable to
+    // a number dict (its index value `string` does not fit `number`).
+    assert!(
+        rel.is_assignable(str_dict_num, str_dict_num).is_yes(),
+        "{{ [k: string]: number }} <: itself"
+    );
+    assert!(
+        !rel.is_assignable(str_dict_str, str_dict_num).is_yes(),
+        "{{ [k: string]: string }} is NOT assignable to {{ [k: string]: number }}"
+    );
+
+    // Number index target governs numeric-named members: `{ 0: string }` fits
+    // `{ [i: number]: string }`.
+    assert!(
+        rel.is_assignable(numeric_member, num_dict_str).is_yes(),
+        "{{ 0: string }} <: {{ [i: number]: string }}"
+    );
+    // ...but the numeric member's `string` value does NOT fit a number→number
+    // dict — `{ 0: string }` is NOT assignable to `{ [i: number]: number }`.
+    assert!(
+        !rel.is_assignable(numeric_member, num_dict_num).is_yes(),
+        "{{ 0: string }} is NOT assignable to {{ [i: number]: number }} (value mismatch)"
+    );
+    // A **non-numeric** named member is untouched by a number index signature:
+    // `{ a: string }` is assignable to `{ [i: number]: number }` (the `a` key is
+    // a pure string key, not governed by the number index).
+    assert!(
+        rel.is_assignable(a_str, num_dict_num).is_yes(),
+        "a non-numeric member is not constrained by a number index signature"
+    );
+}
+
+/// Exhaustively check the M0 intrinsic-lattice + literal-widening rules so a
+/// regression in the relation engine is caught independent of the parser and
+/// the fixtures.
+#[test]
+fn intrinsic_lattice_and_widening() {
+    let mut interner = Interner::with_intrinsics();
+    // Literal sources used by the M0 fixtures.
+    let lit_num = interner.intern_literal(LiteralValue::Number(1.0));
+    let lit_str = interner.intern_literal(LiteralValue::String("x".to_string()));
+    let lit_bool = interner.intern_literal(LiteralValue::Boolean(true));
+
+    let wk = interner.well_known();
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    // Literal -> base widening (assignability uses the literal type).
+    assert!(rel.is_assignable(lit_num, wk.number).is_yes());
+    assert!(rel.is_assignable(lit_str, wk.string).is_yes());
+    assert!(rel.is_assignable(lit_bool, wk.boolean).is_yes());
+    // Cross-base widening fails.
+    assert!(!rel.is_assignable(lit_str, wk.number).is_yes());
+    assert!(!rel.is_assignable(lit_num, wk.string).is_yes());
+    assert!(!rel.is_assignable(lit_num, wk.boolean).is_yes());
+    assert!(!rel.is_assignable(lit_bool, wk.number).is_yes());
+
+    // any: assignable both directions.
+    assert!(rel.is_assignable(lit_num, wk.any).is_yes());
+    assert!(rel.is_assignable(wk.any, wk.number).is_yes());
+
+    // unknown: top type. Everything -> unknown; unknown -> only unknown/any.
+    assert!(rel.is_assignable(lit_num, wk.unknown).is_yes());
+    assert!(rel.is_assignable(wk.unknown, wk.unknown).is_yes());
+    assert!(rel.is_assignable(wk.unknown, wk.any).is_yes());
+    assert!(!rel.is_assignable(wk.unknown, wk.number).is_yes());
+
+    // never: bottom type. never -> anything; nothing -> never except never.
+    assert!(rel.is_assignable(wk.never, wk.number).is_yes());
+    assert!(rel.is_assignable(wk.never, wk.never).is_yes());
+    assert!(!rel.is_assignable(lit_num, wk.never).is_yes());
+
+    // void: accepts undefined and itself.
+    assert!(rel.is_assignable(wk.undefined, wk.void).is_yes());
+    assert!(rel.is_assignable(wk.void, wk.void).is_yes());
+    assert!(!rel.is_assignable(lit_num, wk.void).is_yes());
+
+    // strictNullChecks: null/undefined distinct, each only to self/any/unknown
+    // (undefined also to void).
+    assert!(rel.is_assignable(wk.null, wk.null).is_yes());
+    assert!(rel.is_assignable(wk.undefined, wk.undefined).is_yes());
+    assert!(!rel.is_assignable(wk.null, wk.number).is_yes());
+    assert!(!rel.is_assignable(wk.undefined, wk.string).is_yes());
+    assert!(!rel.is_assignable(wk.undefined, wk.null).is_yes());
+    assert!(!rel.is_assignable(wk.null, wk.undefined).is_yes());
+}
+
+/// A failure returns a reason chain whose root is the (src, tgt) pair — the
+/// hook M6 grows into nested messages, and the data M0's renderer consumes.
+#[test]
+fn failure_carries_reason_root() {
+    let mut interner = Interner::with_intrinsics();
+    let lit_str = interner.intern_literal(LiteralValue::String("x".to_string()));
+    let wk = interner.well_known();
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    match rel.is_assignable(lit_str, wk.number) {
+        Relation::No(chain) => {
+            assert_eq!(chain.root(), (lit_str, wk.number));
+        }
+        Relation::Yes => panic!("expected a relation failure"),
+    }
+}
+
+/// The cache returns a stable verdict on repeat queries (smoke test of the
+/// 3-`u32` cache path; the cycle stack never fires for non-recursive types).
+#[test]
+fn repeated_query_is_stable() {
+    let mut interner = Interner::with_intrinsics();
+    let lit_num = interner.intern_literal(LiteralValue::Number(1.0));
+    let wk = interner.well_known();
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    let first = rel.is_assignable(lit_num, wk.string).is_yes();
+    let second = rel.is_assignable(lit_num, wk.string).is_yes();
+    assert_eq!(first, second);
+    assert!(!first);
+}
+
+/// M5 — relating recursive types **terminates** via the assume-true cycle
+/// stack (§6.3). This guards the cycle fixpoint: a stack overflow here is the
+/// failure mode the recursive-type fixture must never hit. It covers the three
+/// paths that each loop forever without the fix:
+///
+///  1. a recursive interface relating to **itself**,
+///  2. a recursive interface relating to a **structural copy** of itself,
+///  3. a **failing** recursive relation queried **twice** — the second query
+///     hits the cached-false rebuild path, which must recompute under stack
+///     protection rather than recurse on the cached failure forever.
+#[test]
+fn recursive_relation_terminates() {
+    use crate::types::repr::ObjectType;
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    // `interface List { head: number; tail: List | null }` — a nominal,
+    // self-referential object built reserve-then-fill (its `tail` references
+    // its own id, never an inlined expansion).
+    let list = interner.reserve_object();
+    let list_or_null = interner.union(vec![list, wk.null]);
+    interner.fill_object(
+        list,
+        ObjectType {
+            properties: vec![prop("head", wk.number), prop("tail", list_or_null)],
+            ..Default::default()
+        },
+    );
+
+    // A *structural* copy with the same shape but its own id (built the same
+    // way so it too is self-referential).
+    let copy = interner.reserve_object();
+    let copy_or_null = interner.union(vec![copy, wk.null]);
+    interner.fill_object(
+        copy,
+        ObjectType {
+            properties: vec![prop("head", wk.number), prop("tail", copy_or_null)],
+            ..Default::default()
+        },
+    );
+
+    // Two mutually-shaped recursive interfaces that DISAGREE at a leaf:
+    // `A { self: A; tag: number }` vs `B { self: B; tag: string }`. Relating
+    // `A <: B` re-enters `(A, B)` via `self` (assumed true) but fails on `tag`.
+    let a = interner.reserve_object();
+    let b = interner.reserve_object();
+    interner.fill_object(
+        a,
+        ObjectType {
+            properties: vec![prop("self", a), prop("tag", wk.number)],
+            ..Default::default()
+        },
+    );
+    interner.fill_object(
+        b,
+        ObjectType {
+            properties: vec![prop("self", b), prop("tag", wk.string)],
+            ..Default::default()
+        },
+    );
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    // 1. Recursive interface relates to itself (identity short-circuit, but the
+    //    union member `List | null` still gets relate'd through the cycle for
+    //    `List <: List | null`).
+    assert!(rel.is_assignable(list, list).is_yes(), "List <: List");
+    assert!(
+        rel.is_assignable(list_or_null, list_or_null).is_yes(),
+        "List | null <: List | null"
+    );
+
+    // 2. Recursive interface relates to a structural copy — must terminate and
+    //    succeed (each side's `tail` re-enters the in-flight `(List, copy)`).
+    assert!(
+        rel.is_assignable(list, copy).is_yes(),
+        "List <: structural copy must terminate as success"
+    );
+    assert!(
+        rel.is_assignable(copy, list).is_yes(),
+        "structural copy <: List must terminate as success"
+    );
+
+    // 3. The failing recursive relation, queried TWICE. The first decides
+    //    false (and caches the bool); the second recomputes the reason on the
+    //    cached-false path — which must run under stack protection and
+    //    terminate, not loop. The leaf cause is the `tag` mismatch.
+    let first = rel.is_assignable(a, b);
+    assert!(!first.is_yes(), "A is not assignable to B (tag mismatch)");
+    let second = rel.is_assignable(a, b);
+    assert!(
+        !second.is_yes(),
+        "repeat query of a failing recursive relation must terminate with the same verdict"
+    );
+    // The rebuilt reason still points at the offending `tag` property.
+    match second {
+        Relation::No(chain) => match chain.head() {
+            Reason::Property { name, .. } => assert_eq!(name, "tag"),
+            other => panic!("expected the `tag` Property failure, got {other:?}"),
+        },
+        Relation::Yes => unreachable!(),
+    }
+}
+
+/// M31 — the merged-source recursion over a **recursive object target** must
+/// TERMINATE (the finding-1 fix's blocker: an unguarded per-property recursion
+/// stack-overflows on a self-referential property). Covers the three paths:
+///
+///  1. a **single-contributor** recursive property (`Rec & { extra } <: Rec`,
+///     `Rec { next: Rec }`) — delegates to the cycle-guarded main engine (Part A);
+///  2. a **multi-contributor** recursive property (`P & Q <: P`, `P { p: P }` /
+///     `Q { p: Q }`) — the coinductive assume-true `in_flight` guard (Part B); tsc
+///     accepts this fixpoint, so it must stay CLEAN, not over-report;
+///  3. a recursive target with a leaf **mismatch** the walk must still REACH and
+///     report (`Cell & { extra } <: { next: Cell; value: string }`).
+#[test]
+fn merged_intersection_source_recurses_to_a_fixpoint() {
+    use crate::types::repr::ObjectType;
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    // `interface Rec { next: Rec }` — self-referential (reserve-then-fill).
+    let rec = interner.reserve_object();
+    interner.fill_object(
+        rec,
+        ObjectType {
+            properties: vec![prop("next", rec)],
+            ..Default::default()
+        },
+    );
+    let extra = interner.intern_object(ObjectType {
+        properties: vec![prop("extra", wk.number)],
+        ..Default::default()
+    });
+    // `Rec & { extra: number }`.
+    let rec_and_extra = interner.intersection(vec![rec, extra]);
+
+    // `interface Cell { next: Cell; value: number }` and a target that wants
+    // `value: string` (a leaf mismatch behind the recursion).
+    let cell = interner.reserve_object();
+    interner.fill_object(
+        cell,
+        ObjectType {
+            properties: vec![prop("next", cell), prop("value", wk.number)],
+            ..Default::default()
+        },
+    );
+    let extra_str = interner.intern_object(ObjectType {
+        properties: vec![prop("extra", wk.string)],
+        ..Default::default()
+    });
+    let cell_and_extra = interner.intersection(vec![cell, extra_str]);
+    let cell_wrong = interner.intern_object(ObjectType {
+        properties: vec![prop("next", cell), prop("value", wk.string)],
+        ..Default::default()
+    });
+
+    // `interface P { p: P }` / `interface Q { p: Q }` — both contribute the
+    // recursive key `p`, so `P & Q <: P` exercises the multi-contributor guard.
+    let p = interner.reserve_object();
+    let q = interner.reserve_object();
+    interner.fill_object(
+        p,
+        ObjectType {
+            properties: vec![prop("p", p)],
+            ..Default::default()
+        },
+    );
+    interner.fill_object(
+        q,
+        ObjectType {
+            properties: vec![prop("p", q)],
+            ..Default::default()
+        },
+    );
+    let p_and_q = interner.intersection(vec![p, q]);
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    // 1. Single-contributor recursive property — must terminate as success.
+    assert!(
+        rel.is_assignable(rec_and_extra, rec).is_yes(),
+        "Rec & {{ extra }} <: Rec must terminate (single-contributor Part A)"
+    );
+
+    // 2. Multi-contributor recursive property — coinductive fixpoint, stays clean.
+    assert!(
+        rel.is_assignable(p_and_q, p).is_yes(),
+        "P & Q <: P must terminate as success (multi-contributor Part B)"
+    );
+
+    // 3. The leaf mismatch behind the recursion must still be reached + reported.
+    match rel.is_assignable(cell_and_extra, cell_wrong) {
+        Relation::No(chain) => match chain.head() {
+            Reason::Property { name, .. } => assert_eq!(name, "value"),
+            other => panic!("expected the `value` Property failure, got {other:?}"),
+        },
+        Relation::Yes => panic!("the `value: number` vs `value: string` mismatch must be caught"),
+    }
+}
+
+/// M5 soundness — a recursive **false** verdict must be **order-independent**:
+/// it must not depend on whether an enclosing assume-true query ran first
+/// (architecture §6.3). This is the cache-poisoning hazard: relating `CA <: AA`
+/// decides the nested `CB <: AB` *provisionally* true under the in-flight
+/// `(CA, AA)` assumption; if that provisional `true` were committed to the
+/// durable cache, a later INDEPENDENT `CB <: AB` query would read it as ground
+/// truth and drop a real error. The fix never caches a verdict that rested on an
+/// assumption about an ancestor key, so the standalone verdict is identical
+/// either way.
+#[test]
+fn recursive_false_verdict_is_order_independent() {
+    use crate::types::repr::ObjectType;
+
+    // Build the four mutually-recursive interfaces once; reused for both orders.
+    // AA { peer: AB; tag: number }   AB { back: AA; leaf: number }
+    // CA { peer: CB; tag: string }   CB { back: CA; leaf: number }  (tag differs)
+    fn build(interner: &mut Interner) -> (TypeId, TypeId, TypeId, TypeId) {
+        let wk = interner.well_known();
+        let (aa, ab, ca, cb) = (
+            interner.reserve_object(),
+            interner.reserve_object(),
+            interner.reserve_object(),
+            interner.reserve_object(),
+        );
+        interner.fill_object(
+            aa,
+            ObjectType {
+                properties: vec![prop("peer", ab), prop("tag", wk.number)],
+                ..Default::default()
+            },
+        );
+        interner.fill_object(
+            ab,
+            ObjectType {
+                properties: vec![prop("back", aa), prop("leaf", wk.number)],
+                ..Default::default()
+            },
+        );
+        interner.fill_object(
+            ca,
+            ObjectType {
+                properties: vec![prop("peer", cb), prop("tag", wk.string)],
+                ..Default::default()
+            },
+        );
+        interner.fill_object(
+            cb,
+            ObjectType {
+                properties: vec![prop("back", ca), prop("leaf", wk.number)],
+                ..Default::default()
+            },
+        );
+        (aa, ab, ca, cb)
+    }
+
+    // Order A: query `CA <: AA` FIRST (which provisionally relates `CB <: AB`
+    // under the `(CA, AA)` assumption), THEN the standalone `CB <: AB`.
+    let order_a_cb_ab = {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let (aa, ab, ca, cb) = build(&mut interner);
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+        // The enclosing query: genuinely false (top-level `tag` mismatch).
+        assert!(
+            !rel.is_assignable(ca, aa).is_yes(),
+            "CA <: AA is false (tag)"
+        );
+        // The standalone nested query MUST still be false.
+        rel.is_assignable(cb, ab).is_yes()
+    };
+
+    // Order B: the standalone `CB <: AB` query alone, no enclosing query.
+    let order_b_cb_ab = {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let (_aa, ab, _ca, cb) = build(&mut interner);
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+        rel.is_assignable(cb, ab).is_yes()
+    };
+
+    // The verdict is the same either way, and it is FALSE: `CB <: AB` requires
+    // `CB.back (CA) <: AB.back (AA)`, which fails on the `tag` leaf.
+    assert_eq!(
+        order_a_cb_ab, order_b_cb_ab,
+        "a recursive false verdict must not depend on an enclosing assume-true query"
+    );
+    assert!(
+        !order_b_cb_ab,
+        "CB is not assignable to AB (the recursive `tag` mismatch must be reported)"
+    );
+}
+
+/// M27 — template **patterns** in the relation engine: a string literal matches a
+/// pattern by anchored segment scanning (`${string}` any, `${number}` a decimal), a
+/// pattern flows into `string` and into a subsuming pattern, and `string` matches only
+/// the bare `` `${string}` `` hole.
+#[test]
+fn template_pattern_assignability() {
+    use crate::types::repr::TemplateType;
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    let template = |interner: &mut Interner, texts: &[&str], holes: Vec<TypeId>| {
+        interner.intern_template(TemplateType {
+            texts: texts.iter().map(|t| t.to_string()).collect(),
+            holes,
+        })
+    };
+    let s = |interner: &mut Interner, v: &str| {
+        interner.intern_literal(LiteralValue::String(v.to_string()))
+    };
+
+    // Patterns.
+    let greeting = template(&mut interner, &["hello ", ""], vec![wk.string]); // `hello ${string}`
+    let num_hole = template(&mut interner, &["n", ""], vec![wk.number]); // `n${number}`
+    let bare = template(&mut interner, &["", ""], vec![wk.string]); // `${string}`
+    let h_hole = template(&mut interner, &["h", ""], vec![wk.string]); // `h${string}`
+    let x_hole = template(&mut interner, &["x", ""], vec![wk.string]); // `x${string}`
+
+    // Literal sources.
+    let hello_world = s(&mut interner, "hello world");
+    let goodbye = s(&mut interner, "goodbye world");
+    let n42 = s(&mut interner, "n42");
+    let n35 = s(&mut interner, "n3.5");
+    let nx = s(&mut interner, "nx");
+
+    let yes = |interner: &Interner, src: TypeId, tgt: TypeId| {
+        let mut rel = Relater::new(interner.store(), wk);
+        rel.is_assignable(src, tgt).is_yes()
+    };
+
+    // Literal → pattern (anchored matching).
+    assert!(yes(&interner, hello_world, greeting), "\"hello world\" <: `hello ${{string}}`");
+    assert!(!yes(&interner, goodbye, greeting), "\"goodbye world\" not <: `hello ${{string}}`");
+    assert!(yes(&interner, n42, num_hole), "\"n42\" <: `n${{number}}`");
+    assert!(yes(&interner, n35, num_hole), "\"n3.5\" <: `n${{number}}`");
+    assert!(!yes(&interner, nx, num_hole), "\"nx\" not <: `n${{number}}` (non-numeric)");
+
+    // `string` → pattern: only the bare `${string}` hole.
+    assert!(!yes(&interner, wk.string, greeting), "string not <: `hello ${{string}}`");
+    assert!(yes(&interner, wk.string, bare), "string <: `${{string}}`");
+
+    // Pattern → string, and pattern subsumption.
+    assert!(yes(&interner, greeting, wk.string), "`hello ${{string}}` <: string");
+    assert!(yes(&interner, greeting, bare), "`hello ${{string}}` <: `${{string}}`");
+    assert!(yes(&interner, greeting, h_hole), "`hello ${{string}}` <: `h${{string}}`");
+    assert!(!yes(&interner, greeting, x_hole), "`hello ${{string}}` not <: `x${{string}}`");
+}
