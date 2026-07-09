@@ -33,9 +33,13 @@ an FN — which does not happen). The ledger entry was corrected in the 2026-07-
 
 ## Approach / acceptance
 
-Collect same-name `infer` candidates by **variance**: covariant positions union
+Collect same-name `infer` candidates by **variance** (mirroring tsc's
+`candidates`/`contraCandidates` split in `inferTypes`): covariant positions union
 (existing behavior), contravariant positions **intersect** (`&`, available in the type
-model since M31 — the missing wiring). 
+model since M31 — the missing wiring). tsc mechanism note (verified 2026-07-09): the
+intersection is the **signatureless conditional-`infer` path**
+(`getTypeFromInference` → `getIntersectionType(contraCandidates)`); the signature/call-site
+path's `getCommonSubtype` single-candidate selection must NOT be copied here.
 
 Acceptance: the overlap fixture above → `r2` clean, `r1` errors (`string` ≠ `number`);
 the disjoint case → `never` in both (unchanged); covariant same-name `infer` still

@@ -7,12 +7,14 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
 
 ## 1. Invariants you must NOT break
 
-- **Relation engine** (`src/relate/relation.rs`): the 3×`u32` `(TypeId,TypeId,RelationKind)` bool
+- **Relation engine** (`src/relate/relation/mod.rs`): the 3×`u32` `(TypeId,TypeId,RelationKind)` bool
   cache, the **assume-true-until-disproven cycle stack** for recursive types, and `Relation::No(ReasonChain)`
   (never a bare `bool`). **Cache-soundness fix (architecture §6.3):** a verdict that depended on an
   in-flight *ancestor* assumption must NOT be committed to the durable cache (only a `false`, or a
   non-provisional `true`). A regression here causes order-dependent dropped errors — the sharpest
-  bug found in the whole project.
+  bug found in the whole project. If a depth/budget limit is ever added to `relate`, verdicts computed
+  under an exhausted budget must not be committed to any cache either (same bug class as the b55
+  evaluator-memo fix).
 - **Type store** (`src/types/`): every type is a hash-consed `TypeId`; structural equality is `==`.
   Property metadata that is part of *identity* — `visibility`, `declaring_class`, `readonly`,
   `is_accessor`, index signatures — is folded into the structural hash + `object_props_eq`, but the

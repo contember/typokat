@@ -13,6 +13,9 @@ decided work or status.
   proposals recorded so they aren't re-proposed).
 - [`type-assertion-markers.md`](type-assertion-markers.md) — `// type:` corpus markers
   compared as interned `TypeId`s (string-compare form explicitly rejected).
+- [`sota-checker-lessons.md`](sota-checker-lessons.md) — SOTA checker survey (tsgo, ty,
+  Pyrefly, Flow, Sorbet, Hack, rustc, papers) + peer-review verdicts; reference shelf for
+  the `14`–`17` scale era and profiling-gated relation/evaluator ideas.
 
 *(shipped/graduated: `benchmark-harness` → `tooling/bench/`; `minimal-prelude-slice` →
 backlog `38`.)*

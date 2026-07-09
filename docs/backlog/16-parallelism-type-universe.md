@@ -30,7 +30,12 @@ work under per-file parallel execution.
 
 parse+bind stays per-file-parallel and interner-free forever. Acceptance: multi-file checking shares
 the prelude + cross-file types across workers without losing type identity, and stays correct under
-parallel execution.
+parallel execution — **deterministically**: identical diagnostics (order and rendered text, including
+union display order) across runs regardless of worker count or schedule (the tsgo lesson — it shipped
+different errors between runs off encounter-order type ids). Corollary: the stable hash must define a
+**content-based canonical member order** — hashing unions over run-local TypeId-sorted members would
+make structurally identical types hash differently across workers. (Peer-reviewed 2026-07-09; see
+`docs/ideas/sota-checker-lessons.md`.)
 
 ## Touch points
 
