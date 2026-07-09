@@ -1,13 +1,6 @@
 //! Flow analysis and narrowing operations (architecture §5).
-//!
-//! This module contains the reusable narrowing functions and the CFG node model
-//! used by the checker. Narrowing operations are intentionally flow-model-agnostic:
-//! they filter a type under a guard and re-intern the result, while the statement
-//! checker decides which symbol and branch polarity apply.
-//!
-//! Still-deferred narrowings include assertion functions/type predicates, combined
-//! `typeof`+`in` discriminants, non-literal discriminants, and expression-level
-//! `&&`/`||`/ternary condition narrowing.
+//! Reusable narrowing functions plus the checker CFG node model. Operations filter
+//! types under guard facts; the checker decides symbol and branch polarity.
 
 use crate::binder::symbol::SymbolId;
 use crate::relate::{Relater, Relation};
@@ -33,22 +26,15 @@ impl FlowNodeId {
     pub const START: FlowNodeId = FlowNodeId(1);
 }
 
-/// A node in the control-flow graph (architecture §5) — the **single** narrowing
-/// model (M23): `if`/`else`/`switch`, early `return`/`throw`, `&&`/`||`/ternary,
-/// assignment-in-flow, and `while` loop edges all lower to these nodes, and a
-/// reference's narrowed type is a memoized backward walk applying the [`narrow`]
-/// ops. Slots 0/1 are the [`FlowNodeId::UNREACHABLE`]/[`FlowNodeId::START`]
-/// sentinels.
+/// A node in the single control-flow narrowing model (architecture §5). Slots 0/1
+/// are the [`FlowNodeId::UNREACHABLE`]/[`FlowNodeId::START`] sentinels.
 pub enum FlowNode {
     /// Reserved sentinel: unreachable code / an all-unreachable join (slot 0).
     Unreachable,
     /// Reserved sentinel: flow start — the declared type (slot 1).
     Start,
-    /// An assignment `symbol = <value>` in straight-line flow. `assigned` is the
-    /// (widened) assigned type, or `None` to reset the symbol to its **declared**
-    /// type — used for a complex RHS or a compound assignment (`+=`), the sound
-    /// over-report direction. A reference to a *different* symbol passes through to
-    /// `antecedent`.
+    /// An assignment in straight-line flow. `None` resets to the declared type for
+    /// complex/compound assignments, the sound over-report direction.
     Assignment {
         symbol: SymbolId,
         assigned: Option<TypeId>,
@@ -69,14 +55,9 @@ pub enum FlowNode {
     /// antecedents (which already exclude the unreachable ones, so an all-returning
     /// `if` collapses to its complement — early-exit narrowing).
     BranchLabel { antecedents: Vec<FlowNodeId> },
-    /// A `while` loop label (the back-edge join). `pre` are the entry edges, `back`
-    /// the back edges (the body fall-through end + every `continue`). Resolved by a
-    /// **single-unroll fixpoint** seeded with the pre-loop type: the back edge is
-    /// evaluated with the seed visible for re-entry, and the result is the union of
-    /// the seed with the back-edge types. The provisional seed is **never** durably
-    /// memoized (invariants §1 — a pre-loop narrow state cached across a back edge
-    /// is a dropped-error false negative; `loops.ts` `loopBackEdge`/`breakTrap` pin
-    /// this).
+    /// A `while` loop label resolved by a single-unroll fixpoint. The provisional
+    /// seed is never durably memoized; caching it across a back edge is a dropped-
+    /// error false negative (invariants §1).
     LoopLabel {
         pre: Vec<FlowNodeId>,
         back: Vec<FlowNodeId>,
@@ -118,37 +99,22 @@ impl TypeofTag {
     }
 }
 
-/// A recognized narrowing operation: the *shape* of the guard, independent of the
-/// branch polarity (the driver applies `positive` for the then-branch and its
-/// negation for the else-branch). Pairing one of these with a target `SymbolId`
-/// (done in `checker.rs`) makes a guard fact — the symbol-keying that keeps
-/// narrowing from leaking across symbols.
-///
-/// Not `Copy`: the M8 discriminant/`in` variants carry the property name (a
-/// `String`). The driver passes it to [`narrow`] **by reference**, so a guard fact
-/// is reused across both branches without cloning.
+/// A guard shape independent of branch polarity. The checker pairs it with a
+/// target `SymbolId`, which keeps narrowing from leaking across symbols.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum NarrowOp {
     /// `typeof x === <tag>` (the positive sense). The then-branch keeps the
     /// members matching the tag; the else-branch keeps the complement.
     Typeof(TypeofTag),
-    /// Truthiness (`if (x)`, positive sense). The then-branch removes the always-
-    /// falsy members (`null`/`undefined`); the else-branch removes the always-
-    /// truthy members (objects/functions). Per the M7 subset, falsy-capable
-    /// primitives (`string`/`number`/`boolean`/literals) are **not** split, so
-    /// they survive into both branches (sound: each branch stays a superset of the
-    /// precise narrowing).
+    /// Truthiness. Falsy-capable primitives are not split, so each branch remains
+    /// a superset of the precise narrowing.
     Truthy,
     /// `x === null` / `x === undefined` (the positive sense). The then-branch keeps
     /// only that nullish member; the else-branch removes it. The target nullish
     /// intrinsic is identified by `is_undefined`.
     EqNullish { is_undefined: bool },
-    /// **Literal discriminant** (M8): `x.prop === <literal>` (the positive sense).
-    /// The then-branch keeps the union members whose `prop` *could* equal the
-    /// literal; the else-branch keeps the complement (the members whose `prop` can
-    /// never be anything but the literal are removed). `property` is the
-    /// discriminant property name; `literal` is the interned literal `TypeId` it is
-    /// compared against. See [`narrow_by_discriminant`] for the exact (sound) rule.
+    /// Literal discriminant (M8): then keeps members whose property could equal the
+    /// literal; else removes members whose property is exactly that literal.
     Discriminant { property: String, literal: TypeId },
     /// **`in`-operator** (M8): `"prop" in x` (the positive sense). The then-branch
     /// keeps the union members that *have* `prop`; the else-branch keeps those that
@@ -156,17 +122,8 @@ pub enum NarrowOp {
     In { property: String },
 }
 
-/// Apply a narrowing operation to `ty` under a branch polarity, returning the
-/// refined type (re-interned through [`Interner::union`]). `positive` is `true` in
-/// the branch where the guard holds as written, `false` in the complementary
-/// branch — the driver passes `true` for the then-branch and the polarity-flipped
-/// value for the else-branch (and folds any `!` in the condition into it).
-///
-/// `op` is borrowed (not consumed) so the driver applies the same fact to both
-/// branches. Every narrowing filters the **union members** of `ty` and re-interns,
-/// so a removed member collapses the union (`string | number` minus `number` =
-/// `string`; `{a} | null` minus `null` = `{a}`). A non-union `ty` is treated as a
-/// one-member set, so the operations are total and compose with prior narrowings.
+/// Apply a narrowing operation under branch polarity and re-intern the result.
+/// Non-unions are treated as one-member sets, so operations are total and compose.
 pub fn narrow(interner: &mut Interner, ty: TypeId, op: &NarrowOp, positive: bool) -> TypeId {
     match op {
         NarrowOp::Typeof(tag) => narrow_by_typeof(interner, ty, *tag, positive),
@@ -181,18 +138,8 @@ pub fn narrow(interner: &mut Interner, ty: TypeId, op: &NarrowOp, positive: bool
     }
 }
 
-/// Narrow `ty` by `typeof x === <tag>` (architecture §5).
-///
-///  - **then-branch** (`keep == true`): keep the members whose `typeof` tag is
-///    `tag` — i.e. the matching primitive/literal members.
-///  - **else-branch** (`keep == false`): keep the complement (everything that does
-///    *not* match the tag).
-///
-/// A member matches a tag when it is the tag's base intrinsic or a literal of that
-/// base (e.g. `"x"` matches `typeof === "string"`). Object/function/`null`/
-/// `undefined`/`unknown` members never match a primitive tag. `any` is left
-/// untouched (it is not a union; narrowing `any` keeps `any` — sound, and matches
-/// tsc treating `any` as un-narrowable by `typeof`).
+/// Narrow by `typeof x === <tag>`. Then keeps matching primitive/literal members;
+/// else keeps the complement. `any` stays un-narrowable.
 pub fn narrow_by_typeof(
     interner: &mut Interner,
     ty: TypeId,
@@ -206,18 +153,8 @@ pub fn narrow_by_typeof(
     })
 }
 
-/// Narrow `ty` by truthiness (architecture §5).
-///
-///  - **then-branch** (`truthy == true`): remove the always-falsy members
-///    (`null`, `undefined`).
-///  - **else-branch** (`truthy == false`): remove the always-truthy members
-///    (object and function types — and the error type, which behaves like `any`
-///    and should not survive into a falsy branch as a spurious object).
-///
-/// Falsy-capable primitives (`string`/`number`/`boolean` and their literals) are
-/// deliberately **not** split (mvp-plan M7 subset): they survive into both
-/// branches. This keeps each branch a *superset* of the precise narrowing, so the
-/// result is sound (an over-wide branch can only over-report, never under-report).
+/// Narrow by truthiness. Falsy-capable primitives are deliberately not split, so
+/// both branches remain safe supersets of the precise narrowing.
 pub fn narrow_by_truthiness(interner: &mut Interner, ty: TypeId, truthy: bool) -> TypeId {
     let wk = interner.well_known();
     filter_union(interner, ty, |store, member| {
@@ -231,13 +168,8 @@ pub fn narrow_by_truthiness(interner: &mut Interner, ty: TypeId, truthy: bool) -
     })
 }
 
-/// Narrow `ty` by `x === null` / `x === undefined` (architecture §5).
-///
-///  - **then-branch** (`positive == true`): keep only the targeted nullish member
-///    (`null` or `undefined`). If the union does not contain it, the result is
-///    `never` — exactly tsc's verdict (the value cannot equal it).
-///  - **else-branch** (`positive == false`): remove the targeted nullish member
-///    (`{a} | null` minus `null` = `{a}`).
+/// Narrow by strict null/undefined equality: then keeps only the targeted nullish
+/// member, else removes it.
 fn narrow_by_nullish_equality(
     interner: &mut Interner,
     ty: TypeId,
@@ -411,11 +343,7 @@ fn member_matches_typeof(
         // "string"` (and no other tag) — kept correct so a template member is not
         // wrongly narrowed out of a `string` branch.
         TypeTag::Template => tag.intrinsic() == crate::types::repr::IntrinsicKind::String,
-        // Objects/functions/unions/type-parameters/arrays/tuples never match a
-        // primitive `typeof` tag (a nested union cannot appear as a member after
-        // canonicalization, a type parameter only appears inside an uninstantiated
-        // generic body, and an array's/tuple's `typeof` is `"object"` — out of the M7
-        // tag subset; but the arm is exhaustive and defensive either way).
+        // Composite/uninstantiated types never match primitive M7 `typeof` tags.
         TypeTag::Object
         | TypeTag::Function
         | TypeTag::Union
@@ -438,11 +366,7 @@ fn member_matches_typeof(
     }
 }
 
-/// Whether a type is *always* truthy — used to drop members from a falsy branch.
-/// Object and function types are always truthy. Everything else (primitives,
-/// literals, `null`/`undefined`, `unknown`, `any`/error) is conservatively treated
-/// as possibly-falsy so it is **kept** in the falsy branch (sound: never removes a
-/// member that could legitimately be falsy).
+/// Whether a type is always truthy; everything else is kept in the falsy branch.
 fn is_always_truthy(store: &crate::types::store::Store, member: TypeId) -> bool {
     // M17: an array value is always truthy in JS (like an object/function), so it is
     // dropped from a falsy branch — a `T[] | null` narrowed by `if (a)` keeps only
@@ -453,16 +377,8 @@ fn is_always_truthy(store: &crate::types::store::Store, member: TypeId) -> bool 
     )
 }
 
-/// Filter the members of a union `ty` by `keep`, re-interning the survivors through
-/// [`Interner::union`] (which canonicalizes and collapses a 1-member result to the
-/// member, a 0-member result to `never`).
-///
-/// A non-union `ty` is treated as a **single-member set**: `keep` is consulted once
-/// for `ty` itself, yielding either `ty` unchanged or `never`. This makes every
-/// narrowing total and lets it compose with a prior narrowing that already
-/// collapsed a union down to one member (nested `if`s). `any`/the error type are
-/// returned unchanged without consulting `keep` — they are un-narrowable tops and
-/// must not collapse to `never`.
+/// Filter union members and re-intern survivors. Non-unions are one-member sets;
+/// `any`/error are un-narrowable tops and must not collapse to `never`.
 fn filter_union(
     interner: &mut Interner,
     ty: TypeId,

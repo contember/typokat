@@ -1,22 +1,7 @@
-//! The flow-node CFG: construction pre-pass plus backward resolution (architecture §5).
-//!
-//! ## Construction (the pre-pass)
-//!
-//! [`Pass::build_flow_graph`] walks the top level and every function/method body
-//! before checking, recording the current flow node for each identifier reference
-//! in [`Pass::reference_flow`]. The pre-pass makes loop back edges complete before
-//! any narrowed type is resolved. Function bodies start at [`FlowNodeId::START`]
-//! (the documented closure divergence), and declarations create no flow node: a
-//! reference reads its declared type until a real `=` assignment narrows it.
-//!
-//! ## Resolution (the backward walk)
-//!
-//! [`Pass::resolve_narrowed_type`] walks backward from a reference's flow node,
-//! applying [`narrow`](crate::check::flow::narrow) and memoizing by
-//! `(flow node, symbol)`. Non-loop resolution is iterative to avoid host-stack
-//! overflow; loop labels use a bounded single-unroll fixpoint. The provisional loop
-//! seed is **never** durably memoized (invariants §1 — caching it across a back edge
-//! is a dropped-error false negative).
+//! Flow-node CFG construction and backward resolution (architecture §5).
+//! The pre-pass records each reference's flow node before checking, with loop back
+//! edges complete up front. Resolution memoizes by `(flow node, symbol)`; loop
+//! labels use a single-unroll fixpoint whose seed is never durably memoized.
 
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
@@ -205,14 +190,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.flow_cursor = self.flow_join(vec![then_end, else_end]);
     }
 
-    /// Build the flow for a `switch` (backlog 53): each clause body starts from its
-    /// per-case discriminant narrowing (`x.prop === label`) joined with the previous
-    /// clause's fall-through end when it did not terminate; `default:` narrows by the
-    /// complement of all labels. Post-switch flow **joins** every clause's exit — the
-    /// last clause's fall-through end, every `break` edge, and (when there is no
-    /// `default`) the pre-switch no-match path — so an assignment in a clause reaches
-    /// the code after the `switch`. A `return`/`throw`-terminated clause contributes
-    /// [`FlowNodeId::UNREACHABLE`], filtered out by [`flow_join`].
+    /// Build `switch` flow: case/default discriminant narrows, fallthrough joins
+    /// into the next clause, and post-switch flow joins fallthrough, breaks, and
+    /// the no-match path when there is no default.
     fn build_flow_switch(&mut self, scope: ScopeId, switch: &SwitchStatement<'_>) {
         self.build_flow_expr(scope, &switch.discriminant);
         let discriminant = self.member_discriminant(scope, &switch.discriminant);
@@ -317,11 +297,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Build the flow for a `while` loop: a loop label joins the pre-loop edge with
-    /// the back edges (body fall-through end + every `continue`); the condition
-    /// narrows the body (the true branch) and the code after the loop (the false
-    /// branch joined with any `break` edges). The condition is evaluated *at the loop
-    /// label* so its references see the back-edge fixpoint (each iteration).
+    /// Build `while` flow with a loop label for pre-loop plus back edges. The
+    /// condition is evaluated at the label so references see the fixpoint.
     fn build_flow_while(&mut self, scope: ScopeId, while_stmt: &WhileStatement<'_>) {
         let pre = self.flow_cursor;
         if pre == FlowNodeId::UNREACHABLE {
@@ -448,13 +425,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// `&&` / `||` (M23): the right operand is evaluated under the left operand's
-    /// guard — `&&` when it holds (true branch), `||` when it fails (false branch).
-    /// The post-expression cursor **joins** the RHS-evaluated end with the RHS-skipped
-    /// branch (`&&` → the false branch, `||` → the true branch), so an assignment in
-    /// the RHS survives (backlog 53). Condition narrowing still does not persist past
-    /// the expression: both join inputs carry the condition's opposing senses, so it
-    /// widens back out naturally.
+    /// Build `&&`/`||` flow: RHS runs under the appropriate left-guard branch, then
+    /// joins with the skipped branch so RHS assignments survive but guard narrowing
+    /// does not persist past the expression.
     fn build_flow_logical(&mut self, scope: ScopeId, logical: &LogicalExpression<'_>) {
         self.build_flow_expr(scope, &logical.left);
         let fact = self.analyze_guard(scope, &logical.left);
@@ -499,14 +472,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.flow_cursor = self.flow_join(vec![then_end, else_end]);
     }
 
-    /// An assignment `x = <rhs>` (M23). The RHS is built first (it sees the
-    /// pre-assignment flow — `x = x` reads the old `x`). A simple `=` to an identifier
-    /// narrows `x` to the **assigned value's** (widened) type in the straight-line
-    /// flow after; a compound (`+=`) or complex RHS resets to the declared type (over-
-    /// report, sound). A **destructuring** target (`[x] = …`, `({ x } = …)`) resets
-    /// every identifier the pattern binds to its declared type — a stale narrow past
-    /// the reassignment is a dropped error (review round 1, `assignment_patterns.ts`).
-    /// A member target binds no symbol (member paths are not narrowed).
+    /// Build assignment flow. RHS sees pre-assignment flow; simple identifier `=`
+    /// narrows to the assigned value, while compound/complex/destructuring targets
+    /// reset bound identifiers to declared types. Member targets bind no symbol.
     fn build_flow_assignment(&mut self, scope: ScopeId, assign: &AssignmentExpression<'_>) {
         self.build_flow_expr(scope, &assign.right);
         if self.flow_cursor == FlowNodeId::UNREACHABLE {
@@ -561,12 +529,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.flow_cursor = node;
     }
 
-    /// Reset every identifier a destructuring assignment target binds (review round
-    /// 1): array patterns (elements + rest), object patterns (shorthand + renamed
-    /// properties + rest), defaults, and nested patterns all recurse here. A member
-    /// target binds no symbol (member paths are not narrowed — nothing to reset).
-    /// TS-wrapper targets (`x as T`, `x!` — `TSAsExpression` and friends) are out of
-    /// the subset and skipped.
+    /// Reset every identifier bound by a destructuring assignment target; nested
+    /// patterns recurse, member targets bind no symbol, and TS-wrapper targets are
+    /// out of subset.
     fn reset_pattern_targets(&mut self, scope: ScopeId, target: &AssignmentTarget<'_>) {
         match target {
             AssignmentTarget::AssignmentTargetIdentifier(ident) => {
@@ -926,11 +891,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .unwrap_or_else(|| self.declared_type(symbol))
     }
 
-    /// Resolve a `while` loop label (M23): a **single-unroll fixpoint** — the union of
-    /// the pre-loop seed with the back-edge types, the seed made visible for re-entry
-    /// via [`Pass::flow_provisional`]. The provisional seed is **never** promoted to
-    /// the durable memo (invariants §1); durable writes are suppressed while any loop
-    /// fixpoint is in progress ([`Pass::flow_loop_depth`]).
+    /// Resolve a `while` label with a single-unroll fixpoint. The provisional seed
+    /// is never promoted to the durable memo (invariants §1), and durable writes are
+    /// suppressed while any loop fixpoint is in progress.
     fn resolve_loop_label(&mut self, label: FlowNodeId, symbol: SymbolId) -> TypeId {
         if let Some(&t) = self.flow_provisional.get(&(label, symbol)) {
             return t;

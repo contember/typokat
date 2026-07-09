@@ -1,15 +1,7 @@
-//! M11 end-to-end tests for classes (fields + constructor + methods + `this` +
-//! `new` + structural instance types). These drive the whole pipeline (parse →
-//! bind → check) and assert the *set* of `(line, code)` diagnostics, so they pin
-//! the behaviours the reviewer should scrutinize: the instance type is built from
-//! fields + methods (member access + assignability), `new` checks the constructor
-//! arity/args and yields the instance type, `this` resolves to the instance type
-//! inside member bodies and does **not leak**, method returns are checked, and the
-//! instance type is structurally interchangeable with a matching object type both
-//! ways. The deferred features (inheritance, modifiers, static, …) must not crash.
-//!
-//! The per-fixture acceptance lives in the conformance corpus (`m11_classes/`);
-//! these unit pins guard the construction/scoping invariants directly.
+//! M11 end-to-end tests for classes.
+//! Pins instance construction, `new`, `this` scoping, method returns, structural
+//! instance assignability, and no-crash handling for deferred features.
+//! Fixture acceptance lives in `m11_classes/`.
 
 use crate::driver::check_source;
 
@@ -254,11 +246,8 @@ const a: A = new B(1);
     assert!(diags(src).is_empty(), "got {:?}", diags(src));
 }
 
-/// **Deferred features do not crash**: a class using inheritance, access
-/// modifiers, `static`, getters, and a parameter property must complete the run
-/// without panicking. Correctness of these is out of M11 scope; we only assert no
-/// crash and that the member-assignment in the constructor body is not falsely
-/// reported.
+/// Deferred class features are out of M11 scope, but must not crash or
+/// false-report constructor member assignment.
 #[test]
 fn deferred_class_features_do_not_crash() {
     let src = "\
@@ -290,11 +279,8 @@ const d = new Derived(1);
     let _ = diags(src);
 }
 
-/// Member-assignment-target checking landed in **M14** (it was deferred through
-/// M11–M13): `this.x = <wrong>` in a constructor is now `TK2322` — the RHS must be
-/// assignable to the property's type. A *type-correct* `this.x = <number>` stays
-/// clean (the M14 `member_assign_tests` module pins both directions); this M11 case
-/// keeps the mismatch pin here so the gap stays closed.
+/// M14 closed the constructor member-assignment gap: the wrong RHS now emits
+/// `TK2322`, while the type-correct path is pinned in `member_assign_tests`.
 #[test]
 fn member_assignment_target_type_mismatch_is_checked() {
     let src = "\

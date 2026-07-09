@@ -1,20 +1,7 @@
-//! Pluggable structural hashing for the interner.
+//! Structural hashing for the interner.
 //!
-//! Architecture §3.2 wants two identities per type: the run-local `TypeId(u32)`
-//! and a **stable structural hash** (content-addressed, e.g. blake3) computed at
-//! intern time for cross-run identity (disk cache, incrementality).
-//!
-//! The MVP deliberately does NOT compute blake3 (mvp-plan §7.1): we have no
-//! incrementality yet, so paying for it would be cost without benefit. But the
-//! interner is *shaped* around "a hash computed at intern time" so swapping the
-//! function in here is a one-module change rather than the rewrite the doc warns
-//! about. Concretely:
-//!
-//! - `structural_hash` is the live function (FxHash now) used for hash-consing.
-//! - `StableHash` + `stable_hash` are the reserved slot for the blake3-style
-//!   content hash. They are NOT populated in the MVP — `stable_hash` returns a
-//!   documented placeholder and the `Store` keeps a (currently unused) column
-//!   for it. Phase 4 fills this in without changing call sites.
+//! `structural_hash` is the live FxHash key; `StableHash` reserves the future
+//! cross-run content hash slot and deliberately returns a zero digest today.
 
 use crate::types::repr::{
     IntrinsicKind, LiteralValue, ModifierOp, ParameterType, PropertyType, TypeParamId, TypeTag,
@@ -23,22 +10,14 @@ use crate::types::store::TypeId;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
-/// The structural-hash key for a candidate type, hashed *before* it is interned.
-/// Two structurally identical types must produce the same `StructuralKey` hash
-/// so hash-consing collapses them (architecture §3: structural equality becomes
-/// an id compare).
-///
-/// This intentionally mirrors the data the interner dedups on. As object/union/
-/// function types come online (M2–M4) their structural keys are added here.
+/// The pre-intern structural-hash key. It mirrors the data the interner dedups
+/// on, so structurally equal candidates hash into the same bucket and then get
+/// confirmed by structural comparison.
 pub enum StructuralKey<'a> {
     Intrinsic(IntrinsicKind),
     Literal(&'a LiteralValue),
-    /// An object type, keyed over its **canonical** property list (sorted by name
-    /// by the interner before hashing) so `{ a; b }` and `{ b; a }` collide, plus
-    /// its **index signatures** (M19): the string- and number-index value type ids
-    /// are part of the key, so `{ [k: string]: number }` collides only with another
-    /// object having the same members AND the same index signatures (and is distinct
-    /// from `{}` / `{ [k: string]: string }`).
+    /// Object identity: canonical property list plus index and call/construct
+    /// signatures. All identity-bearing `PropertyType` fields are hashed below.
     Object {
         properties: &'a [PropertyType],
         string_index: Option<TypeId>,
@@ -72,11 +51,8 @@ pub enum StructuralKey<'a> {
     /// `number[]` collides with `number[]`; `number[]` and `string[]` do not. The
     /// element is itself canonical (interned), so the key is decided by its id.
     Array(TypeId),
-    /// A **tuple** type (`[A, B]` — M18), keyed over its **ordered** element list.
-    /// Order is significant (the list is **not** sorted, unlike a union), so
-    /// `[number, string]` and `[string, number]` hash differently, and so does
-    /// `[number]` (length differs). Each element is itself canonical (interned), so
-    /// the key is decided by the ordered sequence of ids.
+    /// A **tuple** type (`[A, B]` — M18), keyed over its ordered element ids.
+    /// Order and arity are identity-bearing; the list is never sorted.
     Tuple(&'a [TypeId]),
     /// A **readonly** wrapper over an array/tuple operand. Identity is the operand
     /// id alone, with its own discriminant so it never collides with the operand.
@@ -359,11 +335,8 @@ impl TypeTag {
     }
 }
 
-/// Reserved cross-run stable hash type (architecture §3.2). A newtype around a
-/// 32-byte digest so the eventual blake3 output drops in unchanged.
-///
-/// TODO(Phase 4): compute a real content hash (blake3 over the canonical
-/// structure) at intern time and store it in `Store::stable_hash`.
+/// Reserved cross-run stable hash type.
+/// TODO(Phase 4): compute a real content hash at intern time.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
 pub struct StableHash(pub [u8; 32]);
 

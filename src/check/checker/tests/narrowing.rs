@@ -1,10 +1,6 @@
-//! M7 end-to-end soundness tests for control-flow narrowing. These drive the
-//! whole pipeline (parse → bind → check) and assert the *set* of `(line, code)`
-//! diagnostics, so they pin the four soundness properties the review hammers:
-//! narrowing does not escape its branch, never affects another symbol, resets
-//! on reassignment, and never fires for an unrecognized guard. The
-//! per-operation narrowing math is unit-tested in `flow.rs`; these guard the
-//! env/driver (the structured-flow slice).
+//! M7 end-to-end soundness tests for control-flow narrowing.
+//! Pins branch scoping, symbol isolation, reassignment resets, and unrecognized
+//! guard behavior; per-operation math is unit-tested in `flow.rs`.
 
 use crate::driver::check_source;
 
@@ -159,12 +155,8 @@ const ok: number = x.a;
     assert_eq!(diags(src), vec![(2, "TK2339".to_string())]);
 }
 
-/// Soundness hardening — a **compound** assignment (`+=`, …) to a narrowed
-/// variable resets its narrowing too, just like a simple `=`. After `x += "b"`
-/// inside a `typeof`-guarded branch, `x` must no longer be assumed `string`, so a
-/// `const s: string = x` errors (the variable is back to `string | number`).
-/// This guards the defense-in-depth reset hoisted above the compound-operator
-/// early-return in `check_assignment`: were it stale, this would silently pass.
+/// Compound assignment must reset narrowing like `=`; the reset sits before the
+/// compound-operator early return in `check_assignment`.
 #[test]
 fn compound_assignment_resets_narrowing() {
     let src = "\
@@ -300,12 +292,8 @@ case \"circle\": {
     assert_eq!(diags(src), vec![(16, "TK2339".to_string())]);
 }
 
-/// Conservative fallthrough: a `case` that **falls through** (no terminator)
-/// into the next clause must not let the next clause over-narrow. With an empty
-/// `case "circle":` falling into `case "square":`, the `square` clause's value
-/// could still be a circle, so a `circle`-only access must NOT be assumed — and,
-/// symmetrically, the wide union access errors. This pins that the per-case
-/// narrowing is suppressed on fallthrough (soundness, no false negative).
+/// A falling-through `case` must not let the next clause over-narrow; per-case
+/// narrowing is suppressed on fallthrough to avoid false negatives.
 #[test]
 fn switch_fallthrough_is_conservative() {
     let src = "\

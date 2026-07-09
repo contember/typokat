@@ -1,9 +1,7 @@
-//! Diagnostics: the structured `Diagnostic` the checker emits and the conformance
-//! harness consumes, plus terminal rendering via `codespan-reporting`.
+//! Structured checker diagnostics plus terminal rendering.
 //!
-//! The harness consumes *structured* diagnostics (code + message + span), not
-//! rendered text (mvp-plan §2/§3), so the data model is the source of truth and
-//! the terminal rendering is a separate, presentation-only step.
+//! The conformance harness consumes code/message/span as the source of truth;
+//! `codespan-reporting` output is presentation-only.
 
 use crate::relate::Reason;
 use crate::span::{LineIndex, Span};
@@ -125,14 +123,9 @@ pub struct Diagnostic {
     pub severity: Severity,
     pub message: String,
     pub span: Span,
-    /// The nested reason-chain elaboration (M6, §6.4): the tsc-style "because…"
-    /// lines rendered *below* the headline `message`, each already prefixed with
-    /// its indentation, leaf last. Empty when there is no sub-reason — in
-    /// particular a single-`Leaf` relation failure, whose headline already *is*
-    /// the leaf, carries no elaboration so the rendered text stays exactly the
-    /// one headline line (no earlier-milestone regression). Threaded into both
-    /// [`Diagnostic::rendered_text`] (the harness substring-matches it) and the
-    /// terminal renderer (codespan notes).
+    /// Nested reason-chain lines rendered below the headline, already indented
+    /// and leaf last. A single-`Leaf` failure stays headline-only; both the
+    /// harness text and terminal notes consume the same elaboration.
     elaboration: Vec<String>,
 }
 
@@ -183,12 +176,9 @@ impl Diagnostic {
         }
     }
 
-    /// Construct a `TK2313` "circular constraint" error (M24): a type parameter
-    /// whose constraint chain — followed through bare type-parameter constraints
-    /// only — revisits the parameter itself (`<T extends T>`, `<T extends U, U
-    /// extends T>`). The primary span is the constraint annotation. The parameter
-    /// records no constraint, so the degenerate cycle never reaches the relation
-    /// engine's assume-true stack.
+    /// Construct a `TK2313` circular-constraint error for a bare type-parameter
+    /// constraint cycle. The parameter records no constraint, so the degenerate
+    /// cycle never reaches the relation engine's assume-true stack.
     pub fn circular_constraint(span: Span, name: &str) -> Self {
         Diagnostic {
             code: DiagnosticCode::TK2313,
@@ -239,11 +229,8 @@ impl Diagnostic {
         }
     }
 
-    /// Construct a `TK2511` "cannot create an instance of an abstract class" error
-    /// (M15): a `new C(...)` whose directly-named class `C` is declared `abstract`.
-    /// The primary span is the `new` expression. Only the named class's own
-    /// abstractness matters — a concrete subclass of an abstract class instantiates
-    /// fine.
+    /// Construct a `TK2511` error for `new C(...)` when the directly named class
+    /// is abstract; a concrete subclass of an abstract class instantiates fine.
     pub fn abstract_instantiation(span: Span) -> Self {
         Diagnostic {
             code: DiagnosticCode::TK2511,
@@ -254,11 +241,8 @@ impl Diagnostic {
         }
     }
 
-    /// Construct a `TK2416` override-compatibility error (backlog 06): a derived
-    /// class's own member `name` (in type `derived`) is not assignable to the
-    /// same-named member in its `base`. The primary span is the derived member's
-    /// name; the nested reason chain is attached via [`Diagnostic::with_elaboration`]
-    /// exactly as `TK2322`.
+    /// Construct a `TK2416` override-compatibility error, with the nested reason
+    /// chain attached exactly as `TK2322`.
     pub fn property_override_incompatible(
         span: Span,
         name: &str,
@@ -276,11 +260,8 @@ impl Diagnostic {
         }
     }
 
-    /// Construct a `TK2515` error (backlog 06): a non-abstract class `class_name`
-    /// leaves exactly one inherited abstract member `member` unimplemented. `base`
-    /// is the **direct** base's name (tsc attributes to the direct base, not the
-    /// declaring class); the member name is rendered **unquoted**. The primary span
-    /// is the class name.
+    /// Construct a `TK2515` error for one unimplemented inherited abstract member.
+    /// `base` is the direct base name, and the member renders unquoted.
     pub fn missing_abstract_member(
         span: Span,
         class_name: &str,
@@ -298,11 +279,8 @@ impl Diagnostic {
         }
     }
 
-    /// Construct a `TK2654` error (backlog 06): a non-abstract class `class_name`
-    /// leaves two or more inherited abstract members unimplemented (aggregated into
-    /// one diagnostic). `members` are rendered **quoted**, `, `-separated, in the
-    /// pending-list order; `base` is the **direct** base's name. The primary span is
-    /// the class name.
+    /// Construct a `TK2654` error for multiple unimplemented inherited abstract
+    /// members. Members render quoted and comma-separated in pending-list order.
     pub fn missing_abstract_members(
         span: Span,
         class_name: &str,
@@ -341,11 +319,8 @@ impl Diagnostic {
         }
     }
 
-    /// Construct a `TK2674` "constructor is protected" error (backlog 20): a direct
-    /// `new C(...)` reaches a `protected` constructor from outside the declaring class
-    /// and its subclasses. `class_name` is the constructor's **declaring** class (the
-    /// base, for an inherited constructor). The primary span is the whole `new`
-    /// expression.
+    /// Construct a `TK2674` protected-constructor error for an invalid direct
+    /// `new C(...)`; `class_name` is the constructor's declaring class.
     pub fn constructor_is_protected(span: Span, class_name: &str) -> Self {
         Diagnostic {
             code: DiagnosticCode::TK2674,
@@ -414,12 +389,9 @@ impl Diagnostic {
         }
     }
 
-    /// Construct a `TK2353` excess-property error: a fresh object literal
-    /// specifies a property `name` not present in the object-typed target `tgt`.
-    /// The primary span is the offending property. The message mirrors tsc's TS2353
-    /// (`Object literal may only specify known properties, and '{name}' does not exist
-    /// in type '{tgt}'.`), of which the pre-existing `'{name}' does not exist in type`
-    /// substring the corpus asserts is a suffix.
+    /// Construct a `TK2353` excess-property error for a fresh object literal
+    /// property missing from the object target. The TS2353-compatible suffix is
+    /// pinned by the corpus.
     pub fn excess_property(span: Span, name: &str, tgt: &str) -> Self {
         Diagnostic {
             code: DiagnosticCode::TK2353,
@@ -473,11 +445,8 @@ impl Diagnostic {
         }
     }
 
-    /// Attach a rendered reason-chain elaboration (M6, §6.4) to this diagnostic.
-    /// `lines` are the nested "because…" lines (already indented, leaf last) shown
-    /// below the headline `message`. An empty `lines` leaves the diagnostic
-    /// unchanged — single-`Leaf` failures pass an empty list so their rendered
-    /// text stays exactly the one headline line.
+    /// Attach rendered reason-chain lines below the headline. Empty input leaves
+    /// single-`Leaf` failures headline-only.
     pub fn with_elaboration(mut self, lines: Vec<String>) -> Self {
         self.elaboration = lines;
         self
@@ -488,12 +457,9 @@ impl Diagnostic {
         matches!(self.severity, Severity::Error)
     }
 
-    /// The fully-rendered diagnostic text the harness substring-matches against
-    /// (`tests/cases/README.md`: case-sensitive `contains` over the rendered
-    /// text, "including any nested reason chain"). The headline is `code +
-    /// message`; M6 appends the nested reason-chain elaboration (each line on its
-    /// own line, already indented) so the leaf cause is present in the matched
-    /// text. With no elaboration this is exactly the one headline line.
+    /// Fully rendered diagnostic text for the harness substring match, including
+    /// any nested reason-chain elaboration. Without elaboration this is exactly
+    /// the headline line.
     pub fn rendered_text(&self) -> String {
         let mut text = format!("error[{}]: {}", self.code.as_str(), self.message);
         for line in &self.elaboration {
@@ -507,21 +473,10 @@ impl Diagnostic {
 /// Indentation step for one level of reason-chain nesting (two spaces, tsc-style).
 const REASON_INDENT: &str = "  ";
 
-/// Render a relation-failure reason chain (M6, §6.4) into the nested "because…"
-/// elaboration lines shown *below* the diagnostic headline, leaf last.
-///
-/// The headline already states the outermost `(headline_src → tgt)` mismatch
-/// (built by the checker). This renderer therefore emits only the *sub*-reason:
-///
-///  - a **terminal** head (`Leaf`, `MissingProperty`, `NoUnionMember`,
-///    `ParameterCount`) is fully expressed by the headline already, so it yields
-///    **no** lines — this is what keeps a single-`Leaf` failure (the M0–M5 scalar
-///    mismatches) to exactly its one headline line, with no redundant wrapper;
-///  - a **union-source** head descends straight into the offending member's own
-///    reason, because the headline already names that member (`headline_src`);
-///  - a **wrapper** head (`Property`, `Parameter`, `ReturnType`) renders its
-///    "…are incompatible." line and then its nested cause, indented one level,
-///    recursing down to the leaf.
+/// Render a relation-failure reason chain into the nested lines below the
+/// diagnostic headline. Terminals stay headline-only, union-source heads descend
+/// to the offending member, and wrappers render their incompatibility line before
+/// the nested cause.
 pub fn render_reason_chain(store: &Store, head: &Reason) -> Vec<String> {
     match head {
         // The headline already states this mismatch in full.
@@ -541,11 +496,8 @@ pub fn render_reason_chain(store: &Store, head: &Reason) -> Vec<String> {
         Reason::Property { .. } | Reason::Parameter { .. } | Reason::ReturnType { .. } => {
             reason_lines(store, head, 1)
         }
-        // An array-element mismatch (M17): the headline already states the
-        // `S[]`/`T[]` mismatch, so the elaboration is the **element's** own cause,
-        // one indent level in. A nested-array element prints its `S[]`/`T[]` line and
-        // recurses; a union-element descends straight into the offending member (no
-        // redundant wrapper) — both via [`element_reason_lines`].
+        // The headline already states the `S[]`/`T[]` mismatch, so elaborate the
+        // element's own cause one level in; union elements skip redundant wrappers.
         Reason::ArrayElement { because, .. } => element_reason_lines(store, because, 1),
         // M18: a tuple-element mismatch — the headline already states the `[…]`/`[…]`
         // mismatch, so the elaboration is the offending **element's** own cause, one
@@ -560,15 +512,9 @@ pub fn render_reason_chain(store: &Store, head: &Reason) -> Vec<String> {
     }
 }
 
-/// Render the **element cause** of an array mismatch (M17) at indentation `depth`.
-/// This is the array-element analogue of the head dispatch in [`render_reason_chain`]:
-/// the enclosing array line (the headline, or an outer array's element line) already
-/// states the `S[]`/`T[]` mismatch, so a **union-member** cause descends straight into
-/// the offending member (avoiding the "member line + identical leaf line" doubling that
-/// the shared [`reason_lines`] union arm produces when nested), while every other cause —
-/// a nested array, a structural wrapper, or a terminal leaf — is rendered by
-/// [`reason_lines`] exactly as anywhere else (so `string[][]` still nests its inner
-/// `string[]`/`number[]` line, then the leaf).
+/// Render an array element's own cause. Union-member causes descend straight into
+/// the offending member to avoid a redundant wrapper; nested arrays and structural
+/// causes use the normal reason renderer.
 fn element_reason_lines(store: &Store, cause: &Reason, depth: usize) -> Vec<String> {
     match cause {
         // A union element: the offending member is the cause; descend into it so a
@@ -580,11 +526,8 @@ fn element_reason_lines(store: &Store, cause: &Reason, depth: usize) -> Vec<Stri
     }
 }
 
-/// Render `reason` and everything nested beneath it as indented lines, each at
-/// `depth` levels of indentation (the leaf line last). Every `Reason` variant is
-/// handled exhaustively; the recursion descends into the `because` of each
-/// wrapper, so a chain renders as a top-down "Types of property…/Type … is not
-/// assignable…" cascade. Never panics.
+/// Render `reason` and its nested causes as indented lines, leaf last. Every
+/// variant is handled exhaustively.
 fn reason_lines(store: &Store, reason: &Reason, depth: usize) -> Vec<String> {
     let indent = REASON_INDENT.repeat(depth);
     match reason {
@@ -718,11 +661,8 @@ fn reason_lines(store: &Store, reason: &Reason, depth: usize) -> Vec<String> {
             lines.extend(reason_lines(store, because, depth + 1));
             lines
         }
-        // An object whose value does not fit the target's index signature (M19):
-        // announce the two object types, then nest the value's cause. (At the chain
-        // head this arm is bypassed by `render_reason_chain`, which descends straight
-        // into `because`; this arm renders an index-sig mismatch nested *inside*
-        // another reason.)
+        // Nested index-signature mismatch: announce the object pair, then nest the
+        // value cause. Chain heads descend straight into `because`.
         Reason::IndexSignature { src, tgt, because } => {
             let src = render_type(store, *src, /* widen */ false);
             let tgt = render_type(store, *tgt, /* widen */ false);
@@ -743,32 +683,16 @@ fn parameter_name_at(store: &Store, id: TypeId, index: usize) -> Option<String> 
     func.params.get(index).map(|p| p.name.clone())
 }
 
-/// Render the display name of a type (the "Type display format" of
-/// `tests/cases/README.md`).
-///
-/// `widen`: when `true`, a literal type renders as its base intrinsic
-/// (`"hello"` → `string`, `42` → `number`, `true` → `boolean`). This is how the
-/// **source** side of an assignability message is shown — assignability *logic*
-/// uses the literal type, but the *message* widens it (mvp-plan M0 spec). The
-/// target side renders with `widen = false`. Recursive render calls pass
-/// `widen = false`; widening is only a top-level source-display convention.
-///
-/// Rendering is **cycle-safe** (M5): a recursive named type (`interface List {
-/// tail: List | null }`) would otherwise expand forever. An object type already
-/// being rendered higher in the stack is printed as `...` instead of re-expanded.
-/// Object/named-type targets are asserted code-only in the corpus, so the exact
-/// placeholder text is unconstrained — it only has to terminate.
+/// Render a type per the corpus display format. `widen` applies only to the
+/// top-level source side of assignability messages; relation logic still uses the
+/// literal type. Recursive object expansions are cycle-safe and print `...`.
 pub fn render_type(store: &Store, id: TypeId, widen: bool) -> String {
     let mut rendering: Vec<TypeId> = Vec::new();
     render_type_inner(store, id, widen, &mut rendering)
 }
 
-/// Cycle-safe core of [`render_type`]. `rendering` holds the object ids currently
-/// being expanded on the call stack; re-entering one emits `...` to break the
-/// cycle. Only object types can be self-referential (interfaces are the only
-/// nominal types), so the guard is keyed on object ids — but it is threaded
-/// through every recursive arm so a cycle reached *via* a union/function member is
-/// also broken.
+/// Cycle-safe core of [`render_type`]. `rendering` tracks object ids on the call
+/// stack; re-entry emits `...`, even through union/function members.
 fn render_type_inner(
     store: &Store,
     id: TypeId,
@@ -1125,11 +1049,8 @@ fn render_function_parts(
     (params, ret)
 }
 
-/// Whether an array element type must be **parenthesized** before the postfix `[]`
-/// (M17). A union (`number | string`) or function (`(x: number) => string`) element
-/// would bind ambiguously under bare `[]`, so it is wrapped (`(number | string)[]`).
-/// Everything else — intrinsics, literals, objects, type parameters, nested arrays —
-/// renders without parentheses.
+/// Whether an array element type must be parenthesized before postfix `[]`.
+/// Unions and functions would bind ambiguously; other element types render bare.
 fn array_element_needs_parens(store: &Store, element: TypeId) -> bool {
     matches!(
         store.tag(element),

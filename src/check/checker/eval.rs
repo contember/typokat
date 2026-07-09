@@ -1,20 +1,8 @@
 //! Conditional-type evaluation (M25; architecture §7).
-//!
-//! A conditional `C extends E ? T : F` is *evaluated* once its check type `C` is
-//! **concrete** (contains no free declaration type parameter):
-//!
-//!  1. distributive instantiations split union checks (`never` distributes to zero
-//!     members, and `boolean` expands to `true | false` first);
-//!  2. the `extends` test uses [`Relater`] and conditional-mode
-//!     [`infer_from_types_for_conditional`] after freshening `infer` binders;
-//!  3. the selected branch is evaluated with matched `infer` candidates substituted.
-//!
-//! ## Soundness / termination
-//!
-//! Memoization is keyed by interned `TypeId`, but exhausted or in-flight results are
-//! never committed (same provisional-result discipline as the relation cache). The
-//! explicit work-stack prevents host-stack overflow; the per-root step budget reports
-//! `TK2589` via [`ConditionalEvaluator::exhausted`].
+//! Concrete conditionals split distributive unions, run `extends` through the
+//! relater plus conditional-mode infer, then substitute matched `infer` candidates.
+//! Exhausted or in-flight results are never memoized; the explicit work-stack
+//! avoids host-stack overflow and reports `TK2589` on budget exhaustion.
 
 use super::context::Pass;
 use crate::check::infer::infer_from_types_for_conditional;
@@ -30,17 +18,10 @@ use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 impl<'a, 'ast> Pass<'a, 'ast> {
-    /// Evaluate a lowered type at a **value-position demand site** (M25): a directly
-    /// concrete conditional, a lazy alias instantiation, or a union of those resolves to
-    /// its result; a deferred conditional (or any other type) is returned unchanged. On
-    /// a per-root instantiation-depth blow-out the evaluator sets `exhausted`, which is
-    /// reported as `TK2589` at `span` (the annotation that demanded evaluation — a
-    /// documented span divergence from tsc).
-    ///
-    /// Cheap-rejects everything that is not itself a conditional / instantiation / union,
-    /// so ordinary annotations pay only a tag check. Called after alias/generic
-    /// instantiation, at a bare conditional-alias reference, at an inline conditional
-    /// annotation, and on a generic call's substituted return type.
+    /// Evaluate a lowered type at a value-position demand site. Concrete
+    /// conditionals, lazy instantiations, and unions of those resolve; deferred
+    /// conditionals and other types are unchanged. Exhaustion reports `TK2589` at
+    /// the demand span, a documented tsc span divergence.
     pub(in crate::check::checker) fn evaluate_type(&mut self, ty: TypeId, span: Span) -> TypeId {
         if !matches!(
             self.interner.store().tag(ty),
@@ -874,11 +855,9 @@ impl<'a> ConditionalEvaluator<'a> {
             .is_some_and(|members| members.iter().any(|&m| evaluable(m)))
     }
 
-    /// Finish a distributive instantiation whose check argument was pre-evaluated
-    /// (M28): pop the evaluated argument, re-derive the per-member conditionals from
-    /// its VALUE, and schedule their evaluation + the result union. The enclosing
-    /// [`Task::SetMemo`] (pushed by [`ConditionalEvaluator::eval_instantiation`])
-    /// commits the union under the ORIGINAL instantiation id.
+    /// Finish a distributive instantiation after pre-evaluating its check
+    /// argument: re-derive per-member conditionals from the evaluated value, then
+    /// let the enclosing [`Task::SetMemo`] commit under the original id.
     fn expand_distributive(&mut self, ty: TypeId, tasks: &mut Vec<Task>, values: &mut Vec<TypeId>) {
         let evaluated_arg = values.pop().unwrap_or(self.interner.well_known().error);
         let Some(inst) = self.interner.store().instantiation_type(ty).cloned() else {
@@ -1063,10 +1042,8 @@ impl<'a> ConditionalEvaluator<'a> {
         }
     }
 
-    /// Schedule the evaluation of a mapped type `ty` (M26). A mapped type over a **free**
-    /// key source is deferred (returned as its own value, related conservatively by the
-    /// M25 model); a concrete one first evaluates its key source (a tail step, so a
-    /// mapped-of-mapped is a loop, not host recursion), then [`Task::AssembleMapped`]
+    /// Schedule mapped-type evaluation. Free key sources defer conservatively;
+    /// concrete key sources evaluate as tail steps before [`Task::AssembleMapped`]
     /// derives the output properties.
     fn eval_mapped(
         &mut self,
@@ -1330,12 +1307,9 @@ impl<'a> ConditionalEvaluator<'a> {
         values.push(result);
     }
 
-    /// Classify a template hole for construction (M27). A string/number/boolean literal
-    /// (or a union thereof) yields the ordered list of string parts it contributes to the
-    /// cartesian product; the `boolean` intrinsic expands to `"false"`/`"true"`; the
-    /// `never` intrinsic short-circuits the whole template; anything else (a
-    /// `string`/`number` intrinsic, a free parameter, an `infer` binder, or a union with
-    /// any non-literal member) leaves the template symbolic.
+    /// Classify a template hole for construction. Literal string/number/boolean
+    /// inputs feed the cartesian product, `never` short-circuits, and non-literal
+    /// inputs leave the template symbolic.
     fn hole_parts(&self, hole: TypeId) -> HolePart {
         let wk = self.interner.well_known();
         let store = self.interner.store();
@@ -1683,11 +1657,9 @@ impl<'a> ConditionalEvaluator<'a> {
         Some(props)
     }
 
-    /// Build the result object of a mapped evaluation (M26): pair each property's
-    /// metadata with its evaluated value type (by position), stripping `undefined` for a
-    /// `-?`-over-optional property (tsc `Required` semantics) and baking `| undefined`
-    /// into an **optional** property's stored type (the M21 convention the relation
-    /// engine reads back), then interning the object.
+    /// Build the mapped result object, preserving metadata by position. `-?` over
+    /// optional strips `undefined`; optional outputs bake `| undefined` into the
+    /// stored type for the relation engine.
     fn build_mapped_object(&mut self, meta: &[MappedProp], values: &[TypeId]) -> TypeId {
         let undefined = self.interner.well_known().undefined;
         let mut object = ObjectType::default();
@@ -2752,11 +2724,8 @@ fn contains_nodes(
     false
 }
 
-/// Apply an M28 string intrinsic (identified by its well-known marker `base`) to a
-/// string-literal value. `Uppercase`/`Lowercase` map the whole string (Rust
-/// `to_uppercase`/`to_lowercase` — char-wise Unicode, matching JS for the corpus's
-/// cases; multi-char expansions like `ß` → `"SS"` agree with JS `toUpperCase`);
-/// `Capitalize`/`Uncapitalize` map the **first char only**.
+/// Apply an M28 string intrinsic to a string literal. Upper/lowercase map the
+/// whole string; capitalize/uncapitalize map only the first char.
 fn transform_string_intrinsic(wk: &crate::types::WellKnown, base: TypeId, s: &str) -> String {
     if base == wk.uppercase {
         return s.to_uppercase();
@@ -3298,11 +3267,8 @@ mod tests {
         );
     }
 
-    /// M28 — the four string intrinsics: a literal argument transforms
-    /// (whole-string for Uppercase/Lowercase; first char only for
-    /// Capitalize/Uncapitalize; the empty string unchanged), a union distributes per
-    /// member, and a non-literal argument (`string`) stays a **symbolic**
-    /// instantiation (the identical, hash-consed node).
+    /// M28 string intrinsics: literals transform, unions distribute, and a
+    /// non-literal argument stays a symbolic instantiation.
     #[test]
     fn string_intrinsics_transform_distribute_and_stay_symbolic() {
         let mut interner = Interner::with_intrinsics();

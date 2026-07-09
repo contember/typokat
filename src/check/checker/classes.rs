@@ -86,11 +86,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         };
         let base_name = ident.name.as_str();
 
-        // Fill the base first (on demand), so its instance type + constructor exist before
-        // we compose. The index is the base name's type-space `DeclId` position in
-        // `type_decls` (the binder numbered type `DeclId`s in source order, and
-        // `reserve_type_decls` pushed `type_decls` in that same order — so the type
-        // `DeclId`'s index *is* the `type_decls` index).
+        // Fill the base first so its instance type + constructor exist before compose.
+        // Type `DeclId`s and `type_decls` are both source-ordered, so the id index is
+        // the `type_decls` index.
         if let Some(type_id) = type_decl_id(self.binder, scope, base_name) {
             self.ensure_class_filled(scope, type_id.index());
         }
@@ -101,11 +99,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.class_ctors.get(&decl_id).copied()
     }
 
-    /// Build the class instance type, static side, constructor signature, and class metadata.
-    ///
-    /// This is type-only lowering. Bodies are checked later by [`check_class`] after
-    /// `this`, `super`, and the class type-parameter frame are bound. Deferrals and
-    /// deliberate divergences are tracked in `docs/reference/divergences.md`.
+    /// Build the class instance type, static side, constructor signature, and metadata.
+    /// This is type-only lowering; bodies are checked later after `this`, `super`,
+    /// and class type parameters are bound.
     fn fill_class(
         &mut self,
         scope: ScopeId,
@@ -217,14 +213,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             },
         };
 
-        // F1/WU3: the class value's static side is constructable for relation
-        // purposes (`const c: { new (...): Instance } = Class`). The actual
-        // `new Class(...)` expression still resolves through `class_ctors` below,
-        // so class construction precedence and generic-class substitution stay on
-        // the existing path. Abstract classes deliberately expose no construct
-        // signature here; assigning them to a constructable target would be
-        // unsound. Classes with private/protected constructors likewise expose
-        // no public construct signature on the static side.
+        // F1/WU3: expose a public construct signature on the class value for
+        // relation only. Direct `new Class(...)` still uses `class_ctors`; abstract
+        // classes and private/protected constructors expose no public construct side.
         let construct_signatures = if class.r#abstract || !has_public_constructor(class) {
             Vec::new()
         } else {
@@ -277,11 +268,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         ctor_declaring_class,
                     },
                 );
-                // M16: record the class's type-parameter ids under the same value `DeclId`,
-                // so `new Box<number>(…)` / `new Box(…)` ([`infer_new`]) can substitute them
-                // into the (uninstantiated) constructor signature + instance template. An
-                // empty list for a non-generic class (then `infer_new` skips substitution).
-                // Kept in a sibling map rather than on `ClassInfo` so the latter stays `Copy`.
+                // M16: map the class value `DeclId` to its type parameters so `infer_new`
+                // can substitute the constructor + instance template. Kept outside
+                // `ClassInfo` so that stays `Copy`.
                 if !type_params.is_empty() {
                     self.class_type_params.insert(decl_id, type_params.to_vec());
                 }
@@ -297,33 +286,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 if !member_kinds.is_empty() {
                     self.class_member_kinds.insert(decl_id, member_kinds);
                 }
-                // M13: bind the class's value-slot type to the **static side**, so a
-                // reference to the class *name as a value* — and the base of
-                // `C.staticMember` — resolves to the static-side object type. `new` still
-                // uses `class_ctors` (the constructor signature), unaffected. An instance
-                // member is not on the static side, so `C.instanceMember` is `TK2339`.
+                // M13: the class value resolves to its static-side object type;
+                // direct construction still uses `class_ctors`. Instance members are
+                // absent from this side, so `C.instanceMember` is `TK2339`.
                 self.decl_types.set(decl_id, static_side);
             }
         }
     }
 
-    /// Collect a class's **own** instance members, **own** static members, and constructor
-    /// parameters from its body (M11–M16), stamping each member with its visibility +
-    /// declaring [`ClassId`] (M13). Extracted from [`fill_class`] so the caller can run it
-    /// **inside** the M16 type-parameter frame ([`with_type_params`]) — every annotation it
-    /// lowers (`value: T`, `get(): T`, `constructor(v: T)`) then resolves `T` to the class's
-    /// parameter. It does not compose with the base or intern anything; it only produces the
-    /// class's own contribution.
-    ///
-    /// A field becomes a property (static-side when `static`) — typed from its annotation,
-    /// or, when un-annotated with an initializer, **inferred** from the initializer (F3 —
-    /// widened when non-`readonly`); a plain/`abstract` method becomes a function-typed
-    /// property; a constructor records its parameter signature AND emits an instance member
-    /// for each **parameter property** (a param with an accessibility / `readonly` modifier,
-    /// F3); a `get`/`set` accessor is accumulated per name and combined into ONE instance
-    /// property afterward ([`build_accessor_members`], M15). Computed keys, a field with
-    /// neither annotation nor initializer, and out-of-subset members are skipped — the class
-    /// keeps the members it can express.
+    /// Collect a class's own instance/static members and constructor parameters.
+    /// Runs inside the class type-parameter frame, stamps visibility + declaring
+    /// [`ClassId`], and leaves base composition/interning to the caller.
+    /// Unsupported members are skipped; the class keeps what it can express.
     fn collect_class_own_members(
         &mut self,
         scope: ScopeId,
@@ -334,22 +308,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let mut own_static: Vec<PropertyType> = Vec::new();
         // The constructor's parameters, if an explicit `constructor` is present.
         let mut ctor_params: Option<Vec<ParameterType>> = None;
-        // M15: getters/setters, accumulated per name and combined into ONE accessor
-        // property after the loop. A getter contributes the property's type (its return
-        // type) and a setter contributes it (its parameter type); a get without a set is
-        // `readonly` (behaves like a read-only property → assigning it is `TK2540`). See
-        // [`build_accessor_members`]. Keyed in declaration order so a same-named get + set
-        // collapse to a single member.
+        // M15: accumulate get/set pairs per name, then build one accessor property.
+        // A getter supplies the type; a missing setter makes it `readonly`.
         let mut accessors: Vec<AccessorBuild> = Vec::new();
 
         for element in &class.body.body {
             match element {
-                // A field `x: T` becomes a property — on the static side when `static`,
-                // otherwise on the instance. An **annotated** field takes its declared
-                // type; a field with **no annotation but an initializer** (`f = () => 1`,
-                // `g = 2`) takes its type **inferred from the initializer** (F3 / backlog
-                // 01). Computed keys, and a field with neither annotation nor initializer,
-                // are skipped (out of subset / not expressible).
+                // A field becomes a static or instance property. Annotated fields use
+                // the declared type; unannotated initialized fields infer it. Computed
+                // or untyped/uninitialized fields are skipped.
                 ClassElement::PropertyDefinition(prop) => {
                     if prop.computed {
                         continue;
@@ -361,30 +328,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         // Annotated: lower the declared type (M11). `None` (unlowerable /
                         // out of subset) keeps the field skipped.
                         Some(annotation) => self.lower_annotation(scope, &annotation.type_annotation),
-                        // F3: no annotation — infer the type from the initializer when one
-                        // is present. A field with neither annotation nor initializer stays
-                        // skipped (deferred). The initializer is inferred for its TYPE ONLY:
-                        // the member-body walk ([`check_class_member_bodies`]) re-walks it later
-                        // (with the real `this`) and is the sole emitter, so BOTH emission
-                        // channels this inference can feed — immediate `diagnostics` AND deferred
-                        // `obligations` (an initializer can contain `this.x = …` assignments /
-                        // return obligations) — are snapshot+restored here, else they double-
-                        // report in phase 2. A non-`readonly` field **widens** its literal
-                        // initializer (`g = 2` → `number`, `s = "hi"` → `string`), matching
-                        // tsc; a `readonly` field keeps the literal.
-                        //
-                        // F3 (WU1 review fix): an initializer may reference `this`
-                        // (`b = this.a`, `c = this.m()`). `fill_class` has not yet filled the
-                        // reserved instance type at collection time, so we bind `this` to an
-                        // object of the members collected **so far** (instance- or static-side
-                        // per the field's `static`) for the duration of this type-only
-                        // inference. A backward `this.x` then infers `x`'s real type instead of
-                        // collapsing to `any`. This is inherently **cycle-free**: a self /
-                        // forward reference (`g = this.g`, `a = this.b; b = this.a`) is not in
-                        // the members-so-far, so `this.<self>` resolves to `TK2339` → the error
-                        // type (truncated away) — no recursion, no hang. (Methods aren't body-
-                        // inferred here; `this.m()` reads `m`'s lowered signature, so there is
-                        // no recursion into another field's initializer either.)
+                        // Type-only inference: phase 2 re-walks the initializer and is the
+                        // sole emitter, so snapshot+restore diagnostics and obligations here
+                        // to avoid double reports. Non-`readonly` literals widen; `readonly`
+                        // keeps the literal.
+
+                        // For `this` in an initializer, bind only members collected so far.
+                        // Backward references infer real types; self/forward references are
+                        // absent, resolve to error, and cannot recurse. Method calls read
+                        // lowered signatures, never another field initializer.
                         None => prop.value.as_ref().and_then(|init| {
                             let members_so_far = if prop.r#static {
                                 own_static.clone()
@@ -420,11 +372,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     }) else {
                         continue;
                     };
-                    // M21: an optional field (`name?: T`) is a real member whose effective
-                    // type bakes in `| undefined` (interned here, as the relation engine
-                    // cannot intern — see [`lower_interface_members`]). A class with only
-                    // public fields has a structural instance type, so the optional then
-                    // behaves exactly like an optional member on an object type.
+                    // M21: optional fields are real members with `| undefined` baked in
+                    // here, where interning is available; the relation engine cannot intern.
                     let ty = if prop.optional {
                         self.optional_field_effective_type(ty)
                     } else {
@@ -449,11 +398,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         own_instance.push(member);
                     }
                 }
-                // A method/constructor/accessor. A constructor records its parameter
-                // signature; a plain `method` (including an `abstract method(): T;` with no
-                // body, M15) becomes a function-typed property (static or instance); a
-                // getter/setter (M15) is accumulated per name and combined into one accessor
-                // property after the loop.
+                // Constructors record parameter signatures; methods become function-typed
+                // properties; accessors are accumulated and combined after the loop.
                 ClassElement::MethodDefinition(method) => {
                     if method.computed {
                         continue;
@@ -466,14 +412,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                             // is not valid TS; treat any constructor as the constructor.
                             ctor_params =
                                 Some(self.lower_signature_parameters(scope, &method.value.params));
-                            // F3 / backlog 01: a constructor PARAMETER PROPERTY — a param
-                            // carrying an accessibility (`public`/`private`/`protected`) or
-                            // `readonly` modifier — ALSO declares an instance member with
-                            // that modifier and the param's annotated type, IN ADDITION to
-                            // remaining a constructor parameter (handled above). A param with
-                            // no such modifier stays a plain parameter (no member). The
-                            // member type lowers the param's annotation the same way the
-                            // signature does (the error type when absent/unlowerable).
+                            // A constructor parameter property also declares an instance
+                            // member with the param's modifier and annotated type; an
+                            // unmodified param stays only a parameter.
                             for param in &method.value.params.items {
                                 if param.accessibility.is_none() && !param.readonly {
                                     continue;
@@ -529,11 +470,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                                 own_instance.push(member);
                             }
                         }
-                        // M15: a getter/setter accessor. `static` accessors are deferred,
-                        // so only instance accessors build a property (a deferred static
-                        // accessor's body is still walked by `check_class`, harmlessly).
-                        // The getter's return type / setter's parameter type are recorded
-                        // per name and combined into one accessor property after the loop.
+                        // M15: instance accessors record getter/setter data per name and
+                        // build one property after the loop. Static accessors are deferred,
+                        // though their bodies are still walked by `check_class`.
                         MethodDefinitionKind::Get | MethodDefinitionKind::Set => {
                             if method.r#static {
                                 continue;
@@ -561,13 +500,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         (own_instance, own_static, ctor_params)
     }
 
-    /// Record one getter/setter into the per-name accessor accumulator (M15). A getter
-    /// records its **return type** (the accessor property's type); a setter records only
-    /// that a setter exists (so a get-only accessor is `readonly`). A second accessor of the
-    /// same name (the matching get/set) merges into the existing entry, so a `get`+`set` pair
-    /// collapses to a single property. An unlowerable getter return type is recorded as
-    /// `None` (a `None`-typed accessor builds no property); a differing get/set type is
-    /// deferred (the getter's type is taken).
+    /// Record one getter/setter into the per-name accessor accumulator.
+    /// The getter supplies the property type; the setter only marks writability.
+    /// Matching get/set declarations merge, and unlowerable getter types build no
+    /// property. Differing get/set types remain deferred.
     fn record_accessor(
         &mut self,
         scope: ScopeId,
@@ -620,13 +556,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Lower a method's signature to an interned **function type** for use as the
-    /// instance type's property (M11). Parameters come from their annotations
-    /// (positional); the return type is the declared annotation, or `void` when none is
-    /// written (the property type drives member access + structural relation; the
-    /// fixtures annotate method returns). Type references resolve from `scope`. Returns
-    /// `None` only if the return annotation is present but cannot be lowered (out of
-    /// subset) — matching the other signature lowerings.
+    /// Lower a method signature to the function type stored as its property.
+    /// Parameters are positional annotations; an omitted return is `void`.
+    /// Returns `None` only when a present return annotation cannot be lowered.
     fn lower_method_signature(&mut self, scope: ScopeId, func: &Function<'_>) -> Option<TypeId> {
         self.lower_signature_function_type(scope, &func.params, func.return_type.as_deref())
     }
@@ -714,11 +646,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) {
         for element in &class.body.body {
             let ClassElement::MethodDefinition(method) = element else {
-                // A field initializer expression is walked here so it is checked (and
-                // resolves `this`). M13: a **static** field initializer is checked too,
-                // with `this` bound to the static side (the class value). Static blocks and
-                // `accessor`-property declarations remain out of subset. (M15 `get`/`set`
-                // accessors are `MethodDefinition`s, so they take the arm below.)
+                // Field initializers are checked here, with `this` bound to the instance
+                // or static side. Static blocks and `accessor` properties remain out of
+                // subset; `get`/`set` accessors are handled as methods below.
                 if let ClassElement::PropertyDefinition(prop) = element {
                     if let Some(init) = &prop.value {
                         // A static initializer's `this` is the class value; an instance
@@ -730,13 +660,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                                 self.current_this = Some(static_this);
                             }
                         }
-                        // backlog 61: an annotated field initializer is checked exactly like
-                        // a variable-declaration initializer (assignability, fresh-literal
-                        // excess, M30 contextual typing); an unannotated field keeps plain
-                        // inference. `readonly` is irrelevant here — the relation ignores it,
-                        // and the field is being initialized in its own declaration. An
-                        // optional field's target is its M21 effective type (`T | undefined`),
-                        // matching the member `fill_class` built.
+                        // Annotated field initializers use the variable-initializer path
+                        // (assignability, fresh excess, contextual typing). `readonly` is
+                        // irrelevant here; optional fields target their `T | undefined` type.
                         let annotation = prop
                             .type_annotation
                             .as_ref()
@@ -754,17 +680,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
                 continue;
             };
-            // Check the method/constructor body via the shared function machine. The
-            // returned function type is discarded (the property type was already built in
-            // `fill_class`); we keep only the body-checking side effects (return
-            // obligations, nested-construct resolution, name resolution) under the bound
-            // `this`.
-            //
-            // M13: a **static** method body is checked exactly like an instance method,
-            // except `this` is bound to the **static side** (`this` inside a static method
-            // is the class value, not an instance). `current_class` stays the class, so
-            // same-class static access is allowed; it is saved/restored per static member
-            // so a static body does not leak its `this` to a following instance member.
+            // Use the shared function machine for body-checking side effects; the
+            // property type was already built in `fill_class`.
+
+            // Static methods bind `this` to the static side while keeping
+            // `current_class` for same-class access. Save/restore prevents leaks to the
+            // next member.
             if method.r#static {
                 let saved_member_this = self.current_this;
                 if let Some(static_this) = static_this {
@@ -785,18 +706,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Apply M13 access control to a member access `obj.m` whose member was found on the
-    /// base type. A `public` member is always reachable. A `private` member is reachable
-    /// only when the accessing context ([`Pass::current_class`]) **is** the member's
-    /// declaring class (else `TK2341`). A `protected` member is reachable when the
-    /// context is the declaring class **or a subclass** of it (else `TK2445`).
-    ///
-    /// The rule keys on the **declaring class**, not the instance, so same-class access to
-    /// *another* instance's `private` member is allowed (the context matches the origin).
-    /// An access outside any class member (`current_class == None`) matches no origin, so
-    /// a non-public member is correctly rejected there. A member with no declaring class
-    /// (an ordinary object/interface member — always `Public`) never reaches the
-    /// non-public arms.
+    /// Apply M13 access control to a found member access.
+    /// `private` requires the declaring class as current context; `protected`
+    /// also allows subclasses. The rule keys on the member's declaring class, not
+    /// the instance, so same-class access to another instance's private member works.
     pub(in crate::check::checker) fn check_member_access_control(
         &mut self,
         prop_name: &str,
@@ -831,23 +744,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Run M13 access control (`TK2341`/`TK2445`) for every **named** member reached
-    /// through an **object**-destructuring pattern (`let { priv } = k;`,
-    /// `function f({ priv }: K) {}`). `source` is the statically-known type the pattern
-    /// destructures (the initializer's inferred type for a variable declaration, the
-    /// parameter's annotation for a function parameter).
-    ///
-    /// For each property the checked name is the pattern **key** (so a rename
-    /// `{ priv: a }` still checks `priv`, mirroring `obj.priv`); the access context is the
-    /// enclosing [`Pass::current_class`], so in-class / subclass destructuring stays clean
-    /// exactly like a member access. The member is resolved on the source — an object type
-    /// directly, a union by requiring it on every member — and the access check runs only
-    /// when the property is **found**. A missing property is left silent (no `TK2339` for
-    /// destructuring — that property-existence case is deferred and would over-report).
-    ///
-    /// Out of scope (skipped, no check, no crash): the `...rest` element, computed /
-    /// non-static keys, and any nested / array / default-valued sub-pattern (only the
-    /// access check is run; binding the destructured names' types is a separate feature).
+    /// Run M13 access control for named object-destructuring keys.
+    /// Renames check the source key, and the current class context mirrors `obj.key`.
+    /// Missing properties stay silent (`TK2339` for destructuring is deferred).
+    /// Rest, computed keys, and nested/default/array patterns are skipped.
     pub(in crate::check::checker) fn check_object_pattern_access(
         &mut self,
         pattern: &ObjectPattern<'_>,
@@ -868,13 +768,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Look a destructured member `name` up on `source` for access control, returning its
-    /// `(visibility, declaring_class)` if it is **present**. An object type is looked up
-    /// directly; a union requires the member on **every** constituent (a member absent on
-    /// any constituent is "not found" → `None`, so no check and — per the deferral — no
-    /// `TK2339`). A constituent's `any`/error contributes no nominal origin, so its
-    /// presence is assumed without forcing a visibility. The union case is not exercised by
-    /// the f4 fixtures (a class-instance source); it only guarantees the walk doesn't crash.
+    /// Look up a destructured member's access-control metadata.
+    /// Objects are direct; unions require the member on every constituent. Missing
+    /// means "no check" per the destructuring `TK2339` deferral, and `any`/error
+    /// constituents contribute no nominal origin.
     fn pattern_member_access(
         &self,
         source: TypeId,
@@ -885,11 +782,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // priv }: T)`) resolves through its apparent type, like every other structural
         // consumer. Identity for a non-parameter source.
         let source = self.apparent_type(source);
-        // M31: an intersection source — a property is present if **any** object member
-        // declares it; report a private/protected constituent's origin so access is still
-        // gated. Store-only (no interning), consistent with the merged apparent object
-        // used on the read/write side. Not exercised by the m31 corpus (no destructuring
-        // of an intersection) — present for soundness.
+        // M31: an intersection property is present if any object member declares it;
+        // keep private/protected origins so access remains gated.
         if let Some(members) = store.intersection_members(source) {
             let mut result: Option<(Visibility, Option<ClassId>)> = None;
             for &member in members {
@@ -936,19 +830,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .map(|prop| (prop.visibility, prop.declaring_class))
     }
 
-    /// Backlog 20 — gate a direct `new C(...)` on the constructor's accessibility,
-    /// emitting `TK2673` (private) / `TK2674` (protected) on the whole `new` span when the
-    /// constructor is not reachable from the current context, and returning whether it was
-    /// **inaccessible** (so the caller suppresses the abstract-instantiation `TK2511`,
-    /// which tsc drops in favour of the accessibility error).
-    ///
-    /// A `public` constructor is always accessible. A `private` one is reachable only
-    /// lexically inside its **declaring** class (instance methods and statics both set
-    /// [`Pass::current_class`] to it). A `protected` one is reachable inside the declaring
-    /// class or a **subclass** of it (the M13 [`is_class_or_subclass`] walk — the same
-    /// machinery member access uses). The message names the constructor's **declaring**
-    /// class ([`ClassInfo::ctor_declaring_class`]), which is the base for an inherited
-    /// constructor.
+    /// Gate direct `new C(...)` on constructor accessibility.
+    /// Emits `TK2673`/`TK2674`, returns whether to suppress `TK2511`, and checks
+    /// private/protected reachability against the constructor's declaring class.
     pub(in crate::check::checker) fn check_new_accessibility(
         &mut self,
         info: &ClassInfo,
@@ -993,11 +877,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .unwrap_or("")
     }
 
-    /// Whether `class_id` **is** `ancestor` or a **subclass** of it (M13), by walking the
-    /// [`Pass::class_parents`] chain upward from `class_id`. Used to decide `protected`
-    /// access: the accessing context's class must be the declaring class or a descendant.
-    /// The walk is bounded by a visited set so a malformed `extends` cycle terminates
-    /// (cyclic hierarchies are invalid TS but must not hang).
+    /// Whether `class_id` is `ancestor` or a subclass of it.
+    /// Used for `protected` access; a visited set keeps malformed `extends` cycles
+    /// from hanging.
     fn is_class_or_subclass(&self, class_id: ClassId, ancestor: ClassId) -> bool {
         let mut current = class_id;
         let mut visited: rustc_hash::FxHashSet<ClassId> = rustc_hash::FxHashSet::default();
@@ -1016,21 +898,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Backlog 06 — TK2416: record a phase-2 override-compatibility check for every
-    /// own PUBLIC instance member that overrides a same-named PUBLIC member of the
-    /// direct base's (composed) instance members. The check relates the derived
-    /// member's **effective** type (optionals already carry `| undefined`, M21) to the
-    /// base member's; a failure renders as `TK2416` on the derived member's name span
-    /// ([`emit_override_failures`](super::statements::emit_override_failures) applies
-    /// the method bivariant-param / covariant-return rule, keyed on the **base**
-    /// member's declaration kind — `base_member_kinds`, the base chain's composed
-    /// [`Pass::class_member_kinds`] map; a missing entry defaults to field/strict, the
-    /// over-reporting = safe direction). Public↔public only — a private/protected
-    /// override is `TS2415` territory (deferred), and the nominal relation would
-    /// otherwise reject a legal protected redeclaration. An error-typed member is
-    /// skipped (cascade suppression); a member with no locatable AST name span (e.g. a
-    /// constructor parameter property — deferred) is skipped. The caller has already
-    /// gated out the generic (free-type-parameter) case.
+    /// Record phase-2 `TK2416` checks for public own members overriding public base members.
+    /// Effective types are related later, with method bivariance keyed on the base
+    /// member kind. Private/protected overrides, error-typed members, spanless members,
+    /// and generic/free-parameter cases are deferred or skipped.
     fn collect_override_checks(
         &mut self,
         class: &Class<'_>,
@@ -1075,13 +946,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Backlog 06 — emit the abstract-member-completeness diagnostic for a
-    /// non-abstract class with a non-empty `pending` list: `TK2515` for a single
-    /// missing member (unquoted, attributed to the direct base), `TK2654` for two or
-    /// more (aggregated, quoted, in pending order). Both fire on the class **name**
-    /// span. Requires a resolvable direct base to attribute to (own abstract members
-    /// in a non-abstract class with no base is tsc `TS1244`, out of scope) and a named
-    /// class (an anonymous class expression is skipped).
+    /// Emit abstract-member-completeness diagnostics for non-abstract classes.
+    /// One missing member is `TK2515`; multiple are aggregated as `TK2654`.
+    /// Requires a named class and resolvable direct base for attribution.
     fn report_missing_abstract_members(&mut self, class: &Class<'_>, pending: &[String]) {
         let Some(id) = class.id.as_ref() else {
             return;
@@ -1104,21 +971,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
 }
 
-/// Build the **accessor properties** for a class from its accumulated getters/setters
-/// (M15), stamping each with the class's [`ClassId`]. Each accessor becomes **one**
-/// property:
-///
-///  - **type** = the getter's return type (a getter must exist — see below);
-///  - **`readonly`** = a getter exists **and** there is no setter (get-only → behaves
-///    like a read-only property, reusing the M14 flag); a get+set pair is writable.
-///
-/// A **set-only** accessor (no getter) is **deferred**: it builds no property (so the
-/// name is simply absent from the instance type — its body is still walked by
-/// `check_class`). The spec's "else the setter's parameter type" type fallback is part of
-/// that deferral and not taken here. An accessor whose getter return type could not be
-/// lowered (out of subset) is skipped too. The result reuses the ordinary
-/// [`PropertyType`], so member read resolves the property type and member assignment
-/// reuses the M14 path (`TK2322`/`TK2540`) with no accessor-specific machinery.
+/// Build one class property per accumulated accessor name.
+/// A getter supplies the property type; a get-only accessor is `readonly`, while
+/// get+set is writable. Set-only and unlowerable accessors are deferred/skipped,
+/// and ordinary member read/assignment machinery handles the resulting property.
 fn build_accessor_members(class_id: ClassId, accessors: Vec<AccessorBuild>) -> Vec<PropertyType> {
     let mut members: Vec<PropertyType> = Vec::with_capacity(accessors.len());
     for accessor in accessors {
@@ -1159,12 +1015,9 @@ fn base_class_name<'x, 'ast>(class: &'x Class<'ast>) -> Option<&'x str> {
     }
 }
 
-/// The name-span of each of a class's **own instance members** (non-static,
-/// non-computed fields/methods/accessors; the constructor is excluded), for
-/// positioning the `TK2416` override diagnostic on the derived member's name
-/// (backlog 06). The first key span wins for a name declared twice (a get/set
-/// pair). Constructor parameter properties are intentionally absent (their
-/// override check is deferred — no name span here).
+/// Name spans for own instance members, used to position `TK2416`.
+/// The first span wins for duplicate names; constructor parameter properties are
+/// absent because their override check is deferred.
 fn own_instance_member_spans(class: &Class<'_>) -> FxHashMap<String, Span> {
     let mut spans: FxHashMap<String, Span> = FxHashMap::default();
     for element in &class.body.body {
@@ -1198,13 +1051,9 @@ fn own_instance_member_spans(class: &Class<'_>) -> FxHashMap<String, Span> {
     spans
 }
 
-/// The **declaration kind** of each of a class's own instance members (backlog 06):
-/// `true` when declared with **method syntax** (`m() {}`), `false` for a field
-/// (annotated or initializer-inferred — including a function-typed one), a `get`/`set`
-/// accessor, or a constructor parameter property. Declaration-order last-wins for a
-/// (invalid-TS) duplicate name. Overlaid onto the base chain's map in [`fill_class`];
-/// tsc keys the `TK2416` method-bivariance rule on the **base** member's kind, so this
-/// is what a subclass's override check reads.
+/// Declaration kind for each own instance member: `true` for method syntax,
+/// `false` for fields/accessors/parameter properties. Last duplicate wins, and
+/// `fill_class` overlays this onto the base chain for the `TK2416` base-kind rule.
 fn own_instance_member_kinds(class: &Class<'_>) -> FxHashMap<String, bool> {
     let mut kinds: FxHashMap<String, bool> = FxHashMap::default();
     for element in &class.body.body {
@@ -1252,13 +1101,10 @@ fn own_instance_member_kinds(class: &Class<'_>) -> FxHashMap<String, bool> {
     kinds
 }
 
-/// A class's own **abstract** member names (declaration order, deduped) and the set
-/// of names its own **concrete** members implement (backlog 06). Abstract: an
-/// `abstract` method / field / accessor. Concrete (implements an inherited abstract
-/// member): a non-abstract method, any field (annotated or initializer-inferred), an
-/// accessor, or a constructor parameter property. Static and computed members are
-/// ignored (an abstract member is never static). Used to compose the pending list
-/// down the `extends` chain.
+/// Own abstract member names and own concrete implementations for abstract-completeness.
+/// Concrete members include non-abstract methods, fields, accessors, and parameter
+/// properties. Static/computed members are ignored when composing pending names down
+/// the `extends` chain.
 fn collect_abstract_members(class: &Class<'_>) -> (Vec<String>, FxHashSet<String>) {
     let mut own_abstract: Vec<String> = Vec::new();
     let mut own_concrete: FxHashSet<String> = FxHashSet::default();
@@ -1361,17 +1207,9 @@ fn constructor_visibility(class: &Class<'_>) -> Visibility {
     Visibility::Public
 }
 
-/// Compose a derived class's instance members from its **base** members and its
-/// **own** (M12). The base's members come first; each of the class's own members
-/// **overrides** a base member of the same name (the derived type wins) or is appended
-/// when the name is new. This yields a width-superset of the base, so subclass→base
-/// assignability falls out of the structural relation (the base is width-narrower).
-///
-/// The interner re-sorts into canonical (name-sorted) order when the object is filled,
-/// so the order here only affects which entry survives a duplicate name — own over
-/// base, matching TS override semantics. (Override *compatibility* — `TK2416` — is
-/// checked separately by [`Pass::collect_override_checks`] before this composes;
-/// composition itself still just replaces the base member with the derived one.)
+/// Compose a derived instance from base members plus own overrides.
+/// Own members replace same-named base members, then the interner canonicalizes
+/// ordering; override compatibility is checked separately before this replacement.
 fn compose_members(
     base_properties: Vec<PropertyType>,
     own_properties: Vec<PropertyType>,

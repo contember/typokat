@@ -1,13 +1,7 @@
 //! AST → scope graph + multi-slot symbols (architecture §4).
-//!
-//! The binder declares value/type-space names, assigns separate `DeclId` ranges for
-//! those spaces, and records function/block scopes keyed by `(module scope, span
-//! start)`. Type names are declared before bodies are walked so the checker can run
-//! its reserve-then-fill pass for recursive and mutually-referential types.
-//!
-//! The recursive walk visits statement bodies and expression positions that can hold
-//! nested functions, arrows, classes, or initializer expressions needing their own
-//! scopes. The checker owns type construction and all semantic diagnostics.
+//! Declares value/type names, keeps separate `DeclId` spaces, and records scopes
+//! keyed by `(module scope, span start)` for the checker's reserve-then-fill pass.
+//! The checker owns type construction and semantic diagnostics.
 
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{DeclId, Symbol, SymbolId, SymbolTable};
@@ -35,24 +29,15 @@ pub struct Binder {
     /// `0..decl_count`). Includes variable bindings, function declaration names,
     /// and function parameters.
     pub decl_count: u32,
-    /// Number of **type** declarations assigned a `DeclId` (type-space `DeclId`s
-    /// run `0..type_decl_count`). This is a **separate numbering space** from the
-    /// value `DeclId`s above: the type slot's `DeclId` keys the checker's
-    /// `type DeclId → TypeId` table, while the value slot's keeps keying the value
-    /// `DeclId → TypeId` table. Keeping them separate lets one name occupy both
-    /// slots (`namespace`/`interface`/`class` merging, §4.1) without collision.
+    /// Number of **type** declarations assigned a `DeclId` in the separate type
+    /// numbering space. Type slots key the checker's type table, value slots key
+    /// the value table, so one name can occupy both without collision (§4.1).
     pub type_decl_count: u32,
-    /// Maps a function/arrow node to the [`ScopeKind::Function`] scope holding its
-    /// parameters. The checker uses this to descend into the body with parameters
-    /// resolvable. Keyed by `(module scope, span start)`: span starts are unique
-    /// only *within a file*, so in a shared project `BindState` (many modules) the
-    /// module scope disambiguates offset-aligned nodes across files (backlog 58).
+    /// Maps a function/arrow node to its parameter scope. Keyed by `(module scope,
+    /// span start)` because offsets are unique only within one file (backlog 58).
     pub fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
-    /// Maps a `{ … }` block to its [`ScopeKind::Block`] lexical scope (M7). Each
-    /// block gets its own scope so a `let`/`const` declared inside an `if`/`else`
-    /// branch lives in that branch, not the enclosing function scope — keeping
-    /// branch-local names from colliding across branches. Keyed by
-    /// `(module scope, span start)`, like `fn_scopes` (backlog 58).
+    /// Maps a `{ … }` block to its lexical scope (M7), keyed like `fn_scopes` so
+    /// branch-local declarations stay local and cross-file offsets do not collide.
     pub block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
 }
 
@@ -130,20 +115,10 @@ impl BindState {
     }
 }
 
-/// Build the scope graph and symbol table for the **prelude + user** program pair
-/// (M28).
-///
-/// The prelude unit binds first, into its own root [`ScopeKind::Module`] scope; the
-/// user module scope is then created **with the prelude scope as its parent**, so
-/// user references fall through to the prelude names and user declarations shadow
-/// them (innermost-first resolution — tsc-like, and no duplicate-name diagnostics
-/// since the two units are distinct scopes). `DeclId` numbering (both spaces) runs
-/// prelude-first, matching the checker's prelude-then-user decl-table layout.
-///
-/// Within each unit the M5 shape is kept: every top-level **type** name (type
-/// aliases + interfaces + class type sides) is declared up front, before value
-/// declarations and bodies, so forward/mutual references resolve regardless of
-/// textual order — the precondition for the checker's reserve-then-fill.
+/// Build the scope graph and symbol table for the **prelude + user** pair (M28).
+/// The prelude binds first and becomes the user module's parent, giving normal
+/// shadowing without duplicate-name diagnostics. Each unit still declares all
+/// top-level type names before bodies for the checker's reserve-then-fill pass.
 pub fn bind_module_with_prelude(prelude: &Program<'_>, program: &Program<'_>) -> Binder {
     let mut builder = ProjectBinderBuilder::new(prelude);
     let (module, _) = builder.add_module(program, &[]);
@@ -236,11 +211,8 @@ impl ProjectBinderBuilder {
     }
 }
 
-/// Declare every top-level `type`/`interface` name into the **type space** of
-/// `scope`, each with a fresh type-space `DeclId`. Run before any body walk so a
-/// type body can reference itself or a (later-declared) sibling. Bodies are not
-/// inspected here — only the names are introduced (the checker reserves the
-/// `TypeId` and fills the body in its own two-phase pass).
+/// Declare top-level type names before body walks so self/sibling references
+/// resolve; the checker reserves each `TypeId` and fills it later.
 fn bind_type_declarations(state: &mut BindState, scope: ScopeId, statements: &[Statement<'_>]) {
     for stmt in statements {
         bind_type_declaration_statement(state, scope, stmt);
@@ -386,12 +358,8 @@ fn bind_block(state: &mut BindState, parent: ScopeId, block: &BlockStatement<'_>
     bind_statements(state, block_scope, &block.body);
 }
 
-/// Bind a `switch` statement (M8): bind the discriminant expression (for nested
-/// functions) and every clause's statements into `scope`. A block-bodied clause
-/// (`case x: { … }`) opens its own lexical scope through the `BlockStatement` arm
-/// of [`bind_statement`], so a `let`/`const` declared in that block stays local to
-/// the clause. The `case` *test* expressions are literals in the subset (no nested
-/// functions), but are bound defensively for any in-subset shape.
+/// Bind a `switch`: clauses share `scope` unless an explicit block creates a
+/// lexical child. Case tests are literals in the subset, but still walked.
 fn bind_switch(state: &mut BindState, scope: ScopeId, switch: &SwitchStatement<'_>) {
     bind_expression(state, scope, &switch.discriminant);
     for case in &switch.cases {
@@ -424,11 +392,8 @@ fn bind_function_declaration(state: &mut BindState, scope: ScopeId, func: &Funct
     bind_function(state, scope, func);
 }
 
-/// Bind a class declaration (M11): declare its name in the **value** space (the
-/// constructor side — its type side is declared up front in
-/// [`bind_type_declarations`]), then bind the class body. A class with no name is
-/// out of the M11 subset (an anonymous class) — its body is still bound so any
-/// nested function is given a scope.
+/// Bind a class declaration: declare the constructor-side value name, then bind
+/// the body. Anonymous class bodies are still walked for nested scopes.
 fn bind_class_declaration(state: &mut BindState, scope: ScopeId, class: &Class<'_>) {
     if let Some(id) = &class.id {
         let decl_id = state.fresh_decl();
@@ -437,12 +402,8 @@ fn bind_class_declaration(state: &mut BindState, scope: ScopeId, class: &Class<'
     bind_class(state, scope, class);
 }
 
-/// Bind a class body: method-like elements get function scopes, and field
-/// initializers are walked for nested functions.
-///
-/// `extends`/`super`, abstract flags, accessor merging, and parameter-property
-/// members are checker-owned; the binder only provides the scopes their bodies need.
-/// `implements` remains deferred and declares no binder name.
+/// Bind class-body scopes. The checker owns `extends`/`super`, abstract flags,
+/// accessor merging, parameter properties, and deferred `implements` handling.
 fn bind_class(state: &mut BindState, parent: ScopeId, class: &Class<'_>) {
     for element in &class.body.body {
         match element {
@@ -464,12 +425,8 @@ fn bind_class(state: &mut BindState, parent: ScopeId, class: &Class<'_>) {
     }
 }
 
-/// Bind a function/arrow's own scope: create a [`ScopeKind::Function`] scope
-/// under `parent`, declare each parameter as a value symbol in it, record the
-/// scope under `(module scope, function span start)`, and recurse into the body.
-///
-/// Each parameter gets a fresh `DeclId`; the checker fills its type from the
-/// parameter annotation when it descends into the function.
+/// Bind a function/arrow scope, record it by `(module scope, span start)`, and
+/// declare parameters with fresh value `DeclId`s for the checker to fill.
 fn bind_function(state: &mut BindState, parent: ScopeId, func: &Function<'_>) {
     let fn_scope = state
         .graph
@@ -588,11 +545,8 @@ fn declare_value(state: &mut BindState, scope: ScopeId, name: &str, decl_id: Dec
     state.graph.declare(scope, name, symbol_id);
 }
 
-/// Declare a **type-space** binding `name` in `scope`, merging into an existing
-/// symbol if the name is already present so the type slot lives under the same id
-/// as any value slot (architecture §4.1). Declaration merging across two type
-/// declarations (`interface`+`interface`, `TK2451`) is deferred (mvp-plan M5
-/// scope); the later binding wins, and M5 fixtures use unique type names.
+/// Declare a type-space binding, merging with any existing value slot under the
+/// same symbol id (§4.1). Duplicate type declarations remain deferred (`TK2451`).
 fn declare_type(state: &mut BindState, scope: ScopeId, name: &str, decl_id: DeclId) {
     if let Some(existing) = state.graph.get(scope).and_then(|s| s.lookup_local(name)) {
         if let Some(symbol) = state.symbols.get_mut(existing) {

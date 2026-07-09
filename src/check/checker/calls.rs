@@ -23,17 +23,9 @@ use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
-    /// M24 — check each explicit type argument against its type parameter's
-    /// **constraint**, emitting `TK2344` on the offending argument.
-    ///
-    /// The constraint is substituted with the full `TypeParamId → TypeId` argument map
-    /// **before** the check, so a constraint that references an earlier parameter of the
-    /// same list (`<T, U extends T>` instantiated `f<string, number>`) is checked against
-    /// the actual `T` argument (`number` against `string`). Each substituted constraint is
-    /// then related to its argument through the shared relation engine — cycle stack +
-    /// cache-soundness intact. A failure is `TK2344` at the argument's span, carrying the
-    /// relation's reason chain; the bad argument **still instantiates** (tsc behaviour — no
-    /// cascading second diagnostic), so the caller keeps its substituted result.
+    /// M24: check explicit type arguments against substituted constraints. The
+    /// shared relation engine supplies `TK2344` reason chains; failed arguments
+    /// still instantiate, matching tsc and avoiding cascades.
     pub(in crate::check::checker) fn check_type_argument_constraints(
         &mut self,
         type_params: &[TypeParamId],
@@ -54,23 +46,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // evaluator before relating, so the check runs against the VALUE
             // (`"a" | "b"`), driving the fixture's TK2344.
             let evaluated = self.evaluate_type(substituted, span);
-            // M28 CONSTRAINT-side gate (round 1, re-affirmed round 4): a substituted
-            // constraint still carrying a deferred `keyof` (the canonical Omit idiom —
-            // `Pick<T, Exclude<keyof T, K>>` inside a generic body, where Pick's
-            // constraint is `keyof T` with `T` free) cannot be decided; tsc lands that
-            // check at concrete instantiation (M24 parity). Keyof only, so
-            // conditional/mapped constraints keep their pre-M28 behavior.
+            // M28: a substituted constraint still carrying deferred `keyof` cannot
+            // be decided here; tsc lands that check at concrete instantiation.
+            // Keyof only, so conditional/mapped constraints keep prior behavior.
             if contains_deferred_keyof(self.interner.store(), evaluated) {
                 continue;
             }
-            // M28 round 4 (leader tsc-probe arbitration, REPLACING the round-3
-            // argument-side gate — its "tsc defers these" rationale was
-            // probe-disproven): the ARGUMENT always evaluates through the shared
-            // evaluator, then the check ALWAYS runs on the evaluated form. A decidable
-            // composition (`Exclude<"a" | 1, "a">` → `1`) checks precisely; a
-            // still-deferred result checks conservatively — tsc-exact on unprovable
-            // shapes (`MyExclude<K, "a">`), a documented over-report on provable ones
-            // (`Extract<K, string>` — tsc's constraint approximation, backlog 37).
+            // M28: always evaluate the argument before checking. Decidable
+            // compositions check precisely; still-deferred results check
+            // conservatively (documented over-report for backlog 37 shapes).
             let evaluated_arg = self.evaluate_type(arg, span);
             checks.push((evaluated_arg, arg, evaluated, span));
         }
@@ -87,11 +71,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let mut relater = Relater::new(store, wk);
             for (evaluated_arg, written_arg, constraint, span) in checks {
                 if let Relation::No(chain) = relater.is_assignable(evaluated_arg, constraint) {
-                    // Render the WRITTEN argument when the evaluated form is still
-                    // deferred — the source form carries the alias name
-                    // (`Extract<K, string>`, round-4 directive) where the evaluated
-                    // form would be a raw substituted body; a fully-evaluated value
-                    // renders as itself (`1` — tsc-like).
+                    // Render the written argument when evaluation remains deferred;
+                    // otherwise render the evaluated value, matching tsc-like output.
                     let render_id = if contains_deferred_argument(store, evaluated_arg) {
                         written_arg
                     } else {
@@ -111,23 +92,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Instantiate a **generic call with explicit type arguments** (`identity<number>
-    /// (5)`, M9), returning the instantiated function `TypeId`, or `None` when this is
-    /// not such a call (no type arguments, or the callee is not a registered generic
-    /// `function`). The caller then runs the usual arity/argument/return checks against
-    /// the instantiated parameter/return types.
-    ///
-    /// Resolution: the callee must be a plain identifier resolving (through the scope
-    /// graph) to a value `DeclId` registered in [`Pass::generic_fns`]. Its type
-    /// arguments are lowered (in the call's scope), then substituted into the generic's
-    /// template signature (`params[i] → arg[i]`).
-    ///
-    /// Type-argument **arity** is assumed correct (the fixtures supply it). A wrong
-    /// count is handled **gracefully** — parameters and arguments are zipped to the
-    /// shorter list, so a surplus on either side is ignored and an unmapped parameter
-    /// simply survives the substitution; no panic, and no diagnostic (the `TK2558`
-    /// wrong-arity check is out of M9 scope). An argument that cannot be lowered aborts
-    /// the instantiation (`None`), so the call falls back to the inferred callee path.
+    /// Instantiate an M9 generic call with explicit type arguments. The callee must
+    /// be a registered generic function identifier; wrong type-argument arity zips
+    /// gracefully because `TK2558` is out of scope.
     fn instantiate_generic_callee(
         &mut self,
         scope: ScopeId,
@@ -166,28 +133,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(substitute(self.interner, sig.fn_ty, &map))
     }
 
-    /// Instantiate a **generic call WITHOUT explicit type arguments** (`identity(5)`,
-    /// M10) by **inferring** its type arguments from the (already-inferred) argument
-    /// types, returning the instantiated function `TypeId`, or `None` when this is not
-    /// such a call (the callee is not a registered generic `function`). The caller then
-    /// runs the **same** arity/argument/return checks against the instantiated
-    /// signature — inference only decides the type arguments; assignability is still
-    /// verified by the relation engine.
-    ///
-    /// Resolution mirrors [`instantiate_generic_callee`]: the callee must be a plain
-    /// identifier resolving (through the scope graph) to a value `DeclId` registered in
-    /// [`Pass::generic_fns`]. Its template signature's parameter types (which contain
-    /// the `TypeParam`s) are matched against the argument types by the generative
-    /// inference engine ([`crate::check::infer`]), which fixes each type parameter from
-    /// its candidates (no candidate → `unknown`; one → it; ≥ 2 → their union). The
-    /// resulting `TypeParamId → TypeId` map is then substituted into the template by the
-    /// existing M9 [`substitute`].
-    ///
-    /// The caller guarantees this is only reached when there are **no** explicit type
-    /// arguments (the M9 path is tried first), so explicit-type-arg calls keep the M9
-    /// behaviour unchanged. A type parameter the arguments do not constrain falls back
-    /// to `unknown` — sound: `unknown` cannot mask a downstream error the way `any`
-    /// would.
+    /// Instantiate an M10 generic call without explicit type arguments by inferring
+    /// from already-inferred arguments. Inference only chooses type arguments; the
+    /// instantiated signature is still checked by the relation engine.
     fn infer_generic_callee(
         &mut self,
         scope: ScopeId,
@@ -229,22 +177,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(substitute(self.interner, sig.fn_ty, &map))
     }
 
-    /// Infer the type of a call expression in `scope` and check it.
-    ///
-    /// The callee is inferred first (resolving its name / descending into a callee
-    /// expression). When it is a function type:
-    ///
-    ///  - **arity** (no optional/rest params in M3): too many or too few arguments →
-    ///    `TK2554` (primary span = the call), and
-    ///  - each **argument** is collected as an assignability obligation against the
-    ///    corresponding parameter → `TK2345` (primary span = the argument), paired up
-    ///    to the lesser of the two counts.
-    ///
-    /// The call's type is the selected signature's return type. A callee is callable
-    /// when it is a function type or an object with a single call signature. A
-    /// non-callable callee yields the error type silently, preserving the pre-WU2
-    /// behavior until the dedicated diagnostic can account for dropped callability
-    /// and overloads.
+    /// Infer and check a call. Callable callees are function types or objects with
+    /// one call signature; non-callables still yield the error type silently until
+    /// the dedicated diagnostic can account for dropped callability and overloads.
     pub(in crate::check::checker) fn infer_call(
         &mut self,
         scope: ScopeId,
@@ -271,11 +206,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // used only when there was no explicit-args instantiation above.
         let inferred_callee = self.infer_expr(scope, &call.callee);
 
-        // Infer every argument up front (skipping spreads — out of the M3 subset);
-        // this also descends into nested calls/functions inside the arguments. The
-        // parallel `arg_fresh` records which arguments are fresh object/array literals
-        // (the M24 clamp exemption's provenance) — built in the same loop so the two
-        // stay index-aligned even when an out-of-subset argument is skipped.
+        // Infer arguments up front and build `arg_fresh` in the same loop so M24
+        // clamp provenance stays index-aligned with skipped out-of-subset args.
         let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(call.arguments.len());
         let mut arg_fresh: Vec<bool> = Vec::with_capacity(call.arguments.len());
         let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(call.arguments.len());
@@ -290,12 +222,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // A spread or an out-of-subset argument is not paired against a parameter.
         }
 
-        // M10: a **generic call WITHOUT explicit type arguments** (`identity(5)`) infers
-        // its type arguments from the argument types, then instantiates the signature by
-        // the *same* M9 substitution. Only attempted when the M9 explicit-args path did
-        // not already instantiate (so explicit type args keep the M9 behaviour) and the
-        // callee is a registered generic function. A non-generic call yields `None` and
-        // falls through to the inferred-callee type unchanged.
+        // M10 inference runs only when M9 explicit instantiation did not; a
+        // non-generic call falls through to the inferred callee unchanged.
         let inferred_generic_callee = if instantiated_callee.is_none() {
             self.infer_generic_callee(scope, call, &arg_types, &arg_fresh)
         } else {
@@ -344,11 +272,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some((ret, call_span))
     }
 
-    /// The callable signature of a callee type: a plain function type, or an object's
-    /// single call signature. M24 (review F3): the callee resolves through its
-    /// **apparent type** first, so calling a value typed as a constrained parameter
-    /// (`T extends (a: number) => number`) checks arguments and yields the return type
-    /// through the constraint. For a non-parameter callee this is the identity.
+    /// Callable signature after apparent-type resolution: a function type or an
+    /// object's single call signature.
     fn callable_signature(&self, callee_ty: TypeId) -> Option<TypeId> {
         let callee_ty = self.apparent_type(callee_ty);
         match self.interner.store().tag(callee_ty) {
@@ -364,22 +289,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Check a `super(args)` constructor call (M12) against the **base** class's
-    /// constructor signature in scope ([`Pass::current_super_ctor`], bound by
-    /// [`check_class`] for a derived class's member bodies).
-    ///
-    /// The arguments are checked with the **same** machine as a `new`/ordinary call —
-    /// arity (`TK2554`) + per-argument assignability (`TK2345`) via
-    /// [`check_call_arguments`]. Arguments are always inferred first (so a nested
-    /// call/`new`/function inside them is checked and an unresolved name emits `TK2304`),
-    /// even when there is no base signature in scope.
-    ///
-    /// A `super(...)` with **no base signature in scope** (a `super` outside a derived
-    /// class member, or a class whose base could not be resolved) collects no obligation
-    /// and emits no `super`-specific diagnostic — no crash, no false positive. The
-    /// expression's value type is unused (`super(...)` is a constructor statement), so it
-    /// yields the error type. `super.method()` (super *property* access) is a different
-    /// AST shape (a member access on `Super`) and remains deferred.
+    /// Check `super(args)` against the base constructor with the shared call
+    /// machine. Arguments are always walked; missing base signatures collect no
+    /// obligation and emit no `super`-specific diagnostic.
     fn infer_super_call(
         &mut self,
         scope: ScopeId,
@@ -418,16 +330,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some((wk.error, call_span))
     }
 
-    /// Check a call's arguments against a callee signature's parameter types — the M3
-    /// arity + argument-assignability rules, shared by both `CallExpression`
-    /// ([`infer_call`]) and `NewExpression` ([`infer_new`], M11).
-    ///
-    ///  - **arity** (no optional/rest params in the subset): the argument and parameter
-    ///    counts must match exactly, else `TK2554` (primary span = the call/`new`), and
-    ///  - each **argument** is collected as an assignability obligation against the
-    ///    corresponding parameter. Context-free failures are `TK2345`; fresh object and
-    ///    tuple literals contextually typed by the parameter use assignment-style
-    ///    diagnostics (`TK2322`/`TK2741`), matching tsc's literal-member reporting.
+    /// Shared M3 call/`new` argument checking: exact arity plus per-argument
+    /// assignability. Fresh object/tuple literals use assignment-style diagnostics,
+    /// matching tsc's literal-member reporting.
     fn check_call_arguments(
         &mut self,
         scope: ScopeId,
@@ -492,44 +397,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Infer and check a `new ClassName(args)` expression (M11, extended for M16 generic
-    /// classes), yielding the class's **instance type**.
-    ///
-    /// The callee must be a plain identifier resolving (through the scope graph) to a
-    /// value `DeclId` registered in [`Pass::class_ctors`] — i.e. a class. Its constructor
-    /// signature drives the **same** arity (`TK2554`) and argument-assignability
-    /// (`TK2345`) checks as an M3 call ([`check_call_arguments`]); the expression's type
-    /// is the class's instance type. Arguments are always inferred first (so nested
-    /// calls/`new`/functions inside them are checked) even when the callee is not a
-    /// known class.
-    ///
-    /// A non-class / unresolved callee is out of scope: the callee is still inferred (so
-    /// an unresolved name emits `TK2304` once) and the result is the error type (no
-    /// `new`-specific diagnostic, no cascade).
-    ///
-    /// M16 (generic classes): when the named class is generic (its value `DeclId` has an
-    /// entry in [`Pass::class_type_params`]) the constructor signature and instance type are
-    /// **instantiated** before the argument checks ([`new_class_substitution`]):
-    ///
-    ///  - **explicit type arguments** (`new Box<number>(…)`) substitute `param[i] → arg[i]`
-    ///    (lowered in `scope`), so the constructor becomes `(v: number)` and the instance
-    ///    `{ value: number; get: () => number }`. `new Box<number>("s")` then fails the
-    ///    argument check (`TK2345`);
-    ///  - **no type arguments** (`new Box(5)`) infer the parameters from the constructor
-    ///    arguments via the **same** M10 generative engine
-    ///    ([`crate::check::infer::infer_type_arguments`]) run on the *uninstantiated*
-    ///    constructor parameter types, then substitute — `T` is inferred `number` from `5`.
-    ///    An un-inferrable parameter falls back to `unknown` (sound).
-    ///
-    /// The argument checks (`TK2554`/`TK2345`) run against the **instantiated** constructor
-    /// parameters; the expression's type is the **instantiated** instance type, so a member
-    /// using `T` (`b.get(): T`) reads back as the substituted type downstream. A non-generic
-    /// class skips all of this and behaves exactly as in M11.
-    ///
-    /// M15: if the directly-named class is `abstract` ([`ClassInfo::is_abstract`]), the
-    /// `new` is `TK2511` (`Cannot create an instance of an abstract class`). **Only the
-    /// named class's own flag matters** — a concrete subclass of an abstract class is not
-    /// itself abstract, so it instantiates fine.
+    /// Infer/check `new ClassName(args)` and return the instance type. Direct class
+    /// constructors use shared call checks; generic classes instantiate constructor
+    /// and instance types first. Non-class callees are walked but yield the error
+    /// type without a `new`-specific diagnostic.
     pub(in crate::check::checker) fn infer_new(
         &mut self,
         scope: ScopeId,
@@ -538,11 +409,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let wk = self.interner.well_known();
         let new_span = Span::from_oxc(new_expr.span);
 
-        // Resolve the class via the callee identifier's value slot, BEFORE inferring the
-        // callee expression (so an unresolved name still emits exactly one `TK2304` via
-        // the callee inference below, not a doubled diagnostic). A non-identifier callee
-        // (`new (expr)(…)`) is out of subset. M16: keep the `DeclId` too, to look up the
-        // class's type parameters for a generic instantiation.
+        // Resolve direct class identifiers before callee inference so unresolved
+        // names still emit exactly one `TK2304`; keep `DeclId` for M16 generics.
         let class_resolved: Option<(DeclId, ClassInfo)> = match &new_expr.callee {
             Expression::Identifier(ident) => value_decl_id(self.binder, scope, ident.name.as_str())
                 .and_then(|decl_id| {
@@ -606,14 +474,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // whole `new` span; returns whether the constructor was inaccessible.
         let ctor_inaccessible = self.check_new_accessibility(&info, new_span);
 
-        // M15: an `abstract` class cannot be instantiated → `TK2511`. **Only the directly-
-        // named class's flag matters** (`info.is_abstract`): a concrete subclass of an
-        // abstract class has its own flag `false`, so `new Concrete(...)` is fine even though
-        // its base is abstract. The argument/arity checks below still run (matching tsc,
-        // which reports both the abstract-instantiation error and any bad arguments); the
-        // expression's type is still the instance type, so downstream uses do not cascade.
-        // Backlog 20: suppressed when the constructor is ALSO inaccessible — tsc reports
-        // only the accessibility error in that combination (probed).
+        // M15: only the directly named class's abstract flag matters. Still run
+        // argument checks; suppress when constructor accessibility already reported,
+        // matching tsc's single accessibility error in that combination.
         if info.is_abstract && !ctor_inaccessible {
             self.diagnostics
                 .push(Diagnostic::abstract_instantiation(new_span));
@@ -641,11 +504,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some((instance, new_span))
     }
 
-    /// The construct signature of a `new` callee type: an object's single construct
-    /// signature. M24 (review F3, same class): the callee resolves through its
-    /// **apparent type** first, so `new t(...)` on a value typed as a constrained
-    /// parameter (`T extends { new (...): X }`) checks through the constraint. For a
-    /// non-parameter callee this is the identity.
+    /// Construct signature after apparent-type resolution: an object's single
+    /// construct signature.
     fn construct_signature(&self, callee_ty: TypeId) -> Option<TypeId> {
         let callee_ty = self.apparent_type(callee_ty);
         if self.interner.store().tag(callee_ty) != TypeTag::Object {
@@ -658,28 +518,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(*signature)
     }
 
-    /// M16: the constructor signature + instance type of a `new ClassName(args)` after
-    /// instantiating a **generic** class, or the class's own `ctor`/`instance` unchanged for
-    /// a non-generic one (the M11 identity).
-    ///
-    /// A class is generic iff its value `DeclId` has type parameters in
-    /// [`Pass::class_type_params`]. The substitution `TypeParamId → TypeId` is built from:
-    ///
-    ///  - **explicit type arguments** on the `new` (`new Box<number>(…)`): each argument is
-    ///    lowered in `scope` and zipped to the class's parameters (graceful on an arity
-    ///    mismatch — zipped to the shorter list, no panic, no diagnostic, matching the M9
-    ///    type-reference behaviour); a non-lowerable argument simply leaves that parameter
-    ///    unmapped (it survives substitution);
-    ///  - **no type arguments** (`new Box(5)`): the parameters are **inferred** from the
-    ///    constructor argument types via the M10 generative engine
-    ///    ([`crate::check::infer::infer_type_arguments`]), run against the *uninstantiated*
-    ///    constructor parameter types (which embed the type parameters). An un-inferred
-    ///    parameter falls back to `unknown` (the sound M10 fallback).
-    ///
-    /// The map is then applied (via the M9 [`substitute`]) to **both** the constructor
-    /// signature and the instance type, so the argument checks run against the substituted
-    /// parameters and the result carries the substituted members. An empty map (a parameter
-    /// list that resolved to nothing, or a non-generic class) leaves both ids untouched.
+    /// M16 generic-class substitution for `new`: explicit type args or M10
+    /// constructor-argument inference build one map, then both constructor and
+    /// instance type are substituted. Empty/non-generic maps are the M11 identity.
     fn new_class_substitution(
         &mut self,
         scope: ScopeId,
@@ -742,16 +583,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         (ctor, instance)
     }
 
-    /// Infer a `function` declaration/expression's type and check its body, returning
-    /// the interned function type **and** its type-parameter ids (M9 — empty for a
-    /// non-generic function).
-    ///
-    /// M9: a generic function's type parameters are allocated and pushed onto the
-    /// type-parameter scope for the whole signature + body, so `x: T`, the return `: T`,
-    /// and a nested `Box<T>` lower to the parameter type. The interned result is the
-    /// **template** (its signature with the parameter types embedded); the returned ids
-    /// pair with it for instantiation at a call site. The frame is popped before
-    /// returning (a type parameter does not leak past its function).
+    /// Infer a function type and check its body. Generic functions push their type
+    /// parameters for the whole signature/body and return the template plus ids for
+    /// call-site instantiation.
     pub(in crate::check::checker) fn infer_function(
         &mut self,
         enclosing: ScopeId,
@@ -794,15 +628,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         (fn_ty, param_ids)
     }
 
-    /// Infer an arrow's type and check its body. An expression-body arrow's return
-    /// type is the body expression's type (widened when not annotated).
-    ///
-    /// M9: a generic arrow (`<T>(x: T) => T`) scopes its type parameters to its
-    /// signature + body (the frame is pushed for the whole inference and popped after).
-    /// Generic arrows are not in the M9 fixtures and an arrow's params are not
-    /// registered for a call site (only a named generic `function` declaration is
-    /// callable with explicit type args before inference, M10) — the scoping is here so
-    /// a parameter never leaks.
+    /// Infer an arrow's type and check its body. Generic arrow type parameters are
+    /// scoped to the signature/body only; they are not registered for explicit
+    /// call-site type arguments.
     pub(in crate::check::checker) fn infer_arrow(
         &mut self,
         enclosing: ScopeId,
@@ -902,14 +730,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 None => error_ty,
             };
 
-            // F4 — access control through an **object** destructuring parameter
-            // (`function f({ priv }: K) {}`). Run M13's private/protected check for each
-            // destructured member against the parameter's annotation type. Only the access
-            // check runs (binding the names' types is deferred); the check is skipped for an
-            // un-annotated parameter (the error type is any-like → no member origin) and for
-            // every non-object pattern kind. The annotation resolves in the *enclosing*
-            // scope, and `current_class` is the enclosing class context (so an in-class /
-            // subclass parameter destructure stays clean, like a member access).
+            // F4: object destructuring parameters run M13 access checks against the
+            // annotation type only; binding destructured names is deferred. The
+            // annotation resolves in the enclosing class context.
             if let BindingPattern::ObjectPattern(object) = &param.pattern {
                 if param.type_annotation.is_some() {
                     self.check_object_pattern_access(object, ty);
@@ -937,16 +760,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         lowered
     }
 
-    /// Walk a function body in `scope`, checking each `return <expr>` against a
-    /// declared return type and inferring a return type when none is declared.
-    ///
-    /// Returns the **inferred** return type (used only when there is no declared
-    /// return type): the first `return <expr>`'s widened type, or `void` if no value
-    /// return is found (a bare `return;` or no `return` at all). When a return type
-    /// *is* declared, each `return <expr>` is collected as an assignability
-    /// obligation (primary span = the expression); a bare `return;` is left to the
-    /// `void` rule in phase 2. Missing-return analysis (`TK2355`) is deferred, so an
-    /// empty body under a non-void declared return is **not** an error.
+    /// Walk a function body, checking returns against a declared type or inferring
+    /// the first value return's widened type. Missing-return analysis (`TK2355`)
+    /// remains deferred.
     fn check_function_body(
         &mut self,
         scope: ScopeId,
@@ -981,13 +797,9 @@ fn resolve_return_type(
         .unwrap_or_else(|| interner.well_known().void)
 }
 
-/// Whether a call/`new` argument is a **fresh object/array literal** at the call
-/// site (M24) — the provenance the clamp-to-constraint exemption keys on. tsc
-/// contextually retypes a fresh literal against the constraint (out-of-scope pass,
-/// documented deferral), so a violating candidate inferred from one is not clamped;
-/// a typed value (identifier, member access, call result, …) cannot be reshaped and
-/// clamps normally. Freshness is syntactic (mirroring the excess-property check);
-/// parentheses are transparent.
+/// Whether a call/`new` argument is a fresh object/array literal for the M24
+/// clamp-to-constraint exemption. Freshness is syntactic; parentheses are
+/// transparent.
 fn is_fresh_literal(expr: &Expression<'_>) -> bool {
     match expr {
         Expression::ObjectExpression(_) | Expression::ArrayExpression(_) => true,

@@ -19,16 +19,9 @@ use super::calls::intrinsic_id;
 use super::expr::contextual_literal_target;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
-    /// Check a reassignment `NAME = <expr>` (a simple `=` to an identifier target) in
-    /// `scope`. The RHS must be assignable to the target's declared type → `TK2322`
-    /// with the RHS as the primary span. An unresolved target is `TK2304`.
-    ///
-    /// M23 — the assignment's effect on narrowing lives in the **flow graph** (the
-    /// pre-pass installs an assignment node that narrows the symbol to the assigned
-    /// value's type in the straight-line flow after, or resets it to the declared type
-    /// for a compound / complex RHS). This routine only collects the assignability
-    /// obligation; it no longer touches any narrowing state. A non-identifier or
-    /// unresolvable target has no symbol, so it narrows nothing and never panics.
+    /// Check `NAME = expr` against the target's declared type. M23 narrowing
+    /// effects live only in the flow graph; this routine just walks the RHS and
+    /// records assignability.
     pub(in crate::check::checker) fn check_assignment(&mut self, scope: ScopeId, assign: &AssignmentExpression<'_>) {
         let target = match &assign.left {
             AssignmentTarget::AssignmentTargetIdentifier(target) => target,
@@ -40,23 +33,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 self.check_member_assignment(scope, member, assign);
                 return;
             }
-            // Other targets (computed/element access `obj[k] = …`, destructuring) stay
-            // **deferred**: there is no symbol to reset and member-assignment checking of
-            // these is out of the M14 subset. Still infer the RHS so it is walked — a
-            // nested call/`new`/function inside it is checked, an unresolved name in it
-            // emits `TK2304` — but collect **no** obligation (so no false negative or
-            // spurious error).
+            // Computed/destructuring targets stay deferred. Still walk the RHS so
+            // nested checks and unresolved-name diagnostics fire, but collect no
+            // obligation.
             _ => {
                 self.infer_expr(scope, &assign.right);
                 return;
             }
         };
 
-        // Infer the RHS first so any reference inside it resolves (and emits TK2304
-        // before we look at the target), and any nested function body is checked. The
-        // RHS is evaluated *before* the assignment, so it still sees the target's
-        // pre-assignment narrowing (e.g. `x = x` reads the narrowed `x`). Done for both
-        // simple and compound forms so the RHS of a compound assignment is still walked.
+        // Infer the RHS before the target so it sees pre-assignment narrowing and
+        // compound assignments still walk their RHS.
         let rhs = self.infer_expr(scope, &assign.right);
 
         let symbol_id = match self.binder.graph.resolve(scope, target.name.as_str()) {
@@ -104,37 +91,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Check a **member-assignment target** `obj.prop = expr` / `this.prop = expr` (M14,
-    /// filling the gap deferred since M11). The right-hand side must be assignable to the
-    /// resolved property's type (`TK2322`, primary span = the RHS), and a `readonly`
-    /// property may be assigned **only** inside its declaring class's constructor via
-    /// `this.prop` (otherwise `TK2540`).
-    ///
-    /// **Base / property resolution.** The base (`member.object`) and the RHS are inferred
-    /// first (so references inside them resolve, nested calls/functions are checked, and an
-    /// unresolved name emits `TK2304`). The property is then looked up by name on the base
-    /// **object** type — the same lookup `infer_member_access` uses, but kept local so an
-    /// assignment target does not also emit read-side `TK2339`/access-control diagnostics
-    /// (those stay on the read path; reporting a missing/illegal *assignment* target is out
-    /// of the M14 subset). `this.prop` falls out for free: a `ThisExpression` base infers to
-    /// the current instance type (or the static side in a static body), so its members
-    /// resolve exactly as any object base.
-    ///
-    /// **The error-typed skips (no regression / no false positive).** The assignability
-    /// obligation is collected **only** when the base, the property, *and* the RHS are all
-    /// well-typed — it is skipped when the base type is the error/`any` type, the base is not
-    /// an object type (a union / intrinsic — element-access and union targets are deferred),
-    /// the property is not found, the property's type is the error type, **or the RHS type is
-    /// the error type**. The RHS skip mirrors how the M3/M11 return path tolerates
-    /// incomplete expression inference: an arithmetic RHS like `this.count + by` infers to the
-    /// error type (arithmetic is out of the value subset), so collecting an obligation against
-    /// it would be meaningless — skipping keeps the existing M11–M13 constructor/method
-    /// assignments clean. (Such an RHS is already assignable to anything, so the skip changes
-    /// no verdict; it is belt-and-suspenders against any future over-report.)
-    ///
-    /// **Compound assignment** (`+=`, …) on a member target stays **deferred** — the base/RHS
-    /// are still walked, but no obligation and no `readonly` check are collected (matching the
-    /// identifier-target baseline, where compound assignability is unchecked).
+    /// Check M14 member assignment. Base/RHS are walked first; local lookup avoids
+    /// read-side diagnostics, and compound member assignments remain deferred.
     fn check_member_assignment(
         &mut self,
         scope: ScopeId,
@@ -167,11 +125,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return;
         }
 
-        // M24 (review F1): a member WRITE resolves through the base's **apparent type**,
-        // exactly like a read — `t.x = "s"` with `T extends { x: number }` checks the RHS
-        // against `number`. For a non-parameter base this is the identity.
-        // M31: an intersection base resolves through its merged apparent object (mirroring
-        // the read side), so `(A & B).prop = …` checks against the merged property type.
+        // Member writes use the same apparent/merged base type as reads, so
+        // constrained parameters and intersections expose their real property type.
         let base_ty = self.apparent_type(base_ty);
         let base_ty = self
             .intersection_apparent_object(base_ty)
@@ -195,11 +150,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 )
             });
 
-        // F5/backlog-03 (part b): a **union** base has no `object_type`, so the object
-        // lookup above misses it and the assignment was silently skipped (no readonly
-        // check, no type check). Resolve the property across the union members instead —
-        // mirroring the read-side `union_member_access` model — when the object path found
-        // nothing.
+        // Union bases have no single object; fall back to the read-side union member
+        // model so readonly and type checks are not skipped.
         let found = match object_found {
             Some(found) => Some(found),
             None => self.union_member_assignment_target(base_ty, prop_name),
@@ -216,14 +168,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return;
         }
 
-        // M14/M15 — `readonly` gate: a `readonly` member may be assigned **only** as
-        // `this.prop` inside the **declaring class's constructor**. Anywhere else (another
-        // method, a static body, external code, or via a non-`this` base) it is `TK2540`.
-        //
-        // M15: that constructor carve-out applies to a `readonly` **data field** only — a
-        // get-only **accessor** is read-only *everywhere*, including its own constructor
-        // (tsc `TS2540`). So the carve-out is additionally gated on `!is_accessor`: a
-        // get-only accessor is `TK2540` regardless of constructor context.
+        // `readonly` data fields may be assigned only as `this.prop` in the declaring
+        // constructor. Get-only accessors are read-only everywhere, so the carve-out
+        // is gated on `!is_accessor`.
         if readonly {
             let in_declaring_ctor = !is_accessor
                 && self.current_in_ctor
@@ -268,22 +215,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Resolve a property assignment target across a **union** base (F5/backlog-03 part b),
-    /// mirroring the read-side [`union_member_access`](super::Pass::union_member_access)
-    /// model. The property must be present on **every** member (else the target is deferred
-    /// — `None`, no `TK2339` on an assignment target, matching the object path). When it is:
-    ///
-    /// - the **readonly** flag for the target is `true` if the property is `readonly` on
-    ///   **any** member (matching tsc — a union property is read-only if any constituent
-    ///   makes it so), so assigning to it is `TK2540`;
-    /// - the target **type** is the union of the members' property types (interned), so a
-    ///   wrong-typed RHS is `TK2322`.
-    ///
-    /// `is_accessor`/`declaring_class` are reported as `false`/`None`: the `readonly`
-    /// gate's constructor carve-out only applies to a `this.prop` base, and a union base is
-    /// never `this`, so these never affect the verdict — the gate emits `TK2540` whenever
-    /// `readonly` holds. Returns the same `(ty, readonly, is_accessor, declaring_class)`
-    /// snapshot the object path produces.
+    /// Resolve a union assignment target. The property must exist on every member;
+    /// the write type is the union of member property types, and readonly is true if
+    /// any constituent is readonly. A union base is never `this`, so constructor
+    /// carve-outs do not apply.
     fn union_member_assignment_target(
         &mut self,
         base_ty: TypeId,
@@ -314,16 +249,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
 }
 
-/// Recursive excess-property (freshness) check (mvp-plan §6, README
-/// `excess_property.ts`).
-///
-/// M19 — **index-signature suppression**: an index signature accepts arbitrary keys,
-/// so when the target object type has a **string** index signature a property the
-/// target does not name is NOT excess — the `TK2353` is suppressed (otherwise
-/// `{ a: 1, b: 2 }` against `{ [k: string]: number }` would wrongly report `b` as
-/// excess). The suppression is scoped to the **target that actually has the index
-/// signature**: a plain object target (no index signature) still gets the M2 excess
-/// check exactly as before, including at nested levels.
+/// Recursive excess-property check. M19 index signatures suppress unknown keys
+/// only on the target that owns the signature; plain object targets still run the
+/// M2 freshness check, including at nested levels.
 pub(in crate::check::checker) fn check_excess_properties(
     store: &Store,
     expr: &Expression<'_>,
@@ -368,11 +296,8 @@ fn check_object_excess_properties(
     {
         return;
     }
-    // M19: an index signature accepts arbitrary keys, so a property the target does
-    // not name is not excess. A **string** index accepts any key; a **number** index
-    // accepts only **numeric-named** keys (`{ 0: "a" }` against `{ [i: number]: T }`).
-    // The index **value** types are snapshotted so the excess check still descends
-    // into a fresh object literal used as an index value (its own freshness check).
+    // Snapshot index value types: string indexes accept any key, number indexes
+    // accept numeric-named keys, and fresh index values still get checked.
     let string_index = target_obj.string_index;
     let number_index = target_obj.number_index;
     let target_rendered = render_type(store, target_ty, /* widen */ false);
@@ -387,19 +312,14 @@ fn check_object_excess_properties(
 
         match target_obj.property(&name) {
             Some(target_prop) => {
-                // M21: an *optional* member's type is `T | undefined` (a union), but
-                // freshness must still recurse THROUGH that container (the M19
-                // "freshness recurses through a new container" rule), so descend into
-                // the union's object part rather than bail on the union.
+                // Optional members are `T | undefined`; recurse through the object
+                // part instead of bailing on the union container.
                 let recurse_ty = excess_recursion_target(store, target_prop.ty);
                 check_excess_properties(store, &prop.value, recurse_ty, diagnostics);
             }
             None => {
-                // M19: the key itself is suppressed when an index signature accepts it
-                // — a string index for any key, a number index for a numeric-named key.
-                // A plain object target (no index signature) still reports excess (M2).
-                // The index value type that governs this key: a numeric key prefers
-                // the number index, else the string index covers it.
+                // M19: index signatures suppress accepted keys; numeric keys prefer
+                // the number index, otherwise the string index covers them.
                 let index_value = if is_numeric_property_name(&name) {
                     number_index.or(string_index)
                 } else {
@@ -426,16 +346,9 @@ fn check_object_excess_properties(
     }
 }
 
-/// Excess-property check against an **intersection** target (M31): a fresh object
-/// literal's allowed keys are the **merged** key set — a property named by ANY
-/// object-typed member (or accepted by any member's index signature) is allowed, and
-/// only a property in NO member and no accepting index signature is excess (`TK2353`).
-///
-/// This is a **single merged** check, never a per-member one: relating `{a:1, b:"s"}`
-/// separately against member `{b:string}` would spuriously flag `a`, so per-member
-/// excess is never run — the merged key set is the only correct target-key set (tsc's
-/// combined-property-set rule). Delegates to the set-based
-/// [`check_object_excess_against_members`].
+/// Excess-check an intersection target against the merged key set (M31), never
+/// per member. Per-member checks would spuriously reject keys supplied by a
+/// different constituent.
 fn check_intersection_object_excess(
     store: &Store,
     literal: &oxc_ast::ast::ObjectExpression<'_>,
@@ -448,13 +361,8 @@ fn check_intersection_object_excess(
     check_object_excess_against_members(store, literal, members, diagnostics);
 }
 
-/// Excess-check a fresh object literal against a **set** of object-typed targets (M31 —
-/// the merged view of an intersection). A key named by ANY member (or accepted by any
-/// member's index signature) is allowed; a key in NO member is excess (`TK2353`). A
-/// matched key recurses against the set of **all** members that name it, so nested
-/// freshness sees **every** contributor — not just the first (review finding 2): a
-/// property supplied by a *later* member must not be flagged. Store-only (no interning):
-/// the merged key set is all the excess check needs.
+/// Excess-check a fresh object literal against a merged member set. Matched keys
+/// recurse through all contributing members so later constituents are not missed.
 fn check_object_excess_against_members(
     store: &Store,
     literal: &oxc_ast::ast::ObjectExpression<'_>,
@@ -520,12 +428,8 @@ fn check_object_excess_against_members(
     }
 }
 
-/// Recurse the excess check against a **set** of target types (M31 — a merged view). A
-/// singleton set delegates to the ordinary single-target [`check_excess_properties`]
-/// (which handles objects, arrays, tuples, and further intersection nesting uniformly);
-/// a multi-member set excess-checks an object literal against the merged member set
-/// ([`check_object_excess_against_members`]). Other value/target shapes vs a merged set
-/// are out of the M31 subset (no-op, safe).
+/// Recurse excess checks against a merged member set. Singletons delegate to the
+/// ordinary path; multi-member non-object values are out of the M31 subset.
 fn check_excess_against_members(
     store: &Store,
     expr: &Expression<'_>,
@@ -586,11 +490,8 @@ fn excess_recursion_target(store: &Store, ty: TypeId) -> TypeId {
     contextual_literal_target(store, ty)
 }
 
-/// Whether a property name is **numeric-keyed** (M19) — governed by a number index
-/// signature. A name that parses as a finite number (`"0"`, `"1"`, …) is numeric;
-/// an ordinary identifier (`"a"`) is not. Mirrors the relation engine's rule for the
-/// excess-property suppression so a numeric-named member is accepted by a number
-/// index signature (matching tsc).
+/// Whether a property name is numeric-keyed for M19 number index signatures,
+/// matching the relation engine's suppression rule.
 fn is_numeric_property_name(name: &str) -> bool {
     name.parse::<f64>().map(|n| n.is_finite()).unwrap_or(false)
 }

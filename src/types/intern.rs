@@ -1,13 +1,7 @@
 //! The interner: hash-consing + canonicalization over the SoA `Store`.
 //!
-//! Architecture §3 / mvp-plan §4.2. Every type is constructed through here so
-//! structurally identical types share one `TypeId` (structural equality becomes
-//! an integer compare). The dedup index maps a structural hash → candidate ids;
-//! ties within a bucket are resolved by a real structural comparison.
-//!
-//! Intrinsics are interned FIRST (in `IntrinsicKind::ALL` order) so they get
-//! small, fixed, well-known ids exposed as `WellKnown` constants and used as
-//! cheap constants throughout the checker and relation engine.
+//! The dedup index maps structural hash to candidates, then confirms ties with
+//! structural comparison. Intrinsics intern first, giving stable `WellKnown` ids.
 
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
@@ -35,11 +29,8 @@ pub struct WellKnown {
     pub boolean: TypeId,
     pub number: TypeId,
     pub string: TypeId,
-    /// M28 — the four string-intrinsic **markers** (the base of a symbolic
-    /// `Uppercase<S>` instantiation; see [`IntrinsicKind::Uppercase`]). Not keyword
-    /// types: they only ever appear as an
-    /// [`crate::types::repr::InstantiationType::base`] the evaluator intercepts by
-    /// identity.
+    /// M28 string-intrinsic markers, used only as symbolic instantiation bases
+    /// intercepted by evaluator identity checks.
     pub uppercase: TypeId,
     pub lowercase: TypeId,
     pub capitalize: TypeId,
@@ -193,12 +184,8 @@ impl Interner {
         id
     }
 
-    /// Intern an object type, returning the shared id.
-    ///
-    /// Canonicalization (mvp-plan §3.3): the property list is sorted by name
-    /// before hashing/comparison so two object types that differ only in member
-    /// order (`{ a; b }` vs `{ b; a }`) hash-cons to the **same** `TypeId`. The
-    /// caller passes properties in source order; this owns the sort.
+    /// Intern an object type. Properties are sorted by name before hashing and
+    /// comparison, so source member order does not affect the shared `TypeId`.
     pub fn intern_object(&mut self, mut object: ObjectType) -> TypeId {
         // Canonical order: sort by property name. The sort is stable, so the
         // relative order of any (illegal-in-the-subset) duplicate names is
@@ -253,24 +240,15 @@ impl Interner {
             .push_object(ObjectType::default(), TypeFlags::EMPTY)
     }
 
-    /// Fill the body of a previously [reserved](Interner::reserve_object) object
-    /// type in place (M5 interfaces, phase 2). The property list is sorted into
-    /// canonical (name-sorted) order — matching `intern_object` — so the renderer
-    /// and the relation engine see members in the same order they would for a
-    /// structural object. The id is **not** added to the dedup index (it stays
-    /// nominal); a no-op if `id` is not an object row.
+    /// Fill a reserved object in place. Properties are sorted like `intern_object`;
+    /// the id stays nominal and is not added to the dedup index.
     pub fn fill_object(&mut self, id: TypeId, mut object: ObjectType) {
         object.properties.sort_by(|a, b| a.name.cmp(&b.name));
         self.store.set_object(id, object);
     }
 
-    /// Intern a function type, returning the shared id.
-    ///
-    /// Unlike object types, parameters are **positional** and are *not* sorted:
-    /// parameter order is part of a function type's identity (mvp-plan §6.5; only
-    /// object properties are canonicalized by name). Two function types hash-cons
-    /// to the same `TypeId` only when their parameter lists match in order and
-    /// their return types are the same interned id.
+    /// Intern a function type. Parameters are positional and never sorted; two
+    /// functions share an id only when parameters match in order and return ids match.
     pub fn intern_function(&mut self, function: FunctionType) -> TypeId {
         let key = StructuralKey::Function {
             params: &function.params,
@@ -290,13 +268,8 @@ impl Interner {
         id
     }
 
-    /// Intern a **type-parameter** type (`T`), returning the shared id (M9).
-    ///
-    /// Identity is the [`TypeParamId`] (the declaration site) alone — the `name`
-    /// is carried for rendering only and never affects hash-consing. Re-interning
-    /// the same parameter therefore returns the same id; two parameters from
-    /// distinct declarations get distinct ids even if they share a source name.
-    /// See [`crate::types::repr::TypeParamId`] for the named-vs-de-Bruijn deviation.
+    /// Intern a type-parameter type. Identity is the declaration-site
+    /// [`TypeParamId`]; the source name is rendering-only.
     pub fn intern_type_param(&mut self, id: TypeParamId, name: impl Into<String>) -> TypeId {
         let key = StructuralKey::TypeParam(id);
         let hash = structural_hash(&key);
@@ -316,13 +289,7 @@ impl Interner {
         interned
     }
 
-    /// Intern an **array** type `element[]`, returning the shared id (M17).
-    ///
-    /// Identity is the element id alone (hashed via [`StructuralKey::Array`]), so
-    /// `number[]` hash-conses to one id and `number[]` ≠ `string[]`; re-interning the
-    /// same element returns the same id, and `T[][]` nests by interning the inner
-    /// `T[]` first and using it as the element. The element is itself canonical
-    /// (interned through this interner), so the dedup tie-break is a plain id compare.
+    /// Intern an array type. Identity is the canonical element id alone.
     pub fn intern_array(&mut self, element: TypeId) -> TypeId {
         let key = StructuralKey::Array(element);
         let hash = structural_hash(&key);
@@ -338,16 +305,8 @@ impl Interner {
         id
     }
 
-    /// Intern a **tuple** type `[A, B, …]`, returning the shared id (M18).
-    ///
-    /// Identity is the **ordered** element list (hashed via [`StructuralKey::Tuple`]),
-    /// so `[number, string]` hash-conses to one id while `[number, string]`,
-    /// `[string, number]`, and `[number]` are all **distinct** — order *and* arity
-    /// are significant (unlike a union, whose members are sorted + deduped into a
-    /// canonical set; like a function's positional parameters). The elements are
-    /// **never sorted**: the caller passes them in source order and they are stored
-    /// as-is. Each element is itself canonical (interned through this interner), so
-    /// the dedup tie-break is a positional id compare.
+    /// Intern a tuple type. Identity is the ordered element-id list: order and
+    /// arity are significant, and elements are stored in source order.
     pub fn intern_tuple(&mut self, elements: Vec<TypeId>) -> TypeId {
         let key = StructuralKey::Tuple(&elements);
         let hash = structural_hash(&key);
@@ -523,12 +482,9 @@ impl Interner {
         id
     }
 
-    /// Intern a **conditional** type `check extends extends_ty ? true : false` (M25).
-    ///
-    /// Identity is all four component ids **in order** plus `infer_count` and
-    /// `distributive` (position is meaning — the branches are not a canonical set, so
-    /// swapping them is a different type). A reserved (recursive-template) conditional id
-    /// is filled through [`Interner::fill_conditional`], not this method.
+    /// Intern a conditional type. Identity is all four component ids in order plus
+    /// `infer_count`, `distributive`, and `poisoned`; reserved templates are filled
+    /// through [`Interner::fill_conditional`].
     pub fn intern_conditional(&mut self, conditional: ConditionalType) -> TypeId {
         let key = StructuralKey::Conditional {
             check: conditional.check,
@@ -558,13 +514,9 @@ impl Interner {
         id
     }
 
-    /// Reserve a **recursive conditional-alias template** id with a placeholder body,
-    /// returning the id WITHOUT hash-consing it (M25 — mirrors
-    /// [`Interner::reserve_object`]). The id exists before the alias body is lowered, so
-    /// a self-recursive reference (`type Unwrap<T> = … Unwrap<U> …`) can point at it (as
-    /// a lazy [`InstantiationType`] base) without expanding. Filled later via
-    /// [`Interner::fill_conditional`]. A reserved template is nominal (not deduped): a
-    /// placeholder body would otherwise mis-key the dedup index.
+    /// Reserve a recursive conditional-alias template id without hash-consing. The
+    /// id exists before lowering so self-recursive references can point at it as a
+    /// lazy [`InstantiationType`] base; `fill_conditional` supplies the real body.
     pub fn reserve_conditional(&mut self) -> TypeId {
         // A placeholder body; overwritten by `fill_conditional`. The error type is a
         // safe neutral filler (never observed before the fill).
@@ -656,14 +608,9 @@ impl Interner {
         id
     }
 
-    /// Reserve a **recursive mapped-alias template** id with a placeholder body,
-    /// returning the id WITHOUT hash-consing it (M28 — mirrors
-    /// [`Interner::reserve_conditional`]). The id exists before the alias body is
-    /// lowered, so a self-recursive reference (`type DeepPartial<T> = { [K in keyof T]?:
-    /// DeepPartial<T[K]> }`) can point at it (as a lazy [`InstantiationType`] base)
-    /// without expanding. Filled later via [`Interner::fill_mapped`]. A reserved
-    /// template is nominal (not deduped): a placeholder body would mis-key the dedup
-    /// index.
+    /// Reserve a recursive mapped-alias template id without hash-consing. The id
+    /// exists before lowering so self-recursive references can point at it as a
+    /// lazy [`InstantiationType`] base; `fill_mapped` supplies the real body.
     pub fn reserve_mapped(&mut self) -> TypeId {
         // A placeholder body; overwritten by `fill_mapped`. The error type is a safe
         // neutral filler (never observed before the fill).
@@ -896,12 +843,8 @@ mod tests {
         assert_eq!(outer1, outer2, "nested object identity must propagate");
     }
 
-    /// M19 — index signatures are part of an object's **structural identity**:
-    /// `{ [k: string]: number }` interns distinctly from `{}`, from
-    /// `{ [k: string]: string }` (different value type), and from
-    /// `{ [i: number]: number }` (different index kind); the same shape interns
-    /// consistently; and a member set coexists with an index signature in the
-    /// identity (`{ a: number }` ≠ `{ a: number; [k: string]: number }`).
+    /// M19: index signatures are part of object identity, distinguished by
+    /// presence, index kind, value type, and coexistence with named members.
     #[test]
     fn index_signature_is_part_of_object_identity() {
         let mut interner = Interner::with_intrinsics();
@@ -1125,11 +1068,8 @@ mod tests {
         assert_eq!(nsb_flat, nsb_again, "identical unions hash-cons to one id");
     }
 
-    /// Intersection canonicalization + hash-consing (M31 — the structural dual of the
-    /// union test above). Order-independence, dedup, `unknown`-drop (`X & unknown` →
-    /// `X`), `never`-absorption (`X & never` → `never`), single-member collapse, empty
-    /// collapse to `unknown`, `any`-absorption, and flatten are all asserted against the
-    /// resulting `TypeId`s. A union and an intersection over the same set stay distinct.
+    /// M31 intersection canonicalization: dual absorption/identity rules, flattening,
+    /// dedup, collapse, and distinctness from unions over the same member set.
     #[test]
     fn intersection_canonicalization_and_hash_consing() {
         let mut interner = Interner::with_intrinsics();

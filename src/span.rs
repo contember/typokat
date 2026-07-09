@@ -1,9 +1,7 @@
 //! Span handling: byte-offset ranges and 1-based line/column mapping.
 //!
-//! oxc spans are zero-based byte offsets (`oxc_span::Span { start, end: u32 }`).
-//! We keep our own tiny `Span` so the rest of the checker doesn't depend on oxc
-//! span details, and so the harness can map a diagnostic's primary-span start to
-//! a 1-based line number (the marker convention in `tests/cases/README.md`).
+//! The checker uses its own `Span` wrapper around oxc byte offsets so diagnostics
+//! can map primary spans to the harness's 1-based marker lines.
 
 /// A half-open byte range `[start, end)` into the source text.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]

@@ -35,12 +35,8 @@ impl CheckOutput {
     }
 }
 
-/// Parse and check `source` as a TypeScript file, returning its diagnostics.
-///
-/// The `Allocator` is created and owned locally; the AST it backs never escapes
-/// this function (we extract owned `Diagnostic`s before it drops), so there are
-/// no dangling-lifetime hazards. `strictNullChecks` is on by default — it is
-/// encoded directly in the relation rules, not a parser flag.
+/// Parse and check one TypeScript source. The local `Allocator` owns the AST only
+/// for this call; owned diagnostics are extracted before it drops.
 pub fn check_source(source: &str) -> CheckOutput {
     let allocator = Allocator::default();
     // TypeScript, non-JSX, module semantics.
@@ -74,47 +70,25 @@ pub fn check_source(source: &str) -> CheckOutput {
     }
 }
 
-/// One file handed to [`check_files`]: a display `name` (used only for rendering
-/// and for correlating results back to inputs) and its full `source` text.
-///
-/// Both are owned `String`s on purpose. The oxc AST is neither `Send` nor `Sync`
-/// (an arena `Vec` is deliberately `!Send`, and AST nodes hold `Cell`s, so it is
-/// `!Sync`) — it is pinned to the thread that parses it and can neither be moved
-/// to another thread nor shared by reference. So the source must travel to the
-/// worker as owned data, and the *entire* parse→check pipeline for a file has to
-/// run on one thread (architecture §8).
+/// One file handed to [`check_files`]. Owned strings let the parse→check pipeline
+/// stay pinned to one worker because the oxc AST is `!Send + !Sync`.
 pub struct FileInput {
     pub name: String,
     pub source: String,
 }
 
-/// The result of checking one [`FileInput`], carrying the input back alongside
-/// its diagnostics.
-///
-/// `name` and `source` are *moved through* the pipeline (not re-cloned) and
-/// returned so a caller can both render diagnostics — codespan needs the source —
-/// and correlate each result to its input without a side table. In the `Vec`
-/// returned by [`check_files`], `reports[i]` is the result of `inputs[i]`.
+/// Result for one [`FileInput`]. `name` and `source` move through the pipeline so
+/// diagnostics can render without a side table; `reports[i]` matches `inputs[i]`.
 pub struct FileReport {
     pub name: String,
     pub source: String,
     pub output: CheckOutput,
 }
 
-/// Check many files in parallel — one fully independent pipeline per file.
-///
-/// Each file's whole parse→bind→check pipeline runs on its own rayon worker with
-/// its own `Allocator` and its own `Interner`; this is exactly [`check_source`]
-/// fanned out across files. Because the AST is `!Send + !Sync` it can never leave
-/// the thread that parsed it, which makes the *per-file pipeline* — not a shared,
-/// serially-checked interner — the natural unit of parallelism (architecture §8).
-/// There is no cross-file name/type resolution today (modules are out of scope),
-/// so per-file interners are not merely sound but lossless: the interner is a
-/// per-run dedup + relation cache, and nothing observable crosses a file boundary.
-///
-/// Order is preserved (`reports[i]` ↔ `inputs[i]`), and only owned, `Send` data
-/// (`FileReport`) crosses back from the workers — so the result is deterministic
-/// regardless of the order in which workers happen to finish.
+/// Check many files in parallel, with an independent allocator/interner per file.
+/// There is no cross-file resolution on this API, so per-file pipelines are
+/// lossless and keep the `!Send + !Sync` AST on its parser thread. Order is
+/// preserved: `reports[i]` corresponds to `inputs[i]`.
 pub fn check_files(inputs: Vec<FileInput>) -> Vec<FileReport> {
     inputs
         .into_par_iter()
@@ -129,12 +103,8 @@ pub fn check_files(inputs: Vec<FileInput>) -> Vec<FileReport> {
         .collect()
 }
 
-/// Check a local relative-module project in one serial type universe.
-///
-/// This is the M29 correctness-first API. It deliberately lives beside
-/// [`check_files`]: the old multi-file API remains per-file independent and
-/// parallel, while this path resolves only `./` / `../` specifiers among the
-/// provided `.ts` files and checks them in dependency order with one `Interner`.
+/// Check a local relative-module project in one serial type universe, resolving
+/// only `./` / `../` specifiers among the provided `.ts` files.
 pub fn check_project(inputs: Vec<FileInput>) -> Vec<FileReport> {
     if inputs.is_empty() {
         return Vec::new();
@@ -390,11 +360,8 @@ mod tests {
         format!("{:?}", output.diagnostics)
     }
 
-    /// A clean file, a type-error file, and a syntactically broken file — checked
-    /// together — must each produce exactly what [`check_source`] produces for that
-    /// source alone, in input order. This pins the core contract: parallel
-    /// multi-file checking is per-file-independent (no cross-file leakage) and
-    /// order-preserving.
+    /// Pins the contract that parallel multi-file checking is per-file-independent
+    /// and order-preserving.
     #[test]
     fn check_files_matches_per_file_check_source_in_order() {
         let clean = "const x: number = 1;";

@@ -1,10 +1,7 @@
 //! Relation verdict cache (architecture §6.1).
 //!
-//! Stable `TypeId`s make the key three cheap integers; hash-consing collapses
-//! structurally equal types to the same key.
-//!
-//! Cache *lifetime* (architecture §6.2) — separating durable relations from the
-//! swarm of short-lived narrowed types — remains a local `RelationCache` concern.
+//! Stable `TypeId`s make each key three cheap integers. Cache lifetime stays local
+//! to `RelationCache`, separating durable relations from short-lived narrowed types.
 
 use crate::relate::relation::RelationKind;
 use crate::types::store::TypeId;

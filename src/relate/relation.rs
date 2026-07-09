@@ -1,11 +1,7 @@
 //! Relation queries (`is_assignable` today; subtype/identity kinds are reserved).
 //!
-//! The soundness-critical machinery is built into the core driver, not bolted onto
-//! individual rules:
-//!
-//!  1. a durable cache keyed on `(src, tgt, RelationKind)`,
-//!  2. an assume-true cycle stack for recursive types,
-//!  3. `Relation::No(ReasonChain)`, never a bare failure boolean.
+//! The core driver owns the soundness-critical cache, assume-true cycle stack,
+//! and `Relation::No(ReasonChain)` failures.
 
 use crate::relate::cache::{RelationCache, RelationKey};
 use crate::types::repr::{IntrinsicKind, LiteralValue, PropertyType, TemplateType, TypeTag, Visibility};
@@ -445,11 +441,8 @@ impl<'a> Relater<'a> {
             return Relation::Yes;
         }
 
-        // Literal → base widening: a literal is assignable to its base intrinsic
-        // (`"x"` <: `string`, `1` <: `number`, `true` <: `boolean`). The literal
-        // *type* is used for the decision; the message widens it (see the
-        // renderer). M0 has no literal *targets*, so only this direction is
-        // needed; M1 adds literal-to-literal once inference produces them.
+        // Literal-to-base widening uses the literal type for the decision; only
+        // diagnostics widen the displayed source.
         if let Some(lit) = self.store.literal_value(src) {
             let base = self.intrinsic_id(lit.base_kind());
             if base == tgt {
@@ -924,14 +917,9 @@ impl<'a> Relater<'a> {
         Relation::Yes
     }
 
-    /// Array assignability (M17): `src` (`S[]`) is assignable to `tgt` (`T[]`) iff
-    /// the source element `S` is assignable to the target element `T` —
-    /// **covariant** (matching tsc's deliberate array covariance). The element
-    /// relation runs through the ordinary [`Relater::relate`], so it is cached and
-    /// cycle-safe like every other recursive relation (an array's element lives in
-    /// the interned type, so the cache/stack invariants are unchanged), and nested
-    /// arrays (`number[][]`) recurse naturally. A failure wraps the element's own
-    /// cause as an `ArrayElement` reason for M6.
+    /// Array assignability is covariant in the element type (M17). The element
+    /// relation uses ordinary [`Relater::relate`] so cache/cycle invariants and
+    /// nested-array reasons are preserved.
     fn relate_arrays(
         &mut self,
         src: TypeId,
@@ -961,16 +949,9 @@ impl<'a> Relater<'a> {
         Relation::Yes
     }
 
-    /// Tuple assignability (M18): `src` (`[S0, S1, …]`) is assignable to `tgt`
-    /// (`[T0, T1, …]`) iff they have the **same length** AND each `Si` is assignable
-    /// to `Ti` (**positional**, *not* a set). A length mismatch is a terminal
-    /// `TupleLength` reason; the **first** failing position (in order) is wrapped as
-    /// a `TupleElement` reason carrying that element's own nested cause — a **single**
-    /// diagnostic per failure (like the object relation's first-failing-property
-    /// rule), not one diagnostic per element. The element relation runs through the
-    /// ordinary [`Relater::relate`], so it is cached and cycle-safe like every other
-    /// recursive relation (a tuple's elements live in the interned type, so the
-    /// cache/stack invariants are unchanged), and nested tuples recurse naturally.
+    /// Tuple assignability is same-length and positional (M18). Length mismatch is
+    /// terminal; the first failing element wraps its nested cause, and element
+    /// relations use ordinary cache/cycle-safe [`Relater::relate`].
     fn relate_tuples(
         &mut self,
         src: TypeId,
@@ -1019,14 +1000,9 @@ impl<'a> Relater<'a> {
         Relation::Yes
     }
 
-    /// Tuple → array assignability (M18): a tuple `src` (`[A, B, …]`) is assignable
-    /// to an array `tgt` (`T[]`) iff **every** element is assignable to the array's
-    /// element type `T`. The first failing element is wrapped as an `ArrayElement`
-    /// reason (reusing the M17 array-element reason — the headline already names the
-    /// two types, and the cause is "an element does not fit `T`"), carrying that
-    /// element's own nested cause. The empty tuple `[]` trivially satisfies any
-    /// `T[]` (no element can fail). The element relation runs through the ordinary
-    /// [`Relater::relate`] (cached + cycle-safe).
+    /// Tuple-to-array assignability requires every tuple element to fit the array
+    /// element type. The first failure reuses `ArrayElement`; `[]` trivially
+    /// satisfies any `T[]`.
     fn relate_tuple_to_array(
         &mut self,
         src: TypeId,
@@ -1549,13 +1525,9 @@ impl<'a> Relater<'a> {
     }
 }
 
-/// Whether a property name is **numeric-keyed** (M19) — i.e. governed by a number
-/// index signature. A property whose name is a canonical number string (`"0"`,
-/// `"1"`, …) counts as a numeric key, matching TS's rule that a number index
-/// signature constrains numeric-named members. The check is conservative: the name
-/// must parse as a finite `f64` (so `"0"`/`"1"` from a numeric object-literal key
-/// qualify, while ordinary identifiers like `"a"` do not). A non-numeric name is a
-/// pure string key, untouched by a number index signature.
+/// Whether a property name is numeric-keyed and thus governed by a number index
+/// signature. The name must parse as a finite `f64`; ordinary identifiers remain
+/// pure string keys.
 fn is_numeric_property_name(name: &str) -> bool {
     name.parse::<f64>().map(|n| n.is_finite()).unwrap_or(false)
 }
@@ -2168,11 +2140,9 @@ mod tests {
         }
     }
 
-    /// M3 function assignability: parameters CONTRAVARIANT (over the common
-    /// positions), return COVARIANT, fewer-source-params allowed, surplus-source-
-    /// params rejected, and a `void` target return accepting any source return
-    /// (mvp-plan §6.5). Exercised independently of the parser so a
-    /// variance/arity/void regression is caught here.
+    /// M3 function assignability: contravariant parameters, covariant return,
+    /// fewer source params allowed, surplus source params rejected, and `void`
+    /// target return accepts any source return.
     #[test]
     fn function_variance_arity_and_void_return() {
         use crate::types::repr::{FunctionType, ParameterType};
@@ -2300,11 +2270,8 @@ mod tests {
         assert!(rel.is_assignable(num_to_num, num_to_num).is_yes());
     }
 
-    /// M17 array assignability is **covariant** in the element: `S[]` <: `T[]` iff
-    /// `S` <: `T`. `never[]` <: `T[]` (the bottom element); `string[]` is NOT
-    /// assignable to `number[]`; identical arrays succeed; nested arrays recurse; and
-    /// an array is not assignable to a non-array (and vice versa). Exercised
-    /// independently of the parser so a variance/covariance regression is caught here.
+    /// M17 array assignability is covariant in the element and recurses through
+    /// nested arrays; arrays and non-arrays do not relate.
     #[test]
     fn array_covariant_assignability() {
         let mut interner = Interner::with_intrinsics();
@@ -2381,13 +2348,8 @@ mod tests {
         );
     }
 
-    /// M18 tuple assignability is **positional** and **same-length**: identical
-    /// tuples succeed; a positional element must be assignable at its index (a literal
-    /// `1` widens to `number`); a length mismatch fails as a terminal `TupleLength`
-    /// reason; an element mismatch fails as a single `TupleElement` reason at the
-    /// **first** failing position (not one per element); and a tuple is not
-    /// assignable to a non-tuple/non-array. Exercised independently of the parser so a
-    /// positional/length regression is caught here.
+    /// M18 tuple assignability is positional and same-length; length mismatches are
+    /// terminal, and the first element mismatch is the single nested reason.
     #[test]
     fn tuple_positional_and_length_assignability() {
         let mut interner = Interner::with_intrinsics();
@@ -2520,15 +2482,9 @@ mod tests {
         );
     }
 
-    /// M19 — index-signature assignability. A plain object is assignable to a
-    /// **string** index-sig target iff **every** named-property value fits the index
-    /// value type (`{ a: number; b: number } <: { [k: string]: number }`; a `string`
-    /// value fails as one `IndexSignature` reason). The **empty** object trivially
-    /// fits. A dictionary is assignable to a dictionary iff its index value fits
-    /// (`{ [k: string]: number } <: { [k: string]: number }` by identity; a string
-    /// dict is NOT assignable to a number dict). A **number** index sig governs only
-    /// numeric-named members. Exercised independently of the parser so a
-    /// soundness/value-check regression is caught here.
+    /// M19 index signatures: every governed source property must fit the target
+    /// index value. Empty objects fit string indexes, dictionaries compare index
+    /// values, and number indexes govern only numeric-named members.
     #[test]
     fn index_signature_assignability() {
         let mut interner = Interner::with_intrinsics();

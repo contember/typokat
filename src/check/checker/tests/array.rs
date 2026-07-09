@@ -1,12 +1,7 @@
-//! M17 end-to-end tests for **array types** (`T[]` / `Array<T>`, array literals,
-//! element access, `length`, covariant assignability). These drive the whole
-//! pipeline (parse → bind → check) and assert the `(line, code)` diagnostics,
-//! pinning the invariants the reviewer should scrutinize: array-literal element
-//! inference is the **union** of the (widened) element types, `[]` infers
-//! `never[]` (assignable to any `T[]`), element access yields the element type for
-//! any index, `length` is synthesized (→ `number`) while other members are
-//! `TK2339`, `Array<T>` is the same type as `T[]`, and assignability is covariant.
-//! The per-fixture acceptance lives in the conformance corpus (`m17_arrays/`).
+//! M17 end-to-end tests for array types.
+//! Pins widened element-union inference, `never[]`, element access, synthesized
+//! `length`, `Array<T>` equivalence, and covariant assignability. Fixture
+//! acceptance lives in `m17_arrays/`.
 
 use crate::driver::check_source;
 
@@ -30,11 +25,8 @@ fn diags(source: &str) -> Vec<(u32, String)> {
     v
 }
 
-/// Array-literal element inference is the **union** of the (widened) element
-/// types: `[1, 2, 3]` → `number[]` (ok against `number[]`), `[1, "x"]` →
-/// `(number | string)[]` (NOT assignable to `number[]` → `TK2322`). The literal
-/// `1` is widened, so a homogeneous numeric literal array is `number[]`, not
-/// `(1 | 2 | 3)[]`.
+/// Array literals infer the union of widened element types: homogeneous numbers
+/// become `number[]`, while `[1, "x"]` rejects a `number[]` annotation.
 #[test]
 fn array_literal_element_inference_is_union() {
     let src = "\

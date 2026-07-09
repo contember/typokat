@@ -1,8 +1,7 @@
 //! Binder layer (architecture §4): scope graph with multi-slot symbols.
 //!
-//! Symbols keep separate value/type/namespace slots because declaration merging is
-//! a design requirement, not a special case. Resolution is parent-walk over the
-//! scope graph; the checker chooses the slot it needs.
+//! Symbols keep separate value/type/namespace slots for declaration merging.
+//! Resolution is parent-walk over the scope graph; the checker chooses the slot.
 
 pub mod bind;
 pub mod scope;

@@ -1,15 +1,7 @@
-//! M12 end-to-end tests for class inheritance (`extends`, `super`). These drive
-//! the whole pipeline (parse → bind → check) and assert the *set* of `(line,
-//! code)` diagnostics, pinning the invariants the reviewer should scrutinize:
-//! the composed instance type (inherited + own members, own overriding base),
-//! subclass→base assignability (and the base→subclass failure direction),
-//! `super(...)` checked against the base constructor (arity + args), an inherited
-//! constructor when the derived class declares none, and an `extends` **cycle**
-//! terminating without a panic.
-//!
-//! The per-fixture acceptance lives in the conformance corpus
-//! (`m12_inheritance/`); these unit pins guard the construction/scoping invariants
-//! directly.
+//! M12 end-to-end tests for class inheritance.
+//! Pins composed instance types, subclass/base assignability directions, `super`
+//! checks, inherited constructors, and terminating `extends` cycles.
+//! Fixture acceptance lives in `m12_inheritance/`.
 
 use crate::driver::check_source;
 
@@ -154,12 +146,8 @@ const r = new Plain(\"s\");
     );
 }
 
-/// An own member **overrides** an inherited one of the same name: the derived
-/// type wins. Here `Derived.x: string` overrides `Base.x: number`, so a
-/// `string`-annotated read is clean and a `number`-annotated read errors —
-/// proving the override replaced the inherited member. The override is also
-/// type-incompatible (`string` ≇ `number`), so backlog 06 reports `TK2416` on the
-/// derived member's name (matching tsc `TS2416`).
+/// Own members override inherited ones, and an incompatible public override
+/// reports `TK2416` on the derived member name.
 #[test]
 fn own_member_overrides_inherited() {
     let src = "\

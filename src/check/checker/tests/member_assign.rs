@@ -1,18 +1,7 @@
-//! M14 end-to-end tests for **member-assignment-target** checking (`obj.prop =
-//! expr`) and **`readonly`** properties. These drive the whole pipeline (parse →
-//! bind → check) and assert the *set* of `(line, code)` diagnostics, pinning the
-//! invariants the reviewer should scrutinize:
-//!
-//!  - a member-assignment RHS is checked against the property type (`TK2322`), and a
-//!    type-correct one is clean — for both a class instance and an object literal;
-//!  - the existing M11–M13 constructor/method assignments (`this.x = x`, …) stay
-//!    clean (no regression), and an incomplete (arithmetic) RHS does not false-fire;
-//!  - a `readonly` property is assignable via `this` inside the declaring class's
-//!    constructor (ok) but `TK2540` in any other method, via a non-`this` base, or
-//!    from external code.
-//!
-//! The per-fixture acceptance lives in `m14_readonly/`; the unit-level
-//! "readonly does NOT affect assignability" pins live in `relate::relation::tests`.
+//! M14 end-to-end tests for member-assignment targets and `readonly` properties.
+//! Pins RHS checking, M11-M13 assignment regressions, and the constructor-only
+//! readonly write carve-out. Fixture acceptance lives in `m14_readonly/`; relation
+//! pins cover that `readonly` does not affect assignability.
 
 use crate::driver::check_source;
 

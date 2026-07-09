@@ -1,32 +1,8 @@
-//! Type-parameter substitution (M9 — generics core).
-//!
-//! Instantiation of a generic declaration is **substitution**: given a type and a
-//! map `TypeParamId → TypeId`, produce the type with every type-parameter
-//! occurrence replaced by its argument, recursing through objects, functions,
-//! unions, and nested type parameters, then re-interning the result so equal
-//! instantiations share one `TypeId` (`Box<number>` is consistent;
-//! `Box<number>` ≠ `Box<string>`).
-//!
-//! This is the statement-checker-facing half of M9; the relation engine then runs
-//! over the *substituted* (structural) types unchanged. For a generic interface,
-//! instantiating to the substituted **structural** type is the M9 choice (the
-//! README's "structural assignability is acceptable for M9" — see the FLAG in
-//! `checker.rs::instantiate_type_reference`).
-//!
-//! ## Cycle safety
-//!
-//! The store can hold self-referential **nominal** types (M5 — `interface List {
-//! tail: List | null }`, whose `tail` references `List`'s own id). A naive walk
-//! would chase such a cycle forever. [`Substitution`] therefore carries an
-//! `in_progress` set of the type ids currently being rewritten; re-entering one
-//! short-circuits by returning the **original** id. This is sound here because the
-//! only types that legitimately reference themselves by id are nominal types that
-//! contain **no in-scope type parameter** (the M9 generic-interface bodies the
-//! fixtures use are *non-recursive* structural objects), so their substitution is
-//! the identity — returning the original id is exactly the fixpoint. The guard is
-//! defensive against an accidental recursive instantiation rather than a feature:
-//! recursive generic instantiation (and its depth limits) is explicitly out of the
-//! M9 scope.
+//! Type-parameter substitution for generic instantiation.
+//! Rewrites free declaration parameters through composite types and re-interns the
+//! result, so equal instantiations share one `TypeId`. The `in_progress` guard
+//! returns the original id on self-referential nominal types; recursive generic
+//! instantiation remains out of scope.
 
 use crate::types::repr::{
     ConditionalType, FunctionType, MappedType, ObjectType, ParameterType, PropertyType,
@@ -97,13 +73,9 @@ impl<'a> Substitution<'a> {
         }
     }
 
-    /// Substitute through an object type, rewriting each property type and
-    /// re-interning the (structural) result **only when a child actually changed**.
-    /// If no property substitutes, the original id is returned unchanged — which
-    /// preserves a *nominal* object's identity (it is never re-interned into a
-    /// fresh structural copy) and keeps the no-op path allocation-free.
-    /// Cycle-guarded for self-referential nominal objects (returns the original id
-    /// on re-entry).
+    /// Substitute through an object, re-interning only when a child changed.
+    /// No-op substitution preserves nominal identity; re-entry returns the original
+    /// id to break self-referential nominal cycles.
     fn apply_object(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
         // Re-entry on an in-flight object id breaks the cycle (see module docs).
         if self.in_progress.contains(&ty) {
@@ -260,11 +232,8 @@ impl<'a> Substitution<'a> {
         }
     }
 
-    /// Substitute through an intersection (M31), rewriting each member and re-interning
-    /// through `Interner::intersection` (so the result is re-canonicalized: a member
-    /// that substitutes to a duplicate, to `unknown`, or to `never` collapses correctly)
-    /// **only when a member changed**; otherwise the original id is returned. The
-    /// structural dual of [`Substitution::apply_union`].
+    /// Substitute through an intersection and re-canonicalize through
+    /// `Interner::intersection` only when a member changed.
     fn apply_intersection(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
         if self.in_progress.contains(&ty) {
             return ty;
@@ -293,12 +262,8 @@ impl<'a> Substitution<'a> {
         }
     }
 
-    /// Substitute through an array type, rewriting its **element** and re-interning
-    /// `T[]` → `<arg>[]` **only when the element changed** (otherwise the original id
-    /// is returned, keeping the no-op path allocation-free). This is what makes a
-    /// generic `T[]` instantiate correctly (`Box<T> = { items: T[] }` → `number[]`).
-    /// No cycle guard is needed: an array's element is an *interned* (never
-    /// self-referential-by-id) type, so the recursion is finite.
+    /// Substitute an array's element and re-intern only when it changed. No cycle
+    /// guard is needed because the element is an interned child id.
     fn apply_array(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
         let Some(array) = interner.store().array_type(ty) else {
             return ty;
@@ -312,12 +277,8 @@ impl<'a> Substitution<'a> {
         }
     }
 
-    /// Substitute through a tuple type (M18), rewriting **each** element positionally
-    /// and re-interning `[A, B]` → `[<arg>, <arg>]` **only when some element changed**
-    /// (otherwise the original id is returned, keeping the no-op path allocation-free).
-    /// The element **order is preserved** (`intern_tuple` never sorts), so a generic
-    /// tuple instantiates positionally. No cycle guard is needed: a tuple's elements
-    /// are *interned* (never self-referential-by-id) types, so the recursion is finite.
+    /// Substitute tuple elements positionally and re-intern only when one changed.
+    /// Element order is preserved; child ids make the recursion finite.
     fn apply_tuple(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
         let Some(tuple) = interner.store().tuple_type(ty) else {
             return ty;
@@ -353,26 +314,16 @@ impl<'a> Substitution<'a> {
         }
     }
 
-    /// Substitute through a **conditional** type (M25), rewriting all four component
-    /// ids and re-interning **only when something changed**. This is a *plain* rewrite:
-    /// it does **not** capture the node's own `infer` binders — those are
-    /// [`TypeTag::Infer`] nodes, which `apply` leaves untouched (the no-capture rule,
-    /// ADR-0002). No cycle guard is needed: a conditional's components are interned
-    /// types; a *recursive* conditional alias defers through an
-    /// [`TypeTag::Instantiation`] branch (handled by `apply_instantiation`), which never
-    /// expands here.
+    /// Substitute a conditional's four component ids and re-intern only on change.
+    /// This plain rewrite never captures the node's own `infer` binders (ADR-0002);
+    /// recursive conditional aliases stay behind lazy instantiation nodes.
     ///
-    /// **Distribution guard**: a *distributive* conditional whose naked check parameter
-    /// is mapped to a **distributing** type (a union, `never`, or the `boolean`
-    /// intrinsic) cannot be plainly rewritten — that would bake the whole union into the
-    /// check (`string | number extends string` evaluated once) where tsc distributes per
-    /// member. It is instead deferred as a lazy [`crate::types::repr::InstantiationType`]
-    /// carrying the map, so the evaluator distributes — the SAME path alias
-    /// instantiation takes. This is what makes a generic **call**'s conditional return
-    /// distribute over a union type argument (inferred or explicit). A check parameter
-    /// mapped to a single non-distributing type takes the plain rewrite below (behavior
-    /// unchanged), so the evaluator's own per-member substitutions never re-wrap (no
-    /// cycle).
+    /// **Distribution guard**: if the naked check parameter of a distributive
+    /// conditional maps to a union, `never`, or `boolean`, plain rewriting would
+    /// evaluate the whole union once instead of per member. Defer as a lazy
+    /// [`crate::types::repr::InstantiationType`] so the evaluator distributes on the
+    /// same path as alias instantiation. Single non-distributing arguments take the
+    /// plain rewrite, preventing evaluator per-member substitutions from re-wrapping.
     fn apply_conditional(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
         let Some(cond) = interner.store().conditional_type(ty).copied() else {
             return ty;
@@ -415,12 +366,9 @@ impl<'a> Substitution<'a> {
         })
     }
 
-    /// Substitute through a **lazy instantiation** `substitute(base, args)` (M25):
-    /// compose the outer substitution into each argument **value** (the `base` template
-    /// and the argument **keys** are untouched — they are the template's own parameters).
-    /// So `substitute(Inst{base, {T→U}}, map)` becomes `Inst{base, {T→substitute(U, map)}}`,
-    /// keeping the recursive reference lazy (its `base` never expands here). Re-interned
-    /// only when an argument value changed.
+    /// Substitute through a lazy instantiation by composing into argument values
+    /// only. The base and argument keys stay untouched, keeping recursive references
+    /// lazy; re-intern only when an argument value changed.
     fn apply_instantiation(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
         let Some(inst) = interner.store().instantiation_type(ty) else {
             return ty;
@@ -443,26 +391,17 @@ impl<'a> Substitution<'a> {
         }
     }
 
-    /// Substitute through a **mapped** type (M26), rewriting its key source and value
-    /// template and re-interning **only when something changed**. The node's own
-    /// `MappedValue` placeholder is a bound variable, so `apply` leaves it untouched
-    /// (the no-capture rule); a free declaration parameter in the key source (`T` in
-    /// `{ [K in keyof T]: T[K] }`) is substituted, which is what turns `Ident<T>` into
-    /// the concrete `Ident<P>` the evaluator then maps. No cycle guard is needed: a
-    /// mapped type's components are interned, non-self-referential-by-id types.
+    /// Substitute a mapped type's key source and value template, re-interning only
+    /// on change. `MappedValue` is a bound placeholder (no-capture); free
+    /// declaration parameters in the key source still rewrite.
     ///
-    /// **Distribution guard (review F1 — the M25 conditional guard's mapped analog):** a
-    /// **homomorphic** map whose `keyof` operand is a **naked declaration type
-    /// parameter** mapped to a **union** distributes over the members — tsc:
-    /// `Ident<A | B>` = `Ident<A> | Ident<B>` — as a union of plain per-member
-    /// substitutions of the whole node; `never` distributes to `never`. Unlike M25 this
-    /// builds the union **eagerly**: a mapped node is inherently lazy (interned, only
-    /// expanded at evaluation demand), so no `InstantiationType` wrap is needed, and a
-    /// member is never a union, so the per-member recursion takes the plain path (no
-    /// re-distribution). The DIRECT `{ [K in keyof (A | B)]: … }` form never fires this
-    /// guard (its key source is already the union at lowering, not a parameter) and
-    /// takes the evaluation-time common-key semantics instead (tsc: `keyof (A | B)` is
-    /// the intersection of the key sets) — the two must not be conflated.
+    /// **Mapped distribution guard**: a homomorphic map whose `keyof` operand is a
+    /// naked declaration parameter mapped to a union distributes per member
+    /// (`Ident<A | B>` = `Ident<A> | Ident<B>`); `never` distributes to `never`.
+    /// This eagerly builds a union because mapped nodes are already lazy evaluation
+    /// units. The direct `{ [K in keyof (A | B)]: … }` form is different: its key
+    /// source is already a union at lowering and uses evaluation-time common-key
+    /// semantics, so it must not trigger this guard.
     fn apply_mapped(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
         let Some(mapped) = interner.store().mapped_type(ty).copied() else {
             return ty;
@@ -513,12 +452,8 @@ impl<'a> Substitution<'a> {
         })
     }
 
-    /// Substitute through a **deferred `keyof`** (M28), rewriting its operand and
-    /// re-interning **only when it changed** (else the original id is returned). No
-    /// eager evaluation here — a now-concrete operand (`keyof T` → `keyof P`) resolves
-    /// at the next value-position demand site through the shared evaluator (the single
-    /// keyof computation), keeping substitution a pure rewrite. No cycle guard is
-    /// needed: the operand is an interned (never self-referential-by-id) type.
+    /// Substitute a deferred `keyof` operand and re-intern only on change. No eager
+    /// evaluation here; the shared evaluator resolves concrete operands at demand.
     fn apply_keyof(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
         let Some(operand) = interner.store().keyof_operand(ty) else {
             return ty;
@@ -531,13 +466,8 @@ impl<'a> Substitution<'a> {
         }
     }
 
-    /// Substitute through a **template literal type** (M27), rewriting each **hole** and
-    /// re-interning **only when a hole changed** (else the original id is returned,
-    /// keeping the no-op path allocation-free). The text segments are untouched. This is
-    /// what turns a generic `` `tag:${T}` `` into `` `tag:${string}` `` / `` `tag:${"x"}` ``
-    /// at instantiation; the constructed literal/union collapse then happens at the
-    /// evaluation demand site, not here. No cycle guard is needed: a template's holes are
-    /// interned (never self-referential-by-id) types.
+    /// Substitute template holes and re-intern only when a hole changed. Text
+    /// segments are untouched; literal/union construction remains evaluator work.
     fn apply_template(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
         let Some(template) = interner.store().template_type(ty) else {
             return ty;
@@ -820,11 +750,8 @@ mod tests {
         assert_ne!(box_num_a, box_str, "Box<number> ≠ Box<string>");
     }
 
-    /// M25 — `substitute` must **not capture** a conditional's own `infer` binders,
-    /// even under nested conditionals: an [`TypeTag::Infer`] node is a bound de Bruijn
-    /// variable, never a substitution target (ADR-0002). Substituting the free
-    /// declaration parameter `T` rewrites the check/false positions but leaves every
-    /// `infer` node identical, at both nesting levels.
+    /// M25: substitution must not capture conditional `infer` binders, even under
+    /// nesting; only free declaration parameters rewrite.
     #[test]
     fn substitute_does_not_capture_infer_binders_under_nesting() {
         use crate::types::repr::ConditionalType;
@@ -876,12 +803,8 @@ mod tests {
         assert_eq!(inner_c.true_branch, infer0, "infer true branch unchanged (no capture)");
     }
 
-    /// M25 — the **distribution guard**: substituting a *distributive* conditional's
-    /// naked check parameter with a **union** (or `never`/`boolean`) defers to a lazy
-    /// instantiation (the evaluator distributes — same path as alias instantiation, so a
-    /// generic CALL's conditional return distributes too); a **single** non-distributing
-    /// argument takes the plain rewrite (so the evaluator's per-member substitutions
-    /// never re-wrap — no cycle).
+    /// M25 distribution guard: union/`never`/`boolean` check arguments defer to lazy
+    /// instantiation; single non-distributing arguments plainly rewrite.
     #[test]
     fn distributive_conditional_defers_on_union_plain_on_single() {
         use crate::types::repr::ConditionalType;
@@ -936,11 +859,8 @@ mod tests {
         assert_eq!(plain_cond.check, wk.string);
     }
 
-    /// M26 — `substitute` maps over a mapped type's **key source** and **value
-    /// template** but does **not capture** the node's own `MappedValue` placeholder
-    /// (the no-capture rule, ADR-0002 analog). Substituting the free declaration
-    /// parameter `T` rewrites the key source (`T` → `P`) while the value template's
-    /// placeholder stays identical.
+    /// M26: substitution rewrites mapped key/value templates without capturing the
+    /// node's own `MappedValue` placeholder.
     #[test]
     fn substitute_maps_over_mapped_without_capturing_value_placeholder() {
         use crate::types::repr::{MappedType, ModifierOp};
@@ -984,11 +904,8 @@ mod tests {
         assert!(out.homomorphic);
     }
 
-    /// M28 — `substitute` rewrites a mapped type's **modifiers source** (the captured
-    /// `T` of a `Pick`-shaped `T[P]`) alongside the key source, still without
-    /// capturing the bound `MappedValue` placeholder; and it rewrites a **deferred
-    /// `keyof`**'s operand as a pure rewrite (the node STAYS a `Keyof` — evaluation
-    /// happens only at a demand site, never inside substitution).
+    /// M28: substitution rewrites mapped modifiers source and deferred-`keyof`
+    /// operands as pure rewrites; evaluation still happens only at demand sites.
     #[test]
     fn substitute_rewrites_modifiers_source_and_keyof_operand() {
         use crate::types::repr::{MappedType, ModifierOp};
@@ -1044,12 +961,8 @@ mod tests {
         assert_eq!(substitute(&mut interner, keyof_u, &map), keyof_u);
     }
 
-    /// M26 — the **mapped distribution guard** (review F1): substituting a homomorphic
-    /// map's naked key parameter with a **union** distributes per member
-    /// (`Ident<A | B>` = `Ident<A> | Ident<B>`) and `never` distributes to `never`,
-    /// while a map whose key source is **already a union** (the direct
-    /// `{ [K in keyof (A | B)]: … }` form) takes the plain rewrite — a single node, no
-    /// distribution (evaluation-time common-key semantics apply there instead).
+    /// M26 mapped distribution guard: naked-parameter union arguments distribute,
+    /// but direct `keyof (A | B)` maps remain single nodes for common-key semantics.
     #[test]
     fn homomorphic_mapped_distributes_over_naked_param_union_only() {
         use crate::types::repr::{MappedType, ModifierOp};

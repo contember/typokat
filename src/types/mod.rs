@@ -1,8 +1,5 @@
-//! Type store layer (architecture §3): SoA arena, hash-consing interner,
-//! pluggable structural hash, type representation.
-//!
-//! This is "the foundation, not an optimization" — built correct-from-day-1
-//! because retrofitting the arena/interner shape is a rewrite (mvp-plan §1.3).
+//! Type store layer: SoA arena, hash-consing interner, structural hashing, and
+//! type representation.
 
 pub mod hash;
 pub mod intern;

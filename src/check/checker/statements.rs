@@ -27,13 +27,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Check one statement in `scope`, threading the optional function return context.
-    /// Flow-sensitive narrowing comes from the pre-built flow graph; this walker just
-    /// descends through the syntax that can contain checked expressions or returns.
-    ///
-    /// `inferred` accumulates the first value-return's widened type when no return is
-    /// declared (used only by [`check_function_body`]); at module level it is a
-    /// throwaway that no `return` ever writes (a top-level `return` is illegal TS).
+    /// Check one statement, threading return context. Narrowing comes from the
+    /// pre-built flow graph; `inferred` records the first value return when needed.
     pub(in crate::check::checker) fn check_stmt(
         &mut self,
         scope: ScopeId,
@@ -121,12 +116,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Check a `return <expr>?` statement against the enclosing function's return
-    /// context (extracted from the M3 body walk; behaviour unchanged). With a declared
-    /// return type, the returned expression is an assignability obligation
-    /// (primary span = the expression); without one, the first value-return's widened
-    /// type is recorded as the inferred return. A bare `return;` is handled by the
-    /// `void` rule in phase 2 and contributes no inferred type.
+    /// Check `return expr` against the declared return type, or record the first
+    /// value return's widened type for inference. Bare `return;` contributes none.
     fn check_return(
         &mut self,
         scope: ScopeId,
@@ -190,13 +181,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Check an initializer expression against an optional declared annotation exactly the
-    /// way a variable-declaration initializer is: M18/M30 contextual typing of a fresh
-    /// object/array/tuple literal against the annotation ([`infer_initializer`]), the
-    /// TK2322 assignability obligation, and the fresh-literal TK2353 excess-property check.
-    /// Returns the initializer's inferred `(type, span)` for the caller to record a declared
-    /// type. Shared by [`check_declarator`] and class field initializers (backlog 61) so the
-    /// two declaration positions cannot drift apart.
+    /// Check an initializer against an optional annotation using the declaration
+    /// path: contextual typing, assignability, and excess-property checks. Shared
+    /// by variables and class fields so they cannot drift.
     pub(in crate::check::checker) fn check_annotated_initializer(
         &mut self,
         scope: ScopeId,
@@ -220,20 +207,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         initializer
     }
 
-    /// Check one variable declarator and record its declared/inferred type.
-    ///
-    /// The declared type is the annotation if present, otherwise the (possibly
-    /// widened) initializer type. When both are present, an assignability obligation
-    /// is collected and a fresh object literal gets an excess-property check.
-    ///
-    /// M18 — **contextual typing** for an array literal in a **tuple** position: when
-    /// the (resolved) annotation is a tuple and the initializer is an array literal, the
-    /// literal is typed **positionally as a tuple** (element *i* = the type of literal
-    /// element *i*) rather than as the M17 array. Relating that tuple to the annotation
-    /// tuple then checks position-by-position (`[1, "x"]` <: `[number, string]` ok;
-    /// `["x", 1]` → one `TK2322`) and catches length mismatches (`[1]`, `[1, "x", 2]` →
-    /// one `TK2322`). With **no** tuple context an array literal still infers an array
-    /// (M17 unchanged). See [`infer_array_literal_as_tuple`].
+    /// Check one variable declarator and record its declared/inferred type. M18
+    /// tuple-context array literals are typed positionally as tuples; otherwise
+    /// array literals keep the M17 array inference path.
     fn check_declarator(
         &mut self,
         scope: ScopeId,
@@ -250,21 +226,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             None => None,
         };
 
-        // Infer the initializer (it may resolve references / emit TK2304 and descends
-        // into any nested function body), then run its assignability obligation + excess
-        // check against the annotation. M18: in a **tuple** context an array literal is
-        // typed positionally as a tuple; otherwise it infers an array (M17) — and every
-        // other expression is inferred exactly as before.
+        // Infer/check the initializer against the annotation, including M18 tuple
+        // contextual typing for array literals.
         let initializer = declarator
             .init
             .as_ref()
             .and_then(|init| self.check_annotated_initializer(scope, annotation, init));
 
-        // F4 — access control through an **object** destructuring binding
-        // (`let { priv } = k;`). Run M13's private/protected check for each destructured
-        // member against the source type — the initializer's inferred type (binding the
-        // names' types is deferred; only the access check runs). Other pattern kinds
-        // (identifier, array, nested, rest, defaults) are out of scope and skipped.
+        // F4: object destructuring bindings run M13 access checks against the
+        // initializer type; binding the destructured names' types is deferred.
         if let BindingPattern::ObjectPattern(object) = &declarator.id {
             if let Some((source, _)) = &initializer {
                 self.check_object_pattern_access(object, *source);
@@ -283,15 +253,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Check a function declaration: compute its function type, bind it into the
-    /// value slot (so a call resolves), and descend into its body.
-    ///
-    /// M9: a **generic** function (`function f<T>(…)`) additionally records its generic
-    /// signature (the type-parameter ids + the template function type) under its value
-    /// `DeclId`, so a call `f<number>(…)` can instantiate it. Its bound `decl_types`
-    /// id is the template (signature with the parameter types embedded); a *non-generic*
-    /// call site would see those parameter types unresolved, but the fixtures only call
-    /// generic functions with explicit type arguments (inference is M10).
+    /// Check a function declaration and bind its function type. Generic functions
+    /// also record the template plus type-parameter ids for call-site instantiation.
     fn check_function_declaration(&mut self, scope: ScopeId, func: &Function<'_>) {
         let (fn_ty, params) = self.infer_function(scope, func);
         if let Some(id) = &func.id {
@@ -312,19 +275,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
 }
 
-/// Map a relation failure to a diagnostic according to the obligation's kind.
-///
-/// `Assignment`: a required-target-property absence → `TK2741`; everything else
-/// (primitive mismatch, a present-but-wrong property, or any function-shaped
-/// mismatch — possibly nested) → `TK2322`. The error type never reaches here (it
-/// is `any`-like, so its obligations resolve to `Yes`). `Argument`: any failure →
-/// `TK2345`.
-///
-/// M6 (§6.4): the **headline** keeps its flat top-level form, and the nested
-/// reason chain is rendered below it as the diagnostic's elaboration via
-/// [`render_reason_chain`]. A single-`Leaf`/missing-property/arity head produces
-/// an **empty** elaboration (the headline already states it in full), so scalar
-/// mismatches render exactly one line — no earlier-milestone regression.
+/// Map a relation failure to `TK2741`/`TK2322`/`TK2345`. M6 keeps a flat headline
+/// and renders nested reasons as elaboration; simple heads produce no elaboration.
 pub(in crate::check::checker) fn emit_obligation_failure(
     store: &Store,
     ob: &AssignObligation,
@@ -360,13 +312,8 @@ pub(in crate::check::checker) fn emit_obligation_failure(
             // M19: a value not fitting the target's index signature is a `TK2322`;
             // the headline states the two object types, the value's cause nested below.
             | Reason::IndexSignature { .. } => {
-                // Source widened (literal → base), target as-is (mvp-plan
-                // M0/M1 message spec). For a union source the headline names the
-                // specific failing member, not the whole union (matching tsc:
-                // `number | string` → `number` reports `'string'`).
-                // M25: keep the source literal when the target is itself a literal / unit
-                // type (`false` → `true`, `2` → `1`) — tsc does not widen against a unit
-                // target, only against a non-literal one (`"hello"` → `string`).
+                // Widen source literals for non-literal targets; keep unit/literal
+                // source forms and union offending members in the headline.
                 let widen = !is_literal_target(store, ob.tgt);
                 let src = render_type(store, headline_src(ob, head), widen);
                 let tgt = render_type(store, ob.tgt, /* widen */ false);
@@ -387,26 +334,10 @@ pub(in crate::check::checker) fn emit_obligation_failure(
     }
 }
 
-/// Decide the phase-2 class-member override-compatibility checks (backlog 06) and
-/// emit `TK2416` for each incompatible one. The relation runs on the shared phase-2
-/// [`Relater`] (same cache/cycle machinery as every other query).
-///
-/// The variance split is keyed on the **base** (target) member's declaration kind
-/// ([`OverrideCheck::base_is_method`]) — tsc 6.0.3 behavior, probed: the derived
-/// member's own kind never changes the verdict. A **base method** (declared `m() {}`,
-/// both member types functions) follows tsc's method rule: parameters are compared
-/// **bivariantly** (compatible if assignable in **either** direction), the return type
-/// **covariantly** (`own → base`, with the `void`-return exception). A
-/// signature-**arity** mismatch there is **out of subset** — typokat models neither
-/// optional nor rest parameters, so it cannot decide whether dropping/adding a
-/// parameter is legal (tsc often accepts it); the check is skipped (a deferral, not an
-/// over-report). Every other shape — a base data property, a base function-typed
-/// **field** (strict contravariant params, per `strictFunctionTypes`, regardless of
-/// how the derived member is declared), or a base accessor — is decided by a single
-/// `own → base` [`Relater::is_assignable`] query (including its arity rule, so a
-/// derived member adding required parameters over a base field errors). The nested
-/// reason chain of the offending component is rendered below the fixed `TK2416`
-/// headline, exactly like `TK2322`.
+/// Emit `TK2416` override failures. The base member kind decides variance: base
+/// methods use tsc's bivariant-parameter/covariant-return rule, while fields,
+/// accessors, and data properties use one strict `own → base` relation query.
+/// Method arity mismatches are deferred because optional/rest params are unmodeled.
 pub(in crate::check::checker) fn emit_override_failures(
     store: &Store,
     well_known: WellKnown,
@@ -448,11 +379,8 @@ fn override_failure_reason(
     base_ty: TypeId,
     base_is_method: bool,
 ) -> Option<ReasonChain> {
-    // Method override: the BASE member was declared with method syntax AND both
-    // members are function-typed. Compare per tsc's method rule (bivariant params,
-    // covariant return). A base function-typed FIELD is NOT a method here — it falls
-    // through to the plain (contravariant) query below, matching `strictFunctionTypes`
-    // — even when the DERIVED member is method syntax (the base kind decides).
+    // Base method syntax plus function types triggers tsc's method rule; base
+    // function-typed fields fall through to the strict query below.
     if let (true, Some(own_fn), Some(base_fn)) = (
         base_is_method,
         store.function_type(own_ty),
@@ -492,11 +420,8 @@ fn override_failure_reason(
     }
 }
 
-/// The source type to put in the headline message. Normally the obligation's
-/// source, but for a **union source** failure it is the specific offending member
-/// (`number | string` not assignable to `number` reports the failing `string`,
-/// matching tsc) — the whole-union form is reserved for the nested reason chain
-/// (M6).
+/// The source type for the headline; union-source failures use the specific
+/// offending member and leave the whole union for the nested reason chain.
 fn headline_src(ob: &AssignObligation, head: &Reason) -> TypeId {
     match head {
         Reason::UnionSourceMember { member, .. } => *member,

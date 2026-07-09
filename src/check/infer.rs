@@ -1,48 +1,9 @@
 //! Type-argument inference (M10; architecture §5.1).
-//!
-//! This engine **produces** type-parameter bindings from call arguments; the
-//! relation engine still **decides** assignability after substitution. M10 covers
-//! call-site inference only; contextual typing, richer constraint-guided
-//! inference, priorities, and variance-aware inference remain separate work.
-//!
-//! ## Shape
-//!
-//! Two phases, mirroring tsc's "candidate collection" then "fixing":
-//!
-//!  1. **Collect** ([`infer_from_types_raw`]): structurally match each call-argument
-//!     type against its parameter type, recording, for every type parameter, the
-//!     **raw** (un-widened) argument types that landed against it (its *candidates*).
-//!  2. **Fix** ([`fix_candidates`]): turn each parameter's candidate list into a
-//!     single type — no candidates → **`unknown`** (the **sound** fallback: `unknown`
-//!     accepts nothing downstream without a check, so it can never *mask* a real
-//!     error the way `any` would); one candidate → that type; ≥ 2 distinct
-//!     candidates → their **union** ([`Interner::union`]). Literal candidates widen
-//!     here (per parameter — see the Soundness note below).
-//!
-//! The resulting `TypeParamId → TypeId` map feeds M9 substitution; the existing
-//! arity/argument/return checks then run unchanged.
-//!
-//! ## Soundness
-//!
-//! Inferring too **wide** is acceptable (it can only over-report); inferring too
-//! **narrow**, or to `any`, is **not** (it would drop a real error). Two choices
-//! follow:
-//!
-//!  - the no-candidate fallback is `unknown`, never `any`;
-//!  - each literal candidate is **widened** (a literal `5` → `number`) at fix time,
-//!    so an inferred argument is never *narrower* than what a value of that type
-//!    denotes. Widening can only make the inferred type wider, so it stays sound; it
-//!    also matches the conventional top-level (non-contextual) inference result and
-//!    the fixtures' "`T` inferred `number`" expectations. The one exception
-//!    (M24/M27): a parameter with a **primitive constraint** keeps the literal —
-//!    tsc's `hasPrimitiveConstraint` rule, which only ever preserves where tsc also
-//!    preserves (see [`fix_candidates`]).
-//!
-//! ## Termination
-//!
-//! [`InferenceContext`] guards structural matching with the current `(source,
-//! target)` pairs. Re-entering a pair adds no new candidates because the same pair
-//! is already contributing further up the stack.
+//! Produces type-parameter bindings from call arguments; the relation engine still
+//! decides assignability after substitution. No candidate fixes to `unknown`, one
+//! candidate fixes to itself, and multiple distinct candidates fix to their union.
+//! Soundness rule: inference may be too wide, but never too narrow or `any`; the
+//! `(source, target)` guard makes recursive matching terminate.
 
 use crate::relate::Relater;
 use crate::types::repr::{
@@ -56,13 +17,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 /// duplicate collapse.
 pub type Candidates = FxHashMap<crate::types::repr::TypeParamId, Vec<TypeId>>;
 
-/// Structurally match a source against a target in **conditional-`infer` mode** (M25):
-/// the same walker as [`infer_from_types_raw`], but a **union target** descends into
-/// its members (review MEDIUM-3) and a template-pattern target captures `infer` holes
-/// (M27). Candidates are never widened here — not even at fix time (tsc keeps `"x"` —
-/// review HIGH-1/HIGH-2); the evaluator fixes them itself. Used by the
-/// conditional-type evaluator's extends test; call-site type-argument inference goes
-/// through [`infer_type_arguments`].
+/// Structurally match in conditional-`infer` mode (M25). Unlike call-site
+/// inference, union targets descend into members, template patterns capture
+/// `infer` holes, and candidates are never widened.
 pub fn infer_from_types_for_conditional(
     interner: &mut Interner,
     source: TypeId,
@@ -131,14 +88,9 @@ pub fn infer_type_arguments(
     fix_params(interner, next_type_param, type_params, fixed, &exempt)
 }
 
-/// Fix raw candidate lists to one type per parameter (M10, refined for M24/M27's
-/// `hasPrimitiveConstraint` rule). Literal candidates **widen** to their base
-/// (`"x"` → `string`) — the M10 call-site rule keeping an inferred argument no narrower
-/// than the value denotes — **unless** the parameter has a **primitive constraint**
-/// (`<T extends string>`, `<T extends "a" | "b">`, a template-pattern constraint, …), in
-/// which case tsc preserves the literal (`mk<T extends string>("x")` infers `T = "x"`,
-/// not `string`). A single (prepared) candidate fixes to itself; several fix to their
-/// union.
+/// Fix raw candidate lists to one type per parameter. Call-site literals widen
+/// unless the parameter has tsc's primitive constraint shape (M24/M27), where tsc
+/// preserves the literal; several prepared candidates fix to their union.
 fn fix_candidates(
     interner: &mut Interner,
     candidates: Candidates,
@@ -197,27 +149,13 @@ fn is_primitive_ish(store: &Store, ty: TypeId) -> bool {
     }
 }
 
-/// Structurally match a source (argument) type against a target (parameter) type,
-/// recording **raw** (un-widened) candidates for any type parameter found in the
-/// target (architecture §5.1) — [`fix_candidates`] then widens per parameter. The
-/// call-site collection mode: no union-target descent (the M10 rule — a union target
-/// with a non-union source is ambiguous, so it infers nothing).
+/// Structurally match an argument source against a parameter target, recording raw
+/// candidates later fixed by [`fix_candidates`]. Call-site mode deliberately has
+/// no union-target descent: ambiguous matches infer nothing, which is sound.
 ///
-/// Cases (kept deliberately small and sound):
-///
-///  - target is a **type parameter** → record the source as a candidate for that
-///    parameter id;
-///  - **both objects** → for each property present in **both**, recurse on the
-///    property types (a property only on one side contributes no candidate);
-///  - **both functions** → recurse **positionally** on the parameters (up to the
-///    shorter list) and on the return type;
-///  - **both unions** → best-effort: recurse **pairwise** on members **only when
-///    the two unions have equal length** (a positional pairing); otherwise skip
-///    (ambiguous — skipping is sound, it just infers nothing here);
-///  - anything else → no candidate.
-///
-/// The recursion is cycle-guarded (see the module docs) so self-referential
-/// argument/parameter types terminate.
+/// The small sound subset records direct type-parameter hits, shared object
+/// properties, positional function parts, and equal-length union pairings. The
+/// recursion is cycle-guarded.
 fn infer_from_types_raw(
     interner: &mut Interner,
     source: TypeId,
@@ -379,16 +317,9 @@ impl InferenceContext {
             return;
         }
 
-        // M25 (conditional mode): a union TARGET with a non-union source descends into
-        // every member — a member the source does not shape-match contributes nothing,
-        // and same-name contributions union. A union source keeps the pairwise arm.
-        //
-        // A **naked** infer member (`{ v: infer U } | infer U`) records the whole check
-        // type as a LOW-priority candidate (tsc's inference priorities): it is DISCARDED
-        // when any structural member of this union bound the same binder, and kept only
-        // when no structural member did (`string | infer U` — the naked-only shape).
-        // Structural members are therefore collected first (into a local set, so the
-        // drop decision keys on THIS union's contributions), then merged.
+        // M25 conditional mode: a union target descends into members. Naked infer
+        // members are low-priority whole-check candidates and are dropped when a
+        // structural member of THIS union bound the same binder.
         if self.union_target_descent
             && interner.store().tag(target) == TypeTag::Union
             && interner.store().tag(source) != TypeTag::Union
@@ -472,11 +403,8 @@ impl InferenceContext {
             (TypeTag::Array, TypeTag::Array) => {
                 self.infer_arrays(interner, source, target, candidates);
             }
-            // M25 (conditional-type `infer`): both tuples → recurse **positionally** on
-            // each element up to the shorter list, exactly like function parameters. A
-            // `[infer H, infer R]` extends target infers `H`/`R` from a `[string,
-            // number]` check. (Reuses the shared inference machinery — the same one M10
-            // uses for call-argument inference.)
+            // Conditional `infer`: tuple pairs recurse positionally, like function
+            // parameters, through the shared inference machinery.
             (TypeTag::Tuple, TypeTag::Tuple) => {
                 self.infer_tuples(interner, source, target, candidates);
             }
@@ -598,12 +526,9 @@ impl InferenceContext {
         }
     }
 
-    /// b57 — a TUPLE source against an ARRAY target: infer from each tuple element into
-    /// the array's element position (candidates for a shared binder union naturally).
-    /// An **empty** tuple has element type `never` (a union of zero elements), seeded
-    /// explicitly so `[] extends (infer U)[]` binds `U = never` instead of falling
-    /// through to the unbound `unknown` fallback. Mirrors the relation's tuple→array
-    /// covariance.
+    /// b57: infer tuple elements into an array target's element position. Empty
+    /// tuples seed `never`, so `[] extends (infer U)[]` binds `U = never` instead
+    /// of falling through to the unbound `unknown` fallback.
     fn infer_tuple_into_array(
         &mut self,
         interner: &mut Interner,

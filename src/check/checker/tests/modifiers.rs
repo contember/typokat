@@ -1,15 +1,7 @@
-//! M13 end-to-end tests for access modifiers (`private`/`protected` — access
-//! control + nominal typing) and `static` members. These drive the whole
-//! pipeline (parse → bind → check) and assert the *set* of `(line, code)`
-//! diagnostics, pinning the invariants the reviewer should scrutinize: access
-//! control keys on the current-class context (inside vs outside vs subclass), the
-//! nominal relation breaks structural assignability for a `private`/`protected`
-//! member (and a same-class instance still passes), and the static/instance
-//! partition routes members to the right side (cross-access → `TK2339`).
-//!
-//! The per-fixture acceptance lives in the conformance corpus (`m13_modifiers/`);
-//! the unit-level nominal-relation pins live in `relate::relation::tests`. These
-//! guard the checker-side context tracking + partition directly.
+//! M13 end-to-end tests for access modifiers and `static` members.
+//! Pins current-class access control, nominal private/protected relation, and
+//! static/instance partitioning. Fixture acceptance lives in `m13_modifiers/`;
+//! relation-level nominal pins live in `relate::relation::tests`.
 
 use crate::driver::check_source;
 
@@ -195,11 +187,8 @@ function leak(a: Account) {
     );
 }
 
-/// A **static** member's body is type-checked (statics are real members in M13):
-/// a static method's bad `return`, an unresolved name in a static body, a wrong
-/// static-call argument, and a static field initializer's unresolved name are all
-/// flagged — while the well-typed static body and the instance body stay clean.
-/// This guards the false negative the review caught (static bodies were skipped).
+/// Static member bodies are checked; this guards the old false negative where
+/// they were skipped.
 #[test]
 fn static_member_bodies_are_checked() {
     let src = "\

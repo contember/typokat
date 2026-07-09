@@ -1,8 +1,7 @@
 //! The scope graph (architecture §4).
 //!
-//! Name resolution is modelled as a scope graph (the Visser/Delft line): a tree
-//! of scopes with parent-walk resolution, giving a unified resolution model and
-//! a basis for later incrementality and per-unit parallel checking.
+//! Name resolution is a tree of scopes with parent-walk lookup, leaving room for
+//! later incrementality and per-unit parallel checking.
 
 use crate::binder::symbol::SymbolId;
 use rustc_hash::FxHashMap;

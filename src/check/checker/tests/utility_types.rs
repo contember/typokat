@@ -1,9 +1,6 @@
-//! M28 end-to-end tests for the **prelude compilation unit** (the built-in utility
-//! aliases) — the integration seams the conformance fixtures cannot pin: the prelude
-//! checks clean (as a trusted asset AND as ordinary user source), user declarations
-//! shadow prelude names without duplicate diagnostics, and the `Pick` modifiers
-//! source preserves value types + `?` through a non-homomorphic map. The per-fixture
-//! acceptance lives in the conformance corpus (`m28_utility_types/`).
+//! M28 end-to-end tests for the prelude compilation unit.
+//! Pins clean prelude checking, user shadowing, and `Pick` modifier-source
+//! preservation. Fixture acceptance lives in `m28_utility_types/`.
 
 use crate::check::checker::PRELUDE_SOURCE;
 use crate::driver::check_source;
@@ -28,15 +25,8 @@ fn diags(source: &str) -> Vec<(u32, String)> {
     v
 }
 
-/// The prelude itself checks **clean**. Run twice, deliberately:
-///
-///  - the trusted-asset path is exercised implicitly by EVERY check (the prelude
-///    pass `debug_assert`s clean inside `check_program`), including the empty
-///    program here;
-///  - checking the prelude text **as user source** additionally proves the user
-///    unit may re-declare every prelude name (full shadowing) without a single
-///    duplicate-name or lowering diagnostic — the user `= intrinsic` bodies
-///    degrade silently (out of scope), never error.
+/// The prelude checks clean both as a trusted asset and as user source, proving
+/// full user shadowing without duplicate-name or lowering diagnostics.
 #[test]
 fn prelude_checks_clean() {
     assert!(
@@ -66,11 +56,8 @@ const x: Partial<{ a: string }> = \"s\";
     );
 }
 
-/// `Pick` preserves the picked member's **value type** and **optionality** (the M28
-/// modifiers source): picking optional `b` keeps it optional (an empty literal is
-/// fine) AND keeps its `string` value type (a number is TK2322) — previously the
-/// non-homomorphic map produced required `any` members (both directions silently
-/// wrong).
+/// `Pick` preserves the picked member's value type and optionality via the M28
+/// modifiers source.
 #[test]
 fn pick_preserves_value_types_and_optionality() {
     let src = "\

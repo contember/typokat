@@ -1,12 +1,7 @@
-//! M18 end-to-end tests for **tuple types** (`[A, B]`, positional assignability,
-//! length, indexed access, contextual typing, tuple → array). These drive the
-//! whole pipeline (parse → bind → check) and assert the `(line, code)`
-//! diagnostics, pinning the invariants the reviewer should scrutinize: the
-//! **contextual** array-literal-as-tuple path does not regress the M17 array
-//! inference (a non-tuple-context literal still infers an array), positional +
-//! length assignability is sound, a tuple failure is a **single** diagnostic, and
-//! tuple → array holds. The per-fixture acceptance lives in the conformance corpus
-//! (`m18_tuples/`).
+//! M18 end-to-end tests for tuple types.
+//! Pins contextual tuple literals without regressing M17 arrays, positional and
+//! length assignability, single tuple diagnostics, and tuple-to-array relation.
+//! Fixture acceptance lives in `m18_tuples/`.
 
 use crate::driver::check_source;
 
@@ -30,11 +25,8 @@ fn diags(source: &str) -> Vec<(u32, String)> {
     v
 }
 
-/// **Contextual typing** — an array literal in a tuple position is typed
-/// positionally as a tuple: `[1, "x"]` against `[number, string]` is ok, while
-/// `["x", 1]` produces **one** `TK2322` (position 0 mismatch). This is the key new
-/// M18 mechanism; the literal element types are checked **position-by-position**,
-/// not collapsed into an array union.
+/// Contextual tuple literals are checked position-by-position, not collapsed
+/// into an array union.
 #[test]
 fn contextual_array_literal_is_typed_as_tuple() {
     let src = "\
@@ -45,11 +37,8 @@ const swapped: [number, string] = [\"x\", 1];
     assert_eq!(diags(src), vec![(2, "TK2322".to_string())]);
 }
 
-/// A **literal-type** tuple target preserves the literal element types under
-/// contextual typing (they are **not** widened): `[1, 2] = [1, 2]` is ok, while
-/// `[1, 2] = [1, 3]` is `TK2322` (`3` is not assignable to the literal `2`). This
-/// is consistent with the scalar literal path (`const x: 1 = 1`) and is the case
-/// the widening bug regressed.
+/// Literal-type tuple targets preserve literal elements under contextual typing;
+/// this guards the old widening regression.
 #[test]
 fn contextual_literal_type_tuple_target() {
     let src = "\
@@ -127,12 +116,7 @@ const bad: number[] = t;
     assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
 }
 
-/// **No regression of M17**: an array literal with **no** tuple context still
-/// infers an **array** (the union of widened element types), not a tuple. So
-/// `const xs = [1, 2]` is `number[]` (assignable to a `number[]` annotation and
-/// usable where an array is expected), and a heterogeneous `[1, "x"]` against a
-/// `number[]` annotation is still the M17 `(number | string)[]` → `number[]`
-/// `TK2322` — proving the contextual path did not hijack the array inference.
+/// No tuple context still uses M17 array inference, not tuple inference.
 #[test]
 fn no_tuple_context_array_literal_still_infers_array() {
     let src = "\

@@ -1,17 +1,7 @@
-//! M15 end-to-end tests for **getters/setters** and **`abstract` classes**. These
-//! drive the whole pipeline (parse → bind → check) and assert the *set* of
-//! `(line, code)` diagnostics, pinning the invariants the reviewer should scrutinize:
-//!
-//!  - a `get`/`set` accessor is **one** property of the getter's return type, and it
-//!    is **writable** (assigning a wrong type is `TK2322`, a right one is clean);
-//!  - a **get-only** accessor is `readonly` → assigning it is `TK2540`, while reading
-//!    it yields the getter's type;
-//!  - `new` on an **`abstract`** class is `TK2511`, but a **concrete subclass** of an
-//!    abstract class instantiates fine (only the named class's flag matters);
-//!  - an **abstract method** (no body) is part of the instance type and is satisfied
-//!    by a concrete subclass's implementation (its return type still checked).
-//!
-//! The per-fixture acceptance lives in `m15_accessors/`.
+//! M15 end-to-end tests for accessors and `abstract` classes.
+//! Pins accessor writability/readonly behavior, direct abstract-instantiation
+//! checks, and abstract member implementation. Fixture acceptance lives in
+//! `m15_accessors/`.
 
 use crate::driver::check_source;
 

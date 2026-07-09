@@ -22,15 +22,9 @@ use oxc_ast::ast::{
 use rustc_hash::{FxHashMap, FxHashSet};
 
 impl<'a, 'ast> Pass<'a, 'ast> {
-    /// Lower an annotation type to its `TypeId`. Supports intrinsic keywords, object
-    /// type literals, function types (`(x: number) => string`), unions, and (M5) type
-    /// **references** (`Point`, `Num`, `List`) resolved through the binder's type slot.
-    ///
-    /// Reference resolution returns a **stored id** for the referenced declaration
-    /// (the interface's reserved nominal id, or the alias's resolved target) — never
-    /// an inlined copy of the referenced structure. That is what makes lowering a
-    /// recursive type terminate: `tail: List | null` stores the union of `List`'s id
-    /// and `null`, not an expansion of `List` (mvp-plan M5, §3, §6.3).
+    /// Lower an annotation type to its `TypeId`. Type references resolve to stored
+    /// declaration ids, never inlined structures, so recursive aliases/interfaces
+    /// terminate by pointing at the reserved id (mvp-plan M5, §3, §6.3).
     pub(in crate::check::checker) fn lower_annotation(
         &mut self,
         scope: ScopeId,
@@ -110,23 +104,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
                 return None;
             }
-            // M20: an indexed-access type `T[K]`. Both sides are lowered, then the
-            // member type(s) named by `K` are looked up on `T` eagerly
-            // ([`indexed_access_type`]). Out-of-scope combinations (a non-object `T`, a
-            // missing key, a generic key) yield the error type (no crash).
-            //
-            // M26: inside a mapped type's value template, `X[K]` whose index names the
-            // innermost mapped key binder is the source property value — it lowers to the
-            // node-scoped [`TypeTag::MappedValue`] placeholder (resolved per key at
-            // evaluation), NOT the eager M20 lookup (which would resolve to the error
-            // type against the still-abstract source).
+            // M20 eager `T[K]`, except inside an M26 mapped value template where
+            // `X[K]` on the active key lowers to [`TypeTag::MappedValue`]. That
+            // placeholder is resolved per key at evaluation; eager lookup would see
+            // the still-abstract source and collapse to the error type.
             TSType::TSIndexedAccessType(access) => {
                 if self.index_is_active_mapped_key(&access.index_type) {
-                    // M28: capture the **modifiers source** — the `T` of a `T[P]`
-                    // access on the active mapped key — when the object side is a bare
-                    // in-scope type parameter (the `Pick` shape; nothing else is
-                    // captured, so no new lowering paths/diagnostics can fire). First
-                    // capture wins.
+                    // M28: capture the `T` of `T[P]` for homomorphic modifiers only
+                    // in the bare type-parameter (`Pick`) shape. First capture wins.
                     if let Some(param_ty) = self.bare_type_param_reference(&access.object_type) {
                         if let Some(frame) = self.mapped_frames.last_mut() {
                             frame.captured_source.get_or_insert(param_ty);
@@ -160,12 +145,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(id)
     }
 
-    /// B29 — run `f` with the alias **indirection depth** incremented by one: a descent
-    /// through a type constructor whose recursion is legal (array element, tuple element,
-    /// object-literal member, function/constructor parameter or return). Always balanced,
-    /// so a `?` / early return by the caller leaves the depth restored. A re-entry into a
-    /// still-resolving alias at a greater depth than it started is legal recursion, not a
-    /// surface cycle (see [`Pass::resolve_type_decl`]).
+    /// B29: run `f` one legal-recursion boundary deeper. Balanced even through
+    /// early returns; re-entering a resolving alias at greater depth is recursion,
+    /// not a surface cycle (see [`Pass::resolve_type_decl`]).
     fn with_indirection<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
         self.alias_indirection_depth += 1;
         let result = f(self);
@@ -263,11 +245,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(self.maybe_evaluate(id, span))
     }
 
-    /// Lower an `infer U` binder to its node-scoped de Bruijn [`TypeTag::Infer`] index
-    /// (M25), declared into the **innermost active** frame. A new name takes the next
-    /// index (`binders.len()`); a repeated name reuses its index (so
-    /// `{ a: infer U; b: infer U }` binds one index). Outside any conditional's
-    /// `extends`/true position (no active frame) it is out of subset → `None`.
+    /// Lower `infer U` into the innermost active conditional frame. Repeated names
+    /// reuse their de Bruijn index; outside `extends`/true positions it is out of
+    /// subset (`None`).
     fn lower_infer_type(&mut self, infer: &TSInferType<'_>) -> Option<TypeId> {
         let name = infer.type_parameter.name.name.as_str();
         let frame = self.cond_frames.iter_mut().rev().find(|f| f.active)?;
@@ -417,11 +397,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             other => other,
         };
 
-        // TK2456 (review): a key source that surface-references the alias currently
-        // being resolved (`type M = { [K in keyof M]: number }`) is a circular alias —
-        // the re-entry error type would otherwise silently feed the map. The alias
-        // degrades to the error type (silent downstream, M22 discipline). tsc also adds
-        // a TS2313 for K's circular constraint — secondary code omitted (documented).
+        // TK2456: a key source that surface-references the alias being resolved
+        // is circular; otherwise the re-entry error type would silently feed the
+        // map. The alias degrades to the error type (M22); tsc's extra TS2313 is
+        // documented but omitted.
         if let Some((decl_id, alias_span, name)) = self.resolving_alias.clone() {
             if self.check_surface_references(scope, key_surface, decl_id) {
                 self.diagnostics
@@ -509,12 +488,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         reference.type_arguments.is_none() && ident.name.as_str() == frame.key_name
     }
 
-    /// Lower a union type annotation `A | B | …` to a canonical interned `TypeId`
-    /// (M4). Each member is lowered recursively, then `Interner::union` flattens,
-    /// sorts, dedups, drops `never`, and collapses degenerate unions (mvp-plan
-    /// §3.3). A member whose type cannot be lowered (out of subset) aborts the whole
-    /// annotation (`None`), matching the object/function lowering — dropping a member
-    /// silently would mis-state the union.
+    /// Lower `A | B | …` to a canonical interned union. Any unlowerable member
+    /// aborts the whole annotation; dropping it would mis-state the union.
     fn lower_union_annotation(&mut self, scope: ScopeId, members: &[TSType<'_>]) -> Option<TypeId> {
         let mut lowered: Vec<TypeId> = Vec::with_capacity(members.len());
         for member in members {
@@ -523,13 +498,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(self.interner.union(lowered))
     }
 
-    /// Lower an intersection type annotation `A & B & …` to a canonical interned
-    /// `TypeId` (M31 — the structural dual of [`Pass::lower_union_annotation`]). Each
-    /// member is lowered recursively, then `Interner::intersection` flattens, absorbs
-    /// (`any`/error → `any`, `never` → `never`), drops `unknown`, sorts + dedups, and
-    /// collapses degenerate intersections. A member that cannot be lowered (out of
-    /// subset) aborts the whole annotation (`None`), matching the union lowering —
-    /// dropping a member silently would mis-state the intersection.
+    /// Lower `A & B & …` to a canonical interned intersection. Any unlowerable
+    /// member aborts the whole annotation; dropping it would mis-state the type.
     fn lower_intersection_annotation(
         &mut self,
         scope: ScopeId,
@@ -542,21 +512,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(self.interner.intersection(lowered))
     }
 
-    /// Lower a tuple type annotation `[A, B, …]` to a canonical interned `TypeId`
-    /// (M18). Each element is lowered recursively (preserving order — `intern_tuple`
-    /// never sorts), so nested tuples (`[[number], string]`) and array elements
-    /// (`[number[], string]`) work. The **empty** tuple `[]` lowers to the interned
-    /// empty tuple.
-    ///
-    /// Out of the M18 subset, aborting the whole annotation (`None`, matching the
-    /// object/union/array lowerings — silently dropping or mis-shaping an element would
-    /// mis-state the tuple):
-    ///
-    ///  - **optional** (`[number?]`) and **rest** (`[number, ...string[]]`) elements:
-    ///    [`TSTupleElement::as_ts_type`] returns `None` for these, so the lowering
-    ///    aborts;
-    ///  - **named** tuple members (`[x: number, y: string]`): the element *is* a
-    ///    `TSType::TSNamedTupleMember`, which `lower_annotation` does not handle → `None`.
+    /// Lower `[A, B, …]` to an ordered interned tuple; `[]` is the empty tuple.
+    /// Optional, rest, and named tuple members are out of subset and abort the
+    /// annotation rather than silently mis-shaping the tuple.
     fn lower_tuple_annotation(
         &mut self,
         scope: ScopeId,
@@ -572,15 +530,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(self.interner.intern_tuple(lowered))
     }
 
-    /// Lower a **literal type** (`TSLiteralType`'s literal) to its interned literal
-    /// `TypeId` (M8). A string/number/boolean literal interns to the hash-consed
-    /// literal id (so it shares identity with the same literal anywhere, which is what
-    /// makes literal↔literal assignability and discriminant matching reduce to id
-    /// equality). A negated numeric literal (`-1`, oxc: a unary-minus type expression)
-    /// lowers to the corresponding negative number literal. A `bigint`/template/other
-    /// unary literal type is out of the M8 subset → `None` (the caller aborts the
-    /// enclosing annotation, matching the other lowerings — silently dropping it would
-    /// mis-state the type).
+    /// Lower a literal type to its hash-consed literal id, including unary-minus
+    /// numeric literals. Bigint/template/other unary literals are out of subset and
+    /// abort the enclosing annotation.
     fn lower_literal_type(&mut self, literal: &TSLiteral<'_>) -> Option<TypeId> {
         let value = match literal {
             TSLiteral::StringLiteral(s) => LiteralValue::String(s.value.to_string()),
@@ -606,23 +558,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(self.interner.intern_literal(value))
     }
 
-    /// Lower an object type literal's members to an interned (structural) object
-    /// `TypeId`. Object **type literals** stay structurally hash-consed (only nominal
-    /// interfaces bypass interning).
-    ///
-    /// M19: a **string** index signature (`[k: string]: T`) sets `string_index = T`
-    /// and a **number** index signature (`[i: number]: T`) sets `number_index = T`;
-    /// both coexist with named properties.
-    ///
-    /// M21: an **optional** property (`b?: T`) is a real member with `optional: true`
-    /// and an effective type of `T | undefined` (the `| undefined` is interned here).
-    ///
-    /// F1/WU1: a non-generic static-name method signature lowers to a
-    /// function-typed property (`f(x: number): string` → `f: (x: number) => string`).
-    ///
-    /// A member whose type cannot be lowered, or any unsupported signature
-    /// (call/construct/generic method/accessor method, or an index sig with an
-    /// unsupported key) aborts the lowering (`None`).
+    /// Lower object type literal members to a structural object. Optional members
+    /// intern `T | undefined` here; string/number indexes coexist with named
+    /// properties; unsupported or unlowerable members abort the whole object.
     fn lower_object_annotation(
         &mut self,
         scope: ScopeId,
@@ -644,11 +582,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     // } | null`), so lower it at a deeper indirection level.
                     let ty = self
                         .with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation))?;
-                    // M21: an optional member (`b?: T`) lowers like a normal property whose
-                    // effective type is `T | undefined` (see [`lower_interface_members`] for
-                    // the rationale — the `| undefined` must be interned here, not in the
-                    // relation engine). Previously any optional member aborted the whole
-                    // annotation (degrading it to the error type); now it is a real member.
+                    // M21: optional properties intern `T | undefined` here, matching
+                    // interface members and keeping this out of the relation engine.
                     let ty = if sig.optional {
                         let undefined = self.interner.well_known().undefined;
                         self.interner.union(vec![ty, undefined])
@@ -657,11 +592,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     };
                     let mut prop = PropertyType::public(name.into_owned(), ty);
                     prop.optional = sig.optional;
-                    // F5/backlog-03: carry the `readonly` modifier onto object-type-literal
-                    // members (`{ readonly k: T }`). Previously dropped, so assigning to such a
-                    // member was silently allowed. Part of the property's structural identity
-                    // (hashed by the interner) but ignored by the relation engine for
-                    // assignability; it gates the assignment target only (`TK2540`).
+                    // F5/backlog-03: `readonly` is structural identity and gates
+                    // assignment targets (`TK2540`), but does not affect assignability.
                     prop.readonly = sig.readonly;
                     object.properties.push(prop);
                 }
@@ -696,12 +628,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(self.interner.intern_object(object))
     }
 
-    /// Lower a `TSMethodSignature` member to a public function-typed property.
-    ///
-    /// This intentionally accepts only the WU1 subset: required, non-generic,
-    /// non-`this`, non-accessor method signatures with static names. Optional
-    /// method signatures are out of subset for WU1 and are dropped rather than
-    /// represented incompletely.
+    /// Lower a WU1 method signature: required, non-generic, non-`this`,
+    /// non-accessor, static name. Optional methods stay out of subset.
     pub(in crate::check::checker) fn lower_method_signature_property(
         &mut self,
         scope: ScopeId,
@@ -724,11 +652,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(PropertyType::public(name.into_owned(), ty))
     }
 
-    /// Lower a single object/interface call signature to an interned function type.
-    ///
-    /// WU2 accepts only a required, non-generic, non-`this`, non-rest signature.
-    /// Optional/rest/default params and generic/`this` call signatures are out of
-    /// subset and do not create represented callability.
+    /// Lower a WU2 call signature: required, non-generic, non-`this`, non-rest.
+    /// Other signatures stay out of subset and do not create callability.
     pub(in crate::check::checker) fn lower_call_signature(
         &mut self,
         scope: ScopeId,
@@ -740,12 +665,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.lower_strict_signature_function_type(scope, &sig.params, sig.return_type.as_deref())
     }
 
-    /// Lower a single object/interface construct signature to an interned function type.
-    ///
-    /// WU3 accepts only a required, non-generic, non-rest signature whose declared
-    /// instance/return type is representable. Optional/rest/default params and generic
-    /// construct signatures are out of subset and do not create represented
-    /// constructability.
+    /// Lower a WU3 construct signature: required, non-generic, non-rest, with a
+    /// representable instance type. Other signatures do not create constructability.
     pub(in crate::check::checker) fn lower_construct_signature(
         &mut self,
         scope: ScopeId,
@@ -948,11 +869,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Lower an object/interface method or call signature only when every parameter
-    /// and the declared return type are faithfully representable in the current
-    /// subset. Unlike class/free-function lowering, this never substitutes the error
-    /// type for a bad parameter, because that would make an unsupported signature
-    /// participate in calls/relations as if it were real.
+    /// Lower object/interface signatures only when every parameter and return type
+    /// is representable. Unlike class/free-function lowering, bad parameters do
+    /// not become the error type because that would create fake callability.
     fn lower_strict_signature_function_type(
         &mut self,
         scope: ScopeId,
@@ -981,11 +900,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }))
     }
 
-    /// Lower a function-like signature into an interned [`FunctionType`].
-    ///
-    /// Parameters come from annotations; missing/unlowerable parameter annotations use
-    /// the error type to suppress cascades. A missing return annotation becomes `void`,
-    /// matching the class-method lowering this helper replaces.
+    /// Lower a function-like signature. Bad parameter annotations become the error
+    /// type to suppress cascades; missing returns become `void`.
     pub(in crate::check::checker) fn lower_signature_function_type(
         &mut self,
         scope: ScopeId,
@@ -1095,14 +1011,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             > 1
     }
 
-    /// Lower a single index signature (M19) into the appropriate slot of `object`.
-    /// `[k: string]: T` sets `string_index`; `[i: number]: T` sets `number_index`. The
-    /// **value** type `T` is lowered; the key type itself is fixed (`string`/`number`)
-    /// and not stored. Returns `None` — aborting the enclosing annotation, matching the
-    /// other lowerings — for anything out of the M19 subset: a non-`string`/`number`
-    /// key (symbol/template-literal index sigs are deferred), a value type that cannot
-    /// be lowered, or a malformed signature (no/multiple key parameters). `readonly`
-    /// index signatures are deferred — the `readonly` flag is ignored here.
+    /// Lower an M19 index signature into `object`. Only `[k: string]: T` and
+    /// `[i: number]: T` are represented; malformed, unsupported-key, or unlowerable
+    /// signatures abort the enclosing annotation. `readonly` indexes are deferred.
     pub(in crate::check::checker) fn lower_index_signature(
         &mut self,
         scope: ScopeId,
@@ -1278,11 +1189,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         wk.error
     }
 
-    /// Lower a function type annotation's parameters and return type to an interned
-    /// function `TypeId`. Parameters are kept **positional** (never sorted). A
-    /// parameter without a type annotation, or one whose type cannot be lowered, or
-    /// any optional/rest parameter, aborts the lowering (`None`) — these are out of
-    /// the M3 subset and dropping them silently would mis-state the type.
+    /// Lower a function type annotation to an interned function. Parameters stay
+    /// positional; missing/unlowerable/optional/rest parameters abort rather than
+    /// silently mis-stating the signature.
     fn lower_function_annotation(
         &mut self,
         scope: ScopeId,

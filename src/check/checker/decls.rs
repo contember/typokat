@@ -168,12 +168,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.building_template = false;
     }
 
-    /// B28 — fill one interface's reserved object with its **composed** type (own
-    /// members plus everything inherited through `extends`), on demand and exactly once.
-    /// Mirrors [`ensure_class_filled`]: the base interfaces are filled **first** (so a
-    /// derived interface reads their fully-composed members regardless of declaration
-    /// order), the `Filling` guard breaks an `extends` cycle (out-of-scope TS2310 — no
-    /// diagnostic, terminates), and a non-interface / out-of-range index is a no-op.
+    /// Fill one interface's reserved object with its composed type.
+    /// Bases are filled first in any declaration order; `Filling` breaks out-of-scope
+    /// `extends` cycles without a diagnostic.
     fn ensure_interface_filled(&mut self, scope: ScopeId, index: usize) {
         match self.template_fill.get(index).copied() {
             // Already filled, or filling (an `extends` cycle re-entered) — do not recurse.
@@ -223,12 +220,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// B29 — fill one **seeded object-literal alias**'s reserved object with its lowered
-    /// members, on demand and exactly once (mirroring [`ensure_interface_filled`], same
-    /// [`template_fill`](Pass::template_fill) array). Members are lowered with the
-    /// `resolving_alias` context set, so a nested mapped key source that
-    /// surface-references the alias still hits the M26 `TK2456` path. A non-seeded /
-    /// out-of-range index is a no-op.
+    /// Fill one seeded object-literal alias's reserved object with lowered members.
+    /// Runs on demand in `template_fill`; `resolving_alias` stays set so nested
+    /// mapped self-references still report `TK2456`.
     fn ensure_object_alias_filled(&mut self, scope: ScopeId, index: usize) {
         match self.template_fill.get(index).copied() {
             Some(ClassFillState::Done) | Some(ClassFillState::Filling) => return,
@@ -264,15 +258,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// B28 — force-fill a heritage clause's base so the compose step reads real members
-    /// regardless of declaration/fill order. Dispatches on the named declaration's kind:
-    /// an **interface** fills recursively; a **class** fills via the (idempotent,
-    /// cycle-guarded) class machinery — tsc allows `interface extends Class`, composing
-    /// the instance type; a bare **alias** resolves (memoized) and whatever reserved
-    /// template it lands on — an interface, a class instance, or a B29 seeded
-    /// object-literal alias — is filled via [`ensure_reserved_template_filled`]. A
-    /// generic alias heritage (`Alias<Args>`) needs no pre-fill: instantiation resolves
-    /// its template on demand at compose time.
+    /// Force-fill a heritage base before composition reads its members.
+    /// Interfaces recurse, classes use class fill, and aliases resolve then fill any
+    /// reserved template they land on. Generic alias heritage resolves on demand at
+    /// instantiation time.
     fn ensure_heritage_base_filled(&mut self, scope: ScopeId, heritage: &TSInterfaceHeritage<'_>) {
         let Expression::Identifier(ident) = &heritage.expression else {
             return;
@@ -291,11 +280,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// B28 — given a resolved base `TypeId`, fill the declaration whose reserved
-    /// template it is (interface / class instance / seeded object-literal alias), if
-    /// any. This is what makes a transparent alias chain (`type A = RealBase`) compose
-    /// the *filled* target in any declaration order. A `TypeId` owned by no declaration
-    /// (a structural type, the error type) needs no fill.
+    /// Fill the reserved-template declaration owned by a resolved base `TypeId`, if any.
+    /// Transparent alias chains then compose the filled target in any declaration order.
     fn ensure_reserved_template_filled(&mut self, scope: ScopeId, ty: TypeId) {
         let target = self.type_decls.iter().position(|decl| match decl {
             TypeDecl::Interface { reserved, .. } | TypeDecl::Class { reserved, .. } => {
@@ -318,12 +304,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// B28 — fold every `extends` base's members into `own` and return the composed
-    /// object. Bases are merged left-to-right (a later base overriding an earlier one on
-    /// a name conflict, matching tsc's read order); `own` members override any inherited
-    /// one by name. Index signatures and (subset) call/construct signatures inherit when
-    /// `own` does not declare them. A base that does not resolve to an object type
-    /// contributes nothing (no diagnostic — over/under-report guarded by scope).
+    /// Fold `extends` bases into `own`, then return the composed object.
+    /// Bases merge left-to-right, own members override inherited ones, and non-object
+    /// bases contribute nothing in this deferred slice.
     fn compose_interface_heritage(
         &mut self,
         scope: ScopeId,
@@ -365,18 +348,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Resolve a single type declaration to its `TypeId`, memoizing the result in
-    /// `pass.type_resolved`. Interfaces are already seeded (their reserved id); an
-    /// object-literal alias is seeded with a reserved object id (B29); other aliases are
-    /// lowered on first request.
-    ///
-    /// B29: a **surface cycle** — an alias whose own surface (its body, a union member,
-    /// or a mutual partner's surface) re-enters it, reachable without descending through a
-    /// member — is a circular alias. It reports `TK2456` at **every** alias in the cycle
-    /// (via the resolving-alias stack) and error-types them (the M22 silent-downstream
-    /// discipline then holds). Legal recursion **through a member** never reaches this
-    /// path: an object-literal alias is seeded, so a member self-reference resolves to its
-    /// reserved id (the m5 named-recursive representation) rather than re-entering.
+    /// Resolve one type declaration to a memoized `TypeId`.
+    /// Surface alias cycles report `TK2456` at every alias in the cycle and become
+    /// error types; legal recursion through members uses seeded reserved ids instead
+    /// of re-entering resolution.
     fn resolve_type_decl(&mut self, scope: ScopeId, decl_id: DeclId) -> TypeId {
         let error_ty = self.interner.well_known().error;
 
@@ -388,12 +363,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         let index = decl_id.index();
 
-        // A reference re-entered this alias while it is mid-resolution. If the re-entry is
-        // at the alias's own surface depth it is a **surface cycle** (`type Y = Y | null`,
-        // mutual pairs) — report `TK2456` for the whole cycle and error-type it. If it came
-        // through a type constructor (a greater depth: `type Arr = Arr[]`, `type W = { a: W
-        // } | null`) it is **legal recursion** — silently error-type (no `TK2456`; a seeded
-        // object-literal alias resolves such reads correctly instead of re-entering).
+        // Same-depth re-entry is a surface alias cycle: report `TK2456` for the cycle.
+        // Deeper re-entry came through a type constructor and is legal recursion, so
+        // silently error-type it; seeded object aliases handle member self-reference.
         if matches!(
             self.type_decls.get(index),
             Some(TypeDecl::Alias { resolving: true, .. })
@@ -504,28 +476,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.interner.well_known().error
     }
 
-    /// Resolve a `TSTypeReference` to a `TypeId` (M5, extended for M9).
-    ///
-    /// Resolution order over a plain identifier name:
-    ///
-    ///  1. **type parameter in scope** (M9): if the name is a type parameter of an
-    ///     enclosing generic declaration ([`lookup_type_param`]), it resolves to that
-    ///     parameter's interned [`TypeTag::TypeParam`] type. A type parameter never
-    ///     takes type arguments (`T<…>` is nonsense), so this only fires without args.
-    ///  2. **type arguments present** (`Box<number>`, M9): instantiate the referenced
-    ///     generic declaration by substituting its parameters with the lowered
-    ///     arguments ([`instantiate_type_reference`]).
-    ///  3. **bare named type** (M5): the declaration's (reserved or lazily-resolved)
-    ///     id, via the binder's type slot.
-    ///
-    /// An **unresolved simple-identifier** type name reports `TK2304` ("Cannot find
-    /// name", M22) and degrades to the **error type** (any-like — which suppresses any
-    /// cascade, so `const a: Foo = 5` is only `TK2304`, never also `TK2322`); the
-    /// diagnostic fires only when the name resolves to *no* space, so a value used as a
-    /// type (tsc `TS2749`) and a type parameter applied with arguments (tsc `TS2315`)
-    /// stay silent (distinct, deferred). A qualified name (`A.B`, out of subset) still
-    /// yields `None` (the caller aborts the enclosing lowering, matching object / union /
-    /// function lowering).
+    /// Resolve a `TSTypeReference` to a `TypeId`.
+    /// Resolution order is in-scope type parameter, generic instantiation, then bare
+    /// named type. Truly unresolved simple names report `TK2304` and become error
+    /// types; value-as-type, applied type parameters, and qualified names are deferred.
     pub(in crate::check::checker) fn resolve_type_reference(
         &mut self,
         scope: ScopeId,
@@ -538,11 +492,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let name = ident.name.as_str();
         let ref_span = Span::from_oxc(ident.span);
 
-        // M25: an in-scope `infer` binder shadows a named type and takes no arguments.
-        // An own-binder reference (this node's extends/true) resolves normally; an OUTER
-        // node's binder resolves as cross-binder — no TK2304, but it poisons the nodes in
-        // between (backlog 26 stopgap). A name in no active frame (e.g. this node's own
-        // binder referenced from its false branch) falls through → `TK2304`.
+        // M25: active `infer` binders shadow named types and take no arguments.
+        // Cross-binder references resolve but poison intervening nodes; names in no
+        // active frame fall through to `TK2304`.
         if type_arguments.is_none() {
             if let Some(infer_ty) = self.resolve_infer_reference(name) {
                 return Some(infer_ty);
@@ -556,15 +508,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         }
 
-        // M17: the built-in `Array<T>`. With no `lib.d.ts`, `Array` is not a declared
-        // type, so it is intercepted here: `Array<T>` (exactly one type argument) lowers
-        // to the same array type as `T[]`. User-shadowing of `Array` is deferred (no
-        // fixture declares a type named `Array`), so the built-in name always wins. A
-        // wrong type-argument count (`Array`, `Array<A, B>`) degrades to the error type
-        // silently: `Array` IS a recognized built-in, so a bad arity is a deferred
-        // type-argument-count error (tsc TS2314), NOT "cannot find name" — so this branch
-        // must return for EVERY `Array` path rather than fall through to the M22
-        // unresolved-name arm below (which would wrongly emit TK2304).
+        // M17: intercept built-in `Array<T>` without `lib.d.ts`; user shadowing and
+        // wrong arity are deferred. Every `Array` path returns here so bad arity never
+        // falls through to the unresolved-name arm and emits `TK2304`.
         if name == "Array" {
             match type_arguments {
                 Some(args) if args.params.len() == 1 => {
@@ -582,12 +528,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let decl_id = match type_decl_id(self.binder, scope, name) {
             Some(id) => id,
             None => {
-                // The name resolves to no TYPE. Report TK2304 ONLY when it resolves to nothing
-                // in any space (truly undeclared). A name found in the VALUE space (value used
-                // as a type — tsc TS2749) or an in-scope TYPE PARAMETER used with arguments
-                // (tsc TS2315) is FOUND — those are distinct, deferred diagnostics, not
-                // "cannot find name" — so stay silent. (A qualified name `A.B` returned `None`
-                // at the top of this fn, out of subset — also silent.)
+                // Report `TK2304` only for truly undeclared names. Value-as-type,
+                // applied type parameters, and qualified names are found/deferred cases,
+                // not "cannot find name".
                 let found_in_some_space = self.binder.graph.resolve(scope, name).is_some()
                     || self.lookup_type_param(name).is_some();
                 if !found_in_some_space {
@@ -623,30 +566,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(self.maybe_evaluate(resolved, ref_span))
     }
 
-    /// Instantiate a generic type reference `Name<Arg, …>` by substitution (M9).
-    ///
-    /// Lowers each type argument (in the *referencing* scope), then substitutes the
-    /// referenced declaration's type parameters with them into its **template**
-    /// (`type_resolved[decl_id]`, built with the parameter types embedded). For a
-    /// generic interface the template is its structural body, so `Box<number>`
-    /// instantiates to `{ value: number }` — structural assignability then applies (see
-    /// the FLAG below). Equal instantiations share one interned `TypeId`
-    /// (`Box<number>` is consistent; `Box<number>` ≠ `Box<string>`).
-    ///
-    /// Type-argument **arity**: M9 assumes correct arity (the fixtures supply it). A
-    /// wrong count is handled **gracefully** — the parameter/argument pairs are zipped
-    /// to the shorter list, so a surplus on either side is ignored rather than
-    /// panicking; an unmapped parameter simply survives the substitution. No diagnostic
-    /// is emitted (the `TK2558` wrong-arity check is a future milestone, out of M9
-    /// scope). An argument that cannot be lowered (out of subset) aborts with `None`,
-    /// matching the other lowerings.
-    ///
-    /// FLAG (structural vs nominal generic instances): a generic interface instance is
-    /// the **substituted structural type**, not a distinct nominal type per
-    /// instantiation. M9 only needs structural assignability for the fixtures, and the
-    /// task explicitly allows this; nominal generic instances (so that `Box<number>`
-    /// and a structurally-equal `{ value: number }` are *not* interchangeable) are a
-    /// later concern.
+    /// Instantiate a generic type reference by substituting lowered args into its template.
+    /// Wrong arity is graceful and diagnostic-free in this slice: pairs are zipped and
+    /// unmapped parameters survive. Generic interface instances remain substituted
+    /// structural types, not nominal per-instantiation identities.
     fn instantiate_type_reference(
         &mut self,
         scope: ScopeId,
@@ -677,21 +600,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // (`IBox<string>`, `TA<number>`). The bad argument still instantiates below.
         self.check_type_argument_constraints(&params, &arg_infos, &map);
 
-        // M25: a **conditional** template instantiates **lazily** — as an interned
-        // [`InstantiationType`] the evaluator applies (and distributes) on demand — rather
-        // than eager substitution. This keeps a self-recursive conditional alias from
-        // expanding at lowering (which would loop) and lets distribution derive per-member
-        // branches from the naked check parameter.
-        //
-        // M28: a **mapped** template instantiates lazily too (faithful mirror of the
-        // conditional machinery): a self-recursive mapped alias (`DeepPartial`) must
-        // not expand at lowering — its reserved template row may not even be filled yet
-        // while its own body lowers. Behavior-equivalent for non-recursive mapped
-        // aliases (the evaluator's plain expansion runs the same `substitute`, and
-        // both the pre- and post-expansion forms relate conservatively while
-        // deferred). A **string-intrinsic marker** template (`Uppercase` — the prelude
-        // seeding) also instantiates lazily, as the symbolic form the evaluator
-        // intercepts by identity; eager substitution would erase it to the bare marker.
+        // Conditional, mapped, and string-intrinsic templates instantiate lazily.
+        // Eager substitution would loop on recursive conditionals/mapped aliases or
+        // erase intrinsic identity; non-recursive mapped aliases remain equivalent via
+        // evaluator-side expansion.
         let template_tag = self.interner.store().tag(template);
         if template_tag == TypeTag::Conditional
             || template_tag == TypeTag::Mapped
@@ -727,12 +639,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Build a parameter frame mapping each declared type parameter's **source name**
-    /// to its interned [`TypeTag::TypeParam`] type, pairing the pre-allocated `ids`
-    /// (source order) with the names from `param_decl`. A parameter with no resolvable
-    /// name (out of subset) is skipped; the frame only holds the parameters it can
-    /// name. Interning here is what makes a body reference `T` resolve to a stable
-    /// type-parameter id (see [`resolve_type_reference`]).
+    /// Build a source-name to type-parameter-id frame from pre-allocated ids.
+    /// Unnameable parameters are skipped; named ones resolve to stable ids in bodies.
     pub(in crate::check::checker) fn build_type_param_frame(
         &mut self,
         param_decl: Option<&TSTypeParameterDeclaration<'_>>,
@@ -750,16 +658,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         frame
     }
 
-    /// Lower each type parameter's `extends` **constraint** (M24) into the store-side
-    /// constraint column, keyed by [`TypeParamId`]. MUST be called with the parameter
-    /// frame **already active** (inside [`with_type_params`]) so a constraint that
-    /// references an earlier parameter of the same list — `<T, U extends T>` — resolves
-    /// `T` to its parameter type. Every generic declaration site (functions, classes,
-    /// interfaces, aliases) calls this once.
-    ///
-    /// Constraint annotation diagnostics surface normally, but only real lowered types
-    /// are recorded. Circular chains through bare parameters, unions, or intersections
-    /// report `TK2313` and clear their constraints before relation queries can see them.
+    /// Lower type-parameter `extends` constraints into the store column.
+    /// Must run with the parameter frame active so earlier parameters resolve. Real
+    /// lowered constraints are recorded; circular bare/union/intersection chains
+    /// report `TK2313` and are cleared before relation queries.
     pub(in crate::check::checker) fn lower_type_param_constraints(
         &mut self,
         scope: ScopeId,
@@ -802,19 +704,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Whether `start`'s constraint chain revisits `start` itself (M24 `TK2313`). The
-    /// chain follows, per step, the **bare-parameter successors** of a constraint: a
-    /// bare `TypeParam` constraint continues to that parameter, and a **union**
-    /// constraint continues through each of its bare-`TypeParam` MEMBERS
-    /// (`<T extends T | number>` is circular; a union can branch, so this is a DFS,
-    /// not a single-successor walk). Any other constraint
-    /// shape (object, array, function, …) ends that branch: structural self-reference
-    /// is legal and terminates via the relation engine's cycle stack. A cycle that does
-    /// NOT pass through `start` (the walk dead-ends into some other pair's loop) stops
-    /// via the visited set without flagging `start` — the parameters *on* that loop
-    /// flag themselves when their own walks run. Because the successors are read off
-    /// the **lowered** column, a transparent alias that collapses to a bare parameter
-    /// (`type Id<X> = X; <T extends Id<T>>`) is caught too.
+    /// Whether `start`'s constraint chain revisits itself (`TK2313`).
+    /// The DFS follows bare type-parameter successors, including union members; other
+    /// shapes end the branch because structural recursion is relation-cycle handled.
+    /// Visited-set termination avoids flagging cycles that do not pass through `start`.
     fn constraint_chain_revisits(&self, start: TypeParamId) -> bool {
         let store = self.interner.store();
         let mut visited: FxHashSet<TypeParamId> = FxHashSet::default();
@@ -852,11 +745,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         false
     }
 
-    /// Run `body` with the type-parameter frame `frame` pushed onto the scope stack,
-    /// popping it afterwards (so the parameters are in scope **only** for `body`). The
-    /// pop runs unconditionally, so a type parameter never leaks past its declaration.
-    /// An empty frame (a non-generic declaration) is still pushed/popped — harmless and
-    /// keeps the call sites uniform.
+    /// Run `body` with `frame` pushed, then pop unconditionally.
+    /// This keeps type parameters scoped to their declaration; empty frames keep call
+    /// sites uniform.
     pub(in crate::check::checker) fn with_type_params<R>(
         &mut self,
         frame: FxHashMap<String, TypeId>,
@@ -879,13 +770,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .find_map(|frame| frame.get(name).copied())
     }
 
-    /// Lower an interface body's members to a nominal `ObjectType` (M5). Mirrors
-    /// [`lower_object_annotation`] but returns the `ObjectType` (the caller fills the
-    /// reserved nominal id rather than interning a fresh structural object). A member
-    /// that is not a plain property/index signature or WU1 method signature, or whose
-    /// type cannot be lowered, is skipped — the interface keeps the members it can
-    /// express (a partial interface is more useful than none, and the unsupported
-    /// members are out of the current subset).
+    /// Lower interface members to the reserved nominal object's `ObjectType`.
+    /// Unsupported or unlowerable members are skipped; the interface keeps the
+    /// expressible subset.
     fn lower_interface_members(
         &mut self,
         scope: ScopeId,
@@ -915,14 +802,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         // tsc treats annotationless interface properties as `any`.
                         None => self.interner.well_known().any,
                     };
-                    // M21: an optional property (`b?: T`) is a real member whose effective
-                    // type bakes in `| undefined` (model `exactOptionalPropertyTypes` OFF).
-                    // Unioning here (where `&mut Interner` is available) is what keeps the
-                    // relation engine — which borrows `&Store` read-only and cannot intern —
-                    // unchanged: a present source value is then related against `T | undefined`
-                    // by the existing union-target logic, and a missing optional target is
-                    // simply allowed in `relate_objects`. With it stored as a normal member,
-                    // `keyof`/indexed-access include the key and excess no longer trips on it.
+                    // Optional properties are real members with `| undefined` baked in
+                    // while interning is available. The read-only relation engine then
+                    // uses existing union-target logic, and `keyof`/indexed access see
+                    // the key.
                     let ty = if sig.optional {
                         let undefined = self.interner.well_known().undefined;
                         self.interner.union(vec![ty, undefined])
@@ -931,11 +814,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     };
                     let mut prop = PropertyType::public(name.into_owned(), ty);
                     prop.optional = sig.optional;
-                    // F5/backlog-03: carry the `readonly` modifier onto interface members
-                    // (`interface I { readonly k: T }`). Previously dropped, so assigning to such
-                    // a member was silently allowed. Part of the property's structural identity
-                    // (hashed by the interner) but ignored by the relation engine for
-                    // assignability; it gates the assignment target only (`TK2540`).
+                    // Preserve `readonly` on interface members. It is hashed into
+                    // structural identity, ignored for assignability, and gates only
+                    // assignment targets (`TK2540`).
                     prop.readonly = sig.readonly;
                     object.properties.push(prop);
                 }
@@ -979,11 +860,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     }
 }
 
-/// B28 — merge an `overlay` object type onto a `base`, `overlay` winning on every
-/// conflict. Used to fold interface `extends` bases (left-to-right) and then the
-/// interface's own members onto them: an `overlay` property replaces a same-named base
-/// property (else appends), and an index / call / construct signature the `overlay`
-/// declares shadows the base's (an absent one leaves the inherited one in place).
+/// Merge `overlay` onto `base`, with overlay members/signatures winning conflicts.
+/// Used for interface `extends` and own-member composition.
 fn merge_object_members(base: ObjectType, overlay: ObjectType) -> ObjectType {
     let mut properties = base.properties;
     for prop in overlay.properties {
@@ -1009,23 +887,10 @@ fn merge_object_members(base: ObjectType, overlay: ObjectType) -> ObjectType {
     }
 }
 
-/// Phase 0a — **reserve**. Walk the top-level type declarations and, indexed by
-/// the binder's type-space `DeclId`, record each one's lowering plan. Every
-/// `interface` gets a fresh nominal object id reserved up front (empty body); each
-/// `type` alias records its annotation for lazy resolution.
-///
-/// Reserving the interface ids *before* any body is resolved is what lets a body
-/// reference itself or a sibling: `interface List { tail: List | null }` and the
-/// mutual `Ping`/`Pong` lower because `List`/`Pong` already have ids by the time
-/// their members are lowered.
-///
-/// M28: reserve runs **per compilation unit** (the prelude, then the user program):
-/// name lookups resolve against the unit's own `scope`, and the decl/`resolved`
-/// tables are **appended** through `&mut` (the caller pre-seeds `decls` — with
-/// [`TypeDecl::Resolved`] prelude placeholders for the user unit — and sizes
-/// `resolved` to the binder's full `type_decl_count`). The binder assigned type
-/// `DeclId`s in the same prelude-then-user source order, so appending keeps the decl
-/// table index-aligned with the `DeclId`s.
+/// Reserve top-level type declarations by type-space `DeclId`.
+/// Interfaces get ids before bodies resolve, enabling self/sibling references.
+/// Reserve runs per compilation unit; append order matches binder `DeclId` order so
+/// prelude and user declarations stay index-aligned.
 #[allow(clippy::too_many_arguments)] // Two counters + two appended tables — irreducible reserve state.
 pub(in crate::check::checker) fn reserve_type_decls<'ast>(
     interner: &mut Interner,
@@ -1088,11 +953,8 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                     } else {
                         None
                     };
-                // M28: a top-level **mapped**-type body reserves a mapped template id
-                // and seeds `type_resolved`, mirroring the conditional-template
-                // machinery, so a self-recursive reference (`DeepPartial<T[K]>` inside
-                // the body) resolves to it as a lazy instantiation — never the error
-                // type. The placeholder is filled in the fill step.
+                // Top-level mapped aliases reserve a template id so self-recursive
+                // references resolve as lazy instantiations, not error types.
                 let mapped_template =
                     if matches!(alias.type_annotation, oxc_ast::ast::TSType::TSMappedType(_)) {
                         let reserved = interner.reserve_mapped();
@@ -1107,13 +969,9 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                     } else {
                         None
                     };
-                // B29: a **non-generic** alias whose top body is an object type literal
-                // (`type X = { a: X | null }`) reserves an object id and seeds
-                // `type_resolved`, so a self-reference through a member resolves to this
-                // stable id (legal member recursion) rather than re-entering into the
-                // error type. Filled in the fill step. Generic object aliases stay
-                // structural templates (instantiated by substitution), so they are not
-                // seeded here.
+                // Non-generic object-literal aliases reserve an object id so member
+                // self-references are legal recursion. Generic object aliases remain
+                // structural templates instantiated by substitution, so they are not seeded.
                 let object_template = if alias.type_parameters.is_none()
                     && matches!(alias.type_annotation, oxc_ast::ast::TSType::TSTypeLiteral(_))
                 {
@@ -1145,12 +1003,9 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                     );
                 }
             }
-            // M11: a named `class` reserves its **instance type** id (an empty object,
-            // filled in the fill step with the class's fields + methods) so a field
-            // can reference the class's own type or a sibling. The binder declared the
-            // class name in the type space in the *same source order*, so pushing here
-            // keeps `decls` index-aligned with the type `DeclId`s. An anonymous class
-            // declared no type name (the binder skipped it), so it is skipped here too.
+            // Named classes reserve their instance type id before fill, enabling own
+            // and sibling references. Binder/source order keeps `decls` aligned with
+            // type `DeclId`s; anonymous classes have no type name to reserve.
             Some(TopTypeDecl::Class(class)) if class.id.is_some() => {
                 let reserved = interner.reserve_object();
                 // M13: a fresh stable `ClassId` for this declaration (source order),
@@ -1219,11 +1074,8 @@ fn top_type_decl<'ast>(stmt: &'ast Statement<'ast>) -> Option<TopTypeDecl<'ast>>
     }
 }
 
-/// Allocate one fresh [`TypeParamId`] per declared type parameter (M9), in source
-/// order, advancing the module-wide counter. Returns an empty vec for a
-/// non-generic declaration (`None` type-parameter list). The ids are paired with
-/// their source names later, when the body is lowered with a parameter frame in
-/// scope ([`with_type_params`]).
+/// Allocate fresh type-parameter ids in source order.
+/// Names are paired later when lowering with a parameter frame in scope.
 pub(in crate::check::checker) fn alloc_type_param_ids(
     decl: Option<&TSTypeParameterDeclaration<'_>>,
     next_type_param: &mut u32,

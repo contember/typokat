@@ -1,10 +1,6 @@
 //! Guard analysis plus structural statement walkers.
-//!
-//! The flow-node CFG is the single narrowing model. The `if`/`else`/`switch`/`while`
-//! check walkers here only descend into sub-expressions; references resolve their
-//! narrowed type from the flow node recorded by the pre-pass. Guard analysis is
-//! shared with the flow builder, which turns [`GuardFact`] values into condition
-//! nodes.
+//! The flow-node CFG is the single narrowing model; these walkers just descend
+//! into expressions while guard analysis feeds flow condition nodes.
 
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
@@ -17,12 +13,9 @@ use oxc_ast::ast::{
 };
 use super::context::*;
 
-/// A recognized guard fact: the **specific symbol** being narrowed plus the
-/// narrowing operation (and the polarity already folded so the then-branch applies
-/// it as written). Pairing a [`NarrowOp`] with a `SymbolId` here — in the checker,
-/// not in the flow operations — is the symbol-keying that keeps a narrowing of `x`
-/// from ever touching another symbol. Read by the flow builder to construct a
-/// [`FlowNode::Condition`](crate::check::flow::FlowNode::Condition).
+/// A recognized guard fact: the specific symbol, operation, and then-branch
+/// polarity. Symbol-keying here keeps a narrowing of `x` from touching any other
+/// binding.
 pub(in crate::check::checker) struct GuardFact {
     /// The value symbol the guard refines (resolved from the condition's operand
     /// through the scope graph, so it is the exact binding in scope).
@@ -87,23 +80,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.check_stmt(scope, &while_stmt.body, declared_ret, inferred);
     }
 
-    /// Analyze a condition expression into a `GuardFact`, or `None` if it is not a
-    /// recognized guard (in which case nothing is narrowed — soundness: an unknown
-    /// guard must never narrow). Recognizes, over a plain identifier operand:
-    ///
-    ///  - **typeof**: `typeof x === "string" | "number" | "boolean"` and `!==`/`==`/
-    ///    `!=`, with the `typeof …` on either side of the comparison;
-    ///  - **truthiness**: bare `x`, and `!x` (which flips the polarity);
-    ///  - **null/undefined equality**: `x === null` / `x === undefined` and `!==`,
-    ///    with the literal on either side;
-    ///  - **literal discriminant** (M8): `x.prop === <literal>` / `!==` (strict only,
-    ///    literal on either side), narrowing the symbol `x`;
-    ///  - **`in` operator** (M8): `"prop" in x`, narrowing the symbol `x`.
-    ///
-    /// A leading `!` flips `then_positive`. Anything else (an unrecognized tag, a
-    /// non-identifier operand, a `&&`/`||`, a member-access operand in a position other
-    /// than the recognized discriminant, …) returns `None`. Takes `&mut Pass` because
-    /// the discriminant form interns the comparison literal.
+    /// Analyze a condition into a guard fact, or `None` for unrecognized shapes
+    /// (unknown guards must never narrow). Recognized forms cover `typeof`,
+    /// truthiness, nullish equality, literal discriminants, and `"prop" in x`;
+    /// leading `!` flips the then-branch polarity.
     pub(in crate::check::checker) fn analyze_guard(
         &mut self,
         scope: ScopeId,
@@ -158,12 +138,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Analyze an equality `BinaryExpression` into a guard fact (M7). Handles strict
-    /// (`===`/`!==`) equality for both the typeof and null/undefined forms; for the
-    /// typeof form, where `typeof x` is always a string, loose `==`/`!=` behave
-    /// identically and are accepted too. The two operands are tried in both orders so
-    /// `typeof x === "s"` and `"s" === typeof x` (and `x === null` / `null === x`) are
-    /// both recognized.
+    /// Analyze equality guards. Strict equality handles typeof/nullish forms; loose
+    /// equality is accepted only for `typeof`, and operands are tried in both orders.
     fn analyze_equality_guard(
         &mut self,
         scope: ScopeId,
@@ -276,12 +252,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         })
     }
 
-    /// Try to read `member_side` as a discriminant member access `x.prop` (on a
-    /// narrowable identifier `x`) and `literal_side` as a literal expression, producing
-    /// a literal-discriminant guard fact targeting `x` (M8). `eq_positive` is the
-    /// comparison's positive sense (`===` → `true`); it becomes the then-branch
-    /// polarity (`kind === "circle"` keeps the matching members in the then-branch).
-    /// The comparison literal is interned (hence `&mut pass`).
+    /// Read `x.prop === <literal>` as an M8 literal-discriminant guard targeting
+    /// `x`; the comparison literal is interned.
     fn discriminant_guard(
         &mut self,
         scope: ScopeId,
@@ -298,13 +270,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         })
     }
 
-    /// Read an expression as a **discriminant member access** `x.prop`: a non-optional
-    /// static member access whose object is a narrowable identifier `x`. Returns the
-    /// `(SymbolId, property name)` to narrow, or `None` if the shape is not recognized
-    /// (a computed/optional member, a non-identifier base, a nested member like
-    /// `x.a.b`, …) — in which case nothing is narrowed (sound). Keying on the base
-    /// **symbol** is what guarantees `x.prop === lit` narrows `x` and never `prop` or
-    /// another symbol.
+    /// Read `x.prop` as a discriminant member access. Only non-optional static
+    /// access on a narrowable identifier qualifies; keying on the base symbol keeps
+    /// the narrowing on `x`.
     pub(in crate::check::checker) fn member_discriminant(
         &self,
         scope: ScopeId,
@@ -355,12 +323,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(symbol_id)
     }
 
-    /// Analyze a `"prop" in x` expression into an `in`-operator guard fact targeting
-    /// `x` (M8). The left operand must be a **string-literal** property name and the
-    /// right operand a narrowable identifier `x`. The then-branch (`in` holds) keeps
-    /// the members that have the property; an enclosing `!` flips it. Anything else
-    /// (a non-literal left, a computed/private `in`, a non-identifier right) narrows
-    /// nothing.
+    /// Analyze `"prop" in x` as an M8 guard. The left side must be a string literal
+    /// and the right side a narrowable identifier; every other shape narrows nothing.
     fn in_guard(&self, scope: ScopeId, binary: &BinaryExpression<'_>) -> Option<GuardFact> {
         // The property name must be a static string literal: `"a" in x`.
         let Expression::StringLiteral(name) = &binary.left else {
@@ -377,13 +341,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     }
 }
 
-/// Whether a `switch` clause body **definitely terminates** (does not fall through
-/// to the next clause). Conservative: a clause terminates only when its last
-/// statement is a `return`/`break`/`throw`, or a block whose last statement is one
-/// of those. An empty body, or any other trailing statement, is treated as
-/// falling through (so the next clause is checked without this clause's narrowing —
-/// sound). This gates whether the flow builder lets the *next* clause assume its own
-/// label (`build_flow_switch`).
+/// Whether a `switch` clause definitely terminates. Conservative false means the
+/// next clause cannot assume only its own label, avoiding over-narrowing.
 pub(in crate::check::checker) fn clause_terminates(consequent: &[Statement<'_>]) -> bool {
     match consequent.last() {
         Some(stmt) => statement_terminates(stmt),
@@ -391,13 +350,8 @@ pub(in crate::check::checker) fn clause_terminates(consequent: &[Statement<'_>])
     }
 }
 
-/// Whether a single statement is a control-flow terminator for the purposes of the
-/// conservative fallthrough check: a `return`/`break`/`throw`, or a block ending in
-/// one. `continue` is intentionally **not** treated as a terminator (it only
-/// applies inside a loop, never to a `switch` clause's fallthrough). Anything else
-/// (an expression, declaration, `if`, nested `switch`, …) is treated as
-/// non-terminating — conservative, so a clause that might fall through never lets
-/// the next clause over-narrow.
+/// Whether one statement terminates a switch clause for fallthrough purposes.
+/// `continue` is intentionally not a terminator here.
 fn statement_terminates(stmt: &Statement<'_>) -> bool {
     match stmt {
         Statement::ReturnStatement(_)

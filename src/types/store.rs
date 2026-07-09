@@ -1,14 +1,7 @@
-//! The type store: a struct-of-arrays (SoA) arena keyed by `TypeId(u32)`.
+//! Append-only struct-of-arrays type arena keyed by `TypeId(u32)`.
 //!
-//! Architecture §3.1 / mvp-plan §4.1. The hot attributes (`tag`, `flags`) live
-//! in parallel vecs indexed directly by `TypeId`, so scanning/filtering is
-//! cache-friendly. The variable-size data lives in cold side-tables
-//! (`literals`, `objects`, `unions`, `functions`) selected by `tag`, addressed
-//! by `payload`.
-//!
-//! The store is append-only: a `TypeId` is a stable arena index for the life of
-//! the process. No `Rc`, no `RefCell`, no cycles — exactly the index-into-arena
-//! discipline the architecture insists on.
+//! Hot columns are indexed directly by `TypeId`; variable-size data lives in
+//! tag-selected side tables. `TypeId`s stay stable for the process lifetime.
 
 use crate::types::hash::StableHash;
 use crate::types::repr::{
@@ -49,12 +42,8 @@ pub struct Store {
     /// of a `Union`-tagged row. A union row always has at least two members — the
     /// 0- and 1-member cases collapse in the interner and never reach the store.
     unions: Vec<Box<[TypeId]>>,
-    /// Intersection members (M31), already canonicalized: flattened, sorted by
-    /// `TypeId`, deduped, with `unknown` dropped and (an) `any` absorbed (an
-    /// intersection containing `never` collapses to `never` in the interner, so
-    /// never reaches the store). Addressed by the `payload` of an
-    /// `Intersection`-tagged row. Like a union row, always at least two members —
-    /// the 0- and 1-member cases collapse in the interner (`Interner::intersection`).
+    /// Intersection members (M31), already canonicalized by the interner. Like a
+    /// union row, always at least two members.
     intersections: Vec<Box<[TypeId]>>,
     /// Function types (M3). Addressed by the `payload` of a `Function`-tagged row.
     functions: Vec<FunctionType>,
@@ -99,12 +88,8 @@ pub struct Store {
     /// unlowerable one, simply has no entry (no constraint — the safe direction).
     type_param_constraints: FxHashMap<TypeParamId, TypeId>,
 
-    /// **Template display-name column** (M28 round 3): the alias NAME of a reserved
-    /// conditional/mapped template row, keyed by the reserved `TypeId`. A
-    /// rendering-only side column (like `TypeParamType::name` — never part of
-    /// identity; reserved rows are nominal and never deduped anyway): the renderer
-    /// prints a deferred instantiation of a named template as `Extract<K, string>`
-    /// instead of its raw body. Set at reserve time by the checker.
+    /// Template display names (M28 round 3), keyed by reserved template id.
+    /// Rendering-only: deferred instantiations print as alias names, not raw bodies.
     template_names: FxHashMap<TypeId, String>,
 
     /// Reserved cross-run identity column (architecture §3.2). NOT populated in
@@ -287,11 +272,8 @@ impl Store {
         self.type_param_constraints.insert(id, constraint);
     }
 
-    /// Erase a type parameter's constraint (M24 — the `TK2313` circularity fix): a
-    /// parameter whose constraint chain revisits itself records **no** constraint, so
-    /// the degenerate cycle never feeds the relation engine's assume-true stack.
-    /// Internal — the checker calls it through
-    /// `Interner::remove_type_param_constraint` right after the circularity pass.
+    /// Erase a circular type-parameter constraint so the degenerate cycle never
+    /// reaches the relation engine's assume-true stack.
     pub(crate) fn remove_type_param_constraint(&mut self, id: TypeParamId) {
         self.type_param_constraints.remove(&id);
     }
@@ -365,12 +347,8 @@ impl Store {
         self.push(TypeTag::Object, flags, payload)
     }
 
-    /// Replace the body of an existing `Object` row in place (M5 nominal-interface
-    /// reserve-then-fill — `Interner::fill_object`). The `tag`/`flags`/`payload`
-    /// columns are untouched, so the type's `TypeId` and identity are preserved;
-    /// only the cold side-table entry the payload points at is overwritten. A no-op
-    /// if `id` is not an `Object` row (defensive — never expected, the interner
-    /// only calls this on ids it reserved as objects).
+    /// Replace a reserved object body in place, preserving the row's `TypeId` and
+    /// hot columns. No-op if `id` is not an object row.
     pub(crate) fn set_object(&mut self, id: TypeId, object: ObjectType) {
         if self.tag(id) != TypeTag::Object {
             return;

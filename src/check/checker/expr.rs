@@ -59,11 +59,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 Some((self.current_this.unwrap_or(well_known.error), span))
             }
             Expression::FunctionExpression(func) => {
-                // A generic function *expression*'s type parameters are scoped to its
-                // body (handled inside `infer_function`); the param ids are not
-                // registered for a call site (only a named generic `function`
-                // declaration is callable with explicit type args in the M9 subset —
-                // inference is M10).
+                // Generic function expressions scope type params to the body, but
+                // are not registered for explicit call-site type arguments.
                 let (id, _params) = self.infer_function(scope, func);
                 Some((id, Span::from_oxc(func.span)))
             }
@@ -171,18 +168,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some((asserted, span))
     }
 
-    /// Resolve a value symbol's *narrowed* type at a reference (M23). The reference's
-    /// flow node (recorded by the pre-pass, keyed by its span start) drives a backward
-    /// walk over the flow-node CFG ([`resolve_narrowed_type`](Pass::resolve_narrowed_type));
-    /// a reference the pre-pass did not cover defaults to [`FlowNodeId::START`] — the
-    /// **declared** type (the sound over-report), so partial coverage never
-    /// under-reports.
-    ///
-    /// This single seam is where control-flow narrowing takes effect: every identifier
-    /// reference — assignment sources, member-access bases, returned expressions, call
-    /// arguments — resolves through [`infer_expr`], which calls this. Keying on the
-    /// `SymbolId` (not the name, not the `DeclId` of an unrelated binding) is the
-    /// soundness guarantee that narrowing applies to exactly the guarded binding.
+    /// Resolve a value symbol's narrowed type at a reference. Missing pre-pass
+    /// coverage defaults to START (the declared type), and facts key by `SymbolId`
+    /// so narrowing applies only to the guarded binding.
     pub(in crate::check::checker) fn resolve_identifier_type(
         &mut self,
         symbol_id: SymbolId,
@@ -196,13 +184,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.resolve_narrowed_type(flow, symbol_id)
     }
 
-    /// Infer a unary expression (M7 condition support). Descends into the operand for
-    /// its side effects, then returns a coarse result type by operator:
-    ///
-    ///  - `typeof x` → `string` (the runtime tag string),
-    ///  - `!x` → `boolean`,
-    ///  - everything else (`+`/`-`/`~`/`void`/`delete`) is out of the subset → the
-    ///    error type (no diagnostic; never an assignment source in the corpus).
+    /// Infer a unary expression for M7 condition support: walk the operand, then
+    /// return `string` for `typeof`, `boolean` for `!`, or the error type for
+    /// out-of-subset unary operators.
     fn infer_unary(&mut self, scope: ScopeId, unary: &UnaryExpression<'_>) -> (TypeId, Span) {
         let wk = self.interner.well_known();
         let span = Span::from_oxc(unary.span);
@@ -281,19 +265,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         })
     }
 
-    /// Infer the type of an array literal `[e1, e2, …]` (M17): `(<elem>)[]` where the
-    /// element type is the `union(...)` of the **widened** per-element types
-    /// (`[1, 2, 3]` → `number[]`, `[1, "x"]` → `(number | string)[]`). An **empty**
-    /// literal `[]` has an empty element union → `never`, giving `never[]` — which is
-    /// assignable to any `T[]` (the bottom element under covariance), exactly as a fresh
-    /// empty array should be.
-    ///
-    /// Elements are **widened** (a literal `1` → `number`) before the union, matching the
-    /// object-literal member inference and tsc's array-literal element typing; a literal
-    /// element type would otherwise make `[1, 2, 3]` infer `(1 | 2 | 3)[]` and reject the
-    /// `number[]` annotation. A **spread** or **elision** element is out of the M17 subset
-    /// — it is skipped (it contributes no element type), so a literal containing one is
-    /// not mis-typed; spread support lands with the array-methods milestone.
+    /// Infer an M17 array literal as an array of the union of widened element types.
+    /// Empty/all-skipped literals become `never[]`; spread/elision elements are out
+    /// of subset and contribute no element type.
     fn infer_array_literal(&mut self, scope: ScopeId, array: &ArrayExpression<'_>) -> TypeId {
         let mut element_types: Vec<TypeId> = Vec::with_capacity(array.elements.len());
         for element in &array.elements {
@@ -322,11 +296,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         context: Option<TypeId>,
     ) -> Option<(TypeId, Span)> {
         let context = context.map(|ctx| contextual_literal_target(self.interner.store(), ctx));
-        // M31: peel an intersection contextual target to its merged apparent object, so a
-        // fresh literal is shaped against the merged member set — `{ a: 1 } & { b: 2 }`
-        // keeps `a`/`b` at their literal member types instead of widening and then failing
-        // the literal-typed members (the finding-3 over-report). Mirrors the `T | undefined`
-        // peel; the recursion runs through here, so nested intersections resolve too.
+        // M31: peel an intersection context to its merged apparent object so fresh
+        // literals shape against the merged member set, including nested cases.
         let context = context.map(|ctx| self.intersection_apparent_object(ctx).unwrap_or(ctx));
         match (init, context) {
             (Expression::ParenthesizedExpression(paren), ctx) => {
@@ -482,34 +453,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.interner.intern_array(element)
     }
 
-    /// Type an array literal **positionally as a tuple** for an M18 tuple context
-    /// `context` (the target tuple): the result is `[T0, T1, …]` where `Ti` is the
-    /// (widened) type of the literal's *i*-th element. This is what makes `const t:
-    /// [number, string] = [1, "x"]` check position-by-position against the target tuple
-    /// (and what makes a wrong-length literal — `[1]`, `[1, "x", 2]` — a length mismatch
-    /// rather than an array-vs-tuple mismatch).
-    ///
-    /// Contextual typing is **recursive**: element *i* is itself typed against the target
-    /// tuple's element type *i* (via [`infer_initializer`]), so a **nested** array literal
-    /// in a nested tuple position is typed as a tuple too (`[[number], string]` accepts
-    /// `[[1], "x"]`). When the literal is longer than the target tuple (a length error
-    /// reported by the relation), the surplus elements have no contextual type and infer
-    /// normally — they cannot pass the length check anyway.
-    ///
-    /// Elements are kept at their **inferred (un-widened) type** — a literal `1` stays
-    /// `1`, not `number`. This is the difference from the M17 *array*-literal inference
-    /// (which widens before the union): here the tuple is used **only** for the
-    /// assignability check against the target tuple, and the existing relation widens
-    /// literal→base at each position *when the target permits it* (`1` relates to both `1`
-    /// and `number`), so keeping the literal type is what makes a **literal-type** tuple
-    /// target accept a matching literal (`[1, 2] = [1, 2]` ok) while still rejecting a
-    /// non-matching one (`[1, 2] = [1, 3]` → `3` not assignable to `2`) and a base-type
-    /// target (`[number, string] = [1, "x"]` ok via the relation's literal→base
-    /// widening). The variable still takes the **annotation's** type, so the un-widened
-    /// source tuple is never observed elsewhere. A **spread** or **elision** element is
-    /// out of the M18 subset; it is skipped (contributes no element), so a literal
-    /// containing one is not mis-shaped — exactly as the M17 array-literal inference
-    /// treats it.
+    /// Type an array literal positionally as an M18 tuple context. Element contexts
+    /// recurse, surplus elements infer normally for the later length error, and
+    /// element types stay un-widened so literal tuple targets remain precise.
     fn infer_array_literal_as_tuple(
         &mut self,
         scope: ScopeId,
@@ -548,20 +494,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.interner.intern_tuple(elements)
     }
 
-    /// Infer the type of an element access `a[i]` (M17/M18). When the base `a` is an
-    /// **array** (M17), the result is its **element type** — M17 does not strict-check
-    /// the index, so **any** index expression yields the element type (`nums[0]`,
-    /// `nums[i]` alike). When the base is a **tuple** (M18), the result is the element at
-    /// the **literal** numeric index (`t[0]` → position 0's type, `t[1]` → position 1's),
-    /// read off the constant index. The index is still inferred for its side effects
-    /// (resolving references / emitting any `TK2304` inside it).
-    ///
-    /// A base that is `any`/error yields the error type (suppressing cascade). For a
-    /// tuple base, an **out-of-range** literal index or a **non-literal** index is out of
-    /// the M18 subset → the error type (no diagnostic, no crash; the fixtures use only
-    /// in-range literal indices). A base that is **not** an array or tuple is out of
-    /// scope: no diagnostic is emitted and the result is the error type, so nothing
-    /// downstream over-reports and the checker never crashes.
+    /// Infer `a[i]`: arrays yield their element type for any index, tuples yield the
+    /// literal-indexed element, and object bases use M19 index rules. Out-of-subset
+    /// cases return the error type without diagnostics.
     fn infer_element_access(
         &mut self,
         scope: ScopeId,
@@ -612,21 +547,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some((wk.error, span))
     }
 
-    /// Resolve the result type of an element access `obj[key]` on an **object** base
-    /// (M19). In order:
-    ///
-    ///  1. a **string-literal** key that names a known property → that property's type
-    ///     (`dict["a"]` where `a` is declared);
-    ///  2. a **`number`-typed** key (a numeric literal, or a `number`-typed variable)
-    ///     when the object has a number index signature → the number value type;
-    ///  3. otherwise, when the object has a **string** index signature → the string
-    ///     value type (covers a dynamic string key `dict[key]` and any other key under a
-    ///     string index);
-    ///  4. otherwise the error type (no diagnostic — element access on an object outside
-    ///     these cases is out of the M19 subset, matching the array/tuple leniency).
-    ///
-    /// `key_ty` is the (already-inferred) type of the index expression, or `None` if it
-    /// was out of subset.
+    /// Resolve M19 object element access: named string-literal property, then number
+    /// index, then string index, else the error type without diagnostics.
     fn object_element_access(
         &mut self,
         base_ty: TypeId,
@@ -663,23 +585,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         wk.error
     }
 
-    /// The **apparent type** of `ty` (M24): for a **constrained type parameter**, its
-    /// `extends` constraint — resolved **transitively** through a constraint chain
-    /// (`U extends T`, `T extends HasX` → `HasX`) so a structural operand sees the
-    /// ultimate concrete bound. Any other type is its own apparent type (returned
-    /// unchanged), so non-generic operands are untouched. A **cycle** (`T extends T`, or
-    /// a mutual `T extends U` / `U extends T`) terminates: the visited-set guard stops
-    /// at the first repeat, returning the last parameter in the chain (member access on
-    /// it then reports `TK2339`, the safe over-report). An **unconstrained** type
-    /// parameter is also returned unchanged, so `t.x` on a bare `T` stays `TK2339` on
-    /// `'T'`.
-    ///
-    /// This is the **shared Pass-level resolver** (review F1–F3): EVERY structural
-    /// consumer of an operand type routes through it — member reads
-    /// ([`infer_member_access`]), member writes ([`check_member_assignment`]), element
-    /// access ([`infer_element_access`]), and callable/construct signature lookup
-    /// ([`callable_signature`]/[`construct_signature`]) — so a constrained `T` behaves
-    /// as its constraint everywhere, not just on reads.
+    /// Resolve the M24 apparent type of constrained type parameters transitively.
+    /// The visited set terminates constraint cycles in the safe over-report direction.
+    /// All structural consumers route through this shared resolver.
     pub(in crate::check::checker) fn apparent_type(&self, ty: TypeId) -> TypeId {
         let store = self.interner.store();
         let mut current = ty;
@@ -700,18 +608,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         current
     }
 
-    /// The **merged apparent object** of an intersection type (M31), interned — the
-    /// structural view every object consumer resolves an `A & B` operand through
-    /// (member reads/writes; the excess check uses its own store-only key gather).
-    /// The property set is the **union** of the object-typed members' properties; a
-    /// property present in several members takes the **intersection** of its types
-    /// (`{ a: X } & { a: Y }.a` is `X & Y`), is optional only if optional in **all**
-    /// members, and is `readonly`/accessor if so in **any**. Index signatures merge the
-    /// same way (present if any member has one, value = intersection). Each member is
-    /// first resolved through [`Pass::apparent_type`] (a constrained-param member
-    /// contributes its constraint's object). Returns `None` when `ty` is not an
-    /// intersection or no member is an object type (e.g. `string & number`), so the
-    /// caller keeps the raw type.
+    /// Intern the merged apparent object for an intersection (M31). Properties are
+    /// unioned by name, duplicate property/index types are intersected, optional
+    /// requires all contributors, and readonly/accessor wins if any contributor has it.
     pub(in crate::check::checker) fn intersection_apparent_object(
         &mut self,
         ty: TypeId,
@@ -806,14 +705,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }))
     }
 
-    /// Infer the type of a member access `obj.prop` in `scope`. A missing property is
-    /// `TK2339` and yields the error type (no cascade); an `any`/error base yields the
-    /// error type.
-    ///
-    /// M4 adds the **union** base: `u.p` where `u` is a union requires `p` on *every*
-    /// member; the result type is the `union(...)` of the per-member property types.
-    /// If any member lacks the property, it is `TK2339` on the union as a whole (and
-    /// the result is the error type, suppressing cascade).
+    /// Infer `obj.prop`. Missing properties emit `TK2339`; union bases require the
+    /// property on every member and union the member property types.
     fn infer_member_access(
         &mut self,
         scope: ScopeId,
@@ -828,14 +721,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return Some((wk.error, prop_span));
         }
 
-        // M24 — apparent type: a **constrained type parameter** exposes its constraint's
-        // members, resolving transitively through a constraint chain (`U extends T`,
-        // `T extends HasX`) and terminating on a cycle ([`apparent_type`]). The member is
-        // resolved against this apparent type, but `base_ty` is kept for the `TK2339`
-        // render so a missing member still names the parameter (`'T'`). For a non-parameter
-        // base `lookup_ty == base_ty`, so M0–M23 behaviour is unchanged.
-        // M31: an intersection base resolves against its merged apparent object (a member
-        // present in ≥1 constituent → its intersected type; in none → `TK2339`).
+        // Resolve members through apparent/merged types, but keep `base_ty` for
+        // `TK2339` rendering so missing constrained-parameter members still name `T`.
         let lookup_ty = self.apparent_type(base_ty);
         let lookup_ty = self
             .intersection_apparent_object(lookup_ty)
@@ -886,12 +773,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         match found {
             Some((prop_ty, visibility, declaring_class)) => {
-                // M13 access control: a `private`/`protected` member is reachable only
-                // from the right class context (`current_class`). The member is present
-                // on the type, so an access violation is `TK2341`/`TK2445` (NOT a
-                // property-does-not-exist), and the access still yields the member's real
-                // type (matching tsc — access control does not change the type, so there
-                // is no cascade).
+                // M13: access violations are `TK2341`/`TK2445`, not missing-property
+                // errors, and still yield the real member type to avoid cascades.
                 self.check_member_access_control(prop_name,
                     prop_span,
                     visibility,
@@ -917,14 +800,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Resolve `union.prop` (M4): collect each member's type for `prop`, requiring it
-    /// on **every** member. The result is the `union(...)` of those per-member types
-    /// (canonicalized by the interner). If any member lacks the property, emit a
-    /// single `TK2339` against the whole union and return the error type.
-    ///
-    /// A member that is itself `any`/error contributes the error type (its `prop` is
-    /// assumed to exist). A member that is neither an object nor `any`/error has no
-    /// known property in the MVP subset, so it counts as "missing" → `TK2339`.
+    /// Resolve `union.prop` by requiring the property on every member and unioning
+    /// member property types. Non-object members count as missing; `any`/error
+    /// contributes the error type.
     fn union_member_access(
         &mut self,
         union_ty: TypeId,
@@ -1047,13 +925,8 @@ fn is_numeric_property_name(name: &str) -> bool {
     name.parse::<f64>().map(|n| n.is_finite()).unwrap_or(false)
 }
 
-/// Read a **non-negative integer literal** index from an element-access index
-/// expression (`t[0]`, `t[2]`), as a `usize` array offset, or `None` for any
-/// non-literal / non-integer / negative / out-of-`usize` index. Used by tuple
-/// element access (M18) to resolve `t[k]` to the *k*-th element type. A `NumericLiteral`
-/// whose value is a whole, finite, in-range, non-negative number maps to that index;
-/// everything else (a variable, a fractional/negative literal, `NaN`/∞) is `None`
-/// (out of subset).
+/// Read a non-negative integer literal tuple index, or `None` for non-literal,
+/// fractional, negative, non-finite, or out-of-`usize` indices.
 fn literal_index(expr: &Expression<'_>) -> Option<usize> {
     let Expression::NumericLiteral(lit) = expr else {
         return None;

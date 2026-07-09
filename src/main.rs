@@ -1,10 +1,7 @@
 //! typokat CLI entry point.
 //!
-//! One command: `typokat check [--format rich|compact] <file.ts>...`, which
-//! parses and checks one or more files as one local-relative project, renders
-//! any diagnostics to stderr per file, and exits non-zero if any file has
-//! errors. A default single-file invocation renders exactly as it always has.
-//! All pipeline logic lives in the `typokat` library crate (`lib.rs`).
+//! Implements `typokat check [--format rich|compact] <file.ts>...`, checking the
+//! inputs as one local-relative project and rendering diagnostics to stderr.
 
 use std::io::Write;
 use std::process::ExitCode;
@@ -114,16 +111,9 @@ fn parse_diagnostic_format(value: &str) -> Result<DiagnosticFormat, String> {
     }
 }
 
-/// Read, check as one local-relative project, and report. Returns
-/// `Ok(had_errors)`.
-///
-/// Every file is read up front; a read failure aborts with a usage/IO error (exit
-/// 2), exactly as the single-file path always did. The per-file rendering is
-/// unchanged in the default rich format — parse errors first, then type
-/// diagnostics — so the official-suite harness (which shells
-/// `typokat check <file>` and substring-matches stderr) sees identical output
-/// for a single file; multiple files just repeat the block, each under its own
-/// name.
+/// Read inputs, check them as one local-relative project, and report diagnostics.
+/// Read failures remain usage/IO errors; single-file rendering is unchanged for
+/// the official-suite harness.
 fn check_paths(paths: &[String], format: DiagnosticFormat) -> Result<bool, String> {
     let mut inputs = Vec::with_capacity(paths.len());
     for path in paths {

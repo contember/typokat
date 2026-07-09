@@ -1,10 +1,7 @@
 //! Multi-slot symbols (architecture §4.1).
 //!
-//! A symbol is NOT a single binding but a set of slots over **separate
-//! declaration spaces** — value / type / namespace. One name can occupy several
-//! (the canonical `namespace A {} interface A {} class A {}` case, and the
-//! `namespace`+`interface` merges in `lib.d.ts` itself). This multiplicity is
-//! baked into the scope graph so declaration merging never needs a parallel model.
+//! One symbol owns separate value/type/namespace slots, so declaration merging is
+//! represented directly in the scope graph instead of by a parallel model.
 
 /// Index of a declaration site; the checker stores declared/inferred types by `DeclId`.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]

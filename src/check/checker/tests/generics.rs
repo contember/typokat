@@ -1,11 +1,6 @@
-//! M9 end-to-end tests for generics (type parameters, generic functions /
-//! interfaces / aliases, explicit type arguments, instantiation by
-//! substitution). These drive the whole pipeline (parse → bind → check) and
-//! assert the *set* of `(line, code)` diagnostics, so they pin the behaviours
-//! the reviewer should scrutinize: substitution flows through the instantiated
-//! parameter/return/body, instantiation interns consistently, a type parameter
-//! does not leak past its declaration, and a wrong type-argument count does not
-//! panic (graceful, no new diagnostic).
+//! M9 end-to-end tests for generics.
+//! Pins substitution through instantiated signatures/bodies, stable interning,
+//! type-parameter scoping, and graceful wrong-arity handling.
 
 use crate::driver::check_source;
 
@@ -129,13 +124,8 @@ const bad = unwrap<number>({ value: \"s\" });
     );
 }
 
-/// **No leak**: a type parameter is in scope only within its own declaration.
-/// `T` declared on `first` must not resolve inside `second`; an out-of-scope `T`
-/// is an unresolved type name, so its annotation cannot be lowered and no
-/// (spurious) assignability error fires — the assignment is simply unchecked.
-/// The control is that the *same* code with `T` in scope (inside `first`)
-/// behaves like a real type parameter. Here we pin that referencing `T` outside
-/// its function does not crash and does not narrow another declaration's checks.
+/// Type parameters are scoped to their declaration: out-of-scope `T` is
+/// unresolved and must not leak into another generic's checks.
 #[test]
 fn type_parameter_does_not_leak_across_declarations() {
     let src = "\

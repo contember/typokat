@@ -1,11 +1,7 @@
-//! M19 end-to-end tests for **index signatures** (`{ [k: string]: T }`,
-//! `{ [i: number]: T }`). These drive the whole pipeline (parse → bind → check)
-//! and assert the `(line, code)` diagnostics, pinning the invariants the reviewer
-//! should scrutinize: index/property **access** resolves to the index value type,
-//! object-literal → index-sig **assignability** is value-checked, and the M2
-//! excess-property check (`TK2353`) is suppressed **only** against an index-sig
-//! target (a plain object target still reports excess). The per-fixture acceptance
-//! lives in the conformance corpus (`m19_index_sig/`).
+//! M19 end-to-end tests for index signatures.
+//! Pins indexed access, object-literal assignability, and excess-property
+//! suppression only for index-signature targets. Fixture acceptance lives in
+//! `m19_index_sig/`.
 
 use crate::driver::check_source;
 

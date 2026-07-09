@@ -1,13 +1,7 @@
-//! M16 end-to-end tests for **generic classes** (type parameters on a class scope
-//! its instance type + constructor; `new C<args>` / `new C(args)` instantiate by
-//! explicit substitution or constructor-argument inference; `C<args>` is usable as a
-//! type). These drive the whole pipeline (parse → bind → check) and assert the set of
-//! `(line, code)` diagnostics, pinning the M16 invariants the reviewer should
-//! scrutinize: the parameter is substituted into the instance/ctor/members,
-//! `Box<number>` and `Box<string>` are distinct instantiations, the constructor
-//! arguments are checked against the substituted parameters, and inference from the
-//! constructor arguments matches the explicit-argument path. The per-fixture
-//! acceptance lives in the conformance corpus (`m16_generic_classes/`).
+//! M16 end-to-end tests for generic classes.
+//! Pins class type-parameter substitution, distinct instantiations, constructor
+//! argument checking, inference, and `C<args>` type annotations. Fixture
+//! acceptance lives in `m16_generic_classes/`.
 
 use crate::driver::check_source;
 
@@ -209,13 +203,9 @@ const n: number = b.get();
     assert!(diags(src).is_empty(), "got {:?}", diags(src));
 }
 
-/// A type parameter does **not leak** past its class: a same-named top-level
-/// `type T = string` is what a reference to `T` resolves to **outside** the class
-/// (so `const s: T = 1` is `TK2322`, number vs string), while **inside** the class
-/// the parameter `T` shadows it (so `value: T` is the parameter, and `new Box<number>`
-/// types `value` as `number`, not `string`). If the parameter leaked, `s: T = 1`
-/// outside would see the parameter and not error. (Pins the `with_type_params` pop in
-/// both `fill_class` and `check_class`, and the M9 shadowing order.)
+/// A class type parameter must not leak: inside the class `T` shadows the
+/// top-level alias, outside it resolves back to that alias. Pins both
+/// `with_type_params` pops and the M9 shadowing order.
 #[test]
 fn type_parameter_does_not_leak_and_shadows_inside() {
     let src = "\

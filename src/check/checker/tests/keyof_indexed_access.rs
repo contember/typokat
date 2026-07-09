@@ -1,13 +1,7 @@
-//! M20 end-to-end tests for **`keyof T`** and **indexed-access types `T[K]`**,
-//! evaluated **eagerly** on concrete object types during annotation lowering.
-//! These drive the whole pipeline (parse → bind → check) and assert the
-//! `(line, code)` diagnostics, pinning the invariants the reviewer should
-//! scrutinize: `keyof` of an object is the string-literal union of its keys (plus
-//! `string`/`number` for index signatures, `never` when empty); `T[K]` resolves a
-//! literal / union / `keyof` key to the looked-up property value type(s); and every
-//! out-of-scope / missing-key / generic case degrades to the error type **without a
-//! crash** (no diagnostic — matching the M19 element-access leniency). The
-//! per-fixture acceptance lives in the conformance corpus (`m20_keyof/`).
+//! M20 end-to-end tests for `keyof T` and indexed-access types.
+//! Pins eager concrete-object evaluation, index-signature keys, and graceful
+//! error-type fallback for missing/out-of-scope cases. Fixture acceptance lives
+//! in `m20_keyof/`.
 
 use crate::driver::check_source;
 
@@ -124,11 +118,7 @@ const allBad: Point[keyof Point] = \"s\";
     assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
 }
 
-/// A **missing** key degrades to the error type **without a crash**: `Rec["zzz"]`
-/// names no property and the object has no string index, so the result is the
-/// error type (`any`-like), which suppresses cascade — binding it to an unrelated
-/// type produces **no** diagnostic. The point of the test is "no panic + graceful
-/// fallback".
+/// A missing key degrades to the error type without a crash or cascade.
 #[test]
 fn indexed_access_missing_key_is_error_type_no_crash() {
     let src = "\
@@ -176,11 +166,8 @@ const oob: T[5] = 123;
     assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
 }
 
-/// Generic `keyof T` over a **type parameter** is a **deferred node** (M28 — it
-/// previously collapsed to the permissive error type, silently accepting anything):
-/// `x: T` is NOT assignable to `keyof T` (tsc agrees — TS2322), relating
-/// conservatively (identical-node only), and there is **no crash**. `T["a"]` (a
-/// generic indexed access) stays the M20 out-of-scope error type — silent.
+/// Generic `keyof T` stays a deferred node and relates conservatively; generic
+/// indexed access remains the silent M20 out-of-scope fallback.
 #[test]
 fn generic_keyof_defers_and_indexed_access_falls_back_no_crash() {
     let src = "\

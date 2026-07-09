@@ -1,5 +1,4 @@
 //! Statement-level checker.
-//!
 //! This module wires parsing/binding output into the checker pass, flow pre-pass,
 //! and relation phase. Keep durable design notes in `docs/reference/architecture.md`
 //! (§5.2) and soundness rules in `docs/reference/invariants.md`.
@@ -591,13 +590,9 @@ fn emit_pending_checks(pass: &mut Pass<'_, '_>) {
     );
 }
 
-/// Construct a fresh phase-1 [`Pass`] over the given decl tables (M28 — one for the
-/// prelude unit, one for the user unit; the working-set defaults are identical).
-///
-/// M12/B28/B29 fill states are derived from the decl table: a class index starts
-/// `Pending` (instance type / constructor built on demand, base first); an interface
-/// or seeded object-literal-alias index starts `Pending` for the template machinery;
-/// everything else — including M28 `Resolved` prelude placeholders — is `Done`.
+/// Construct a fresh phase-1 [`Pass`]. Fill states come from the decl kind:
+/// classes/interfaces/template aliases start `Pending`; resolved placeholders and
+/// other declarations start `Done`.
 fn build_pass<'a, 'ast>(
     interner: &'a mut Interner,
     binder: &'a Binder,

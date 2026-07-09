@@ -1,10 +1,5 @@
 //! Type representation primitives: `TypeTag`, `TypeFlags`, payload side-table
 //! structs, and `LiteralValue`.
-//!
-//! These are the "shapes" the architecture (§3.1) and mvp-plan (§4.1) ask for.
-//! M0 only ever constructs `Intrinsic` and `Literal` types, but the cold
-//! side-table structs (`ObjectType`, `FunctionType`) are defined now so later
-//! milestones (M2/M3) slot in without touching the store layout.
 
 use crate::types::store::TypeId;
 
@@ -25,11 +20,8 @@ pub enum TypeTag {
     /// canonicalized by `Interner::union` (M4).
     Union,
     /// An **intersection** type (`A & B` — M31). `payload` indexes
-    /// `Store::intersections`. The structural **dual** of `Union`: a canonical
-    /// member set (flattened, sorted by `TypeId`, deduped), but with **inverted**
-    /// canonicalization — `never` absorbs the whole thing, `unknown` is dropped
-    /// (the `&` identity), 0 members collapse to `unknown`, 1 to the bare member.
-    /// Constructed and canonicalized by `Interner::intersection`.
+    /// `Store::intersections`. The structural dual of `Union`: canonical member
+    /// set, but `never` absorbs and `unknown` is dropped.
     Intersection,
     /// A function type. `payload` indexes `Store::functions`.
     /// TODO(M3): constructed by the function checker.
@@ -46,32 +38,20 @@ pub enum TypeTag {
     /// list (order is significant — unlike a union, `[A, B]` ≠ `[B, A]`).
     /// Constructed by `Interner::intern_tuple` (M18).
     Tuple,
-    /// A **readonly** array/tuple wrapper (`readonly T[]` / `readonly [A, B]`).
-    /// `payload` is the wrapped mutable array/tuple `TypeId`, stored inline like
-    /// [`TypeTag::Keyof`]. This is intentionally non-structural with respect to
-    /// object shapes: user-written objects cannot satisfy a readonly array pattern by
-    /// declaring a synthetic property.
+    /// A **readonly** array/tuple wrapper. `payload` stores the wrapped operand
+    /// inline; user-written object shapes cannot satisfy it by synthetic property.
     Readonly,
-    /// A **conditional** type (`C extends E ? T : F` — M25). `payload` indexes
-    /// `Store::conditionals`. Carries the four component ids (check, extends, true,
-    /// false), the count of `infer` binders it introduces, and whether its check was a
-    /// *naked* declaration type parameter (drives distribution). Constructed by
-    /// `Interner::intern_conditional`; a recursive conditional alias's template id is
-    /// reserved/filled like a nominal object (`reserve_conditional`/`fill_conditional`).
+    /// A **conditional** type (`C extends E ? T : F` — M25). Carries component ids,
+    /// `infer` binder count, distribution flag, and poison flag; recursive alias
+    /// templates are reserved/filled like nominal objects.
     Conditional,
-    /// A **lazy alias instantiation** (`Alias<Args>` where `Alias`'s body is a
-    /// conditional — M25). `payload` indexes `Store::instantiations`. Denotes
-    /// `substitute(base, args)` computed *lazily* by the evaluator, so a self-recursive
-    /// conditional alias (`type Unwrap<T> = … Unwrap<U> …`) does not expand at lowering
-    /// (which would loop) but at demand. Constructed by `Interner::intern_instantiation`.
+    /// A **lazy alias instantiation** (`Alias<Args>` — M25). Denotes
+    /// `substitute(base, args)` computed by the evaluator so self-recursive aliases
+    /// do not expand at lowering.
     Instantiation,
     /// An **`infer` binder** (`infer U` inside a conditional's `extends` type — M25).
-    /// `payload` is the **de Bruijn index** within the enclosing conditional node
-    /// (ADR-0002: de Bruijn scoped to infer binders only). The same infer name in
-    /// several positions of one node shares an index. Constructed by
-    /// `Interner::intern_infer`; identity is the index alone. `substitute` never targets
-    /// it (it is a *bound* variable, not a free declaration parameter — the no-capture
-    /// rule).
+    /// `payload` is the node-local de Bruijn index. Identity is the index alone, and
+    /// substitution never targets it (bound variable; ADR-0002 no-capture rule).
     Infer,
     /// A **mapped type** (`{ [K in S]: V }` — M26). `payload` indexes `Store::mapped`.
     /// Carries the key source, the value template (with `T[K]` represented as the
@@ -82,12 +62,9 @@ pub enum TypeTag {
     /// (identical-only). Constructed via `Interner::intern_mapped`. See
     /// [`MappedType`].
     Mapped,
-    /// The **source value placeholder** (`T[K]`) inside a mapped type's value template
-    /// (M26) — a node-scoped bound variable standing for the current key's source
-    /// property value. `substitute` never targets it (a bound variable, not a free
-    /// declaration parameter — the no-capture rule, ADR-0002 analog); the evaluator
-    /// replaces it per key with the source property's type. Identity is the tag alone
-    /// (payload `0`). Constructed via `Interner::intern_mapped_value`.
+    /// The **source value placeholder** (`T[K]`) inside a mapped type's value template.
+    /// A node-scoped bound variable: substitution never targets it, and the evaluator
+    /// replaces it per key. Identity is the tag alone (payload `0`).
     MappedValue,
     /// A **template literal type** (`` `a${T}` `` — M27). `payload` indexes
     /// `Store::templates`. Carries alternating literal **text** segments and **hole**
@@ -114,12 +91,8 @@ pub enum TypeTag {
     Keyof,
 }
 
-/// The fixed set of intrinsic (keyword) types. The discriminant doubles as the
-/// `payload` value for `TypeTag::Intrinsic`, so an intrinsic type is fully
-/// described by `(tag = Intrinsic, payload = IntrinsicKind as u32)`.
-///
-/// Order here is the canonical well-known order; `Interner::with_intrinsics`
-/// interns them in this order so each gets a small fixed `TypeId` (§4.1).
+/// The fixed intrinsic set. The discriminant is the `TypeTag::Intrinsic`
+/// payload, and this order defines the well-known ids.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 #[repr(u8)]
 pub enum IntrinsicKind {
@@ -137,12 +110,8 @@ pub enum IntrinsicKind {
     Boolean,
     Number,
     String,
-    /// The four **string-manipulation intrinsic markers** (M28): the base a symbolic
-    /// `Uppercase<S>` instantiation carries. Each marker id only ever appears as an
-    /// [`crate::types::repr::InstantiationType::base`]; the prelude seeds
-    /// `type Uppercase<S extends string> = intrinsic;` to its marker, and the
-    /// evaluator intercepts instantiations by this well-known identity. Appended
-    /// AFTER the keyword kinds so the existing well-known ids stay stable.
+    /// M28 string-manipulation intrinsic markers, used as symbolic instantiation
+    /// bases and appended after keyword kinds so existing well-known ids stay stable.
     Uppercase,
     Lowercase,
     Capitalize,
@@ -239,17 +208,9 @@ impl LiteralValue {
     }
 }
 
-/// A stable identity for one **class declaration** (M13). Allocated per declared
-/// `class` by the checker and stamped onto every member that class declares (its
-/// [`PropertyType::declaring_class`]), so a `private`/`protected` member can be
-/// matched to its *origin* — the declaration it came from. Two structurally
-/// identical classes get distinct ids, which is what makes a class with a
-/// non-public member **nominal**: `class Secret { private x }` and a structurally
-/// equal `class Other { private x }` carry different `ClassId`s on their `x`, so
-/// the relation engine (and hash-consing) keep them distinct types.
-///
-/// A `u32` arena index, mirroring [`TypeParamId`] — cheap to copy/compare and part
-/// of a property's structural identity (hashed + compared in the interner).
+/// Stable identity for one class declaration. Stamped onto declared members so
+/// private/protected origins make structurally equal classes nominally distinct.
+/// Part of a property's structural identity (hashed + compared in the interner).
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct ClassId(pub u32);
 
@@ -260,16 +221,9 @@ impl ClassId {
     }
 }
 
-/// The access modifier of a class member (M13): `public` (the default),
-/// `private`, or `protected`. Read from the member's AST `accessibility`
-/// (`PropertyDefinition`/`MethodDefinition`). It is part of a property's
-/// **structural identity** (hashed + compared in the interner) together with the
-/// [`PropertyType::declaring_class`], so a `private x: number` and a public
-/// `x: number` of the same name/type are *different* members — the basis for the
-/// access-control checks (`TK2341`/`TK2445`) and the nominal relation rule.
-///
-/// `Public` is the default and produces no diagnostics; only `Private` and
-/// `Protected` drive access control and nominal typing.
+/// Class-member access modifier (M13). Together with
+/// [`PropertyType::declaring_class`], it is property identity and drives both
+/// access-control diagnostics and the nominal relation rule.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
 pub enum Visibility {
     /// `public` (or unannotated) — the structural default, no access control.
@@ -282,18 +236,9 @@ pub enum Visibility {
     Protected,
 }
 
-/// A member of an object type.
-///
-/// M2 properties are all required (`optional` is always `false`); the field is
-/// kept so optional members (`a?: T`) slot in later without a struct change.
-///
-/// M13–M15 fields (`visibility`, `declaring_class`, `readonly`, `is_accessor`)
-/// are part of structural identity, so interning preserves nominal access origins
-/// and assignment-target metadata. The relation engine uses visibility/origin for
-/// nominal class typing, but ignores `readonly`/`is_accessor` for assignability;
-/// those two only gate writes (`readonly` fields keep the constructor carve-out,
-/// get-only accessors are read-only everywhere). Plain object/interface members
-/// use the M0–M12 defaults: public, no declaring class, mutable data field.
+/// A member of an object type. M13–M15 metadata is identity-bearing so interning
+/// preserves nominal origins and write-target behavior; assignability uses
+/// visibility/origin but ignores `readonly`/`is_accessor`.
 #[derive(Clone, Debug)]
 pub struct PropertyType {
     pub name: String,
@@ -346,14 +291,9 @@ impl PropertyType {
 /// `Interner::intern_object` (canonicalized: properties sorted by name) and
 /// compared property-wise by the relation engine (width + depth).
 ///
-/// M19 adds the two **index signatures** (`{ [k: string]: T }`,
-/// `{ [i: number]: T }`). Each is the **value** type of the corresponding index
-/// kind (the key type itself is fixed — `string` or `number` — and is not stored).
-/// They coexist with named properties and are part of the object's structural
-/// identity (hashed + compared by the interner), so `{ [k: string]: number }`
-/// interns distinctly from `{}` and from `{ [k: string]: string }`. The relation
-/// engine reads them for index-signature assignability; substitution rewrites the
-/// value types so a (future) generic `{ [k: string]: T }` instantiates correctly.
+/// M19 index signatures store only the value type for fixed `string`/`number`
+/// keys. They coexist with named properties, participate in object identity, and
+/// are rewritten by substitution.
 ///
 /// F1/WU2 adds call signatures as interned [`FunctionType`] ids. F1/WU3 mirrors
 /// that for construct signatures. Each work unit only lowers a single signature of
@@ -362,13 +302,8 @@ impl PropertyType {
 /// properties and index signatures and are part of object identity.
 #[derive(Clone, Debug, Default)]
 pub struct ObjectType {
-    /// Members in **canonical order** (sorted by name). The interner sorts before
-    /// hash-consing (mvp-plan §3.3) so `{ a; b }` and `{ b; a }` collapse to one
-    /// `TypeId`; the stored order is therefore the canonical (name-sorted) one,
-    /// not source order. The renderer prints this canonical order — `; `-separated
-    /// (README "Type display format"); object-target messages in the corpus are
-    /// asserted code-only, so the exact ordering is never matched against a fixed
-    /// layout.
+    /// Members in canonical name order. The interner sorts before hash-consing;
+    /// the renderer prints this canonical order.
     pub properties: Vec<PropertyType>,
     /// The **value** type of the string index signature `[k: string]: T` (M19), or
     /// `None` if the object has none. Part of the object's structural identity.
@@ -444,11 +379,8 @@ impl TypeParamId {
     }
 }
 
-/// A type-parameter type (`T`). Identity is its [`TypeParamId`] alone (the `name`
-/// is carried only for rendering — two parameters with the same name but distinct
-/// declaration sites have distinct ids and are distinct types). Interned via
-/// `Interner::intern_type_param`; instantiation replaces it by substitution
-/// (`Interner`/`substitute`, M9).
+/// A type-parameter type. Identity is [`TypeParamId`] alone; `name` is
+/// rendering-only. Instantiation replaces it by substitution.
 #[derive(Clone, Debug)]
 pub struct TypeParamType {
     /// The unique id of the declaring type parameter — the substitution key.
@@ -474,35 +406,17 @@ pub struct FunctionType {
     pub ret: TypeId,
 }
 
-/// An array type (`T[]` / `Array<T>`) — M17. Carries a single **element**
-/// `TypeId`; its whole identity is that element id, so `number[]` is consistent and
-/// `number[]` ≠ `string[]`. Interned via `Interner::intern_array`; the relation
-/// engine relates two arrays **covariantly** (`S[]` <: `T[]` iff `S` <: `T`, matching
-/// tsc's deliberate array covariance), and substitution rewrites the element so a
-/// generic `T[]` instantiates correctly.
-///
-/// A `Copy` newtype rather than a bare `TypeId` so the cold side-table is a distinct
-/// type (parallel to `ObjectType`/`FunctionType`) and an array row is never confused
-/// with a raw id elsewhere.
+/// An array type (`T[]` / `Array<T>`) — M17. Identity is the element id; arrays
+/// relate covariantly (matching tsc), and substitution rewrites the element.
 #[derive(Copy, Clone, Debug)]
 pub struct ArrayType {
     /// The element type — the `T` of `T[]`. The array's entire structural identity.
     pub element: TypeId,
 }
 
-/// A tuple type (`[A, B]`) — M18. Carries an **ordered** list of element
-/// `TypeId`s; its whole identity is that ordered list, so `[number, string]` is
-/// consistent and `[number, string]` ≠ `[string, number]` ≠ `[number]`. Order is
-/// significant — the elements are **never sorted** (unlike a union's canonical
-/// member set; like a function's positional parameters). Interned via
-/// `Interner::intern_tuple`; the relation engine relates two tuples **positionally**
-/// (same length AND each element pairwise, `S[i]` <: `T[i]`) and a tuple to an
-/// array when every element is assignable to the array element; substitution
-/// rewrites each element so a (future) generic tuple instantiates correctly.
-///
-/// A distinct cold side-table struct (parallel to `ObjectType`/`FunctionType`) so a
-/// tuple row is never confused with a union's member slice elsewhere — they hold the
-/// same shape (`Vec<TypeId>`) but mean different things (ordered vs canonical set).
+/// A tuple type (`[A, B]`) — M18. Identity is the ordered element list; elements
+/// are never sorted. Tuple relation is positional, and substitution rewrites each
+/// element.
 #[derive(Clone, Debug, Default)]
 pub struct TupleType {
     /// The element types in **source order** (`[A, B]` → `[A, B]`). The tuple's
@@ -553,12 +467,9 @@ pub struct ConditionalType {
     pub poisoned: bool,
 }
 
-/// A lazy alias instantiation `substitute(base, args)` (M25) — see
-/// [`TypeTag::Instantiation`]. `base` is a (reserved-or-resolved) conditional template
-/// id; `args` is the substitution to apply, sorted by [`TypeParamId`] for a stable
-/// structural identity. Kept lazy so a self-recursive conditional alias does not expand
-/// at lowering; the evaluator applies `args` to `base` on demand (and distributes when
-/// `base` is distributive and the check argument is a union).
+/// Lazy alias instantiation `substitute(base, args)` (M25). `args` is sorted by
+/// [`TypeParamId`] for stable identity; laziness prevents recursive aliases from
+/// expanding at lowering.
 #[derive(Clone, Debug)]
 pub struct InstantiationType {
     /// The conditional template being applied (its own free parameters are the keys of
@@ -569,11 +480,8 @@ pub struct InstantiationType {
     pub args: Vec<(TypeParamId, TypeId)>,
 }
 
-/// A mapped-type modifier operator (`?`/`readonly`) — how the node adjusts a
-/// property's optionality or readonly-ness (M26). `Keep` applies no change (the
-/// homomorphic default, preserving the source property's flag); `Add` sets the flag
-/// (`?`/`+?`, `readonly`/`+readonly`); `Remove` clears it (`-?`, `-readonly`).
-/// Identity-bearing (folded into the mapped node's hash/eq).
+/// Mapped-type modifier arithmetic (`?`/`readonly`) — identity-bearing and folded
+/// into mapped-node hash/eq.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 #[repr(u8)]
 pub enum ModifierOp {
@@ -620,13 +528,9 @@ pub struct TemplateType {
     pub holes: Vec<TypeId>,
 }
 
-/// Render an `f64` the way JavaScript's `String(n)` would for the common finite cases
-/// — the value a numeric hole contributes to a constructed template literal (M27), and
-/// the canonical form a `` `${number}` `` segment is validated against. Integers and
-/// simple decimals match `String(n)` exactly (Rust's shortest round-trip Display);
-/// negative zero normalizes to `"0"`, and the non-finite forms use the JS spellings.
-/// Scientific/large-magnitude forms diverge from `String(n)` (out of the M27 subset —
-/// documented, conservative).
+/// Render an `f64` like JavaScript `String(n)` for the M27 subset: common finite
+/// forms round-trip, `-0` becomes `"0"`, and non-finite forms use JS spellings.
+/// Scientific/large-magnitude formatting is a documented conservative divergence.
 pub fn number_to_string(n: f64) -> String {
     if n == 0.0 {
         // Covers both `0.0` and `-0.0` (JS `String(-0)` is `"0"`).
