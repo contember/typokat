@@ -63,6 +63,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // implementation commit flips this on.
     ("m31_intersections", true),
     ("m32_signature_shape", true),
+    // M33 function overloads. Registered false by the spec commit; the
+    // implementation commit flips this on.
+    ("m33_function_overloads", false),
     // Bug-fix corpora (official-suite findings / backlog items). Each is
     // committed `false` as a behavior-neutral spec, then flipped `true` by the
     // commit that lands its fix. See tests/cases/README.md ("Bug-fix corpora").

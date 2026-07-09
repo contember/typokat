@@ -243,3 +243,7 @@ review must be done by a different agent after WU3/WU4 and before deleting backl
      changed the *why* -> ../decisions/NNNN ; new future work -> ../backlog/NN ;
      transient -> leave it (dies with the sprint on archive). After graduating,
      trim to a one-line pointer ("-> ADR-0007"). -->
+- **WU1 probes.** Cross-checked overload fixture candidates with `tsc 6.0.3
+  --strict --noEmit`: same-arity type mismatches and implementation-signature leaks
+  report `TS2769`; pure overload arity failures stay `TS2554`; incompatible
+  overload declarations report `TS2394`; generic methods remain backlog `41`.

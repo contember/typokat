@@ -57,12 +57,14 @@ fixture (keeps fixtures robust to author miscounting).
 | `TK2654` | Non-abstract class is missing implementations for members (two or more missing, aggregated) |
 | `TK2540` | Cannot assign to a read-only property |
 | `TK2353` | Object literal may only specify known properties (excess property) |
+| `TK2394` | Overload signature is not compatible with its implementation signature |
 | `TK2554` | Wrong number of arguments (arity) |
 | `TK2555` | Too few arguments for a rest/min-arity call |
 | `TK2589` | Type instantiation is excessively deep and possibly infinite |
 | `TK2673` | Constructor of class is private (direct `new` outside the declaring class) |
 | `TK2674` | Constructor of class is protected (direct `new` outside the declaring class/subclasses) |
 | `TK2741` | Property is missing in type but required |
+| `TK2769` | No overload matches this call |
 
 ## Type display format (what the renderer must print)
 
@@ -143,6 +145,7 @@ keep at most one mismatched argument per call.
 | `m30_contextual_literals/` | M30 — contextual typing of fresh object / array / tuple literals |
 | `m31_intersections/` | M31 — intersection types (`A & B`): canonicalization, dual relation directions, merged member access + excess |
 | `m32_signature_shape/` | M32 — signature shape: rest elements plus optional/default parameters |
+| `m33_function_overloads/` | M33 — function overloads: ordered signatures, implementation compatibility, overload call resolution |
 
 ## Project fixture convention (M29+)
 
