@@ -11,6 +11,11 @@ By default typokat is timed with its normal rich `codespan` terminal diagnostics
 Use `--typokat-format compact` when you want to separate checker throughput from
 source-frame rendering overhead.
 
+Each timed command also gets a separate peak-memory sample by default via
+GNU `/usr/bin/time -v`; the report records `max RSS MiB`. Use
+`--memory-runs 0` to disable this extra pass or `--memory-runs N` to take the
+maximum across several samples.
+
 The generated corpus is intentionally not committed: `corpus/` and `report/`
 are gitignored.
 
@@ -43,6 +48,9 @@ python3 typobench.py run --families modules --sizes 1000,10000 --runs 3
 
 # Measure diagnostics with typokat's compact, low-overhead renderer.
 python3 typobench.py run --families errors --typokat-format compact
+
+# Disable memory sampling for a pure timing run.
+python3 typobench.py run --families shape --memory-runs 0
 ```
 
 As of 2026-07-06, `typescript@rc` exposes the native compiler as the `tsc`
@@ -86,8 +94,10 @@ the global lookup), passed alongside the module files.
 - `flow` - narrowing-heavy functions using `typeof`, `null`, and discriminated
   union checks.
 - `errors` - intentionally invalid assignments, calls, object literals, member
-  access, readonly writes, and flow returns. This exercises relation failure
-  paths, diagnostic reason chains, and renderer throughput.
+  access, readonly writes, flow returns, and M31/M32 shape failures
+  (intersections, optional/default/rest signatures, tuple rest, conditional rest
+  `infer`). This exercises relation failure paths, diagnostic reason chains, and
+  renderer throughput.
 - `modules` - a multi-file project: many small modules, each importing the two
   preceding ones (a DAG, not a bare chain) and composing their exported
   types/values, plus a fan-in `main.ts` and a shared `globals.ts` script. This
@@ -113,7 +123,7 @@ that preflight passes.
 `typobench.py run` writes:
 
 - `report/latest.json` - machine-readable results, including raw hyperfine
-  statistics and lines/s.
+  statistics, lines/s, and peak RSS samples.
 - `report/latest.md` - compact table for pasting into profiling notes.
 - `report/raw/<timestamp>/...json` - the raw per-file hyperfine exports.
 
