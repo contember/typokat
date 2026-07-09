@@ -79,11 +79,11 @@ Implemented: explicit type arguments + instantiation (M9); type-argument **infer
 type, clamp-to-constraint inference reporting `TK2345`, `TK2313` for a circular constraint chain)
 (M24).
 
-- **Deferred / out of scope:** `K extends keyof T` (the generic-`keyof` deferral); contextual
-  typing of object/array literals against a generic constraint (tsc `TS2353` / fresh-literal
-  reshaping — so a violating inference candidate that came from a **fresh object/array literal**
-  argument is exempt from the clamp; a typed value, primitive or structural, clamps normally);
-  type-parameter defaults.
+- **Deferred / out of scope:** `K extends keyof T` (the generic-`keyof` deferral); full constraint-side
+  excess-property checking for fresh literals (tsc `TS2353`) is still deferred, so a violating
+  inference candidate that came only from a **fresh object/array literal** argument is exempt from
+  the constraint clamp; typed values, primitives, structural values, and call-site contextual
+  reshaping of fresh literal arguments clamp/check normally. Type-parameter defaults are deferred.
 - **Representation note (deviation from architecture §3.1, not a tsc divergence):** type
   parameters keep a **named unique-id** representation, not de Bruijn indices; the constraint is a
   store-side column keyed by `TypeParamId`, not folded into the interned type's identity.

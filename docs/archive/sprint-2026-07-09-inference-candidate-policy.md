@@ -1,3 +1,31 @@
+# OUTCOME - shipped 2026-07-09
+
+**Commit map.**
+
+- `03fd02c` - plan inference candidate sprint.
+- `dfa72e7` - add the initial disabled b65 candidate-policy corpus.
+- `a9455f0` - extend the b65 corpus from explorer probes.
+- `9d5fe04` - record b65 corpus probes.
+- `f7f3022` - implement call-site candidate provenance, fix-then-check policy, fresh-argument diagnostics, and enable b65.
+
+**Verification.**
+
+- `cargo test conformance` - pass.
+- `cargo test` - pass.
+- `cargo clippy --all-targets -- -D warnings` - pass.
+- `cargo run --quiet -- check tests/cases/b65_inference_candidate_policy/*.ts` - only marker-backed expected diagnostics.
+- `git diff --check` - pass.
+- `cargo build --release` - pass.
+- `python3 tooling/official-suite/tsofficial.py run --check` - pass, 874 corpus files, 507 in scope, 0 regressions / 0 progress / 0 missing-from-corpus.
+
+**Review.** Implemented by an implementation subagent after the spec commits, then reviewed by independent adversarial subagents. Review rounds found and fixed: non-fresh structural candidates unioning too broadly, multiple `T` occurrences inside one argument unioning too broadly, fresh structural candidate priority vs typed candidates, nullish/primitive merge parity, and fresh tuple-length diagnostic code parity. Final focused review passed.
+
+**Shipped behavior.** Ordinary call/new inference now keeps call-site candidate provenance, fixes a single replay target per type parameter, rejects incompatible same-`T` arguments via the existing argument relation, preserves conditional-`infer` same-name covariant union behavior, and keeps compatible same-family primitive/nullish unions.
+
+**Deferred.** None from backlog `65`. The unrelated known-gap tail remains `56`, `60`, `62`, `32`, `21`, `22`, `66`, `67`; signature rest parity tail remains `69`.
+
+---
+
 # Sprint - inference candidate policy (2026-07-09)
 
 **Goal.** Ship backlog `65`: call-site inference must stop accepting incompatible
@@ -145,8 +173,7 @@ line up.
   official-suite `run --check` are green or have an explicitly reviewed
   safe-direction ratchet. Backlog `65` is deleted only after the implementation ships.
 - **Touch points.** `docs/reference/divergences.md`, `tests/cases/README.md`,
-  `docs/INDEX.md`, `docs/backlog/65-multi-arg-candidate-union-fn.md`,
-  `tooling/official-suite/`.
+  `docs/INDEX.md`, the consumed backlog `65` item, `tooling/official-suite/`.
 
 ## Out of scope (explicit)
 

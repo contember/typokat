@@ -15,8 +15,9 @@ narrowing, M23), `08`–`12` (constraints M24 → utility types M28: the type-le
 complete), `28`–`29` (soundness warm-ups), `31` (M30 contextual literals), backlog `15` slice 1
 (M29 local-relative modules), `53` `55` `57` `58` `61` (the five HIGH silent-FN fixes,
 sprint-2026-07-07), `25` (M31 intersection types, sprint-2026-07-07), `33` `34`
-`54` `59` `64` (soundness-tail quick wins, sprint-2026-07-08), and `24` `39`
-(M32 signature shape, sprint-2026-07-09) — see
+`54` `59` `64` (soundness-tail quick wins, sprint-2026-07-08), `24` `39`
+(M32 signature shape, sprint-2026-07-09), and `65` (inference candidate policy,
+sprint-2026-07-09) — see
 [`../archive/`](../archive/README.md). Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). How each item
@@ -74,7 +75,6 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 - [`56`](56-silent-instantiation-cycles.md) — instantiation cycles silently resolve to error.
 - [`60`](60-fresh-literal-union-targets.md) — fresh literals vs union targets: excess + assignability skipped.
 - [`62`](62-index-signature-relation-parity.md) — index-signature relation parity (implicit-index rule, numeric names).
-- [`65`](65-multi-arg-candidate-union-fn.md) — multi-argument inference unions candidates instead of fixing-then-checking (drops TS2345).
 - [`21`](21-local-class-checking.md) — function-local classes entirely unchecked.
 - [`22`](22-new-callee-forms.md) — `new (C)()` / aliased `new` miss class-keyed checks.
 - [`32`](32-eager-keyof-forward-references.md) — eager `keyof` over forward references.
@@ -104,8 +104,9 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 ## Recommended order
 
 1. **Kill the known silent-FN families** — the five HIGH review findings (`53` `55` `57` `58`
-   `61`) shipped in sprint-2026-07-07-soundness-fn-fixes; the remaining C group (`56`, `60`, `62`,
-   `65`, `32`, `21`, `22`, `66`, `67`) is next, every one a dropped-error class.
+   `61`) shipped in sprint-2026-07-07-soundness-fn-fixes; `64` `34` `33` `54` `59` `65`
+   shipped in follow-up sprints; the remaining C group (`56`, `60`, `62`, `32`, `21`, `22`,
+   `66`, `67`) is next, every one a dropped-error class.
 2. **Run track A** to unblock `14` (`25` intersections shipped as M31 and `24`/`39` signature
    shape shipped as M32); interleave B items and C's
    parity tail as warm-ups between the remaining A milestones. `38` (minimal prelude) and `13` (profiling

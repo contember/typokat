@@ -23,7 +23,6 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-07-09-inference-candidate-policy.md`](sprints/sprint-2026-07-09-inference-candidate-policy.md) — backlog `65`, call-site inference candidate policy.
 
 ## What's hot
 
@@ -33,18 +32,16 @@ decisions → reference → archive.
   M29 shipped backlog `15` slice 1 (serial local-relative modules); M30 shipped contextual
   literal typing; M31 shipped intersection types (`A & B`) — backlog `25`, the first track-A
   step; M32 shipped backlog `24` rest elements and `39` optional/default parameters; the
-  2026-07-08 soundness-tail sprint shipped `64` `34` `33` `54` `59` and deferred `65`
-  to a dedicated inference-policy sprint. The completion roadmap (refined 2026-07-07) lives in the backlog
+  2026-07-09 inference-policy sprint shipped `65`. The completion roadmap (refined 2026-07-07) lives in the backlog
   README: a definition of done (checker 1.0) + four tracks (A model completeness `40`–`44`
   = the remaining `lib.d.ts` critical path; B checker completeness `18` `19` `45`–`52`;
-  C known-gap tail; D scale ladder `38` `13` `14` `15` `16` `17`). **Now:** active sprint
-  `sprint-2026-07-09-inference-candidate-policy.md` schedules `65` separately; after that,
-  continue track A with overloads/generic methods/namespaces before full `lib.d.ts`.
+  C known-gap tail; D scale ladder `38` `13` `14` `15` `16` `17`). **Now:** continue
+  track A with overloads/generic methods/namespaces before full `lib.d.ts`.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
   invariants CLEAN and filed `53`–`65`; the five HIGH silent-FN families then shipped through
   the full dev-method loop (sprint archived — `53` CFG assignment loss, `55` template memo
   poisoning, `57` Tuple↔Array inference, `58` project scope-key collision, `61` class field
   initializers, all five reviews PASS). The follow-up quick-wins sprint then closed `64` `34`
-  `33` `54` `59`; the remaining C silent-FN tail is now `56` `60` `62` `65` `32` `21` `22`
-  `66` `67`, with `65` explicitly policy-heavy.
+  `33` `54` `59`; the dedicated inference-policy sprint then closed `65`. The remaining C
+  silent-FN tail is now `56` `60` `62` `32` `21` `22` `66` `67`.
