@@ -3,6 +3,7 @@ use crate::binder::scope::ScopeId;
 use crate::types::repr::{ObjectType, PropertyType};
 use crate::types::store::TypeId;
 use oxc_ast::ast::{Expression, TSInterfaceHeritage, TSSignature};
+use rustc_hash::FxHashSet;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Fold `extends` bases into `own`, then return the composed object.
@@ -59,8 +60,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> ObjectType {
         let mut object = ObjectType::default();
         let overloaded_method_names = self.overloaded_method_names(members);
-        let call_signatures_overloaded = self.call_signatures_overloaded(members);
-        let construct_signatures_overloaded = self.construct_signatures_overloaded(members);
+        let mut lowered_overloaded_methods: FxHashSet<String> = FxHashSet::default();
         for member in members {
             match member {
                 TSSignature::TSPropertySignature(sig) => {
@@ -111,6 +111,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         continue;
                     };
                     if overloaded_method_names.contains(name.as_ref()) {
+                        let name = name.into_owned();
+                        if lowered_overloaded_methods.insert(name.clone()) {
+                            if let Some(prop) =
+                                self.lower_method_overload_property(scope, members, &name)
+                            {
+                                object.properties.push(prop);
+                            }
+                        }
                         continue;
                     }
                     if let Some(prop) = self.lower_method_signature_property(scope, sig) {
@@ -118,17 +126,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     }
                 }
                 TSSignature::TSCallSignatureDeclaration(sig) => {
-                    if call_signatures_overloaded {
-                        continue;
-                    }
                     if let Some(signature) = self.lower_call_signature(scope, sig) {
                         object.call_signatures.push(signature);
                     }
                 }
                 TSSignature::TSConstructSignatureDeclaration(sig) => {
-                    if construct_signatures_overloaded {
-                        continue;
-                    }
                     if let Some(signature) = self.lower_construct_signature(scope, sig) {
                         object.construct_signatures.push(signature);
                     }

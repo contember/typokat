@@ -106,8 +106,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> Option<TypeId> {
         let mut object = ObjectType::default();
         let overloaded_method_names = self.overloaded_method_names(members);
-        let call_signatures_overloaded = self.call_signatures_overloaded(members);
-        let construct_signatures_overloaded = self.construct_signatures_overloaded(members);
+        let mut lowered_overloaded_methods: FxHashSet<String> = FxHashSet::default();
         for member in members {
             match member {
                 TSSignature::TSPropertySignature(sig) => {
@@ -143,22 +142,21 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 TSSignature::TSMethodSignature(sig) => {
                     let name = sig.key.static_name()?;
                     if overloaded_method_names.contains(name.as_ref()) {
-                        return None;
+                        let name = name.into_owned();
+                        if lowered_overloaded_methods.insert(name.clone()) {
+                            let prop = self.lower_method_overload_property(scope, members, &name)?;
+                            object.properties.push(prop);
+                        }
+                        continue;
                     }
                     let prop = self.lower_method_signature_property(scope, sig)?;
                     object.properties.push(prop);
                 }
                 TSSignature::TSCallSignatureDeclaration(sig) => {
-                    if call_signatures_overloaded {
-                        return None;
-                    }
                     let signature = self.lower_call_signature(scope, sig)?;
                     object.call_signatures.push(signature);
                 }
                 TSSignature::TSConstructSignatureDeclaration(sig) => {
-                    if construct_signatures_overloaded {
-                        return None;
-                    }
                     let signature = self.lower_construct_signature(scope, sig)?;
                     object.construct_signatures.push(signature);
                 }

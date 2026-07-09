@@ -37,6 +37,8 @@ pub struct Binder {
     /// Maps a function/arrow node to its parameter scope. Keyed by `(module scope,
     /// span start)` because offsets are unique only within one file (backlog 58).
     pub fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
+    /// Maps function declarations to their value declaration id.
+    pub fn_decl_ids: FxHashMap<(ScopeId, u32), DeclId>,
     /// Maps a `{ … }` block to its lexical scope (M7), keyed like `fn_scopes` so
     /// branch-local declarations stay local and cross-file offsets do not collide.
     pub block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
@@ -89,6 +91,7 @@ struct BindState {
     graph: ScopeGraph,
     symbols: SymbolTable,
     fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
+    fn_decl_ids: FxHashMap<(ScopeId, u32), DeclId>,
     /// Per-block lexical scopes (M7), keyed by `(module scope, block span start)`.
     block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     /// The module scope currently being bound — the disambiguating half of the
@@ -139,6 +142,7 @@ impl ProjectBinderBuilder {
             graph: ScopeGraph::new(),
             symbols: SymbolTable::new(),
             fn_scopes: FxHashMap::default(),
+            fn_decl_ids: FxHashMap::default(),
             block_scopes: FxHashMap::default(),
             current_module: ScopeId(0),
             next_decl: 0,
@@ -192,6 +196,7 @@ impl ProjectBinderBuilder {
             decl_count: self.state.next_decl,
             type_decl_count: self.state.next_type_decl,
             fn_scopes: self.state.fn_scopes,
+            fn_decl_ids: self.state.fn_decl_ids,
             block_scopes: self.state.block_scopes,
         }
     }
@@ -388,7 +393,10 @@ fn bind_declarator(state: &mut BindState, scope: ScopeId, declarator: &VariableD
 fn bind_function_declaration(state: &mut BindState, scope: ScopeId, func: &Function<'_>) {
     if let Some(id) = &func.id {
         let decl_id = state.fresh_decl();
-        declare_value(state, scope, id.name.as_str(), decl_id);
+        state
+            .fn_decl_ids
+            .insert((state.current_module, func.span.start), decl_id);
+        declare_function_value(state, scope, id.name.as_str(), decl_id);
     }
     bind_function(state, scope, func);
 }
@@ -557,6 +565,21 @@ fn declare_value(state: &mut BindState, scope: ScopeId, name: &str, decl_id: Dec
     }
     let mut symbol = Symbol::new(name);
     symbol.value = Some(decl_id);
+    let symbol_id: SymbolId = state.symbols.push(symbol);
+    state.graph.declare(scope, name, symbol_id);
+}
+
+fn declare_function_value(state: &mut BindState, scope: ScopeId, name: &str, decl_id: DeclId) {
+    if let Some(existing) = state.graph.get(scope).and_then(|s| s.lookup_local(name)) {
+        if let Some(symbol) = state.symbols.get_mut(existing) {
+            symbol.value = Some(decl_id);
+            symbol.function_values.push(decl_id);
+        }
+        return;
+    }
+    let mut symbol = Symbol::new(name);
+    symbol.value = Some(decl_id);
+    symbol.function_values.push(decl_id);
     let symbol_id: SymbolId = state.symbols.push(symbol);
     state.graph.declare(scope, name, symbol_id);
 }

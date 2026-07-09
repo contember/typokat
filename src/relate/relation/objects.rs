@@ -265,13 +265,9 @@ impl<'a> Relater<'a> {
         let Some(src_obj) = self.store.object_type(src) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
-        let ([src_sig], [tgt_sig]) = (
-            src_obj.call_signatures.as_slice(),
-            tgt_obj.call_signatures.as_slice(),
-        ) else {
-            return Relation::No(ReasonChain::leaf(src, tgt));
-        };
-        self.relate(*src_sig, *tgt_sig, kind, assumed)
+        let src_signatures = src_obj.call_signatures.clone();
+        let tgt_signatures = tgt_obj.call_signatures.clone();
+        self.relate_signature_sets(src, tgt, &src_signatures, &tgt_signatures, kind, assumed)
     }
 
     fn relate_object_construct_signatures(
@@ -290,13 +286,9 @@ impl<'a> Relater<'a> {
         let Some(src_obj) = self.store.object_type(src) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
-        let ([src_sig], [tgt_sig]) = (
-            src_obj.construct_signatures.as_slice(),
-            tgt_obj.construct_signatures.as_slice(),
-        ) else {
-            return Relation::No(ReasonChain::leaf(src, tgt));
-        };
-        self.relate(*src_sig, *tgt_sig, kind, assumed)
+        let src_signatures = src_obj.construct_signatures.clone();
+        let tgt_signatures = tgt_obj.construct_signatures.clone();
+        self.relate_signature_sets(src, tgt, &src_signatures, &tgt_signatures, kind, assumed)
     }
 
     pub(super) fn relate_object_to_function(
@@ -309,10 +301,16 @@ impl<'a> Relater<'a> {
         let Some(src_obj) = self.store.object_type(src) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
-        let [src_sig] = src_obj.call_signatures.as_slice() else {
+        if src_obj.call_signatures.is_empty() {
             return Relation::No(ReasonChain::leaf(src, tgt));
-        };
-        self.relate(*src_sig, tgt, kind, assumed)
+        }
+        let src_signatures = src_obj.call_signatures.clone();
+        for src_sig in src_signatures {
+            if matches!(self.relate(src_sig, tgt, kind, assumed), Relation::Yes) {
+                return Relation::Yes;
+            }
+        }
+        Relation::No(ReasonChain::leaf(src, tgt))
     }
 
     pub(super) fn relate_function_to_object(
@@ -325,9 +323,9 @@ impl<'a> Relater<'a> {
         let Some(tgt_obj) = self.store.object_type(tgt) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
-        let [tgt_sig] = tgt_obj.call_signatures.as_slice() else {
+        if tgt_obj.call_signatures.is_empty() {
             return Relation::No(ReasonChain::leaf(src, tgt));
-        };
+        }
 
         // A plain function value has no represented named members. It can satisfy
         // optional target properties by omission, but any required target member is
@@ -346,7 +344,40 @@ impl<'a> Relater<'a> {
             return Relation::No(ReasonChain::leaf(src, tgt));
         }
 
-        self.relate(src, *tgt_sig, kind, assumed)
+        let tgt_signatures = tgt_obj.call_signatures.clone();
+        for tgt_sig in tgt_signatures {
+            if let Relation::No(_) = self.relate(src, tgt_sig, kind, assumed) {
+                return Relation::No(ReasonChain::leaf(src, tgt));
+            }
+        }
+        Relation::Yes
+    }
+
+    fn relate_signature_sets(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        src_signatures: &[TypeId],
+        tgt_signatures: &[TypeId],
+        kind: RelationKind,
+        assumed: &mut FxHashSet<RelationKey>,
+    ) -> Relation {
+        if src_signatures.is_empty() || tgt_signatures.is_empty() {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        }
+        for tgt_sig in tgt_signatures {
+            let mut matched = false;
+            for src_sig in src_signatures {
+                if matches!(self.relate(*src_sig, *tgt_sig, kind, assumed), Relation::Yes) {
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                return Relation::No(ReasonChain::leaf(src, tgt));
+            }
+        }
+        Relation::Yes
     }
 
     /// Function assignability (mvp-plan §6.5, architecture §6.5). `src` is

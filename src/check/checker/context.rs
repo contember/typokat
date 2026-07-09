@@ -129,14 +129,6 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
     Resolved { params: Vec<TypeParamId> },
 }
 
-/// A generic value declaration's ordered type parameters and template function type.
-/// Explicit type arguments substitute into `fn_ty` before the usual call checks.
-#[derive(Clone)]
-pub(in crate::check::checker) struct GenericSig {
-    pub(in crate::check::checker) params: Vec<TypeParamId>,
-    pub(in crate::check::checker) fn_ty: TypeId,
-}
-
 /// A class's copyable `new` metadata, keyed by value-space `DeclId`.
 #[derive(Copy, Clone)]
 pub(in crate::check::checker) struct ClassInfo {
@@ -199,16 +191,19 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// Parent class by stable [`ClassId`], built from resolvable `extends`.
     /// Used by `protected` access and independent of interned type identity.
     pub(in crate::check::checker) class_parents: FxHashMap<ClassId, ClassId>,
-    /// Generic value signatures (M9), keyed by the value-space `DeclId` of a generic
-    /// `function` declaration. A call `identity<number>(5)` looks the callee's
-    /// `DeclId` up here, substitutes the type arguments into the template signature,
-    /// and checks the call against the instantiated parameter/return types.
-    pub(in crate::check::checker) generic_fns: FxHashMap<DeclId, GenericSig>,
+    /// Generic signature metadata keyed by the template function type itself.
+    /// Overload resolution walks signature `TypeId`s, so generic overloads need
+    /// the candidate-local type parameters here instead of a global callee entry.
+    pub(in crate::check::checker) generic_sig_params: FxHashMap<TypeId, Vec<TypeParamId>>,
     /// Class `new`-info (M11), keyed by a class's **value-space** `DeclId`. Filled in
     /// phase 0 (fill) once each class's instance type and constructor signature are
     /// built; read by `new ClassName(args)` ([`infer_new`]) to check the arguments
     /// and yield the instance type.
     pub(in crate::check::checker) class_ctors: FxHashMap<DeclId, ClassInfo>,
+    /// Direct constructor overload signatures for class values, keyed like
+    /// [`class_ctors`](Pass::class_ctors). Empty/absent means the implementation
+    /// constructor signature is the externally callable one.
+    pub(in crate::check::checker) class_ctor_overloads: FxHashMap<DeclId, Vec<TypeId>>,
     /// Generic class type parameters, keyed like [`class_ctors`](Pass::class_ctors).
     /// `new` uses these for explicit substitution or constructor-argument inference.
     /// Kept out of [`ClassInfo`] so that struct stays `Copy`.

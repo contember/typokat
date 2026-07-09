@@ -26,3 +26,30 @@ overloadArity(1, "x", "extra"); // error[TK2554]: Expected 1-2 arguments, but go
 function incompatibleImplementation(x: number): number; // error[TK2394]: not compatible with its implementation signature
 function incompatibleImplementation(x: string): string;
 function incompatibleImplementation(x: boolean): boolean { return x; }
+
+export function exportedOverload(x: number): number;
+export function exportedOverload(x: string): string;
+export function exportedOverload(x: number | string): number | string { return x; }
+
+const exportedNumber: number = exportedOverload(1);
+const exportedString: string = exportedOverload("x");
+exportedOverload(true); // error[TK2769]: No overload matches this call
+
+declare function ambientOverload(x: number): number;
+declare function ambientOverload(x: string): string;
+
+const ambientNumber: number = ambientOverload(1);
+const ambientString: string = ambientOverload("x");
+ambientOverload(true); // error[TK2769]: No overload matches this call
+
+function chooseExplicit<T extends string>(x: T): T;
+function chooseExplicit<T extends number>(x: T): T;
+function chooseExplicit<T extends string | number>(x: T): T { return x; }
+
+const chooseExplicitWrong: string = chooseExplicit<number>(1); // error[TK2322]: Type 'number' is not assignable to type 'string'
+chooseExplicit<boolean>(true); // error[TK2344]: Type 'boolean' does not satisfy the constraint 'string'
+
+function hiddenNonContiguous(x: number): number; // error[TK2391]: Function implementation is missing or not immediately following the declaration
+const separator = 1;
+function hiddenNonContiguous(x: number | string): number | string { return x; }
+hiddenNonContiguous("s");

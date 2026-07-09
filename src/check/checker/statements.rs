@@ -6,9 +6,11 @@ use super::assignment::declared_from_init;
 use super::calls::widen;
 use super::context::*;
 use crate::binder::scope::ScopeId;
+use crate::binder::symbol::DeclId;
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::{Reason, ReasonChain, Relater, Relation};
 use crate::span::Span;
+use crate::types::repr::{ObjectType, ParameterType};
 use crate::types::store::{Store, TypeId};
 use crate::types::WellKnown;
 use oxc_ast::ast::{
@@ -26,8 +28,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         statements: &[Statement<'_>],
     ) {
         let mut no_return: Option<TypeId> = None;
-        for stmt in statements {
-            self.check_stmt(scope, stmt, None, &mut no_return);
+        let mut index = 0;
+        while index < statements.len() {
+            if let Some((name, end)) = function_overload_group(statements, index) {
+                self.check_function_declaration_group(scope, &statements[index..end], name);
+                index = end;
+                continue;
+            }
+            self.check_stmt(scope, &statements[index], None, &mut no_return);
+            index += 1;
         }
     }
 
@@ -262,11 +271,231 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             {
                 self.decl_types.set(decl_id, fn_ty);
                 if !params.is_empty() {
-                    self.generic_fns
-                        .insert(decl_id, GenericSig { params, fn_ty });
+                    self.generic_sig_params.insert(fn_ty, params);
+                }
+                if func.body.is_none() && !func.declare {
+                    self.diagnostics.push(Diagnostic::overload_missing_implementation(
+                        Span::from_oxc(func.span),
+                    ));
                 }
             }
         }
+    }
+
+    fn check_function_declaration_group(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+        name: &str,
+    ) {
+        let mut signatures: Vec<(TypeId, Span)> = Vec::new();
+        let mut implementation: Option<(TypeId, DeclId)> = None;
+        for stmt in statements {
+            let Some(func) = function_decl_from_statement(stmt) else {
+                continue;
+            };
+            let decl_id = self
+                .binder
+                .fn_decl_ids
+                .get(&(self.current_module, func.span.start))
+                .copied();
+            let (fn_ty, params) = self.infer_function(scope, func);
+            if let Some(decl_id) = decl_id {
+                self.decl_types.set(decl_id, fn_ty);
+                if !params.is_empty() {
+                    self.generic_sig_params.insert(fn_ty, params);
+                }
+                if func.body.is_some() {
+                    implementation = Some((fn_ty, decl_id));
+                } else {
+                    signatures.push((fn_ty, Span::from_oxc(func.span)));
+                }
+            }
+        }
+
+        let overload_ty = if signatures.is_empty() {
+            None
+        } else {
+            Some(self.interner.intern_object(ObjectType {
+                call_signatures: signatures.iter().map(|(ty, _)| *ty).collect(),
+                ..Default::default()
+            }))
+        };
+
+        let Some((implementation_ty, implementation_decl)) = implementation else {
+            if let Some(overload_ty) = overload_ty {
+                if let Some((_, span)) = signatures.first() {
+                    if statements
+                        .iter()
+                        .filter_map(function_decl_from_statement)
+                        .any(|func| !func.declare)
+                    {
+                        self.diagnostics
+                            .push(Diagnostic::overload_missing_implementation(*span));
+                    }
+                }
+                self.expose_overload_value(scope, name, None, overload_ty);
+            }
+            return;
+        };
+        if signatures.is_empty() {
+            self.decl_types.set(implementation_decl, implementation_ty);
+            return;
+        }
+
+        self.check_overload_implementation_compatibility(
+            implementation_ty,
+            &signatures,
+        );
+        let Some(overload_ty) = overload_ty else {
+            return;
+        };
+        self.expose_overload_value(scope, name, Some(implementation_decl), overload_ty);
+    }
+
+    fn expose_overload_value(
+        &mut self,
+        scope: ScopeId,
+        name: &str,
+        implementation_decl: Option<DeclId>,
+        overload_ty: TypeId,
+    ) {
+        if let Some(implementation_decl) = implementation_decl {
+            self.decl_types.set(implementation_decl, overload_ty);
+        }
+        if let Some(symbol_id) = self.binder.graph.resolve(scope, name) {
+            if let Some(symbol) = self.binder.symbols.get(symbol_id) {
+                for decl_id in &symbol.function_values {
+                    if Some(*decl_id) == implementation_decl {
+                        continue;
+                    }
+                    self.decl_types.set(*decl_id, overload_ty);
+                }
+            }
+        }
+    }
+
+    fn check_overload_implementation_compatibility(
+        &mut self,
+        implementation_ty: TypeId,
+        signatures: &[(TypeId, Span)],
+    ) {
+        for (signature_ty, span) in signatures {
+            let signature_ty =
+                self.align_overload_type_params(*signature_ty, implementation_ty);
+            let wk = self.interner.well_known();
+            let store = self.interner.store();
+            let mut relater = Relater::new(store, wk);
+            if !overload_implementation_compatible(
+                store,
+                &mut relater,
+                signature_ty,
+                implementation_ty,
+            ) {
+                self.diagnostics
+                    .push(Diagnostic::overload_incompatible(*span));
+                break;
+            }
+        }
+    }
+
+    fn align_overload_type_params(
+        &mut self,
+        overload_ty: TypeId,
+        implementation_ty: TypeId,
+    ) -> TypeId {
+        let Some(overload_params) = self.generic_sig_params.get(&overload_ty).cloned() else {
+            return overload_ty;
+        };
+        let Some(implementation_params) =
+            self.generic_sig_params.get(&implementation_ty).cloned()
+        else {
+            return overload_ty;
+        };
+        if overload_params.len() != implementation_params.len() {
+            return overload_ty;
+        }
+        let mut map = rustc_hash::FxHashMap::default();
+        for (overload_param, implementation_param) in
+            overload_params.into_iter().zip(implementation_params)
+        {
+            let target = self
+                .interner
+                .intern_type_param(implementation_param, "T");
+            map.insert(overload_param, target);
+        }
+        crate::types::substitute(self.interner, overload_ty, &map)
+    }
+}
+
+pub(in crate::check::checker) fn overload_implementation_compatible(
+    store: &Store,
+    relater: &mut Relater<'_>,
+    overload_ty: TypeId,
+    implementation_ty: TypeId,
+) -> bool {
+    let Some(overload) = store.function_type(overload_ty) else {
+        return false;
+    };
+    let Some(implementation) = store.function_type(implementation_ty) else {
+        return false;
+    };
+    if overload.params.len() > implementation.params.len() {
+        return false;
+    }
+    for (overload_param, implementation_param) in overload.params.iter().zip(&implementation.params)
+    {
+        if !parameter_compatible(relater, overload_param, implementation_param) {
+            return false;
+        }
+    }
+    matches!(relater.is_assignable(overload.ret, implementation.ret), Relation::Yes)
+}
+
+fn parameter_compatible(
+    relater: &mut Relater<'_>,
+    overload: &ParameterType,
+    implementation: &ParameterType,
+) -> bool {
+    if overload.rest != implementation.rest {
+        return false;
+    }
+    matches!(
+        relater.is_assignable(overload.ty, implementation.ty),
+        Relation::Yes
+    )
+}
+
+fn function_overload_group<'stmt>(
+    statements: &'stmt [Statement<'_>],
+    index: usize,
+) -> Option<(&'stmt str, usize)> {
+    let first = function_decl_from_statement(statements.get(index)?)?;
+    let name = first.id.as_ref()?.name.as_str();
+    let mut end = index + 1;
+    while let Some(next) = statements.get(end).and_then(function_decl_from_statement) {
+        if next.id.as_ref().map(|id| id.name.as_str()) != Some(name) {
+            break;
+        }
+        end += 1;
+    }
+    if end - index > 1 {
+        Some((name, end))
+    } else {
+        None
+    }
+}
+
+fn function_decl_from_statement<'stmt, 'ast>(
+    stmt: &'stmt Statement<'ast>,
+) -> Option<&'stmt Function<'ast>> {
+    match stmt {
+        Statement::FunctionDeclaration(func) => Some(func),
+        Statement::ExportNamedDeclaration(export) => match export.declaration.as_ref()? {
+            Declaration::FunctionDeclaration(func) => Some(func),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

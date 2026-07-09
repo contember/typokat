@@ -40,6 +40,10 @@ pub enum DiagnosticCode {
     TK2345,
     /// Object literal may only specify known properties (excess property).
     TK2353,
+    /// Function implementation is missing or not immediately following the declaration.
+    TK2391,
+    /// Overload signature is not compatible with its implementation signature.
+    TK2394,
     /// Property in a derived type is not assignable to the same property in the
     /// base type (override compatibility) — backlog 06.
     TK2416,
@@ -70,6 +74,8 @@ pub enum DiagnosticCode {
     TK2589,
     /// Property is missing in type but required.
     TK2741,
+    /// No overload matches this call.
+    TK2769,
 }
 
 impl DiagnosticCode {
@@ -87,6 +93,8 @@ impl DiagnosticCode {
             DiagnosticCode::TK2345 => "TK2345",
             DiagnosticCode::TK2456 => "TK2456",
             DiagnosticCode::TK2353 => "TK2353",
+            DiagnosticCode::TK2391 => "TK2391",
+            DiagnosticCode::TK2394 => "TK2394",
             DiagnosticCode::TK2416 => "TK2416",
             DiagnosticCode::TK2445 => "TK2445",
             DiagnosticCode::TK2511 => "TK2511",
@@ -99,6 +107,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2555 => "TK2555",
             DiagnosticCode::TK2589 => "TK2589",
             DiagnosticCode::TK2741 => "TK2741",
+            DiagnosticCode::TK2769 => "TK2769",
         }
     }
 }
@@ -409,6 +418,30 @@ impl Diagnostic {
         }
     }
 
+    /// Construct a `TK2394` overload implementation compatibility error.
+    pub fn overload_incompatible(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2394,
+            severity: Severity::Error,
+            message: "This overload signature is not compatible with its implementation signature."
+                .to_string(),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2391` invalid overload layout error.
+    pub fn overload_missing_implementation(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2391,
+            severity: Severity::Error,
+            message: "Function implementation is missing or not immediately following the declaration."
+                .to_string(),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
     /// Construct a `TK2344` "type does not satisfy the constraint" error (M24): an
     /// explicit type argument `src` violates its type parameter's constraint `tgt`.
     /// The primary span is the offending type argument; the nested reason chain is
@@ -467,6 +500,17 @@ impl Diagnostic {
             code: DiagnosticCode::TK2555,
             severity: Severity::Error,
             message: format!("Expected at least {min} arguments, but got {got}"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2769` overload resolution failure.
+    pub fn no_overload_matches(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2769,
+            severity: Severity::Error,
+            message: "No overload matches this call".to_string(),
             span,
             elaboration: Vec::new(),
         }

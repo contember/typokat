@@ -22,3 +22,5 @@ interface GenericMethodOverloadsDeferred {
   map<T>(x: T): T;
   map<T>(x: T[]): T[];
 }
+
+const missingGenericMethod: GenericMethodOverloadsDeferred = {}; // error[TK2741]

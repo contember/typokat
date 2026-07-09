@@ -34,6 +34,13 @@ pub struct Symbol {
     pub name: String,
     /// Value-space declaration (`const`/`let`/`var`/`function`/`class` value side).
     pub value: Option<DeclId>,
+    /// Function declarations for this value symbol, in source order.
+    ///
+    /// Empty for non-function values. Overload checking uses this ordered list to
+    /// separate external overload signatures from the implementation declaration
+    /// while keeping the ordinary `value` slot as the current externally resolved
+    /// declaration.
+    pub function_values: Vec<DeclId>,
     /// Type-space declaration; uses the binder's separate type `DeclId` range.
     pub ty: Option<DeclId>,
     /// Namespace-space declaration (`namespace`/module).
@@ -47,6 +54,7 @@ impl Symbol {
         Symbol {
             name: name.into(),
             value: None,
+            function_values: Vec::new(),
             ty: None,
             ns: None,
         }

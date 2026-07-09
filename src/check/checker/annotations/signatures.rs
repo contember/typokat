@@ -26,6 +26,52 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(PropertyType::public(name.into_owned(), ty))
     }
 
+    pub(in crate::check::checker) fn lower_method_overload_property(
+        &mut self,
+        scope: ScopeId,
+        members: &[TSSignature<'_>],
+        name: &str,
+    ) -> Option<PropertyType> {
+        let mut call_signatures: Vec<TypeId> = Vec::new();
+        let mut unsupported = false;
+        for member in members {
+            let TSSignature::TSMethodSignature(sig) = member else {
+                continue;
+            };
+            if sig.key.static_name().as_deref() != Some(name) {
+                continue;
+            }
+            if sig.kind != TSMethodSignatureKind::Method
+                || sig.type_parameters.is_some()
+                || sig.this_param.is_some()
+                || sig.optional
+            {
+                unsupported = true;
+                continue;
+            }
+            let signature = self.lower_strict_signature_function_type(
+                scope,
+                &sig.params,
+                sig.return_type.as_deref(),
+            )?;
+            call_signatures.push(signature);
+        }
+        if unsupported {
+            return Some(PropertyType::public(
+                name.to_string(),
+                self.interner.well_known().never,
+            ));
+        }
+        if call_signatures.is_empty() {
+            return None;
+        }
+        let overload_ty = self.interner.intern_object(ObjectType {
+            call_signatures,
+            ..Default::default()
+        });
+        Some(PropertyType::public(name.to_string(), overload_ty))
+    }
+
     /// Lower a WU2 call signature: non-generic, non-`this`, with represented
     /// optional/default/rest parameter shape.
     /// Other signatures stay out of subset and do not create callability.
@@ -140,28 +186,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
             })
             .collect()
-    }
-
-    pub(in crate::check::checker) fn call_signatures_overloaded(
-        &self,
-        members: &[TSSignature<'_>],
-    ) -> bool {
-        members
-            .iter()
-            .filter(|member| matches!(member, TSSignature::TSCallSignatureDeclaration(_)))
-            .count()
-            > 1
-    }
-
-    pub(in crate::check::checker) fn construct_signatures_overloaded(
-        &self,
-        members: &[TSSignature<'_>],
-    ) -> bool {
-        members
-            .iter()
-            .filter(|member| matches!(member, TSSignature::TSConstructSignatureDeclaration(_)))
-            .count()
-            > 1
     }
 
     /// Lower an M19 index signature into `object`. Only `[k: string]: T` and

@@ -57,6 +57,7 @@ fixture (keeps fixtures robust to author miscounting).
 | `TK2654` | Non-abstract class is missing implementations for members (two or more missing, aggregated) |
 | `TK2540` | Cannot assign to a read-only property |
 | `TK2353` | Object literal may only specify known properties (excess property) |
+| `TK2391` | Function implementation is missing or not immediately following overload declarations |
 | `TK2394` | Overload signature is not compatible with its implementation signature |
 | `TK2554` | Wrong number of arguments (arity) |
 | `TK2555` | Too few arguments for a rest/min-arity call |

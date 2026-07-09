@@ -10,6 +10,9 @@ use crate::types::repr::{
     TypeParamId, Visibility,
 };
 use crate::types::store::TypeId;
+use crate::span::Span;
+use crate::diagnostics::Diagnostic;
+use crate::relate::Relater;
 use oxc_ast::ast::{
     Class, ClassElement, Expression, Function,
     MethodDefinition, MethodDefinitionKind, MethodDefinitionType,
@@ -20,6 +23,7 @@ use super::context::*;
 use super::calls::{parameter_name, widen};
 use super::decls::type_decl_id;
 use super::decls::value_decl_id;
+use super::statements::overload_implementation_compatible;
 use self::visibility::{constructor_visibility, has_public_constructor, lower_visibility};
 
 /// One accessor pair being assembled into a single property.
@@ -39,6 +43,13 @@ struct AccessorBuild {
     has_setter: bool,
     /// The accessor's access modifier (getter's preferred when both present).
     visibility: Visibility,
+}
+
+struct ClassOwnMembers {
+    instance: Vec<PropertyType>,
+    static_side: Vec<PropertyType>,
+    ctor_params: Option<Vec<ParameterType>>,
+    ctor_overloads: Option<Vec<TypeId>>,
 }
 
 impl<'a, 'ast> Pass<'a, 'ast> {
@@ -146,7 +157,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let frame = self.build_type_param_frame(param_decl, type_params);
 
         // Lower own members inside the class type-parameter frame.
-        let (own_instance, own_static, ctor_params) = self.with_type_params(frame, |pass| {
+        let own_members = self.with_type_params(frame, |pass| {
             // M24: lower the parameters' `extends` constraints with the frame active.
             pass.lower_type_param_constraints(scope, param_decl, type_params);
             pass.collect_class_own_members(scope, class_id, class)
@@ -174,12 +185,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .map(|decl_id| self.class_type_params.contains_key(&decl_id))
             .unwrap_or(false);
         if type_params.is_empty() && !base_is_generic {
-            self.collect_override_checks(class, &own_instance, &base_instance, &base_member_kinds);
+            self.collect_override_checks(
+                class,
+                &own_members.instance,
+                &base_instance,
+                &base_member_kinds,
+            );
         }
 
-        let properties = compose_members(base_instance, own_instance);
+        let properties = compose_members(base_instance, own_members.instance);
 
-        let static_properties = compose_members(base_static, own_static);
+        let static_properties = compose_members(base_static, own_members.static_side);
 
         // Fill the reserved instance type with the composed (base + own) members.
         self.interner.fill_object(
@@ -191,7 +207,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         );
 
         // A class with no own constructor inherits the base constructor's accessibility.
-        let (ctor_visibility, ctor_declaring_class) = if ctor_params.is_some() {
+        let (ctor_visibility, ctor_declaring_class) = if own_members.ctor_params.is_some() {
             (constructor_visibility(class), class_id)
         } else {
             match base {
@@ -201,7 +217,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         };
 
         // `new` reads only the parameters; the function return is unused.
-        let ctor = match ctor_params {
+        let ctor = match own_members.ctor_params {
             Some(params) => self.interner.intern_function(FunctionType {
                 params,
                 ret: void_ty,
@@ -220,6 +236,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // classes and private/protected constructors expose no public construct side.
         let construct_signatures = if class.r#abstract || !has_public_constructor(class) {
             Vec::new()
+        } else if let Some(overloads) = &own_members.ctor_overloads {
+            let overload_params: Vec<Vec<ParameterType>> = overloads
+                .iter()
+                .filter_map(|ctor| {
+                    self.interner
+                        .store()
+                        .function_type(*ctor)
+                        .map(|func| func.params.clone())
+                })
+                .collect();
+            overload_params
+                .into_iter()
+                .map(|params| self.interner.intern_function(FunctionType { params, ret: reserved }))
+                .collect()
         } else {
             let params = self
                 .interner
@@ -276,6 +306,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 if !type_params.is_empty() {
                     self.class_type_params.insert(decl_id, type_params.to_vec());
                 }
+                if let Some(overloads) = own_members.ctor_overloads.clone() {
+                    self.class_ctor_overloads.insert(decl_id, overloads);
+                }
                 // Backlog 06: record this class's pending abstract members so a
                 // subclass composes against it (absent = empty). Non-abstract classes
                 // that keep pending members already reported above; still stored so a
@@ -305,11 +338,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         class_id: ClassId,
         class: &Class<'_>,
-    ) -> (Vec<PropertyType>, Vec<PropertyType>, Option<Vec<ParameterType>>) {
+    ) -> ClassOwnMembers {
         let mut own_instance: Vec<PropertyType> = Vec::new();
         let mut own_static: Vec<PropertyType> = Vec::new();
         // The constructor's parameters, if an explicit `constructor` is present.
         let mut ctor_params: Option<Vec<ParameterType>> = None;
+        let mut ctor_overloads: Vec<(TypeId, Span)> = Vec::new();
+        let overloaded_methods = class_overloaded_method_names(class);
+        let mut lowered_overloaded_methods: FxHashSet<(String, bool)> = FxHashSet::default();
         // M15: accumulate get/set pairs per name, then build one accessor property.
         // A getter supplies the type; a missing setter makes it `readonly`.
         let mut accessors: Vec<AccessorBuild> = Vec::new();
@@ -408,6 +444,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     }
                     match method.kind {
                         MethodDefinitionKind::Constructor => {
+                            if method.value.body.is_none() {
+                                let params =
+                                    self.lower_signature_parameters(scope, &method.value.params);
+                                let signature = self.interner.intern_function(FunctionType {
+                                    params,
+                                    ret: self.interner.well_known().void,
+                                });
+                                ctor_overloads.push((signature, Span::from_oxc(method.span)));
+                                continue;
+                            }
                             // The constructor signature: its parameters (used by `new`).
                             // A field/sibling-class reference in a parameter annotation
                             // resolves from `scope`. A `static` keyword on a constructor
@@ -451,6 +497,26 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                             let Some(name) = method.key.static_name() else {
                                 continue;
                             };
+                            let overload_key = (name.to_string(), method.r#static);
+                            if overloaded_methods.contains(&overload_key) {
+                                if lowered_overloaded_methods.insert(overload_key.clone()) {
+                                    if let Some(member) = self.lower_class_method_overload(
+                                        scope,
+                                        class_id,
+                                        class,
+                                        name.as_ref(),
+                                        method.r#static,
+                                        lower_visibility(method.accessibility),
+                                    ) {
+                                        if method.r#static {
+                                            own_static.push(member);
+                                        } else {
+                                            own_instance.push(member);
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
                             let Some(ty) = self.lower_method_signature(scope, &method.value) else {
                                 continue;
                             };
@@ -499,7 +565,115 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             own_instance.push(member);
         }
 
-        (own_instance, own_static, ctor_params)
+        if let Some(params) = &ctor_params {
+            let implementation = self.interner.intern_function(FunctionType {
+                params: params.clone(),
+                ret: self.interner.well_known().void,
+            });
+            self.check_class_overload_compatibility(implementation, &ctor_overloads);
+        }
+
+        let ctor_overloads = if ctor_overloads.is_empty() {
+            None
+        } else {
+            Some(ctor_overloads.iter().map(|(signature, _)| *signature).collect())
+        };
+        ClassOwnMembers {
+            instance: own_instance,
+            static_side: own_static,
+            ctor_params,
+            ctor_overloads,
+        }
+    }
+
+    fn lower_class_method_overload(
+        &mut self,
+        scope: ScopeId,
+        class_id: ClassId,
+        class: &Class<'_>,
+        name: &str,
+        is_static: bool,
+        visibility: Visibility,
+    ) -> Option<PropertyType> {
+        let mut call_signatures: Vec<TypeId> = Vec::new();
+        let mut overloads: Vec<(TypeId, Span)> = Vec::new();
+        let mut implementation: Option<TypeId> = None;
+        let mut unsupported = false;
+        for element in &class.body.body {
+            let ClassElement::MethodDefinition(method) = element else {
+                continue;
+            };
+            if method.computed
+                || method.r#static != is_static
+                || method.kind != MethodDefinitionKind::Method
+                || method.key.static_name().as_deref() != Some(name)
+            {
+                continue;
+            }
+            if method.value.type_parameters.is_some() {
+                unsupported = true;
+                continue;
+            }
+            let signature = self.lower_method_signature(scope, &method.value)?;
+            if method.value.body.is_some() {
+                implementation = Some(signature);
+                continue;
+            }
+            call_signatures.push(signature);
+            overloads.push((signature, Span::from_oxc(method.span)));
+        }
+        if unsupported {
+            return Some(PropertyType {
+                name: name.to_string(),
+                ty: self.interner.well_known().never,
+                optional: false,
+                visibility,
+                declaring_class: Some(class_id),
+                readonly: false,
+                is_accessor: false,
+            });
+        }
+        if call_signatures.is_empty() {
+            return None;
+        }
+        if let Some(implementation) = implementation {
+            self.check_class_overload_compatibility(implementation, &overloads);
+        }
+        let ty = self.interner.intern_object(ObjectType {
+            call_signatures,
+            ..Default::default()
+        });
+        Some(PropertyType {
+            name: name.to_string(),
+            ty,
+            optional: false,
+            visibility,
+            declaring_class: Some(class_id),
+            readonly: false,
+            is_accessor: false,
+        })
+    }
+
+    fn check_class_overload_compatibility(
+        &mut self,
+        implementation_ty: TypeId,
+        overloads: &[(TypeId, Span)],
+    ) {
+        for (signature_ty, span) in overloads {
+            let wk = self.interner.well_known();
+            let store = self.interner.store();
+            let mut relater = Relater::new(store, wk);
+            if !overload_implementation_compatible(
+                store,
+                &mut relater,
+                *signature_ty,
+                implementation_ty,
+            ) {
+                self.diagnostics
+                    .push(Diagnostic::overload_incompatible(*span));
+                break;
+            }
+        }
     }
 
     /// Record one getter/setter into the per-name accessor accumulator.
@@ -664,6 +838,25 @@ fn own_instance_member_kinds(class: &Class<'_>) -> FxHashMap<String, bool> {
         }
     }
     kinds
+}
+
+fn class_overloaded_method_names(class: &Class<'_>) -> FxHashSet<(String, bool)> {
+    let mut counts: FxHashMap<(String, bool), usize> = FxHashMap::default();
+    for element in &class.body.body {
+        let ClassElement::MethodDefinition(method) = element else {
+            continue;
+        };
+        if method.computed || method.kind != MethodDefinitionKind::Method {
+            continue;
+        }
+        if let Some(name) = method.key.static_name() {
+            *counts.entry((name.into_owned(), method.r#static)).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter_map(|(key, count)| if count > 1 { Some(key) } else { None })
+        .collect()
 }
 
 /// Own abstract member names and own concrete implementations for abstract-completeness.
