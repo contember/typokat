@@ -1,8 +1,9 @@
+use super::functions::parameter_from_shape;
 use super::*;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
-    /// Lower a WU1 method signature: required, non-generic, non-`this`,
-    /// non-accessor, static name. Optional methods stay out of subset.
+    /// Lower a WU1 method signature: non-generic, non-`this`, non-accessor,
+    /// static name. Optional methods stay out of subset.
     pub(in crate::check::checker) fn lower_method_signature_property(
         &mut self,
         scope: ScopeId,
@@ -25,7 +26,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(PropertyType::public(name.into_owned(), ty))
     }
 
-    /// Lower a WU2 call signature: required, non-generic, non-`this`, non-rest.
+    /// Lower a WU2 call signature: non-generic, non-`this`, with represented
+    /// optional/default/rest parameter shape.
     /// Other signatures stay out of subset and do not create callability.
     pub(in crate::check::checker) fn lower_call_signature(
         &mut self,
@@ -38,8 +40,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.lower_strict_signature_function_type(scope, &sig.params, sig.return_type.as_deref())
     }
 
-    /// Lower a WU3 construct signature: required, non-generic, non-rest, with a
-    /// representable instance type. Other signatures do not create constructability.
+    /// Lower a WU3 construct signature: non-generic with a representable instance
+    /// type. Other signatures do not create constructability.
     pub(in crate::check::checker) fn lower_construct_signature(
         &mut self,
         scope: ScopeId,
@@ -72,7 +74,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(self.interner.intern_function(FunctionType { params, ret }))
     }
 
-    /// Lower positional signature parameters for function-typed properties and class
+    /// Lower signature parameters for function-typed properties and class
     /// method/constructor signatures.
     pub(in crate::check::checker) fn lower_signature_parameters(
         &mut self,
@@ -80,7 +82,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         params: &FormalParameters<'_>,
     ) -> Vec<ParameterType> {
         let error_ty = self.interner.well_known().error;
-        let mut lowered: Vec<ParameterType> = Vec::with_capacity(params.items.len());
+        let mut lowered: Vec<ParameterType> =
+            Vec::with_capacity(params.items.len() + usize::from(params.rest.is_some()));
         for param in &params.items {
             let name = parameter_name(&param.pattern).unwrap_or_default();
             let ty = match param.type_annotation.as_ref() {
@@ -89,7 +92,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     .unwrap_or(error_ty),
                 None => error_ty,
             };
-            lowered.push(ParameterType::required(name, ty));
+            lowered.push(parameter_from_shape(
+                name,
+                ty,
+                param.optional,
+                param.initializer.is_some(),
+            ));
+        }
+        if let Some(rest) = &params.rest {
+            let name = parameter_name(&rest.rest.argument).unwrap_or_default();
+            let ty = match rest.type_annotation.as_ref() {
+                Some(ann) => self
+                    .lower_annotation(scope, &ann.type_annotation)
+                    .unwrap_or(error_ty),
+                None => error_ty,
+            };
+            lowered.push(ParameterType::rest(name, ty));
         }
         lowered
     }

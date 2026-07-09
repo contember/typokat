@@ -21,3 +21,15 @@ const arr: (number | string)[] = t; // ok — tuple assignable to the array of i
 const lit: [1, 2] = [1, 2];    // ok — literal element types are preserved under tuple context
 const litBad: [1, 2] = [1, 3]; // error[TK2322]
 // ^ 3 is not assignable to the literal type 2
+
+function needsTerminalRest(arg: [string, ...number[]]): void {}
+needsTerminalRest(true); // error[TK2345]: Argument of type 'boolean' is not assignable to parameter of type '[string, ...number[]]'
+
+function needsMiddleRest(arg: [string, ...number[], boolean]): void {}
+needsMiddleRest(true); // error[TK2345]: Argument of type 'boolean' is not assignable to parameter of type '[string, ...number[], boolean]'
+
+function needsLeadingRest(arg: [...number[], boolean]): void {}
+needsLeadingRest(true); // error[TK2345]: Argument of type 'boolean' is not assignable to parameter of type '[...number[], boolean]'
+
+function needsReadonlyRest(arg: readonly [string, ...number[]]): void {}
+needsReadonlyRest(true); // error[TK2345]: Argument of type 'boolean' is not assignable to parameter of type 'readonly [string, ...number[]]'

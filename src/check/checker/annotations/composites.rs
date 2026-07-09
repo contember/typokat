@@ -30,7 +30,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     }
 
     /// Lower `[A, B, …]` to an ordered interned tuple; `[]` is the empty tuple.
-    /// Optional, rest, and named tuple members are out of subset and abort the
+    /// Optional and named tuple members are out of subset and abort the
     /// annotation rather than silently mis-shaping the tuple.
     pub(super) fn lower_tuple_annotation(
         &mut self,
@@ -38,13 +38,36 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         elements: &[TSTupleElement<'_>],
     ) -> Option<TypeId> {
         let mut lowered: Vec<TypeId> = Vec::with_capacity(elements.len());
+        let mut rest: Option<TupleRestType> = None;
         for element in elements {
-            // A plain positional element exposes its underlying `TSType`; an optional /
-            // rest element does not (`as_ts_type` → `None`) and is out of subset.
-            let ts_type = element.as_ts_type()?;
-            lowered.push(self.with_indirection(|p| p.lower_annotation(scope, ts_type))?);
+            match element {
+                TSTupleElement::TSRestType(rest_type) => {
+                    if rest.is_some() {
+                        return None;
+                    }
+                    let ty = self.with_indirection(|p| {
+                        p.lower_annotation(scope, &rest_type.type_annotation)
+                    })?;
+                    rest = Some(TupleRestType::new(lowered.len(), ty));
+                }
+                TSTupleElement::TSOptionalType(_) => return None,
+                _ => {
+                    let ts_type = element.as_ts_type()?;
+                    if matches!(ts_type, TSType::TSNamedTupleMember(_)) {
+                        return None;
+                    }
+                    lowered.push(self.with_indirection(|p| p.lower_annotation(scope, ts_type))?);
+                }
+            }
         }
-        Some(self.interner.intern_tuple(lowered))
+        if let Some(rest) = rest {
+            Some(
+                self.interner
+                    .intern_tuple_type(TupleType::with_rest(lowered, rest)),
+            )
+        } else {
+            Some(self.interner.intern_tuple(lowered))
+        }
     }
 
     /// Lower a literal type to its hash-consed literal id, including unary-minus
@@ -144,25 +167,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(self.interner.intern_object(object))
     }
 
-    /// Lower a function type annotation to an interned function. Parameters stay
-    /// positional; missing/unlowerable/optional/rest parameters abort rather than
-    /// silently mis-stating the signature.
+    /// Lower a function type annotation to an interned function. Missing or
+    /// unlowerable parameters abort rather than silently mis-stating the signature.
     pub(super) fn lower_function_annotation(
         &mut self,
         scope: ScopeId,
         params: &FormalParameters<'_>,
         return_type: &TSType<'_>,
     ) -> Option<TypeId> {
-        self.signature_params_in_subset(params)?;
-        let mut lowered: Vec<ParameterType> = Vec::with_capacity(params.items.len());
-        for param in &params.items {
-            let name = parameter_name(&param.pattern)?;
-            let annotation = param.type_annotation.as_ref()?;
-            // B29: a parameter/return is a legal-recursion boundary (`type Fn = () => Fn`).
-            let ty =
-                self.with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation))?;
-            lowered.push(ParameterType::required(name, ty));
-        }
+        let lowered = self.lower_strict_signature_parameters(scope, params, true)?;
         let ret = self.with_indirection(|p| p.lower_annotation(scope, return_type))?;
         Some(self.interner.intern_function(FunctionType {
             params: lowered,
@@ -182,12 +195,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 Some(self.intern_readonly_array(element))
             }
             TSType::TSTupleType(tuple) => {
-                let mut elements = Vec::with_capacity(tuple.element_types.len());
-                for element in &tuple.element_types {
-                    let ts_type = element.as_ts_type()?;
-                    elements.push(self.with_indirection(|p| p.lower_annotation(scope, ts_type))?);
-                }
-                Some(self.intern_readonly_tuple(elements))
+                let tuple = self.lower_tuple_annotation(scope, &tuple.element_types)?;
+                Some(self.interner.intern_readonly(tuple))
             }
             _ => None,
         }
@@ -196,10 +205,5 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn intern_readonly_array(&mut self, element: TypeId) -> TypeId {
         let array = self.interner.intern_array(element);
         self.interner.intern_readonly(array)
-    }
-
-    fn intern_readonly_tuple(&mut self, elements: Vec<TypeId>) -> TypeId {
-        let tuple = self.interner.intern_tuple(elements);
-        self.interner.intern_readonly(tuple)
     }
 }

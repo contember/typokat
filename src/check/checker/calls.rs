@@ -253,20 +253,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let Some(func) = self.interner.store().function_type(signature_ty) else {
             return Some((wk.error, call_span));
         };
-        let param_types: Vec<TypeId> = func.params.iter().map(|p| p.ty).collect();
+        let params = func.params.clone();
         let ret = func.ret;
 
         // M25: a substituted PARAMETER type may be a now-concrete conditional too
         // (`g2<T>(t: T, c: T extends string ? "yes" : "no")`). Evaluate each (the same
         // demand as the return below) so valid calls pass and a mismatch reports against
         // the RESOLVED type — an unevaluated deferred node would reject every argument.
-        let param_types: Vec<TypeId> = param_types
-            .into_iter()
-            .map(|param| self.evaluate_type(param, call_span))
-            .collect();
+        let params = self.evaluate_parameters(params, call_span);
 
         // Arity (TK2554) + per-argument assignability (TK2345), shared with `new`.
-        self.check_call_arguments(scope, &param_types, &arg_types, &arg_exprs, call_span);
+        self.check_call_arguments(scope, &params, &arg_types, &arg_exprs, call_span);
 
         // M25: a generic call's return type may be a conditional instantiated by the
         // inferred/explicit type arguments (`m("abc")` → `"abc" extends string ? … : …`).
@@ -321,60 +318,222 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let Some(super_ctor) = self.current_super_ctor else {
             return Some((wk.error, call_span));
         };
-        let param_types: Vec<TypeId> = match self.interner.store().function_type(super_ctor) {
-            Some(func) => func.params.iter().map(|p| p.ty).collect(),
+        let params: Vec<ParameterType> = match self.interner.store().function_type(super_ctor) {
+            Some(func) => func.params.clone(),
             // Defensive: the constructor is always interned as a function in `fill_class`.
             None => return Some((wk.error, call_span)),
         };
+        let params = self.evaluate_parameters(params, call_span);
 
         // Reuse the shared call-checking path: arity (TK2554) + argument assignability
         // (TK2345). The `super(...)` expression's value type is unused.
-        self.check_call_arguments(scope, &param_types, &arg_types, &arg_exprs, call_span);
+        self.check_call_arguments(scope, &params, &arg_types, &arg_exprs, call_span);
 
         Some((wk.error, call_span))
     }
 
-    /// Shared M3 call/`new` argument checking: exact arity plus per-argument
+    /// Shared M3 call/`new` argument checking: arity plus per-argument
     /// assignability. Fresh object/tuple literals use assignment-style diagnostics,
     /// matching tsc's literal-member reporting.
     fn check_call_arguments(
         &mut self,
         scope: ScopeId,
-        param_types: &[TypeId],
+        params: &[ParameterType],
         arg_types: &[(TypeId, Span)],
         arg_exprs: &[&Expression<'_>],
         call_span: Span,
     ) {
-        if arg_types.len() != param_types.len() {
-            self.diagnostics.push(Diagnostic::wrong_argument_count(
-                call_span,
-                param_types.len(),
-                arg_types.len(),
-            ));
-        }
+        self.check_call_arity(params, arg_types.len(), call_span);
 
+        let targets = self.call_argument_targets(params, arg_types.len());
         for (((arg_ty, arg_span), arg_expr), param_ty) in
-            arg_types.iter().zip(arg_exprs).zip(param_types)
+            arg_types.iter().zip(arg_exprs).zip(targets)
         {
+            let Some(param_ty) = param_ty else {
+                continue;
+            };
             let (src, src_span) = self.infer_contextual_source_after_walked(
                 scope,
                 arg_expr,
-                *param_ty,
+                param_ty,
                 (*arg_ty, *arg_span),
             );
             check_excess_properties(
                 self.interner.store(),
                 arg_expr,
-                *param_ty,
+                param_ty,
                 &mut self.diagnostics,
             );
             self.obligations.push(AssignObligation {
                 src,
-                tgt: *param_ty,
+                tgt: param_ty,
                 src_span,
-                kind: self.call_argument_obligation_kind(arg_expr, *param_ty),
+                kind: self.call_argument_obligation_kind(arg_expr, param_ty),
             });
         }
+    }
+
+    fn evaluate_parameters(
+        &mut self,
+        params: Vec<ParameterType>,
+        span: Span,
+    ) -> Vec<ParameterType> {
+        params
+            .into_iter()
+            .map(|mut param| {
+                param.ty = self.evaluate_type(param.ty, span);
+                param
+            })
+            .collect()
+    }
+
+    fn check_call_arity(&mut self, params: &[ParameterType], got: usize, span: Span) {
+        let arity = self.call_arity(params);
+        if got < arity.min {
+            let diagnostic = if arity.unbounded_rest {
+                Diagnostic::wrong_min_argument_count(span, arity.min, got)
+            } else {
+                self.wrong_bounded_argument_count(
+                    span,
+                    arity.min,
+                    arity.max.unwrap_or(arity.min),
+                    got,
+                )
+            };
+            self.diagnostics.push(diagnostic);
+            return;
+        }
+        if let Some(max) = arity.max {
+            if got > max {
+                let diagnostic = self.wrong_bounded_argument_count(span, arity.min, max, got);
+                self.diagnostics.push(diagnostic);
+            }
+        }
+    }
+
+    fn wrong_bounded_argument_count(
+        &self,
+        span: Span,
+        min: usize,
+        max: usize,
+        got: usize,
+    ) -> Diagnostic {
+        if min == max {
+            Diagnostic::wrong_argument_count(span, min, got)
+        } else {
+            Diagnostic::wrong_argument_count_range(span, min, max, got)
+        }
+    }
+
+    fn call_arity(&self, params: &[ParameterType]) -> CallArity {
+        let function = FunctionType {
+            params: params.to_vec(),
+            ret: self.interner.well_known().void,
+        };
+        let fixed = function.total_fixed_param_count();
+        let mut min = function.required_param_count();
+        let mut max = Some(fixed);
+        let mut unbounded_rest = false;
+        if let Some(rest) = function.rest_param() {
+            let rest_arity = self.rest_parameter_arity(rest.ty);
+            min += rest_arity.min;
+            max = rest_arity.max.map(|rest_max| fixed + rest_max);
+            unbounded_rest = rest_arity.max.is_none();
+        }
+        CallArity {
+            min,
+            max,
+            unbounded_rest,
+        }
+    }
+
+    fn rest_parameter_arity(&self, rest_ty: TypeId) -> RestArity {
+        let rest_ty = self
+            .interner
+            .store()
+            .readonly_operand(rest_ty)
+            .unwrap_or(rest_ty);
+        if self.interner.store().array_type(rest_ty).is_some() {
+            return RestArity { min: 0, max: None };
+        }
+        if let Some(tuple) = self.interner.store().tuple_type(rest_ty) {
+            let min = tuple.elements.len();
+            let max = if tuple.has_rest() { None } else { Some(min) };
+            return RestArity { min, max };
+        }
+        RestArity { min: 0, max: None }
+    }
+
+    fn call_argument_targets(
+        &self,
+        params: &[ParameterType],
+        arg_count: usize,
+    ) -> Vec<Option<TypeId>> {
+        let fixed: Vec<&ParameterType> = params.iter().filter(|param| param.is_fixed()).collect();
+        let rest = params.iter().find(|param| param.rest);
+        let total_rest_args = arg_count.saturating_sub(fixed.len());
+        (0..arg_count)
+            .map(|index| {
+                if let Some(param) = fixed.get(index) {
+                    return Some(param.ty);
+                }
+                let rest = rest?;
+                self.rest_argument_target(rest.ty, index - fixed.len(), total_rest_args)
+            })
+            .collect()
+    }
+
+    fn rest_argument_target(
+        &self,
+        rest_ty: TypeId,
+        offset: usize,
+        total_rest_args: usize,
+    ) -> Option<TypeId> {
+        let rest_ty = self
+            .interner
+            .store()
+            .readonly_operand(rest_ty)
+            .unwrap_or(rest_ty);
+        if let Some(array) = self.interner.store().array_type(rest_ty) {
+            return Some(array.element);
+        }
+        if let Some(tuple) = self.interner.store().tuple_type(rest_ty) {
+            return self.tuple_rest_argument_target(tuple, offset, total_rest_args);
+        }
+        Some(rest_ty)
+    }
+
+    fn tuple_rest_argument_target(
+        &self,
+        tuple: &crate::types::repr::TupleType,
+        offset: usize,
+        total_rest_args: usize,
+    ) -> Option<TypeId> {
+        let Some(rest) = tuple.rest else {
+            return tuple.elements.get(offset).copied();
+        };
+        if offset < rest.position {
+            return tuple.elements.get(offset).copied();
+        }
+        let fixed_after = tuple.elements.len().saturating_sub(rest.position);
+        let tail_start = total_rest_args.saturating_sub(fixed_after);
+        if offset >= tail_start {
+            let tail_index = rest.position + (offset - tail_start);
+            return tuple.elements.get(tail_index).copied();
+        }
+        self.rest_segment_element(rest.ty)
+    }
+
+    fn rest_segment_element(&self, rest_ty: TypeId) -> Option<TypeId> {
+        let rest_ty = self
+            .interner
+            .store()
+            .readonly_operand(rest_ty)
+            .unwrap_or(rest_ty);
+        if let Some(array) = self.interner.store().array_type(rest_ty) {
+            return Some(array.element);
+        }
+        Some(rest_ty)
     }
 
     fn call_argument_obligation_kind(
@@ -457,15 +616,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     let Some(func) = self.interner.store().function_type(signature_ty) else {
                         return Some((wk.error, new_span));
                     };
-                    let param_types: Vec<TypeId> = func.params.iter().map(|p| p.ty).collect();
+                    let params = func.params.clone();
                     let ret = func.ret;
-                    self.check_call_arguments(
-                        scope,
-                        &param_types,
-                        &arg_types,
-                        &arg_exprs,
-                        new_span,
-                    );
+                    let params = self.evaluate_parameters(params, new_span);
+                    self.check_call_arguments(scope, &params, &arg_types, &arg_exprs, new_span);
                     return Some((ret, new_span));
                 }
             }
@@ -495,15 +649,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         // The (instantiated) constructor signature's parameter types (zero for an implicit
         // constructor).
-        let param_types: Vec<TypeId> = match self.interner.store().function_type(ctor) {
-            Some(func) => func.params.iter().map(|p| p.ty).collect(),
+        let params: Vec<ParameterType> = match self.interner.store().function_type(ctor) {
+            Some(func) => func.params.clone(),
             // Defensive: the constructor is always interned as a function in `fill_class`.
             None => Vec::new(),
         };
+        let params = self.evaluate_parameters(params, new_span);
 
         // Reuse the M3 call-checking path: arity (TK2554) + argument assignability
         // (TK2345). The `new` expression's type is the (instantiated) instance type.
-        self.check_call_arguments(scope, &param_types, &arg_types, &arg_exprs, new_span);
+        self.check_call_arguments(scope, &params, &arg_types, &arg_exprs, new_span);
 
         Some((instance, new_span))
     }
@@ -718,7 +873,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// Lower a function's/arrow's parameters to `ParameterType`s and, when a function
     /// scope is known, record each parameter's type in `decl_types` so the body can
     /// resolve it. An un-annotated parameter is out of the MVP subset → the error
-    /// type (no diagnostic), matching M0/M1 leniency. Parameters are positional.
+    /// type (no diagnostic), matching M0/M1 leniency.
     fn lower_parameters(
         &mut self,
         enclosing: ScopeId,
@@ -726,16 +881,21 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         params: &FormalParameters<'_>,
     ) -> Vec<ParameterType> {
         let error_ty = self.interner.well_known().error;
-        let mut lowered: Vec<ParameterType> = Vec::with_capacity(params.items.len());
+        let mut lowered: Vec<ParameterType> =
+            Vec::with_capacity(params.items.len() + usize::from(params.rest.is_some()));
+        let parameter_scope = fn_scope.unwrap_or(enclosing);
         for param in &params.items {
             let name = parameter_name(&param.pattern).unwrap_or_default();
             // Annotated type, or the error type for an un-annotated parameter. Type
             // references in the annotation resolve from the enclosing scope.
-            let ty = match param.type_annotation.as_ref() {
-                Some(ann) => self
-                    .lower_annotation(enclosing, &ann.type_annotation)
-                    .unwrap_or(error_ty),
-                None => error_ty,
+            let annotation_ty = param
+                .type_annotation
+                .as_ref()
+                .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation));
+            let ty = if param.type_annotation.is_some() {
+                annotation_ty.unwrap_or(error_ty)
+            } else {
+                error_ty
             };
 
             // F4: object destructuring parameters run M13 access checks against the
@@ -745,6 +905,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 if param.type_annotation.is_some() {
                     self.check_object_pattern_access(object, ty);
                 }
+            }
+
+            if let (Some(init), Some(annotation_ty)) = (&param.initializer, annotation_ty) {
+                self.check_annotated_initializer(parameter_scope, Some(annotation_ty), init);
             }
 
             // Bind the parameter's type into the function scope so the body resolves
@@ -759,7 +923,31 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
             }
 
-            lowered.push(ParameterType::required(name, ty));
+            lowered.push(parameter_from_shape(
+                name,
+                ty,
+                param.optional,
+                param.initializer.is_some(),
+            ));
+        }
+        if let Some(rest) = &params.rest {
+            let name = parameter_name(&rest.rest.argument).unwrap_or_default();
+            let ty = match rest.type_annotation.as_ref() {
+                Some(ann) => self
+                    .lower_annotation(enclosing, &ann.type_annotation)
+                    .unwrap_or(error_ty),
+                None => error_ty,
+            };
+            if let Some(scope) = fn_scope {
+                if let Some(decl_id) = parameter_name(&rest.rest.argument)
+                    .and_then(|n| self.binder.graph.resolve(scope, &n))
+                    .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
+                    .and_then(|s| s.value)
+                {
+                    self.decl_types.set(decl_id, ty);
+                }
+            }
+            lowered.push(ParameterType::rest(name, ty));
         }
         lowered
     }
@@ -786,6 +974,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         inferred.unwrap_or(void_ty)
     }
+}
+
+struct CallArity {
+    min: usize,
+    max: Option<usize>,
+    unbounded_rest: bool,
+}
+
+struct RestArity {
+    min: usize,
+    max: Option<usize>,
 }
 
 /// The function's return type: a declared annotation always wins; otherwise the
@@ -818,6 +1017,21 @@ pub(in crate::check::checker) fn parameter_name(pattern: &BindingPattern<'_>) ->
     match pattern {
         BindingPattern::BindingIdentifier(ident) => Some(ident.name.to_string()),
         _ => None,
+    }
+}
+
+fn parameter_from_shape(
+    name: impl Into<String>,
+    ty: TypeId,
+    optional: bool,
+    has_default: bool,
+) -> ParameterType {
+    if has_default {
+        ParameterType::defaulted(name, ty)
+    } else if optional {
+        ParameterType::optional(name, ty)
+    } else {
+        ParameterType::required(name, ty)
     }
 }
 

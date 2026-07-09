@@ -17,3 +17,16 @@ objectService.convert("bad");                                          // error[
 
 const objectProp: boolean = objectService.enabled;                     // ok - plain property still lowers
 const objectBadProp: string = objectService.enabled;                   // error[TK2322]: Type 'boolean' is not assignable to type 'string'
+
+type ObjectShapedMethods = {
+  optional(input: number, label?: string): void;
+  rest(input: number, ...labels: string[]): void;
+};
+
+declare const objectShapedMethods: ObjectShapedMethods;
+objectShapedMethods.optional(1);
+objectShapedMethods.optional();                                        // error[TK2554]: Expected 1-2 arguments, but got 0
+objectShapedMethods.optional(1, 2);                                    // error[TK2345]: Argument of type 'number' is not assignable to parameter of type 'string'
+objectShapedMethods.rest(1, "x");
+objectShapedMethods.rest();                                            // error[TK2555]: Expected at least 1 arguments, but got 0
+objectShapedMethods.rest(1, 2);                                        // error[TK2345]: Argument of type 'number' is not assignable to parameter of type 'string'

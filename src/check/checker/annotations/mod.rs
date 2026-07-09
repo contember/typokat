@@ -9,7 +9,7 @@ use crate::diagnostics::Diagnostic;
 use crate::span::Span;
 use crate::types::repr::{
     ConditionalType, FunctionType, LiteralValue, MappedType, ModifierOp, ObjectType, ParameterType,
-    PropertyType, TemplateType, TypeTag,
+    PropertyType, TemplateType, TupleRestType, TupleType, TypeTag,
 };
 use crate::types::store::TypeId;
 use oxc_ast::ast::{

@@ -21,3 +21,22 @@ interfaceCallable();                                               // error[TK25
 objectCallable(1, 2);                                              // error[TK2554]: Expected 1 arguments, but got 2
 interfaceCallable("bad");                                         // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'
 objectCallable("bad");                                            // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'
+
+interface OptionalCallable {
+  (input: number, label?: string): string;
+}
+
+type RestCallable = {
+  (input: number, ...labels: string[]): void;
+};
+
+declare const optionalCallable: OptionalCallable;
+declare const restCallable: RestCallable;
+
+const optionalResult: string = optionalCallable(1);
+optionalCallable();                                                // error[TK2554]: Expected 1-2 arguments, but got 0
+optionalCallable(1, "x", "extra");                                // error[TK2554]: Expected 1-2 arguments, but got 3
+optionalCallable(1, 2);                                            // error[TK2345]: Argument of type 'number' is not assignable to parameter of type 'string'
+restCallable(1, "x");
+restCallable();                                                    // error[TK2555]: Expected at least 1 arguments, but got 0
+restCallable(1, 2);                                                // error[TK2345]: Argument of type 'number' is not assignable to parameter of type 'string'

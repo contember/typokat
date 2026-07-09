@@ -33,16 +33,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         params: &FormalParameters<'_>,
         return_type: &TSTypeAnnotation<'_>,
     ) -> Option<TypeId> {
-        self.signature_params_in_subset(params)?;
-        let mut lowered: Vec<ParameterType> = Vec::with_capacity(params.items.len());
-        for param in &params.items {
-            let name = parameter_name(&param.pattern)?;
-            let annotation = param.type_annotation.as_ref()?;
-            // B29: a parameter/return is a legal-recursion boundary.
-            let ty =
-                self.with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation))?;
-            lowered.push(ParameterType::required(name, ty));
-        }
+        let lowered = self.lower_strict_signature_parameters(scope, params, true)?;
         let ret =
             self.with_indirection(|p| p.lower_annotation(scope, &return_type.type_annotation))?;
         Some(self.interner.intern_function(FunctionType {
@@ -59,6 +50,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> bool {
         let params_ok = params.items.iter().all(|param| {
             param.type_annotation.as_ref().is_some_and(|ann| {
+                self.annotation_type_refs_are_locally_resolvable(scope, &ann.type_annotation)
+            })
+        }) && params.rest.as_ref().is_none_or(|rest| {
+            rest.type_annotation.as_ref().is_some_and(|ann| {
                 self.annotation_type_refs_are_locally_resolvable(scope, &ann.type_annotation)
             })
         });
@@ -166,11 +161,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             TSType::TSArrayType(array) => {
                 self.annotation_type_refs_are_locally_resolvable(scope, &array.element_type)
             }
-            TSType::TSTupleType(tuple) => tuple.element_types.iter().all(|element| {
-                element
-                    .as_ts_type()
-                    .is_some_and(|ty| self.annotation_type_refs_are_locally_resolvable(scope, ty))
-            }),
+            TSType::TSTupleType(tuple) => tuple
+                .element_types
+                .iter()
+                .all(|element| self.tuple_element_refs_are_locally_resolvable(scope, element)),
             TSType::TSTypeOperatorType(op) => {
                 op.operator == TSTypeOperatorOperator::Keyof
                     && self.annotation_type_refs_are_locally_resolvable(scope, &op.type_annotation)
@@ -192,14 +186,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         params: &FormalParameters<'_>,
         return_type: Option<&TSTypeAnnotation<'_>>,
     ) -> Option<TypeId> {
-        self.signature_params_in_subset(params)?;
-        let mut lowered: Vec<ParameterType> = Vec::with_capacity(params.items.len());
-        for param in &params.items {
-            let name = parameter_name(&param.pattern)?;
-            let annotation = param.type_annotation.as_ref()?;
-            let ty = self.lower_annotation(scope, &annotation.type_annotation)?;
-            lowered.push(ParameterType::required(name, ty));
-        }
+        let lowered = self.lower_strict_signature_parameters(scope, params, false)?;
         let ret = match return_type {
             Some(ann) => self.lower_annotation(scope, &ann.type_annotation)?,
             None => self.interner.well_known().void,
@@ -210,19 +197,71 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }))
     }
 
-    /// Required-only parameter subset shared by WU2 call signatures and the
-    /// function-type annotation lowerer. Rest and optional parameters need
-    /// different arity/relation rules, so accepting them as required would
-    /// mis-state the type.
-    pub(super) fn signature_params_in_subset(&self, params: &FormalParameters<'_>) -> Option<()> {
-        if params.rest.is_some() {
-            return None;
-        }
+    pub(super) fn lower_strict_signature_parameters(
+        &mut self,
+        scope: ScopeId,
+        params: &FormalParameters<'_>,
+        with_indirection: bool,
+    ) -> Option<Vec<ParameterType>> {
+        let mut lowered: Vec<ParameterType> =
+            Vec::with_capacity(params.items.len() + usize::from(params.rest.is_some()));
         for param in &params.items {
-            if param.optional || param.initializer.is_some() {
-                return None;
-            }
+            let name = parameter_name(&param.pattern)?;
+            let annotation = param.type_annotation.as_ref()?;
+            let ty = if with_indirection {
+                self.with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation))?
+            } else {
+                self.lower_annotation(scope, &annotation.type_annotation)?
+            };
+            lowered.push(parameter_from_shape(
+                name,
+                ty,
+                param.optional,
+                param.initializer.is_some(),
+            ));
         }
-        Some(())
+        if let Some(rest) = &params.rest {
+            let name = parameter_name(&rest.rest.argument)?;
+            let annotation = rest.type_annotation.as_ref()?;
+            let ty = if with_indirection {
+                self.with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation))?
+            } else {
+                self.lower_annotation(scope, &annotation.type_annotation)?
+            };
+            lowered.push(ParameterType::rest(name, ty));
+        }
+        Some(lowered)
+    }
+
+    fn tuple_element_refs_are_locally_resolvable(
+        &self,
+        scope: ScopeId,
+        element: &TSTupleElement<'_>,
+    ) -> bool {
+        match element {
+            TSTupleElement::TSRestType(rest) => {
+                self.annotation_type_refs_are_locally_resolvable(scope, &rest.type_annotation)
+            }
+            TSTupleElement::TSOptionalType(_) => false,
+            _ => match element.as_ts_type() {
+                Some(TSType::TSNamedTupleMember(_)) | None => false,
+                Some(ty) => self.annotation_type_refs_are_locally_resolvable(scope, ty),
+            },
+        }
+    }
+}
+
+pub(super) fn parameter_from_shape(
+    name: impl Into<String>,
+    ty: TypeId,
+    optional: bool,
+    has_default: bool,
+) -> ParameterType {
+    if has_default {
+        ParameterType::defaulted(name, ty)
+    } else if optional {
+        ParameterType::optional(name, ty)
+    } else {
+        ParameterType::required(name, ty)
     }
 }

@@ -64,6 +64,8 @@ pub enum DiagnosticCode {
     TK2540,
     /// Wrong number of call arguments (arity).
     TK2554,
+    /// Too few call arguments for a variadic signature.
+    TK2555,
     /// Type instantiation is excessively deep and possibly infinite — M25.
     TK2589,
     /// Property is missing in type but required.
@@ -94,6 +96,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2674 => "TK2674",
             DiagnosticCode::TK2540 => "TK2540",
             DiagnosticCode::TK2554 => "TK2554",
+            DiagnosticCode::TK2555 => "TK2555",
             DiagnosticCode::TK2589 => "TK2589",
             DiagnosticCode::TK2741 => "TK2741",
         }
@@ -442,6 +445,28 @@ impl Diagnostic {
             code: DiagnosticCode::TK2554,
             severity: Severity::Error,
             message: format!("Expected {expected} arguments, but got {got}"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2554` arity error for optional/default parameter ranges.
+    pub fn wrong_argument_count_range(span: Span, min: usize, max: usize, got: usize) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2554,
+            severity: Severity::Error,
+            message: format!("Expected {min}-{max} arguments, but got {got}"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2555` rest-arity error for calls below the required minimum.
+    pub fn wrong_min_argument_count(span: Span, min: usize, got: usize) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2555,
+            severity: Severity::Error,
+            message: format!("Expected at least {min} arguments, but got {got}"),
             span,
             elaboration: Vec::new(),
         }

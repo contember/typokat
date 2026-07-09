@@ -23,3 +23,22 @@ const interfaceBadValue: string = new interfaceCtor(1).value;   // error[TK2322]
 new interfaceCtor();                                            // error[TK2554]: Expected 1 arguments, but got 0
 new interfaceCtor(1, 2);                                        // error[TK2554]: Expected 1 arguments, but got 2
 new interfaceCtor("bad");                                      // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'
+
+interface OptionalInterfaceCtor {
+  new (input: number, label?: string): Box;
+}
+
+interface RestInterfaceCtor {
+  new (input: number, ...labels: string[]): Box;
+}
+
+declare const optionalInterfaceCtor: OptionalInterfaceCtor;
+declare const restInterfaceCtor: RestInterfaceCtor;
+
+new optionalInterfaceCtor(1);
+new optionalInterfaceCtor();                                    // error[TK2554]: Expected 1-2 arguments, but got 0
+new optionalInterfaceCtor(1, "x", "extra");                    // error[TK2554]: Expected 1-2 arguments, but got 3
+new optionalInterfaceCtor(1, 2);                                // error[TK2345]: Argument of type 'number' is not assignable to parameter of type 'string'
+new restInterfaceCtor(1, "x");
+new restInterfaceCtor();                                        // error[TK2555]: Expected at least 1 arguments, but got 0
+new restInterfaceCtor(1, 2);                                    // error[TK2345]: Argument of type 'number' is not assignable to parameter of type 'string'

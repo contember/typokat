@@ -290,6 +290,18 @@ fn function_signature_shape_renders_optional_and_rest_params() {
     );
 }
 
+#[test]
+fn arity_diagnostics_render_range_and_at_least_messages() {
+    assert_eq!(
+        Diagnostic::wrong_argument_count_range(Span::new(0, 1), 1, 2, 0).rendered_text(),
+        "error[TK2554]: Expected 1-2 arguments, but got 0"
+    );
+    assert_eq!(
+        Diagnostic::wrong_min_argument_count(Span::new(0, 1), 1, 0).rendered_text(),
+        "error[TK2555]: Expected at least 1 arguments, but got 0"
+    );
+}
+
 /// M31 intersection rendering: `A & B` joins members with ` & ` (canonical,
 /// TypeId-sorted order — asserted order-independently, like unions), a **union**
 /// member is parenthesized (`(A | B) & C`), and an intersection element inside an

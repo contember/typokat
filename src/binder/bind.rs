@@ -6,8 +6,9 @@
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{DeclId, Symbol, SymbolId, SymbolTable};
 use oxc_ast::ast::{
-    ArrowFunctionExpression, BindingPattern, BlockStatement, Class, ClassElement, Expression,
-    Declaration, Function, FunctionBody, Program, Statement, SwitchStatement, VariableDeclarator,
+    ArrowFunctionExpression, BindingPattern, BlockStatement, Class, ClassElement, Declaration,
+    Expression, FormalParameters, Function, FunctionBody, Program, Statement, SwitchStatement,
+    VariableDeclarator,
 };
 use rustc_hash::FxHashMap;
 
@@ -435,13 +436,13 @@ fn bind_function(state: &mut BindState, parent: ScopeId, func: &Function<'_>) {
         .fn_scopes
         .insert((state.current_module, func.span.start), fn_scope);
 
+    bind_parameters(state, fn_scope, &func.params);
+
     for param in &func.params.items {
-        if let Some(name) = binding_name(&param.pattern) {
-            let decl_id = state.fresh_decl();
-            declare_value(state, fn_scope, name, decl_id);
+        if let Some(init) = &param.initializer {
+            bind_expression(state, fn_scope, init);
         }
     }
-
     if let Some(body) = &func.body {
         bind_function_body(state, fn_scope, body);
     }
@@ -458,14 +459,29 @@ fn bind_arrow(state: &mut BindState, parent: ScopeId, arrow: &ArrowFunctionExpre
         .fn_scopes
         .insert((state.current_module, arrow.span.start), fn_scope);
 
+    bind_parameters(state, fn_scope, &arrow.params);
+
     for param in &arrow.params.items {
+        if let Some(init) = &param.initializer {
+            bind_expression(state, fn_scope, init);
+        }
+    }
+    bind_function_body(state, fn_scope, &arrow.body);
+}
+
+fn bind_parameters(state: &mut BindState, fn_scope: ScopeId, params: &FormalParameters<'_>) {
+    for param in &params.items {
         if let Some(name) = binding_name(&param.pattern) {
             let decl_id = state.fresh_decl();
             declare_value(state, fn_scope, name, decl_id);
         }
     }
-
-    bind_function_body(state, fn_scope, &arrow.body);
+    if let Some(rest) = &params.rest {
+        if let Some(name) = binding_name(&rest.rest.argument) {
+            let decl_id = state.fresh_decl();
+            declare_value(state, fn_scope, name, decl_id);
+        }
+    }
 }
 
 /// Bind a function body's statements into the function scope. An expression-body
