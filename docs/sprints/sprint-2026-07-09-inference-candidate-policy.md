@@ -193,3 +193,12 @@ before deleting backlog `65`.
      changed the *why* -> ../decisions/NNNN ; new future work -> ../backlog/NN ;
      transient -> leave it (dies with the sprint on archive). After graduating,
      trim to a one-line pointer ("-> ADR-0007"). -->
+- **WU1 spec committed** - plan `03fd02c`, initial corpus `dfa72e7`,
+  explorer extension `a9455f0`. Two read-only explorer subagents cross-checked
+  scalar, constrained, widened-variable, tuple/array, rest, constructor, and
+  structural-candidate probes against `tsc 6.0.3 --strict` and current typokat.
+  The new `b65_inference_candidate_policy/` corpus is registered disabled and
+  behavior-neutral; `cargo test conformance` passes with it disabled. Current
+  typokat is clean on the core scalar/array/rest/constructor/structural b65
+  false negatives, while tsc reports `TS2345`; constrained non-fresh object
+  controls already report through the existing M24 clamp.
