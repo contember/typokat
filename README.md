@@ -1,39 +1,28 @@
 # typokat
 
-A from-scratch **TypeScript type checker in Rust**, built to a state-of-the-art architecture.
-`typokat check <file.ts>` parses, binds, and type-checks TypeScript and reports `tsc`-style
-diagnostics — structural **and** nominal typing, control-flow narrowing, generics with inference,
-full classes, and the common "real-world" type constructs. It is a **checker, not a compiler**:
-emit and JS runtime semantics are out of scope by design, while module resolution is a narrow
-type-checking slice (local relative `.ts` modules) — the goal is to preserve the
-**type model** (see [`docs/reference/architecture.md`](./docs/reference/architecture.md)).
+**A TypeScript type checker written from scratch in Rust.**
 
-> Status: **M0–M33** implemented — M33 adds ordered function overloads:
-> declaration grouping, implementation-signature hiding, implementation compatibility
-> (`TK2394`), no-match overload diagnostics (`TK2769`), overload resolution for
-> free functions, object/interface call and construct signatures, class
-> constructors/methods, and generic free-function overloads. M32 adds signature shape: optional/default
-> parameters, function rest parameters, tuple rest elements, rest-aware calls/constructors,
-> tuple/function relation, conditional rest `infer`, and a rest-based `ReturnType`; M31 adds
-> intersection types (`A & B`): an interned, canonicalized member-set node (the structural dual
-> of union) with dual relation directions (target = every member, source = merged apparent
-> object), merged member access + excess checking, and the `T extends T & X`
-> circular-constraint case; M30 adds target-aware
-> contextual typing of
-> fresh object/array/tuple literals in concrete declaration, assignment, parameter,
-> `new`/`super`, and declared-return positions; M29 adds the first correctness-first
-> cross-file slice: local relative named imports/exports in one serial type universe. The type-level
-> evaluation phase is complete: M24 generic constraints, M25 conditional types (demand-driven
-> evaluator: explicit work-stack, memoization, tsc-like instantiation budget, non-widening
-> `infer` mode), M26 mapped types (modifier arithmetic with tsc `Required` semantics,
-> homomorphic union distribution), M27 template literal types (construction, anchored pattern
-> matching, `infer` extraction), M28 **built-in utility types** (`Partial`…`ReturnType` via an
-> embedded prelude compilation unit, the `Uppercase`/`Lowercase`/`Capitalize`/
-> `Uncapitalize` intrinsics, a deferred `keyof` type node) — on top of the M23
-> flow-node CFG, class completeness, and constructor accessibility. ~26k lines of
-> Rust, 225 unit tests + a 193-file conformance corpus (739 expected diagnostics),
-> `clippy -D warnings` clean. Every milestone was cross-checked against real
-> `tsc 6.0.3 --strict`.
+No `tsc` fork, no transpiled JS — a fresh implementation of the TypeScript *type model* on a
+hash-consed type arena and a purpose-built relation engine. Point it at a `.ts` file and it
+parses, binds, and type-checks it, then reports `tsc`-style diagnostics: structural **and** nominal
+typing, control-flow narrowing, generics with inference, full classes, conditional/mapped/template
+types, and the everyday "real-world" constructs.
+
+It is a **checker, not a compiler** — emit and JS runtime semantics are out of scope by design, and
+module resolution is a deliberately narrow slice (local relative `.ts` modules). The one goal is to
+preserve the **type model** faithfully; when in doubt it *over-reports* (the safe direction). Full
+design: [`docs/reference/architecture.md`](./docs/reference/architecture.md).
+
+<p>
+  <img alt="Rust" src="https://img.shields.io/badge/built%20with-Rust-000?logo=rust">
+  <img alt="Milestones" src="https://img.shields.io/badge/milestones-M0--M33-2ea44f">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-272%20unit%20%2B%20211%20fixtures-blue">
+  <img alt="Clippy" src="https://img.shields.io/badge/clippy-clean-brightgreen">
+</p>
+
+By the numbers: **~32k lines of Rust**, **272 unit tests** + a **211-file conformance corpus**
+(778 expected diagnostics), `clippy -D warnings` clean, and **every milestone cross-checked against
+real `tsc 6.0.3 --strict`**.
 
 ## Quick start
 
@@ -41,7 +30,7 @@ type-checking slice (local relative `.ts` modules) — the goal is to preserve t
 cargo run -- check path/to/file.ts
 ```
 
-Exit code is `0` when clean, `1` when diagnostics are reported. Example output:
+Exit code is `0` when clean, `1` when diagnostics are reported. Real output:
 
 ```
 error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: number } }'
