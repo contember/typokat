@@ -7,8 +7,8 @@ use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{DeclId, Symbol, SymbolId, SymbolTable};
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, BlockStatement, Class, ClassElement, Declaration,
-    Expression, FormalParameters, Function, FunctionBody, Program, Statement, SwitchStatement,
-    VariableDeclarator,
+    Expression, ForStatement, ForStatementInit, ForStatementLeft, FormalParameters, Function,
+    FunctionBody, Program, Statement, SwitchStatement, VariableDeclarator,
 };
 use rustc_hash::FxHashMap;
 
@@ -328,6 +328,37 @@ fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
             bind_expression(state, scope, &while_stmt.test);
             bind_statement(state, scope, &while_stmt.body);
         }
+        // A `do … while` has no head binding; walk the body and the condition.
+        Statement::DoWhileStatement(do_stmt) => {
+            bind_statement(state, scope, &do_stmt.body);
+            bind_expression(state, scope, &do_stmt.test);
+        }
+        // C-style `for (init; test; update) body` — the init declaration lives in a
+        // per-loop head scope shared by the test/update/body.
+        Statement::ForStatement(for_stmt) => bind_for(state, scope, for_stmt),
+        // `for-in`/`for-of` — the iteration variable lives in a per-loop head scope; the
+        // source is evaluated in the enclosing scope.
+        Statement::ForInStatement(for_in) => bind_for_in_of(
+            state,
+            scope,
+            &for_in.left,
+            &for_in.right,
+            &for_in.body,
+            for_in.span.start,
+        ),
+        Statement::ForOfStatement(for_of) => bind_for_in_of(
+            state,
+            scope,
+            &for_of.left,
+            &for_of.right,
+            &for_of.body,
+            for_of.span.start,
+        ),
+        // `label: <stmt>` — the label is not a binding; descend into the body so a
+        // labeled loop gets its head scope and a labeled block binds normally.
+        Statement::LabeledStatement(labeled) => {
+            bind_statement(state, scope, &labeled.body);
+        }
         // Other statements declare no names in the subset; their sub-expressions (if
         // any) are not in the subset either.
         _ => {}
@@ -374,6 +405,61 @@ fn bind_switch(state: &mut BindState, scope: ScopeId, switch: &SwitchStatement<'
         }
         bind_statements(state, scope, &case.consequent);
     }
+}
+
+/// Bind a C-style `for` head into a fresh [`ScopeKind::Block`] head scope (keyed by
+/// the loop statement's span start, like [`bind_block`]) so a `for (let i…)`
+/// initializer is scoped to the loop, then bind the test/update/body inside it.
+fn bind_for(state: &mut BindState, parent: ScopeId, for_stmt: &ForStatement<'_>) {
+    let head = state.graph.push(Scope::new(ScopeKind::Block, Some(parent)));
+    state
+        .block_scopes
+        .insert((state.current_module, for_stmt.span.start), head);
+    if let Some(init) = &for_stmt.init {
+        match init {
+            ForStatementInit::VariableDeclaration(decl) => {
+                for declarator in &decl.declarations {
+                    bind_declarator(state, head, declarator);
+                }
+            }
+            other => {
+                if let Some(expr) = other.as_expression() {
+                    bind_expression(state, head, expr);
+                }
+            }
+        }
+    }
+    if let Some(test) = &for_stmt.test {
+        bind_expression(state, head, test);
+    }
+    if let Some(update) = &for_stmt.update {
+        bind_expression(state, head, update);
+    }
+    bind_statement(state, head, &for_stmt.body);
+}
+
+/// Bind a `for-in`/`for-of` head: a fresh head scope holds the iteration variable,
+/// the source is bound in the enclosing scope (it is evaluated there), and the body
+/// is bound inside the head scope.
+fn bind_for_in_of(
+    state: &mut BindState,
+    parent: ScopeId,
+    left: &ForStatementLeft<'_>,
+    right: &Expression<'_>,
+    body: &Statement<'_>,
+    span_start: u32,
+) {
+    let head = state.graph.push(Scope::new(ScopeKind::Block, Some(parent)));
+    state
+        .block_scopes
+        .insert((state.current_module, span_start), head);
+    bind_expression(state, parent, right);
+    if let ForStatementLeft::VariableDeclaration(decl) = left {
+        for declarator in &decl.declarations {
+            bind_declarator(state, head, declarator);
+        }
+    }
+    bind_statement(state, head, body);
 }
 
 /// Bind a variable declarator: declare its identifier (if a plain identifier) in

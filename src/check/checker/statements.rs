@@ -14,8 +14,9 @@ use crate::types::repr::{ObjectType, ParameterType};
 use crate::types::store::{Store, TypeId};
 use crate::types::WellKnown;
 use oxc_ast::ast::{
-    BindingPattern, BlockStatement, Declaration, Expression, Function, Statement,
-    VariableDeclarationKind, VariableDeclarator,
+    BindingPattern, BlockStatement, Declaration, Expression, ForInStatement, ForOfStatement,
+    ForStatement, ForStatementInit, ForStatementLeft, Function, Statement, VariableDeclarationKind,
+    VariableDeclarator,
 };
 
 impl<'a, 'ast> Pass<'a, 'ast> {
@@ -103,6 +104,27 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     self.check_declaration(scope, decl);
                 }
             }
+            // Loop forms: walk their head (init/condition/incrementor or iteration
+            // target/source) and body so nested declarations/assignments/calls are
+            // checked. Precise per-iteration narrowing stays deferred to backlog 51 —
+            // body references fall back to the declared/START-flow type (sound).
+            Statement::ForStatement(for_stmt) => {
+                self.check_for(scope, for_stmt, declared_ret, inferred);
+            }
+            Statement::ForInStatement(for_in) => {
+                self.check_for_in(scope, for_in, declared_ret, inferred);
+            }
+            Statement::ForOfStatement(for_of) => {
+                self.check_for_of(scope, for_of, declared_ret, inferred);
+            }
+            Statement::DoWhileStatement(do_stmt) => {
+                self.check_do(scope, do_stmt, declared_ret, inferred);
+            }
+            // A `throw expr` — type-check the operand so nested calls/assignments inside
+            // it are checked (its own value type is irrelevant; the throw is a diverge).
+            Statement::ThrowStatement(throw) => {
+                self.infer_expr(scope, &throw.argument);
+            }
             // Other statements are out of the subset.
             _ => {}
         }
@@ -125,8 +147,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Check `return expr` against the declared return type, or record the first
-    /// value return's widened type for inference. Bare `return;` contributes none.
+    /// Check `return expr` against the declared return type, or fold the value return's
+    /// widened type into the running inferred-return union. Bare `return;` contributes none.
     fn check_return(
         &mut self,
         scope: ScopeId,
@@ -151,14 +173,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     kind: ObligationKind::Assignment,
                 });
             }
-            // No annotation: infer from the first value return, widened.
+            // No annotation: the inferred return type is the union of every value
+            // return's widened type, independent of visitation order (`union` canonicalizes
+            // its member set). Stopping at the first return would drop `string | number`
+            // down to whichever return was seen first.
             None => {
                 let Some((src, _)) = self.infer_expr(scope, arg) else {
                     return;
                 };
-                if inferred.is_none() {
-                    *inferred = Some(widen(self.interner, src));
-                }
+                let widened = widen(self.interner, src);
+                *inferred = Some(match *inferred {
+                    Some(existing) => self.interner.union(vec![existing, widened]),
+                    None => widened,
+                });
             }
         }
     }
@@ -183,6 +210,140 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         for stmt in &block.body {
             self.check_stmt(block_scope, stmt, declared_ret, inferred);
         }
+    }
+
+    /// The lexical scope the binder created for a loop's head (holding a `for (let i…)`
+    /// initializer or a `for-in`/`for-of` iteration variable), keyed by the loop
+    /// statement's span start. Falls back to the enclosing scope defensively.
+    fn loop_head_scope(&self, scope: ScopeId, span_start: u32) -> ScopeId {
+        self.binder
+            .block_scopes
+            .get(&(self.current_module, span_start))
+            .copied()
+            .unwrap_or(scope)
+    }
+
+    /// Check a C-style `for (init; test; update) body`. The head scope holds a
+    /// `let`/`const` initializer so it is in scope for test/update/body; each part is
+    /// walked and the body checked.
+    fn check_for(
+        &mut self,
+        scope: ScopeId,
+        for_stmt: &ForStatement<'_>,
+        declared_ret: Option<TypeId>,
+        inferred: &mut Option<TypeId>,
+    ) {
+        let head = self.loop_head_scope(scope, for_stmt.span.start);
+        if let Some(init) = &for_stmt.init {
+            match init {
+                ForStatementInit::VariableDeclaration(decl) => {
+                    for declarator in &decl.declarations {
+                        self.check_declarator(head, decl.kind, declarator);
+                    }
+                }
+                other => {
+                    if let Some(expr) = other.as_expression() {
+                        self.infer_expr(head, expr);
+                    }
+                }
+            }
+        }
+        if let Some(test) = &for_stmt.test {
+            self.infer_expr(head, test);
+        }
+        if let Some(update) = &for_stmt.update {
+            self.infer_expr(head, update);
+        }
+        self.check_stmt(head, &for_stmt.body, declared_ret, inferred);
+    }
+
+    /// Check `for (left in right) body`. The iteration variable is always typed
+    /// `string` (for-in enumerates string keys); the source object is walked in the
+    /// enclosing scope.
+    fn check_for_in(
+        &mut self,
+        scope: ScopeId,
+        for_in: &ForInStatement<'_>,
+        declared_ret: Option<TypeId>,
+        inferred: &mut Option<TypeId>,
+    ) {
+        let head = self.loop_head_scope(scope, for_in.span.start);
+        self.infer_expr(scope, &for_in.right);
+        let key_ty = self.interner.well_known().string;
+        self.declare_for_left(head, &for_in.left, key_ty);
+        self.check_stmt(head, &for_in.body, declared_ret, inferred);
+    }
+
+    /// Check `for (left of right) body`. The iteration variable is typed as the
+    /// source's element type (array element / tuple-element union); the source is
+    /// walked in the enclosing scope.
+    fn check_for_of(
+        &mut self,
+        scope: ScopeId,
+        for_of: &ForOfStatement<'_>,
+        declared_ret: Option<TypeId>,
+        inferred: &mut Option<TypeId>,
+    ) {
+        let head = self.loop_head_scope(scope, for_of.span.start);
+        let element_ty = match self.infer_expr(scope, &for_of.right) {
+            Some((source, _)) => self.iterated_element_type(source),
+            None => self.interner.well_known().error,
+        };
+        self.declare_for_left(head, &for_of.left, element_ty);
+        self.check_stmt(head, &for_of.body, declared_ret, inferred);
+    }
+
+    /// Check `do body while (test)`: the body runs first (its own block scope), then
+    /// the condition is walked.
+    fn check_do(
+        &mut self,
+        scope: ScopeId,
+        do_stmt: &oxc_ast::ast::DoWhileStatement<'_>,
+        declared_ret: Option<TypeId>,
+        inferred: &mut Option<TypeId>,
+    ) {
+        self.check_stmt(scope, &do_stmt.body, declared_ret, inferred);
+        self.infer_expr(scope, &do_stmt.test);
+    }
+
+    /// Record the declared type of a `for-in`/`for-of` iteration variable. Only a
+    /// `let`/`const` binding-identifier target is typed; a pre-declared assignment
+    /// target (`for (x of xs)`) reassigns an existing binding and its per-iteration
+    /// assignability is deferred (backlog 51).
+    fn declare_for_left(
+        &mut self,
+        scope: ScopeId,
+        left: &ForStatementLeft<'_>,
+        element_ty: TypeId,
+    ) {
+        let ForStatementLeft::VariableDeclaration(decl) = left else {
+            return;
+        };
+        for declarator in &decl.declarations {
+            if let Some(decl_id) = binding_decl_id(self.binder, scope, &declarator.id) {
+                self.decl_types.set(decl_id, element_ty);
+            }
+        }
+    }
+
+    /// The element type yielded by iterating `ty` in a `for-of`: an array's element or
+    /// a tuple's element union. Other iterables (strings, iterators) need `lib.d.ts`
+    /// and are out of subset → the error type (no diagnostic, no cascade).
+    fn iterated_element_type(&mut self, ty: TypeId) -> TypeId {
+        let ty = self.apparent_type(ty);
+        let ty = self.interner.store().readonly_operand(ty).unwrap_or(ty);
+        let store = self.interner.store();
+        if let Some(array) = store.array_type(ty) {
+            return array.element;
+        }
+        if store.tag(ty) == crate::types::repr::TypeTag::Tuple {
+            let elements = store
+                .tuple_type(ty)
+                .map(|t| t.elements.clone())
+                .unwrap_or_default();
+            return self.interner.union(elements);
+        }
+        self.interner.well_known().error
     }
 
     /// Check an initializer against an optional annotation using the declaration

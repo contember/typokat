@@ -69,6 +69,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 Some((id, Span::from_oxc(arrow.span)))
             }
             Expression::ParenthesizedExpression(paren) => self.infer_expr(scope, &paren.expression),
+            // An assignment expression can appear anywhere an expression can — a ternary
+            // arm, an array element, a condition, or another assignment's RHS. Reuse the
+            // one assignment checker (so the nested target is checked); its value type is
+            // the RHS (TS assignment-expression semantics).
+            Expression::AssignmentExpression(assign) => self.check_assignment(scope, assign),
             Expression::TSAsExpression(assertion) => self.infer_assertion(
                 scope,
                 &assertion.expression,

@@ -19,10 +19,17 @@ use super::calls::intrinsic_id;
 use super::expr::contextual_literal_target;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
-    /// Check `NAME = expr` against the target's declared type. M23 narrowing
-    /// effects live only in the flow graph; this routine just walks the RHS and
-    /// records assignability.
-    pub(in crate::check::checker) fn check_assignment(&mut self, scope: ScopeId, assign: &AssignmentExpression<'_>) {
+    /// Check `NAME = expr` against the target's declared type, returning the
+    /// assignment expression's **value** (the RHS type + the assignment span) so a
+    /// nested assignment (`cond ? (a = e) : …`, `[a = e]`, `s = (a = e)`) is both
+    /// checked and usable as an outer source. M23 narrowing effects live only in the
+    /// flow graph; this routine just walks the RHS and records assignability.
+    pub(in crate::check::checker) fn check_assignment(
+        &mut self,
+        scope: ScopeId,
+        assign: &AssignmentExpression<'_>,
+    ) -> Option<(TypeId, Span)> {
+        let assign_span = Span::from_oxc(assign.span);
         let target = match &assign.left {
             AssignmentTarget::AssignmentTargetIdentifier(target) => target,
             // M14: a **static member** target (`this.prop = …`, `obj.prop = …`) is now
@@ -30,21 +37,23 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // (`TK2322`), and a `readonly` member may not be assigned outside the
             // declaring class's constructor (`TK2540`). Handled in its own routine.
             AssignmentTarget::StaticMemberExpression(member) => {
-                self.check_member_assignment(scope, member, assign);
-                return;
+                return self.check_member_assignment(scope, member, assign);
             }
             // Computed/destructuring targets stay deferred. Still walk the RHS so
             // nested checks and unresolved-name diagnostics fire, but collect no
             // obligation.
             _ => {
-                self.infer_expr(scope, &assign.right);
-                return;
+                let rhs = self.infer_expr(scope, &assign.right);
+                return rhs.map(|(ty, _)| (ty, assign_span));
             }
         };
 
         // Infer the RHS before the target so it sees pre-assignment narrowing and
         // compound assignments still walk their RHS.
         let rhs = self.infer_expr(scope, &assign.right);
+        // The assignment expression's value is the RHS (TS semantics), regardless of
+        // whether a type obligation is collected below.
+        let value = rhs.map(|(ty, _)| (ty, assign_span));
 
         let symbol_id = match self.binder.graph.resolve(scope, target.name.as_str()) {
             Some(symbol_id) => symbol_id,
@@ -53,7 +62,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     Span::from_oxc(target.span),
                     target.name.as_str(),
                 ));
-                return;
+                return value;
             }
         };
 
@@ -61,7 +70,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // (out of the M7 subset). The flow graph already reset this symbol's narrowing
         // (an assignment node), so it is sound to stop here without an obligation.
         if assign.operator != AssignmentOperator::Assign {
-            return;
+            return value;
         }
 
         // The target type is always the symbol's *declared* type (you may assign
@@ -89,17 +98,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 kind: ObligationKind::Assignment,
             });
         }
+
+        value
     }
 
-    /// Check M14 member assignment. Base/RHS are walked first; local lookup avoids
-    /// read-side diagnostics, and compound member assignments remain deferred.
+    /// Check M14 member assignment, returning the assignment's value (the RHS type +
+    /// the assignment span) for use as an outer source. Base/RHS are walked first;
+    /// local lookup avoids read-side diagnostics, and compound member assignments
+    /// remain deferred.
     fn check_member_assignment(
         &mut self,
         scope: ScopeId,
         member: &StaticMemberExpression<'_>,
         assign: &AssignmentExpression<'_>,
-    ) {
+    ) -> Option<(TypeId, Span)> {
         let wk = self.interner.well_known();
+        let assign_span = Span::from_oxc(assign.span);
 
         // Walk the base (so its references resolve / nested constructs are checked) and the
         // RHS (so an unresolved name in it emits `TK2304`, and nested calls/functions are
@@ -107,22 +121,23 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // collected below.
         let base = self.infer_expr(scope, &member.object);
         let rhs = self.infer_expr(scope, &assign.right);
+        let value = rhs.map(|(ty, _)| (ty, assign_span));
 
         // Compound assignment (`+=`, `||=`, …): assignability is unchecked baseline-wide and a
         // `readonly` member-compound-assignment is out of the M14 subset. Stop after walking.
         if assign.operator != AssignmentOperator::Assign {
-            return;
+            return value;
         }
 
         // Resolve the base type. Absent → nothing to check.
         let Some((base_ty, _)) = base else {
-            return;
+            return value;
         };
 
         // Skip when the base is the error/`any` type (an unresolved base, or `any`): there is
         // no concrete property to check against, and the error type suppresses cascades.
         if base_ty == wk.error || base_ty == wk.any {
-            return;
+            return value;
         }
 
         // Member writes use the same apparent/merged base type as reads, so
@@ -160,12 +175,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Property not on the type (or missing on some union member) → deferred (no
         // `TK2339` on an assignment target).
         let Some((prop_ty, readonly, is_accessor, declaring_class)) = found else {
-            return;
+            return value;
         };
 
         // A property whose type is the error type carries no real obligation.
         if prop_ty == wk.error {
-            return;
+            return value;
         }
 
         // `readonly` data fields may be assigned only as `this.prop` in the declaring
@@ -186,7 +201,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 // `TK2540` is the assignment error for this target; do not also collect a
                 // type-assignability obligation (the fixtures' readonly RHS types already
                 // match, and tsc surfaces the read-only violation as the assignment error).
-                return;
+                return value;
             }
             // Allowed (declaring constructor): fall through to the normal type check, so a
             // *type-wrong* `this.readonly = …` in the constructor is still `TK2322`.
@@ -213,6 +228,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 });
             }
         }
+
+        value
     }
 
     /// Resolve a union assignment target. The property must exist on every member;

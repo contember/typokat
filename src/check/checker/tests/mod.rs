@@ -12,3 +12,4 @@ mod tuple;
 mod index_signature;
 mod keyof_indexed_access;
 mod utility_types;
+mod wu1_statements;

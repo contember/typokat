@@ -100,7 +100,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // tests/cases/README.md ("Soundness-review corpora").
     // WU1 — nested assignment expressions, complete return inference, loop/throw
     // body checking (findings 1-3).
-    ("sr_wu1_expressions", false),
+    ("sr_wu1_expressions", true),
     // WU2 — switch-local scope boundary + local function overloads (findings 5-6).
     ("sr_wu2_scope_overloads", false),
     // WU2 — type-only export/value separation (finding 4). Project-shaped; also
