@@ -43,8 +43,9 @@ live by the review; `⚠` = baseline or process fact that WU5/WU7/WU8 must ratch
 - ✔ `for`, `for-in`, `for-of`, and `do` statements are skipped, and `throw`
   operands are not checked - `src/check/checker/statements.rs:106`.
 - ✔ Type-only exports can leak into value lookup - `src/check/checker/mod.rs:495`.
-- ✔ `switch` binding does not preserve the required shared lexical scope -
-  `src/binder/bind.rs:369`.
+- ✔ `switch` clauses already share one scope, but it is the surrounding scope rather
+  than a switch-local lexical scope, so block-scoped declarations leak past the end
+  of the switch - `src/binder/bind.rs:369`.
 - ✔ Local function overloads do not follow the supported overload path -
   `src/check/checker/calls.rs:1207`.
 - ✔ Intersection normalization mishandles `any & never` -
@@ -81,8 +82,9 @@ live by the review; `⚠` = baseline or process fact that WU5/WU7/WU8 must ratch
   expressions (`src/check/checker/expr.rs`, `src/check/checker/statements.rs:66`),
   complete return inference (`src/check/checker/statements.rs:154`), `for`, `for-in`,
   `for-of`, `do`, and `throw` operand checking (`src/check/checker/statements.rs:106`),
-  type-only export/value separation (`src/check/checker/mod.rs:495`), shared `switch`
-  scope (`src/binder/bind.rs:369`), local overloads
+  type-only export/value separation (`src/check/checker/mod.rs:495`), the missing
+  switch-local boundary that lets a case declaration resolve after the switch
+  (`src/binder/bind.rs:369`), local overloads
   (`src/check/checker/calls.rs:1207`), `any & never`
   (`src/types/intern/operators.rs:111`), source-intersection nominal origin
   (`src/relate/relation/objects.rs:775`), recursive mapped types
@@ -144,30 +146,38 @@ live by the review; `⚠` = baseline or process fact that WU5/WU7/WU8 must ratch
 ### WU2 - Scope, export-space, and local-overload fixes (effort L)
 
 - **Effort.** L.
-- **Problem.** A type-only export can be resolved as a value, `switch` clauses do
-  not bind into the correct shared lexical scope, and local overload declarations
-  bypass the supported overload behavior - `src/check/checker/mod.rs:495`,
-  `src/binder/bind.rs:369`, `src/check/checker/calls.rs:1207`.
+- **Problem.** A type-only export can be resolved as a value. `switch` clauses already
+  bind into one shared scope, but that scope is the switch's parent, so a block-scoped
+  declaration from a case incorrectly resolves after the switch. Local overload
+  declarations also bypass the supported overload behavior -
+  `src/check/checker/mod.rs:495`, `src/binder/bind.rs:369`,
+  `src/check/checker/calls.rs:1207`.
 - **Verify first.** Run the focused WU0 fixtures, inspect value/type/namespace slot
-  selection for exports, compare `switch` binding with block scope, and trace local
-  function declarations through the M33 grouping and call-resolution path. Confirm
-  that the fixes can stay within existing multi-slot symbols and overload
-  representation.
+  selection for exports, confirm that all switch clauses currently receive the same
+  parent `ScopeId`, identify how the checker will enter one new switch-local scope,
+  and trace local function declarations through the M33 grouping and call-resolution
+  path. Confirm that the fixes can stay within existing multi-slot symbols and
+  overload representation.
 - **Scope.** Enforce export-space separation so a type-only export never supplies a
-  runtime value. Bind all clauses of one `switch` into the required shared lexical
-  scope while preserving nested block scopes. Route representable local function
-  overload declarations through the existing ordered overload and hidden
-  implementation-signature machinery. Preserve declaration identity and avoid new
-  binder or module boundaries.
+  runtime value. Create one lexical scope owned by the switch body, bind every clause
+  into that same scope, make the checker enter it, and preserve explicit nested block
+  scopes. Do not add duplicate-declaration diagnostics: object/member `TK2300` and
+  block-scoped `TK2451`, including duplicate declarations across cases, remain owned
+  by backlog `18`. Route representable local function overload declarations through
+  the existing ordered overload and hidden implementation-signature machinery.
+  Preserve declaration identity and avoid new binder or module boundaries.
 - **Acceptance / witness.** WU0 fixtures prove type-only exports fail value lookup,
-  duplicate/cross-clause `switch` declarations match pinned tsc behavior, and local
-  overload calls select only declared overload signatures. Controls preserve valid
-  type exports, nested blocks, top-level overloads, and multi-slot class/type/value
-  behavior. The WU2-owned flat/project corpora flip enabled in the WU2 implementation
-  commit; unrelated WU0 corpora remain disabled.
+  a `let`/`const` declared in a case no longer resolves after the switch (`TK2304`),
+  and local overload calls select only declared overload signatures. A binder-level
+  positive control proves all clauses use the same new switch-local `ScopeId`; it
+  does not expect `TK2451` or expand backlog `18`. Other controls preserve valid type
+  exports, explicit nested blocks, top-level overloads, and multi-slot
+  class/type/value behavior. The WU2-owned flat/project corpora flip enabled in the
+  WU2 implementation commit; unrelated WU0 corpora remain disabled.
 - **Touch points.** `src/check/checker/mod.rs`, `src/binder/bind.rs`, binder symbol
   and scope tests, `src/check/checker/calls.rs`, declaration/overload checker state,
-  module fixtures, and the WU0 corpus.
+  module fixtures, backlog `18` as the explicit duplicate-diagnostic boundary, and
+  the WU0 corpus.
 
 ### WU3 - Intersection, keyof, and recursion safety fixes (effort L)
 
@@ -223,8 +233,9 @@ live by the review; `⚠` = baseline or process fact that WU5/WU7/WU8 must ratch
   implementation WU starts. The review must hunt dropped diagnostics first and
   cross-check every disputed verdict with `tsc 6.0.3 --strict --noEmit`.
 - **Scope.** Review nested expression traversal, all new statement paths, return
-  collection order, CFG joins, export slot selection, switch scope, local overload
-  visibility, intersection normalization, nominal origin, mapped recursion, and
+  collection order, CFG joins, export slot selection, the switch-local boundary
+  without `TK2451` scope expansion, local overload visibility, intersection
+  normalization, nominal origin, mapped recursion, and
   `keyof`. Test query/source order and repeated evaluation where caches are involved.
   Route concrete FAIL repros back to the responsible implementation work unit and
   re-review soundness fixes. File valid out-of-scope discoveries as backlog items or
@@ -394,6 +405,8 @@ they do not silently expand this sprint.
   type store, evaluator recursion discipline, and relation cache. This sprint does
   not authorize an architecture or module-boundary change; if a finding cannot fit,
   stop and resolve the design explicitly.
+- WU2 owns only the switch-local scope boundary and the after-switch `TK2304` witness.
+  Duplicate declarations and `TK2451` remain in backlog `18`.
 - Independent reviewers, not the corresponding WU1-WU3 implementers, own the three
   WU4 checkpoints. A relation or recursion FAIL requires a new regression witness and
   re-review after the fix.
