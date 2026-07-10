@@ -102,10 +102,10 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // body checking (findings 1-3).
     ("sr_wu1_expressions", true),
     // WU2 — switch-local scope boundary + local function overloads (findings 5-6).
-    ("sr_wu2_scope_overloads", false),
+    ("sr_wu2_scope_overloads", true),
     // WU2 — type-only export/value separation (finding 4). Project-shaped; also
     // registered in PROJECT_DIRS below.
-    ("sr_wu2_export_space", false),
+    ("sr_wu2_export_space", true),
     // WU3 — any&never, source-intersection nominal origin, string-index keyof,
     // recursive mapped types, deep-annotation depth guard (findings 7-10 + backlog
     // 63k). NOTE: recursive_mapped.ts and deep_annotation.ts stack-overflow at HEAD

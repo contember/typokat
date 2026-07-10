@@ -1203,10 +1203,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // M23: the function-boundary narrowing reset lives in the flow pre-pass (each
         // body is built at its own `START`, so a reference never sees the caller's
         // narrowing — the documented closure divergence). The check walk here just
-        // descends into the body.
-        for stmt in &body.statements {
-            self.check_stmt(scope, stmt, declared_ret, &mut inferred);
-        }
+        // descends into the body, via the shared list walker so a *local* overload
+        // set is grouped exactly like a top-level one (M33).
+        self.check_statement_list(scope, &body.statements, declared_ret, &mut inferred);
 
         inferred.unwrap_or(void_ty)
     }

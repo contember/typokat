@@ -40,6 +40,10 @@ entry here is deleted.
   mismatched arguments, typokat reports a `TK2345` for **each**, whereas tsc stops at
   the first. Fixtures keep at most one mismatched argument per call so the corpus
   matches both.
+- **`var` is not hoisted to the function scope (over-report).** The binder treats
+  `var` like a block-scoped declaration, so a `var` referenced outside its block or
+  `switch` clause reports a spurious `TK2304` where tsc resolves it (safe
+  direction). Fix belongs with definite assignment (backlog `47`).
 - **`strictNullChecks` is on** (our default): `null`/`undefined` are distinct types,
   not assignable to others.
 

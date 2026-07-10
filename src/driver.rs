@@ -434,4 +434,141 @@ mod tests {
             assert_eq!(a.output.parse_errors, b.output.parse_errors);
         }
     }
+
+    /// The diagnostic codes emitted for `source`, in order.
+    fn codes(output: &CheckOutput) -> Vec<&'static str> {
+        output
+            .diagnostics
+            .iter()
+            .map(|d| d.code.as_str())
+            .collect()
+    }
+
+    /// WU2 local overloads: a signature-only local declaration must NOT fire the
+    /// spurious `TK2391`, and calls resolve against the *declared* overloads
+    /// (a non-matching argument is `TK2769`, tsc's `TS2769`).
+    #[test]
+    fn local_overload_set_groups_and_selects_declared_signatures() {
+        let out = check_source(
+            "function outer(): void {\n\
+               function ov(x: number): number;\n\
+               function ov(x: string): string;\n\
+               function ov(x: number | string): number | string { return x; }\n\
+               const okNum: number = ov(1);\n\
+               const okStr: string = ov(\"a\");\n\
+               ov(true);\n\
+             }",
+        );
+        // Only the bad call reports, and it reports the overload code — no TK2391,
+        // no spurious TK2322 on the well-typed calls.
+        assert_eq!(codes(&out), vec!["TK2769"]);
+    }
+
+    /// A local overload set inside a nested `{ }` block groups the same way.
+    #[test]
+    fn local_overload_nested_in_block() {
+        let out = check_source(
+            "function outer(): void {\n\
+               {\n\
+                 function ov(x: number): number;\n\
+                 function ov(x: string): string;\n\
+                 function ov(x: number | string): number | string { return x; }\n\
+                 const okNum: number = ov(1);\n\
+                 ov(true);\n\
+               }\n\
+             }",
+        );
+        assert_eq!(codes(&out), vec!["TK2769"]);
+    }
+
+    /// A local overload set inside a loop body (WU1 added loop-body walkers) also
+    /// routes through the shared grouping walker.
+    #[test]
+    fn local_overload_nested_in_loop_body() {
+        let out = check_source(
+            "function outer(): void {\n\
+               for (let i = 0; i < 1; i++) {\n\
+                 function ov(x: number): number;\n\
+                 function ov(x: string): string;\n\
+                 function ov(x: number | string): number | string { return x; }\n\
+                 const okNum: number = ov(1);\n\
+                 ov(true);\n\
+               }\n\
+             }",
+        );
+        assert_eq!(codes(&out), vec!["TK2769"]);
+    }
+
+    /// Regression control: top-level overloads keep working unchanged.
+    #[test]
+    fn top_level_overloads_regression_control() {
+        let out = check_source(
+            "function ov(x: number): number;\n\
+             function ov(x: string): string;\n\
+             function ov(x: number | string): number | string { return x; }\n\
+             const okNum: number = ov(1);\n\
+             const okStr: string = ov(\"a\");\n\
+             ov(true);",
+        );
+        assert_eq!(codes(&out), vec!["TK2769"]);
+    }
+
+    /// WU2 export space: a type-only specifier export (`export type { C }` /
+    /// `export { type v }`) suppresses the value slot — a plain import cannot use
+    /// the name as a runtime value (M29 stand-in for TS1362 is `TK2304`) — while
+    /// the type side still resolves.
+    #[test]
+    fn type_only_specifier_export_suppresses_value_slot() {
+        let files = vec![
+            FileInput {
+                name: "a.ts".into(),
+                source: "class C {}\n\
+                         export type { C };\n\
+                         const v = 1;\n\
+                         export { type v };"
+                    .into(),
+            },
+            FileInput {
+                name: "use.ts".into(),
+                source: "import { C, v } from \"./a\";\n\
+                         const asType: C = new C();\n\
+                         const asVal: number = v;"
+                    .into(),
+            },
+        ];
+        let reports = check_project(files);
+        // The exporter is clean (a value-only local is a valid `export type` target).
+        assert!(reports[0].output.diagnostics.is_empty(), "exporter clean");
+        // The importer: `new C()` (value use of a type-only export) and `v`
+        // (value use of a type-only export) each miss the value slot → TK2304.
+        // `C` as a *type* still resolves, so no TK2304 there.
+        assert_eq!(codes(&reports[1].output), vec!["TK2304", "TK2304"]);
+    }
+
+    /// Control: a regular `export { x }` still provides both the value and type
+    /// slots — value and type uses both resolve.
+    #[test]
+    fn regular_specifier_export_provides_both_slots() {
+        let files = vec![
+            FileInput {
+                name: "a.ts".into(),
+                source: "class C {}\n\
+                         export { C };"
+                    .into(),
+            },
+            FileInput {
+                name: "use.ts".into(),
+                source: "import { C } from \"./a\";\n\
+                         const asType: C = new C();"
+                    .into(),
+            },
+        ];
+        let reports = check_project(files);
+        assert!(reports[0].output.diagnostics.is_empty());
+        assert!(
+            reports[1].output.diagnostics.is_empty(),
+            "value + type both resolve: {:?}",
+            codes(&reports[1].output)
+        );
+    }
 }

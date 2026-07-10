@@ -58,11 +58,23 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         declared_ret: Option<TypeId>,
         inferred: &mut Option<TypeId>,
     ) {
+        // The discriminant is evaluated in the enclosing scope; the case block is one
+        // switch-local lexical scope (binder-created, keyed by span) that the clauses
+        // share so their block-scoped declarations do not leak past the switch.
         self.infer_expr(scope, &switch.discriminant);
+        let switch_scope = self
+            .binder
+            .block_scopes
+            .get(&(self.current_module, switch.span.start))
+            .copied()
+            .unwrap_or(scope);
         for case in &switch.cases {
-            for stmt in &case.consequent {
-                self.check_stmt(scope, stmt, declared_ret, inferred);
+            if let Some(test) = &case.test {
+                self.infer_expr(switch_scope, test);
             }
+            // Route the consequent through the shared list walker so a local overload
+            // set declared inside a clause is grouped like any other (M33).
+            self.check_statement_list(switch_scope, &case.consequent, declared_ret, inferred);
         }
     }
 

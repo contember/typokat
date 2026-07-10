@@ -29,6 +29,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         statements: &[Statement<'_>],
     ) {
         let mut no_return: Option<TypeId> = None;
+        self.check_statement_list(scope, statements, None, &mut no_return);
+    }
+
+    /// Walk a statement list, threading the return context, and route consecutive
+    /// same-named function declarations through the overload grouping machinery
+    /// (M33). Shared by every statement-list context — module top level, blocks,
+    /// switch clauses, loop bodies — so a *local* overload set is grouped exactly
+    /// like a top-level one (no spurious TK2391; calls select the declared
+    /// signatures, not the implementation signature).
+    pub(in crate::check::checker) fn check_statement_list(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+        declared_ret: Option<TypeId>,
+        inferred: &mut Option<TypeId>,
+    ) {
         let mut index = 0;
         while index < statements.len() {
             if let Some((name, end)) = function_overload_group(statements, index) {
@@ -36,7 +52,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 index = end;
                 continue;
             }
-            self.check_stmt(scope, &statements[index], None, &mut no_return);
+            self.check_stmt(scope, &statements[index], declared_ret, inferred);
             index += 1;
         }
     }
@@ -207,9 +223,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .get(&(self.current_module, block.span.start))
             .copied()
             .unwrap_or(scope);
-        for stmt in &block.body {
-            self.check_stmt(block_scope, stmt, declared_ret, inferred);
-        }
+        self.check_statement_list(block_scope, &block.body, declared_ret, inferred);
     }
 
     /// The lexical scope the binder created for a loop's head (holding a `for (let i…)`

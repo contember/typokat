@@ -395,15 +395,28 @@ fn bind_block(state: &mut BindState, parent: ScopeId, block: &BlockStatement<'_>
     bind_statements(state, block_scope, &block.body);
 }
 
-/// Bind a `switch`: clauses share `scope` unless an explicit block creates a
-/// lexical child. Case tests are literals in the subset, but still walked.
+/// Bind a `switch`: the whole case block is ONE lexical scope (per ECMAScript the
+/// CaseBlock is a single block environment), keyed by the switch span so the
+/// checker can enter it. The discriminant is evaluated in the enclosing scope
+/// (before the case block); every clause's test and consequent binds into the
+/// shared switch-local scope, so a block-scoped declaration in a case does not
+/// leak past the switch, yet remains visible across clauses. Explicit nested
+/// `{ }` blocks inside a clause still create their own child scope via `bind_block`.
 fn bind_switch(state: &mut BindState, scope: ScopeId, switch: &SwitchStatement<'_>) {
     bind_expression(state, scope, &switch.discriminant);
+    let switch_scope = state
+        .graph
+        .push(Scope::new(ScopeKind::Block, Some(scope)));
+    state
+        .block_scopes
+        .insert((state.current_module, switch.span.start), switch_scope);
     for case in &switch.cases {
+        // Case tests resolve in the switch-local scope (tsc: a test can name an
+        // earlier clause's `let`; it reports only the deferred TS2454, not TS2304).
         if let Some(test) = &case.test {
-            bind_expression(state, scope, test);
+            bind_expression(state, switch_scope, test);
         }
-        bind_statements(state, scope, &case.consequent);
+        bind_statements(state, switch_scope, &case.consequent);
     }
 }
 
@@ -735,5 +748,81 @@ fn binding_name<'a>(pattern: &'a BindingPattern<'a>) -> Option<&'a str> {
     match pattern {
         BindingPattern::BindingIdentifier(ident) => Some(ident.name.as_str()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_span::SourceType;
+
+    fn bind(src: &str) -> Binder {
+        let prelude_alloc = Allocator::default();
+        let alloc = Allocator::default();
+        let prelude = Parser::new(&prelude_alloc, "", SourceType::ts()).parse();
+        let parsed = Parser::new(&alloc, src, SourceType::ts()).parse();
+        assert!(!parsed.panicked, "parse failed: {src}");
+        bind_module_with_prelude(&prelude.program, &parsed.program)
+    }
+
+    /// WU2: every `case`/`default` clause binds into ONE switch-local lexical
+    /// scope, and that scope does not leak into the enclosing function.
+    #[test]
+    fn switch_clauses_share_one_switch_local_scope() {
+        let binder = bind(
+            "function f(x: number) { \
+               switch (x) { \
+                 case 1: let a = 1; break; \
+                 case 2: let b = 2; break; \
+               } \
+             }",
+        );
+
+        // The switch introduces exactly one block scope (no explicit `{ }` blocks
+        // in this fixture), shared by both clauses.
+        assert_eq!(binder.block_scopes.len(), 1, "one switch-local scope");
+        let switch_scope = *binder.block_scopes.values().next().unwrap();
+        let scope = binder.graph.get(switch_scope).unwrap();
+        assert_eq!(scope.kind, ScopeKind::Block);
+
+        // Both clause-local `let`s live directly in that same scope, as distinct
+        // symbols — proving the clauses share ONE ScopeId.
+        let a = scope.lookup_local("a").expect("a in switch scope");
+        let b = scope.lookup_local("b").expect("b in switch scope");
+        assert_ne!(a, b);
+
+        // The switch-local names do not leak up to the enclosing function scope.
+        let parent = binder.graph.get(scope.parent.unwrap()).unwrap();
+        assert_eq!(parent.kind, ScopeKind::Function);
+        assert!(parent.lookup_local("a").is_none());
+        assert!(parent.lookup_local("b").is_none());
+    }
+
+    /// An explicit `{ }` block inside a clause still gets its own nested scope,
+    /// child of the switch-local scope — its declarations do not reach the switch.
+    #[test]
+    fn explicit_block_in_clause_keeps_its_own_scope() {
+        let binder = bind(
+            "function f(x: number) { \
+               switch (x) { \
+                 case 1: { let inner = 1; } break; \
+               } \
+             }",
+        );
+
+        // Two block scopes: the switch-local one and the explicit `{ }` inside it.
+        assert_eq!(binder.block_scopes.len(), 2);
+        let inner_scope = binder
+            .block_scopes
+            .values()
+            .find(|id| binder.graph.get(**id).unwrap().lookup_local("inner").is_some())
+            .copied()
+            .expect("inner block scope");
+        // Its parent is a switch-local block scope, and `inner` is not in the switch.
+        let parent = binder.graph.get(inner_scope).unwrap().parent.unwrap();
+        assert_eq!(binder.graph.get(parent).unwrap().kind, ScopeKind::Block);
+        assert!(binder.graph.get(parent).unwrap().lookup_local("inner").is_none());
     }
 }

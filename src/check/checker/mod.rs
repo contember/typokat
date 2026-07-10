@@ -16,7 +16,7 @@ use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Declaration, ExportSpecifier, ModuleExportName, Program, Statement,
+    Declaration, ExportSpecifier, ImportOrExportKind, ModuleExportName, Program, Statement,
 };
 use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType};
@@ -445,8 +445,18 @@ fn collect_exports(
         if let Some(decl) = &export.declaration {
             collect_declaration_export(builder, scope, decl, &mut surface);
         } else {
+            // `export type { x }` marks the whole statement type-only; mirror the
+            // import side (driver.rs) where the outer kind ORs with each specifier.
+            let outer_type_only = export.export_kind == ImportOrExportKind::Type;
             for specifier in &export.specifiers {
-                collect_list_export(builder, scope, specifier, &mut surface, diagnostics);
+                collect_list_export(
+                    builder,
+                    scope,
+                    specifier,
+                    outer_type_only,
+                    &mut surface,
+                    diagnostics,
+                );
             }
         }
     }
@@ -496,6 +506,7 @@ fn collect_list_export(
     builder: &ProjectBinderBuilder,
     scope: ScopeId,
     specifier: &ExportSpecifier<'_>,
+    outer_type_only: bool,
     surface: &mut ExportSurface,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -505,13 +516,22 @@ fn collect_list_export(
     let Some(exported) = module_export_name(&specifier.exported) else {
         return;
     };
-    let (value, ty) = builder.symbol_slots(scope, local);
+    let (mut value, ty) = builder.symbol_slots(scope, local);
+    // Existence is judged against the real symbol; a value-only local is still a
+    // valid `export type { x }` target (the error surfaces on the importer, below).
     if value.is_none() && ty.is_none() {
         diagnostics.push(Diagnostic::cannot_find_name(
             Span::from_oxc(specifier.local.span()),
             local,
         ));
         return;
+    }
+    // A type-only specifier (`export type { x }` or `export { type x }`) must not
+    // supply a runtime value — suppress the value slot so a non-type-only import
+    // cannot use it as a value (tsc TS1362; M29 stand-in is TK2304 on the importer).
+    let type_only = outer_type_only || specifier.export_kind == ImportOrExportKind::Type;
+    if type_only {
+        value = None;
     }
     surface.insert(exported.to_string(), ExportedSlots { value, ty });
 }
