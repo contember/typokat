@@ -428,7 +428,7 @@ fn array_element_needs_parens(store: &Store, element: TypeId) -> bool {
 fn render_literal(lit: &crate::types::repr::LiteralValue) -> String {
     use crate::types::repr::LiteralValue;
     match lit {
-        LiteralValue::String(s) => format!("\"{s}\""),
+        LiteralValue::String(s) => format!("\"{}\"", escape_string_literal(s)),
         LiteralValue::Boolean(b) => b.to_string(),
         LiteralValue::Number(n) => {
             // Render integers without a trailing `.0` to match `tsc`'s literal
@@ -439,5 +439,46 @@ fn render_literal(lit: &crate::types::repr::LiteralValue) -> String {
                 format!("{n}")
             }
         }
+    }
+}
+
+/// Escape control characters (and `\`/`"`) inside a string-literal type body, as tsc
+/// renders them — a raw newline would otherwise split a diagnostic across lines and,
+/// after WU3, could inject a phantom `incomplete[…]` line into an exit-3 identity list.
+fn escape_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::escape_string_literal;
+
+    /// A hostile string-literal type carrying a raw newline (and a fabricated
+    /// `incomplete[…]` payload) renders on ONE line with the newline escaped, so it
+    /// can never pollute the incomplete-identity list of an exit-3 official-suite run.
+    #[test]
+    fn hostile_literal_renders_on_one_line() {
+        let rendered = format!("\"{}\"", escape_string_literal("x\nincomplete[evil/id]"));
+        assert!(!rendered.contains('\n'), "no raw newline: {rendered:?}");
+        assert_eq!(rendered, "\"x\\nincomplete[evil/id]\"");
+    }
+
+    /// Backslash, quote, and other control chars escape too.
+    #[test]
+    fn escapes_backslash_quote_and_controls() {
+        assert_eq!(escape_string_literal("a\\b\"c\t\r"), "a\\\\b\\\"c\\t\\r");
+        assert_eq!(escape_string_literal("\u{7}"), "\\u{7}");
     }
 }
