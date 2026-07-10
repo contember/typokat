@@ -358,12 +358,15 @@ a nearby **supported control** on a sibling line carries the ordinary `error[TK�
 marker so the two paths are diffed side by side.
 
 The corpus is **split by owning work unit**. `b73_surface_accounting/` holds the WU3
-expression child-slot fixtures and is now **enabled**: the harness diffs their
-`incomplete[<id>]` markers (`compare_incomplete_output`) with the same per-line,
-exact-identity discipline as `error[TK…]` — an unexpected record or a missing expected
-one fails. The sibling `b73_surface_accounting_pending/` holds the statement-container
-(WU4) and annotation (WU5) fixtures and stays registered `false` until those emissions
-land; enabling one at HEAD shows the silent path directly (the `incomplete[…]` line
+expression child-slot fixtures plus the WU4 statement-container fixtures and is
+**enabled**: the harness diffs their `incomplete[<id>]` markers
+(`compare_incomplete_output`) with the same per-line, exact-identity discipline as
+`error[TK…]` — an unexpected record or a missing expected one fails. WU4 traverses the
+try/catch/finally blocks through the existing block walker, so the try fixture now
+carries the ordinary `error[TK…]` markers (with an `incomplete[…]` only for the
+still-unmodeled catch parameter). The sibling `b73_surface_accounting_pending/` holds
+the remaining annotation (WU5) fixture and stays registered `false` until that emission
+lands; enabling it at HEAD shows the silent path directly (the `incomplete[…]` line
 produces no record while `tsc` errors). Every fixture header records the exact `tsc
 6.0.3 --strict` verdict and the `file:line` of the wildcard/`None`/skip that drops the
 position.
@@ -373,5 +376,6 @@ position.
 | `template_interpolation.ts` | WU3 (enabled) | `infer_expr` `TemplateLiteral` arm records before `None` | `expr-infer/template-literal/interpolation` | TS2345 |
 | `computed_key.ts` | WU3 (enabled) | `infer_object_literal` records non-`static_name` keys | `expr-infer/object-literal/computed-key` | TS2345 |
 | `array_spread.ts` | WU3 (enabled) | array-element helper records spread/elision | `expr-infer/array-literal/spread-element` | TS2345 |
-| `try_catch_finally.ts` | pending (WU4) | `check_stmt` drops `TryStatement` (`statements.rs:145`) | `stmt-check/try-statement/{block,handler,finalizer}` | TS2322 ×3 |
+| `try_catch_finally.ts` | WU4 (enabled) | `check_stmt` walks the blocks; catch param stays incomplete | `error[TK2322]` ×3 + `stmt-check/try-statement/catch-param` | TS2322 ×3 |
+| `for_of_assign_target.ts` | WU4 (enabled) | `declare_for_left` records the pre-declared target | `stmt-check/assignment-target/self` | TS2322 |
 | `typeof_query.ts` | pending (WU5) | `lower_annotation_inner` drops `TSTypeQuery` (`annotations/mod.rs:174`) | `annotation-lower/type-query/typeof` | TS2304 |

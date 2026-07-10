@@ -115,14 +115,14 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // 62, 66, 67. Stays `false` beyond this sprint until each backlog item ships.
     ("sr_deferred_ledger", false),
     // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
-    // (backlog 73). ENABLED by WU3: the expression child-slot fixtures (template
-    // interpolation, computed object key, array spread) now emit their prescribed
-    // `incomplete[<role/surface/slot>]` records, diffed by `compare_incomplete_output`.
-    // See tests/cases/README.md ("Surface-accounting corpus").
+    // (backlog 73). ENABLED by WU3 (expression child slots) and WU4 (statement
+    // containers): the fixtures emit their prescribed `incomplete[<role/surface/slot>]`
+    // records and/or ordinary `error[TK…]`, diffed by `compare_incomplete_output` /
+    // `compare_fixture_output`. See tests/cases/README.md ("Surface-accounting corpus").
     ("b73_surface_accounting", true),
-    // Sibling PENDING corpus — the statement-container (`try`/`catch`/`finally`, WU4)
-    // and annotation (`typeof Missing`, WU5) fixtures. Split out of the WU3 dir so it
-    // can enable independently; stays `false` until WU4/WU5 wire those emissions.
+    // Sibling PENDING corpus — the remaining annotation (`typeof Missing`, WU5)
+    // fixture. Split out of the WU3 dir so it can enable independently; stays `false`
+    // until WU5 wires that emission.
     ("b73_surface_accounting_pending", false),
 ];
 

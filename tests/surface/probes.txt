@@ -1,12 +1,12 @@
-Surface-accounting probe snapshots (sprint 2026-07-10, WU0 captured → WU3 updated)
-=================================================================================
+Surface-accounting probe snapshots (sprint 2026-07-10, WU0 captured → WU3/WU4 updated)
+=====================================================================================
 
 Committed witness data. typokat = target/release/typokat check <file>;
 oracle = tsc 6.0.3 --strict --noEmit <file>. Each probe was a minimal in-scope construct that
 typokat exited clean (0 diagnostics) while tsc rejects. WU3 closed probes 1-3 (expression
-child-slot accounting): they now exit 3 (incomplete) with the prescribed identity. Probes 4/5
-(annotation/statement-container) remain open for WU5/WU4. Fixtures for probes 1-3 live in
-tests/cases/b73_surface_accounting/; probes 4/5 in tests/cases/b73_surface_accounting_pending/.
+child-slot accounting) and WU4 closed probe 5 (try/catch/finally): they now exit 3 while tsc
+rejects. Probe 4 (annotation) remains open for WU5. Fixtures for probes 1-3 + 5 live in
+tests/cases/b73_surface_accounting/; probe 4 in tests/cases/b73_surface_accounting_pending/.
 
 Legend: "exit" is the process exit code. typokat: 0 = clean, 1 = diagnostics, 3 = incomplete.
 tsc 6.0.3: 0 = clean, 2 = diagnostics (this tsc build returns 2 for type errors under --noEmit).
@@ -36,15 +36,17 @@ Probe 4 — `typeof Missing` in a type annotation                          [OPEN
   tsc:     exit 2 — TS2304: Cannot find name 'Missing'.
   id:      annotation-lower/type-query/typeof
 
-Probe 5 — bad assignments inside try / catch / finally                   [OPEN — WU4]
+Probe 5 — bad assignments inside try / catch / finally                   [CLOSED by WU4]
   source:  try { const a: number = "bad1"; }
            catch (e) { const b: number = "bad2"; }
            finally { const c: number = "bad3"; }
-  typokat: exit 0 — (no output)
+  typokat: WU0 exit 0 — (no output)  →  WU4 exit 1 — TK2322 ×3 (blocks now walked)
+           plus exit 3 (incomplete precedence): incomplete[stmt-check/try-statement/catch-param]
+           for the still-unmodeled catch variable. Net exit 3.
   tsc:     exit 2 — TS2322 ×3 (one per block: try line 2, catch line 4, finally line 6)
-  id:      stmt-check/try-statement/{block,handler,finalizer}
+  id:      TK2322 ×3 (block/handler/finalizer now supported) + stmt-check/try-statement/catch-param
 
 ------------------------------------------------------------------------------------------------
 Summary: WU0 captured 5/5 probes exiting 0 (false-clean); all 5 rejected by tsc 6.0.3 --strict.
-WU3 closed probes 1-3 (now exit 3 with the prescribed incomplete identity). Probes 4/5 remain
-open for WU4/WU5. These are false-clean silent-skip paths, not deliberate divergences.
+WU3 closed probes 1-3 and WU4 closed probe 5 (all now exit 3, no longer clean). Probe 4 remains
+open for WU5. These are false-clean silent-skip paths, not deliberate divergences.

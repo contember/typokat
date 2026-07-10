@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
-# corpus 874  in-scope 487  out-of-scope 387
-# clean-kept 165/205  error-exact 29/282  diag-recall 364/1729
+# corpus 874  in-scope 485  out-of-scope 389
+# clean-kept 163/203  error-exact 29/282  diag-recall 364/1729
 # cols: status<TAB>matched fn fp expected<TAB>ids<TAB>rel  (status=IN | OOS:<bucket>; nums/ids '-' = n/a; ids=<matched>|<fp> as sorted line:code identities; OOS:unsupported carries nums + <matched>|<fp>|<incomplete> — an exit-3 demotion keeps its diagnostic diff plus its surface identities)
 IN	4 4 2 8	15:2341,18:2341,20:2341,23:2341|16:2339,21:2339	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	15:2445,18:2445,20:2445,23:2445|16:2339,21:2339	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -290,7 +290,7 @@ OOS:syntax:module	- - - -	-	conformance/controlFlow/assertionTypePredicates2.ts
 IN	0 0 5 0	|6:2339,15:2339,21:2339,30:2339,36:2339	conformance/controlFlow/constLocalsInFunctionExpressions.ts
 OOS:syntax:type-predicate	- - - -	-	conformance/controlFlow/controlFlowAliasing.ts
 OOS:syntax:module	- - - -	-	conformance/controlFlow/controlFlowAliasing2.ts
-IN	0 0 0 0	|	conformance/controlFlow/controlFlowAliasingCatchVariables.ts
+OOS:unsupported	0 0 0 0	||stmt-check/try-statement/catch-param,stmt-check/try-statement/catch-param	conformance/controlFlow/controlFlowAliasingCatchVariables.ts
 IN	0 0 3 0	|5:2339,9:2339,17:2322	conformance/controlFlow/controlFlowAssignmentExpression.ts
 OOS:syntax:as-const	- - - -	-	conformance/controlFlow/controlFlowAssignmentPatternOrder.ts
 IN	0 1 0 1	|	conformance/controlFlow/controlFlowBinaryAndExpression.ts
@@ -308,7 +308,7 @@ IN	0 0 0 0	|	conformance/controlFlow/controlFlowElementAccess2.ts
 OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowElementAccessNoCrash1.ts
 OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowForInStatement.ts
 IN	0 0 0 0	|	conformance/controlFlow/controlFlowForInStatement2.ts
-OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowForOfStatement.ts
+OOS:unsupported	0 0 1 0	|2:2304|stmt-check/assignment-target/self	conformance/controlFlow/controlFlowForOfStatement.ts
 OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowForStatement.ts
 OOS:syntax:module	- - - -	-	conformance/controlFlow/controlFlowGenericTypes.ts
 OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowIIFE.ts
@@ -460,7 +460,7 @@ OOS:multifile	- - - -	-	conformance/types/intersection/intersectionsAndEmptyObje
 IN	0 0 0 0	|	conformance/types/intersection/operatorsAndIntersectionTypes.ts
 IN	0 6 1 6	|20:2741	conformance/types/intersection/recursiveIntersectionTypes.ts
 IN	0 9 0 9	|	conformance/types/keyof/circularIndexedAccessErrors.ts
-IN	0 0 0 0	|	conformance/types/keyof/keyofAndForIn.ts
+OOS:unsupported	0 0 0 0	||stmt-check/assignment-target/self,stmt-check/assignment-target/self,stmt-check/assignment-target/self	conformance/types/keyof/keyofAndForIn.ts
 OOS:syntax:enum	- - - -	-	conformance/types/keyof/keyofAndIndexedAccess.ts
 OOS:syntax:module	- - - -	-	conformance/types/keyof/keyofAndIndexedAccess2.ts
 OOS:unresolved	- - - -	-	conformance/types/keyof/keyofAndIndexedAccessErrors.ts

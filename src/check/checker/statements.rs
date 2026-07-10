@@ -15,9 +15,10 @@ use crate::types::store::{Store, TypeId};
 use crate::types::WellKnown;
 use oxc_ast::ast::{
     BindingPattern, BlockStatement, Declaration, Expression, ForInStatement, ForOfStatement,
-    ForStatement, ForStatementInit, ForStatementLeft, Function, Statement, VariableDeclarationKind,
-    VariableDeclarator,
+    ForStatement, ForStatementInit, ForStatementLeft, Function, Statement, TryStatement,
+    VariableDeclarationKind, VariableDeclarator,
 };
+use oxc_span::GetSpan;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Check a list of statements in `scope` at the **module top level** (no enclosing
@@ -141,8 +142,106 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Statement::ThrowStatement(throw) => {
                 self.infer_expr(scope, &throw.argument);
             }
-            // Other statements are out of the subset.
+            // `try`/`catch`/`finally`: the three blocks are ordinary statement lists,
+            // walked through the existing block walker so nested errors surface (WU4).
+            // The catch parameter's type stays unmodeled (recorded incomplete inside).
+            Statement::TryStatement(try_stmt) => {
+                self.check_try(scope, try_stmt, declared_ret, inferred);
+            }
+            // Declaration statements the statement checker does not model. Their type/
+            // value side is skipped, so record the incomplete surface before dropping
+            // (owners on each backlog) instead of exiting clean (WU4). `import`,
+            // `export {…}`, type-alias, and interface are handled elsewhere (binder /
+            // type-fill / the ExportNamedDeclaration arm) and skip silently.
+            Statement::TSEnumDeclaration(_) => {
+                self.record_incomplete(
+                    "decl/enum-declaration/self",
+                    Span::from_oxc(stmt.span()),
+                    "enum declaration not modeled",
+                );
+            }
+            Statement::TSModuleDeclaration(_) => {
+                self.record_incomplete(
+                    "decl/module-declaration/self",
+                    Span::from_oxc(stmt.span()),
+                    "namespace/module declaration not modeled",
+                );
+            }
+            Statement::TSGlobalDeclaration(_) => {
+                self.record_incomplete(
+                    "decl/global-declaration/self",
+                    Span::from_oxc(stmt.span()),
+                    "global augmentation not modeled",
+                );
+            }
+            Statement::TSImportEqualsDeclaration(_) => {
+                self.record_incomplete(
+                    "decl/import-equals/self",
+                    Span::from_oxc(stmt.span()),
+                    "import = declaration not modeled",
+                );
+            }
+            Statement::ExportAllDeclaration(_) => {
+                self.record_incomplete(
+                    "decl/export-all/self",
+                    Span::from_oxc(stmt.span()),
+                    "export * not modeled",
+                );
+            }
+            Statement::ExportDefaultDeclaration(_) => {
+                self.record_incomplete(
+                    "decl/export-default/self",
+                    Span::from_oxc(stmt.span()),
+                    "export default not modeled",
+                );
+            }
+            Statement::TSExportAssignment(_) => {
+                self.record_incomplete(
+                    "decl/export-assignment/self",
+                    Span::from_oxc(stmt.span()),
+                    "export = not modeled",
+                );
+            }
+            Statement::TSNamespaceExportDeclaration(_) => {
+                self.record_incomplete(
+                    "decl/namespace-export/self",
+                    Span::from_oxc(stmt.span()),
+                    "export as namespace not modeled",
+                );
+            }
+            // Remaining forms carry no in-scope child the statement checker hides:
+            // supported-elsewhere (`import`, type-alias, interface), design-OOS
+            // (`with`/`debugger`/`;`), and the flow-owned `break`/`continue`.
             _ => {}
+        }
+    }
+
+    /// Check a `try`/`catch`/`finally` (WU4). Each block is walked through the
+    /// existing block walker, so nested TK diagnostics surface exactly as in a plain
+    /// block. Flow narrowing does not cross into try blocks (the pre-pass leaves them
+    /// conservative — see `flowgraph`); the catch variable is bound by the binder but
+    /// its type is not modeled (tsc types it `unknown`), so record the incomplete
+    /// catch-parameter surface rather than under-reporting silently.
+    fn check_try(
+        &mut self,
+        scope: ScopeId,
+        try_stmt: &TryStatement<'_>,
+        declared_ret: Option<TypeId>,
+        inferred: &mut Option<TypeId>,
+    ) {
+        self.check_block(scope, &try_stmt.block, declared_ret, inferred);
+        if let Some(handler) = &try_stmt.handler {
+            if let Some(param) = &handler.param {
+                self.record_incomplete(
+                    "stmt-check/try-statement/catch-param",
+                    Span::from_oxc(param.span),
+                    "catch parameter type not modeled (tsc types it unknown)",
+                );
+            }
+            self.check_block(scope, &handler.body, declared_ret, inferred);
+        }
+        if let Some(finalizer) = &try_stmt.finalizer {
+            self.check_block(scope, finalizer, declared_ret, inferred);
         }
     }
 
@@ -158,6 +257,37 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
             Declaration::ClassDeclaration(class) => {
                 self.check_class(scope, class);
+            }
+            // Exported declaration forms the statement checker does not model — account
+            // for them before dropping (WU4). Type-alias / interface are handled by
+            // type-fill and skip silently.
+            Declaration::TSEnumDeclaration(_) => {
+                self.record_incomplete(
+                    "decl/enum-declaration/self",
+                    Span::from_oxc(decl.span()),
+                    "enum declaration not modeled",
+                );
+            }
+            Declaration::TSModuleDeclaration(_) => {
+                self.record_incomplete(
+                    "decl/module-declaration/self",
+                    Span::from_oxc(decl.span()),
+                    "namespace/module declaration not modeled",
+                );
+            }
+            Declaration::TSGlobalDeclaration(_) => {
+                self.record_incomplete(
+                    "decl/global-declaration/self",
+                    Span::from_oxc(decl.span()),
+                    "global augmentation not modeled",
+                );
+            }
+            Declaration::TSImportEqualsDeclaration(_) => {
+                self.record_incomplete(
+                    "decl/import-equals/self",
+                    Span::from_oxc(decl.span()),
+                    "import = declaration not modeled",
+                );
             }
             _ => {}
         }
@@ -331,6 +461,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         element_ty: TypeId,
     ) {
         let ForStatementLeft::VariableDeclaration(decl) = left else {
+            // A pre-declared assignment target (`for (s of xs)`): the per-iteration
+            // assignability of the element to the existing binding is not checked
+            // (WU4 accounting; `let s: string; for (s of [1,2,3])` should error).
+            self.record_incomplete(
+                "stmt-check/assignment-target/self",
+                Span::from_oxc(left.span()),
+                "for-in/of assignment target not typed",
+            );
             return;
         };
         for declarator in &decl.declarations {

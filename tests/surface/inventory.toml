@@ -80,6 +80,16 @@ disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
 witness = "flow graph claims for-statement not walked (cross-layer drift)"
 
+[[surface]]
+id = "flow/try-statement/self"
+role = "flow"
+surface = "try-statement"
+slot = "self"
+oxc_variant = "Statement::TryStatement"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "stmt-check walks try blocks but the flow pre-pass leaves them conservative (cross-layer difference)"
+
 # ------------------------------------------------------------------------------
 # role: type-fill
 # ------------------------------------------------------------------------------
@@ -116,7 +126,7 @@ slot = "self"
 oxc_variant = "ForStatementLeft::AssignmentTarget"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "for-in/of left assignment target silently untyped"
+witness = "../cases/b73_surface_accounting/for_of_assign_target.ts"
 
 [[surface]]
 id = "stmt-check/block-statement/self"
@@ -284,9 +294,19 @@ role = "stmt-check"
 surface = "try-statement"
 slot = "block"
 oxc_variant = "Statement::TryStatement"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b73_surface_accounting/try_catch_finally.ts"
+
+[[surface]]
+id = "stmt-check/try-statement/catch-param"
+role = "stmt-check"
+surface = "try-statement"
+slot = "catch-param"
+oxc_variant = "Statement::TryStatement"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../cases/b73_surface_accounting_pending/try_catch_finally.ts"
+witness = "../cases/b73_surface_accounting/try_catch_finally.ts"
 
 [[surface]]
 id = "stmt-check/try-statement/finalizer"
@@ -294,9 +314,9 @@ role = "stmt-check"
 surface = "try-statement"
 slot = "finalizer"
 oxc_variant = "Statement::TryStatement"
-disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../cases/b73_surface_accounting_pending/try_catch_finally.ts"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b73_surface_accounting/try_catch_finally.ts"
 
 [[surface]]
 id = "stmt-check/try-statement/handler"
@@ -304,9 +324,9 @@ role = "stmt-check"
 surface = "try-statement"
 slot = "handler"
 oxc_variant = "Statement::TryStatement"
-disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../cases/b73_surface_accounting_pending/try_catch_finally.ts"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b73_surface_accounting/try_catch_finally.ts"
 
 [[surface]]
 id = "stmt-check/try-statement/self"
@@ -314,9 +334,10 @@ role = "stmt-check"
 surface = "try-statement"
 slot = "self"
 oxc_variant = "Statement::TryStatement"
-disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../cases/b73_surface_accounting_pending/try_catch_finally.ts"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b73_surface_accounting/try_catch_finally.ts"
+requires_slots = ["block", "handler", "finalizer"]
 
 [[surface]]
 id = "stmt-check/while-statement/self"

@@ -101,9 +101,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 // condition), not an exit edge.
                 self.build_flow_continue(continue_stmt);
             }
-            // Out of subset (`for`/`for-of`/`do-while`/`try`, …): not walked by the
-            // check pass either, so no references are resolved inside them — a miss in
-            // `reference_flow` falls back to the declared type (sound). Left un-built.
+            // `for`/`for-of`/`for-in`/`do-while`/`try` are walked by the STATEMENT
+            // checker but intentionally left un-built here: the flow pre-pass models no
+            // per-iteration or exception edges (that would be new control-flow
+            // semantics, out of scope). References inside them miss `reference_flow` and
+            // fall back to the declared type — conservative, so narrowing is only lost,
+            // never unsoundly gained. The cross-layer difference is recorded as the
+            // `flow/{for,do-while,try}-statement/self` unsupported-in surfaces (backlog 73).
             _ => {}
         }
     }

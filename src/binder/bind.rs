@@ -8,7 +8,7 @@ use crate::binder::symbol::{DeclId, Symbol, SymbolId, SymbolTable};
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, BlockStatement, Class, ClassElement, Declaration,
     Expression, ForStatement, ForStatementInit, ForStatementLeft, FormalParameters, Function,
-    FunctionBody, Program, Statement, SwitchStatement, VariableDeclarator,
+    FunctionBody, Program, Statement, SwitchStatement, TryStatement, VariableDeclarator,
 };
 use rustc_hash::FxHashMap;
 
@@ -359,9 +359,37 @@ fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
         Statement::LabeledStatement(labeled) => {
             bind_statement(state, scope, &labeled.body);
         }
+        // `try`/`catch`/`finally` — each block gets its own lexical scope so the
+        // checker walks it (WU4); the catch parameter is declared in a dedicated
+        // catch scope so references resolve (its type is left to the checker).
+        Statement::TryStatement(try_stmt) => bind_try(state, scope, try_stmt),
         // Other statements declare no names in the subset; their sub-expressions (if
         // any) are not in the subset either.
         _ => {}
+    }
+}
+
+/// Bind a `try`/`catch`/`finally`. The try and finally blocks bind like ordinary
+/// blocks. The catch clause gets a dedicated block scope holding the caught
+/// parameter (so references inside the handler resolve), with the handler body
+/// nested inside it as its own block.
+fn bind_try(state: &mut BindState, parent: ScopeId, try_stmt: &TryStatement<'_>) {
+    bind_block(state, parent, &try_stmt.block);
+    if let Some(handler) = &try_stmt.handler {
+        let catch_scope = state.graph.push(Scope::new(ScopeKind::Block, Some(parent)));
+        state
+            .block_scopes
+            .insert((state.current_module, handler.span.start), catch_scope);
+        if let Some(param) = &handler.param {
+            if let Some(name) = binding_name(&param.pattern) {
+                let decl_id = state.fresh_decl();
+                declare_value(state, catch_scope, name, decl_id);
+            }
+        }
+        bind_block(state, catch_scope, &handler.body);
+    }
+    if let Some(finalizer) = &try_stmt.finalizer {
+        bind_block(state, parent, finalizer);
     }
 }
 
