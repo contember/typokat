@@ -167,3 +167,14 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
 cargo test                              # unit tests + the conformance corpus
 cargo clippy --all-targets -- -D warnings
 ```
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs the same commands a contributor runs — one
+separately-diagnosable job each: `cargo fmt --check`, `cargo test`,
+`cargo clippy --all-targets -- -D warnings`, `cargo build --release`, the
+official-suite harness unit tests (`python3 -m unittest test_tsofficial`), and the
+official-suite regression ratchet (`python3 tsofficial.py run --check`, which fetches
+the corpus at the pinned TypeScript SHA and rejects any diagnostic-identity regression
+against the committed `scoreboard.txt`). Formatting is enforced against the toolchain
+pinned in `rust-toolchain.toml`, so run `cargo fmt` before pushing.

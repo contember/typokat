@@ -1,0 +1,111 @@
+# Checked-in quality gates. Every job invokes the exact command a contributor runs
+# locally (no CI-only wrapper that changes semantics). The Rust toolchain — including
+# the rustfmt version that makes `cargo fmt --check` stable — is pinned by
+# rust-toolchain.toml, so `rustup show` installs that same version here.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Minimal token scope. The official-suite job authenticates `gh api` calls against
+# the public microsoft/TypeScript repo purely for API rate limits; read is enough.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # `cargo fmt --check` — enforced against the pinned rustfmt (rust-toolchain.toml).
+  fmt:
+    name: fmt (cargo fmt --check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup show
+      - run: cargo fmt --check
+
+  # `cargo clippy --all-targets -- -D warnings` — warnings are errors.
+  clippy:
+    name: clippy (-D warnings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup show
+      # Cache keyed on Cargo.lock + rustc version + job (Swatinem/rust-cache).
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
+
+  # `cargo test` — unit tests, the conformance corpus, and the manifest validator.
+  test:
+    name: test (cargo test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test
+
+  # `cargo build --release` — the release profile must build.
+  build:
+    name: build (cargo build --release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+
+  # The official-suite harness's own stdlib-only unit tests (no third-party deps).
+  python-harness:
+    name: python harness tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: python3 -m unittest test_tsofficial
+        working-directory: tooling/official-suite
+        run: python3 -m unittest test_tsofficial
+
+  # Official-suite regression ratchet: build the release binary, fetch the corpus at
+  # the pinned TypeScript SHA, and reject any diagnostic-identity regression against
+  # the committed scoreboard. A real gate (no continue-on-error).
+  official-suite:
+    name: official-suite (run --check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Corpus is fully determined by PINNED_SHA + DEFAULT_DIRS in tsofficial.py, so
+      # keying the cache on that file's hash is sound: any change re-fetches.
+      - name: Cache fetched corpus
+        id: corpus-cache
+        uses: actions/cache@v4
+        with:
+          path: tooling/official-suite/corpus
+          key: ts-corpus-${{ hashFiles('tooling/official-suite/tsofficial.py') }}
+      - name: Build release binary
+        run: cargo build --release
+      - name: Fetch corpus (pinned TS SHA)
+        if: steps.corpus-cache.outputs.cache-hit != 'true'
+        working-directory: tooling/official-suite
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tsofficial.py fetch
+      - name: run --check (identity ratchet vs committed scoreboard)
+        working-directory: tooling/official-suite
+        run: python3 tsofficial.py run --check
