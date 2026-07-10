@@ -178,6 +178,7 @@ const CRITERION_KEYS: &[&str] = &[
     "links",
     "deps",
     "scope",
+    "deps_exception",
 ];
 
 /// Full validation entry point: parse then check every invariant. `manifest_dir`
@@ -484,6 +485,88 @@ fn extract_scope_families(scope_text: &str, errors: &mut Vec<String>) -> BTreeMa
     families
 }
 
+/// Compare each incomplete criterion's `deps` with its backlog owner's
+/// `blocked-by` frontmatter. A mismatch is an error unless the criterion carries
+/// an explicit non-empty `deps_exception` rationale — never an implicit drift.
+/// This is what catches the historical `14`/`70` drift (a criterion claiming a
+/// dependency its owner's `blocked-by` does not list).
+fn validate_deps_parity(text: &str, backlog_dir: &Path) -> Result<(), Vec<String>> {
+    let manifest = parse(text)?;
+    let mut errors = Vec::new();
+
+    for (idx, c) in manifest.criteria.iter().enumerate() {
+        let id = c
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("criterion #{}", idx + 1));
+
+        let owner = c.get("owner").and_then(Value::as_str).unwrap_or("");
+        if owner.is_empty() || owner == "shipped" {
+            continue; // only backlog-path owners have a blocked-by graph
+        }
+
+        let deps: BTreeSet<String> = match c.get("deps") {
+            Some(Value::Arr(v)) => v.iter().cloned().collect(),
+            _ => BTreeSet::new(),
+        };
+        let exception = c
+            .get("deps_exception")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty());
+
+        match owner_blocked_by(backlog_dir, owner) {
+            None => errors.push(format!(
+                "criterion {id:?}: cannot read owner {owner:?} to check deps parity"
+            )),
+            Some(blocked_by) => {
+                if deps != blocked_by && exception.is_none() {
+                    errors.push(format!(
+                        "criterion {id:?}: deps {:?} disagree with owner {owner:?} blocked-by {:?} \
+                         — reconcile them or add deps_exception=\"rationale\" for a deliberate slice",
+                        deps.iter().collect::<Vec<_>>(),
+                        blocked_by.iter().collect::<Vec<_>>()
+                    ));
+                }
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// Parse a backlog item's `blocked-by:` frontmatter list into a set of relative
+/// paths (comparable directly to manifest `deps`, since both resolve against
+/// docs/backlog/). Returns `None` only if the owner file cannot be read; a file
+/// with no `blocked-by` line yields the empty set.
+fn owner_blocked_by(backlog_dir: &Path, owner_rel: &str) -> Option<BTreeSet<String>> {
+    let text = std::fs::read_to_string(backlog_dir.join(owner_rel)).ok()?;
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("blocked-by:") else {
+            continue;
+        };
+        let inner = rest
+            .trim()
+            .strip_prefix('[')
+            .and_then(|s| s.strip_suffix(']'))
+            .unwrap_or("");
+        return Some(
+            inner
+                .split(',')
+                .map(|s| s.trim().trim_matches('"').trim())
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        );
+    }
+    Some(BTreeSet::new())
+}
+
 fn is_scope_family_id(value: &str) -> bool {
     let Some((tier, slug)) = value.split_once('-') else {
         return false;
@@ -575,6 +658,14 @@ fn committed_manifest_is_valid() {
     if let Err(errors) = validate_scope_coverage(&text, &scope_text) {
         panic!(
             "scope-to-manifest coverage validation failed ({}):\n  {}",
+            errors.len(),
+            errors.join("\n  ")
+        );
+    }
+
+    if let Err(errors) = validate_deps_parity(&text, &dir) {
+        panic!(
+            "deps-vs-blocked-by parity validation failed ({}):\n  {}",
             errors.len(),
             errors.join("\n  ")
         );
@@ -910,4 +1001,120 @@ fn scope_inventory_rejects_unmarked_duplicate_and_wrong_tier_families() {
         }
     }
     assert!(leaked.is_empty(), "{}", leaked.join("\n"));
+}
+
+// ---------------------------------------------------------------------------
+// deps <-> blocked-by parity witnesses (table-driven).
+//
+// The `open-one` criterion owns backlog `14`, whose real `blocked-by` frontmatter
+// is `[41, 43, 70]`; a matching `deps` array makes the base pass. Each mutation
+// then drifts one side and must be rejected unless a `deps_exception` justifies it.
+// ---------------------------------------------------------------------------
+
+fn deps_parity_base() -> String {
+    valid_base()
+        .replace("owner = \"./41-generic-methods.md\"", "owner = \"./14-libdts-loading.md\"")
+        .replace(
+            "deps = []\n",
+            "deps = [\"./41-generic-methods.md\", \"./43-namespaces-declaration-merging.md\", \"./70-this-parameter-typing.md\"]\n",
+        )
+}
+
+#[test]
+fn deps_parity_base_itself_passes() {
+    assert!(
+        validate_deps_parity(&deps_parity_base(), &backlog_dir()).is_ok(),
+        "the deps-parity base must itself be valid"
+    );
+    // The committed manifest must also be in parity.
+    let dir = backlog_dir();
+    let text = std::fs::read_to_string(dir.join("completion-1.0.toml")).unwrap();
+    assert!(validate_deps_parity(&text, &dir).is_ok());
+}
+
+#[test]
+fn rejects_deps_parity_drift() {
+    let dir = backlog_dir();
+
+    let cases: Vec<(&str, String, &str)> = vec![
+        (
+            // The historical 14/70 drift: claim 70 as the only dep while the owner's
+            // blocked-by lists 41/43/70 — 41 and 43 go missing.
+            "14/70 drift (deps drop 41 and 43)",
+            deps_parity_base().replace(
+                "deps = [\"./41-generic-methods.md\", \"./43-namespaces-declaration-merging.md\", \"./70-this-parameter-typing.md\"]",
+                "deps = [\"./70-this-parameter-typing.md\"]",
+            ),
+            "disagree with owner",
+        ),
+        (
+            // Extra dep the owner's blocked-by does not list.
+            "deps names an unlisted dependency",
+            deps_parity_base().replace(
+                "\"./70-this-parameter-typing.md\"]",
+                "\"./70-this-parameter-typing.md\", \"./15-modules-imports.md\"]",
+            ),
+            "disagree with owner",
+        ),
+        (
+            // Owner (41) has no blocked-by, but the criterion claims a dep.
+            "deps on an owner with empty blocked-by",
+            valid_base().replace(
+                "owner = \"./41-generic-methods.md\"\nwitness = \"spec-first corpus\"\nlinks = [\"../reference/divergences.md\"]\ndeps = []",
+                "owner = \"./41-generic-methods.md\"\nwitness = \"spec-first corpus\"\nlinks = [\"../reference/divergences.md\"]\ndeps = [\"./70-this-parameter-typing.md\"]",
+            ),
+            "disagree with owner",
+        ),
+    ];
+
+    let mut leaked = Vec::new();
+    for (name, text, expect) in cases {
+        match validate_deps_parity(&text, &dir) {
+            Ok(()) => leaked.push(format!("case {name:?} was accepted but must be rejected")),
+            Err(errors) => {
+                let joined = errors.join(" | ");
+                if !joined.contains(expect) {
+                    leaked.push(format!(
+                        "case {name:?} rejected, but no error mentioned {expect:?}:\n    {joined}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(leaked.is_empty(), "{}", leaked.join("\n"));
+}
+
+#[test]
+fn deps_exception_permits_a_declared_slice() {
+    // A drift with an explicit rationale is allowed (a deliberate dependency slice).
+    let text = deps_parity_base()
+        .replace(
+            "deps = [\"./41-generic-methods.md\", \"./43-namespaces-declaration-merging.md\", \"./70-this-parameter-typing.md\"]",
+            "deps = [\"./70-this-parameter-typing.md\"]\ndeps_exception = \"slice depends only on the this-parameter prerequisite\"",
+        );
+    assert!(
+        validate_deps_parity(&text, &backlog_dir()).is_ok(),
+        "an explicit deps_exception must permit a declared slice"
+    );
+}
+
+#[test]
+fn rejects_wu0_dependency_drift_fixture() {
+    // The WU0 rejection fixture: criterion claims a dep (`./70-this-parameters.md`)
+    // absent from owner 14's blocked-by, with no deps_exception.
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("surface")
+        .join("fixtures")
+        .join("dependency_drift.toml");
+    let text = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
+    match validate_deps_parity(&text, &backlog_dir()) {
+        Ok(()) => panic!("WU0 dependency_drift.toml fixture was accepted but must be rejected"),
+        Err(errors) => assert!(
+            errors.join(" | ").contains("disagree with owner"),
+            "expected a deps-vs-blocked-by drift error, got: {}",
+            errors.join(" | ")
+        ),
+    }
 }

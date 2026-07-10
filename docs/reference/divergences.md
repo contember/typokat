@@ -18,6 +18,42 @@ pins every entry; the *how it's implemented* lives in
 [`architecture.md`](architecture.md). When a backlog item ships a fix, the matching
 entry here is deleted.
 
+## Inline metadata (the machine layer)
+
+This file is **both** the human ledger and the machine-checked divergence census
+(manifest criterion `C-deferred-divergence-census`, backlog `75`). Every divergence
+entry carries a one-line HTML-comment marker, validated by
+[`tests/divergences.rs`](../../tests/divergences.rs). Grammar:
+
+```
+<!-- div: id=<stable-id> dir=<under|over|cosmetic> scope=<family|design-oos> owner=<owner> witness=<path> -->
+```
+
+- **`id`** — a stable `area/topic/detail` slug (`[a-z0-9-]` segments, `/`-separated),
+  unique across the file, independent of the prose display text.
+- **`dir`** — the report direction vs `tsc`: `under` (we drop a real error — a
+  false-negative), `over` (we report where tsc is clean — the safe direction), or
+  `cosmetic` (same verdict, different message/code/span).
+- **`scope`** — the [`scope.md`](scope.md) Tier S/A/B family this touches, or
+  `design-oos` when it is out of the type model by design.
+- **`owner`** — a live `../backlog/NN-*.md` item that will resolve it, or `design-oos`
+  when no fix is planned. **An `under` entry MUST name a live backlog owner** — an
+  unowned false-negative is exactly the silent-FN the census exists to forbid.
+- **`witness`** — a corpus/tooling path that pins the entry (a `tests/cases/**`
+  fixture or directory, the disabled `sr_deferred_ledger` corpus, or the
+  official-suite scoreboard).
+
+The validator checks structure, links, and ownership — it does **not** run the
+checker, so `dir` honesty rests on adversarial review (cross-check disputed entries
+against `tsc --strict`), not on a green `cargo test`.
+
+The validator rejects a divergence row missing its marker, a duplicate `id`, a bad
+`dir`/`scope` enum, a dead/missing owner or witness, and any `under` without a live
+owner. It flags an unmarked row whenever a list item under a divergence section
+carries a divergence sentinel (`over-report`, `under-report`, `deferred`, `skipped`,
+`out of scope`, `cosmetic`, …) but no marker; non-sentinel entries are marked by hand
+and validated the same way.
+
 ## Cross-cutting conventions
 
 - **Error type suppresses cascade.** An unresolved name (`TK2304`) gets the **error
@@ -36,33 +72,46 @@ entry here is deleted.
   "cannot find name"); **qualified** type names (`A.B` — needs namespaces). M29
   temporarily maps a type-only import/export used as a value to `TK2304` instead of
   tsc's `TS2693`.
+  <!-- div: id=names/value-used-as-type dir=under scope=s-value-type-space owner=../backlog/52-type-reference-tail.md witness=../../tests/cases/m22_unresolved_type/positions.ts -->
+  <!-- div: id=names/type-args-on-type-param dir=under scope=a-type-argument-arity owner=../backlog/52-type-reference-tail.md witness=../../tests/cases/m24_generic_constraints/constraint_check_explicit.ts -->
+  <!-- div: id=names/type-arg-count-on-builtin dir=under scope=a-type-argument-arity owner=../backlog/52-type-reference-tail.md witness=../../tests/cases/m22_unresolved_type/generics.ts -->
+  <!-- div: id=names/qualified-type-name dir=under scope=b-namespaces owner=../backlog/43-namespaces-declaration-merging.md witness=../../tests/cases/m22_unresolved_type/positions.ts -->
+  <!-- div: id=names/type-only-import-as-value-code dir=cosmetic scope=s-value-type-space owner=../backlog/52-type-reference-tail.md witness=../../tests/cases/sr_wu2_export_space/type_only_export_leak/a.ts -->
 - **Multiple mismatched arguments (over-report).** On a call/`new` with several
   mismatched arguments, typokat reports a `TK2345` for **each**, whereas tsc stops at
   the first. Fixtures keep at most one mismatched argument per call so the corpus
   matches both.
+  <!-- div: id=calls/multiple-mismatched-arguments dir=over scope=s-call-arguments owner=design-oos witness=../../tests/cases/m3_functions -->
 - **`var` is not hoisted to the function scope (over-report).** The binder treats
   `var` like a block-scoped declaration, so a `var` referenced outside its block or
   `switch` clause reports a spurious `TK2304` where tsc resolves it (safe
   direction). Function and `var` hoisting share backlog `74`; definite-assignment
   timing remains backlog `47`.
+  <!-- div: id=hoisting/var-block-scoped dir=over scope=s-declaration-hoisting owner=../backlog/74-declaration-hoisting-parity.md witness=../../tests/cases/b58_project_scopes -->
 - **Forward local function calls are not checked (under-report).** A call before its
   local function declaration does not see the hoisted declaration, so argument/overload
   diagnostics can disappear. This dropped-error family is owned by backlog `74`.
-- **`undefined` in assignment-target position (over-report).** typokat resolves
+  <!-- div: id=hoisting/forward-local-function-call dir=under scope=s-declaration-hoisting owner=../backlog/74-declaration-hoisting-parity.md witness=../../tests/cases/b58_project_scopes -->
+- **`undefined` in assignment-target position (cosmetic).** typokat resolves
   `undefined` as a value read but not as an assignment target, so `undefined = null`
-  reports `TK2304` where tsc reports `TS2539` (still an error — safe direction).
+  reports `TK2304` where tsc reports `TS2539` — same verdict, different code.
   Surfaced by WU1's nested-assignment checking; owner backlog `47`.
+  <!-- div: id=names/undefined-assignment-target dir=cosmetic scope=s-name-resolution owner=../backlog/47-definite-assignment.md witness=../../tests/cases/sr_wu1_expressions/nested_assignments.ts -->
 - **Assignment into an explicit `any` narrows it (over-report).** `let s: any;
   s = 5; s.foo` reports `TK2339` where tsc keeps `s` as `any` (assignment narrowing
   applies only to implicit evolving `any`). Safe direction; batched in backlog `63`.
+  <!-- div: id=narrowing/explicit-any-narrowed dir=over scope=a-narrowing-tail owner=../backlog/63-review-parity-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
 - **`strictNullChecks` is on** (our default): `null`/`undefined` are distinct types,
   not assignable to others.
 
 ## Deferred checks — flow / binder (not yet emitted)
 
 - `TK2355` *function must return a value* — needs control-flow reachability (with narrowing).
+  <!-- div: id=flow/missing-return-value dir=under scope=a-missing-return owner=../backlog/46-return-path-analysis.md witness=../../tests/cases/m3_functions -->
 - `TK2454` *used before assigned* — needs definite-assignment flow analysis.
+  <!-- div: id=flow/used-before-assigned dir=under scope=a-definite-assignment owner=../backlog/47-definite-assignment.md witness=../../tests/cases/m1_binder_inference -->
 - `TK2451` *cannot redeclare* — binder check, deferred; fixtures use unique names.
+  <!-- div: id=binder/cannot-redeclare dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/m1_binder_inference -->
 
 ### Soundness-review deferred ledger (backlog `30`/`56`/`60`/`62`/`66`/`67`)
 
@@ -73,12 +122,15 @@ each an open backlog item, pinned by the **disabled** `sr_deferred_ledger/` corp
 - **`56`** — a genuine instantiation cycle (`type Loop<T> = T extends string ? Loop<T>
   : never`, direct or mutual) short-circuits to the error type with no diagnostic, so
   no `TK2589` fires where tsc reports `TS2589`.
+  <!-- div: id=ledger/instantiation-cycles dir=under scope=b-type-level-tail owner=../backlog/56-silent-instantiation-cycles.md witness=../../tests/cases/sr_deferred_ledger/b56_instantiation_cycles.ts -->
 - **`60`** — fresh object literals against UNION targets skip excess-property checking
   (`A | B`, `A | null`) and let an optional-member union member vacuously absorb a
   wrong-typed known property (missing `TK2353`/`TK2322`).
+  <!-- div: id=ledger/fresh-literal-union-targets dir=under scope=s-excess-property owner=../backlog/60-fresh-literal-union-targets.md witness=../../tests/cases/sr_deferred_ledger/b60_fresh_literal_unions.ts -->
 - **`62`** — a declared (interface/class) source is accepted against an index-signature
   target because there is no "source provides an index signature" rule (missing
   `TK2322`); anonymous sources correctly keep their implicit index signature.
+  <!-- div: id=ledger/index-signature-source dir=under scope=b-indexed-access-diagnostics owner=../backlog/62-index-signature-relation-parity.md witness=../../tests/cases/sr_deferred_ledger/b62_index_signature.ts -->
 - **`30`** (Template literal types), **`66`** (Classes), and **`67`** (Utility types)
   are documented in their own sections below; the corpus adds fixtures for them.
 
@@ -93,10 +145,12 @@ flow-node CFG (M23), the single narrowing model.
 - Declaration **initializers** are deliberately NOT narrowed (`let x: string | null = "a"`
   reads as `string | null` — over-report, safe direction); assignment narrowing starts at the
   first real assignment.
+  <!-- div: id=narrowing/declaration-initializer dir=over scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/m23_unstructured_narrowing -->
 - **Deferred:** assertion functions / type predicates (`x is T`), `for`/`for-of`/`do-while`
   loop forms, and narrowing seen by a **closure** over a never-reassigned binding (tsc narrows;
   typokat keeps the function-boundary reset — over-report, safe direction). Member-path narrowing
   (`x.a`) — narrowing is symbol-keyed. (Backlog `50`/`51`.)
+  <!-- div: id=narrowing/deferred-forms dir=over scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/m23_unstructured_narrowing -->
 - **Accepted official-suite over-reports** (safe direction, recorded in the scoreboard;
   independently audited — matched never drops, fn never rises): walking `while` bodies / ternary
   arms / logical RHS surfaces lib-shaped `TK2339` (`.length`/`.toString`/… on correctly-narrowed
@@ -109,6 +163,7 @@ flow-node CFG (M23), the single narrowing model.
   initializer / `return` operands) — e.g. no-lib `Array.push` in
   `privateNameClassExpressionLoop.ts` and `typeInferenceWithTupleType.ts`, and
   `.length`/`.toString` on narrowed primitives in `controlFlowAssignmentExpression.ts`.
+  <!-- div: id=narrowing/lib-shaped-member-access dir=over scope=b-type-level-tail owner=../backlog/14-libdts-loading.md witness=../../tooling/official-suite/scoreboard.txt -->
 
 ## Generics & constraints (M9 / M10 / M24)
 
@@ -122,6 +177,9 @@ type, clamp-to-constraint inference reporting `TK2345`, `TK2313` for a circular 
   inference candidate that came only from a **fresh object/array literal** argument is exempt from
   the constraint clamp; typed values, primitives, structural values, and call-site contextual
   reshaping of fresh literal arguments clamp/check normally. Type-parameter defaults are deferred.
+  <!-- div: id=constraints/generic-keyof dir=over scope=b-type-level-tail owner=../backlog/35-keyof-union-and-key-source-edges.md witness=../../tests/cases/m24_generic_constraints -->
+  <!-- div: id=constraints/fresh-literal-excess-exempt dir=under scope=a-generic-constraints owner=../backlog/67-utility-alias-constraint-enforcement.md witness=../../tests/cases/m24_generic_constraints -->
+  <!-- div: id=constraints/type-parameter-defaults dir=over scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/m24_generic_constraints -->
 - **Representation note (deviation from architecture §3.1, not a tsc divergence):** type
   parameters keep a **named unique-id** representation, not de Bruijn indices; the constraint is a
   store-side column keyed by `TypeParamId`, not folded into the interned type's identity.
@@ -144,24 +202,31 @@ completeness (`TK2515`/`TK2654`) (b06); private/protected constructor accessibil
   so there is **no verdict divergence**. Message cosmetic only: the foreign→private rejection renders
   both sides structurally (`{ x: number }` not assignable to `{ x: number }`) where tsc explains
   "Types have separate declarations of a private property 'x'".
+  <!-- div: id=classes/nominal-private-message dir=cosmetic scope=s-class-access owner=design-oos witness=../../tests/cases/m13_modifiers -->
 - **Override compatibility (`TK2416`) is public↔public only.** A private/protected override is
   `TS2415` territory, deferred — this scope also skips a *genuine* tsc `TS2416` on an incompatible
   protected-over-protected override (a declared false negative — **dropped error**, backlog `66`;
   the nominal relation would otherwise also reject a *legal* protected redeclaration, which is why
   it was scoped out). Further deferrals:
+  <!-- div: id=classes/override-public-only dir=under scope=s-class-override owner=../backlog/66-protected-override-compat.md witness=../../tests/cases/sr_deferred_ledger/b66_protected_override.ts -->
   - **Unequal raw-arity base-method overrides are skipped** on the bespoke method-bivariance path.
     Signature shape is modeled since M32, but override compatibility still keeps this narrow
     out-of-subset gate to avoid mixing tsc's bivariant method rule with represented rest/optional
     shapes without a dedicated override review. Over a base **field** the strict relation query
     still applies.
+    <!-- div: id=classes/override-raw-arity dir=under scope=s-class-override owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/b06_class_completeness/override_kind_mixtures.ts -->
   - **Generic bases are skipped** — an override against a generic base / from within a generic
     class may carry a free type parameter (the generic-base composition deferral), where the
     relation would over-report. Relatedly, `TK2515`/`TK2654` render a generic direct base as its
     bare name (`Box`) where tsc renders the instantiation (`Box<string>`) — cosmetic.
+    <!-- div: id=classes/override-generic-base dir=under scope=s-class-override owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/b06_class_completeness/override_incompatible.ts -->
+    <!-- div: id=classes/abstract-completeness-generic-name dir=cosmetic scope=s-abstract-completeness owner=design-oos witness=../../tests/cases/b06_class_completeness -->
   - **`TS2425`/`TS2426`** (field↔method / accessor-vs-function kind-mismatch codes) are not
     emitted; typokat still reports the `TK2416` type incompatibility on those lines.
+    <!-- div: id=classes/kind-mismatch-codes dir=cosmetic scope=s-class-override owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/b06_class_completeness/override_kind_mixtures.ts -->
   - **`TS2415`** (incorrectly-extends: visibility narrowing, private-member redeclaration) and
     **`TS2417`** (static-side override incompatibility) are deferred; fixtures avoid those shapes.
+    <!-- div: id=classes/incorrectly-extends dir=under scope=s-static-implements owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/b06_class_completeness -->
 - **Constructor accessibility.** On a class that is both `abstract` and inaccessibly-constructable,
   the accessibility error wins and `TK2511` is suppressed (tsc 6.0.3 behavior). Deferred:
   **`TS2675`** (`class D extends C` where `C`'s constructor is private) — a heritage-clause check,
@@ -169,6 +234,9 @@ completeness (`TK2515`/`TK2654`) (b06); private/protected constructor accessibil
   (`Constructor of class 'Box' is private…`) where tsc renders `'Box<T>'`; `new` through a
   parenthesized callee (`new (Priv)()`) or a `const Alias = Priv` alias misses the class-keyed
   `new` checks (the same pre-existing boundary the `TK2511` abstract check has).
+  <!-- div: id=classes/ts2675-heritage-private-ctor dir=under scope=s-class-access owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/b20_ctor_accessibility/private_ctor.ts -->
+  <!-- div: id=classes/ctor-accessibility-generic-name dir=cosmetic scope=s-class-access owner=design-oos witness=../../tests/cases/b20_ctor_accessibility -->
+  <!-- div: id=classes/new-callee-forms dir=under scope=s-class-access owner=../backlog/22-new-callee-forms.md witness=../../tests/cases/b20_ctor_accessibility -->
 
 ## Arrays & tuples (M17 / M18 / M30)
 
@@ -182,6 +250,8 @@ function rest/optional/default signature shape (M32).
 - **Deferred:** array METHODS (`push`/`map`/…) and the `ReadonlyArray` interface surface (need
   `lib.d.ts`); optional tuple elements (`[number?]`) remain deferred with the rest of M18's tuple
   gaps.
+  <!-- div: id=arrays/array-methods-need-lib dir=over scope=design-oos owner=../backlog/14-libdts-loading.md witness=../../tests/cases/m17_arrays -->
+  <!-- div: id=tuples/optional-elements dir=under scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/m18_tuples -->
 
 ## Index signatures & keyof (M19 / M20)
 
@@ -193,6 +263,9 @@ object types as the common-key set (b34), evaluated eagerly (M20/M28).
   (see Utility types); `keyof` over intersections/non-objects stays out of subset; a
   generic/deferred `T[K]` outside a mapped value template remains the error type (silent, out of
   scope).
+  <!-- div: id=keyof/generic-keyof dir=over scope=b-type-level-tail owner=../backlog/35-keyof-union-and-key-source-edges.md witness=../../tests/cases/m20_keyof -->
+  <!-- div: id=keyof/keyof-intersection-nonobject dir=over scope=b-type-level-tail owner=../backlog/35-keyof-union-and-key-source-edges.md witness=../../tests/cases/m31_intersections -->
+  <!-- div: id=keyof/generic-indexed-access dir=under scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/m20_keyof -->
 
 ## Mapped types (M26)
 
@@ -209,9 +282,13 @@ primitives) also stays DEFERRED — never a permissive `{}`.
   `{ [K in keyof T]: T[K] }` is assignable in tsc; typokat conservatively rejects — pinned in
   `deferred_generics.ts`); index-signature sources (tsc resolves homomorphically; typokat defers —
   `evaluation_sites.ts`).
+  <!-- div: id=mapped/homomorphic-identity dir=over scope=b-type-level-tail owner=design-oos witness=../../tests/cases/m26_mapped_types/deferred_generics.ts -->
+  <!-- div: id=mapped/index-signature-source dir=over scope=b-type-level-tail owner=design-oos witness=../../tests/cases/m26_mapped_types/evaluation_sites.ts -->
 - **Message divergence:** the secondary `TS2313` tsc adds on a self-referential mapped alias is
   omitted (`TK2456` carries the line).
+  <!-- div: id=mapped/ts2313-secondary-omitted dir=cosmetic scope=b-type-level-tail owner=design-oos witness=../../tests/cases/m26_mapped_types -->
 - **Out of scope:** `as` key remapping and template-literal keys (backlog `11`).
+  <!-- div: id=mapped/as-remapping-template-keys dir=over scope=design-oos owner=design-oos witness=../../tests/cases/m26_mapped_types -->
 
 ## Utility types (M28)
 
@@ -227,47 +304,59 @@ including multi-char expansions like `ß` → `"SS"`).
 - **Out of scope:** `Parameters`/`ConstructorParameters`,
   `InstanceType`/`ThisType`, `Awaited`, `NoInfer`, and the `intrinsic` keyword outside the four (a
   user `= intrinsic` alias silently degrades to the error type).
+  <!-- div: id=utility/unsupported-aliases dir=over scope=design-oos owner=design-oos witness=../../tests/cases/m28_utility_types -->
+  <!-- div: id=utility/intrinsic-degradation dir=under scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/m28_utility_types -->
 - **Documented divergences:**
   - The prelude `ReturnType` uses a strict/sound `(...args: never[]) => infer R` match, so it handles
     non-nullary and rest functions without introducing the lib's permissive `any[]` constraint.
     Its lib constraint is still dropped (`ReturnType<number>` is `never`, not `TS2344` — a
     documented under-report, **dropped error**, backlog `67`).
+    <!-- div: id=utility/returntype-constraint-dropped dir=under scope=a-generic-constraints owner=../backlog/67-utility-alias-constraint-enforcement.md witness=../../tests/cases/sr_deferred_ledger/b67_utility_constraint.ts -->
   - A **symbolic** intrinsic application (`Uppercase<S>` over a pattern/`string`/free param)
     relates conservatively — assignable to `string` (and an identical node) only, nothing flows
     INTO it — rejecting values tsc's string-mapping algebra accepts (over-report; witnessed by the
     official suite's `stringMapping*` files).
+    <!-- div: id=utility/symbolic-intrinsic-conservative dir=over scope=b-type-level-tail owner=design-oos witness=../../tooling/official-suite/scoreboard.txt -->
   - tsc's `TS2820` did-you-mean variant of 2322 is not produced.
+    <!-- div: id=utility/ts2820-not-produced dir=cosmetic scope=s-assignability owner=design-oos witness=../../tests/cases/m28_utility_types -->
   - A constraint check is **skipped** only when the substituted CONSTRAINT still carries a deferred
     keyof (the canonical Omit idiom, `Pick<T, Exclude<keyof T, K>>` with `T` free — that check
     lands at concrete instantiation). Generic-call inference uses the same evaluate-then-gate
     discipline, so `K extends keyof T` rejects bad concrete keys while genuinely free wrappers stay
     deferred.
+    <!-- div: id=utility/omit-idiom-constraint-skip dir=under scope=a-generic-constraints owner=../backlog/67-utility-alias-constraint-enforcement.md witness=../../tests/cases/m28_utility_types/constraint_arguments.ts -->
   - `TK2344` **argument** checks EVALUATE first, then always run: a decidable composition checks
     precisely (`Pick<P, Exclude<"a" | 1, "a">>` → `1` → `TK2344`, tsc-exact); a still-deferred
     argument checks conservatively — tsc-exact on unprovable shapes
     (`Uppercase<MyExclude<K, "a">>` errors in both), an over-report ONLY on provable shapes
     (`Uppercase<Extract<K, string>>` — tsc's constraint approximation proves the bound and stays
     clean; backlog `37`; `constraint_arguments.ts`).
+    <!-- div: id=utility/constraint-approx-provable dir=over scope=a-generic-constraints owner=../backlog/37-constraint-approximation-deferred-args.md witness=../../tests/cases/m28_utility_types/constraint_arguments.ts -->
   - A conditional's top-level evaluable check/extends operands demand-evaluate before the extends
     test, and a `No` against an operand carrying an unevaluable deferred node (keyof / conditional
     / instantiation / mapped) at **any structural depth** — through object members, index-signature
     values, call/construct signatures, function parameters/returns, tuple/array elements, and union
     members; template patterns excluded (the M27 matching model decides them) — **never picks the
     false branch**: the whole conditional stays deferred (over-report; `conditional_positions.ts`).
+    <!-- div: id=utility/conditional-deferred-operand dir=over scope=b-type-level-tail owner=../backlog/36-conditional-structural-operand-parity.md witness=../../tests/cases/m28_utility_types/conditional_positions.ts -->
   - Deferred nodes **nested inside composite operands** are NOT pre-evaluated — tsc's own
     resolution of those shapes is mixed (object-wrapped keyof / function-return keyof /
     tuple-wrapped intrinsics evaluate; object-wrapped and array-wrapped intrinsics eager-false), so
     the five tsc-clean lines in `conditional_positions.ts`'s nested block are documented
     sound-direction over-reports — exact parity is backlog `36`.
+    <!-- div: id=utility/nested-composite-operand dir=over scope=b-type-level-tail owner=../backlog/36-conditional-structural-operand-parity.md witness=../../tests/cases/m28_utility_types/conditional_positions.ts -->
   - `Pick`/`Omit` now resolve concrete object-union operands through common keys, including named
     keys covered by a string index signature; **`K = never`** still stays DEFERRED (over-report; tsc
     computes the empty result).
+    <!-- div: id=utility/pick-omit-never-key dir=over scope=b-type-level-tail owner=../backlog/35-keyof-union-and-key-source-edges.md witness=../../tests/cases/m28_utility_types -->
   - `Record` iterates **literal-union key sets only** — template-literal keys
     (`` Record<`k${string}`, V> ``) stay deferred (over-report; tsc produces the pattern index
     signature).
+    <!-- div: id=utility/record-template-keys dir=over scope=b-type-level-tail owner=../backlog/35-keyof-union-and-key-source-edges.md witness=../../tests/cases/m28_utility_types -->
   - `DeepPartial`-style recursion over **primitive leaves** over-reports (no-lib
     `keyof <primitive>` is the M20 gap — the leaf stays a deferred map, rejecting values tsc
     accepts).
+    <!-- div: id=utility/deeppartial-primitive-leaf dir=over scope=b-type-level-tail owner=../backlog/35-keyof-union-and-key-source-edges.md witness=../../tests/cases/m28_utility_types -->
 
 ## Template literal types (M27)
 
@@ -281,12 +370,15 @@ conservative model — a deferred template IS assignable to `string`).
 - **Documented divergences:**
   - ADJACENT infer holes (no literal separator) **poison** the conditional — deferred, conservative
     (tsc resolves them: first hole takes one char).
+    <!-- div: id=template/adjacent-infer-holes dir=over scope=b-type-level-tail owner=design-oos witness=../../tests/cases/m27_template_literals -->
   - Scientific/large-magnitude numeric stringification is a **known unsound gap — backlog `30`**:
     numeric holes and `${number}` segment validation stringify via Rust's shortest-form Display,
     not JS `String(n)` (`` `${1e21}` `` constructs `"1000000000000000000000"` where tsc's type is
     `"1e+21"`, so typokat accepts a string tsc rejects — an UNDER-report, not conservative).
+    <!-- div: id=template/numeric-stringification dir=under scope=b-type-level-tail owner=../backlog/30-numeric-literal-correctness.md witness=../../tests/cases/sr_deferred_ledger/b30_numeric_stringify.ts -->
   - A hole that itself needs evaluation (a nested template, a conditional / alias instantiation)
     stays symbolic and relates conservatively — rejects strings tsc accepts (over-report, safe).
+    <!-- div: id=template/evaluable-hole-conservative dir=over scope=b-type-level-tail owner=design-oos witness=../../tests/cases/m27_template_literals -->
 - `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics (M28) compose with construction
   (an evaluable hole — an intrinsic application, a conditional, a keyof — is evaluated before the
   collapse).
@@ -303,23 +395,30 @@ property, fixed tuple positions, function param/return; same-name covariant cand
 - **Documented divergences:**
   - `TK2589`'s span is the annotation that demanded evaluation (tsc points at the recursive
     reference inside the alias body).
+    <!-- div: id=conditional/tk2589-span dir=cosmetic scope=b-type-level-tail owner=design-oos witness=../../tests/cases/m25_conditional_types -->
   - Same-name `infer` in multiple contravariant positions resolves to a conservative `never`
     (over-report — rejecting values tsc accepts) where tsc **intersects** the candidates. `&` is in
     the model since M31 but this path is not yet wired to intersect (backlog `68`). Verified vs tsc
     6.0.3; the divergence only shows on *overlapping* candidates (disjoint candidates yield `never`
     in both). (An earlier note claiming this *unions* was corrected in the 2026-07-07 audit.)
+    <!-- div: id=conditional/contravariant-infer-never dir=over scope=b-type-level-tail owner=../backlog/68-contravariant-infer-intersection.md witness=../../tests/cases/m25_conditional_types -->
   - `infer X extends C` (TS 4.7) is out of scope.
+    <!-- div: id=conditional/infer-extends-constraint dir=over scope=design-oos owner=design-oos witness=../../tests/cases/m25_conditional_types -->
   - Rest-based conditional `infer` is implemented for fixed tuple/function rest patterns, but a
     variadic source tuple such as `Tail<[string, ...number[]]>` is still a safe-direction
     over-report (tracked in backlog `69`).
+    <!-- div: id=conditional/variadic-source-tuple dir=over scope=b-type-level-tail owner=../backlog/69-signature-rest-parity-tail.md witness=../../tests/cases/b57_tuple_array_infer -->
   - A deferred conditional whose branches still contain its own `infer` binders is conservatively
     non-assignable (over-report, safe).
+    <!-- div: id=conditional/deferred-branch-infer dir=over scope=b-type-level-tail owner=design-oos witness=../../tests/cases/m25_conditional_types -->
   - A nested conditional referencing an OUTER conditional's `infer` binder is **poisoned at
     lowering** — never evaluated, conservatively related (tsc resolves it; over-report pinned in
     `nested_infer.ts` — proper de Bruijn shifting is backlog `26`).
+    <!-- div: id=conditional/nested-outer-infer dir=over scope=b-type-level-tail owner=../backlog/26-cross-binder-nested-infer.md witness=../../tests/cases/m25_conditional_types/nested_infer.ts -->
   - A conditional buried inside a **named alias / interface / class body**
     (`type W = { foo: IsString<string> }`) is not yet evaluated — it stays deferred and relates
     conservatively (over-report; backlog `27`).
+    <!-- div: id=conditional/buried-in-named-body dir=over scope=b-type-level-tail owner=../backlog/27-template-buried-conditional-evaluation.md witness=../../tests/cases/m25_conditional_types -->
   - An `infer` left unbound in a taken true branch resolves to `unknown` (matches tsc).
 
 ## Optional properties (M21)
@@ -338,6 +437,7 @@ is assignable to an optional member. No new diagnostic code.
   **narrowing of an optional through a member-access guard** (`if (x.b !== undefined) …` — needs
   the flow-node CFG, so a guarded optional read still over-reports `T | undefined`; safe direction).
   (Backlog `49`.)
+  <!-- div: id=optional/deferred-methods-and-nullish dir=under scope=a-nullish-receivers owner=../backlog/49-possibly-undefined-family.md witness=../../tests/cases/m21_optional -->
 - **Message-rendering nuance (verdict unchanged, so not a corpus divergence — optional object-target
   messages are asserted code-only):** where tsc renders a present-but-wrong optional property's
   target as the bare `T` (e.g. `{ b: 5 }` → "not assignable to type 'string'"), typokat relates
@@ -362,6 +462,7 @@ resolved to provided `.ts` files; named imports, `import type`, exported declara
   `booleanLiteralTypes1/2.ts`, `literalTypes3.ts`, and `numericLiteralTypes1/2.ts` self-gate as
   `OOS:unresolved` on a no-lib `TK2304` — lost measurement coverage, not a dropped error.
   (Backlog `14`, `15`, `38`, `43`, `52`.)
+  <!-- div: id=modules/out-of-scope-resolution dir=over scope=design-oos owner=../backlog/15-modules-imports.md witness=../../tests/cases/m29_modules -->
 
 ## Intersection types (M31)
 
@@ -374,14 +475,20 @@ set), contextual fresh-literal shaping, and the M24 circular-constraint walk (`T
 - **Documented divergences (all safe / over-report):**
   - Disjoint primitives (`string & number`) are **not** reduced to `never` — the per-member relation
     yields the same *verdict* with a different message, so those fixtures assert **code-only**.
+    <!-- div: id=intersection/disjoint-primitives-message dir=cosmetic scope=s-assignability owner=design-oos witness=../../tests/cases/m31_intersections -->
   - `&` is **not distributed** over unions (`(A | B) & C`).
+    <!-- div: id=intersection/no-union-distribution dir=over scope=b-type-level-tail owner=design-oos witness=../../tests/cases/m31_intersections -->
   - `keyof` / indexed-access **over an intersection** stay out of subset (the M20/M28
     keyof-of-non-object deferral).
+    <!-- div: id=intersection/keyof-indexed-access dir=over scope=b-type-level-tail owner=../backlog/35-keyof-union-and-key-source-edges.md witness=../../tests/cases/m31_intersections -->
   - An **index-signature target** of a source intersection is conservatively rejected.
+    <!-- div: id=intersection/index-signature-target dir=over scope=b-indexed-access-diagnostics owner=design-oos witness=../../tests/cases/m31_intersections -->
   - A **nested optional** target property contributed by a single member is checked more strictly
     than tsc (tsc is lenient only at the top level).
+    <!-- div: id=intersection/nested-optional-strict dir=over scope=b-type-level-tail owner=design-oos witness=../../tests/cases/m31_intersections -->
 - **Out of scope:** function / call-signature intersection (overload intersection). M33 overload
   resolution is carried by explicit overload lists, not by synthesizing callable intersections.
+  <!-- div: id=intersection/callable-intersection-oos dir=over scope=design-oos owner=design-oos witness=../../tests/cases/m31_intersections -->
 
 ## Object / interface signatures (F1 corpora)
 
@@ -392,10 +499,15 @@ parameters are still deferred to backlog `41`; such method overloads stay repres
 conservatively instead of becoming permissive calls. Optional method signatures are deferred (out of
 the WU1 subset on the sound side, so accessing a dropped optional method member over-reports
 instead of dropping a possibly-undefined call error). `tsc --strict` 6.0.3 reports `TS7010` for a
-method signature whose return annotation is omitted — not part of the corpus.
+method signature whose return annotation is omitted; typokat is silent — a dropped error
+(under-report, backlog `48`), pinned by the disabled ledger fixture.
+<!-- div: id=signatures/method-type-params dir=over scope=design-oos owner=../backlog/41-generic-methods.md witness=../../tests/cases/f1_object_interface_methods -->
+<!-- div: id=signatures/optional-method dir=over scope=a-nullish-receivers owner=../backlog/49-possibly-undefined-family.md witness=../../tests/cases/f1_object_interface_methods -->
+<!-- div: id=signatures/ts7010-omitted-return dir=under scope=a-implicit-any-declarations owner=../backlog/48-no-implicit-any.md witness=../../tests/cases/sr_deferred_ledger/b48_implicit_any_return.ts -->
 
 - **Accepted official-suite over-reports** (safe direction, recorded in the scoreboard rather than
   dropped errors):
+  <!-- div: id=signatures/official-overreports dir=over scope=design-oos owner=../backlog/14-libdts-loading.md witness=../../tooling/official-suite/scoreboard.txt -->
   - `objectTypeWithCallSignatureAppearsToBeFunctionType.ts` /
     `objectTypeWithConstructSignatureAppearsToBeFunctionType.ts` — `TK2339` on
     `.apply`/`.call`/`.bind`: typokat does not model `Function.prototype` members on callable /
@@ -413,12 +525,16 @@ method signature whose return annotation is omitted — not part of the corpus.
     pre-existing missing `TK2454` definite-assignment baseline errors, but now also report
     safe-direction `TK2554`/`TK2345`/`TK2769`/`TK2322` on represented overload calls or
     assignments.
+    <!-- div: id=signatures/m33-overload-conservative dir=over scope=s-overload-resolution owner=design-oos witness=../../tooling/official-suite/scoreboard.txt -->
   - `typesWithSpecializedCallSignatures.ts` and
     `stringLiteralTypesInImplementationSignatures2.ts` — `TK2394`: tsc accepts specialized
     string-literal overload signatures against a broader implementation signature in these
     non-strict files; typokat conservatively checks them through the ordinary overload
     compatibility path and over-reports. The latter still has the pre-existing missing `TK2300`
     duplicate-name diagnostic.
+    <!-- div: id=signatures/specialized-overload-overreport dir=over scope=s-overload-resolution owner=design-oos witness=../../tooling/official-suite/scoreboard.txt -->
+    <!-- div: id=signatures/missing-tk2300-duplicate dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tooling/official-suite/scoreboard.txt -->
 - Construct signatures: ordinary function values are deliberately out of scope — `tsc --strict`
   6.0.3 does not treat a plain `(x: number) => Box` value as satisfying a construct signature, and
   `new makeBox(1)` reports `TS7009`. typokat does not model JavaScript runtime constructability.
+  <!-- div: id=signatures/construct-from-function-value dir=over scope=design-oos owner=design-oos witness=../../tests/cases/f1_object_interface_construct -->
