@@ -31,6 +31,10 @@ dropped will skip its `TK2344` check on instantiation — the audit surface is
 
 ## Approach / acceptance
 
+**Acceptance spec (ready):** the disabled
+[`tests/cases/sr_deferred_ledger/b67_utility_constraint.ts`](../../tests/cases/sr_deferred_ledger/b67_utility_constraint.ts)
+fixture pins `ReturnType<number>` → `TK2344` plus the `ReturnType<() => string>` clean control.
+
 Ensure the alias type-argument `TK2344` check runs against utility constraints without
 weakening the checker with a permissive `any[]` shortcut (the M24 machinery already
 does this for representable constraints). Guard against

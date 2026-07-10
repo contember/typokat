@@ -4,7 +4,7 @@ Which `tsc` diagnostics typokat is *meant* to cover, and which whole categories
 are out of scope **by design**. This is a description of the checker's shape — the
 boundary of the type model — not a schedule. The authoritative **live** coverage
 (the codes actually emitted today) is the `DiagnosticCode` enum in
-[`src/diagnostics.rs`](../../src/diagnostics.rs) and the coverage table in
+[`src/diagnostics/mod.rs`](../../src/diagnostics/mod.rs) and the coverage table in
 [`README.md`](../../README.md); the roadmap is [`backlog/`](../backlog/README.md).
 
 Codes use the `TK` prefix; the number mirrors `tsc` exactly (`TK2322` ≡ `TS2322`).
@@ -134,11 +134,15 @@ These never get a `TK` code — they fall outside the type model, not merely "la
   strict-null aliases (`TK18047` '{0}' is possibly 'null'.) and share their `2xxx`
   sibling's semantics if reached.
 
-**`2xxx` codes that look in-scope but are not** — because they are really module
-resolution or emit, not the type model:
-- Module resolution: `TK2307` Cannot find module…, `TK2792` (moduleResolution hint),
-  `TK2305` Module has no exported member…, `TK2459` declares locally but not exported.
-- `isolatedModules` / emit-target-gated `2xxx` diagnostics.
+**`2xxx` module-resolution codes — partly in scope since M29.** The **local-relative `.ts`
+slice** (M29, backlog `15` slice 1) resolves imports, so it **emits** `TK2307` *Cannot find
+module…* and `TK2305` *Module has no exported member…* for that slice — both are live codes in
+`src/diagnostics/mod.rs` and the README diagnostics list. What stays **out of scope** is
+**full** package/`node_modules`/`tsconfig` module resolution (backlog `15` breadth): resolving
+those wider forms, plus `TK2792` (moduleResolution hint) and `TK2459` (declares locally but not
+exported), and any `isolatedModules` / emit-target-gated `2xxx` diagnostics. So `TK2305`/`TK2307`
+are in scope for the resolvable local slice; the divergence ledger's Modules (M29) section is the
+authoritative boundary of *what* resolves.
 
 ## Why this is sound to bound this way
 

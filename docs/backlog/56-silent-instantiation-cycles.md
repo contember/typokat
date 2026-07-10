@@ -22,6 +22,12 @@ today, but it contradicts the module header's stated invariant; fix or re-state 
 
 ## Approach / acceptance
 
+**Acceptance spec (ready):** the disabled
+[`tests/cases/sr_deferred_ledger/b56_instantiation_cycles.ts`](../../tests/cases/sr_deferred_ledger/b56_instantiation_cycles.ts)
+fixture pins tsc's verdict (direct + mutual cycle → `TK2589`, plus a
+cycle-then-legitimate-reuse control). Enable `sr_deferred_ledger` in
+`tests/conformance.rs` when this ships.
+
 On in-flight re-entry, surface a diagnostic (TK2589 to match tsc's verdict on these
 shapes) and/or taint the result so ancestors don't memoize it as final. Corpus:
 direct-recursive and mutual-recursive conditional aliases, plus a

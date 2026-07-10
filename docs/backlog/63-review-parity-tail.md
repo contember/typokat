@@ -34,9 +34,14 @@ probe-verified vs tsc 6.0.3.
   inverted vs tsc's "missing in ⟨SRC⟩ but required in ⟨TGT⟩". *(Item (j), the
   multi-candidate inference union rule, graduated to backlog `65` — the b57 review
   confirmed it is a dropped-error family, not a doc-ledger gap.)*
-- **Robustness:** (k) ~12k-deep nested type literals abort with a native stack overflow
-  in lowering/interning (tsc 6.0.3 itself dies at ~3k) — add a depth guard with a
-  proper diagnostic to honor the "no reachable panic" invariant on adversarial input.
+- **Robustness (k) — PARTIALLY SHIPPED in sprint-2026-07-10 WU3.** The lowering/interning
+  half landed: a shared annotation-depth budget (`MAX_ANNOTATION_DEPTH = 200`, reported as
+  `TK2589`) paired with a 256 MiB scoped worker thread in the driver (rustc-style; exit
+  codes, panic propagation, and semantics verified unchanged by WU4-C). **Residual (63k,
+  still open):** input nested arbitrarily deeper than the budget still overflows **oxc's
+  recursive-descent parser** before lowering runs, so the guard cannot see it — this needs
+  an oxc-side parser nesting limit (or a pre-lowering token-depth reject). tsc 6.0.3 itself
+  dies at ~3k. Pinned by the enabled `sr_wu3_types_recursion/deep_annotation.ts` fixture.
 
 ## Acceptance
 

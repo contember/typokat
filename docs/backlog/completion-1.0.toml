@@ -1,0 +1,513 @@
+# typokat — executable 1.0 completion manifest
+#
+# THE machine-validated source of truth for "is typokat 1.0 done?". It replaces the
+# prose definition-of-done that used to live in backlog/README.md (which now links here).
+# Enforced by `tests/manifest.rs` (runs under `cargo test`, so CI gates it): the validator
+# fails on duplicate/missing ids, unknown backlog/divergence links, missing owners or
+# witnesses, inconsistent states, and an unpinned TypeScript lib audit.
+#
+# Format (a small, hand-parsed TOML subset — no serde dependency, mirrors the committed
+# `tooling/official-suite/scoreboard.txt` precedent of a deterministic checked-in status file):
+#   * `#` comment lines and blank lines are ignored.
+#   * `[meta]` opens the singleton meta table; `[[criterion]]` opens a new criterion record.
+#   * Values are either a quoted string `"..."` or a bracketed array of quoted strings
+#     `["a", "b"]`. No embedded `"` inside a value.
+#   * Paths in `owner`, `links`, and `deps` are resolved relative to THIS file's directory
+#     (docs/backlog/) and must exist. `owner = "shipped"` is the one non-path owner.
+#
+# The four definition-of-done conditions (checker 1.0), each a `track`:
+#   A  Model completeness — no construct lowers to something silently permissive.
+#   B  Checker completeness — the scope.md Tier S/A/B diagnostic surface is exhausted.
+#   C  Parity hygiene — no known silent-FN family; every remaining divergence is
+#      deliberate, safe-direction, and documented in reference/divergences.md.
+#   D  Scale + IDE — the architecture §12 phase ladder tops out (lib.d.ts → modules →
+#      parallelism → incrementality; the `13` profiling gate decided either way).
+# `blocks_release = "true"` marks a criterion that gates 1.0; `"false"` records an item that
+# is tracked but does not gate (already a documented safe-direction divergence, or an
+# independent early-signal slice). `state` is "complete" (owner "shipped") or "incomplete"
+# (owner is the live backlog item).
+
+[meta]
+schema_version = "1"
+lib_audit_ts_version = "6.0.3"
+lib_audit_artifact = "./lib-audit-6.0.3.md"
+
+# ---------------------------------------------------------------------------
+# Track A — model completeness (the lib.d.ts critical path)
+# ---------------------------------------------------------------------------
+
+[[criterion]]
+id = "A-generic-methods"
+track = "A"
+title = "Generic methods (method-level type parameters)"
+state = "incomplete"
+blocks_release = "true"
+owner = "./41-generic-methods.md"
+witness = "spec-first corpus; lib audit flags method-level <T> pervasive in lib.es5 (Array.map<U>, Object.defineProperty<T>)"
+links = ["./14-libdts-loading.md", "./lib-audit-6.0.3.md"]
+deps = []
+
+[[criterion]]
+id = "A-enums"
+track = "A"
+title = "Enums (type side)"
+state = "incomplete"
+blocks_release = "true"
+owner = "./42-enums-type-side.md"
+witness = "spec-first corpus; NOT required by lib.es5 core (audit: 0 enum uses) but required for DoD model completeness"
+links = ["./lib-audit-6.0.3.md"]
+deps = []
+
+[[criterion]]
+id = "A-namespaces-declaration-merging"
+track = "A"
+title = "Namespaces (type side) + declaration merging"
+state = "incomplete"
+blocks_release = "true"
+owner = "./43-namespaces-declaration-merging.md"
+witness = "spec-first corpus; lib audit: interface+var same-name merges (28 pairs) + declare namespace Intl block lib.d.ts"
+links = ["./14-libdts-loading.md", "./lib-audit-6.0.3.md"]
+deps = []
+
+[[criterion]]
+id = "A-satisfies-as-const"
+track = "A"
+title = "satisfies + as const semantics"
+state = "incomplete"
+blocks_release = "true"
+owner = "./44-satisfies-as-const.md"
+witness = "spec-first corpus; NOT used by lib.es5 core (audit: 0 uses) but required for DoD model completeness"
+links = ["./lib-audit-6.0.3.md"]
+deps = []
+
+[[criterion]]
+id = "A-this-parameter-typing"
+track = "A"
+title = "this-parameter typing + ThisType<T>"
+state = "incomplete"
+blocks_release = "true"
+owner = "./70-this-parameter-typing.md"
+witness = "audit-discovered gap; lib audit: Function.apply/call/bind and ObjectConstructor.defineProperty type this explicitly"
+links = ["./14-libdts-loading.md", "./lib-audit-6.0.3.md"]
+deps = []
+
+[[criterion]]
+id = "A-intersections"
+track = "A"
+title = "Intersection types (A & B) — shipped M31"
+state = "complete"
+blocks_release = "true"
+owner = "shipped"
+witness = "cargo test conformance (m31_intersections enabled)"
+links = []
+deps = []
+
+[[criterion]]
+id = "A-signature-shape"
+track = "A"
+title = "Signature shape: rest/optional/default params + tuple rest — shipped M32"
+state = "complete"
+blocks_release = "true"
+owner = "shipped"
+witness = "cargo test conformance (m32_signature_shape enabled)"
+links = []
+deps = []
+
+[[criterion]]
+id = "A-function-overloads"
+track = "A"
+title = "Function overloads (ordered signatures) — shipped M33"
+state = "complete"
+blocks_release = "true"
+owner = "shipped"
+witness = "cargo test conformance (m33_function_overloads enabled)"
+links = []
+deps = []
+
+# ---------------------------------------------------------------------------
+# Track B — checker completeness (Tier A/B diagnostic surface)
+# ---------------------------------------------------------------------------
+
+[[criterion]]
+id = "B-duplicate-identifiers"
+track = "B"
+title = "Duplicate identifiers (TK2300 members + TK2451 redeclare)"
+state = "incomplete"
+blocks_release = "true"
+owner = "./18-duplicate-identifier-detection.md"
+witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
+links = []
+deps = []
+
+[[criterion]]
+id = "B-call-of-non-callable"
+track = "B"
+title = "TK2349 call-of-non-callable"
+state = "incomplete"
+blocks_release = "true"
+owner = "./19-call-of-non-callable-diagnostic.md"
+witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
+links = []
+deps = []
+
+[[criterion]]
+id = "B-operator-comparison-typing"
+track = "B"
+title = "Operator & comparison typing (TK2362/2363/2365/2367)"
+state = "incomplete"
+blocks_release = "true"
+owner = "./45-operator-comparison-typing.md"
+witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
+links = []
+deps = []
+
+[[criterion]]
+id = "B-return-path-analysis"
+track = "B"
+title = "Return-path analysis (TK2355/2366/2378/7030)"
+state = "incomplete"
+blocks_release = "true"
+owner = "./46-return-path-analysis.md"
+witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
+links = []
+deps = []
+
+[[criterion]]
+id = "B-definite-assignment"
+track = "B"
+title = "Definite assignment (TK2454/2448/2564)"
+state = "incomplete"
+blocks_release = "true"
+owner = "./47-definite-assignment.md"
+witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
+links = []
+deps = []
+
+[[criterion]]
+id = "B-no-implicit-any"
+track = "B"
+title = "noImplicitAny family (TK7005/7006/7008/7031/7053)"
+state = "incomplete"
+blocks_release = "true"
+owner = "./48-no-implicit-any.md"
+witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
+links = []
+deps = []
+
+[[criterion]]
+id = "B-possibly-undefined"
+track = "B"
+title = "Possibly-undefined/null family + optional methods/accessors"
+state = "incomplete"
+blocks_release = "true"
+owner = "./49-possibly-undefined-family.md"
+witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
+links = []
+deps = []
+
+[[criterion]]
+id = "B-type-predicates-assertions"
+track = "B"
+title = "Type predicates (x is T) + assertion functions"
+state = "incomplete"
+blocks_release = "true"
+owner = "./50-type-predicates-assertions.md"
+witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
+links = []
+deps = []
+
+[[criterion]]
+id = "B-narrowing-tail"
+track = "B"
+title = "Narrowing tail: remaining loop forms, member paths, closures"
+state = "incomplete"
+blocks_release = "true"
+owner = "./51-narrowing-tail.md"
+witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
+links = []
+deps = []
+
+[[criterion]]
+id = "B-type-reference-tail"
+track = "B"
+title = "Type-reference tail (TS2749, TS2314/2315, TK2558)"
+state = "incomplete"
+blocks_release = "true"
+owner = "./52-type-reference-tail.md"
+witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
+links = []
+deps = []
+
+# ---------------------------------------------------------------------------
+# Track C — parity hygiene. Silent-FN families (blocks_release=true) gate 1.0;
+# the safe-direction FP/parity tail (blocks_release=false) is already documented
+# in reference/divergences.md and does not gate.
+# ---------------------------------------------------------------------------
+
+[[criterion]]
+id = "C-instantiation-cycles"
+track = "C"
+title = "Instantiation cycles silently resolve to error (missing TK2589)"
+state = "incomplete"
+blocks_release = "true"
+owner = "./56-silent-instantiation-cycles.md"
+witness = "disabled acceptance spec: sr_deferred_ledger/b56_instantiation_cycles.ts"
+links = ["../../tests/cases/sr_deferred_ledger/b56_instantiation_cycles.ts", "../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-fresh-literal-union-targets"
+track = "C"
+title = "Fresh literals vs union targets: excess + assignability skipped"
+state = "incomplete"
+blocks_release = "true"
+owner = "./60-fresh-literal-union-targets.md"
+witness = "disabled acceptance spec: sr_deferred_ledger/b60_fresh_literal_unions.ts"
+links = ["../../tests/cases/sr_deferred_ledger/b60_fresh_literal_unions.ts", "../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-index-signature-parity"
+track = "C"
+title = "Index-signature relation parity (implicit-index rule, numeric names)"
+state = "incomplete"
+blocks_release = "true"
+owner = "./62-index-signature-relation-parity.md"
+witness = "disabled acceptance spec: sr_deferred_ledger/b62_index_signature.ts"
+links = ["../../tests/cases/sr_deferred_ledger/b62_index_signature.ts", "../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-numeric-stringification"
+track = "C"
+title = "JS-exact number stringification (String(n) dtoa) — UNDER-report, not safe FP"
+state = "incomplete"
+blocks_release = "true"
+owner = "./30-numeric-literal-correctness.md"
+witness = "disabled acceptance spec: sr_deferred_ledger/b30_numeric_stringify.ts"
+links = ["../../tests/cases/sr_deferred_ledger/b30_numeric_stringify.ts", "../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-protected-override-compat"
+track = "C"
+title = "protected<->protected incompatible override skips TK2416"
+state = "incomplete"
+blocks_release = "true"
+owner = "./66-protected-override-compat.md"
+witness = "disabled acceptance spec: sr_deferred_ledger/b66_protected_override.ts"
+links = ["../../tests/cases/sr_deferred_ledger/b66_protected_override.ts", "../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-utility-alias-constraint"
+track = "C"
+title = "Utility/prelude alias type-param constraints unenforced (missing TK2344)"
+state = "incomplete"
+blocks_release = "true"
+owner = "./67-utility-alias-constraint-enforcement.md"
+witness = "disabled acceptance spec: sr_deferred_ledger/b67_utility_constraint.ts"
+links = ["../../tests/cases/sr_deferred_ledger/b67_utility_constraint.ts", "../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-local-class-checking"
+track = "C"
+title = "Function-local classes entirely unchecked"
+state = "incomplete"
+blocks_release = "true"
+owner = "./21-local-class-checking.md"
+witness = "spec-first corpus (unfixtured; not in sr_deferred_ledger); cross-check tsc 6.0.3 --strict"
+links = []
+deps = []
+
+[[criterion]]
+id = "C-new-callee-forms"
+track = "C"
+title = "new (C)() / aliased new miss class-keyed checks"
+state = "incomplete"
+blocks_release = "true"
+owner = "./22-new-callee-forms.md"
+witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
+links = []
+deps = []
+
+[[criterion]]
+id = "C-eager-keyof-forward-refs"
+track = "C"
+title = "Eager keyof over forward references"
+state = "incomplete"
+blocks_release = "true"
+owner = "./32-eager-keyof-forward-references.md"
+witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
+links = []
+deps = []
+
+[[criterion]]
+id = "C-parity-tail-static-method-type-params"
+track = "C"
+title = "Spurious TK2304 on static method type params (safe FP; may close via 41)"
+state = "incomplete"
+blocks_release = "false"
+owner = "./23-static-method-type-params.md"
+witness = "documented safe-direction over-report; reference/divergences.md"
+links = ["../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-parity-tail-cross-binder-infer"
+track = "C"
+title = "Cross-binder nested infer (de Bruijn shifting on embed) — safe over-report"
+state = "incomplete"
+blocks_release = "false"
+owner = "./26-cross-binder-nested-infer.md"
+witness = "documented safe-direction over-report; reference/divergences.md (Conditional types)"
+links = ["../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-parity-tail-template-buried-conditional"
+track = "C"
+title = "Evaluate template-buried conditionals — safe over-report"
+state = "incomplete"
+blocks_release = "false"
+owner = "./27-template-buried-conditional-evaluation.md"
+witness = "documented safe-direction over-report; reference/divergences.md (Conditional types)"
+links = ["../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-parity-tail-keyof-union-edges"
+track = "C"
+title = "keyof over unions + edge key sources — safe over-report"
+state = "incomplete"
+blocks_release = "false"
+owner = "./35-keyof-union-and-key-source-edges.md"
+witness = "documented safe-direction over-report; reference/divergences.md"
+links = ["../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-parity-tail-conditional-structural-operand"
+track = "C"
+title = "Conditional parity for structurally-wrapped operands — safe over-report"
+state = "incomplete"
+blocks_release = "false"
+owner = "./36-conditional-structural-operand-parity.md"
+witness = "documented safe-direction over-report; reference/divergences.md (Utility types)"
+links = ["../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-parity-tail-constraint-approximation"
+track = "C"
+title = "TK2344 constraint approximation for deferred args — safe over-report"
+state = "incomplete"
+blocks_release = "false"
+owner = "./37-constraint-approximation-deferred-args.md"
+witness = "documented safe-direction over-report; reference/divergences.md (Utility types)"
+links = ["../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-parity-tail-contravariant-infer-intersection"
+track = "C"
+title = "Same-name contravariant infer over-reports to never (should intersect) — safe"
+state = "incomplete"
+blocks_release = "false"
+owner = "./68-contravariant-infer-intersection.md"
+witness = "documented safe-direction over-report; reference/divergences.md (Conditional types)"
+links = ["../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-parity-tail-signature-rest"
+track = "C"
+title = "Signature rest parity tail (variadic source tuple infer) — safe over-report"
+state = "incomplete"
+blocks_release = "false"
+owner = "./69-signature-rest-parity-tail.md"
+witness = "documented safe-direction over-report; reference/divergences.md (Conditional types)"
+links = ["../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-review-parity-tail"
+track = "C"
+title = "2026-07-07 review parity tail (small FPs, messages; 63k depth guard partially shipped WU3)"
+state = "incomplete"
+blocks_release = "false"
+owner = "./63-review-parity-tail.md"
+witness = "batched safe-direction/cosmetic list; reference/divergences.md; 63k residual = oxc parser nesting limit"
+links = ["../reference/divergences.md"]
+deps = []
+
+# ---------------------------------------------------------------------------
+# Track D — scale + IDE (the architecture §12 phase ladder)
+# ---------------------------------------------------------------------------
+
+[[criterion]]
+id = "D-minimal-ambient-prelude"
+track = "D"
+title = "Minimal ambient prelude slice (early real-world signal) — GO per ADR-0003"
+state = "incomplete"
+blocks_release = "false"
+owner = "./38-minimal-ambient-prelude.md"
+witness = "GO decision (ADR-0003): schedule a later spec-first sprint; witness = fixtures check vs tsc + official-suite unresolved bucket shrinks + clean-kept ratchets up"
+links = ["../decisions/0003-backlog-38-minimal-prelude-go.md", "./14-libdts-loading.md"]
+deps = []
+
+[[criterion]]
+id = "D-profiling-gate"
+track = "D"
+title = "Post-evaluator profiling gate decided either way with recorded numbers"
+state = "incomplete"
+blocks_release = "true"
+owner = "./13-bytecode-vm.md"
+witness = "tooling/bench numbers + a recorded go/defer decision (ADR-0001 governs the deferral)"
+links = []
+deps = []
+
+[[criterion]]
+id = "D-libdts-loading"
+track = "D"
+title = "Full lib.d.ts loading + parallelism Stage 1"
+state = "incomplete"
+blocks_release = "true"
+owner = "./14-libdts-loading.md"
+witness = "fixtures using console/array methods/Promise check vs tsc; lib audit records the blocking families"
+links = ["./lib-audit-6.0.3.md"]
+deps = ["./41-generic-methods.md", "./43-namespaces-declaration-merging.md", "./70-this-parameter-typing.md"]
+
+[[criterion]]
+id = "D-module-resolver-breadth"
+track = "D"
+title = "Module-resolver breadth (packages / tsconfig / .d.ts) — serial; slice 1 shipped as M29"
+state = "incomplete"
+blocks_release = "true"
+owner = "./15-modules-imports.md"
+witness = "multi-file fixtures with package/tsconfig-resolved imports check correctly vs tsc (serial universe)"
+links = []
+deps = []
+
+[[criterion]]
+id = "D-parallel-cross-file-identity"
+track = "D"
+title = "Parallelism Stage 1 + Stage 2 cross-file type identity (deterministic)"
+state = "incomplete"
+blocks_release = "true"
+owner = "./16-parallelism-type-universe.md"
+witness = "multi-file checking shares prelude + cross-file types across workers with identical diagnostics regardless of worker count"
+links = []
+deps = ["./14-libdts-loading.md", "./15-modules-imports.md"]
+
+[[criterion]]
+id = "D-incrementality"
+track = "D"
+title = "Incrementality (Phase 5)"
+state = "incomplete"
+blocks_release = "true"
+owner = "./17-incrementality.md"
+witness = "incremental re-check reuses prior results and matches a full re-check"
+links = []
+deps = ["./16-parallelism-type-universe.md"]

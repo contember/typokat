@@ -7,7 +7,10 @@ blocked-by: [./14-libdts-loading.md, ./15-modules-imports.md]
 # 16 — Parallelism: shared type universe (Stages 1 & 2)
 
 **Summary.** The per-file driver already ships (Stage 0); what remains is hardening the shared
-*type universe* after full `lib.d.ts` and modules exist. Architecture §8.
+*type universe* after full `lib.d.ts` and modules exist. Architecture §8. **Ownership boundary
+(WU7):** this item is the **sole** owner of parallel **cross-file type identity** (Stage 2);
+backlog [`15`](./15-modules-imports.md) owns serial resolver breadth and does not duplicate
+Stage 2.
 
 ## Problem
 

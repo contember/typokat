@@ -5,6 +5,13 @@ title: JS-exact number stringification (String(n) dtoa)
 
 # 30 — JS-exact number stringification
 
+**Classification (WU7): silent-FN, blocks 1.0.** This is a genuine **under-report**
+(typokat accepts a non-canonical digit string tsc rejects — a *dropped* `TK2322`), not a
+safe-direction FP. It therefore gates DoD condition 4 (no known silent-FN family), tracked as
+manifest criterion `C-numeric-stringification`. **Acceptance spec (ready):** the disabled
+[`tests/cases/sr_deferred_ledger/b30_numeric_stringify.ts`](../../tests/cases/sr_deferred_ledger/b30_numeric_stringify.ts)
+fixture pins the dropped error plus a round-tripping small-magnitude control.
+
 **Summary.** `number_to_string` (`src/types/repr.rs`) uses plain decimal formatting,
 not JS `String(n)`: `` `${1e21}` `` constructs `"1000000000000000000000"` where tsc's
 type is `"1e+21"` — typokat ACCEPTS the non-canonical form tsc rejects (an

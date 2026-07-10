@@ -46,4 +46,5 @@ decisions → reference → archive.
   poisoning, `57` Tuple↔Array inference, `58` project scope-key collision, `61` class field
   initializers, all five reviews PASS). The follow-up quick-wins sprint then closed `64` `34`
   `33` `54` `59`; the dedicated inference-policy sprint then closed `65`. The remaining C
-  silent-FN tail is now `56` `60` `62` `32` `21` `22` `66` `67`.
+  silent-FN tail is now `30` `56` `60` `62` `32` `21` `22` `66` `67` (`30` reclassified
+  into it 2026-07-10 — a dropped-error under-report, not a safe FP).

@@ -5,8 +5,16 @@ title: Minimal ambient prelude slice (early real-world signal)
 
 # 38 — Minimal ambient prelude slice
 
+**Decision: GO** ([ADR-0003](../decisions/0003-backlog-38-minimal-prelude-go.md), 2026-07-10).
+The WU7 go/defer gate resolved **GO** — the audited lead time to `14` is the whole track-A
+chain (`41` → `43` → `70` → `14`; see [`lib-audit-6.0.3.md`](lib-audit-6.0.3.md)), long enough
+that this slice's replaceable early real-world signal repays its bounded, throwaway surface.
+Scheduled as a **later, separate spec-first sprint** (no budget in the 2026-07-10 sprint),
+after the silent-FN C tail per the recommended order; `14`'s full loader replaces it, never a
+second ambient path. Prerequisites / owner / witness / cost are in the ADR.
+
 **Summary.** The "earlier minimal ambient/prelude slice" that backlog `14` explicitly
-permits, now scheduled: a deliberately small, hand-curated ambient set (`console`, a few
+permits, now approved: a deliberately small, hand-curated ambient set (`console`, a few
 `string`/`number` members like `.length`, `Math`, simple non-generic `Array` members)
 loaded as a frozen prelude — explicitly NOT pretending to be `lib.d.ts`.
 

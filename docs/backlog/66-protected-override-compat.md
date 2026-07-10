@@ -30,6 +30,11 @@ false negative.
 
 ## Approach / acceptance
 
+**Acceptance spec (ready):** the disabled
+[`tests/cases/sr_deferred_ledger/b66_protected_override.ts`](../../tests/cases/sr_deferred_ledger/b66_protected_override.ts)
+fixture pins the dropped `TK2416` on an incompatible protected override plus the
+legal-redeclaration control that must stay clean.
+
 Run the existing `TK2416` variance query (method bivariant / field strict, keyed on
 the base member's declaration kind — already implemented for public) on
 `protected`↔`protected` pairs, comparing **signatures structurally** and bypassing the

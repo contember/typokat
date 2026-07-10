@@ -19,6 +19,10 @@ missed). This is a checked-scope gap, not a b06/b20 defect.
 
 ## Approach / acceptance
 
+**No disabled fixture yet** — unlike `30`/`56`/`60`/`62`/`66`/`67`, this silent-FN family was
+not included in the WU0 `sr_deferred_ledger/` corpus; its acceptance spec is written spec-first
+when the item is scheduled (manifest criterion `C-local-class-checking`).
+
 Register local class declarations through the same fill path (scoped `DeclId`s already exist for
 them in the binder — verify). Acceptance: fixtures with a local class exercising `TK2554`,
 `TK2511`, `TK2673`, and `TK2416` match tsc; no regression at top level.

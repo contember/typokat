@@ -20,6 +20,11 @@ title: Fresh literals vs union targets — excess and assignability silently ski
 
 ## Approach / acceptance
 
+**Acceptance spec (ready):** the disabled
+[`tests/cases/sr_deferred_ledger/b60_fresh_literal_unions.ts`](../../tests/cases/sr_deferred_ledger/b60_fresh_literal_unions.ts)
+fixture pins the three dropped-error shapes (multi-shape-union excess, `| null` excess,
+optional-member-union absorption) plus the clean controls.
+
 Model tsc's union rules for fresh literals: excess checking against the union's
 matching member set (tsc's "most properties in common" discrimination + the union excess
 rule), and the assignability path must not let optional-member union members vacuously

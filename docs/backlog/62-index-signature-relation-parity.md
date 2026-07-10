@@ -28,6 +28,12 @@ title: Index-signature relation parity (implicit-index rule, numeric names, opti
 
 ## Approach / acceptance
 
+**Acceptance spec (ready, gap 1 only):** the disabled
+[`tests/cases/sr_deferred_ledger/b62_index_signature.ts`](../../tests/cases/sr_deferred_ledger/b62_index_signature.ts)
+fixture pins the implicit-index FN (nominal interface source rejected against an
+index-signature target; anonymous source accepted). Gaps 2 (numeric-name classification) and
+3 (optional-`undefined`) still need their own fixtures when this is scheduled.
+
 Add the "source provides an index signature" requirement keyed on whether the source is
 a declared (interface/class) vs anonymous object type; align numeric-name classification
 with tsc's `isNumericLiteralName`; carry the `optional` flag into the index obligations

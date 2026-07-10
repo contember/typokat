@@ -26,25 +26,25 @@ is built: [`../reference/dev-method.md`](../reference/dev-method.md).
 
 ## Definition of done (checker 1.0)
 
-typokat is **complete** when all four hold:
+The **executable source of truth** is the machine-validated manifest
+[`completion-1.0.toml`](completion-1.0.toml), enforced by `tests/manifest.rs` under
+`cargo test`/CI (it fails on duplicate/missing ids, unknown links, missing owners/witnesses,
+inconsistent states, and an unpinned TS lib audit). Every criterion there carries a stable id,
+track, owner, witness, and complete/incomplete state — edit the manifest, not this prose, when
+status changes.
 
-1. **Model completeness** — track A is empty: no construct left that lowers to something
-   silently permissive (generic methods, enums, namespaces + declaration merging,
-   `satisfies`/`as const` — intersections `A & B` shipped as M31, signature shape shipped as
-   M32, overloads shipped as M33).
-2. **Checker completeness** — the scope map ([`../reference/scope.md`](../reference/scope.md))
-   is exhausted: every Tier S + Tier A code is emitted with fixture coverage; every Tier B
-   code is either shipped or explicitly reclassified out-of-scope in `scope.md`.
-3. **Scale** — the §12 phase ladder tops out: full `lib.d.ts` (`14`), module-resolver breadth
-   (`15`), parallel cross-file identity (`16`), incrementality (`17`); the `13` profiling gate
-   is decided either way with recorded numbers.
-4. **Parity hygiene** — track C is empty: no known silent-FN family remains, and every
-   remaining tsc divergence is deliberate, safe-direction, and documented in
-   `docs/reference/divergences.md`.
+In one line, typokat is **complete** when its four tracks are: **A** model completeness (no
+construct lowers to something silently permissive), **B** checker completeness (the
+[`scope.md`](../reference/scope.md) Tier S/A/B surface is exhausted), **C** parity hygiene (no
+known silent-FN family; every remaining divergence deliberate, safe-direction, and documented
+in [`divergences.md`](../reference/divergences.md)), **D** scale + IDE (the §12 phase ladder:
+`lib.d.ts` → modules → parallelism → incrementality, plus the `13` profiling gate decided).
 
-The official-suite scoreboard is the ratchet on the way there — its syntax gates (`enum`,
-`namespace`, `satisfies`, `as const`, `module`) flip from OOS to IN as features land — not a
-numeric pass/fail gate.
+The pinned TS 6.0.3 `lib.d.ts` surface audit — what actually blocks `14` — is
+[`lib-audit-6.0.3.md`](lib-audit-6.0.3.md) (headline: `41` generic methods, `43`
+namespaces/declaration merging, and the audit-discovered `70` `this`-parameter typing block the
+es5 core; `42`/`44` are not used by es5 core). The official-suite scoreboard is the ratchet on
+the way there — its syntax gates flip OOS→IN as features land — not a numeric pass/fail gate.
 
 ## Items
 
@@ -54,6 +54,7 @@ family; together they unblock `14`, whose source text uses all of them.
 - [`42`](42-enums-type-side.md) — enums, type side (not needed by lib.d.ts itself; same family).
 - [`43`](43-namespaces-declaration-merging.md) — namespaces (type side) + declaration merging.
 - [`44`](44-satisfies-as-const.md) — `satisfies` + `as const` semantics.
+- [`70`](70-this-parameter-typing.md) — `this`-parameter typing + `ThisType<T>` (lib.d.ts prerequisite; audit-discovered).
 
 **B. Checker completeness — Tier A/B diagnostic surface.** Independent of A; good sprint
 fillers.
@@ -80,12 +81,12 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 - [`32`](32-eager-keyof-forward-references.md) — eager `keyof` over forward references.
 - [`66`](66-protected-override-compat.md) — protected↔protected incompatible override skips TK2416 (dropped TS2416).
 - [`67`](67-utility-alias-constraint-enforcement.md) — utility/prelude alias type-param constraints unenforced (`ReturnType<number>` drops TS2344).
+- [`30`](30-numeric-literal-correctness.md) — JS-exact number stringification: a non-canonical `${1e21}` digit string is **accepted** (dropped TS2322 — an under-report, not a safe FP).
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - [`23`](23-static-method-type-params.md) — spurious TK2304 on static method type params (or close via `41`).
 - [`26`](26-cross-binder-nested-infer.md) — cross-binder nested `infer` (de Bruijn shifting on embed).
 - [`27`](27-template-buried-conditional-evaluation.md) — evaluate template-buried conditionals.
-- [`30`](30-numeric-literal-correctness.md) — JS-exact number stringification (dtoa).
 - [`35`](35-keyof-union-and-key-source-edges.md) — `keyof` over unions + edge key sources.
 - [`36`](36-conditional-structural-operand-parity.md) — conditional parity for structurally-wrapped operands.
 - [`37`](37-constraint-approximation-deferred-args.md) — TK2344 constraint approximation for deferred args.
@@ -105,8 +106,8 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
 1. **Kill the known silent-FN families** — the five HIGH review findings (`53` `55` `57` `58`
    `61`) shipped in sprint-2026-07-07-soundness-fn-fixes; `64` `34` `33` `54` `59` `65`
-   shipped in follow-up sprints; the remaining C group (`56`, `60`, `62`, `32`, `21`, `22`,
-   `66`, `67`) is next, every one a dropped-error class.
+   shipped in follow-up sprints; the remaining silent-FN C group (`56`, `60`, `62`, `30`, `32`,
+   `21`, `22`, `66`, `67`) is next, every one a dropped-error class.
 2. **Run track A** to unblock `14` (`25` intersections shipped as M31, `24`/`39` signature
    shape shipped as M32, and `40` overloads shipped as M33); interleave B items and C's
    parity tail as warm-ups between the remaining A milestones. `38` (minimal prelude) and `13` (profiling

@@ -126,10 +126,12 @@ tests/
 
 By design `typokat` keeps types and drops emit/runtime; beyond that, these are conscious deferrals:
 
-- **Narrowing deferrals past M23** — assertion functions / type predicates (`x is T`),
-  `for`/`for-of`/`do-while` loop forms (fall back to declared types — safe), closure narrowing of
-  never-reassigned bindings, and member-path narrowing (`x.a` — narrowing is symbol-keyed).
-  Declaration initializers deliberately don't narrow. (Backlog `50`/`51`.)
+- **Narrowing deferrals past M23** — assertion functions / type predicates (`x is T`); closure
+  narrowing of never-reassigned bindings; and member-path narrowing (`x.a` — narrowing is
+  symbol-keyed). `for`/`for-in`/`for-of`/`do` bodies **are** structurally checked (against
+  declared types) since the 2026-07-10 soundness pass; only flow-*narrowing* inside those loop
+  forms still falls back to declared types (safe). Declaration initializers deliberately don't
+  narrow. (Backlog `50`/`51`.)
 - **Type-level evaluation edges** — the phase itself shipped (M24–M28); a conservative
   (over-report) tail remains in the backlog: cross-binder nested `infer` stays a poisoned
   deferral, conditionals buried in named alias/interface/class bodies stay deferred, and
