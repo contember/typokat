@@ -30,7 +30,11 @@ real `tsc 6.0.3 --strict`**.
 cargo run -- check path/to/file.ts
 ```
 
-Exit code is `0` when clean, `1` when diagnostics are reported. Real output:
+Exit code is `0` when the check is complete and clean, `1` when diagnostics are reported, `2` on
+usage/IO errors, and `3` when the checker hit an **unsupported in-scope construct** — the file was
+not fully checked, so a clean diagnostic list is not a clean verdict. Incomplete surfaces render as
+`incomplete[<surface-id>]` records alongside any ordinary diagnostics (exit `3` takes precedence
+over `1`; there is deliberately no flag to downgrade it). Real output:
 
 ```
 error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: number } }'
@@ -159,11 +163,16 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   `TK2304` (M22); still deferred there (distinct tsc codes): a value used as a type (`TS2749`), type
   args on a type parameter (`TS2315`), a wrong type-argument count such as bare `Array` (`TS2314`),
   and qualified names `A.B` (`TS2503`). (Backlog `14`, `15`, `38`, `43`, `52`, `70`.)
-- **No trustworthy arbitrary-project clean verdict yet.** Until the AST-surface census (`73`) and
-  pinned real-project preview gate (`72`) ship, an unsupported construct can still be surfaced as
-  resolver/prelude noise or suppressed behind an incomplete/error-type path. Focused supported-
-  subset diagnostics are useful; a clean result on an unknown npm/Bun/Node project is not yet a
-  completeness claim. The full remaining scope/disposition tail is backlog `75`.
+- **Incomplete checking is a first-class outcome (2026-07-10 accounting sprint).** The consumed
+  OXC AST surface is classified in a machine-validated inventory (`tests/surface/`), and an
+  unsupported in-scope construct now reports `incomplete[<surface-id>]` with exit `3` instead of
+  silently exiting clean — for annotations, signatures, class members, statements/declarations,
+  and the audited expression child slots (template interpolations, computed keys, spreads, spread
+  arguments). A documented tail of expression *shapes* (`x++`, `x!`, `a?.b`, `await`, tagged
+  templates, …) is inventoried and owned but does not emit yet (backlog `73`); until it does — and
+  the prelude (`38`) and pinned real-project preview gate (`72`) ship — a clean result on an
+  unknown npm/Bun/Node project is still not a completeness claim. The remaining semantic
+  scope/disposition tail is backlog `75`.
 - Remaining `tsc` divergences are logged in
   [`docs/reference/divergences.md`](./docs/reference/divergences.md): known under-report families
   block 1.0 through manifest Track C; documented over-report/cosmetic tails are non-blocking only

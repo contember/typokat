@@ -522,11 +522,11 @@ scope = ["s-declaration-hoisting"]
 [[criterion]]
 id = "C-deferred-divergence-census"
 track = "C"
-title = "Every deferred divergence has stable direction, disposition, owner, and witness"
-state = "incomplete"
+title = "Every deferred divergence has stable direction, disposition, owner, and witness — shipped 2026-07-10"
+state = "complete"
 blocks_release = "true"
-owner = "./75-scope-surface-tail.md"
-witness = "structured divergence-family ledger validator rejects missing owner/direction/witness and unclassified under-reports"
+owner = "shipped"
+witness = "cargo test divergences (structured ledger validator: rejects missing owner/direction/witness and unclassified under-reports) + manifest deps parity"
 links = ["../reference/divergences.md", "../reference/scope.md"]
 deps = []
 

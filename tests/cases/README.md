@@ -349,7 +349,7 @@ Construction notes:
 ## Surface-accounting corpus (sprint 2026-07-10)
 
 `b73_surface_accounting/` is the WU0 acceptance spec for the completeness-accounting
-sprint (backlog `73`, `docs/sprints/sprint-2026-07-10-completeness-accounting.md`).
+sprint (backlog `73`, archived at `docs/archive/sprint-2026-07-10-completeness-accounting.md`).
 Each fixture pins an **in-scope AST position the checker silently skips** — the child
 slot / statement container / annotation form exits **clean** today while `tsc 6.0.3
 --strict` rejects it. The skipped position carries an `incomplete[<role/surface/slot>]`

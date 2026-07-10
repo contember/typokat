@@ -1,10 +1,32 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME — shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU0 → <sha>,
-> WU1 → <sha>, … Verification: <the gate command + numbers>. Backlog closed:
-> <ids deleted/rescoped>. Deferred: <honest notes>.
--->
+> **OUTCOME — shipped 2026-07-10.** typokat can no longer report a trustworthy clean result after
+> silently skipping an audited in-scope AST surface: the consumed OXC surface is classified in a
+> machine-validated inventory (148 records, 14 dispatch enums, compile-time E0004 drift
+> tripwires), incomplete checking is a first-class outcome (`record_incomplete` →
+> `incomplete[<id>]` → CLI exit `3` with precedence over `1`, no escape hatch), the official-suite
+> harness scores exit-3 tests as identity-bearing `OOS:unsupported` **with the diagnostic diff
+> preserved**, and every divergence-ledger entry carries validated direction/owner/witness
+> metadata with executable deps↔blocked-by parity. All five WU0 probes flipped from silent exit 0
+> to their truthful outcomes. Every WU passed an independent adversarial review; three reviews
+> FAILED first (WU6: an under-report disguised as cosmetic; WU2 twice: harness parser injection;
+> WU5: silent computed/member shapes) and were remediated witness-first — the process caught
+> exactly the failure classes it was designed for. Commit map: pre-sprint amendment → `efb35bf`,
+> WU0 → `59accbf`, WU1 → `e611cb9`, WU2 → `771a408`, WU3 → `3a688a4`+`b9a5cb6`, WU4 → `491b89f`,
+> WU5 → `97b0fa9`, WU6 → `d9b33d3`, WU8 → the closure commit. Verification: `cargo fmt --check` ·
+> `cargo clippy --all-targets -- -D warnings` · `cargo test` (277 unit + 14 conformance + 7
+> incomplete-outcome + 5 surface + 10 manifest + 4 divergences, 0 failed) · `cargo build
+> --release` · `python3 -m unittest test_tsofficial` (34) · freshly fetched 874-test corpus
+> `run --check` → 0 regressions. Scoreboard (audited per-WU, aggregated by incomplete identity):
+> in-scope 497→395, clean-kept 172/214→121/154 — every demotion a verified false-trust exposure,
+> zero matched-diagnostic coverage lost (diag-recall numerator 345→379). Backlog: `73` **rescoped**
+> (census/outcome/emissions shipped; still owns the non-emitting `infer_expr` shape tail — that is
+> why `C-unsupported-surface-audit` honestly stays incomplete), `75` **rescoped** (census
+> infrastructure complete — `C-deferred-divergence-census` flipped — semantic families remain),
+> `35` gained the discovered aliased-keyof mapped-key over-report. Deferred (honest): the
+> expression-shape tail does not emit yet (granularity decision recorded in `73`); catch params
+> stay error-typed; flow stays un-built through `try`/`for`/`do` (pre-existing stale-narrowing FN,
+> owned); cross-surface `requires_slots` ties are not machine-enforced. Next executable chain:
+> `74` → `38` → `72`. This sprint makes the clean verdict trustworthy on the audited surface; it
+> is **not** real-project-preview or MVP readiness.
 
 # Sprint — executable completeness accounting (2026-07-10)
 

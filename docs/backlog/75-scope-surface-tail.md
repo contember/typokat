@@ -54,17 +54,16 @@ must update the canonical scope inventory, divergence/user-facing limitations wh
 and the manifest in the same change. Close this item only when it owns no remaining family and the
 scope-to-manifest validator proves full disposition coverage.
 
-Before implementation starts, perform a one-time census of every **deferred**, **out of scope**,
-**skipped**, and silent error-type degradation in `divergences.md`. Each entry must link to a
-specific live backlog owner, a shipped witness, or an explicit design-OOS family in the canonical
-scope inventory. Give every divergence family a stable id, direction (`under`/`over`/`cosmetic`),
-scope disposition, owner, and witness; a validator must reject missing fields and every
-unclassified under-report. Prose-only claims do not count.
-
-Also make manifest dependencies executable: for every incomplete criterion with a backlog owner,
-cross-check `deps` against that owner's `blocked-by` frontmatter (with an explicit documented
-exception mechanism if a criterion deliberately represents only a slice). This would have caught
-the `14`/`70` dependency drift that triggered this audit.
+**Census infrastructure shipped (2026-07-10 completeness-accounting sprint, WU6 — do not redo).**
+The one-time divergence census this item demanded is done and machine-enforced: every entry in
+`divergences.md` carries a validated inline marker (stable id, `under`/`over`/`cosmetic`
+direction, scope disposition, owner, witness; `tests/divergences.rs` rejects unmarked rows,
+duplicates, dead links, and every ownerless under-report), and manifest `deps` are cross-checked
+against owner `blocked-by` frontmatter with an explicit `deps_exception` mechanism
+(`tests/manifest.rs`) — the `14`/`70` drift class is now a failing test. Manifest criterion
+`C-deferred-divergence-census` is complete. **What remains here is the semantic tail itself**:
+implementing or explicitly re-scoping the families listed above, each already owned and
+witnessed in the structured ledger.
 
 ## Touch points
 

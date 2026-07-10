@@ -24,16 +24,20 @@ decisions → reference → archive.
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 
-- [`sprint-2026-07-10-completeness-accounting.md`](sprints/sprint-2026-07-10-completeness-accounting.md)
-  — make incomplete checking and deferred divergences executable before `38`/`72`.
+*(none — between sprints)*
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Active: executable completeness accounting** — backlog `73` plus the inventory/validator
-  portion of `75`: exhaustive OXC role/child-slot census, a first-class incomplete outcome, and a
-  structured divergence ledger. Semantic gap fixes and `38`/`72` remain out of this sprint.
+- **2026-07-10 completeness-accounting sprint shipped** (archived:
+  [`archive/sprint-2026-07-10-completeness-accounting.md`](archive/sprint-2026-07-10-completeness-accounting.md)) —
+  machine-validated OXC surface inventory with compile-time drift tripwires, a first-class
+  incomplete outcome (CLI exit `3`, `incomplete[<id>]` records, official-suite `OOS:unsupported`
+  with preserved diag diffs), emissions across expressions/statements/annotations/signatures/
+  class members, and a structured, validated divergence ledger with deps parity. Backlog `73`
+  rescoped to the remaining emission tail; `75` rescoped to the semantic families. **Next
+  executable chain: `74` → `38` → `72`.**
 - **M0–M33 shipped; 2026-07-10 soundness-review sprint shipped** (archived) — all ten
   verified review findings fixed (statements/loops/throw, switch-local scope,
   type-only exports, local overloads, any&never, intersection nominal origin, mapped

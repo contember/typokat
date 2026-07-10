@@ -1,79 +1,60 @@
 ---
 id: 73
-title: Unsupported AST surface and silent-skip audit
+title: Surface-accounting emission tail
 blocked-by: []
 ---
 
-# 73 — Unsupported AST surface and silent-skip audit
+# 73 — Surface-accounting emission tail
 
-**Summary.** Make AST traversal completeness executable: every expression, statement,
-declaration, and type-node form is either checked, deliberately out of scope, or surfaced as
-unsupported — never silently discarded through a wildcard/`None`/error-type fallback.
+**Summary.** Finish making the AST-surface accounting executable end to end: the inventory,
+validators, incomplete outcome, and the wired emissions shipped in the 2026-07-10
+completeness-accounting sprint; this item now owns the surfaces that are inventoried and owned
+but still exit clean without a record.
 
-## Problem
+## Shipped (2026-07-10 sprint — do not redo)
 
-Targeted reviews keep finding ordinary child nodes that the checker never visits. The 2026-07-10
-review found binary-result inference, template-literal interpolations, array spreads, and
-iteration checks (concrete fixes owned by [`71`](./71-expression-inference-fn-tail.md)). Similar
-gaps can exist in `infer_expr`, statement/binder dispatch, annotation lowering, declaration
-collection, and helpers that skip a child while returning `None` or the internal error type.
+The systematic infrastructure this item originally demanded is live: the machine-validated
+surface inventory (`tests/surface/inventory.toml`, 148+ records over 14 dispatch enums,
+compile-time E0004 drift tripwires in `src/surface.rs`), the first-class incomplete outcome
+(`record_incomplete` → `incomplete[<id>]` rendering → CLI exit `3`, official-suite
+`OOS:unsupported` with preserved diagnostic diffs), the `incomplete[…]` conformance-marker
+harness, and emissions for: expression child slots (template interpolations, computed keys,
+object/array spreads, elisions, spread arguments), statements/declarations (try/catch/finally
+traversal, catch params, for-of assignment targets, enum/namespace/module/export drops),
+annotations (typeof, predicates, this-type, import-type, keywords, literal types, tuple members,
+qualified names, type-parameter defaults), signatures (property/method computed keys), and class
+members (static blocks, accessors, index signatures, computed keys, heritage type args,
+implements clauses).
 
-A finite list of known cases is not a completeness argument. The error type is valid for cascade
-suppression after a reported failure, but it must not turn an unvisited in-scope construct into a
-clean verdict.
+## Remaining scope (this item)
 
-## Approach / acceptance
+1. **`infer_expr` expression-shape tail — inventoried, not emitting.** The remaining `_ => None`
+   expression *shapes*: `update-expression` (`x++`), `non-null` (`x!`), `optional-chain`
+   (`a?.b`), `await`, `yield`, `tagged-template`, `satisfies`, `instantiation-expression`
+   (`f<T>`), `import-expression`, `bigint-literal`, `regexp-literal`, `class-expression`,
+   `private-field-access`, `private-in-expression`. **Granularity finding (WU3):** `x++` reaches
+   `infer_expr` via the for-loop `update` slot, so an indiscriminate `_ => None` emission would
+   demote essentially every for-loop in the official corpus — a low-value, high-noise flood.
+   Decide the emission granularity (which shapes truly hide a nested error worth flagging)
+   before wiring the tail; do not blanket-emit the whole arm. Implementation semantics for
+   binary/template/spread/iteration stay with [`71`](./71-expression-inference-fn-tail.md).
+2. **Binder incomplete channel.** The binder has no `record_incomplete`; its drops are accounted
+   at the stmt-check layer today. Acceptable while the layers agree; revisit if a binder-only
+   drop with no checker counterpart appears.
+3. **Cross-surface wrapper ties.** `requires_slots` validates children only within the same
+   `(role, surface)`; the `decl/class-declaration/self` ↔ `class/class-heritage/*` /
+   `class/implements-clause/*` tie is by-record, not machine-enforced (WU7-E note). Extend the
+   validator if wrapper claims should be machine-checked.
+4. **Cosmetic:** `annotation-lower/type-query/self` never emits (redundant with
+   `type-query/typeof`); prune or wire on the next inventory touch.
 
-Inventory the `oxc` AST variants consumed by the binder/checker and classify every form in a
-checked-in, machine-validated surface manifest:
-
-- **supported** — all semantically relevant children are bound and checked, with a focused
-  witness;
-- **delegated/OOS** — excluded by the diagnostic scope boundary with an explicit reason;
-- **unsupported-IN** — not implemented yet, produces a stable unsupported notice and links to a
-  live backlog owner; it cannot contribute a permissive value to a clean verdict.
-
-Audit wildcard arms and permissive returns in expression inference, statement traversal,
-declaration/member binding and checking, type-annotation lowering, binder prepasses, and flow-graph
-construction. Add a validation test that fails when an `oxc` upgrade changes the pinned variant
-inventory, when a variant becomes unclassified, or when a classified form loses its witness/owner.
-Add adversarial nested-child fixtures so assignments/errors inside templates, spreads, computed
-positions, member initializers, loop headers, annotations, and other containers cannot disappear.
-Backlog `71` remains the implementation owner for its known binary/template/spread/iteration
-families; this item owns the systematic inventory, enforcement mechanism, and graduation of newly
-found gaps.
-
-Acceptance: all four dispatch surfaces have complete classifications; no in-scope wildcard path
-can silently return `None`/error without first recording a diagnostic or unsupported notice; an
-independent review adds fresh nesting probes and finds no unclassified silent child. The
-real-project summary in `72` consumes the same unsupported identities. Until this inventory is
-complete for every surface reached by a project, a zero-diagnostic run must explicitly say that a
-clean verdict is not trustworthy rather than presenting it as success.
+Acceptance: every surface above either emits its inventory identity, is flipped supported with a
+fixture witness, or is explicitly re-owned; the official-suite audit for each wiring round is
+aggregated by identity with zero spurious emissions.
 
 ## Touch points
 
-`src/binder/`, `src/check/checker/expr.rs`, `src/check/checker/statements.rs`, declaration and
-annotation lowering, a checked-in AST-surface manifest/validator, diagnostics/reporting, and
-focused conformance fixtures.
+`src/check/checker/expr.rs`, `src/surface.rs`, `tests/surface/`, `tests/cases/b73_surface_accounting/`,
+`tooling/official-suite/scoreboard.txt` (audited re-baseline per wiring round).
 
-## Follow-up — `infer_expr` expression-shape tail (WU3, 2026-07-10)
-
-WU3 of the completeness-accounting sprint wired the enumerated expression **child slots**
-to `record_incomplete` (all still `unsupported-in`; the emission is the accounting):
-object-literal `spread-element`/`computed-key`, array-literal `spread-element`/`elision`,
-call/`new` `spread-argument`, and the template-literal `interpolation`/`self` arm. Verified
-against the official suite: 10 in-scope tests correctly demoted to `OOS:unsupported`, no
-spurious emission, no matched coverage lost.
-
-**Still silently dropped** (owned here / by `71`, not yet accounted): the remaining
-`infer_expr` `_ => None` expression *shapes* — `update-expression` (`x++`), `non-null` (`x!`),
-`optional-chain` (`a?.b`), `await`, `yield`, `tagged-template`, `satisfies`,
-`instantiation-expression` (`f<T>`), `import-expression`, `bigint-literal`, `regexp-literal`,
-`class-expression`, `private-field-access`, `private-in-expression`. These were deliberately
-left out of WU3's enumerated scope. **Granularity finding:** `x++` reaches `infer_expr` via
-the for-loop `update` slot (`statements.rs:269`), so an indiscriminate `_ => None` emission
-would demote essentially every for-loop in the corpus — a low-value, high-noise flood. A
-follow-up must decide the emission granularity (which shapes truly hide a nested error worth
-flagging) before wiring the tail; do not blanket-emit the whole arm.
-
-<!-- Origin: post-sprint MVP-readiness audit; generalizes WU4 traversal byproducts, 2026-07-10. -->
+<!-- Origin: post-sprint MVP-readiness audit, 2026-07-10; rescoped at completeness-accounting sprint closure (same day) — infrastructure shipped, emission tail remains. -->

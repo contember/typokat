@@ -69,7 +69,7 @@ fillers.
 - [`50`](50-type-predicates-assertions.md) — type predicates (`x is T`) + assertion functions.
 - [`51`](51-narrowing-tail.md) — narrowing tail: remaining loop forms, member paths, closures.
 - [`52`](52-type-reference-tail.md) — type-reference tail (TS2749, TS2314/2315, TK2558).
-- [`75`](75-scope-surface-tail.md) — canonical Tier S/A/B ownership tail + structured deferred-divergence census.
+- [`75`](75-scope-surface-tail.md) — canonical Tier S/A/B semantic ownership tail (its divergence-census infrastructure shipped 2026-07-10).
 
 **C. Known-gap fixes — the soundness/parity tail.**
 Silent-FN kills (highest value per effort, schedule first; `54`–`65` are the 2026-07-07
@@ -85,7 +85,7 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 - [`67`](67-utility-alias-constraint-enforcement.md) — utility/prelude alias type-param constraints unenforced (`ReturnType<number>` drops TS2344).
 - [`30`](30-numeric-literal-correctness.md) — JS-exact number stringification: a non-canonical `${1e21}` digit string is **accepted** (dropped TS2322 — an under-report, not a safe FP).
 - [`71`](71-expression-inference-fn-tail.md) — expression/iteration traversal silent-FN tail (binary results, template interpolations, spread, iterability).
-- [`73`](73-unsupported-surface-audit.md) — machine-validated OXC surface census; no silent wildcard/`None`/error-type clean verdict.
+- [`73`](73-unsupported-surface-audit.md) — surface-accounting emission tail (census + incomplete outcome shipped 2026-07-10; the `infer_expr` shape tail still exits clean).
 - [`74`](74-declaration-hoisting-parity.md) — forward local-function calls + `var` hoisting parity.
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
@@ -110,12 +110,15 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
 ## Recommended order
 
-1. **Make incompleteness executable, then kill the known silent-FN families** — run `73`'s AST
-   census and `75`'s scope/divergence census so new silent paths cannot disappear from the plan.
-   The five HIGH review findings (`53` `55` `57` `58`
+1. **Make incompleteness executable, then kill the known silent-FN families** — the accounting
+   sprint (2026-07-10) shipped `73`'s AST census + incomplete outcome and `75`'s divergence
+   census, so new silent paths can no longer disappear from the plan; `73` keeps the emission
+   tail. The five HIGH review findings (`53` `55` `57` `58`
    `61`) shipped in sprint-2026-07-07-soundness-fn-fixes; `64` `34` `33` `54` `59` `65`
    shipped in follow-up sprints; the remaining silent-FN C group (`56`, `60`, `62`, `30`, `32`,
-   `21`, `22`, `66`, `67`, `71`, `74`) is next, every one a dropped-error class.
+   `21`, `22`, `66`, `67`, `71`, `74`) is next, every one a dropped-error class. The next
+   executable chain is **`74` → `38` → `72`** (hoisting parity, then the prelude, then the
+   honest real-project preview).
 2. **Ship the honest preview slice early:** after `73`/`74`, run `38` then `72`. Its WU0 pins a
    genuinely small real project that fits the preview surface; it must not grow a project-specific
    lib shim. This is the first "point it at a project" milestone.
