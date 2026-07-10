@@ -458,3 +458,21 @@ convention.
 
 - **2026-07-10 - Plan registered.** No work unit has been executed; the scoreboard
   remains at the committed `334/1677` baseline.
+- **2026-07-10 - WU0 shipped** (spec-only commit `f36b681`): 5 disabled corpora,
+  18 fixtures, all tsc 6.0.3 witnesses recorded. Two findings crash at HEAD
+  (recursive_mapped.ts, deep_annotation.ts — SIGABRT stack overflow), so their dir
+  stays disabled until WU3's guards land. The `f(x = "wrong")` call-arg shape was
+  excluded from WU1 fixtures — it hits a spurious TK2554 arity miscount (backlog
+  63g), not clean silence.
+- **2026-07-10 - rustfmt drift found during WU1.** HEAD is not `cargo fmt --check`
+  clean under rustfmt 1.9.0 (~28 files, pre-existing). WU6's fmt gate needs either a
+  repo-wide format commit first or a pinned rustfmt version; resolve in WU6.
+- **2026-07-10 - WU1 shipped** (commit `26ce1d7`) after WU4-A PASS. One review
+  finding routed back before commit: the binder had no `LabeledStatement` arm, so
+  labeled loops/blocks never bound their bodies — fixed in the same WU. WU4-A
+  byproducts (pre-existing at HEAD, candidates for backlog graduation at WU8):
+  `infer_expr` has no BinaryExpression arm (`i + i` result never inferred → dropped
+  TK2322 outside loops too); template-literal interpolations unchecked; array-spread
+  elements skipped in `infer_array_literal`; for-of over non-iterable / for-in over
+  non-object undiagnosed (TS2488/TS2407, needs lib); bare `return;` not folded as
+  `undefined` into inferred returns (TK2355 family, backlog 46).
