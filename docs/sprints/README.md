@@ -21,3 +21,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 <!-- one line per active sprint; empty between sprints -->
 
+- [`sprint-2026-07-10-completeness-accounting.md`](sprint-2026-07-10-completeness-accounting.md)
+  — executable unsupported-surface and deferred-divergence accounting before the real-project preview.

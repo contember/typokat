@@ -24,10 +24,16 @@ decisions → reference → archive.
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 
+- [`sprint-2026-07-10-completeness-accounting.md`](sprints/sprint-2026-07-10-completeness-accounting.md)
+  — make incomplete checking and deferred divergences executable before `38`/`72`.
+
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **Active: executable completeness accounting** — backlog `73` plus the inventory/validator
+  portion of `75`: exhaustive OXC role/child-slot census, a first-class incomplete outcome, and a
+  structured divergence ledger. Semantic gap fixes and `38`/`72` remain out of this sprint.
 - **M0–M33 shipped; 2026-07-10 soundness-review sprint shipped** (archived) — all ten
   verified review findings fixed (statements/loops/throw, switch-local scope,
   type-only exports, local overloads, any&never, intersection nominal origin, mapped
@@ -38,8 +44,11 @@ decisions → reference → archive.
   `tests/manifest.rs`, with the pinned TS 6.0.3 lib audit
   ([`backlog/lib-audit-6.0.3.md`](backlog/lib-audit-6.0.3.md)) naming the es5
   blockers: `41` generic methods, `43` namespaces/merging, `70` this-parameter
-  typing. Backlog `38` is GO (ADR-0003). **Now:** resume track A (`41` first) or run
-  the `38` prelude slice.
+  typing. Backlog `38` is GO (ADR-0003). The post-sprint MVP audit added executable
+  scope/unsupported censuses (`73`/`75`) and the first honest pinned-project preview gate
+  (`72`). **Now:** make incompleteness executable (`73`/`75`) and fix hoisting (`74`), then run
+  `38` → `72`; track A
+  (`41` first) continues toward full `lib.d.ts`.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
   invariants CLEAN and filed `53`–`65`; the five HIGH silent-FN families then shipped through
