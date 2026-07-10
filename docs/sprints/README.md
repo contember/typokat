@@ -20,3 +20,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+
+- [`sprint-2026-07-10-soundness-review-fixes.md`](sprint-2026-07-10-soundness-review-fixes.md) - close verified whole-project soundness findings and make the 1.0 plan measurable.
