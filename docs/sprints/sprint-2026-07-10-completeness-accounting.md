@@ -393,3 +393,35 @@ gate is recorded in the run log before WU1 begins.
   WU3 emissions a legitimately-exit-3 test could silently gain a phantom identity. Fix in Rust
   (escape control chars in string-literal type rendering; also a cosmetic tsc divergence) before
   or with WU3's first emission commit.
+- **2026-07-10 — WU3 shipped after WU7-C PASS (first pass).** Reviewer verified all six slots in
+  every walker variant (plain/contextual/tuple), coexistence of TK + incomplete on exit 3, the
+  destructuring boundary, the deferred-tail consistency with the WU0 split gate, harness rejection
+  of lying fixtures, and independently recomputed both scoreboard headers — absolute matched
+  diagnostics rose 345→364, so recall was gained, not lost. Non-blocking observation for WU8
+  closure: besides the 10 IN→unsupported demotions, ~10 OOS→OOS re-bucketings
+  (parse-error/unresolved → unsupported with a scored diff, e.g. `variadicTuples2` now matched 19)
+  are legitimate WU2 exit-precedence effects — account them in the closure audit so they don't
+  read as unexplained churn. Implementation summary below.
+- **2026-07-10 — WU3 implementation detail.** Deliverable-0 landed first
+  (separable): `render_type` now escapes control chars/`\`/`"` in string-literal types
+  (`src/diagnostics/render_type.rs`), with a Rust witness (`hostile_literal_renders_on_one_line`).
+  WU3 wired **six** expression child-slot emissions through the existing walkers (all stay
+  `unsupported-in` — the emission IS the accounting, no disposition flips): object-literal
+  `spread-element`/`computed-key`, array-literal `spread-element`/`elision` (both context and
+  non-context walkers + tuple walker), call/`new` `spread-argument` (3 arg collectors), and the
+  `infer_expr` `TemplateLiteral` arm (`interpolation` with holes, else `self`). Probes 1-3 now
+  exit 3 with their prescribed identities; probes 4/5 remain WU4/WU5 (unchanged). Corpus split:
+  `try_catch_finally.ts` + `typeof_query.ts` → new `b73_surface_accounting_pending/` (still
+  `false`); the three WU3 fixtures enabled. Harness learned `incomplete[<id>]` diffing
+  (`compare_incomplete_output`, exact-identity per line, malformed-marker panic, `[a-z0-9/-]+`
+  ids) + 5 witnesses. **Scope boundary (deviation, flagged in report + backlog 73):** the
+  broader `infer_expr` `_ => None` expression *shapes* (`update`/non-null/optional-chain/await/
+  yield/tagged-template/satisfies/instantiation/import-expr/bigint/regexp/class-expr/private-*)
+  stay silently dropped — `x++` reaches `infer_expr` via the for-loop update slot, so blanket
+  emission would flood every for-loop; granularity decision deferred to 73/71. **Audited
+  re-baseline:** in-scope 497→487; 10 IN→OOS:unsupported demotions, aggregated by identity —
+  `call/call-arguments/spread-argument` ×7, `object-literal/spread-element` ×1,
+  `template-literal/self` ×1, `template-literal/interpolation` ×1; every one verified genuine
+  (real spread/spread-arg/object-spread/value-position template), **zero spurious emissions**,
+  zero matched-diagnostic coverage lost (all 10 were 0-matched). `run --check` clean against the
+  saved baseline. All five gates green.
