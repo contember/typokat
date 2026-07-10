@@ -492,3 +492,11 @@ convention.
   parser — stays with backlog 63k as an oxc nesting-limit item. WU4-C byproduct
   (pre-existing): assigning into `any` narrows it (`s = 5; s.foo` → TK2339
   over-report) — unrelated to WU3, backlog candidate.
+- **2026-07-10 - WU5 shipped** (commit `d5a0ef8`) after independent review PASS.
+  Scoreboard format extended with per-file diagnostic identities, regenerated at
+  the baseline revision `2e20fc6` (counts byte-identical, 334/1677 preserved).
+  `run --check` at HEAD now reports the WU1-WU3 movement precisely: 15 regressions
+  / 3 progress by identity — the expected pre-WU8 state; WU8 must map each to a WU
+  fixture or review witness before re-baselining. Python harness tests:
+  `cd tooling/official-suite && python3 -m unittest test_tsofficial` (stdlib-only,
+  for WU6 CI).
