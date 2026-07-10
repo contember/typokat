@@ -441,3 +441,21 @@ gate is recorded in the run log before WU1 begins.
   record's "no hidden child" framing is imprecise but `with` is a strict-mode grammar error,
   wholly out of scope. Carry to WU8: `tests/surface/census.md` line pointers are a WU0 snapshot,
   now historical (e.g. `statements.rs:145`).
+- **2026-07-10 — WU5 shipped after WU7-E FAIL→PASS.** ~25 emission sites wired at the lowering
+  leaves (typeof/type-predicate/this-type/import-type/keywords/literal-types/tuple members/
+  qualified names) plus signatures (property + method computed keys) and class members
+  (static-block, accessor, index-signature, computed method/property keys); `record_incomplete`
+  now dedups at insertion by (id,span) — reviewer verified no cross-file over-dedup. First review
+  FAILED on three silent computed/member shapes (computed method-signature keys, computed
+  property-definition keys, and heritage-type-args/implements/tparam-defaults with no records);
+  remediation was fixture-first, record-only for the class surfaces (5 new inventory records,
+  owner 75), re-review PASSED with all negatives (no-spurious-firing) verified. Discovered
+  divergence graduated: `mapped/aliased-keyof-key-source` (aliased `keyof` as mapped key source
+  collapses the alias to `never` — over-report) → owner 35, disabled ledger witness. All five
+  WU0 probes now truthful (1/2/3 exit 3 via WU3, 5 via WU4, 4 via WU5). Scoreboard across WU5:
+  in-scope 485→395 (78+12 IN→unsupported, aggregate: typeof ×63, class-index-sig ×24, accessor
+  ×14, heritage ×6, prop-computed-key ×6, …), zero IN→IN diagnostic changes, diag-recall
+  379/1841 (numerator up from 364 pre-WU5, nothing lost). Non-blocking carries for WU8/backlog:
+  requires_slots cannot express cross-surface wrapper ties (class-declaration ↔ class-heritage) —
+  note filed in 73/75 consideration; `annotation-lower/type-query/self` is a never-emitting WU1
+  artifact (cosmetic).
