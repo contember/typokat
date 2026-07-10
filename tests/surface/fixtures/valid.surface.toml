@@ -60,7 +60,7 @@ slot = "typeof"
 oxc_variant = "TSType::TSTypeQuery"
 disposition = "unsupported-in"
 owner = "../../../docs/backlog/75-scope-surface-tail.md"
-witness = "../../cases/b73_surface_accounting/typeof_query.ts"
+witness = "../../cases/b73_surface_accounting_pending/typeof_query.ts"
 
 # --- statement: with-statement (out of scope by design) -----------------------------
 [[surface]]

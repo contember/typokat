@@ -12,10 +12,11 @@ use crate::types::repr::{
 };
 use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
-    ArrayExpression, BinaryExpression, BinaryOperator, ComputedMemberExpression, Expression,
-    LogicalExpression, ObjectExpression, ObjectPropertyKind, StaticMemberExpression, TSType,
-    TSTypeName, UnaryExpression, UnaryOperator,
+    ArrayExpression, ArrayExpressionElement, BinaryExpression, BinaryOperator,
+    ComputedMemberExpression, Expression, LogicalExpression, ObjectExpression, ObjectPropertyKind,
+    StaticMemberExpression, TSType, TSTypeName, UnaryExpression, UnaryOperator,
 };
+use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 impl<'a, 'ast> Pass<'a, 'ast> {
@@ -159,8 +160,74 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Expression::ComputedMemberExpression(member) => {
                 self.infer_element_access(scope, member)
             }
+            // A template literal `` `x${e}y` `` is not typed (owner 71). Record the
+            // skipped child slot before dropping so the interpolation's nested errors
+            // are accounted for: `interpolation` when it has holes, else `self`.
+            Expression::TemplateLiteral(tpl) => {
+                let (id, context) = if tpl.expressions.is_empty() {
+                    (
+                        "expr-infer/template-literal/self",
+                        "template literal not typed",
+                    )
+                } else {
+                    (
+                        "expr-infer/template-literal/interpolation",
+                        "template interpolation not visited",
+                    )
+                };
+                self.record_incomplete(id, Span::from_oxc(tpl.span), context);
+                None
+            }
             _ => None,
         }
+    }
+
+    /// The expression of an array element, or `None` after recording the incomplete
+    /// surface for a spread/elision child slot (owner 71/73). Every array-literal
+    /// walker routes through this so no in-scope child is silently dropped.
+    fn array_element_expr<'e, 'x>(
+        &mut self,
+        element: &'e ArrayExpressionElement<'x>,
+    ) -> Option<&'e Expression<'x>> {
+        match element {
+            ArrayExpressionElement::SpreadElement(spread) => {
+                self.record_incomplete(
+                    "expr-infer/array-literal/spread-element",
+                    Span::from_oxc(spread.span),
+                    "array spread element not visited",
+                );
+                None
+            }
+            ArrayExpressionElement::Elision(elision) => {
+                self.record_incomplete(
+                    "expr-infer/array-literal/elision",
+                    Span::from_oxc(elision.span),
+                    "array hole (elision) not visited",
+                );
+                None
+            }
+            _ => element.as_expression(),
+        }
+    }
+
+    /// Record the incomplete surface for a skipped object-literal spread member
+    /// (`{ ...x }`, owner 73), keeping every object walker's `continue` accounted for.
+    fn record_object_spread_skip(&mut self, member: &ObjectPropertyKind<'_>) {
+        self.record_incomplete(
+            "expr-infer/object-literal/spread-element",
+            Span::from_oxc(member.span()),
+            "object spread element not visited",
+        );
+    }
+
+    /// Record the incomplete surface for a skipped object-literal computed key
+    /// (`{ [e]: v }`, owner 75) at the key's span.
+    fn record_object_computed_key_skip(&mut self, key: &oxc_ast::ast::PropertyKey<'_>) {
+        self.record_incomplete(
+            "expr-infer/object-literal/computed-key",
+            Span::from_oxc(key.span()),
+            "computed object key not visited",
+        );
     }
 
     /// Infer a TypeScript assertion (`expr as T` / `<T>expr`). The source expression is
@@ -260,9 +327,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let mut properties: Vec<PropertyType> = Vec::with_capacity(obj.properties.len());
         for member in &obj.properties {
             let ObjectPropertyKind::ObjectProperty(prop) = member else {
+                self.record_object_spread_skip(member);
                 continue;
             };
             let Some(name) = prop.key.static_name() else {
+                self.record_object_computed_key_skip(&prop.key);
                 continue;
             };
             let Some((value_ty, _)) = self.infer_expr(scope, &prop.value) else {
@@ -285,9 +354,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn infer_array_literal(&mut self, scope: ScopeId, array: &ArrayExpression<'_>) -> TypeId {
         let mut element_types: Vec<TypeId> = Vec::with_capacity(array.elements.len());
         for element in &array.elements {
-            // Spread (`...xs`) / elision (a hole) are out of subset — skip them. Only a
-            // plain expression element contributes to the element type.
-            let Some(expr) = element.as_expression() else {
+            // Spread (`...xs`) / elision (a hole) are out of subset — the helper records
+            // the skipped child slot. Only a plain expression contributes an element type.
+            let Some(expr) = self.array_element_expr(element) else {
                 continue;
             };
             let Some((elem_ty, _)) = self.infer_expr(scope, expr) else {
@@ -401,9 +470,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let mut properties: Vec<PropertyType> = Vec::with_capacity(obj.properties.len());
         for member in &obj.properties {
             let ObjectPropertyKind::ObjectProperty(prop) = member else {
+                self.record_object_spread_skip(member);
                 continue;
             };
             let Some(name) = prop.key.static_name() else {
+                self.record_object_computed_key_skip(&prop.key);
                 continue;
             };
             let value_context = self.object_literal_property_context(context, &name);
@@ -454,7 +525,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> TypeId {
         let mut element_types: Vec<TypeId> = Vec::with_capacity(array.elements.len());
         for element in &array.elements {
-            let Some(expr) = element.as_expression() else {
+            let Some(expr) = self.array_element_expr(element) else {
                 continue;
             };
             let Some((elem_ty, _)) = self.infer_initializer(scope, expr, Some(element_context))
@@ -488,9 +559,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         let mut elements: Vec<TypeId> = Vec::with_capacity(array.elements.len());
         for (index, element) in array.elements.iter().enumerate() {
-            // Spread (`...xs`) / elision (a hole) are out of subset — skip (matching
-            // `infer_array_literal`); only a plain expression contributes a position.
-            let Some(expr) = element.as_expression() else {
+            // Spread (`...xs`) / elision (a hole) are out of subset — the helper records
+            // the skipped child slot; only a plain expression contributes a position.
+            let Some(expr) = self.array_element_expr(element) else {
                 continue;
             };
             // Contextually type this position against the target tuple's element *i* (if

@@ -1,5 +1,7 @@
-// Surface-accounting spec (backlog 73). DISABLED until WU2 and annotation-lowering
-// wiring (WU5) land. See tests/cases/README.md ("Surface-accounting corpus").
+// Surface-accounting spec (backlog 73), sibling PENDING corpus. DISABLED until the
+// annotation-lowering wiring (WU5) lands — split out of b73_surface_accounting (WU3) so
+// the expression fixtures can enable independently. See tests/cases/README.md
+// ("Surface-accounting corpus").
 //
 // Silent skip: `lower_annotation_inner` has no `TSTypeQuery` arm
 // (src/check/checker/annotations/mod.rs:174 `_ => return None`), so `typeof Missing`

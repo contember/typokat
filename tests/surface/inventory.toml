@@ -286,7 +286,7 @@ slot = "block"
 oxc_variant = "Statement::TryStatement"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../cases/b73_surface_accounting/try_catch_finally.ts"
+witness = "../cases/b73_surface_accounting_pending/try_catch_finally.ts"
 
 [[surface]]
 id = "stmt-check/try-statement/finalizer"
@@ -296,7 +296,7 @@ slot = "finalizer"
 oxc_variant = "Statement::TryStatement"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../cases/b73_surface_accounting/try_catch_finally.ts"
+witness = "../cases/b73_surface_accounting_pending/try_catch_finally.ts"
 
 [[surface]]
 id = "stmt-check/try-statement/handler"
@@ -306,7 +306,7 @@ slot = "handler"
 oxc_variant = "Statement::TryStatement"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../cases/b73_surface_accounting/try_catch_finally.ts"
+witness = "../cases/b73_surface_accounting_pending/try_catch_finally.ts"
 
 [[surface]]
 id = "stmt-check/try-statement/self"
@@ -316,7 +316,7 @@ slot = "self"
 oxc_variant = "Statement::TryStatement"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../cases/b73_surface_accounting/try_catch_finally.ts"
+witness = "../cases/b73_surface_accounting_pending/try_catch_finally.ts"
 
 [[surface]]
 id = "stmt-check/while-statement/self"
@@ -1136,7 +1136,7 @@ slot = "self"
 oxc_variant = "TSType::TSTypePredicate"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../cases/b73_surface_accounting/typeof_query.ts"
+witness = "../cases/b73_surface_accounting_pending/typeof_query.ts"
 
 [[surface]]
 id = "annotation-lower/type-query/self"
@@ -1146,7 +1146,7 @@ slot = "self"
 oxc_variant = "TSType::TSTypeQuery"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../cases/b73_surface_accounting/typeof_query.ts"
+witness = "../cases/b73_surface_accounting_pending/typeof_query.ts"
 
 [[surface]]
 id = "annotation-lower/type-query/typeof"
@@ -1156,7 +1156,7 @@ slot = "typeof"
 oxc_variant = "TSType::TSTypeQuery"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../cases/b73_surface_accounting/typeof_query.ts"
+witness = "../cases/b73_surface_accounting_pending/typeof_query.ts"
 
 [[surface]]
 id = "annotation-lower/type-reference/self"

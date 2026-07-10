@@ -1,8 +1,8 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
-# corpus 874  in-scope 497  out-of-scope 377
-# clean-kept 172/214  error-exact 29/283  diag-recall 345/1674
-# cols: status<TAB>matched fn fp expected<TAB>ids<TAB>rel  (status=IN | OOS:<bucket>; nums/ids '-' = n/a; ids=<matched>|<fp> as sorted line:code identities)
+# corpus 874  in-scope 487  out-of-scope 387
+# clean-kept 165/205  error-exact 29/282  diag-recall 364/1729
+# cols: status<TAB>matched fn fp expected<TAB>ids<TAB>rel  (status=IN | OOS:<bucket>; nums/ids '-' = n/a; ids=<matched>|<fp> as sorted line:code identities; OOS:unsupported carries nums + <matched>|<fp>|<incomplete> — an exit-3 demotion keeps its diagnostic diff plus its surface identities)
 IN	4 4 2 8	15:2341,18:2341,20:2341,23:2341|16:2339,21:2339	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	15:2445,18:2445,20:2445,23:2445|16:2339,21:2339	conformance/classes/members/accessibility/classPropertyAsProtected.ts
 IN	0 0 2 0	|15:2339,20:2339	conformance/classes/members/accessibility/classPropertyIsPublicByDefault.ts
@@ -78,16 +78,16 @@ IN	0 0 0 0	|	conformance/classes/members/instanceAndStaticMembers/typeOfThisInSt
 IN	0 1 1 1	|16:2322	conformance/classes/members/instanceAndStaticMembers/typeOfThisInstanceMemberNarrowedWithLoopAntecedent.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameAccessors.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameAccessorsAccess.ts
-IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameAccessorsCallExpression.ts
+OOS:unsupported	0 0 0 0	||call/call-arguments/spread-argument,call/call-arguments/spread-argument	conformance/classes/members/privateNames/privateNameAccessorsCallExpression.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameAccessorssDerivedClasses.ts
 IN	0 1 0 1	|	conformance/classes/members/privateNames/privateNameAmbientNoImplicitAny.ts
 IN	0 12 0 12	|	conformance/classes/members/privateNames/privateNameAndAny.ts
 IN	0 2 0 2	|	conformance/classes/members/privateNames/privateNameAndIndexSignature.ts
-IN	0 4 0 4	|	conformance/classes/members/privateNames/privateNameAndObjectRestSpread.ts
+OOS:unsupported	0 4 0 4	||expr-infer/object-literal/spread-element,expr-infer/object-literal/spread-element	conformance/classes/members/privateNames/privateNameAndObjectRestSpread.ts
 OOS:parse-error	- - - -	-	conformance/classes/members/privateNames/privateNameAndPropertySignature.ts
 IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameAndStaticInitializer.ts
 IN	0 6 0 6	|	conformance/classes/members/privateNames/privateNameBadAssignment.ts
-OOS:parse-error	- - - -	-	conformance/classes/members/privateNames/privateNameBadDeclaration.ts
+OOS:unsupported	0 0 0 0	||expr-infer/object-literal/computed-key,expr-infer/object-literal/computed-key,expr-infer/object-literal/computed-key,expr-infer/object-literal/computed-key,expr-infer/object-literal/computed-key,expr-infer/object-literal/computed-key	conformance/classes/members/privateNames/privateNameBadDeclaration.ts
 IN	0 2 0 2	|	conformance/classes/members/privateNames/privateNameBadSuper.ts
 IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameBadSuperUseDefineForClassFields.ts
 IN	0 4 0 4	|	conformance/classes/members/privateNames/privateNameCircularReference.ts
@@ -107,7 +107,7 @@ OOS:syntax:enum	- - - -	-	conformance/classes/members/privateNames/privateNameEn
 IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameField.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameFieldAccess.ts
 IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameFieldAssignment.ts
-IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameFieldCallExpression.ts
+OOS:unsupported	0 0 0 0	||call/call-arguments/spread-argument,call/call-arguments/spread-argument	conformance/classes/members/privateNames/privateNameFieldCallExpression.ts
 IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameFieldClassExpression.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameFieldDerivedClasses.ts
 IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameFieldDestructuredBinding.ts
@@ -121,18 +121,18 @@ OOS:parse-error	- - - -	-	conformance/classes/members/privateNames/privateNameIn
 OOS:syntax:module	- - - -	-	conformance/classes/members/privateNames/privateNameInInExpressionTransform.ts
 OOS:syntax:type-predicate	- - - -	-	conformance/classes/members/privateNames/privateNameInInExpressionUnused.ts
 IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameInLhsReceiverExpression.ts
-OOS:parse-error	- - - -	-	conformance/classes/members/privateNames/privateNameInObjectLiteral-1.ts
-OOS:parse-error	- - - -	-	conformance/classes/members/privateNames/privateNameInObjectLiteral-2.ts
-OOS:parse-error	- - - -	-	conformance/classes/members/privateNames/privateNameInObjectLiteral-3.ts
+OOS:unsupported	0 1 0 1	||expr-infer/object-literal/computed-key	conformance/classes/members/privateNames/privateNameInObjectLiteral-1.ts
+OOS:unsupported	0 1 0 1	||expr-infer/object-literal/computed-key	conformance/classes/members/privateNames/privateNameInObjectLiteral-2.ts
+OOS:unsupported	0 0 0 0	||expr-infer/object-literal/computed-key	conformance/classes/members/privateNames/privateNameInObjectLiteral-3.ts
 IN	0 5 0 5	|	conformance/classes/members/privateNames/privateNameJsBadAssignment.ts
-OOS:parse-error	- - - -	-	conformance/classes/members/privateNames/privateNameJsBadDeclaration.ts
+OOS:unsupported	0 0 0 0	||expr-infer/object-literal/computed-key,expr-infer/object-literal/computed-key,expr-infer/object-literal/computed-key,expr-infer/object-literal/computed-key,expr-infer/object-literal/computed-key,expr-infer/object-literal/computed-key	conformance/classes/members/privateNames/privateNameJsBadDeclaration.ts
 IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameLateSuper.ts
 IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameLateSuperUseDefineForClassFields.ts
 IN	0 2 0 2	|	conformance/classes/members/privateNames/privateNameMethod.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameMethodAccess.ts
 IN	0 5 0 5	|	conformance/classes/members/privateNames/privateNameMethodAssignment.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameMethodAsync.ts
-IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameMethodCallExpression.ts
+OOS:unsupported	0 0 0 0	||call/call-arguments/spread-argument,call/call-arguments/spread-argument,call/call-arguments/spread-argument,call/call-arguments/spread-argument	conformance/classes/members/privateNames/privateNameMethodCallExpression.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameMethodClassExpression.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameMethodInStaticFieldInit.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameMethodsDerivedClasses.ts
@@ -148,13 +148,13 @@ OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameSet
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameSetterNoGetter.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameStaticAccessors.ts
 OOS:syntax:module	- - - -	-	conformance/classes/members/privateNames/privateNameStaticAccessorsAccess.ts
-IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameStaticAccessorsCallExpression.ts
+OOS:unsupported	0 0 0 0	||call/call-arguments/spread-argument,call/call-arguments/spread-argument	conformance/classes/members/privateNames/privateNameStaticAccessorsCallExpression.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameStaticAccessorssDerivedClasses.ts
 IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameStaticAndStaticInitializer.ts
 OOS:multifile	- - - -	-	conformance/classes/members/privateNames/privateNameStaticEmitHelpers.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameStaticFieldAccess.ts
 IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameStaticFieldAssignment.ts
-IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameStaticFieldCallExpression.ts
+OOS:unsupported	0 0 0 0	||call/call-arguments/spread-argument,call/call-arguments/spread-argument	conformance/classes/members/privateNames/privateNameStaticFieldCallExpression.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameStaticFieldClassExpression.ts
 IN	0 2 0 2	|	conformance/classes/members/privateNames/privateNameStaticFieldDerivedClasses.ts
 IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameStaticFieldDestructuredBinding.ts
@@ -164,7 +164,7 @@ IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameStaticFieldUnar
 IN	0 2 0 2	|	conformance/classes/members/privateNames/privateNameStaticMethod.ts
 IN	0 5 0 5	|	conformance/classes/members/privateNames/privateNameStaticMethodAssignment.ts
 OOS:parse-error	- - - -	-	conformance/classes/members/privateNames/privateNameStaticMethodAsync.ts
-IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameStaticMethodCallExpression.ts
+OOS:unsupported	0 0 0 0	||call/call-arguments/spread-argument,call/call-arguments/spread-argument,call/call-arguments/spread-argument,call/call-arguments/spread-argument	conformance/classes/members/privateNames/privateNameStaticMethodCallExpression.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameStaticMethodClassExpression.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameStaticMethodInStaticFieldInit.ts
 IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameStaticsAndStaticMethods.ts
@@ -198,7 +198,7 @@ IN	0 2 0 2	|	conformance/classes/members/privateNames/privateNamesUnique-4.ts
 IN	0 1 0 1	|	conformance/classes/members/privateNames/privateNamesUnique-5.ts
 IN	0 2 0 2	|	conformance/classes/members/privateNames/privateNamesUseBeforeDef.ts
 IN	0 0 0 0	|	conformance/classes/members/privateNames/privateStaticNameShadowing.ts
-OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateWriteOnlyAccessorRead.ts
+OOS:unsupported	0 8 1 8	|9:2304|expr-infer/array-literal/spread-element	conformance/classes/members/privateNames/privateWriteOnlyAccessorRead.ts
 IN	0 0 0 0	|	conformance/classes/members/privateNames/typeFromPrivatePropertyAssignment.ts
 OOS:multifile	- - - -	-	conformance/classes/members/privateNames/typeFromPrivatePropertyAssignmentJs.ts
 OOS:unresolved	- - - -	-	conformance/classes/propertyMemberDeclarations/abstractProperty.ts
@@ -207,7 +207,7 @@ OOS:parse-error	- - - -	-	conformance/classes/propertyMemberDeclarations/accessi
 IN	0 1 0 1	|	conformance/classes/propertyMemberDeclarations/accessorsOverrideMethod.ts
 IN	0 2 0 2	|	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty.ts
 IN	0 1 0 1	|	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty10.ts
-OOS:unresolved	- - - -	-	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty2.ts
+OOS:unsupported	0 1 2 1	|7:2304,11:2304|expr-infer/template-literal/interpolation	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty2.ts
 IN	0 1 0 1	|	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty3.ts
 IN	0 1 0 1	|	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty4.ts
 IN	0 0 0 0	|	conformance/classes/propertyMemberDeclarations/accessorsOverrideProperty5.ts
@@ -265,7 +265,7 @@ IN	0 4 0 4	|	conformance/classes/propertyMemberDeclarations/propertyAndFunctionW
 OOS:parse-error	- - - -	-	conformance/classes/propertyMemberDeclarations/propertyNamedConstructor.ts
 OOS:parse-error	- - - -	-	conformance/classes/propertyMemberDeclarations/propertyNamedPrototype.ts
 IN	0 2 0 2	|	conformance/classes/propertyMemberDeclarations/propertyOverridesAccessors.ts
-OOS:unresolved	- - - -	-	conformance/classes/propertyMemberDeclarations/propertyOverridesAccessors2.ts
+OOS:unsupported	0 1 2 1	|3:2304,11:2304|expr-infer/template-literal/interpolation	conformance/classes/propertyMemberDeclarations/propertyOverridesAccessors2.ts
 OOS:unresolved	- - - -	-	conformance/classes/propertyMemberDeclarations/propertyOverridesAccessors3.ts
 IN	0 0 0 0	|	conformance/classes/propertyMemberDeclarations/propertyOverridesAccessors4.ts
 IN	0 1 0 1	|	conformance/classes/propertyMemberDeclarations/propertyOverridesAccessors5.ts
@@ -313,7 +313,7 @@ OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowForStatement.ts
 OOS:syntax:module	- - - -	-	conformance/controlFlow/controlFlowGenericTypes.ts
 OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowIIFE.ts
 OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowIfStatement.ts
-OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowInOperator.ts
+OOS:unsupported	0 0 2 0	|40:2304,46:2304|expr-infer/template-literal/interpolation,expr-infer/template-literal/interpolation	conformance/controlFlow/controlFlowInOperator.ts
 OOS:syntax:instanceof	- - - -	-	conformance/controlFlow/controlFlowInstanceOfGuardPrimitives.ts
 OOS:syntax:module	- - - -	-	conformance/controlFlow/controlFlowInstanceofExtendsFunction.ts
 IN	0 0 2 0	|11:2339,14:2339	conformance/controlFlow/controlFlowIteration.ts
@@ -329,10 +329,10 @@ IN	0 0 0 0	|	conformance/controlFlow/controlFlowSuperPropertyAccess.ts
 IN	0 0 0 0	|	conformance/controlFlow/controlFlowTruthiness.ts
 IN	0 1 0 1	|	conformance/controlFlow/controlFlowTypeofObject.ts
 OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowWhileStatement.ts
-IN	0 0 2 0	|3:2339,8:2339	conformance/controlFlow/controlFlowWithTemplateLiterals.ts
+OOS:unsupported	0 0 2 0	|3:2339,8:2339|expr-infer/template-literal/self,expr-infer/template-literal/self	conformance/controlFlow/controlFlowWithTemplateLiterals.ts
 OOS:syntax:module	- - - -	-	conformance/controlFlow/definiteAssignmentAssertions.ts
 OOS:parse-error	- - - -	-	conformance/controlFlow/definiteAssignmentAssertionsWithObjectShortHand.ts
-OOS:unresolved	- - - -	-	conformance/controlFlow/dependentDestructuredVariables.ts
+OOS:unsupported	0 3 110 3	|6:2304,7:2304,9:2304,10:2304,16:2304,17:2304,19:2304,20:2304,25:2304,27:2304,30:2304,33:2304,39:2304,40:2304,42:2304,43:2304,49:2304,50:2304,52:2304,53:2304,62:2304,63:2304,64:2304,66:2304,67:2304,74:2304,75:2304,76:2304,78:2304,79:2304,87:2304,88:2304,90:2304,91:2304,97:2304,98:2304,100:2304,103:2304,106:2304,117:2304,118:2304,120:2304,121:2304,123:2304,124:2304,126:2304,127:2304,130:2304,137:2304,138:2304,140:2304,141:2304,159:2304,160:2304,163:2304,174:2304,176:2304,178:2304,184:2304,186:2304,187:2304,194:2345,203:2322,212:2322,234:2322,237:2304,240:2304,245:2345,245:2345,246:2345,246:2345,320:2304,322:2322,350:2304,352:2304,357:2304,364:2304,366:2304,371:2304,376:2322,397:2304,397:2304,401:2304,401:2345,402:2304,402:2345,407:2304,408:2304,410:2304,411:2304,413:2304,414:2304,416:2304,417:2304,419:2304,420:2304,422:2304,423:2304,430:2304,431:2304,438:2304,439:2304,441:2304,442:2304,447:2304,448:2304,450:2304,451:2304,457:2322,458:2304|expr-infer/template-literal/interpolation,expr-infer/template-literal/interpolation	conformance/controlFlow/dependentDestructuredVariables.ts
 OOS:syntax:as-const	- - - -	-	conformance/controlFlow/dependentDestructuredVariablesFromNestedPatterns.ts
 OOS:syntax:module	- - - -	-	conformance/controlFlow/dependentDestructuredVariablesWithExport.ts
 OOS:syntax:enum	- - - -	-	conformance/controlFlow/exhaustiveSwitchStatements1.ts
@@ -504,7 +504,7 @@ OOS:syntax:as-const	- - - -	-	conformance/types/literal/templateLiteralTypes2.ts
 OOS:syntax:as-const	- - - -	-	conformance/types/literal/templateLiteralTypes3.ts
 OOS:syntax:enum	- - - -	-	conformance/types/literal/templateLiteralTypes4.ts
 OOS:unresolved	- - - -	-	conformance/types/literal/templateLiteralTypes5.ts
-IN	0 0 1 0	|19:2554	conformance/types/literal/templateLiteralTypes6.ts
+OOS:unsupported	0 0 1 0	|19:2554|expr-infer/template-literal/interpolation	conformance/types/literal/templateLiteralTypes6.ts
 OOS:unresolved	- - - -	-	conformance/types/literal/templateLiteralTypes7.ts
 OOS:syntax:enum	- - - -	-	conformance/types/literal/templateLiteralTypes8.ts
 OOS:syntax:module	- - - -	-	conformance/types/literal/templateLiteralTypesPatterns.ts
@@ -646,8 +646,8 @@ OOS:syntax:module	- - - -	-	conformance/types/tuple/named/namedTupleMembers.ts
 OOS:syntax:module	- - - -	-	conformance/types/tuple/named/namedTupleMembersErrors.ts
 OOS:unresolved	- - - -	-	conformance/types/tuple/named/partiallyNamedTuples.ts
 OOS:unresolved	- - - -	-	conformance/types/tuple/named/partiallyNamedTuples2.ts
-IN	0 0 0 0	|	conformance/types/tuple/named/partiallyNamedTuples3.ts
-OOS:parse-error	- - - -	-	conformance/types/tuple/optionalTupleElements1.ts
+OOS:unsupported	0 0 0 0	||call/call-arguments/spread-argument	conformance/types/tuple/named/partiallyNamedTuples3.ts
+OOS:unsupported	0 7 0 7	||expr-infer/array-literal/elision,expr-infer/array-literal/elision,expr-infer/array-literal/elision,expr-infer/array-literal/elision,expr-infer/array-literal/elision	conformance/types/tuple/optionalTupleElements1.ts
 OOS:parse-error	- - - -	-	conformance/types/tuple/readonlyArraysAndTuples.ts
 OOS:syntax:decorator	- - - -	-	conformance/types/tuple/readonlyArraysAndTuples2.ts
 OOS:parse-error	- - - -	-	conformance/types/tuple/restTupleElements1.ts
@@ -660,7 +660,7 @@ IN	0 2 0 2	|	conformance/types/tuple/tupleLengthCheck.ts
 IN	1 5 3 6	11:2322|16:2339,31:2322,32:2322	conformance/types/tuple/typeInferenceWithTupleType.ts
 IN	0 8 0 8	|	conformance/types/tuple/unionsOfTupleTypes1.ts
 OOS:syntax:as-const	- - - -	-	conformance/types/tuple/variadicTuples1.ts
-OOS:parse-error	- - - -	-	conformance/types/tuple/variadicTuples2.ts
+OOS:unsupported	19 14 5 33	47:2322,56:2322,58:2322,61:2322,62:2322,63:2322,72:2345,76:2322,77:2322,78:2322,79:2322,84:2322,116:2345,120:2345,121:2345,126:2345,127:2345,138:2345,139:2345|89:2339,90:2339,117:2555,137:2555,139:2345|call/call-arguments/spread-argument,call/call-arguments/spread-argument,call/call-arguments/spread-argument,call/call-arguments/spread-argument	conformance/types/tuple/variadicTuples2.ts
 IN	0 3 0 3	|	conformance/types/tuple/variadicTuples3.ts
 IN	0 0 1 0	|4:2322	conformance/types/tuple/wideningTuples1.ts
 OOS:unresolved	- - - -	-	conformance/types/tuple/wideningTuples2.ts

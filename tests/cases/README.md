@@ -38,10 +38,11 @@ Rules the harness enforces:
   `<stable-id>` is the surface identity `role/surface/slot-or-variant` (see the
   surface-accounting corpus below and `tests/surface/README.md`). It mirrors the
   `error[TK…]` shape but asserts a *third outcome* — an incomplete record, not a
-  diagnostic. The conformance harness gains this understanding only when the
-  first-class incomplete outcome lands (sprint 2026-07-10 WU2); until then every
-  corpus carrying `incomplete[…]` markers stays registered `false`, and the markers
-  read as inert prose to the current `error[`-only parser (they contain no `error[`).
+  diagnostic. The harness diffs these via `compare_incomplete_output` with the same
+  per-line, exact-identity + optional-substring rules as `error[TK…]` (sprint
+  2026-07-10 WU3). A malformed segment starting with `incomplete[` panics loudly, just
+  like the `error[` parser; a valid `<stable-id>` is `[a-z0-9/-]+`. A corpus whose
+  emissions have not yet landed stays registered `false` until its wiring ships.
 - **Malformed markers fail loudly.** A ` | `-separated comment segment that starts with
   `error[` but isn't a well-formed `error[TK<digits>]` (missing `]`, a non-`TK`/non-digit
   code, …) panics the harness with the file, line, and segment — a silently dropped marker
@@ -356,16 +357,21 @@ marker (the identity scheme is defined in [`tests/surface/README.md`](../surface
 a nearby **supported control** on a sibling line carries the ordinary `error[TK…]`
 marker so the two paths are diffed side by side.
 
-The dir stays registered `false` until the first-class incomplete outcome (WU2) and the
-child-slot wiring (WU3–WU5) land. Enabling a fixture at the current HEAD shows the
-silent path directly: the `incomplete[…]` line produces no diagnostic while `tsc` errors.
-Every fixture header records the exact `tsc 6.0.3 --strict` verdict and the `file:line`
-of the wildcard/`None`/skip that drops the position.
+The corpus is **split by owning work unit**. `b73_surface_accounting/` holds the WU3
+expression child-slot fixtures and is now **enabled**: the harness diffs their
+`incomplete[<id>]` markers (`compare_incomplete_output`) with the same per-line,
+exact-identity discipline as `error[TK…]` — an unexpected record or a missing expected
+one fails. The sibling `b73_surface_accounting_pending/` holds the statement-container
+(WU4) and annotation (WU5) fixtures and stays registered `false` until those emissions
+land; enabling one at HEAD shows the silent path directly (the `incomplete[…]` line
+produces no record while `tsc` errors). Every fixture header records the exact `tsc
+6.0.3 --strict` verdict and the `file:line` of the wildcard/`None`/skip that drops the
+position.
 
-| Fixture | Silent-skip site | Marker id | tsc verdict |
-|---|---|---|---|
-| `template_interpolation.ts` | `infer_expr` has no `TemplateLiteral` arm (`expr.rs:162`) | `expr-infer/template-literal/interpolation` | TS2345 |
-| `computed_key.ts` | `infer_object_literal` skips non-`static_name` keys (`expr.rs:265`) | `expr-infer/object-literal/computed-key` | TS2345 |
-| `array_spread.ts` | `infer_array_literal` skips non-expression elements (`expr.rs:290`) | `expr-infer/array-literal/spread-element` | TS2345 |
-| `try_catch_finally.ts` | `check_stmt` drops `TryStatement` (`statements.rs:145`) | `stmt-check/try-statement/{block,handler,finalizer}` | TS2322 ×3 |
-| `typeof_query.ts` | `lower_annotation_inner` drops `TSTypeQuery` (`annotations/mod.rs:174`) | `annotation-lower/type-query/typeof` | TS2304 |
+| Fixture | Dir | Skip site | Marker id | tsc verdict |
+|---|---|---|---|---|
+| `template_interpolation.ts` | WU3 (enabled) | `infer_expr` `TemplateLiteral` arm records before `None` | `expr-infer/template-literal/interpolation` | TS2345 |
+| `computed_key.ts` | WU3 (enabled) | `infer_object_literal` records non-`static_name` keys | `expr-infer/object-literal/computed-key` | TS2345 |
+| `array_spread.ts` | WU3 (enabled) | array-element helper records spread/elision | `expr-infer/array-literal/spread-element` | TS2345 |
+| `try_catch_finally.ts` | pending (WU4) | `check_stmt` drops `TryStatement` (`statements.rs:145`) | `stmt-check/try-statement/{block,handler,finalizer}` | TS2322 ×3 |
+| `typeof_query.ts` | pending (WU5) | `lower_annotation_inner` drops `TSTypeQuery` (`annotations/mod.rs:174`) | `annotation-lower/type-query/typeof` | TS2304 |

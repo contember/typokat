@@ -1,9 +1,10 @@
-// Surface-accounting spec (backlog 73). DISABLED until WU2/WU3 land. See
+// Surface-accounting spec (backlog 73). ENABLED by WU3: the object-literal walkers now
+// record the incomplete computed-key child slot before `continue`-ing. See
 // tests/cases/README.md ("Surface-accounting corpus").
 //
-// Silent skip: `infer_object_literal` reads `prop.key.static_name()` and `continue`s
-// when it is `None` (src/check/checker/expr.rs:265), so a computed key expression is
-// never walked. tsc 6.0.3 --strict: TS2345 on the computed-key `need("bad")` call.
+// Skip accounted: `infer_object_literal` records `expr-infer/object-literal/computed-key`
+// when `prop.key.static_name()` is `None`, so a computed key expression is no longer a
+// false-clean. tsc 6.0.3 --strict: TS2345 on the computed-key `need("bad")` call.
 
 function need(n: number): number {
   return n;

@@ -114,15 +114,16 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Deferred ledger — known unfixtured under-reports from backlogs 30, 56, 60,
     // 62, 66, 67. Stays `false` beyond this sprint until each backlog item ships.
     ("sr_deferred_ledger", false),
-    // Completeness-accounting sprint (2026-07-10) WU0 — surface-accounting corpus
-    // (backlog 73). DISABLED (behavior-neutral spec): the fixtures pin AST child
-    // slots / statement containers / annotation forms that currently exit clean
-    // (`incomplete[<role/surface/slot>]` markers) plus their supported controls.
-    // Stays `false` until the incomplete outcome (WU2) and the child-slot wiring
-    // (WU3/WU4/WU5) land and the harness learns the `incomplete[...]` marker. See
-    // tests/cases/README.md ("Surface-accounting corpus") and
-    // docs/sprints/sprint-2026-07-10-completeness-accounting.md.
-    ("b73_surface_accounting", false),
+    // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
+    // (backlog 73). ENABLED by WU3: the expression child-slot fixtures (template
+    // interpolation, computed object key, array spread) now emit their prescribed
+    // `incomplete[<role/surface/slot>]` records, diffed by `compare_incomplete_output`.
+    // See tests/cases/README.md ("Surface-accounting corpus").
+    ("b73_surface_accounting", true),
+    // Sibling PENDING corpus — the statement-container (`try`/`catch`/`finally`, WU4)
+    // and annotation (`typeof Missing`, WU5) fixtures. Split out of the WU3 dir so it
+    // can enable independently; stays `false` until WU4/WU5 wire those emissions.
+    ("b73_surface_accounting_pending", false),
 ];
 
 /// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`
@@ -142,6 +143,16 @@ const PROJECT_DIRS: &[&str] = &[
 struct ExpectedMarker {
     code: String,
     /// Optional case-sensitive substring the rendered diagnostic must contain.
+    substring: Option<String>,
+}
+
+/// An expectation parsed from an inline `// incomplete[<stable-id>]` marker — the
+/// third-outcome analogue of [`ExpectedMarker`]. The `id` is matched by exact
+/// identity (same discipline as error codes); the optional substring is a
+/// case-sensitive `contains` against the record's rendered text.
+#[derive(Debug, Clone)]
+struct ExpectedIncomplete {
+    id: String,
     substring: Option<String>,
 }
 
@@ -335,6 +346,101 @@ fn compare_fixture_output(
         }
     }
 
+    // 3. Incomplete-surface markers — the third outcome. Same per-line, exact-identity
+    //    diff discipline as error codes: an unexpected record or a missing expected one
+    //    fails.
+    if let Err(incomplete_failures) = compare_incomplete_output(path, source, output, &line_index) {
+        failures.extend(incomplete_failures);
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures)
+    }
+}
+
+/// Diff the `// incomplete[<id>]` markers against the checker's incomplete channel,
+/// per source line, with the same exact-multiset + optional-substring rules as the
+/// error markers.
+fn compare_incomplete_output(
+    path: &Path,
+    source: &str,
+    output: &typokat::driver::CheckOutput,
+    line_index: &LineIndex,
+) -> Result<(), Vec<String>> {
+    let expected = parse_incomplete_markers(&display_path(path), source);
+
+    // line -> list of (id, rendered_text)
+    let mut actual: BTreeMap<u32, Vec<(String, String)>> = BTreeMap::new();
+    for rec in &output.incomplete {
+        let line = line_index.line_of(rec.span.start);
+        actual
+            .entry(line)
+            .or_default()
+            .push((rec.id.clone(), rec.rendered_text()));
+    }
+
+    let mut failures = Vec::new();
+    let all_lines: std::collections::BTreeSet<u32> = expected
+        .keys()
+        .copied()
+        .chain(actual.keys().copied())
+        .collect();
+
+    for line in all_lines {
+        let empty_exp = Vec::new();
+        let empty_act = Vec::new();
+        let exp = expected.get(&line).unwrap_or(&empty_exp);
+        let act = actual.get(&line).unwrap_or(&empty_act);
+
+        // 1. Multiset of stable ids must match exactly.
+        let exp_ids = sorted_codes(exp.iter().map(|m| m.id.as_str()));
+        let act_ids = sorted_codes(act.iter().map(|(id, _)| id.as_str()));
+        if exp_ids != act_ids {
+            failures.push(format!(
+                "{}:{}: incomplete-identity mismatch\n    expected: {:?}\n    actual:   {:?}",
+                display_path(path),
+                line,
+                exp_ids,
+                act_ids,
+            ));
+            continue;
+        }
+
+        // 2. Each expected substring must appear in SOME actual record on the line with
+        //    the same id (greedy pairing for duplicate ids).
+        let mut remaining: Vec<&(String, String)> = act.iter().collect();
+        for marker in exp {
+            let Some(substr) = &marker.substring else {
+                continue;
+            };
+            let pos = remaining
+                .iter()
+                .position(|(id, text)| *id == marker.id && text.contains(substr));
+            match pos {
+                Some(i) => {
+                    remaining.remove(i);
+                }
+                None => {
+                    let rendered: Vec<&str> = act
+                        .iter()
+                        .filter(|(id, _)| *id == marker.id)
+                        .map(|(_, t)| t.as_str())
+                        .collect();
+                    failures.push(format!(
+                        "{}:{}: no incomplete[{}] record contains substring {:?}\n    rendered: {:?}",
+                        display_path(path),
+                        line,
+                        marker.id,
+                        substr,
+                        rendered,
+                    ));
+                }
+            }
+        }
+    }
+
     if failures.is_empty() {
         Ok(())
     } else {
@@ -434,6 +540,82 @@ fn is_valid_code(code: &str) -> bool {
         Some(digits) => !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()),
         None => false,
     }
+}
+
+/// Parse inline `// incomplete[<stable-id>]` / `: substring` markers, mirroring
+/// [`parse_markers`]. A comment segment that *starts with* `incomplete[` but does not
+/// parse as a well-formed marker panics with file/line/segment — a silently dropped
+/// incomplete marker would hide a false-clean the corpus exists to catch. Prose that
+/// merely mentions `incomplete[` mid-text is ignored. Multiple markers on one line are
+/// ` | `-separated; a second `incomplete[` in a segment's residual is rejected.
+fn parse_incomplete_markers(display: &str, source: &str) -> BTreeMap<u32, Vec<ExpectedIncomplete>> {
+    let mut map: BTreeMap<u32, Vec<ExpectedIncomplete>> = BTreeMap::new();
+    for (idx, line) in source.lines().enumerate() {
+        let line_no = (idx + 1) as u32;
+        let Some(comment_at) = line.find("//") else {
+            continue;
+        };
+        let comment = &line[comment_at + 2..];
+        if !comment.contains("incomplete[") {
+            continue;
+        }
+        for segment in comment.split(" | ") {
+            let trimmed = segment.trim();
+            if !trimmed.starts_with("incomplete[") {
+                continue;
+            }
+            match parse_one_incomplete(trimmed) {
+                Some(marker) => {
+                    let close = trimmed.find(']').expect("parsed marker has `]`");
+                    if trimmed[close + 1..].contains("incomplete[") {
+                        panic!(
+                            "{display}:{line_no}: comment segment {segment:?} contains a second \
+                             `incomplete[` after a parsed marker — separate multiple markers with \
+                             ` | `, or the trailing marker is silently dropped."
+                        );
+                    }
+                    map.entry(line_no).or_default().push(marker)
+                }
+                None => panic!(
+                    "{display}:{line_no}: malformed incomplete marker in comment segment \
+                     {segment:?} — expected `incomplete[<stable-id>]` optionally followed by \
+                     `: <substring>`. A dropped marker would silently hide a false-clean; fix or \
+                     remove the segment."
+                ),
+            }
+        }
+    }
+    map
+}
+
+/// Parse a single `incomplete[<id>]` / `incomplete[<id>]: substring` marker, or `None`
+/// if the segment is not a well-formed marker (empty id / missing `]`).
+fn parse_one_incomplete(segment: &str) -> Option<ExpectedIncomplete> {
+    let segment = segment.trim();
+    let rest = segment.strip_prefix("incomplete[")?;
+    let close = rest.find(']')?;
+    let id = &rest[..close];
+    if !is_valid_incomplete_id(id) {
+        return None;
+    }
+    let after = rest[close + 1..].trim_start();
+    let substring = after
+        .strip_prefix(':')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    Some(ExpectedIncomplete {
+        id: id.to_string(),
+        substring,
+    })
+}
+
+/// A valid stable id is a non-empty `role/surface/slot`-shaped token: lowercase
+/// letters, digits, `/`, and `-` only (no whitespace, no `]`).
+fn is_valid_incomplete_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'/' || b == b'-')
 }
 
 fn sorted_codes<'a>(codes: impl Iterator<Item = &'a str>) -> Vec<String> {
@@ -619,6 +801,85 @@ fn parse_markers_accepts_entire_corpus() {
         parse_markers_catch(&source).unwrap_or_else(|_| {
             panic!(
                 "strict marker parse rejected existing fixture {}",
+                path.display()
+            )
+        });
+    }
+}
+
+// --- Incomplete-marker parser witnesses (sprint WU3) -------------------------
+
+#[cfg(test)]
+fn parse_incomplete_catch(src: &str) -> Result<BTreeMap<u32, Vec<ExpectedIncomplete>>, ()> {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result =
+        std::panic::catch_unwind(|| parse_incomplete_markers("witness.ts", src)).map_err(|_| ());
+    std::panic::set_hook(prev);
+    result
+}
+
+/// Well-formed incomplete markers parse: bare id, id + substring, ` | `-joined pair;
+/// prose mentioning `incomplete[` mid-text is ignored.
+#[test]
+fn parse_incomplete_accepts_well_formed_and_ignores_prose() {
+    let src = concat!(
+        "const a = 1; // incomplete[expr-infer/template-literal/interpolation]\n",
+        "const b = 2; // incomplete[expr-infer/object-literal/computed-key]: computed\n",
+        "const c = 3; // incomplete[expr-infer/array-literal/spread-element] | incomplete[call/call-arguments/spread-argument]\n",
+        "const d = 4; // mentions incomplete[ish] prose, not a marker\n",
+        "const e = 5; // plain prose\n",
+    );
+    let map = parse_incomplete_catch(src).expect("well-formed incomplete corpus must parse");
+    assert_eq!(map[&1][0].id, "expr-infer/template-literal/interpolation");
+    assert_eq!(map[&2][0].substring.as_deref(), Some("computed"));
+    assert_eq!(map[&3].len(), 2, "both ` | `-joined markers parse");
+    assert_eq!(map[&3][1].id, "call/call-arguments/spread-argument");
+    assert!(
+        !map.contains_key(&4),
+        "prose mentioning `incomplete[` ignored"
+    );
+    assert!(!map.contains_key(&5));
+}
+
+/// A marker missing its `]` must fail loudly rather than be silently dropped.
+#[test]
+fn parse_incomplete_rejects_unterminated_id() {
+    assert!(
+        parse_incomplete_catch("const x = 1; // incomplete[expr-infer/x\n").is_err(),
+        "an unterminated incomplete marker must panic, not silently drop"
+    );
+}
+
+/// An id with an illegal character (uppercase / space) is malformed and must fail.
+#[test]
+fn parse_incomplete_rejects_illegal_id() {
+    assert!(
+        parse_incomplete_catch("const x = 1; // incomplete[Expr Infer]\n").is_err(),
+        "an id outside [a-z0-9/-] must panic"
+    );
+}
+
+/// Two incomplete markers joined by a plain space (not ` | `) must fail loudly.
+#[test]
+fn parse_incomplete_rejects_space_joined_double_marker() {
+    assert!(
+        parse_incomplete_catch("const x = 1; // incomplete[a/b/c] incomplete[d/e/f]\n").is_err(),
+        "space-joined double incomplete markers must panic — use ` | `"
+    );
+}
+
+/// The entire committed corpus parses under the strict incomplete-marker rules.
+#[test]
+fn parse_incomplete_accepts_entire_corpus() {
+    let mut files = Vec::new();
+    collect_all_ts(&cases_root(), &mut files);
+    assert!(!files.is_empty(), "expected fixtures under tests/cases");
+    for path in files {
+        let source = std::fs::read_to_string(&path).unwrap();
+        parse_incomplete_catch(&source).unwrap_or_else(|_| {
+            panic!(
+                "strict incomplete-marker parse rejected existing fixture {}",
                 path.display()
             )
         });

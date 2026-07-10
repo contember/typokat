@@ -25,6 +25,17 @@ use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
+    /// Record the incomplete surface for a skipped spread call/`new` argument
+    /// (`f(...xs)` / `new C(...xs)`, owner 73) — the argument collectors share this so
+    /// no in-scope argument is silently dropped before arity/assignability checking.
+    fn record_spread_argument_skip(&mut self, arg: &oxc_ast::ast::Argument<'_>) {
+        self.record_incomplete(
+            "call/call-arguments/spread-argument",
+            Span::from_oxc(arg.span()),
+            "spread call argument not visited",
+        );
+    }
+
     /// M24: check explicit type arguments against substituted constraints. The
     /// shared relation engine supplies `TK2344` reason chains; failed arguments
     /// still instantiate, matching tsc and avoiding cascades.
@@ -177,8 +188,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     arg_fresh.push(is_fresh_literal(arg_expr));
                     arg_exprs.push(arg_expr);
                 }
+            } else {
+                // A spread argument `f(...xs)` is not paired against a parameter (owner 73).
+                self.record_spread_argument_skip(arg);
             }
-            // A spread or an out-of-subset argument is not paired against a parameter.
         }
 
         let Some((callee_ty, _)) = inferred_callee else {
@@ -465,6 +478,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     arg_types.push(inferred);
                     arg_exprs.push(arg_expr);
                 }
+            } else {
+                self.record_spread_argument_skip(arg);
             }
         }
 
@@ -755,6 +770,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     arg_fresh.push(is_fresh_literal(arg_expr));
                     arg_exprs.push(arg_expr);
                 }
+            } else {
+                self.record_spread_argument_skip(arg);
             }
         }
 

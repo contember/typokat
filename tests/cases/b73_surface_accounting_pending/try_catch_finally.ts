@@ -1,5 +1,7 @@
-// Surface-accounting spec (backlog 73). DISABLED until WU2 and statement-container
-// wiring (WU4) land. See tests/cases/README.md ("Surface-accounting corpus").
+// Surface-accounting spec (backlog 73), sibling PENDING corpus. DISABLED until the
+// statement-container wiring (WU4) lands — split out of b73_surface_accounting (WU3) so
+// the expression fixtures can enable independently. See tests/cases/README.md
+// ("Surface-accounting corpus").
 //
 // Silent skip: `check_stmt` drops `TryStatement` (src/check/checker/statements.rs:145
 // `_ => {}`); the binder (src/binder/bind.rs:364) and flow pre-pass

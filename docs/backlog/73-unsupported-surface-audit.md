@@ -56,4 +56,24 @@ clean verdict is not trustworthy rather than presenting it as success.
 annotation lowering, a checked-in AST-surface manifest/validator, diagnostics/reporting, and
 focused conformance fixtures.
 
+## Follow-up — `infer_expr` expression-shape tail (WU3, 2026-07-10)
+
+WU3 of the completeness-accounting sprint wired the enumerated expression **child slots**
+to `record_incomplete` (all still `unsupported-in`; the emission is the accounting):
+object-literal `spread-element`/`computed-key`, array-literal `spread-element`/`elision`,
+call/`new` `spread-argument`, and the template-literal `interpolation`/`self` arm. Verified
+against the official suite: 10 in-scope tests correctly demoted to `OOS:unsupported`, no
+spurious emission, no matched coverage lost.
+
+**Still silently dropped** (owned here / by `71`, not yet accounted): the remaining
+`infer_expr` `_ => None` expression *shapes* — `update-expression` (`x++`), `non-null` (`x!`),
+`optional-chain` (`a?.b`), `await`, `yield`, `tagged-template`, `satisfies`,
+`instantiation-expression` (`f<T>`), `import-expression`, `bigint-literal`, `regexp-literal`,
+`class-expression`, `private-field-access`, `private-in-expression`. These were deliberately
+left out of WU3's enumerated scope. **Granularity finding:** `x++` reaches `infer_expr` via
+the for-loop `update` slot (`statements.rs:269`), so an indiscriminate `_ => None` emission
+would demote essentially every for-loop in the corpus — a low-value, high-noise flood. A
+follow-up must decide the emission granularity (which shapes truly hide a nested error worth
+flagging) before wiring the tail; do not blanket-emit the whole arm.
+
 <!-- Origin: post-sprint MVP-readiness audit; generalizes WU4 traversal byproducts, 2026-07-10. -->

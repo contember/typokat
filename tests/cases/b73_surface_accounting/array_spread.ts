@@ -1,9 +1,10 @@
-// Surface-accounting spec (backlog 73). DISABLED until WU2/WU3 land. See
+// Surface-accounting spec (backlog 73). ENABLED by WU3: the array-literal walkers now
+// record the incomplete spread-element child slot before `continue`-ing. See
 // tests/cases/README.md ("Surface-accounting corpus").
 //
-// Silent skip: `infer_array_literal` reads `element.as_expression()` and `continue`s
-// on a spread/elision (src/check/checker/expr.rs:290), so a bad call inside a spread
-// operand is never walked. tsc 6.0.3 --strict: TS2345 on the spread `need("bad")` call.
+// Skip accounted: the array element helper records `expr-infer/array-literal/spread-element`
+// on a spread/elision, so a bad call inside a spread operand is no longer a false-clean.
+// tsc 6.0.3 --strict: TS2345 on the spread `need("bad")` call.
 
 function need(n: number): number {
   return n;

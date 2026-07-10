@@ -16,7 +16,7 @@ slot = "handler"
 oxc_variant = "Statement::TryStatement"
 disposition = "unsupported-in"
 owner = "../../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../../cases/b73_surface_accounting/try_catch_finally.ts"
+witness = "../../cases/b73_surface_accounting_pending/try_catch_finally.ts"
 
 # DUPLICATE id — must be rejected.
 [[surface]]
@@ -27,4 +27,4 @@ slot = "handler"
 oxc_variant = "Statement::TryStatement"
 disposition = "supported"
 owner = "shipped"
-witness = "../../cases/b73_surface_accounting/try_catch_finally.ts"
+witness = "../../cases/b73_surface_accounting_pending/try_catch_finally.ts"

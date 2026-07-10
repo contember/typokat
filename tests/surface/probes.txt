@@ -1,40 +1,42 @@
-Surface-accounting probe snapshots (sprint 2026-07-10, WU0)
-==========================================================
+Surface-accounting probe snapshots (sprint 2026-07-10, WU0 captured → WU3 updated)
+=================================================================================
 
-Captured at HEAD as committed witness data. typokat = target/release/typokat check <file>;
-oracle = tsc 6.0.3 --strict --noEmit <file>. Each probe is a minimal in-scope construct that
-typokat exits clean (0 diagnostics) while tsc rejects — the exact false-clean paths this sprint
-closes. The corresponding fixtures live in tests/cases/b73_surface_accounting/.
+Committed witness data. typokat = target/release/typokat check <file>;
+oracle = tsc 6.0.3 --strict --noEmit <file>. Each probe was a minimal in-scope construct that
+typokat exited clean (0 diagnostics) while tsc rejects. WU3 closed probes 1-3 (expression
+child-slot accounting): they now exit 3 (incomplete) with the prescribed identity. Probes 4/5
+(annotation/statement-container) remain open for WU5/WU4. Fixtures for probes 1-3 live in
+tests/cases/b73_surface_accounting/; probes 4/5 in tests/cases/b73_surface_accounting_pending/.
 
-Legend: "exit" is the process exit code. typokat: 0 = clean, 1 = diagnostics. tsc 6.0.3: 0 =
-clean, 2 = diagnostics (this tsc build returns 2 for type errors under --noEmit).
+Legend: "exit" is the process exit code. typokat: 0 = clean, 1 = diagnostics, 3 = incomplete.
+tsc 6.0.3: 0 = clean, 2 = diagnostics (this tsc build returns 2 for type errors under --noEmit).
 
 ------------------------------------------------------------------------------------------------
-Probe 1 — bad call inside a template interpolation
+Probe 1 — bad call inside a template interpolation                         [CLOSED by WU3]
   source:  const s: string = `x${need("bad")}y`;   // need(n: number): number
-  typokat: exit 0 — (no output)
+  typokat: WU0 exit 0 — (no output)  →  WU3 exit 3 — incomplete[expr-infer/template-literal/interpolation]
   tsc:     exit 2 — TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
   id:      expr-infer/template-literal/interpolation
 
-Probe 2 — bad call inside a computed object key
+Probe 2 — bad call inside a computed object key                           [CLOSED by WU3]
   source:  const o = { [need("bad")]: 1 };
-  typokat: exit 0 — (no output)
+  typokat: WU0 exit 0 — (no output)  →  WU3 exit 3 — incomplete[expr-infer/object-literal/computed-key]
   tsc:     exit 2 — TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
   id:      expr-infer/object-literal/computed-key
 
-Probe 3 — bad call inside an array spread
+Probe 3 — bad call inside an array spread                                 [CLOSED by WU3]
   source:  const a: number[] = [...[need("bad")]];
-  typokat: exit 0 — (no output)
+  typokat: WU0 exit 0 — (no output)  →  WU3 exit 3 — incomplete[expr-infer/array-literal/spread-element]
   tsc:     exit 2 — TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
   id:      expr-infer/array-literal/spread-element
 
-Probe 4 — `typeof Missing` in a type annotation
+Probe 4 — `typeof Missing` in a type annotation                          [OPEN — WU5]
   source:  let x: typeof Missing = 1;
   typokat: exit 0 — (no output)
   tsc:     exit 2 — TS2304: Cannot find name 'Missing'.
   id:      annotation-lower/type-query/typeof
 
-Probe 5 — bad assignments inside try / catch / finally
+Probe 5 — bad assignments inside try / catch / finally                   [OPEN — WU4]
   source:  try { const a: number = "bad1"; }
            catch (e) { const b: number = "bad2"; }
            finally { const c: number = "bad3"; }
@@ -43,5 +45,6 @@ Probe 5 — bad assignments inside try / catch / finally
   id:      stmt-check/try-statement/{block,handler,finalizer}
 
 ------------------------------------------------------------------------------------------------
-Summary: 5/5 probes exit 0 (clean) in typokat; 5/5 rejected by tsc 6.0.3 --strict.
-These are false-clean silent-skip paths, not deliberate divergences.
+Summary: WU0 captured 5/5 probes exiting 0 (false-clean); all 5 rejected by tsc 6.0.3 --strict.
+WU3 closed probes 1-3 (now exit 3 with the prescribed incomplete identity). Probes 4/5 remain
+open for WU4/WU5. These are false-clean silent-skip paths, not deliberate divergences.

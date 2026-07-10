@@ -1,9 +1,10 @@
-// Surface-accounting spec (backlog 73). DISABLED until the incomplete outcome
-// (WU2) and expression child-slot wiring (WU3) land. See tests/cases/README.md
-// ("Surface-accounting corpus") and docs/reference/scope.md.
+// Surface-accounting spec (backlog 73). ENABLED by WU3: the `TemplateLiteral` arm in
+// `infer_expr` now records the incomplete interpolation child slot before dropping.
+// See tests/cases/README.md ("Surface-accounting corpus") and docs/reference/scope.md.
 //
-// Silent skip: `infer_expr` has no `TemplateLiteral` arm (src/check/checker/expr.rs:162
-// `_ => None`), so a bad call inside a `${...}` interpolation is never checked.
+// Skip accounted: `infer_expr`'s `TemplateLiteral` arm records
+// `expr-infer/template-literal/interpolation` instead of silently returning `None`, so
+// the bad call inside a `${...}` interpolation is no longer a false-clean.
 // tsc 6.0.3 --strict: TS2345 on the interpolated `need("bad")` call.
 
 function need(n: number): number {
