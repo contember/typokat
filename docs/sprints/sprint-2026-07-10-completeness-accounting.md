@@ -359,3 +359,13 @@ gate is recorded in the run log before WU1 begins.
   (b) **no second traversal architecture needed** — accounting is additive to the five existing
   walkers, so the sprint proceeds through WU3–WU5 as planned. Deviation: local `tsc` 6.0.3 used
   directly (npx form broken in this environment); verdicts are real 6.0.3 outputs.
+- **2026-07-10 — WU6 shipped after WU7-F FAIL→PASS.** First review FAILED on the exact target
+  failure mode: a probe-confirmed under-report (TS7010 implicit-any return) mislabeled
+  `cosmetic`/`design-oos`, evading the owned-under rule. Remediation was spec-first (disabled
+  ledger witness `b48_implicit_any_return.ts`, then the marker fix → owner `48`), plus two
+  direction relabels (type-parameter-defaults under→over; undefined-assignment-target
+  over→cosmetic), whole-file scanner with preamble check, and lowercase-id enforcement. Re-review
+  PASSED. Census: 79 entries — 27 under / 42 over / 10 cosmetic; deps↔blocked-by parity clean
+  (independently recomputed, 0 mismatches); `C-deferred-divergence-census` flagged READY, flips at
+  WU8. Accepted residuals (deliberate-deception class): `starts_with` preamble allowlist; `dir`
+  honesty rests on adversarial review, noted inline in the ledger.
