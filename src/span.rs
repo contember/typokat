@@ -67,9 +67,7 @@ impl LineIndex {
         let offset = offset.min(self.len);
         // Largest line-start <= offset. `partition_point` returns the count of
         // starts that are <= offset, which is the 1-based line number directly.
-        let line = self
-            .line_starts
-            .partition_point(|&start| start <= offset);
+        let line = self.line_starts.partition_point(|&start| start <= offset);
         let line = line.max(1);
         let line_start = self.line_starts[line - 1];
         LineCol {

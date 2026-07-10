@@ -1,14 +1,14 @@
 //! Class inheritance: subclass walks, override + abstract-completeness checks
 //! (extracted from classes.rs).
 
+use super::super::context::*;
+use super::*;
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
 use crate::types::repr::{ClassId, PropertyType, Visibility};
 use oxc_ast::ast::{Class, ClassElement, MethodDefinitionKind};
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
-use super::super::context::*;
-use super::*;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// The display name of a constructor's declaring class (backlog 20), for a
@@ -93,7 +93,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// Emit abstract-member-completeness diagnostics for non-abstract classes.
     /// One missing member is `TK2515`; multiple are aggregated as `TK2654`.
     /// Requires a named class and resolvable direct base for attribution.
-    pub(super) fn report_missing_abstract_members(&mut self, class: &Class<'_>, pending: &[String]) {
+    pub(super) fn report_missing_abstract_members(
+        &mut self,
+        class: &Class<'_>,
+        pending: &[String],
+    ) {
         let Some(id) = class.id.as_ref() else {
             return;
         };

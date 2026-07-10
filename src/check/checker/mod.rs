@@ -20,8 +20,8 @@ use oxc_ast::ast::{
 };
 use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType};
-use std::collections::BTreeMap;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::BTreeMap;
 
 mod annotations;
 mod assignment;
@@ -260,10 +260,7 @@ pub fn check_project_programs<'ast>(
         exports.push(surface);
     }
 
-    let binder_module = module_scopes
-        .last()
-        .copied()
-        .unwrap_or(ScopeId(0));
+    let binder_module = module_scopes.last().copied().unwrap_or(ScopeId(0));
     let binder = builder.finish(binder_module);
 
     let mut next_type_param: u32 = 0;

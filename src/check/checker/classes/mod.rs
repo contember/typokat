@@ -4,27 +4,25 @@ mod inheritance;
 mod members;
 mod visibility;
 
-use crate::binder::scope::ScopeId;
-use crate::types::repr::{
-    ClassId, FunctionType, ObjectType, ParameterType, PropertyType,
-    TypeParamId, Visibility,
-};
-use crate::types::store::TypeId;
-use crate::span::Span;
-use crate::diagnostics::Diagnostic;
-use crate::relate::Relater;
-use oxc_ast::ast::{
-    Class, ClassElement, Expression, Function,
-    MethodDefinition, MethodDefinitionKind, MethodDefinitionType,
-    PropertyDefinitionType, TSTypeParameterDeclaration,
-};
-use rustc_hash::{FxHashMap, FxHashSet};
-use super::context::*;
+use self::visibility::{constructor_visibility, has_public_constructor, lower_visibility};
 use super::calls::{parameter_name, widen};
+use super::context::*;
 use super::decls::type_decl_id;
 use super::decls::value_decl_id;
 use super::statements::overload_implementation_compatible;
-use self::visibility::{constructor_visibility, has_public_constructor, lower_visibility};
+use crate::binder::scope::ScopeId;
+use crate::diagnostics::Diagnostic;
+use crate::relate::Relater;
+use crate::span::Span;
+use crate::types::repr::{
+    ClassId, FunctionType, ObjectType, ParameterType, PropertyType, TypeParamId, Visibility,
+};
+use crate::types::store::TypeId;
+use oxc_ast::ast::{
+    Class, ClassElement, Expression, Function, MethodDefinition, MethodDefinitionKind,
+    MethodDefinitionType, PropertyDefinitionType, TSTypeParameterDeclaration,
+};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// One accessor pair being assembled into a single property.
 ///
@@ -135,8 +133,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
 
         // Compose pending abstract members now so subclasses inherit the same list.
-        let base_decl_id = base_class_name(class)
-            .and_then(|name| value_decl_id(self.binder, scope, name));
+        let base_decl_id =
+            base_class_name(class).and_then(|name| value_decl_id(self.binder, scope, name));
         let (own_abstract, own_concrete) = collect_abstract_members(class);
         let base_pending = base_decl_id
             .and_then(|decl_id| self.class_pending_abstract.get(&decl_id).cloned())
@@ -248,7 +246,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .collect();
             overload_params
                 .into_iter()
-                .map(|params| self.interner.intern_function(FunctionType { params, ret: reserved }))
+                .map(|params| {
+                    self.interner.intern_function(FunctionType {
+                        params,
+                        ret: reserved,
+                    })
+                })
                 .collect()
         } else {
             let params = self
@@ -365,7 +368,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     let Some(ty) = (match prop.type_annotation.as_ref() {
                         // Annotated: lower the declared type (M11). `None` (unlowerable /
                         // out of subset) keeps the field skipped.
-                        Some(annotation) => self.lower_annotation(scope, &annotation.type_annotation),
+                        Some(annotation) => {
+                            self.lower_annotation(scope, &annotation.type_annotation)
+                        }
                         // Type-only inference: phase 2 re-walks the initializer and is the
                         // sole emitter, so snapshot+restore diagnostics and obligations here
                         // to avoid double reports. Non-`readonly` literals widen; `readonly`
@@ -576,7 +581,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let ctor_overloads = if ctor_overloads.is_empty() {
             None
         } else {
-            Some(ctor_overloads.iter().map(|(signature, _)| *signature).collect())
+            Some(
+                ctor_overloads
+                    .iter()
+                    .map(|(signature, _)| *signature)
+                    .collect(),
+            )
         };
         ClassOwnMembers {
             instance: own_instance,
@@ -850,7 +860,9 @@ fn class_overloaded_method_names(class: &Class<'_>) -> FxHashSet<(String, bool)>
             continue;
         }
         if let Some(name) = method.key.static_name() {
-            *counts.entry((name.into_owned(), method.r#static)).or_default() += 1;
+            *counts
+                .entry((name.into_owned(), method.r#static))
+                .or_default() += 1;
         }
     }
     counts

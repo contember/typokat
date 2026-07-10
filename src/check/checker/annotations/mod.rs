@@ -60,11 +60,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         result
     }
 
-    fn lower_annotation_inner(
-        &mut self,
-        scope: ScopeId,
-        ts_type: &TSType<'_>,
-    ) -> Option<TypeId> {
+    fn lower_annotation_inner(&mut self, scope: ScopeId, ts_type: &TSType<'_>) -> Option<TypeId> {
         let wk = self.interner.well_known();
         let id = match ts_type {
             TSType::TSAnyKeyword(_) => wk.any,

@@ -2,6 +2,7 @@
 //! The flow-node CFG is the single narrowing model; these walkers just descend
 //! into expressions while guard analysis feeds flow condition nodes.
 
+use super::context::*;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::flow::{NarrowOp, TypeofTag};
@@ -11,7 +12,6 @@ use oxc_ast::ast::{
     AssignmentOperator, AssignmentTarget, BinaryExpression, BinaryOperator, Expression,
     IfStatement, Statement, SwitchStatement, UnaryOperator, WhileStatement,
 };
-use super::context::*;
 
 /// A recognized guard fact: the specific symbol, operation, and then-branch
 /// polarity. Symbol-keying here keeps a narrowing of `x` from touching any other
@@ -109,7 +109,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 Some(inner)
             }
             // A parenthesized condition is transparent.
-            Expression::ParenthesizedExpression(paren) => self.analyze_guard(scope, &paren.expression),
+            Expression::ParenthesizedExpression(paren) => {
+                self.analyze_guard(scope, &paren.expression)
+            }
             // A plain assignment used as a condition (`while (x = e)`, backlog 53): the
             // value is the assigned expression, so its truthiness narrows `x`. The
             // Assignment node itself is created by the flow builder; here we only
@@ -174,7 +176,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         // typeof form: `typeof x === "tag"` (either operand order). Loose `==`/`!=` is
         // fine here because `typeof` always yields a string.
-        if let Some(fact) = self.typeof_guard(scope, left, right, eq_positive)
+        if let Some(fact) = self
+            .typeof_guard(scope, left, right, eq_positive)
             .or_else(|| self.typeof_guard(scope, right, left, eq_positive))
         {
             return Some(fact);
@@ -185,7 +188,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // null/undefined comparison is treated as an unrecognized guard (narrows
         // nothing — sound).
         if strict {
-            if let Some(fact) = self.nullish_guard(scope, left, right, eq_positive)
+            if let Some(fact) = self
+                .nullish_guard(scope, left, right, eq_positive)
                 .or_else(|| self.nullish_guard(scope, right, left, eq_positive))
             {
                 return Some(fact);
@@ -305,7 +309,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// Intern a literal **value** expression (`"circle"`, `42`, `true`) to its literal
     /// `TypeId`, or `None` if it is not a plain literal (the discriminant form only
     /// narrows against a literal). Mirrors the literal arms of [`infer_expr`].
-    pub(in crate::check::checker) fn literal_expr_type(&mut self, expr: &Expression<'_>) -> Option<TypeId> {
+    pub(in crate::check::checker) fn literal_expr_type(
+        &mut self,
+        expr: &Expression<'_>,
+    ) -> Option<TypeId> {
         let value = match expr {
             Expression::StringLiteral(s) => LiteralValue::String(s.value.to_string()),
             Expression::NumericLiteral(n) => LiteralValue::Number(n.value),

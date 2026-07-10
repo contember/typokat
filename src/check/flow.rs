@@ -140,12 +140,7 @@ pub fn narrow(interner: &mut Interner, ty: TypeId, op: &NarrowOp, positive: bool
 
 /// Narrow by `typeof x === <tag>`. Then keeps matching primitive/literal members;
 /// else keeps the complement. `any` stays un-narrowable.
-pub fn narrow_by_typeof(
-    interner: &mut Interner,
-    ty: TypeId,
-    tag: TypeofTag,
-    keep: bool,
-) -> TypeId {
+pub fn narrow_by_typeof(interner: &mut Interner, ty: TypeId, tag: TypeofTag, keep: bool) -> TypeId {
     filter_union(interner, ty, |store, member| {
         let matches = member_matches_typeof(store, member, tag);
         // Keep matching members in the then-branch, the complement in the else.
@@ -434,14 +429,29 @@ mod tests {
         let sn = interner.union(vec![wk.string, wk.number]);
 
         // then-branch of `typeof x === "string"` keeps `string`.
-        assert_eq!(narrow_by_typeof(&mut interner, sn, TypeofTag::String, true), wk.string);
+        assert_eq!(
+            narrow_by_typeof(&mut interner, sn, TypeofTag::String, true),
+            wk.string
+        );
         // else-branch keeps the complement `number`.
-        assert_eq!(narrow_by_typeof(&mut interner, sn, TypeofTag::String, false), wk.number);
+        assert_eq!(
+            narrow_by_typeof(&mut interner, sn, TypeofTag::String, false),
+            wk.number
+        );
         // `typeof === "number"` then-branch keeps `number`.
-        assert_eq!(narrow_by_typeof(&mut interner, sn, TypeofTag::Number, true), wk.number);
+        assert_eq!(
+            narrow_by_typeof(&mut interner, sn, TypeofTag::Number, true),
+            wk.number
+        );
         // `boolean` is absent → then-branch is `never`, else-branch is the whole union.
-        assert_eq!(narrow_by_typeof(&mut interner, sn, TypeofTag::Boolean, true), wk.never);
-        assert_eq!(narrow_by_typeof(&mut interner, sn, TypeofTag::Boolean, false), sn);
+        assert_eq!(
+            narrow_by_typeof(&mut interner, sn, TypeofTag::Boolean, true),
+            wk.never
+        );
+        assert_eq!(
+            narrow_by_typeof(&mut interner, sn, TypeofTag::Boolean, false),
+            sn
+        );
     }
 
     /// typeof over a >2-member union keeps the remaining members in the complement.
@@ -465,7 +475,10 @@ mod tests {
         let lit = interner.intern_literal(LiteralValue::String("x".to_string()));
         let lit_or_num = interner.union(vec![lit, wk.number]);
         // `typeof === "string"` keeps the `"x"` literal member.
-        assert_eq!(narrow_by_typeof(&mut interner, lit_or_num, TypeofTag::String, true), lit);
+        assert_eq!(
+            narrow_by_typeof(&mut interner, lit_or_num, TypeofTag::String, true),
+            lit
+        );
     }
 
     /// truthiness removes null/undefined in the then-branch, always-truthy objects
@@ -479,12 +492,18 @@ mod tests {
         // `{ a } | null`.
         let obj_or_null = interner.union(vec![obj, wk.null]);
         assert_eq!(narrow_by_truthiness(&mut interner, obj_or_null, true), obj);
-        assert_eq!(narrow_by_truthiness(&mut interner, obj_or_null, false), wk.null);
+        assert_eq!(
+            narrow_by_truthiness(&mut interner, obj_or_null, false),
+            wk.null
+        );
 
         // `{ a } | undefined`.
         let obj_or_undef = interner.union(vec![obj, wk.undefined]);
         assert_eq!(narrow_by_truthiness(&mut interner, obj_or_undef, true), obj);
-        assert_eq!(narrow_by_truthiness(&mut interner, obj_or_undef, false), wk.undefined);
+        assert_eq!(
+            narrow_by_truthiness(&mut interner, obj_or_undef, false),
+            wk.undefined
+        );
     }
 
     /// A falsy-capable primitive is NOT split — it survives into both branches.
@@ -496,8 +515,14 @@ mod tests {
         // even though `""` is falsy — we don't split). Falsy branch keeps both
         // `string` (possibly-falsy) and `null`.
         let str_or_null = interner.union(vec![wk.string, wk.null]);
-        assert_eq!(narrow_by_truthiness(&mut interner, str_or_null, true), wk.string);
-        assert_eq!(narrow_by_truthiness(&mut interner, str_or_null, false), str_or_null);
+        assert_eq!(
+            narrow_by_truthiness(&mut interner, str_or_null, true),
+            wk.string
+        );
+        assert_eq!(
+            narrow_by_truthiness(&mut interner, str_or_null, false),
+            str_or_null
+        );
     }
 
     /// null/undefined equality keep/remove.
@@ -510,24 +535,55 @@ mod tests {
         // `{ a } | null` vs `=== null` / `!== null`.
         let obj_or_null = interner.union(vec![obj, wk.null]);
         // `=== null` positive keeps only null.
-        assert_eq!(narrow(&mut interner, obj_or_null, &NarrowOp::EqNullish { is_undefined: false }, true), wk.null);
+        assert_eq!(
+            narrow(
+                &mut interner,
+                obj_or_null,
+                &NarrowOp::EqNullish {
+                    is_undefined: false
+                },
+                true
+            ),
+            wk.null
+        );
         // `=== null` negative (else / `!== null` then) removes null.
-        assert_eq!(narrow(&mut interner, obj_or_null, &NarrowOp::EqNullish { is_undefined: false }, false), obj);
+        assert_eq!(
+            narrow(
+                &mut interner,
+                obj_or_null,
+                &NarrowOp::EqNullish {
+                    is_undefined: false
+                },
+                false
+            ),
+            obj
+        );
 
         // `{ a } | undefined` vs `=== undefined`.
         let obj_or_undef = interner.union(vec![obj, wk.undefined]);
-        assert_eq!(narrow(&mut interner, obj_or_undef, &NarrowOp::EqNullish { is_undefined: true }, true), wk.undefined);
-        assert_eq!(narrow(&mut interner, obj_or_undef, &NarrowOp::EqNullish { is_undefined: true }, false), obj);
+        assert_eq!(
+            narrow(
+                &mut interner,
+                obj_or_undef,
+                &NarrowOp::EqNullish { is_undefined: true },
+                true
+            ),
+            wk.undefined
+        );
+        assert_eq!(
+            narrow(
+                &mut interner,
+                obj_or_undef,
+                &NarrowOp::EqNullish { is_undefined: true },
+                false
+            ),
+            obj
+        );
     }
 
     /// Build `{ <disc>: <disc_ty>; <extra>: number }` — a discriminated-union
     /// member with a discriminant property `disc` of type `disc_ty`.
-    fn member(
-        interner: &mut Interner,
-        disc: &str,
-        disc_ty: TypeId,
-        extra: &str,
-    ) -> TypeId {
+    fn member(interner: &mut Interner, disc: &str, disc_ty: TypeId, extra: &str) -> TypeId {
         let wk = interner.well_known();
         interner.intern_object(ObjectType {
             properties: vec![
@@ -668,10 +724,20 @@ mod tests {
         let mut interner = Interner::with_intrinsics();
         let wk = interner.well_known();
         // typeof on `any` keeps `any`.
-        assert_eq!(narrow_by_typeof(&mut interner, wk.any, TypeofTag::String, true), wk.any);
+        assert_eq!(
+            narrow_by_typeof(&mut interner, wk.any, TypeofTag::String, true),
+            wk.any
+        );
         // null-equality on the error type keeps the error type.
         assert_eq!(
-            narrow(&mut interner, wk.error, &NarrowOp::EqNullish { is_undefined: false }, true),
+            narrow(
+                &mut interner,
+                wk.error,
+                &NarrowOp::EqNullish {
+                    is_undefined: false
+                },
+                true
+            ),
             wk.error
         );
         // truthiness on `any` keeps `any` in both branches.
@@ -680,9 +746,21 @@ mod tests {
 
         // discriminant / `in` on `any` keep `any` in both branches.
         let lit = interner.intern_literal(LiteralValue::String("x".to_string()));
-        assert_eq!(narrow_by_discriminant(&mut interner, wk.any, "kind", lit, true), wk.any);
-        assert_eq!(narrow_by_discriminant(&mut interner, wk.any, "kind", lit, false), wk.any);
-        assert_eq!(narrow_by_in_operator(&mut interner, wk.error, "a", true), wk.error);
-        assert_eq!(narrow_by_in_operator(&mut interner, wk.error, "a", false), wk.error);
+        assert_eq!(
+            narrow_by_discriminant(&mut interner, wk.any, "kind", lit, true),
+            wk.any
+        );
+        assert_eq!(
+            narrow_by_discriminant(&mut interner, wk.any, "kind", lit, false),
+            wk.any
+        );
+        assert_eq!(
+            narrow_by_in_operator(&mut interner, wk.error, "a", true),
+            wk.error
+        );
+        assert_eq!(
+            narrow_by_in_operator(&mut interner, wk.error, "a", false),
+            wk.error
+        );
     }
 }

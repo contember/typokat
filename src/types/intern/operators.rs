@@ -219,7 +219,11 @@ impl Interner {
 
     /// Intern a **lazy instantiation** `substitute(base, args)` (M25). `args` are sorted
     /// by [`TypeParamId`] here so two equal instantiations share one id.
-    pub fn intern_instantiation(&mut self, base: TypeId, mut args: Vec<(TypeParamId, TypeId)>) -> TypeId {
+    pub fn intern_instantiation(
+        &mut self,
+        base: TypeId,
+        mut args: Vec<(TypeParamId, TypeId)>,
+    ) -> TypeId {
         args.sort_by_key(|(param, _)| param.0);
         let key = StructuralKey::Instantiation { base, args: &args };
         let hash = structural_hash(&key);
@@ -340,8 +344,7 @@ impl Interner {
     pub fn intern_mapped_value(&mut self) -> TypeId {
         let key = StructuralKey::MappedValue;
         let hash = structural_hash(&key);
-        if let Some(existing) =
-            self.lookup(hash, |store, id| store.tag(id) == TypeTag::MappedValue)
+        if let Some(existing) = self.lookup(hash, |store, id| store.tag(id) == TypeTag::MappedValue)
         {
             return existing;
         }

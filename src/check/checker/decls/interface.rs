@@ -72,7 +72,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     }
                     let ty = match sig.type_annotation.as_ref() {
                         Some(annotation) => {
-                            let Some(ty) = self.lower_annotation(scope, &annotation.type_annotation)
+                            let Some(ty) =
+                                self.lower_annotation(scope, &annotation.type_annotation)
                             else {
                                 continue;
                             };

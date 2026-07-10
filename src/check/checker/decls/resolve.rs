@@ -31,7 +31,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // silently error-type it; seeded object aliases handle member self-reference.
         if matches!(
             self.type_decls.get(index),
-            Some(TypeDecl::Alias { resolving: true, .. })
+            Some(TypeDecl::Alias {
+                resolving: true,
+                ..
+            })
         ) {
             let start_depth = self
                 .resolving_alias_stack
@@ -244,7 +247,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // diagnostic. A non-lowerable argument aborts.
         let mut arg_infos: Vec<(TypeId, Span)> = Vec::with_capacity(args.params.len());
         for arg in &args.params {
-            arg_infos.push((self.lower_annotation(scope, arg)?, Span::from_oxc(arg.span())));
+            arg_infos.push((
+                self.lower_annotation(scope, arg)?,
+                Span::from_oxc(arg.span()),
+            ));
         }
 
         // The declaration's template (its body with parameter types embedded) and its

@@ -265,8 +265,11 @@ fn compare_fixture_output(
     }
 
     let mut failures = Vec::new();
-    let all_lines: std::collections::BTreeSet<u32> =
-        expected.keys().copied().chain(actual.keys().copied()).collect();
+    let all_lines: std::collections::BTreeSet<u32> = expected
+        .keys()
+        .copied()
+        .chain(actual.keys().copied())
+        .collect();
 
     for line in all_lines {
         let empty_exp = Vec::new();
@@ -297,9 +300,9 @@ fn compare_fixture_output(
             let Some(substr) = &marker.substring else {
                 continue;
             };
-            let pos = remaining.iter().position(|(code, text)| {
-                *code == marker.code && text.contains(substr)
-            });
+            let pos = remaining
+                .iter()
+                .position(|(code, text)| *code == marker.code && text.contains(substr));
             match pos {
                 Some(i) => {
                     remaining.remove(i);
@@ -483,7 +486,9 @@ fn discover_ts_files_recursive_into(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// The `tests/cases` directory, relative to the crate manifest.
 fn cases_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("cases")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("cases")
 }
 
 /// A short, stable path for failure messages (relative to `tests/cases`).

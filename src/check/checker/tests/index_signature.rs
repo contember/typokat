@@ -132,5 +132,8 @@ fn fresh_value_matching_index_value_is_clean() {
     let src = "\
 const a: { [k: string]: { v: number } } = { foo: { v: 1 } };
 ";
-    assert!(diags(src).is_empty(), "a matching nested value must be clean");
+    assert!(
+        diags(src).is_empty(),
+        "a matching nested value must be clean"
+    );
 }

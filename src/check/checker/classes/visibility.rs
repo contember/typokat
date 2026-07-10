@@ -1,10 +1,10 @@
 //! Constructor accessibility and visibility-modifier lowering (extracted from classes.rs).
 
+use super::super::context::*;
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
 use crate::types::repr::Visibility;
 use oxc_ast::ast::{Class, ClassElement, MethodDefinitionKind, TSAccessibility};
-use super::super::context::*;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Gate direct `new C(...)` on constructor accessibility.

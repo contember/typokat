@@ -144,7 +144,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     if overloaded_method_names.contains(name.as_ref()) {
                         let name = name.into_owned();
                         if lowered_overloaded_methods.insert(name.clone()) {
-                            let prop = self.lower_method_overload_property(scope, members, &name)?;
+                            let prop =
+                                self.lower_method_overload_property(scope, members, &name)?;
                             object.properties.push(prop);
                         }
                         continue;

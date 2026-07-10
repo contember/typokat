@@ -276,12 +276,7 @@ impl Diagnostic {
 
     /// Construct a `TK2515` error for one unimplemented inherited abstract member.
     /// `base` is the direct base name, and the member renders unquoted.
-    pub fn missing_abstract_member(
-        span: Span,
-        class_name: &str,
-        member: &str,
-        base: &str,
-    ) -> Self {
+    pub fn missing_abstract_member(span: Span, class_name: &str, member: &str, base: &str) -> Self {
         Diagnostic {
             code: DiagnosticCode::TK2515,
             severity: Severity::Error,
@@ -435,8 +430,9 @@ impl Diagnostic {
         Diagnostic {
             code: DiagnosticCode::TK2391,
             severity: Severity::Error,
-            message: "Function implementation is missing or not immediately following the declaration."
-                .to_string(),
+            message:
+                "Function implementation is missing or not immediately following the declaration."
+                    .to_string(),
             span,
             elaboration: Vec::new(),
         }

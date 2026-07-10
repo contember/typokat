@@ -1,5 +1,7 @@
 //! expr module (extracted from checker/mod.rs).
 
+use super::calls::widen;
+use super::context::*;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::flow::FlowNodeId;
@@ -9,25 +11,29 @@ use crate::types::repr::{
     IntrinsicKind, LiteralValue, ObjectType, PropertyType, TypeParamId, TypeTag,
 };
 use crate::types::store::{Store, TypeId};
-use rustc_hash::{FxHashMap, FxHashSet};
 use oxc_ast::ast::{
     ArrayExpression, BinaryExpression, BinaryOperator, ComputedMemberExpression, Expression,
     LogicalExpression, ObjectExpression, ObjectPropertyKind, StaticMemberExpression, TSType,
     TSTypeName, UnaryExpression, UnaryOperator,
 };
-use super::context::*;
-use super::calls::widen;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Infer the type of an expression in `scope`, returning `(TypeId, span)`. The
     /// span is the expression's own span — the primary span for any diagnostic on it.
     /// Returns `None` for expression shapes outside the subset (those positions are
     /// simply not checked, matching M0 leniency).
-    pub(in crate::check::checker) fn infer_expr(&mut self, scope: ScopeId, expr: &Expression<'_>) -> Option<(TypeId, Span)> {
+    pub(in crate::check::checker) fn infer_expr(
+        &mut self,
+        scope: ScopeId,
+        expr: &Expression<'_>,
+    ) -> Option<(TypeId, Span)> {
         let well_known = self.interner.well_known();
         match expr {
             Expression::NumericLiteral(lit) => {
-                let id = self.interner.intern_literal(LiteralValue::Number(lit.value));
+                let id = self
+                    .interner
+                    .intern_literal(LiteralValue::Number(lit.value));
                 Some((id, Span::from_oxc(lit.span)))
             }
             Expression::StringLiteral(lit) => {
@@ -37,7 +43,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 Some((id, Span::from_oxc(lit.span)))
             }
             Expression::BooleanLiteral(lit) => {
-                let id = self.interner.intern_literal(LiteralValue::Boolean(lit.value));
+                let id = self
+                    .interner
+                    .intern_literal(LiteralValue::Boolean(lit.value));
                 Some((id, Span::from_oxc(lit.span)))
             }
             Expression::NullLiteral(lit) => Some((well_known.null, Span::from_oxc(lit.span))),
@@ -94,9 +102,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
                 match self.binder.graph.resolve(scope, ident.name.as_str()) {
                     Some(symbol_id) => match self.binder.symbols.get(symbol_id) {
-                        Some(symbol) if symbol.value.is_some() => {
-                            Some((self.resolve_identifier_type(symbol_id, ident.span.start), span))
-                        }
+                        Some(symbol) if symbol.value.is_some() => Some((
+                            self.resolve_identifier_type(symbol_id, ident.span.start),
+                            span,
+                        )),
                         _ => {
                             self.diagnostics
                                 .push(Diagnostic::cannot_find_name(span, ident.name.as_str()));
@@ -537,14 +546,23 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Tuple base (M18): index by the **literal** numeric index. A non-literal index
         // or one out of range is out of subset → error type (no diagnostic, no crash).
         if self.interner.store().tag(base_ty) == TypeTag::Tuple {
-            let element = literal_index(&member.expression)
-                .and_then(|i| self.interner.store().tuple_type(base_ty)?.elements.get(i).copied());
+            let element = literal_index(&member.expression).and_then(|i| {
+                self.interner
+                    .store()
+                    .tuple_type(base_ty)?
+                    .elements
+                    .get(i)
+                    .copied()
+            });
             return Some((element.unwrap_or(wk.error), span));
         }
 
         // Object base (M19): resolve `obj[key]` through named properties / index sigs.
         if self.interner.store().tag(base_ty) == TypeTag::Object {
-            return Some((self.object_element_access(base_ty, &member.expression, key_ty), span));
+            return Some((
+                self.object_element_access(base_ty, &member.expression, key_ty),
+                span,
+            ));
         }
 
         // Non-array/non-tuple/non-object base: out of scope (no diagnostic, no crash) →
@@ -751,8 +769,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 return Some((wk.number, prop_span));
             }
             let tgt = render_type(self.interner.store(), lookup_ty, /* widen */ false);
-            self.diagnostics
-                .push(Diagnostic::property_does_not_exist(prop_span, prop_name, &tgt));
+            self.diagnostics.push(Diagnostic::property_does_not_exist(
+                prop_span, prop_name, &tgt,
+            ));
             return Some((wk.error, prop_span));
         }
 
@@ -780,11 +799,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Some((prop_ty, visibility, declaring_class)) => {
                 // M13: access violations are `TK2341`/`TK2445`, not missing-property
                 // errors, and still yield the real member type to avoid cascades.
-                self.check_member_access_control(prop_name,
-                    prop_span,
-                    visibility,
-                    declaring_class,
-                );
+                self.check_member_access_control(prop_name, prop_span, visibility, declaring_class);
                 Some((prop_ty, prop_span))
             }
             None => {
@@ -834,7 +849,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // through its apparent type too (`(T | U).x` with both constrained to
             // `HasX`), else the lookup would falsely report `TK2339`.
             let member = self.apparent_type(member);
-            match store.object_type(member).and_then(|o| o.property(prop_name)) {
+            match store
+                .object_type(member)
+                .and_then(|o| o.property(prop_name))
+            {
                 Some(prop) => member_prop_types.push(prop.ty),
                 // Missing on this member: the property does not exist on the union.
                 None => {
@@ -850,7 +868,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Present on every member: the result is the union of the per-member types.
         self.interner.union(member_prop_types)
     }
-
 }
 
 /// Whether a binary operator is a comparison/equality operator (its result is
@@ -928,7 +945,10 @@ pub(in crate::check::checker) fn contextual_literal_target(store: &Store, ty: Ty
 }
 
 fn is_contextual_literal_shape(store: &Store, ty: TypeId) -> bool {
-    matches!(store.tag(ty), TypeTag::Object | TypeTag::Array | TypeTag::Tuple)
+    matches!(
+        store.tag(ty),
+        TypeTag::Object | TypeTag::Array | TypeTag::Tuple
+    )
 }
 
 fn is_numeric_property_name(name: &str) -> bool {

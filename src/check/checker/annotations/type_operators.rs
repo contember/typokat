@@ -69,14 +69,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let infer_count = frame.binders.len() as u32;
         let poisoned = frame.poisoned;
 
-        let (extends_ty, true_branch, false_branch) =
-            match (extends_ty, true_branch, false_branch) {
-                (Some(e), Some(t), Some(f)) => (e, t, f),
-                // An out-of-subset component degrades the whole conditional to the error
-                // type (the M22 discipline — the diagnostics for the component are
-                // already emitted; the error type suppresses cascade).
-                _ => return Some(error_ty),
-            };
+        let (extends_ty, true_branch, false_branch) = match (extends_ty, true_branch, false_branch)
+        {
+            (Some(e), Some(t), Some(f)) => (e, t, f),
+            // An out-of-subset component degrades the whole conditional to the error
+            // type (the M22 discipline — the diagnostics for the component are
+            // already emitted; the error type suppresses cascade).
+            _ => return Some(error_ty),
+        };
 
         let id = self.interner.intern_conditional(ConditionalType {
             check,
@@ -167,7 +167,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// (a bare `TSTypeReference` whose name resolves to that declaration) — the `TK2456`
     /// circular-alias case (M25). Deliberately only the surface form (not through an
     /// object member), so recursion through structural members stays legal.
-    fn check_surface_references(&self, scope: ScopeId, check: &TSType<'_>, decl_id: DeclId) -> bool {
+    fn check_surface_references(
+        &self,
+        scope: ScopeId,
+        check: &TSType<'_>,
+        decl_id: DeclId,
+    ) -> bool {
         let TSType::TSTypeReference(reference) = check else {
             return false;
         };
@@ -185,7 +190,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// referencing one up to and including the binder-owning one (a poisoned node never
     /// evaluates; conservative relations apply). A miss falls through to the ordinary
     /// type-reference resolution.
-    pub(in crate::check::checker) fn resolve_infer_reference(&mut self, name: &str) -> Option<TypeId> {
+    pub(in crate::check::checker) fn resolve_infer_reference(
+        &mut self,
+        name: &str,
+    ) -> Option<TypeId> {
         let innermost = self.cond_frames.len().checked_sub(1)?;
         let (owner, index) = self
             .cond_frames
@@ -228,7 +236,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// Out of the M26 subset (aborting the annotation, degrading to the error type): an
     /// `as` key remapping (`name_type`), a missing value template, or an un-lowerable key
     /// source / value template.
-    pub(super) fn lower_mapped_type(&mut self, scope: ScopeId, mapped: &TSMappedType<'_>) -> Option<TypeId> {
+    pub(super) fn lower_mapped_type(
+        &mut self,
+        scope: ScopeId,
+        mapped: &TSMappedType<'_>,
+    ) -> Option<TypeId> {
         // `as` key remapping is out of the M26 subset (backlog 11).
         if mapped.name_type.is_some() {
             return None;

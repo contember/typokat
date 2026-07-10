@@ -117,8 +117,8 @@ fn parse_diagnostic_format(value: &str) -> Result<DiagnosticFormat, String> {
 fn check_paths(paths: &[String], format: DiagnosticFormat) -> Result<bool, String> {
     let mut inputs = Vec::with_capacity(paths.len());
     for path in paths {
-        let source = std::fs::read_to_string(path)
-            .map_err(|e| format!("cannot read '{path}': {e}"))?;
+        let source =
+            std::fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
         inputs.push(FileInput {
             name: path.clone(),
             source,

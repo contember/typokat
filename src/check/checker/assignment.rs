@@ -1,5 +1,8 @@
 //! assignment module (extracted from checker/mod.rs).
 
+use super::calls::intrinsic_id;
+use super::context::*;
+use super::expr::contextual_literal_target;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::DeclId;
 use crate::binder::Binder;
@@ -9,14 +12,10 @@ use crate::types::repr::TypeTag;
 use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
 use oxc_ast::ast::{
-    AssignmentExpression, AssignmentOperator,
-    AssignmentTarget, BindingPattern, Expression, ObjectPropertyKind,
-    StaticMemberExpression, VariableDeclarationKind,
+    AssignmentExpression, AssignmentOperator, AssignmentTarget, BindingPattern, Expression,
+    ObjectPropertyKind, StaticMemberExpression, VariableDeclarationKind,
 };
 use oxc_span::GetSpan;
-use super::context::*;
-use super::calls::intrinsic_id;
-use super::expr::contextual_literal_target;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Check `NAME = expr` against the target's declared type, returning the
@@ -263,7 +262,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let prop_ty = self.interner.union(member_prop_types);
         Some((prop_ty, any_readonly, false, None))
     }
-
 }
 
 /// Recursive excess-property check. M19 index signatures suppress unknown keys
@@ -544,7 +542,11 @@ pub(in crate::check::checker) fn declared_from_init(
 
 /// The `DeclId` of a declarator's binding, resolved through the scope graph by
 /// name from `scope`. `None` for non-identifier bindings (out of subset).
-pub(in crate::check::checker) fn binding_decl_id(binder: &Binder, scope: ScopeId, pattern: &BindingPattern<'_>) -> Option<DeclId> {
+pub(in crate::check::checker) fn binding_decl_id(
+    binder: &Binder,
+    scope: ScopeId,
+    pattern: &BindingPattern<'_>,
+) -> Option<DeclId> {
     let name = match pattern {
         BindingPattern::BindingIdentifier(ident) => ident.name.as_str(),
         _ => return None,

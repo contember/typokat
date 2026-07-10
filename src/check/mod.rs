@@ -6,4 +6,6 @@ pub mod checker;
 pub mod flow;
 pub mod infer;
 
-pub use checker::{check_program, check_project_programs, ProjectImport, ProjectImportSource, ProjectProgram};
+pub use checker::{
+    check_program, check_project_programs, ProjectImport, ProjectImportSource, ProjectProgram,
+};

@@ -83,7 +83,12 @@ impl ScopeGraph {
     }
 
     /// Declare `name → symbol` directly in `scope`; duplicate-name diagnostics are deferred.
-    pub fn declare(&mut self, scope: ScopeId, name: impl Into<String>, symbol: SymbolId) -> Option<SymbolId> {
+    pub fn declare(
+        &mut self,
+        scope: ScopeId,
+        name: impl Into<String>,
+        symbol: SymbolId,
+    ) -> Option<SymbolId> {
         match self.get_mut(scope) {
             Some(s) => s.symbols.insert(name.into(), symbol),
             None => None,

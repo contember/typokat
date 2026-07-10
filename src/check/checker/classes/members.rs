@@ -1,5 +1,7 @@
 //! Class member-body checking and access-control lookups (extracted from classes.rs).
 
+use super::super::context::*;
+use super::super::decls::value_decl_id;
 use crate::binder::scope::ScopeId;
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
@@ -7,8 +9,6 @@ use crate::types::repr::{ClassId, Visibility};
 use crate::types::store::TypeId;
 use oxc_ast::ast::{Class, ClassElement, MethodDefinitionKind, ObjectPattern};
 use oxc_span::GetSpan;
-use super::super::context::*;
-use super::super::decls::value_decl_id;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Check class member bodies after type-only class lowering has completed.
@@ -232,10 +232,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 let member = self.apparent_type(member);
                 if let Some(prop) = store.object_type(member).and_then(|o| o.property(name)) {
                     if result.is_none()
-                        || matches!(
-                            prop.visibility,
-                            Visibility::Private | Visibility::Protected
-                        )
+                        || matches!(prop.visibility, Visibility::Private | Visibility::Protected)
                     {
                         result = Some((prop.visibility, prop.declaring_class));
                     }
@@ -256,7 +253,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 let member = self.apparent_type(member);
                 match store.object_type(member).and_then(|o| o.property(name)) {
                     Some(prop) => {
-                        if result.is_none() || matches!(prop.visibility, Visibility::Private | Visibility::Protected) {
+                        if result.is_none()
+                            || matches!(
+                                prop.visibility,
+                                Visibility::Private | Visibility::Protected
+                            )
+                        {
                             result = Some((prop.visibility, prop.declaring_class));
                         }
                     }

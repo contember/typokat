@@ -1,15 +1,15 @@
 //! Checker test modules (extracted from the former checker.rs tail).
-mod narrowing;
-mod generics;
-mod classes;
-mod inheritance;
-mod modifiers;
-mod member_assign;
 mod accessor_abstract;
-mod generic_class;
 mod array;
-mod tuple;
+mod classes;
+mod generic_class;
+mod generics;
 mod index_signature;
+mod inheritance;
 mod keyof_indexed_access;
+mod member_assign;
+mod modifiers;
+mod narrowing;
+mod tuple;
 mod utility_types;
 mod wu1_statements;

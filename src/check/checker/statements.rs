@@ -449,9 +449,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     self.generic_sig_params.insert(fn_ty, params);
                 }
                 if func.body.is_none() && !func.declare {
-                    self.diagnostics.push(Diagnostic::overload_missing_implementation(
-                        Span::from_oxc(func.span),
-                    ));
+                    self.diagnostics
+                        .push(Diagnostic::overload_missing_implementation(Span::from_oxc(
+                            func.span,
+                        )));
                 }
             }
         }
@@ -518,10 +519,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return;
         }
 
-        self.check_overload_implementation_compatibility(
-            implementation_ty,
-            &signatures,
-        );
+        self.check_overload_implementation_compatibility(implementation_ty, &signatures);
         let Some(overload_ty) = overload_ty else {
             return;
         };
@@ -556,8 +554,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         signatures: &[(TypeId, Span)],
     ) {
         for (signature_ty, span) in signatures {
-            let signature_ty =
-                self.align_overload_type_params(*signature_ty, implementation_ty);
+            let signature_ty = self.align_overload_type_params(*signature_ty, implementation_ty);
             let wk = self.interner.well_known();
             let store = self.interner.store();
             let mut relater = Relater::new(store, wk);
@@ -582,8 +579,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let Some(overload_params) = self.generic_sig_params.get(&overload_ty).cloned() else {
             return overload_ty;
         };
-        let Some(implementation_params) =
-            self.generic_sig_params.get(&implementation_ty).cloned()
+        let Some(implementation_params) = self.generic_sig_params.get(&implementation_ty).cloned()
         else {
             return overload_ty;
         };
@@ -594,9 +590,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         for (overload_param, implementation_param) in
             overload_params.into_iter().zip(implementation_params)
         {
-            let target = self
-                .interner
-                .intern_type_param(implementation_param, "T");
+            let target = self.interner.intern_type_param(implementation_param, "T");
             map.insert(overload_param, target);
         }
         crate::types::substitute(self.interner, overload_ty, &map)
@@ -624,7 +618,10 @@ pub(in crate::check::checker) fn overload_implementation_compatible(
             return false;
         }
     }
-    matches!(relater.is_assignable(overload.ret, implementation.ret), Relation::Yes)
+    matches!(
+        relater.is_assignable(overload.ret, implementation.ret),
+        Relation::Yes
+    )
 }
 
 fn parameter_compatible(

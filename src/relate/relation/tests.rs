@@ -288,7 +288,12 @@ fn nominal_origin_holds_through_intersection_source() {
 
     // `class Secret { private p: number }` (its nominal instance type).
     let secret_ty = interner.intern_object(ObjectType {
-        properties: vec![nominal_prop("p", wk.number, Visibility::Private, Some(secret))],
+        properties: vec![nominal_prop(
+            "p",
+            wk.number,
+            Visibility::Private,
+            Some(secret),
+        )],
         ..Default::default()
     });
     let struct_p = interner.intern_object(ObjectType {

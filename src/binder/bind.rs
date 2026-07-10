@@ -386,9 +386,7 @@ fn bind_declaration(state: &mut BindState, scope: ScopeId, decl: &Declaration<'_
 /// `parent`, recording it under `(module scope, block span start)` so the checker
 /// descends into the matching scope. The block's statements are bound inside it.
 fn bind_block(state: &mut BindState, parent: ScopeId, block: &BlockStatement<'_>) {
-    let block_scope = state
-        .graph
-        .push(Scope::new(ScopeKind::Block, Some(parent)));
+    let block_scope = state.graph.push(Scope::new(ScopeKind::Block, Some(parent)));
     state
         .block_scopes
         .insert((state.current_module, block.span.start), block_scope);
@@ -404,9 +402,7 @@ fn bind_block(state: &mut BindState, parent: ScopeId, block: &BlockStatement<'_>
 /// `{ }` blocks inside a clause still create their own child scope via `bind_block`.
 fn bind_switch(state: &mut BindState, scope: ScopeId, switch: &SwitchStatement<'_>) {
     bind_expression(state, scope, &switch.discriminant);
-    let switch_scope = state
-        .graph
-        .push(Scope::new(ScopeKind::Block, Some(scope)));
+    let switch_scope = state.graph.push(Scope::new(ScopeKind::Block, Some(scope)));
     state
         .block_scopes
         .insert((state.current_module, switch.span.start), switch_scope);
@@ -817,12 +813,24 @@ mod tests {
         let inner_scope = binder
             .block_scopes
             .values()
-            .find(|id| binder.graph.get(**id).unwrap().lookup_local("inner").is_some())
+            .find(|id| {
+                binder
+                    .graph
+                    .get(**id)
+                    .unwrap()
+                    .lookup_local("inner")
+                    .is_some()
+            })
             .copied()
             .expect("inner block scope");
         // Its parent is a switch-local block scope, and `inner` is not in the switch.
         let parent = binder.graph.get(inner_scope).unwrap().parent.unwrap();
         assert_eq!(binder.graph.get(parent).unwrap().kind, ScopeKind::Block);
-        assert!(binder.graph.get(parent).unwrap().lookup_local("inner").is_none());
+        assert!(binder
+            .graph
+            .get(parent)
+            .unwrap()
+            .lookup_local("inner")
+            .is_none());
     }
 }

@@ -1,0 +1,5 @@
+# Pin the toolchain so `cargo fmt --check` (enforced in CI) is stable: rustfmt's
+# output drifts between releases, so local and CI must agree on one version.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]

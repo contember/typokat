@@ -147,7 +147,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         let t = assigned.unwrap_or_else(|| self.declared_type(symbol));
                         self.flow_set(&mut scratch, node, symbol, t);
                         stack.pop();
-                    } else if let Some(base) = self.scratch_or_cached(&scratch, antecedent, symbol) {
+                    } else if let Some(base) = self.scratch_or_cached(&scratch, antecedent, symbol)
+                    {
                         self.flow_set(&mut scratch, node, symbol, base);
                         stack.pop();
                     } else {

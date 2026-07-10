@@ -201,7 +201,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let labels: Vec<Option<TypeId>> = switch
             .cases
             .iter()
-            .map(|case| case.test.as_ref().and_then(|test| self.literal_expr_type(test)))
+            .map(|case| {
+                case.test
+                    .as_ref()
+                    .and_then(|test| self.literal_expr_type(test))
+            })
             .collect();
         // The labeled cases' literals, for the `default` complement.
         let case_labels: Vec<TypeId> = switch
@@ -217,8 +221,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // The previous clause's fall-through edge, if it did not terminate.
         let mut fell_through: Option<FlowNodeId> = None;
         for (case, label) in switch.cases.iter().zip(&labels) {
-            let direct =
-                self.switch_case_entry(pre, &discriminant, case.test.is_some(), *label, &case_labels);
+            let direct = self.switch_case_entry(
+                pre,
+                &discriminant,
+                case.test.is_some(),
+                *label,
+                &case_labels,
+            );
             // Reachable by a direct label match OR by falling through the prior clause.
             let entry = match fell_through {
                 Some(prev_end) => self.flow_join(vec![prev_end, direct]),

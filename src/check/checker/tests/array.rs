@@ -46,7 +46,10 @@ fn empty_array_literal_is_never_array_assignable_anywhere() {
 const a: number[] = [];
 const b: string[][] = [];
 ";
-    assert!(diags(src).is_empty(), "empty array literal must be assignable to any T[]");
+    assert!(
+        diags(src).is_empty(),
+        "empty array literal must be assignable to any T[]"
+    );
 }
 
 /// Element access `a[i]` yields the **element type** for **any** index (M17 does

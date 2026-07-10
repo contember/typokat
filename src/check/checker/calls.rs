@@ -235,14 +235,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let overload = signatures.len() > 1;
         if !overload {
             let signature = signatures.first().copied()?;
-            return match self.instantiate_call_candidate(
-                scope,
-                call,
-                signature,
-                args,
-                call_span,
-                true,
-            ) {
+            return match self
+                .instantiate_call_candidate(scope, call, signature, args, call_span, true)
+            {
                 Ok(candidate) => Some(candidate),
                 Err(CandidateBuildFailure::Constraint(_))
                 | Err(CandidateBuildFailure::Unavailable) => None,
@@ -254,14 +249,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let mut first_constraint_failure: Option<Vec<Diagnostic>> = None;
 
         for signature in signatures {
-            let candidate = match self.instantiate_call_candidate(
-                scope,
-                call,
-                *signature,
-                args,
-                call_span,
-                false,
-            ) {
+            let candidate = match self
+                .instantiate_call_candidate(scope, call, *signature, args, call_span, false)
+            {
                 Ok(candidate) => candidate,
                 Err(CandidateBuildFailure::Constraint(diagnostics)) => {
                     if first_constraint_failure.is_none() {
@@ -275,17 +265,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     continue;
                 }
             };
-            match self.try_call_candidate(scope, &candidate.params, args.types, args.exprs, call_span)
-            {
+            match self.try_call_candidate(
+                scope,
+                &candidate.params,
+                args.types,
+                args.exprs,
+                call_span,
+            ) {
                 CandidateTrial::Match => {
-                    let committed = match self.instantiate_call_candidate(
-                        scope,
-                        call,
-                        *signature,
-                        args,
-                        call_span,
-                        true,
-                    ) {
+                    let committed = match self
+                        .instantiate_call_candidate(scope, call, *signature, args, call_span, true)
+                    {
                         Ok(candidate) => candidate,
                         Err(CandidateBuildFailure::Constraint(_))
                         | Err(CandidateBuildFailure::Unavailable) => return None,
@@ -302,7 +292,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         } else if !arity_failures.is_empty() && !saw_non_arity_failure {
             self.emit_overload_arity_failure(&arity_failures, args.types.len(), call_span);
         } else {
-            self.diagnostics.push(Diagnostic::no_overload_matches(call_span));
+            self.diagnostics
+                .push(Diagnostic::no_overload_matches(call_span));
         }
         None
     }
@@ -380,10 +371,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let params = func.params.clone();
         let ret = func.ret;
         let params = self.evaluate_parameters(params, call_span);
-        Ok(CallCandidate {
-            params,
-            ret,
-        })
+        Ok(CallCandidate { params, ret })
     }
 
     fn try_call_candidate(

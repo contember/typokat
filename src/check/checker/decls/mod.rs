@@ -116,8 +116,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let frame = self.build_type_param_frame(param_decl, &params);
             let prev_resolving_alias = self.resolving_alias.take();
             self.resolving_alias = Some((decl_id, name_span, name.clone()));
-            self.resolving_alias_stack
-                .push((decl_id, name_span, name, self.alias_indirection_depth));
+            self.resolving_alias_stack.push((
+                decl_id,
+                name_span,
+                name,
+                self.alias_indirection_depth,
+            ));
             let lowered = self.with_type_params(frame, |pass| {
                 pass.lower_type_param_constraints(scope, param_decl, &params);
                 pass.lower_annotation(scope, annotation)
@@ -270,7 +274,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return;
         };
         match self.type_decls.get(decl_id.index()) {
-            Some(TypeDecl::Interface { .. }) => self.ensure_interface_filled(scope, decl_id.index()),
+            Some(TypeDecl::Interface { .. }) => {
+                self.ensure_interface_filled(scope, decl_id.index())
+            }
             Some(TypeDecl::Class { .. }) => self.ensure_class_filled(scope, decl_id.index()),
             Some(TypeDecl::Alias { .. }) if heritage.type_arguments.is_none() => {
                 let ty = self.resolve_type_decl(scope, decl_id);
@@ -356,21 +362,23 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                 // id and seeds `type_resolved`, so a self-recursive reference resolves to
                 // it (as a lazy instantiation) rather than expanding at lowering. The
                 // placeholder is filled in the fill step.
-                let conditional_template =
-                    if matches!(alias.type_annotation, oxc_ast::ast::TSType::TSConditionalType(_)) {
-                        let reserved = interner.reserve_conditional();
-                        // M28 round 3: name the reserved row so a deferred
-                        // instantiation renders by alias NAME, not the raw body.
-                        interner.set_template_name(reserved, alias.id.name.as_str());
-                        if let Some(decl_id) = decl_id {
-                            if let Some(slot) = resolved.get_mut(decl_id.index()) {
-                                *slot = Some(reserved);
-                            }
+                let conditional_template = if matches!(
+                    alias.type_annotation,
+                    oxc_ast::ast::TSType::TSConditionalType(_)
+                ) {
+                    let reserved = interner.reserve_conditional();
+                    // M28 round 3: name the reserved row so a deferred
+                    // instantiation renders by alias NAME, not the raw body.
+                    interner.set_template_name(reserved, alias.id.name.as_str());
+                    if let Some(decl_id) = decl_id {
+                        if let Some(slot) = resolved.get_mut(decl_id.index()) {
+                            *slot = Some(reserved);
                         }
-                        Some(reserved)
-                    } else {
-                        None
-                    };
+                    }
+                    Some(reserved)
+                } else {
+                    None
+                };
                 // Top-level mapped aliases reserve a template id so self-recursive
                 // references resolve as lazy instantiations, not error types.
                 let mapped_template =
@@ -391,8 +399,10 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                 // self-references are legal recursion. Generic object aliases remain
                 // structural templates instantiated by substitution, so they are not seeded.
                 let object_template = if alias.type_parameters.is_none()
-                    && matches!(alias.type_annotation, oxc_ast::ast::TSType::TSTypeLiteral(_))
-                {
+                    && matches!(
+                        alias.type_annotation,
+                        oxc_ast::ast::TSType::TSTypeLiteral(_)
+                    ) {
                     let reserved = interner.reserve_object();
                     if let Some(decl_id) = decl_id {
                         if let Some(slot) = resolved.get_mut(decl_id.index()) {

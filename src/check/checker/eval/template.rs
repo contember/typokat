@@ -198,7 +198,12 @@ impl<'a> ConditionalEvaluator<'a> {
     /// the `string` intrinsic, a free parameter) stays a **symbolic** instantiation —
     /// rebuilt over the evaluated argument — relating conservatively (identical-node;
     /// → `string`).
-    pub(super) fn apply_string_intrinsic(&mut self, ty: TypeId, values: &mut Vec<TypeId>, error: TypeId) {
+    pub(super) fn apply_string_intrinsic(
+        &mut self,
+        ty: TypeId,
+        values: &mut Vec<TypeId>,
+        error: TypeId,
+    ) {
         let arg = values.pop().unwrap_or(error);
         let Some(inst) = self.interner.store().instantiation_type(ty).cloned() else {
             values.push(ty);

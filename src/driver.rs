@@ -72,11 +72,7 @@ fn check_source_inner(source: &str) -> CheckOutput {
 
     // Collect parser diagnostics as strings (their own types borrow elsewhere;
     // we only need them rendered for the CLI).
-    let parse_errors: Vec<String> = parsed
-        .diagnostics
-        .iter()
-        .map(|d| d.to_string())
-        .collect();
+    let parse_errors: Vec<String> = parsed.diagnostics.iter().map(|d| d.to_string()).collect();
 
     // If the parser bailed entirely, the AST is empty — there is nothing to
     // check, and the parse errors carry the explanation.
@@ -511,11 +507,7 @@ mod tests {
 
     /// The diagnostic codes emitted for `source`, in order.
     fn codes(output: &CheckOutput) -> Vec<&'static str> {
-        output
-            .diagnostics
-            .iter()
-            .map(|d| d.code.as_str())
-            .collect()
+        output.diagnostics.iter().map(|d| d.code.as_str()).collect()
     }
 
     /// WU2 local overloads: a signature-only local declaration must NOT fire the

@@ -368,7 +368,10 @@ impl<'a> Relater<'a> {
         for tgt_sig in tgt_signatures {
             let mut matched = false;
             for src_sig in src_signatures {
-                if matches!(self.relate(*src_sig, *tgt_sig, kind, assumed), Relation::Yes) {
+                if matches!(
+                    self.relate(*src_sig, *tgt_sig, kind, assumed),
+                    Relation::Yes
+                ) {
                     matched = true;
                     break;
                 }
