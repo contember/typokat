@@ -29,7 +29,10 @@ probe-verified vs tsc 6.0.3.
   `const y: "a" | "b" = x` errors (tsc narrows to `"a"`); (g) out-of-subset call
   *argument expressions* (e.g. `use(x = "s")`) are dropped from `arg_types`, so arity
   reports "Expected 1, got 0" on a 1-arg call; (h) aliased guards
-  (`const ok = typeof x === "string"; if (ok)`) narrow nothing — safe, but undocumented.
+  (`const ok = typeof x === "string"; if (ok)`) narrow nothing — safe, but undocumented;
+  (l, added 2026-07-10) assignment into an explicit `any` narrows it (`let s: any;
+  s = 5; s.foo` → TK2339; tsc keeps `s` as `any` — narrowing belongs only to implicit
+  evolving `any`; documented in divergences).
 - **Docs/messages:** (i) TK2741 renders "missing in type ⟨TARGET⟩" — semantically
   inverted vs tsc's "missing in ⟨SRC⟩ but required in ⟨TGT⟩". *(Item (j), the
   multi-candidate inference union rule, graduated to backlog `65` — the b57 review

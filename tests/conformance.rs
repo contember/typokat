@@ -96,7 +96,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Soundness-review-fixes sprint (2026-07-10) WU0 corpora. Each is committed
     // `false` (behavior-neutral spec); WU1-WU3 flip only their own dir when the
     // fix lands, the deferred-ledger dir stays `false` beyond this sprint. See
-    // docs/sprints/sprint-2026-07-10-soundness-review-fixes.md and
+    // docs/archive/sprint-2026-07-10-soundness-review-fixes.md and
     // tests/cases/README.md ("Soundness-review corpora").
     // WU1 — nested assignment expressions, complete return inference, loop/throw
     // body checking (findings 1-3).

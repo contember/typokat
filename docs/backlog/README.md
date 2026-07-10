@@ -82,6 +82,7 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 - [`66`](66-protected-override-compat.md) — protected↔protected incompatible override skips TK2416 (dropped TS2416).
 - [`67`](67-utility-alias-constraint-enforcement.md) — utility/prelude alias type-param constraints unenforced (`ReturnType<number>` drops TS2344).
 - [`30`](30-numeric-literal-correctness.md) — JS-exact number stringification: a non-canonical `${1e21}` digit string is **accepted** (dropped TS2322 — an under-report, not a safe FP).
+- [`71`](71-expression-inference-fn-tail.md) — expression-inference silent-FN tail (binary results, template interpolations, spread, forward-ref local calls; 2026-07-10 review byproducts).
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - [`23`](23-static-method-type-params.md) — spurious TK2304 on static method type params (or close via `41`).

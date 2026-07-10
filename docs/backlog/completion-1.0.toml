@@ -442,6 +442,17 @@ witness = "batched safe-direction/cosmetic list; reference/divergences.md; 63k r
 links = ["../reference/divergences.md"]
 deps = []
 
+[[criterion]]
+id = "C-expression-inference-fn-tail"
+track = "C"
+title = "Expression positions infer_expr still skips silently (binary, template, spread, forward-ref local calls)"
+state = "incomplete"
+blocks_release = "true"
+owner = "./71-expression-inference-fn-tail.md"
+witness = "spec-first corpus pinning each family vs tsc 6.0.3 --strict (2026-07-10 WU4 review byproducts)"
+links = []
+deps = []
+
 # ---------------------------------------------------------------------------
 # Track D — scale + IDE (the architecture §12 phase ladder)
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
-# corpus 874  in-scope 505  out-of-scope 369
-# clean-kept 175/220  error-exact 27/285  diag-recall 334/1677
+# corpus 874  in-scope 497  out-of-scope 377
+# clean-kept 172/214  error-exact 29/283  diag-recall 345/1674
 # cols: status<TAB>matched fn fp expected<TAB>ids<TAB>rel  (status=IN | OOS:<bucket>; nums/ids '-' = n/a; ids=<matched>|<fp> as sorted line:code identities)
 IN	4 4 2 8	15:2341,18:2341,20:2341,23:2341|16:2339,21:2339	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	15:2445,18:2445,20:2445,23:2445|16:2339,21:2339	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -91,7 +91,7 @@ OOS:parse-error	- - - -	-	conformance/classes/members/privateNames/privateNameBa
 IN	0 2 0 2	|	conformance/classes/members/privateNames/privateNameBadSuper.ts
 IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameBadSuperUseDefineForClassFields.ts
 IN	0 4 0 4	|	conformance/classes/members/privateNames/privateNameCircularReference.ts
-IN	0 0 0 0	|	conformance/classes/members/privateNames/privateNameClassExpressionLoop.ts
+IN	0 0 1 0	|3:2339	conformance/classes/members/privateNames/privateNameClassExpressionLoop.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameComputedPropertyName1.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameComputedPropertyName2.ts
 OOS:unresolved	- - - -	-	conformance/classes/members/privateNames/privateNameComputedPropertyName3.ts
@@ -291,7 +291,7 @@ IN	0 0 5 0	|6:2339,15:2339,21:2339,30:2339,36:2339	conformance/controlFlow/const
 OOS:syntax:type-predicate	- - - -	-	conformance/controlFlow/controlFlowAliasing.ts
 OOS:syntax:module	- - - -	-	conformance/controlFlow/controlFlowAliasing2.ts
 IN	0 0 0 0	|	conformance/controlFlow/controlFlowAliasingCatchVariables.ts
-IN	0 0 2 0	|5:2339,17:2322	conformance/controlFlow/controlFlowAssignmentExpression.ts
+IN	0 0 3 0	|5:2339,9:2339,17:2322	conformance/controlFlow/controlFlowAssignmentExpression.ts
 OOS:syntax:as-const	- - - -	-	conformance/controlFlow/controlFlowAssignmentPatternOrder.ts
 IN	0 1 0 1	|	conformance/controlFlow/controlFlowBinaryAndExpression.ts
 OOS:syntax:module	- - - -	-	conformance/controlFlow/controlFlowBinaryOrExpression.ts
@@ -311,9 +311,9 @@ IN	0 0 0 0	|	conformance/controlFlow/controlFlowForInStatement2.ts
 OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowForOfStatement.ts
 OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowForStatement.ts
 OOS:syntax:module	- - - -	-	conformance/controlFlow/controlFlowGenericTypes.ts
-IN	0 2 5 2	|7:2339,16:2339,25:2339,25:2554,45:2339	conformance/controlFlow/controlFlowIIFE.ts
+OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowIIFE.ts
 OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowIfStatement.ts
-IN	0 0 0 0	|	conformance/controlFlow/controlFlowInOperator.ts
+OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowInOperator.ts
 OOS:syntax:instanceof	- - - -	-	conformance/controlFlow/controlFlowInstanceOfGuardPrimitives.ts
 OOS:syntax:module	- - - -	-	conformance/controlFlow/controlFlowInstanceofExtendsFunction.ts
 IN	0 0 2 0	|11:2339,14:2339	conformance/controlFlow/controlFlowIteration.ts
@@ -382,14 +382,14 @@ IN	0 0 0 0	|	conformance/expressions/typeGuards/typeGuardTypeOfUndefined.ts
 OOS:unresolved	- - - -	-	conformance/expressions/typeGuards/typeGuardsDefeat.ts
 IN	0 0 20 0	|12:2339,16:2339,23:2339,26:2339,30:2339,35:2339,39:2339,46:2339,49:2339,53:2339,58:2339,62:2339,69:2339,72:2339,76:2339,81:2339,85:2339,92:2339,95:2339,99:2339	conformance/expressions/typeGuards/typeGuardsInClassAccessors.ts
 IN	0 20 15 20	|10:2339,14:2339,17:2339,22:2339,26:2339,29:2339,34:2339,38:2339,41:2339,46:2339,50:2339,53:2339,58:2339,62:2339,65:2339	conformance/expressions/typeGuards/typeGuardsInClassMethods.ts
-IN	0 0 3 0	|10:2339,69:2339,85:2339	conformance/expressions/typeGuards/typeGuardsInConditionalExpression.ts
-IN	0 3 0 3	|	conformance/expressions/typeGuards/typeGuardsInDoStatement.ts
+IN	0 0 4 0	|10:2339,59:2339,69:2339,85:2339	conformance/expressions/typeGuards/typeGuardsInConditionalExpression.ts
+IN	3 0 0 3	6:2322,15:2322,24:2322|	conformance/expressions/typeGuards/typeGuardsInDoStatement.ts
 OOS:syntax:module	- - - -	-	conformance/expressions/typeGuards/typeGuardsInExternalModule.ts
-IN	0 6 0 6	|	conformance/expressions/typeGuards/typeGuardsInForStatement.ts
+IN	6 0 0 6	3:2322,3:2322,9:2322,9:2322,16:2322,16:2322|	conformance/expressions/typeGuards/typeGuardsInForStatement.ts
 IN	0 25 18 25	|10:2339,14:2339,17:2339,24:2339,27:2339,30:2339,34:2339,35:2339,45:2339,48:2339,51:2339,55:2339,56:2339,66:2339,69:2339,72:2339,76:2339,77:2339	conformance/expressions/typeGuards/typeGuardsInFunction.ts
 OOS:syntax:module	- - - -	-	conformance/expressions/typeGuards/typeGuardsInFunctionAndModuleBlock.ts
 IN	0 3 1 3	|8:2339	conformance/expressions/typeGuards/typeGuardsInGlobal.ts
-IN	1 1 4 2	139:2339|7:2339,88:2339,132:2339,138:2339	conformance/expressions/typeGuards/typeGuardsInIfStatement.ts
+IN	1 1 6 2	139:2339|7:2339,88:2339,120:2339,124:2339,132:2339,138:2339	conformance/expressions/typeGuards/typeGuardsInIfStatement.ts
 OOS:syntax:module	- - - -	-	conformance/expressions/typeGuards/typeGuardsInModule.ts
 IN	0 0 4 0	|16:2339,16:2339,21:2339,21:2339	conformance/expressions/typeGuards/typeGuardsInProperties.ts
 IN	0 0 3 0	|4:2339,41:2339,43:2339	conformance/expressions/typeGuards/typeGuardsInRightOperandOfAndAndOperator.ts
@@ -465,20 +465,20 @@ OOS:syntax:enum	- - - -	-	conformance/types/keyof/keyofAndIndexedAccess.ts
 OOS:syntax:module	- - - -	-	conformance/types/keyof/keyofAndIndexedAccess2.ts
 OOS:unresolved	- - - -	-	conformance/types/keyof/keyofAndIndexedAccessErrors.ts
 IN	0 0 0 0	|	conformance/types/keyof/keyofIntersection.ts
-IN	0 0 3 0	|12:2322,57:2345,94:2345	conformance/types/literal/booleanLiteralTypes1.ts
-IN	0 0 3 0	|12:2322,57:2345,94:2345	conformance/types/literal/booleanLiteralTypes2.ts
+OOS:unresolved	- - - -	-	conformance/types/literal/booleanLiteralTypes1.ts
+OOS:unresolved	- - - -	-	conformance/types/literal/booleanLiteralTypes2.ts
 OOS:syntax:enum	- - - -	-	conformance/types/literal/enumLiteralTypes1.ts
 OOS:syntax:enum	- - - -	-	conformance/types/literal/enumLiteralTypes2.ts
 OOS:syntax:enum	- - - -	-	conformance/types/literal/enumLiteralTypes3.ts
 OOS:syntax:module	- - - -	-	conformance/types/literal/literalTypeWidening.ts
 IN	0 0 0 0	|	conformance/types/literal/literalTypes1.ts
 OOS:syntax:enum	- - - -	-	conformance/types/literal/literalTypes2.ts
-IN	0 0 0 0	|	conformance/types/literal/literalTypes3.ts
+OOS:unresolved	- - - -	-	conformance/types/literal/literalTypes3.ts
 OOS:syntax:as-const	- - - -	-	conformance/types/literal/literalTypesAndDestructuring.ts
 IN	0 0 0 0	|	conformance/types/literal/literalTypesAndTypeAssertions.ts
 IN	1 0 0 1	4:2322|	conformance/types/literal/literalTypesWidenInParameterPosition.ts
-IN	0 0 2 0	|84:2345,138:2345	conformance/types/literal/numericLiteralTypes1.ts
-IN	0 0 2 0	|84:2345,138:2345	conformance/types/literal/numericLiteralTypes2.ts
+OOS:unresolved	- - - -	-	conformance/types/literal/numericLiteralTypes1.ts
+OOS:unresolved	- - - -	-	conformance/types/literal/numericLiteralTypes2.ts
 IN	16 12 0 28	8:2322,9:2322,10:2322,14:2322,16:2322,17:2322,24:2322,29:2322,30:2322,35:2322,37:2322,38:2322,39:2322,40:2322,43:2322,50:2322|	conformance/types/literal/numericLiteralTypes3.ts
 OOS:unresolved	- - - -	-	conformance/types/literal/numericStringLiteralTypes.ts
 OOS:syntax:enum	- - - -	-	conformance/types/literal/stringEnumLiteralTypes1.ts
@@ -657,18 +657,18 @@ IN	0 0 0 0	|	conformance/types/tuple/tupleElementTypes2.ts
 IN	0 0 0 0	|	conformance/types/tuple/tupleElementTypes3.ts
 IN	0 0 0 0	|	conformance/types/tuple/tupleElementTypes4.ts
 IN	0 2 0 2	|	conformance/types/tuple/tupleLengthCheck.ts
-IN	1 5 2 6	11:2322|31:2322,32:2322	conformance/types/tuple/typeInferenceWithTupleType.ts
+IN	1 5 3 6	11:2322|16:2339,31:2322,32:2322	conformance/types/tuple/typeInferenceWithTupleType.ts
 IN	0 8 0 8	|	conformance/types/tuple/unionsOfTupleTypes1.ts
 OOS:syntax:as-const	- - - -	-	conformance/types/tuple/variadicTuples1.ts
 OOS:parse-error	- - - -	-	conformance/types/tuple/variadicTuples2.ts
 IN	0 3 0 3	|	conformance/types/tuple/variadicTuples3.ts
 IN	0 0 1 0	|4:2322	conformance/types/tuple/wideningTuples1.ts
 OOS:unresolved	- - - -	-	conformance/types/tuple/wideningTuples2.ts
-IN	0 2 0 2	|	conformance/types/tuple/wideningTuples3.ts
-IN	0 1 0 1	|	conformance/types/tuple/wideningTuples4.ts
+IN	1 1 0 2	3:2322|	conformance/types/tuple/wideningTuples3.ts
+IN	1 0 1 1	3:2322|4:2322	conformance/types/tuple/wideningTuples4.ts
 IN	0 2 0 2	|	conformance/types/tuple/wideningTuples5.ts
 OOS:unresolved	- - - -	-	conformance/types/tuple/wideningTuples6.ts
-IN	0 1 0 1	|	conformance/types/tuple/wideningTuples7.ts
+IN	0 1 1 1	|3:2322	conformance/types/tuple/wideningTuples7.ts
 OOS:syntax:module	- - - -	-	conformance/types/typeRelationships/assignmentCompatibility/anyAssignabilityInInheritance.ts
 OOS:syntax:enum	- - - -	-	conformance/types/typeRelationships/assignmentCompatibility/anyAssignableToEveryType.ts
 OOS:syntax:module	- - - -	-	conformance/types/typeRelationships/assignmentCompatibility/anyAssignableToEveryType2.ts
@@ -731,7 +731,7 @@ OOS:syntax:enum	- - - -	-	conformance/types/typeRelationships/assignmentCompatib
 OOS:unresolved	- - - -	-	conformance/types/typeRelationships/assignmentCompatibility/genericCallWithObjectTypeArgsAndInitializers.ts
 OOS:syntax:module	- - - -	-	conformance/types/typeRelationships/assignmentCompatibility/intersectionIncludingPropFromGlobalAugmentation.ts
 OOS:syntax:enum	- - - -	-	conformance/types/typeRelationships/assignmentCompatibility/nullAssignableToEveryType.ts
-IN	0 1 0 1	|	conformance/types/typeRelationships/assignmentCompatibility/nullAssignedToUndefined.ts
+OOS:unresolved	- - - -	-	conformance/types/typeRelationships/assignmentCompatibility/nullAssignedToUndefined.ts
 OOS:syntax:enum	- - - -	-	conformance/types/typeRelationships/assignmentCompatibility/numberAssignableToEnum.ts
 IN	3 0 2 3	6:2322,10:2322,13:2322|5:2322,17:2322	conformance/types/typeRelationships/assignmentCompatibility/optionalPropertyAssignableToStringIndexSignature.ts
 IN	2 0 0 2	4:2322,5:2322|	conformance/types/typeRelationships/assignmentCompatibility/typeParameterAssignability.ts

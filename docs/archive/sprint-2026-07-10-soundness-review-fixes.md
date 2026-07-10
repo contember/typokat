@@ -1,10 +1,27 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME - shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU0 -> <sha>,
-> WU1 -> <sha>, ... Verification: <the gate command + numbers>. Backlog closed:
-> <ids deleted/rescoped>. Deferred: <honest notes>.
--->
+> **OUTCOME - shipped 2026-07-10.** All ten verified review findings fixed through the
+> full spec-first loop (WU0 spec corpus → subagent implementation → independent
+> adversarial review → leader commit), the two test ratchets hardened to
+> diagnostic-identity, CI checked in, and the 1.0 plan made executable. Commit map:
+> WU0 → `f36b681`, WU1 → `26ce1d7` (WU4-A PASS), WU2 → `21c15df` (WU4-B PASS),
+> WU3 → `6c82ead` (WU4-C PASS), WU5 → `d5a0ef8`, WU6 → `ebc2df7` (style) +
+> `3c82a0f` (ci), WU7 → `c737d21` (ADR-0003: backlog 38 GO), WU8 → the closure
+> commit carrying this move. Verification: `cargo fmt --check` clean under the
+> pinned 1.95.0 toolchain; `cargo test` 272 unit + 9 conformance-harness + 3
+> manifest tests + the conformance corpus green with all three WU corpora enabled;
+> `cargo clippy --all-targets -- -D warnings` clean; `cargo build --release` ok;
+> `python3 -m unittest test_tsofficial` 16/16; official-suite `run --check` 0
+> regressions after the audited re-baseline 334/1677 → **345/1674** diag-recall
+> (matched +11, fn 1343 → 1329; all 18 identity deltas attributed to WU1 with
+> repros — 7 lib-shaped safe-direction FPs, 8 files self-gating OOS on no-lib
+> globals in newly traversed code, 3 progress files; zero dropped errors).
+> Backlog closed/changed: 63k partially shipped (annotation depth budget; oxc
+> parser residual stays), 30 reclassified silent-FN, 15/16 disambiguated, 38 GO
+> (ADR-0003), new items 70 (this-parameter typing) and 71 (expression-inference FN
+> tail), divergences extended (var non-hoist, undefined-target, explicit-any
+> narrowing, WU1 over-report/OOS files). Deferred honestly: TK2451/TK2300 (backlog
+> 18), precise loop narrowing (51), forward-ref local calls + binary/template/spread
+> inference (71), sr_deferred_ledger corpus stays disabled with live owners (30, 56,
+> 60, 62, 66, 67).
 
 # Sprint - soundness review fixes (2026-07-10)
 
@@ -500,3 +517,19 @@ convention.
   fixture or review witness before re-baselining. Python harness tests:
   `cd tooling/official-suite && python3 -m unittest test_tsofficial` (stdlib-only,
   for WU6 CI).
+- **2026-07-10 - WU6 shipped** (commits `ebc2df7` style/toolchain-pin + `3c82a0f`
+  ci) after independent review PASS. rustfmt drift resolved by pinning 1.95.0 and
+  one repo-wide format commit (verified token-identical). → the fmt-drift entry
+  above is resolved.
+- **2026-07-10 - WU7 shipped** (commit `c737d21`) after independent review
+  FAIL→fix→PASS (two lib-audit counts corrected to their own reproduce commands;
+  validator hardened to reject unknown keys). Manifest: docs/backlog/
+  completion-1.0.toml + tests/manifest.rs. New track-A item 70 discovered by the
+  audit (this-parameter typing). Backlog 38: GO → ADR-0003.
+- **2026-07-10 - WU8 audit.** All 18 scoreboard identity deltas attributed to WU1
+  with minimal repros; zero dropped errors (fn 1343→1329, matched 334→345).
+  Divergences extended (WU1 over-report files, OOS self-gating list,
+  undefined-target, explicit-any narrowing); byproducts graduated: new backlog 71
+  (expression-inference FN tail), 63 gained item (l), 47 owns the two
+  assignment-target over-reports. Scoreboard re-baselined to 345/1674;
+  `run --check` 0 regressions. Sprint archived.

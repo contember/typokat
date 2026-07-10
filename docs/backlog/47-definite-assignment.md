@@ -17,6 +17,10 @@ variable used before its declaration — TDZ), TK2564 (property has no initializ
 not definitely assigned in the constructor). Their absence is a silent-FN family in
 strict-mode real code.
 
+Adjacent over-reports owned here (documented in divergences, 2026-07-10): `var` is not
+hoisted to the function scope (spurious TK2304 outside its block/switch clause), and
+`undefined` in assignment-target position reports TK2304 where tsc gives TS2539.
+
 ## Approach / acceptance
 
 Reuse the flow-node walk: a reference is "assigned" iff every path from function entry

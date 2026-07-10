@@ -295,7 +295,7 @@ at most one mismatched argument per call, per the general call-marker rule above
 ## Soundness-review corpora (sprint 2026-07-10)
 
 The `sr_*` dirs are the WU0 acceptance spec for the soundness-review-fixes sprint
-(`docs/sprints/sprint-2026-07-10-soundness-review-fixes.md`). Same mechanism as the
+(`docs/archive/sprint-2026-07-10-soundness-review-fixes.md`). Same mechanism as the
 bug-fix corpora: each is committed `false` and flips `true` only in the commit that
 lands its owning fix — except `sr_deferred_ledger/`, which stays `false` beyond this
 sprint (its findings are open backlog items). Every fixture header records the

@@ -44,6 +44,13 @@ entry here is deleted.
   `var` like a block-scoped declaration, so a `var` referenced outside its block or
   `switch` clause reports a spurious `TK2304` where tsc resolves it (safe
   direction). Fix belongs with definite assignment (backlog `47`).
+- **`undefined` in assignment-target position (over-report).** typokat resolves
+  `undefined` as a value read but not as an assignment target, so `undefined = null`
+  reports `TK2304` where tsc reports `TS2539` (still an error — safe direction).
+  Surfaced by WU1's nested-assignment checking; owner backlog `47`.
+- **Assignment into an explicit `any` narrows it (over-report).** `let s: any;
+  s = 5; s.foo` reports `TK2339` where tsc keeps `s` as `any` (assignment narrowing
+  applies only to implicit evolving `any`). Safe direction; batched in backlog `63`.
 - **`strictNullChecks` is on** (our default): `null`/`undefined` are distinct types,
   not assignable to others.
 
@@ -92,7 +99,12 @@ flow-node CFG (M23), the single narrowing model.
   primitives — no `lib.d.ts`) in `controlFlowIteration*`, `typeGuardsIn{If,ConditionalExpression}`,
   `typeGuards{Redundancy,OnClassProperty}`, `…RightOperandOf{AndAnd,OrOr}Operator`; plus `TK2345`
   in `controlFlowIterationErrors` from the complex-RHS reset-to-declared rule on a loop back edge
-  (tsc narrows `x = fn(x)` to the return type; typokat resets — wider, sound).
+  (tsc narrows `x = fn(x)` to the return type; typokat resets — wider, sound). Since the
+  2026-07-10 statement-checking sprint (WU1) the same lib-shaped `TK2339` also surfaces in
+  `for`/`do` **loop bodies** and in **assignments embedded in expressions** (comma / nested /
+  initializer / `return` operands) — e.g. no-lib `Array.push` in
+  `privateNameClassExpressionLoop.ts` and `typeInferenceWithTupleType.ts`, and
+  `.length`/`.toString` on narrowed primitives in `controlFlowAssignmentExpression.ts`.
 
 ## Generics & constraints (M9 / M10 / M24)
 
@@ -340,7 +352,12 @@ resolved to provided `.ts` files; named imports, `import type`, exported declara
   standard library otherwise. Since M33 preserves overload annotations instead of skipping them,
   official files such as `assignFromStringInterface2.ts` and `unionTypeCallSignatures2.ts` can
   self-gate as `OOS:unresolved` on missing lib names (`RegExp`, `RegExpMatchArray`, `Date`) that
-  were previously hidden behind skipped overloads. (Backlog `14`, `15`, `38`, `43`, `52`.)
+  were previously hidden behind skipped overloads. Likewise, WU1's `throw`-operand and
+  `for`-header checking (2026-07-10) evaluates lib globals (`Error`, `Number`) previously behind
+  un-traversed code, so `controlFlowIIFE.ts`, `controlFlowInOperator.ts`,
+  `booleanLiteralTypes1/2.ts`, `literalTypes3.ts`, and `numericLiteralTypes1/2.ts` self-gate as
+  `OOS:unresolved` on a no-lib `TK2304` — lost measurement coverage, not a dropped error.
+  (Backlog `14`, `15`, `38`, `43`, `52`.)
 
 ## Intersection types (M31)
 
