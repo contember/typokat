@@ -4,9 +4,10 @@
 //! `Interner`, keeping borrowed parser data inside the parse/check call.
 
 use crate::check::{
-    check_program, check_project_programs, ProjectImport, ProjectImportSource, ProjectProgram,
+    check_program, check_project_programs, CheckResult, ProjectImport, ProjectImportSource,
+    ProjectProgram,
 };
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::span::Span;
 use crate::types::Interner;
 use oxc_allocator::Allocator;
@@ -19,12 +20,17 @@ use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
-/// The outcome of checking one source file.
+/// The outcome of checking one source file. Three independent channels: type
+/// diagnostics, parser errors, and the incomplete-surface channel (WU2) — an empty
+/// triple is clean. Incomplete takes precedence over diagnostics for the CLI exit code.
 pub struct CheckOutput {
     /// Type diagnostics produced by the checker (empty == clean).
     pub diagnostics: Vec<Diagnostic>,
     /// Parser/syntax errors rendered to strings so the CLI can report malformed input.
     pub parse_errors: Vec<String>,
+    /// In-scope AST positions the checker skipped (sprint 2026-07-10, WU2). Nothing
+    /// emits into this yet; when populated it drives exit `3` (incomplete).
+    pub incomplete: Vec<IncompleteSurface>,
 }
 
 impl CheckOutput {
@@ -32,6 +38,12 @@ impl CheckOutput {
     /// code.
     pub fn has_errors(&self) -> bool {
         !self.parse_errors.is_empty() || self.diagnostics.iter().any(Diagnostic::is_error)
+    }
+
+    /// Whether the run recorded any incomplete surface. Exit `3` takes precedence
+    /// over exit `1`, so the CLI checks this before [`has_errors`](CheckOutput::has_errors).
+    pub fn is_incomplete(&self) -> bool {
+        !self.incomplete.is_empty()
     }
 }
 
@@ -80,15 +92,20 @@ fn check_source_inner(source: &str) -> CheckOutput {
         return CheckOutput {
             diagnostics: Vec::new(),
             parse_errors,
+            incomplete: Vec::new(),
         };
     }
 
     let mut interner = Interner::with_intrinsics();
-    let diagnostics = check_program(&mut interner, &parsed.program);
+    let CheckResult {
+        diagnostics,
+        incomplete,
+    } = check_program(&mut interner, &parsed.program);
 
     CheckOutput {
         diagnostics,
         parse_errors,
+        incomplete,
     }
 }
 
@@ -205,12 +222,20 @@ fn check_project_inner(inputs: Vec<FileInput>) -> Vec<FileReport> {
         .collect();
 
     let mut interner = Interner::with_intrinsics();
-    let ordered_diagnostics = check_project_programs(&mut interner, &project_units);
+    let ordered_results = check_project_programs(&mut interner, &project_units);
     let mut diagnostics_by_original: Vec<Vec<Diagnostic>> =
         (0..inputs.len()).map(|_| Vec::new()).collect();
-    for (ordered, &original) in order.iter().enumerate() {
-        if let Some(diagnostics) = ordered_diagnostics.get(ordered) {
-            diagnostics_by_original[original] = diagnostics.clone();
+    let mut incomplete_by_original: Vec<Vec<IncompleteSurface>> =
+        (0..inputs.len()).map(|_| Vec::new()).collect();
+    for (ordered, result) in ordered_results.into_iter().enumerate() {
+        let Some(&original) = order.get(ordered) else {
+            continue;
+        };
+        if let Some(slot) = diagnostics_by_original.get_mut(original) {
+            *slot = result.diagnostics;
+        }
+        if let Some(slot) = incomplete_by_original.get_mut(original) {
+            *slot = result.incomplete;
         }
     }
 
@@ -226,6 +251,10 @@ fn check_project_inner(inputs: Vec<FileInput>) -> Vec<FileReport> {
                     .map(std::mem::take)
                     .unwrap_or_default(),
                 parse_errors: parse_errors.get(index).cloned().unwrap_or_default(),
+                incomplete: incomplete_by_original
+                    .get_mut(index)
+                    .map(std::mem::take)
+                    .unwrap_or_default(),
             },
         })
         .collect()

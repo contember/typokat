@@ -6,7 +6,7 @@ use crate::binder::scope::ScopeId;
 use crate::binder::symbol::{DeclId, SymbolId};
 use crate::binder::Binder;
 use crate::check::flow::{FlowNode, FlowNodeId};
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::span::Span;
 use crate::types::repr::{ClassId, TypeParamId, Visibility};
 use crate::types::store::TypeId;
@@ -234,6 +234,10 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// collected in [`fill_class`] and decided in phase 2 (see [`OverrideCheck`]).
     pub(in crate::check::checker) override_checks: Vec<OverrideCheck>,
     pub(in crate::check::checker) diagnostics: Vec<Diagnostic>,
+    /// The third structured channel (sprint 2026-07-10, WU2): in-scope AST positions
+    /// the walk skipped. Populated via `record_incomplete`; drained into `CheckResult`
+    /// alongside `diagnostics`. Nothing emits into it yet (WU3–5 wire the emissions).
+    pub(in crate::check::checker) incomplete: Vec<IncompleteSurface>,
     /// Current `this` type while checking class members.
     /// Save/restored at member boundaries so it never leaks; nested functions keep
     /// the enclosing value in this subset.

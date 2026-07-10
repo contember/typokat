@@ -60,6 +60,11 @@ python3 tsofficial.py run --save     # accept current results as the new baselin
      `satisfies`, `as const`, user-defined type predicates/assertions, or
      `instanceof` narrowing).
      Heuristic regex — see `OUT_OF_SCOPE_SYNTAX`.
+   - `unsupported` — typokat exited **3** (incomplete): it recorded an in-scope
+     surface it does not yet check (an `incomplete[<id>]` record; the first-class
+     incomplete outcome, WU2). Demoted to OOS but, unlike other buckets, it **keeps
+     the full diagnostic diff** alongside the incomplete identities — a diagnostic
+     regression inside a now-unsupported test must still be visible.
    - `parse-error` — typokat's own parser rejected it.
    - `unresolved` — typokat raised a `TK2304 (cannot find name)` the baseline does
      **not** have: a name tsc resolved via `lib.d.ts`/imports but typokat can't.
@@ -92,11 +97,20 @@ in-scope / clean-kept / error-exact / diag-recall) at the pinned TS SHA.
 ```
 IN	4 8 0 12	5:2322,9:2345|	conformance/.../assignmentCompatWithCallSignatures2.ts
 OOS:syntax:enum	- - - -	-	conformance/.../enumTest.ts
+OOS:unsupported	1 1 0 2	3:2322|	expr-infer/template-literal/interpolation	conformance/.../templateCall.ts
 ```
 
-Columns are `status<TAB>matched fn fp expected<TAB>ids<TAB>rel`. Out-of-scope tests
-are tracked too (a scope flip IN↔OOS is a regression/progress signal), with `-` for
-the numeric and `ids` columns.
+Columns are `status<TAB>matched fn fp expected<TAB>ids<TAB>rel`. Most out-of-scope
+tests are tracked with `-` for the numeric and `ids` columns (a scope flip IN↔OOS is a
+regression/progress signal). **`OOS:unsupported` is the exception** (exit 3, WU2): it
+carries the real numeric diff **and** a three-segment ids column
+`<matched>|<fp>|<incomplete>`, where the third segment is a sorted, comma-joined list of
+stable incomplete surface identities. A demotion to unsupported therefore keeps its full
+diagnostic diff — a dropped matched identity or a new false positive inside an
+unsupported test is still a regression — and its incomplete identities round-trip too (a
+dropped incomplete identity regresses; a gained one is progress). `diag-recall` counts
+unsupported error tests so the recall number stays comparable across the IN↔unsupported
+boundary.
 
 The **`ids` column is diagnostic identity**, not just a count:
 `<matched>|<fp>`, each side a comma-separated, sorted list of `line:code` tokens
@@ -122,11 +136,19 @@ Workflow:
   so it rejects `--limit`.
 
 A checker invocation the harness cannot trust — an unexpected exit code, a signal
-(crash), a timeout, or output inconsistent with the exit code (exit 0 with
-diagnostics, or exit 1 with nothing parseable) — is a **hard harness failure**: the
-run aborts loudly with the file, exit code, and captured output. It is never scored
-as success or as a silent zero (a crash masquerading as a clean file is exactly the
-false negative this suite exists to catch).
+(crash), a timeout, or output inconsistent with the exit code — is a **hard harness
+failure**: the run aborts loudly with the file, exit code, and captured output. It is
+never scored as success or as a silent zero (a crash masquerading as a clean file is
+exactly the false negative this suite exists to catch). The documented exit codes are
+`0` (clean), `1` (type/parse diagnostics), and `3` (incomplete — WU2). Inconsistent
+means: exit `0` with **any** diagnostic OR incomplete record (a clean exit must be
+silent), exit `1` with nothing parseable **or with an incomplete record** (any
+incomplete surface forces exit `3`), or exit `3` with no incomplete record
+(unparseable / lost incomplete output). Exit `3` is a discovery result
+(`OOS:unsupported`), never a crash — but strict crash/signal/unparseable handling is
+unchanged. Incomplete records are parsed **column-0-anchored, rich-format-only** (the
+harness never passes `--format`), so quoted source-snippet text containing
+`incomplete[...]` can never fabricate a record.
 
 Because the corpus is reproducible from `fetch` at the pinned SHA, the baseline is
 meaningful on any machine. Re-fetch at the same SHA before `--check`.

@@ -23,7 +23,8 @@ import tsofficial as ts
 # --- helpers -----------------------------------------------------------------
 
 def rec(rel, *, bucket=None, matched=0, fn=0, fp=0, expected=0,
-        matched_detail=None, fp_detail=None, fn_detail=None, strict=True):
+        matched_detail=None, fp_detail=None, fn_detail=None,
+        incomplete_detail=None, strict=True):
     """Build one cmd_run-shaped result record."""
     return {
         "rel": rel, "bucket": bucket, "strict": strict,
@@ -31,6 +32,7 @@ def rec(rel, *, bucket=None, matched=0, fn=0, fp=0, expected=0,
         "matched_detail": matched_detail or [],
         "fp_detail": fp_detail or [],
         "fn_detail": fn_detail or [],
+        "incomplete_detail": incomplete_detail or [],
     }
 
 
@@ -70,6 +72,12 @@ def fake_binary(script_body):
 DIAG_LINES = (
     'echo "error[TK2322]: Type \'string\' is not assignable to type \'number\'"\n'
     'echo "$(basename "$2"):1:5"\n'
+)
+
+# Emits a well-formed incomplete-surface record (rich form: header + location line).
+INCOMPLETE_LINES = (
+    'echo "incomplete[expr-infer/template-literal/interpolation]: skipped by expr walker"\n'
+    'echo "  --> $(basename "$2"):1:5"\n'
 )
 
 
@@ -182,18 +190,104 @@ class ProcessHandlingTests(unittest.TestCase):
             self._run('echo "error: bad usage" 1>&2\nexit 2\n')
 
     def test_valid_exit1_with_diagnostic_parses(self):
-        parse_errors, diags = self._run(DIAG_LINES + "exit 1\n")
+        parse_errors, diags, incompletes = self._run(DIAG_LINES + "exit 1\n")
         self.assertEqual(parse_errors, [])
         self.assertEqual(diags, [(1, 2322)])
+        self.assertEqual(incompletes, [])
 
     def test_valid_exit0_clean_parses_empty(self):
-        parse_errors, diags = self._run("exit 0\n")
-        self.assertEqual((parse_errors, diags), ([], []))
+        parse_errors, diags, incompletes = self._run("exit 0\n")
+        self.assertEqual((parse_errors, diags, incompletes), ([], [], []))
 
     def test_valid_parse_error_exit1_parses(self):
-        parse_errors, diags = self._run('echo "error: Unexpected token"\nexit 1\n')
+        parse_errors, diags, incompletes = self._run('echo "error: Unexpected token"\nexit 1\n')
         self.assertEqual(len(parse_errors), 1)
         self.assertEqual(diags, [])
+        self.assertEqual(incompletes, [])
+
+    # --- exit 3: the first-class incomplete outcome (WU2) --------------------
+
+    def test_valid_exit3_with_incomplete_parses(self):
+        parse_errors, diags, incompletes = self._run(INCOMPLETE_LINES + "exit 3\n")
+        self.assertEqual((parse_errors, diags), ([], []))
+        self.assertEqual(incompletes, ["expr-infer/template-literal/interpolation"])
+
+    def test_exit3_with_no_incomplete_is_harness_failure(self):
+        """Exit 3 with unparseable output (no incomplete record) is a hard failure —
+        a lost incomplete outcome must not be scored as a silent zero."""
+        with self.assertRaises(ts.HarnessFailure):
+            self._run('echo "some noise"\nexit 3\n')
+
+    def test_exit0_with_incomplete_is_harness_failure(self):
+        """A clean exit that still prints an incomplete record is inconsistent —
+        exit 0 must be silent (exit-0-with-anything = hard inconsistency)."""
+        with self.assertRaises(ts.HarnessFailure):
+            self._run(INCOMPLETE_LINES + "exit 0\n")
+
+    def test_exit3_carries_both_diagnostics_and_incomplete(self):
+        """An exit-3 test round-trips BOTH its diagnostic diff and its incomplete
+        identities: the demotion keeps the diagnostic visible."""
+        parse_errors, diags, incompletes = self._run(
+            DIAG_LINES + INCOMPLETE_LINES + "exit 3\n")
+        self.assertEqual(parse_errors, [])
+        self.assertEqual(diags, [(1, 2322)])
+        self.assertEqual(incompletes, ["expr-infer/template-literal/interpolation"])
+
+    def test_source_snippet_mentioning_incomplete_is_not_a_record(self):
+        """WU7-B BLOCKER witness: rich output quotes source lines; a snippet (or a
+        diagnostic message body) merely CONTAINING `incomplete[...]` must not
+        fabricate a phantom incomplete record. PRE-FIX: the unanchored
+        `INCOMPLETE_RE.search` captured `x` / `0` from the quoted source, consumed
+        the diagnostic header line, and misclassified a complete exit-1 test as
+        OOS:unsupported with a garbage identity."""
+        script = (
+            # Message body mentions incomplete[x] (a user string literal in the type).
+            "echo 'error[TK2322]: Type \"incomplete[x]\" is not assignable to type number'\n"
+            'echo "  --> $(basename "$2"):1:19"\n'
+            "echo '  |'\n"
+            # Rich source-snippet lines quoting user code containing the token.
+            "echo '1 | const n: number = \"incomplete[x]\";'\n"
+            "echo '  |                   ^^^^^^^^^^^^^^^'\n"
+            "echo '2 | arr.incomplete[0];'\n"
+            "exit 1\n"
+        )
+        parse_errors, diags, incompletes = self._run(script)
+        self.assertEqual(incompletes, [],
+                         "quoted source/message text must not parse as records")
+        self.assertEqual(diags, [(1, 2322)],
+                         "the diagnostic must still parse (exit-1 test stays IN)")
+        self.assertEqual(parse_errors, [])
+
+    def test_snippet_with_paren_colon_prefix_is_not_a_record(self):
+        """WU7-B re-review witness (gap a): the `\\): ` alternative of the first fix
+        matched MID-LINE inside rich source snippets, so user code containing
+        `): incomplete[evil/id]` — as a string literal or a trailing comment — still
+        fabricated a phantom record whose id passes shape validation. The harness
+        only ever sees rich output (run_typokat passes no --format), where a real
+        record is anchored at column 0."""
+        script = (
+            DIAG_LINES  # a real diagnostic, so exit 1 stays consistent
+            + "echo '  |'\n"
+            # String-literal shape: quoted source containing `): incomplete[...]`.
+            "echo '1 | const n: number = \"f(1): incomplete[evil/id]\";'\n"
+            # Trailing-comment shape on an error line.
+            "echo '2 | bad(); // note(): incomplete[evil/id]'\n"
+            "exit 1\n"
+        )
+        parse_errors, diags, incompletes = self._run(script)
+        self.assertEqual(incompletes, [],
+                         "mid-line `): incomplete[...]` must not parse as a record")
+        self.assertEqual(diags, [(1, 2322)])
+        self.assertEqual(parse_errors, [])
+
+    def test_exit1_with_incomplete_record_is_harness_failure(self):
+        """WU7-B re-review witness (gap b / R5): the Rust CLI can never exit 1 while
+        printing an incomplete record (any incomplete forces exit 3), so a parsed
+        diagnostic AND an incomplete record under exit 1 means parser fabrication or
+        a broken binary — a hard inconsistency, symmetric with the exit-0/exit-3
+        checks."""
+        with self.assertRaises(ts.HarnessFailure):
+            self._run(DIAG_LINES + INCOMPLETE_LINES + "exit 1\n")
 
 
 # --- scoreboard format round-trip --------------------------------------------
@@ -213,6 +307,130 @@ class ScoreboardFormatTests(unittest.TestCase):
         # Out-of-scope rows carry no identity.
         self.assertEqual(board["y.ts"]["status"], "OOS:syntax:enum")
         self.assertIsNone(board["y.ts"]["matched_ids"])
+        self.assertIsNone(board["y.ts"]["incomplete_ids"])
+
+    def test_unsupported_round_trips_diag_diff_and_incomplete_identities(self):
+        """An exit-3 (OOS:unsupported) record round-trips BOTH its diagnostic diff
+        (matched/fp identities) AND its incomplete surface identities."""
+        rows = [
+            rec("u.ts", bucket="unsupported", matched=1, fn=1, fp=1, expected=2,
+                matched_detail=[(3, 2322)], fp_detail=[(9, 2339)],
+                incomplete_detail=["expr-infer/template-literal/interpolation",
+                                   "stmt-check/try-statement/handler"]),
+        ]
+        with temp_scoreboard(rows):
+            board = ts.read_scoreboard()
+        row = board["u.ts"]
+        self.assertEqual(row["status"], "OOS:unsupported")
+        self.assertEqual(row["matched_ids"], [(3, 2322)])
+        self.assertEqual(row["fp_ids"], [(9, 2339)])
+        self.assertEqual(sorted(row["incomplete_ids"]),
+                         ["expr-infer/template-literal/interpolation",
+                          "stmt-check/try-statement/handler"])
+        # The numeric diag diff is preserved so recall stays comparable across demotion.
+        self.assertEqual((row["matched"], row["fn"], row["fp"], row["expected"]),
+                         (1, 1, 1, 2))
+
+
+# --- WU7-B hardening: incomplete-id shape validation --------------------------
+
+class IncompleteIdValidationTests(unittest.TestCase):
+    HOSTILE = ["with,comma/x", "with|pipe/x", "with\ttab/x", "noslash",
+               "Upper/Case/Bad", "spaced id/x"]
+
+    def test_hostile_id_never_written_to_scoreboard(self):
+        """An id containing `,`, `|`, TAB, or any off-vocabulary character would
+        corrupt the `<matched>|<fp>|<incomplete>` column — serialization hard-fails
+        instead of silently corrupting the committed board."""
+        for bad in self.HOSTILE:
+            rows = [rec("u.ts", bucket="unsupported", incomplete_detail=[bad])]
+            with self.assertRaises(ValueError, msg=f"id {bad!r} must be rejected"):
+                with temp_scoreboard(rows):
+                    pass
+
+    def test_hostile_id_in_committed_scoreboard_hard_fails_on_read(self):
+        """A malformed id already in the committed board (e.g. hand-edited) fails
+        loudly on read rather than flowing into the ratchet comparison."""
+        fd, path = tempfile.mkstemp(suffix=".scoreboard.txt")
+        with os.fdopen(fd, "w") as f:
+            f.write("# header\n")
+            f.write("OOS:unsupported\t0 0 0 0\t||noslash\tu.ts\n")
+        saved = ts.SCOREBOARD
+        ts.SCOREBOARD = path
+        try:
+            with self.assertRaises(ValueError):
+                ts.read_scoreboard()
+        finally:
+            ts.SCOREBOARD = saved
+            os.unlink(path)
+
+    def test_malformed_rendered_id_is_a_harness_failure(self):
+        """A well-anchored incomplete record whose id is off-vocabulary is a hard
+        harness failure at parse time — never recorded."""
+        binary = fake_binary(
+            'echo "incomplete[NOT A VALID ID]: bad"\nexit 3\n')
+        try:
+            with self.assertRaises(ts.HarnessFailure):
+                ts.run_typokat(binary, "const x = 1;\n", "probe.ts")
+        finally:
+            os.unlink(binary)
+
+    def test_valid_ids_pass_validation(self):
+        rows = [rec("u.ts", bucket="unsupported",
+                    incomplete_detail=["expr-infer/template-literal/interpolation",
+                                       "stmt-check/try-statement/handler",
+                                       "a/b", "x-1/y-2/z-3"])]
+        with temp_scoreboard(rows):
+            board = ts.read_scoreboard()
+        self.assertEqual(len(board["u.ts"]["incomplete_ids"]), 4)
+
+
+# --- Finding 4: the exit-3 unsupported outcome ratchet (WU2) ------------------
+
+class UnsupportedOutcomeTests(unittest.TestCase):
+    def _unsup(self, rel, **kw):
+        return rec(rel, bucket="unsupported", **kw)
+
+    def test_in_to_unsupported_is_a_regression(self):
+        base = [rec("a.ts", matched=1, expected=1, matched_detail=[(1, 2322)])]
+        cur = [self._unsup("a.ts", matched=1, expected=1, matched_detail=[(1, 2322)],
+                           incomplete_detail=["expr-infer/template-literal/interpolation"])]
+        with temp_scoreboard(base):
+            self.assertFalse(compare(cur), "IN → OOS:unsupported must regress")
+
+    def test_unsupported_dropped_matched_diagnostic_is_a_regression(self):
+        """Demotion must not blind the harness: a matched diagnostic dropped inside a
+        now-unsupported test is still a regression."""
+        base = [self._unsup("a.ts", matched=1, expected=1, matched_detail=[(1, 2322)],
+                            incomplete_detail=["x/y/z"])]
+        cur = [self._unsup("a.ts", matched=0, fn=1, expected=1,
+                           incomplete_detail=["x/y/z"])]
+        with temp_scoreboard(base):
+            self.assertFalse(compare(cur))
+
+    def test_unsupported_dropped_incomplete_identity_is_a_regression(self):
+        base = [self._unsup("a.ts", incomplete_detail=["x/y/z", "p/q/r"])]
+        cur = [self._unsup("a.ts", incomplete_detail=["x/y/z"])]
+        with temp_scoreboard(base):
+            self.assertFalse(compare(cur))
+
+    def test_unsupported_gained_incomplete_identity_is_progress(self):
+        base = [self._unsup("a.ts", incomplete_detail=["x/y/z"])]
+        cur = [self._unsup("a.ts", incomplete_detail=["x/y/z", "p/q/r"])]
+        with temp_scoreboard(base):
+            self.assertTrue(compare(cur))
+
+    def test_identical_unsupported_has_no_regression(self):
+        rows = [self._unsup("a.ts", matched=1, expected=1, matched_detail=[(1, 2322)],
+                            incomplete_detail=["x/y/z"])]
+        with temp_scoreboard(rows):
+            self.assertTrue(compare(list(rows)))
+
+    def test_unsupported_to_in_is_progress(self):
+        base = [self._unsup("a.ts", incomplete_detail=["x/y/z"])]
+        cur = [rec("a.ts", matched=1, expected=1, matched_detail=[(1, 2322)])]
+        with temp_scoreboard(base):
+            self.assertTrue(compare(cur))
 
 
 if __name__ == "__main__":

@@ -7,5 +7,6 @@ pub mod flow;
 pub mod infer;
 
 pub use checker::{
-    check_program, check_project_programs, ProjectImport, ProjectImportSource, ProjectProgram,
+    check_program, check_project_programs, CheckResult, ProjectImport, ProjectImportSource,
+    ProjectProgram,
 };

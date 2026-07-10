@@ -3,10 +3,14 @@
 //! The conformance harness consumes code/message/span as the source of truth;
 //! `codespan-reporting` output is presentation-only.
 
+mod incomplete;
 mod reason;
 mod render_type;
 mod writer;
 
+pub use incomplete::{
+    render_incomplete_to_writer, render_incomplete_to_writer_with_format, IncompleteSurface,
+};
 pub use reason::render_reason_chain;
 pub use render_type::render_type;
 pub use writer::{render_to_writer, render_to_writer_with_format};

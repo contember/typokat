@@ -9,22 +9,41 @@ use std::process::ExitCode;
 use typokat::diagnostics::{self, DiagnosticFormat};
 use typokat::driver::{check_project, FileInput};
 
+/// Exit code when the file has type/parse errors (complete run, errors found).
+const EXIT_ERRORS: u8 = 1;
 /// Exit code for a usage error (bad/missing arguments).
 const EXIT_USAGE: u8 = 2;
-/// Exit code when the file has type/parse errors.
-const EXIT_ERRORS: u8 = 1;
+/// Exit code when the run is incomplete — the checker skipped an in-scope surface.
+/// Takes precedence over [`EXIT_ERRORS`] even when ordinary diagnostics also exist.
+const EXIT_INCOMPLETE: u8 = 3;
 const USAGE: &str = "usage: typokat check [--format rich|compact] <file.ts>...";
+
+/// The outcome of a well-formed `check` invocation. Distinct from a usage/IO error
+/// (which is `Err` and maps to exit `2`). Incomplete outranks diagnostics: a run that
+/// both skipped a surface and found errors is `Incomplete`.
+enum CheckStatus {
+    /// No diagnostics, no parse errors, no incomplete surfaces → exit `0`.
+    Clean,
+    /// Type/parse diagnostics, and nothing incomplete → exit `1`.
+    Diagnostics,
+    /// At least one incomplete surface (regardless of diagnostics) → exit `3`.
+    Incomplete,
+}
+
+impl CheckStatus {
+    fn exit_code(self) -> ExitCode {
+        match self {
+            CheckStatus::Clean => ExitCode::SUCCESS,
+            CheckStatus::Diagnostics => ExitCode::from(EXIT_ERRORS),
+            CheckStatus::Incomplete => ExitCode::from(EXIT_INCOMPLETE),
+        }
+    }
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     match run(&args) {
-        Ok(had_errors) => {
-            if had_errors {
-                ExitCode::from(EXIT_ERRORS)
-            } else {
-                ExitCode::SUCCESS
-            }
-        }
+        Ok(status) => status.exit_code(),
         Err(err) => {
             eprintln!("error: {err}");
             ExitCode::from(EXIT_USAGE)
@@ -32,10 +51,10 @@ fn main() -> ExitCode {
     }
 }
 
-/// Parse arguments and dispatch. Returns `Ok(had_errors)` on a well-formed
-/// invocation, or `Err(message)` for a usage/IO error. No panics: all failure
-/// modes are reported gracefully.
-fn run(args: &[String]) -> Result<bool, String> {
+/// Parse arguments and dispatch. Returns `Ok(status)` on a well-formed invocation,
+/// or `Err(message)` for a usage/IO error. No panics: all failure modes are reported
+/// gracefully.
+fn run(args: &[String]) -> Result<CheckStatus, String> {
     // args[0] is the program name.
     let command = args.get(1).map(String::as_str);
     match command {
@@ -111,10 +130,11 @@ fn parse_diagnostic_format(value: &str) -> Result<DiagnosticFormat, String> {
     }
 }
 
-/// Read inputs, check them as one local-relative project, and report diagnostics.
-/// Read failures remain usage/IO errors; single-file rendering is unchanged for
-/// the official-suite harness.
-fn check_paths(paths: &[String], format: DiagnosticFormat) -> Result<bool, String> {
+/// Read inputs, check them as one local-relative project, and report diagnostics
+/// plus incomplete surfaces. Read failures remain usage/IO errors. All three channels
+/// (parse errors, diagnostics, incomplete) are always rendered; the returned status
+/// gives exit `3` precedence over exit `1` when any surface was incomplete.
+fn check_paths(paths: &[String], format: DiagnosticFormat) -> Result<CheckStatus, String> {
     let mut inputs = Vec::with_capacity(paths.len());
     for path in paths {
         let source =
@@ -131,6 +151,7 @@ fn check_paths(paths: &[String], format: DiagnosticFormat) -> Result<bool, Strin
     let mut handle = std::io::BufWriter::new(stderr.lock());
 
     let mut had_errors = false;
+    let mut had_incomplete = false;
     for report in &reports {
         for parse_error in &report.output.parse_errors {
             // Parser errors come pre-formatted from oxc; surface them plainly.
@@ -146,12 +167,31 @@ fn check_paths(paths: &[String], format: DiagnosticFormat) -> Result<bool, Strin
         )
         .map_err(|e| format!("failed to render diagnostics: {e}"))?;
 
+        // The incomplete channel renders separately (no TK code); still shown even
+        // when the same file also has diagnostics.
+        diagnostics::render_incomplete_to_writer_with_format(
+            &mut handle,
+            &report.name,
+            &report.source,
+            &report.output.incomplete,
+            format,
+        )
+        .map_err(|e| format!("failed to render incomplete surfaces: {e}"))?;
+
         had_errors |= report.output.has_errors();
+        had_incomplete |= report.output.is_incomplete();
     }
 
     handle
         .flush()
         .map_err(|e| format!("failed to flush diagnostics: {e}"))?;
 
-    Ok(had_errors)
+    // Precedence: incomplete outranks diagnostics.
+    Ok(if had_incomplete {
+        CheckStatus::Incomplete
+    } else if had_errors {
+        CheckStatus::Diagnostics
+    } else {
+        CheckStatus::Clean
+    })
 }

@@ -173,11 +173,31 @@ def syntax_bucket(content):
 # A diagnostic header `error[TK2322]: ...`, then a location line `... :line:col`.
 TK_HEAD_RE = re.compile(r"^error\[TK(\d+)\]:")
 PARSE_ERR_RE = re.compile(r"^error: ")
+# An incomplete-surface record `incomplete[<stable-id>]: ...` (WU2). The id is the
+# stable `role/surface/slot-or-variant` identity; it carries no TK code. Anchored to
+# COLUMN 0, rich-format-only: run_typokat invokes the binary with no --format, so the
+# harness only ever sees rich output, where a real record starts the line. Rich output
+# also quotes source-snippet lines (and diagnostic messages can embed user strings),
+# so any looser pattern — unanchored, or with a mid-line `\): ` compact-style
+# alternative — lets user code containing `incomplete[...]` fabricate phantom records
+# (WU7-B blocker + re-review gap a). If a future harness mode passes --format compact,
+# select a compact-anchored regex BY that format parameter; never widen this one.
+INCOMPLETE_RE = re.compile(r"^incomplete\[([^\]]+)\]")
 
-# The only exit codes the typokat CLI is documented to return: 0 (clean) and 1
-# (type/parse errors). 2 is a usage error and anything else (or a negative code =
-# killed by a signal) means the checker crashed or the harness misused it.
-OK_EXIT_CODES = (0, 1)
+# The stable surface-id shape `role/surface/slot-or-variant` (kebab-case segments,
+# two or more slashes' worth). Enforced on parse AND serialize: an id containing
+# `,`, `|`, a TAB, or any other stray character would corrupt the scoreboard's
+# `<matched>|<fp>|<incomplete>` column, so a malformed id is a hard failure, never
+# silently written or read (WU7-B hardening).
+INC_ID_RE = re.compile(r"^[a-z0-9-]+(?:/[a-z0-9-]+)+$")
+
+# Exit codes the typokat CLI is documented to return: 0 (clean), 1 (type/parse
+# errors), and 3 (incomplete — the checker skipped an in-scope surface; WU2). 2 is a
+# usage error and anything else (or a negative code = killed by a signal) means the
+# checker crashed or the harness misused it. Exit 3 is a *discovery* result
+# (OOS:unsupported), never a crash — but with unparseable output it is still a hard
+# failure, and it never becomes a silent success path.
+OK_EXIT_CODES = (0, 1, 3)
 
 
 class HarnessFailure(Exception):
@@ -189,14 +209,16 @@ class HarnessFailure(Exception):
 
 
 def run_typokat(binary, content, rel="<unknown>"):
-    """Run the binary on `content`; return (parse_errors, diagnostics) where
-    diagnostics is a list of (line, code:int). Lines are 1-based, aligned to
-    `content` (which the caller has already stripped of @option directives).
+    """Run the binary on `content`; return (parse_errors, diagnostics, incompletes).
+    `diagnostics` is a list of (line, code:int); `incompletes` is a list of stable
+    surface-id strings (WU2, exit 3). Lines are 1-based, aligned to `content` (which
+    the caller has already stripped of @option directives).
 
-    Raises `HarnessFailure` (never scored as success or zero) when the process
-    times out, is killed by a signal, exits with an undocumented code, or produces
-    output inconsistent with its exit code (exit 0 with diagnostics, or exit 1 with
-    nothing parseable)."""
+    Raises `HarnessFailure` (never scored as success or zero) when the process times
+    out, is killed by a signal, exits with an undocumented code, or produces output
+    inconsistent with its exit code: exit 0 with ANY diagnostic OR incomplete record,
+    exit 1 with nothing parseable OR with an incomplete record (incomplete forces
+    exit 3), or exit 3 with no incomplete record (lost output)."""
     with tempfile.NamedTemporaryFile("w", suffix=".ts", delete=False) as f:
         f.write(content)
         tmp = f.name
@@ -215,14 +237,33 @@ def run_typokat(binary, content, rel="<unknown>"):
     loc_re = re.compile(re.escape(tmp_base) + r":(\d+):(\d+)")
     parse_errors = []
     diags = []
+    incompletes = []
     pending = None  # code awaiting its location line
     for line in out.split("\n"):
+        # Diagnostic/parse-error heads are anchored at column 0, so match them first:
+        # a real incomplete record can never start with `error[`/`error: `, while a
+        # diagnostic message could in principle embed incomplete-looking text.
         h = TK_HEAD_RE.match(line)
         if h:
             pending = int(h.group(1))
             continue
         if PARSE_ERR_RE.match(line):
             parse_errors.append(line)
+            continue
+        # Incomplete records carry no TK code and never a pending diag location, so
+        # scan them independently of the diagnostic state machine. Anchored .match,
+        # same as TK_HEAD_RE — quoted source must never fabricate a record.
+        im = INCOMPLETE_RE.match(line)
+        if im:
+            inc_id = im.group(1)
+            # Defensive shape check: a malformed id would corrupt the scoreboard
+            # column format, so it is a hard failure, never recorded.
+            if not INC_ID_RE.match(inc_id):
+                raise HarnessFailure(
+                    f"{rel}: typokat printed an incomplete record with a malformed "
+                    f"surface id {inc_id!r} (expected role/surface/slot-or-variant, "
+                    f"kebab-case)\n--- captured output ---\n{out}")
+            incompletes.append(inc_id)
             continue
         if pending is not None:
             lm = loc_re.search(line)
@@ -232,23 +273,35 @@ def run_typokat(binary, content, rel="<unknown>"):
 
     # Validate the exit code and its consistency with the parsed output. A failure
     # here is a harness failure, not a data point: it must never be silently scored.
-    has_output = bool(parse_errors) or bool(diags)
+    has_diag_output = bool(parse_errors) or bool(diags)
     if returncode not in OK_EXIT_CODES:
         raise HarnessFailure(
             f"{rel}: typokat exited with unexpected code {returncode} "
-            f"(expected 0 or 1; negative = killed by signal)\n"
+            f"(expected 0, 1, or 3; negative = killed by signal)\n"
             f"--- captured output ---\n{out}")
-    if returncode == 0 and has_output:
+    if returncode == 0 and (has_diag_output or incompletes):
         raise HarnessFailure(
-            f"{rel}: typokat exited 0 but reported diagnostics/parse errors "
-            f"(inconsistent: a clean exit must be silent)\n"
+            f"{rel}: typokat exited 0 but reported diagnostics/parse errors/incomplete "
+            f"records (inconsistent: a clean exit must be silent)\n"
             f"--- captured output ---\n{out}")
-    if returncode == 1 and not has_output:
+    if returncode == 1 and not has_diag_output:
         raise HarnessFailure(
             f"{rel}: typokat exited 1 but no diagnostic or parse error could be "
             f"parsed (unparseable / lost output)\n"
             f"--- captured output ---\n{out}")
-    return parse_errors, diags
+    if returncode == 1 and incompletes:
+        # The CLI can never exit 1 with an incomplete record (incomplete forces exit
+        # 3), so this means parser fabrication or a broken binary (re-review gap b).
+        raise HarnessFailure(
+            f"{rel}: typokat exited 1 but printed incomplete record(s) "
+            f"(inconsistent: any incomplete surface must force exit 3)\n"
+            f"--- captured output ---\n{out}")
+    if returncode == 3 and not incompletes:
+        raise HarnessFailure(
+            f"{rel}: typokat exited 3 (incomplete) but no incomplete record could be "
+            f"parsed (unparseable / lost output)\n"
+            f"--- captured output ---\n{out}")
+    return parse_errors, diags, incompletes
 
 
 # --- baseline (.errors.txt) parsing ------------------------------------------
@@ -438,7 +491,8 @@ def cmd_run(args):
         options, units = parse_units(source)
         rec = {"rel": rel, "bucket": None, "strict": is_strict(options),
                "matched": 0, "fn": 0, "fp": 0, "expected": 0,
-               "matched_detail": [], "fn_detail": [], "fp_detail": []}
+               "matched_detail": [], "fn_detail": [], "fp_detail": [],
+               "incomplete_detail": []}
 
         if len(units) > 1:
             rec["bucket"] = "multifile"
@@ -458,9 +512,26 @@ def cmd_run(args):
         rec["expected"] = len(expected)
 
         try:
-            parse_errors, diags = run_typokat(binary, content, rel)
+            parse_errors, diags, incompletes = run_typokat(binary, content, rel)
         except HarnessFailure as e:
             sys.exit(f"\nHARNESS FAILURE (aborting — never scored as success):\n  {e}")
+
+        # Exit-3 discovery: typokat recorded an in-scope surface it does not yet check.
+        # Demote to OOS:unsupported but KEEP the full diagnostic diff, so a diagnostic
+        # regression inside a now-unsupported test stays visible (the demotion must not
+        # blind the harness). The incomplete identities ride alongside the diff.
+        # Checked before parse-error deliberately: incompletes come only from exit 3
+        # (run_typokat enforces consistency), and exit 3 outranks everything else — if
+        # the CLI ever emitted both, the unsupported bucket must win over parse-error.
+        if incompletes:
+            d = diff(expected, diags)
+            rec.update(matched=d["matched"], fn=d["fn"], fp=d["fp"],
+                       matched_detail=d["matched_detail"],
+                       fn_detail=d["fn_detail"], fp_detail=d["fp_detail"],
+                       incomplete_detail=sorted(incompletes))
+            rec["bucket"] = "unsupported"
+            results.append(rec); continue
+
         if parse_errors:
             rec["bucket"] = "parse-error"
             results.append(rec); continue
@@ -564,12 +635,18 @@ def print_dashboard(binary, results):
 
 def _scoreboard_stats(results):
     inscope = [r for r in results if r["bucket"] is None]
+    unsupported = [r for r in results if r["bucket"] == "unsupported"]
     clean = [r for r in inscope if r["expected"] == 0]
     err = [r for r in inscope if r["expected"] > 0]
     clean_kept = sum(1 for r in clean if r["fp"] == 0)
     err_exact = sum(1 for r in err if r["fn"] == 0 and r["fp"] == 0)
-    rec_m = sum(r["matched"] for r in err)
-    rec_t = rec_m + sum(r["fn"] for r in err)
+    # diag-recall deliberately spans the IN↔unsupported boundary: an exit-3 demotion
+    # keeps its diagnostic diff, so a test moving IN→unsupported must not vanish from
+    # the recall denominator (WU2). clean-kept / error-exact stay in-scope-only (they
+    # are file-level exactness metrics for the diffed set).
+    recall_rows = err + [r for r in unsupported if r["expected"] > 0]
+    rec_m = sum(r["matched"] for r in recall_rows)
+    rec_t = rec_m + sum(r["fn"] for r in recall_rows)
     return inscope, clean, err, clean_kept, err_exact, rec_m, rec_t
 
 
@@ -579,13 +656,39 @@ def _fmt_ids(pairs):
     return ",".join(f"{ln}:{c}" for ln, c in sorted(pairs))
 
 
+def _check_inc_id(inc_id):
+    """Hard-fail on an incomplete surface id that does not match the stable
+    `role/surface/slot-or-variant` kebab-case shape. An id containing `,`, `|`, or a
+    TAB would corrupt the scoreboard's column format on write or read, so the board
+    is never silently corrupted by a future emission (WU7-B hardening)."""
+    if not INC_ID_RE.match(inc_id):
+        raise ValueError(
+            f"invalid incomplete surface id {inc_id!r}: expected "
+            f"role/surface/slot-or-variant (kebab-case segments)")
+
+
+def _fmt_inc(ids):
+    """Serialize incomplete surface identities (stable id strings) to a stable,
+    multiplicity-preserving string: sorted, comma-joined. Ids are validated first —
+    a malformed id must never be written into the scoreboard."""
+    for inc_id in ids:
+        _check_inc_id(inc_id)
+    return ",".join(sorted(ids))
+
+
 def _parse_ids(field):
-    """Inverse of the `<matched>|<fp>` identity column. Returns (matched, fp) as
-    lists of (line, code) with multiplicity, or (None, None) when identity was not
-    recorded (`-`, i.e. out-of-scope or a pre-identity-format scoreboard)."""
+    """Inverse of the `<matched>|<fp>[|<incomplete>]` identity column. Returns
+    (matched, fp, incomplete): matched/fp as lists of (line, code) with multiplicity;
+    incomplete as a list of id strings. Returns (None, None, None) when identity was
+    not recorded (`-`, i.e. a non-diffed out-of-scope or pre-identity-format line).
+    A two-segment field (IN lines) yields an empty incomplete list, so those round-trip
+    byte-for-byte."""
     if field in ("-", ""):
-        return None, None
-    m_str, _, f_str = field.partition("|")
+        return None, None, None
+    parts = field.split("|")
+    m_str = parts[0] if len(parts) > 0 else ""
+    f_str = parts[1] if len(parts) > 1 else ""
+    i_str = parts[2] if len(parts) > 2 else ""
 
     def parse_half(s):
         out = []
@@ -596,7 +699,61 @@ def _parse_ids(field):
             out.append((int(ln), int(c)))
         return out
 
-    return parse_half(m_str), parse_half(f_str)
+    inc = [tok for tok in i_str.split(",") if tok]
+    for tok in inc:
+        # A malformed id in the committed board means the file is corrupt — fail loudly.
+        _check_inc_id(tok)
+    return parse_half(m_str), parse_half(f_str), inc
+
+
+def _diag_delta(b, c):
+    """Compare matched/fp diagnostic identities of a diffed (IN or unsupported)
+    base/cur pair. Returns (regress_msg, progress_msg); either may be None. This is
+    the same identity discipline for IN↔IN and unsupported↔unsupported — a demotion
+    keeps its diff, so a dropped matched identity inside an unsupported test regresses."""
+    if b["matched_ids"] is None:
+        # Pre-identity-format baseline line: fall back to count comparison.
+        if c["matched"] < b["matched"] or c["fp"] > b["fp"]:
+            return (f"matched {b['matched']}→{c['matched']}, fp {b['fp']}→{c['fp']}", None)
+        if c["matched"] > b["matched"] or c["fp"] < b["fp"]:
+            return (None, f"matched {b['matched']}→{c['matched']}, fp {b['fp']}→{c['fp']}")
+        return (None, None)
+    base_m = Counter(b["matched_ids"])
+    cur_m = Counter(c["matched_detail"])
+    base_fp = Counter(b["fp_ids"])
+    cur_fp = Counter(c["fp_detail"])
+    lost = base_m - cur_m
+    new_fp = cur_fp - base_fp
+    if lost or new_fp:
+        bits = []
+        if lost:
+            bits.append("dropped " + _fmt_ids(lost.elements()))
+        if new_fp:
+            bits.append("new fp " + _fmt_ids(new_fp.elements()))
+        return ("; ".join(bits), None)
+    gained = cur_m - base_m
+    removed_fp = base_fp - cur_fp
+    if gained or removed_fp:
+        bits = []
+        if gained:
+            bits.append("matched " + _fmt_ids(gained.elements()))
+        if removed_fp:
+            bits.append("fixed fp " + _fmt_ids(removed_fp.elements()))
+        return (None, "; ".join(bits))
+    return (None, None)
+
+
+def _inc_delta(b, c):
+    """Compare incomplete surface identities for an unsupported base/cur pair. A
+    dropped incomplete identity is a regression (the accounting silently stopped
+    recording a surface); a gained one is progress. Returns (regress_msg, progress_msg)."""
+    base_i = Counter(b.get("incomplete_ids") or [])
+    cur_i = Counter(c.get("incomplete_detail") or [])
+    lost = base_i - cur_i
+    gained = cur_i - base_i
+    reg = ("dropped incomplete " + ",".join(sorted(lost.elements()))) if lost else None
+    pro = ("incomplete " + ",".join(sorted(gained.elements()))) if gained else None
+    return (reg, pro)
 
 
 def write_scoreboard(results):
@@ -617,11 +774,20 @@ def write_scoreboard(results):
                 f"error-exact {err_exact}/{len(err)}  diag-recall {rec_m}/{rec_t}\n")
         f.write("# cols: status<TAB>matched fn fp expected<TAB>ids<TAB>rel  "
                 "(status=IN | OOS:<bucket>; nums/ids '-' = n/a; "
-                "ids=<matched>|<fp> as sorted line:code identities)\n")
+                "ids=<matched>|<fp> as sorted line:code identities; "
+                "OOS:unsupported carries nums + <matched>|<fp>|<incomplete> — an exit-3 "
+                "demotion keeps its diagnostic diff plus its surface identities)\n")
         for r in rows:
             if r["bucket"] is None:
                 ids = f"{_fmt_ids(r['matched_detail'])}|{_fmt_ids(r['fp_detail'])}"
                 f.write(f"IN\t{r['matched']} {r['fn']} {r['fp']} {r['expected']}"
+                        f"\t{ids}\t{r['rel']}\n")
+            elif r["bucket"] == "unsupported":
+                # Exit-3 demotion: keep the diagnostic diff AND the incomplete identities
+                # so the ratchet still catches a regression inside a now-unsupported test.
+                ids = (f"{_fmt_ids(r['matched_detail'])}|{_fmt_ids(r['fp_detail'])}"
+                       f"|{_fmt_inc(r.get('incomplete_detail', []))}")
+                f.write(f"OOS:unsupported\t{r['matched']} {r['fn']} {r['fp']} {r['expected']}"
                         f"\t{ids}\t{r['rel']}\n")
             else:
                 f.write(f"OOS:{r['bucket']}\t- - - -\t-\t{r['rel']}\n")
@@ -648,10 +814,10 @@ def read_scoreboard():
             def num(x):
                 return None if x == "-" else int(x)
             m, fn, fp, exp = (num(x) for x in nums.split())
-            matched_ids, fp_ids = _parse_ids(ids)
+            matched_ids, fp_ids, incomplete_ids = _parse_ids(ids)
             out[rel] = {"status": status, "matched": m, "fn": fn, "fp": fp,
                         "expected": exp, "matched_ids": matched_ids,
-                        "fp_ids": fp_ids}
+                        "fp_ids": fp_ids, "incomplete_ids": incomplete_ids}
     return out
 
 
@@ -689,45 +855,44 @@ def compare_scoreboard(results):
                                  "(run --save to record it)"))
             continue
 
-        cur_in = c["bucket"] is None
         base_in = b["status"] == "IN"
+        base_unsup = b["status"] == "OOS:unsupported"
+        cur_in = c["bucket"] is None
+        cur_unsup = c["bucket"] == "unsupported"
+
+        # Both IN and OOS:unsupported carry a comparable diagnostic diff; only these
+        # two statuses are "diffed". Transitions in/out of the diffed set are the
+        # coverage regress/progress signals — but an exit-3 demotion (IN→unsupported)
+        # is a regression *and* its diagnostic drops are still surfaced.
+        def diffed_delta(with_incomplete):
+            reg, pro = _diag_delta(b, c)
+            if reg:
+                regress.append((rel, reg))
+            if pro:
+                progress.append((rel, pro))
+            if with_incomplete:
+                ireg, ipro = _inc_delta(b, c)
+                if ireg:
+                    regress.append((rel, ireg))
+                if ipro:
+                    progress.append((rel, ipro))
+
         if base_in and cur_in:
-            if b["matched_ids"] is None:
-                # Pre-identity-format baseline line: fall back to count comparison.
-                if c["matched"] < b["matched"] or c["fp"] > b["fp"]:
-                    regress.append((rel, f"matched {b['matched']}→{c['matched']}, "
-                                         f"fp {b['fp']}→{c['fp']}"))
-                elif c["matched"] > b["matched"] or c["fp"] < b["fp"]:
-                    progress.append((rel, f"matched {b['matched']}→{c['matched']}, "
-                                          f"fp {b['fp']}→{c['fp']}"))
-                continue
-            base_m = Counter(b["matched_ids"])
-            cur_m = Counter(c["matched_detail"])
-            base_fp = Counter(b["fp_ids"])
-            cur_fp = Counter(c["fp_detail"])
-            lost = base_m - cur_m
-            new_fp = cur_fp - base_fp
-            if lost or new_fp:
-                bits = []
-                if lost:
-                    bits.append("dropped " + _fmt_ids(lost.elements()))
-                if new_fp:
-                    bits.append("new fp " + _fmt_ids(new_fp.elements()))
-                regress.append((rel, "; ".join(bits)))
-            else:
-                gained = cur_m - base_m
-                removed_fp = base_fp - cur_fp
-                if gained or removed_fp:
-                    bits = []
-                    if gained:
-                        bits.append("matched " + _fmt_ids(gained.elements()))
-                    if removed_fp:
-                        bits.append("fixed fp " + _fmt_ids(removed_fp.elements()))
-                    progress.append((rel, "; ".join(bits)))
-        elif base_in and not cur_in:
-            regress.append((rel, f"IN → OOS:{c['bucket']} (lost coverage)"))
-        elif not base_in and cur_in:
+            diffed_delta(with_incomplete=False)
+        elif base_unsup and cur_unsup:
+            diffed_delta(with_incomplete=True)
+        elif base_in and cur_unsup:
+            regress.append((rel, "IN → OOS:unsupported (lost coverage)"))
+            diffed_delta(with_incomplete=False)
+        elif base_unsup and cur_in:
+            progress.append((rel, "OOS:unsupported → IN (gained coverage)"))
+            diffed_delta(with_incomplete=False)
+        elif (base_in or base_unsup) and not (cur_in or cur_unsup):
+            regress.append((rel, f"{b['status']} → OOS:{c['bucket']} (lost coverage)"))
+        elif not (base_in or base_unsup) and cur_in:
             progress.append((rel, f"{b['status']} → IN (gained coverage)"))
+        elif not (base_in or base_unsup) and cur_unsup:
+            progress.append((rel, f"{b['status']} → OOS:unsupported (gained accounting)"))
 
     print(f"\n  regression check vs scoreboard.txt — "
           f"regressions: {len(regress)}   progress: {len(progress)}   "

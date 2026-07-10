@@ -8,7 +8,7 @@ use crate::binder::bind_module_with_prelude;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::DeclId;
 use crate::binder::Binder;
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::relate::{Relater, Relation};
 use crate::span::Span;
 use crate::types::repr::TypeParamId;
@@ -42,11 +42,43 @@ use statements::{emit_obligation_failure, emit_override_failures};
 /// Trusted built-in utility aliases, checked as a real prelude unit before user code.
 pub(crate) const PRELUDE_SOURCE: &str = include_str!("../../prelude.ts");
 
-/// Check a parsed program and return the diagnostics it produces.
-pub fn check_program<'ast>(
-    interner: &mut Interner,
-    program: &'ast Program<'ast>,
-) -> Vec<Diagnostic> {
+/// The structured outcome of checking one module: type diagnostics plus the third
+/// incomplete-surface channel (in-scope AST positions the checker skipped). An empty
+/// `incomplete` is the normal case today — WU3–5 wire the emissions (sprint 2026-07-10).
+pub struct CheckResult {
+    pub diagnostics: Vec<Diagnostic>,
+    pub incomplete: Vec<IncompleteSurface>,
+}
+
+/// Test-only emission hook (WU2 plumbing): if `TYPOKAT_TEST_EMIT_INCOMPLETE` is set,
+/// record one incomplete surface per comma-separated id in its value (at span 0..0),
+/// exercising the real `record_incomplete` API end to end. No real checker path emits
+/// yet, so with the env var unset every run is unaffected. A blank/`1` value emits one
+/// default id.
+fn emit_test_incomplete(pass: &mut Pass<'_, '_>) {
+    let Some(value) = std::env::var_os("TYPOKAT_TEST_EMIT_INCOMPLETE") else {
+        return;
+    };
+    let value = value.to_string_lossy();
+    let ids: Vec<&str> = match value.trim() {
+        "" | "1" => vec!["test-only/plumbing/self"],
+        other => other
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect(),
+    };
+    for id in ids {
+        pass.record_incomplete(
+            id,
+            Span::new(0, 0),
+            "test-only emission hook (WU2 plumbing)",
+        );
+    }
+}
+
+/// Check a parsed program and return the diagnostics plus incomplete surfaces it produces.
+pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>) -> CheckResult {
     // Build the prelude in the same type universe; user code keeps only lifetime-free
     // resolved placeholders for its declarations.
     let prelude_allocator = Allocator::default();
@@ -165,12 +197,15 @@ pub fn check_program<'ast>(
     // Phase 1: walk the module body and collect relation obligations.
     pass.check_statements(binder.module, &program.body);
 
+    emit_test_incomplete(&mut pass);
+
     // Move the working set out before borrowing the store immutably for phase 2.
     let Pass {
         interner,
         obligations,
         override_checks,
         mut diagnostics,
+        incomplete,
         ..
     } = pass;
 
@@ -194,7 +229,10 @@ pub fn check_program<'ast>(
         &mut diagnostics,
     );
 
-    diagnostics
+    CheckResult {
+        diagnostics,
+        incomplete,
+    }
 }
 
 /// One parsed project unit handed to the serial M29 project checker.
@@ -226,11 +264,12 @@ struct ExportedSlots {
 
 type ExportSurface = BTreeMap<String, ExportedSlots>;
 
-/// Check a dependency-ordered project in one serial type universe.
+/// Check a dependency-ordered project in one serial type universe. Returns one
+/// [`CheckResult`] per unit, indexed like `units`.
 pub fn check_project_programs<'ast>(
     interner: &mut Interner,
     units: &[ProjectProgram<'ast>],
-) -> Vec<Vec<Diagnostic>> {
+) -> Vec<CheckResult> {
     let prelude_allocator = Allocator::default();
     let prelude_parsed = Parser::new(&prelude_allocator, PRELUDE_SOURCE, SourceType::ts()).parse();
     debug_assert!(
@@ -243,6 +282,8 @@ pub fn check_project_programs<'ast>(
     let mut module_scopes = Vec::with_capacity(units.len());
     let mut module_placeholders: Vec<Vec<ImportPlaceholder>> = Vec::with_capacity(units.len());
     let mut module_diagnostics: Vec<Vec<Diagnostic>> =
+        (0..units.len()).map(|_| Vec::new()).collect();
+    let mut module_incomplete: Vec<Vec<IncompleteSurface>> =
         (0..units.len()).map(|_| Vec::new()).collect();
     let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
 
@@ -367,6 +408,7 @@ pub fn check_project_programs<'ast>(
         pass.fill_type_decls_range(scope, start, end);
         emit_pending_checks(&mut pass);
         module_diagnostics[index].append(&mut pass.diagnostics);
+        module_incomplete[index].append(&mut pass.incomplete);
     }
 
     for (index, (scope, unit)) in module_scopes.iter().copied().zip(units).enumerate() {
@@ -374,10 +416,19 @@ pub fn check_project_programs<'ast>(
         pass.build_flow_graph(scope, &unit.program.body);
         pass.check_statements(scope, &unit.program.body);
         emit_pending_checks(&mut pass);
+        emit_test_incomplete(&mut pass);
         module_diagnostics[index].append(&mut pass.diagnostics);
+        module_incomplete[index].append(&mut pass.incomplete);
     }
 
     module_diagnostics
+        .into_iter()
+        .zip(module_incomplete)
+        .map(|(diagnostics, incomplete)| CheckResult {
+            diagnostics,
+            incomplete,
+        })
+        .collect()
 }
 
 fn imported_symbols(
@@ -607,6 +658,22 @@ fn emit_pending_checks(pass: &mut Pass<'_, '_>) {
     );
 }
 
+impl Pass<'_, '_> {
+    /// Record an in-scope AST position the walk skipped (WU2, sprint 2026-07-10). `id`
+    /// is the stable `role/surface/slot-or-variant` identity; `span` is the skipped
+    /// position. This is the single entry point the checker calls when WU3–5 wire real
+    /// emissions — it is deliberately not a diagnostic and carries no `TK` code.
+    pub(in crate::check::checker) fn record_incomplete(
+        &mut self,
+        id: &str,
+        span: Span,
+        context: &str,
+    ) {
+        self.incomplete
+            .push(IncompleteSurface::new(id, span, context));
+    }
+}
+
 /// Construct a fresh phase-1 [`Pass`]. Fill states come from the decl kind:
 /// classes/interfaces/template aliases start `Pending`; resolved placeholders and
 /// other declarations start `Done`.
@@ -661,6 +728,7 @@ fn build_pass<'a, 'ast>(
         obligations: Vec::new(),
         override_checks: Vec::new(),
         diagnostics: Vec::new(),
+        incomplete: Vec::new(),
         // M23 flow-graph state. Slots 0/1 are the UNREACHABLE/START sentinels the
         // whole arena reserves (see `FlowNodeId::{UNREACHABLE,START}`).
         flow_nodes: vec![
