@@ -476,3 +476,10 @@ convention.
   elements skipped in `infer_array_literal`; for-of over non-iterable / for-in over
   non-object undiagnosed (TS2488/TS2407, needs lib); bare `return;` not folded as
   `undefined` into inferred returns (TK2355 family, backlog 46).
+- **2026-07-10 - WU2 shipped** (commit `21c15df`) after WU4-B PASS. Case tests bind
+  into the switch-local scope (tsc-verified; only the discriminant is outer) — the
+  plan's parenthetical assumption was corrected during implementation. WU4-B
+  byproducts: `var` non-hoist now over-reports TK2304 in the switch shape too
+  (documented in divergences, owner backlog `47`); calling a local function before
+  its declaration is silently unchecked (pre-existing FN, hoisting — backlog
+  candidate for WU8 graduation).
