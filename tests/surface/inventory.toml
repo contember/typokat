@@ -1,0 +1,1485 @@
+# Surface-accounting inventory (sprint 2026-07-10, WU1).
+#
+# Machine-validated by tests/surface.rs. One record per stable
+# `role/surface/slot-or-variant` identity. Dispositions: supported (checker
+# handles it, witness = conformance fixture), unsupported-in (silently dropped
+# but in scope; owner = live backlog file), design-oos (out of scope by design).
+# Compile-time classifiers (src/surface.rs) map every oxc 0.137.0 AST variant to a
+# surface family; this file must carry a record for each. Schema:
+# tests/surface/README.md. Do not hand-desync from src/surface.rs — the
+# validator's classifier-coverage check will reject drift.
+
+[meta]
+oxc_version = "0.137.0"
+
+# ------------------------------------------------------------------------------
+# role: bind
+# ------------------------------------------------------------------------------
+
+[[surface]]
+id = "bind/binding-pattern/array-pattern"
+role = "bind"
+surface = "binding-pattern"
+slot = "array-pattern"
+oxc_variant = "BindingPattern::ArrayPattern"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "array destructuring pattern not bound to types"
+
+[[surface]]
+id = "bind/binding-pattern/assignment-pattern"
+role = "bind"
+surface = "binding-pattern"
+slot = "assignment-pattern"
+oxc_variant = "BindingPattern::AssignmentPattern"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "destructuring default (assignment pattern) not bound to types"
+
+[[surface]]
+id = "bind/binding-pattern/identifier"
+role = "bind"
+surface = "binding-pattern"
+slot = "identifier"
+oxc_variant = "BindingPattern::BindingIdentifier"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m1_binder_inference"
+
+[[surface]]
+id = "bind/binding-pattern/object-pattern"
+role = "bind"
+surface = "binding-pattern"
+slot = "object-pattern"
+oxc_variant = "BindingPattern::ObjectPattern"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "object destructuring pattern not bound to types"
+
+# ------------------------------------------------------------------------------
+# role: flow
+# ------------------------------------------------------------------------------
+
+[[surface]]
+id = "flow/do-while-statement/self"
+role = "flow"
+surface = "do-while-statement"
+slot = "self"
+oxc_variant = "Statement::DoWhileStatement"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "flow graph claims do-while not walked (cross-layer drift)"
+
+[[surface]]
+id = "flow/for-statement/self"
+role = "flow"
+surface = "for-statement"
+slot = "self"
+oxc_variant = "Statement::ForStatement"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "flow graph claims for-statement not walked (cross-layer drift)"
+
+# ------------------------------------------------------------------------------
+# role: type-fill
+# ------------------------------------------------------------------------------
+
+[[surface]]
+id = "type-fill/enum-declaration/self"
+role = "type-fill"
+surface = "enum-declaration"
+slot = "self"
+oxc_variant = "Declaration::TSEnumDeclaration"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/42-enums-type-side.md"
+witness = "enum type-side fill not implemented"
+
+[[surface]]
+id = "type-fill/module-declaration/self"
+role = "type-fill"
+surface = "module-declaration"
+slot = "self"
+oxc_variant = "Declaration::TSModuleDeclaration"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/43-namespaces-declaration-merging.md"
+witness = "namespace type-side fill not implemented"
+
+# ------------------------------------------------------------------------------
+# role: stmt-check
+# ------------------------------------------------------------------------------
+
+[[surface]]
+id = "stmt-check/assignment-target/self"
+role = "stmt-check"
+surface = "assignment-target"
+slot = "self"
+oxc_variant = "ForStatementLeft::AssignmentTarget"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "for-in/of left assignment target silently untyped"
+
+[[surface]]
+id = "stmt-check/block-statement/self"
+role = "stmt-check"
+surface = "block-statement"
+slot = "self"
+oxc_variant = "Statement::BlockStatement"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b53_cfg_assignments"
+
+[[surface]]
+id = "stmt-check/break-statement/self"
+role = "stmt-check"
+surface = "break-statement"
+slot = "self"
+oxc_variant = "Statement::BreakStatement"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "break: reachability effect not modeled"
+
+[[surface]]
+id = "stmt-check/continue-statement/self"
+role = "stmt-check"
+surface = "continue-statement"
+slot = "self"
+oxc_variant = "Statement::ContinueStatement"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "continue: reachability effect not modeled"
+
+[[surface]]
+id = "stmt-check/debugger-statement/self"
+role = "stmt-check"
+surface = "debugger-statement"
+slot = "self"
+oxc_variant = "Statement::DebuggerStatement"
+disposition = "design-oos"
+owner = "by-design"
+witness = "debugger has no type semantics"
+
+[[surface]]
+id = "stmt-check/do-while-statement/self"
+role = "stmt-check"
+surface = "do-while-statement"
+slot = "self"
+oxc_variant = "Statement::DoWhileStatement"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m23_unstructured_narrowing"
+
+[[surface]]
+id = "stmt-check/empty-statement/self"
+role = "stmt-check"
+surface = "empty-statement"
+slot = "self"
+oxc_variant = "Statement::EmptyStatement"
+disposition = "design-oos"
+owner = "by-design"
+witness = "empty statement (;) is a no-op, nothing to check"
+
+[[surface]]
+id = "stmt-check/expression-statement/self"
+role = "stmt-check"
+surface = "expression-statement"
+slot = "self"
+oxc_variant = "Statement::ExpressionStatement"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b53_cfg_assignments"
+
+[[surface]]
+id = "stmt-check/for-in-statement/self"
+role = "stmt-check"
+surface = "for-in-statement"
+slot = "self"
+oxc_variant = "Statement::ForInStatement"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m23_unstructured_narrowing"
+
+[[surface]]
+id = "stmt-check/for-of-statement/self"
+role = "stmt-check"
+surface = "for-of-statement"
+slot = "self"
+oxc_variant = "Statement::ForOfStatement"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m23_unstructured_narrowing"
+
+[[surface]]
+id = "stmt-check/for-statement/init"
+role = "stmt-check"
+surface = "for-statement"
+slot = "init"
+oxc_variant = "ForStatementInit::VariableDeclaration"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m23_unstructured_narrowing"
+
+[[surface]]
+id = "stmt-check/for-statement/self"
+role = "stmt-check"
+surface = "for-statement"
+slot = "self"
+oxc_variant = "Statement::ForStatement"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m23_unstructured_narrowing"
+
+[[surface]]
+id = "stmt-check/if-statement/self"
+role = "stmt-check"
+surface = "if-statement"
+slot = "self"
+oxc_variant = "Statement::IfStatement"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m7_narrowing"
+
+[[surface]]
+id = "stmt-check/labeled-statement/self"
+role = "stmt-check"
+surface = "labeled-statement"
+slot = "self"
+oxc_variant = "Statement::LabeledStatement"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b54_labeled_statements"
+
+[[surface]]
+id = "stmt-check/return-statement/self"
+role = "stmt-check"
+surface = "return-statement"
+slot = "self"
+oxc_variant = "Statement::ReturnStatement"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m3_functions"
+
+[[surface]]
+id = "stmt-check/switch-statement/self"
+role = "stmt-check"
+surface = "switch-statement"
+slot = "self"
+oxc_variant = "Statement::SwitchStatement"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m8_discriminated"
+
+[[surface]]
+id = "stmt-check/throw-statement/self"
+role = "stmt-check"
+surface = "throw-statement"
+slot = "self"
+oxc_variant = "Statement::ThrowStatement"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m23_unstructured_narrowing"
+
+[[surface]]
+id = "stmt-check/try-statement/block"
+role = "stmt-check"
+surface = "try-statement"
+slot = "block"
+oxc_variant = "Statement::TryStatement"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "../cases/b73_surface_accounting/try_catch_finally.ts"
+
+[[surface]]
+id = "stmt-check/try-statement/finalizer"
+role = "stmt-check"
+surface = "try-statement"
+slot = "finalizer"
+oxc_variant = "Statement::TryStatement"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "../cases/b73_surface_accounting/try_catch_finally.ts"
+
+[[surface]]
+id = "stmt-check/try-statement/handler"
+role = "stmt-check"
+surface = "try-statement"
+slot = "handler"
+oxc_variant = "Statement::TryStatement"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "../cases/b73_surface_accounting/try_catch_finally.ts"
+
+[[surface]]
+id = "stmt-check/try-statement/self"
+role = "stmt-check"
+surface = "try-statement"
+slot = "self"
+oxc_variant = "Statement::TryStatement"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "../cases/b73_surface_accounting/try_catch_finally.ts"
+
+[[surface]]
+id = "stmt-check/while-statement/self"
+role = "stmt-check"
+surface = "while-statement"
+slot = "self"
+oxc_variant = "Statement::WhileStatement"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m23_unstructured_narrowing"
+
+[[surface]]
+id = "stmt-check/with-statement/self"
+role = "stmt-check"
+surface = "with-statement"
+slot = "self"
+oxc_variant = "Statement::WithStatement"
+disposition = "design-oos"
+owner = "by-design"
+witness = "with is a strict-mode syntax error, no type model"
+
+# ------------------------------------------------------------------------------
+# role: expr-infer
+# ------------------------------------------------------------------------------
+
+[[surface]]
+id = "expr-infer/array-literal/element"
+role = "expr-infer"
+surface = "array-literal"
+slot = "element"
+oxc_variant = "Expression::ArrayExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m17_arrays"
+
+[[surface]]
+id = "expr-infer/array-literal/elision"
+role = "expr-infer"
+surface = "array-literal"
+slot = "elision"
+oxc_variant = "Expression::ArrayExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "array hole [, x] elided"
+
+[[surface]]
+id = "expr-infer/array-literal/self"
+role = "expr-infer"
+surface = "array-literal"
+slot = "self"
+oxc_variant = "Expression::ArrayExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m17_arrays"
+requires_slots = ["element", "spread-element"]
+
+[[surface]]
+id = "expr-infer/array-literal/spread-element"
+role = "expr-infer"
+surface = "array-literal"
+slot = "spread-element"
+oxc_variant = "Expression::ArrayExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/71-expression-inference-fn-tail.md"
+witness = "../cases/b73_surface_accounting/array_spread.ts"
+
+[[surface]]
+id = "expr-infer/arrow-function/self"
+role = "expr-infer"
+surface = "arrow-function"
+slot = "self"
+oxc_variant = "Expression::ArrowFunctionExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m3_functions"
+
+[[surface]]
+id = "expr-infer/as-assertion/self"
+role = "expr-infer"
+surface = "as-assertion"
+slot = "self"
+oxc_variant = "Expression::TSAsExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b33_as_cast_assignability"
+
+[[surface]]
+id = "expr-infer/assignment-expression/self"
+role = "expr-infer"
+surface = "assignment-expression"
+slot = "self"
+oxc_variant = "Expression::AssignmentExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/sr_wu1_expressions"
+
+[[surface]]
+id = "expr-infer/await-expression/self"
+role = "expr-infer"
+surface = "await-expression"
+slot = "self"
+oxc_variant = "Expression::AwaitExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "async/await result typing not modeled"
+
+[[surface]]
+id = "expr-infer/bigint-literal/self"
+role = "expr-infer"
+surface = "bigint-literal"
+slot = "self"
+oxc_variant = "Expression::BigIntLiteral"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "bigint literal value has no type model yet"
+
+[[surface]]
+id = "expr-infer/binary-expression/self"
+role = "expr-infer"
+surface = "binary-expression"
+slot = "self"
+oxc_variant = "Expression::BinaryExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/sr_wu1_expressions"
+
+[[surface]]
+id = "expr-infer/call-expression/self"
+role = "expr-infer"
+surface = "call-expression"
+slot = "self"
+oxc_variant = "Expression::CallExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/f1_object_interface_call"
+
+[[surface]]
+id = "expr-infer/class-expression/self"
+role = "expr-infer"
+surface = "class-expression"
+slot = "self"
+oxc_variant = "Expression::ClassExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/21-local-class-checking.md"
+witness = "class expression value not checked"
+
+[[surface]]
+id = "expr-infer/conditional-expression/self"
+role = "expr-infer"
+surface = "conditional-expression"
+slot = "self"
+oxc_variant = "Expression::ConditionalExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/sr_wu1_expressions"
+
+[[surface]]
+id = "expr-infer/element-access/self"
+role = "expr-infer"
+surface = "element-access"
+slot = "self"
+oxc_variant = "Expression::ComputedMemberExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/f4_destructuring_access"
+
+[[surface]]
+id = "expr-infer/function-expression/self"
+role = "expr-infer"
+surface = "function-expression"
+slot = "self"
+oxc_variant = "Expression::FunctionExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m3_functions"
+
+[[surface]]
+id = "expr-infer/identifier-reference/self"
+role = "expr-infer"
+surface = "identifier-reference"
+slot = "self"
+oxc_variant = "Expression::Identifier"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/sr_wu1_expressions"
+
+[[surface]]
+id = "expr-infer/import-expression/self"
+role = "expr-infer"
+surface = "import-expression"
+slot = "self"
+oxc_variant = "Expression::ImportExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/15-modules-imports.md"
+witness = "dynamic import() not modeled"
+
+[[surface]]
+id = "expr-infer/instantiation-expression/self"
+role = "expr-infer"
+surface = "instantiation-expression"
+slot = "self"
+oxc_variant = "Expression::TSInstantiationExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/41-generic-methods.md"
+witness = "explicit instantiation f<T> not modeled"
+
+[[surface]]
+id = "expr-infer/jsx/self"
+role = "expr-infer"
+surface = "jsx"
+slot = "self"
+oxc_variant = "Expression::{JSXElement,JSXFragment}"
+disposition = "design-oos"
+owner = "by-design"
+witness = "JSX is out of scope: no type-model surface"
+
+[[surface]]
+id = "expr-infer/literal/self"
+role = "expr-infer"
+surface = "literal"
+slot = "self"
+oxc_variant = "Expression::{BooleanLiteral,NullLiteral,NumericLiteral,StringLiteral}"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m0_assign_primitives"
+
+[[surface]]
+id = "expr-infer/logical-expression/self"
+role = "expr-infer"
+surface = "logical-expression"
+slot = "self"
+oxc_variant = "Expression::LogicalExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/sr_wu1_expressions"
+
+[[surface]]
+id = "expr-infer/member-access/self"
+role = "expr-infer"
+surface = "member-access"
+slot = "self"
+oxc_variant = "Expression::StaticMemberExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/f3_class_member_collection"
+
+[[surface]]
+id = "expr-infer/meta-property/self"
+role = "expr-infer"
+surface = "meta-property"
+slot = "self"
+oxc_variant = "Expression::MetaProperty"
+disposition = "design-oos"
+owner = "by-design"
+witness = "import.meta / new.target are runtime meta, no type surface"
+
+[[surface]]
+id = "expr-infer/new-expression/self"
+role = "expr-infer"
+surface = "new-expression"
+slot = "self"
+oxc_variant = "Expression::NewExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m11_classes"
+
+[[surface]]
+id = "expr-infer/non-null-assertion/self"
+role = "expr-infer"
+surface = "non-null-assertion"
+slot = "self"
+oxc_variant = "Expression::TSNonNullExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "non-null assertion (x!) not modeled"
+
+[[surface]]
+id = "expr-infer/object-literal/computed-key"
+role = "expr-infer"
+surface = "object-literal"
+slot = "computed-key"
+oxc_variant = "ObjectPropertyKind::ObjectProperty"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "../cases/b73_surface_accounting/computed_key.ts"
+
+[[surface]]
+id = "expr-infer/object-literal/self"
+role = "expr-infer"
+surface = "object-literal"
+slot = "self"
+oxc_variant = "Expression::ObjectExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m2_objects"
+requires_slots = ["value", "computed-key", "spread-element"]
+
+[[surface]]
+id = "expr-infer/object-literal/spread-element"
+role = "expr-infer"
+surface = "object-literal"
+slot = "spread-element"
+oxc_variant = "ObjectPropertyKind::SpreadProperty"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "../cases/b73_surface_accounting/array_spread.ts"
+
+[[surface]]
+id = "expr-infer/object-literal/value"
+role = "expr-infer"
+surface = "object-literal"
+slot = "value"
+oxc_variant = "ObjectPropertyKind::ObjectProperty"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m2_objects"
+
+[[surface]]
+id = "expr-infer/optional-chain/self"
+role = "expr-infer"
+surface = "optional-chain"
+slot = "self"
+oxc_variant = "Expression::ChainExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "optional chain (a?.b) not inferred"
+
+[[surface]]
+id = "expr-infer/parenthesized-expression/self"
+role = "expr-infer"
+surface = "parenthesized-expression"
+slot = "self"
+oxc_variant = "Expression::ParenthesizedExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/sr_wu1_expressions"
+
+[[surface]]
+id = "expr-infer/private-field-access/self"
+role = "expr-infer"
+surface = "private-field-access"
+slot = "self"
+oxc_variant = "Expression::PrivateFieldExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "private field access (obj.#x) not inferred"
+
+[[surface]]
+id = "expr-infer/private-in-expression/self"
+role = "expr-infer"
+surface = "private-in-expression"
+slot = "self"
+oxc_variant = "Expression::PrivateInExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "#field in obj not modeled"
+
+[[surface]]
+id = "expr-infer/regexp-literal/self"
+role = "expr-infer"
+surface = "regexp-literal"
+slot = "self"
+oxc_variant = "Expression::RegExpLiteral"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "RegExp literal typing depends on lib.d.ts"
+
+[[surface]]
+id = "expr-infer/satisfies-expression/self"
+role = "expr-infer"
+surface = "satisfies-expression"
+slot = "self"
+oxc_variant = "Expression::TSSatisfiesExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/44-satisfies-as-const.md"
+witness = "satisfies expression not modeled"
+
+[[surface]]
+id = "expr-infer/sequence-expression/self"
+role = "expr-infer"
+surface = "sequence-expression"
+slot = "self"
+oxc_variant = "Expression::SequenceExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/sr_wu1_expressions"
+
+[[surface]]
+id = "expr-infer/super/self"
+role = "expr-infer"
+surface = "super"
+slot = "self"
+oxc_variant = "Expression::Super"
+disposition = "design-oos"
+owner = "by-design"
+witness = "super is a runtime binding, no standalone value type"
+
+[[surface]]
+id = "expr-infer/tagged-template/self"
+role = "expr-infer"
+surface = "tagged-template"
+slot = "self"
+oxc_variant = "Expression::TaggedTemplateExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "tagged template expression not inferred"
+
+[[surface]]
+id = "expr-infer/template-literal/interpolation"
+role = "expr-infer"
+surface = "template-literal"
+slot = "interpolation"
+oxc_variant = "Expression::TemplateLiteral"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/71-expression-inference-fn-tail.md"
+witness = "../cases/b73_surface_accounting/template_interpolation.ts"
+
+[[surface]]
+id = "expr-infer/template-literal/self"
+role = "expr-infer"
+surface = "template-literal"
+slot = "self"
+oxc_variant = "Expression::TemplateLiteral"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/71-expression-inference-fn-tail.md"
+witness = "../cases/b73_surface_accounting/template_interpolation.ts"
+
+[[surface]]
+id = "expr-infer/this-expression/self"
+role = "expr-infer"
+surface = "this-expression"
+slot = "self"
+oxc_variant = "Expression::ThisExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m11_classes"
+
+[[surface]]
+id = "expr-infer/type-assertion/self"
+role = "expr-infer"
+surface = "type-assertion"
+slot = "self"
+oxc_variant = "Expression::TSTypeAssertion"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b33_as_cast_assignability"
+
+[[surface]]
+id = "expr-infer/unary-expression/self"
+role = "expr-infer"
+surface = "unary-expression"
+slot = "self"
+oxc_variant = "Expression::UnaryExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/sr_wu1_expressions"
+
+[[surface]]
+id = "expr-infer/update-expression/self"
+role = "expr-infer"
+surface = "update-expression"
+slot = "self"
+oxc_variant = "Expression::UpdateExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "update expression (x++) operand not resolved"
+
+[[surface]]
+id = "expr-infer/v8-intrinsic/self"
+role = "expr-infer"
+surface = "v8-intrinsic"
+slot = "self"
+oxc_variant = "Expression::V8IntrinsicExpression"
+disposition = "design-oos"
+owner = "by-design"
+witness = "V8 %-intrinsics are runtime-only, out of scope"
+
+[[surface]]
+id = "expr-infer/yield-expression/self"
+role = "expr-infer"
+surface = "yield-expression"
+slot = "self"
+oxc_variant = "Expression::YieldExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "generator yield result not modeled"
+
+# ------------------------------------------------------------------------------
+# role: annotation-lower
+# ------------------------------------------------------------------------------
+
+[[surface]]
+id = "annotation-lower/array-type/self"
+role = "annotation-lower"
+surface = "array-type"
+slot = "self"
+oxc_variant = "TSType::TSArrayType"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m17_arrays"
+
+[[surface]]
+id = "annotation-lower/bigint-keyword/self"
+role = "annotation-lower"
+surface = "bigint-keyword"
+slot = "self"
+oxc_variant = "TSType::TSBigIntKeyword"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "bigint keyword type not modeled"
+
+[[surface]]
+id = "annotation-lower/conditional-type/self"
+role = "annotation-lower"
+surface = "conditional-type"
+slot = "self"
+oxc_variant = "TSType::TSConditionalType"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m25_conditional_types"
+
+[[surface]]
+id = "annotation-lower/constructor-type/self"
+role = "annotation-lower"
+surface = "constructor-type"
+slot = "self"
+oxc_variant = "TSType::TSConstructorType"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m32_signature_shape"
+
+[[surface]]
+id = "annotation-lower/function-type/self"
+role = "annotation-lower"
+surface = "function-type"
+slot = "self"
+oxc_variant = "TSType::TSFunctionType"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m32_signature_shape"
+
+[[surface]]
+id = "annotation-lower/import-type/self"
+role = "annotation-lower"
+surface = "import-type"
+slot = "self"
+oxc_variant = "TSType::TSImportType"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/15-modules-imports.md"
+witness = "import(mod).T type not modeled"
+
+[[surface]]
+id = "annotation-lower/indexed-access-type/self"
+role = "annotation-lower"
+surface = "indexed-access-type"
+slot = "self"
+oxc_variant = "TSType::TSIndexedAccessType"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m19_index_sig"
+
+[[surface]]
+id = "annotation-lower/infer-type/self"
+role = "annotation-lower"
+surface = "infer-type"
+slot = "self"
+oxc_variant = "TSType::TSInferType"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m25_conditional_types"
+
+[[surface]]
+id = "annotation-lower/intersection-type/self"
+role = "annotation-lower"
+surface = "intersection-type"
+slot = "self"
+oxc_variant = "TSType::TSIntersectionType"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m31_intersections"
+
+[[surface]]
+id = "annotation-lower/intrinsic-keyword/self"
+role = "annotation-lower"
+surface = "intrinsic-keyword"
+slot = "self"
+oxc_variant = "TSType::TSIntrinsicKeyword"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "intrinsic keyword type not modeled"
+
+[[surface]]
+id = "annotation-lower/jsdoc-type/self"
+role = "annotation-lower"
+surface = "jsdoc-type"
+slot = "self"
+oxc_variant = "TSType::{JSDocNullableType,JSDocNonNullableType,JSDocUnknownType}"
+disposition = "design-oos"
+owner = "by-design"
+witness = "JSDoc types are out of scope"
+
+[[surface]]
+id = "annotation-lower/literal-type/bigint"
+role = "annotation-lower"
+surface = "literal-type"
+slot = "bigint"
+oxc_variant = "TSLiteral::BigIntLiteral"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "bigint literal type aborts annotation lowering"
+
+[[surface]]
+id = "annotation-lower/literal-type/self"
+role = "annotation-lower"
+surface = "literal-type"
+slot = "self"
+oxc_variant = "TSType::TSLiteralType"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m30_contextual_literals"
+
+[[surface]]
+id = "annotation-lower/literal-type/template"
+role = "annotation-lower"
+surface = "literal-type"
+slot = "template"
+oxc_variant = "TSLiteral::TemplateLiteral"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "template literal in TSLiteral position aborts lowering"
+
+[[surface]]
+id = "annotation-lower/literal-type/unary-minus"
+role = "annotation-lower"
+surface = "literal-type"
+slot = "unary-minus"
+oxc_variant = "TSLiteral::UnaryExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b30_negative_literals"
+
+[[surface]]
+id = "annotation-lower/mapped-type/self"
+role = "annotation-lower"
+surface = "mapped-type"
+slot = "self"
+oxc_variant = "TSType::TSMappedType"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m26_mapped_types"
+
+[[surface]]
+id = "annotation-lower/named-tuple-member/self"
+role = "annotation-lower"
+surface = "named-tuple-member"
+slot = "self"
+oxc_variant = "TSType::TSNamedTupleMember"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "named tuple member aborts tuple annotation lowering"
+
+[[surface]]
+id = "annotation-lower/object-keyword/self"
+role = "annotation-lower"
+surface = "object-keyword"
+slot = "self"
+oxc_variant = "TSType::TSObjectKeyword"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "object keyword type not modeled"
+
+[[surface]]
+id = "annotation-lower/parenthesized-type/self"
+role = "annotation-lower"
+surface = "parenthesized-type"
+slot = "self"
+oxc_variant = "TSType::TSParenthesizedType"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m4_unions"
+
+[[surface]]
+id = "annotation-lower/primitive-keyword/self"
+role = "annotation-lower"
+surface = "primitive-keyword"
+slot = "self"
+oxc_variant = "TSType::{TSAnyKeyword,TSUnknownKeyword,TSNeverKeyword,TSVoidKeyword,TSNullKeyword,TSUndefinedKeyword,TSBooleanKeyword,TSNumberKeyword,TSStringKeyword}"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m0_assign_primitives"
+
+[[surface]]
+id = "annotation-lower/symbol-keyword/self"
+role = "annotation-lower"
+surface = "symbol-keyword"
+slot = "self"
+oxc_variant = "TSType::TSSymbolKeyword"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "symbol keyword type not modeled"
+
+[[surface]]
+id = "annotation-lower/template-literal-type/self"
+role = "annotation-lower"
+surface = "template-literal-type"
+slot = "self"
+oxc_variant = "TSType::TSTemplateLiteralType"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m27_template_literals"
+
+[[surface]]
+id = "annotation-lower/this-type/self"
+role = "annotation-lower"
+surface = "this-type"
+slot = "self"
+oxc_variant = "TSType::TSThisType"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/70-this-parameter-typing.md"
+witness = "this type annotation not modeled"
+
+[[surface]]
+id = "annotation-lower/tuple-optional-element/self"
+role = "annotation-lower"
+surface = "tuple-optional-element"
+slot = "self"
+oxc_variant = "TSTupleElement::TSOptionalType"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "optional tuple element aborts tuple lowering"
+
+[[surface]]
+id = "annotation-lower/tuple-rest-element/self"
+role = "annotation-lower"
+surface = "tuple-rest-element"
+slot = "self"
+oxc_variant = "TSTupleElement::TSRestType"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m18_tuples"
+
+[[surface]]
+id = "annotation-lower/tuple-type/self"
+role = "annotation-lower"
+surface = "tuple-type"
+slot = "self"
+oxc_variant = "TSType::TSTupleType"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m18_tuples"
+
+[[surface]]
+id = "annotation-lower/type-literal/self"
+role = "annotation-lower"
+surface = "type-literal"
+slot = "self"
+oxc_variant = "TSType::TSTypeLiteral"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m19_index_sig"
+
+[[surface]]
+id = "annotation-lower/type-name/identifier"
+role = "annotation-lower"
+surface = "type-name"
+slot = "identifier"
+oxc_variant = "TSTypeName::IdentifierReference"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m22_unresolved_type"
+
+[[surface]]
+id = "annotation-lower/type-name/qualified-name"
+role = "annotation-lower"
+surface = "type-name"
+slot = "qualified-name"
+oxc_variant = "TSTypeName::QualifiedName"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/43-namespaces-declaration-merging.md"
+witness = "qualified type name A.B not resolved"
+
+[[surface]]
+id = "annotation-lower/type-name/this"
+role = "annotation-lower"
+surface = "type-name"
+slot = "this"
+oxc_variant = "TSTypeName::ThisExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/70-this-parameter-typing.md"
+witness = "this type name not resolved"
+
+[[surface]]
+id = "annotation-lower/type-operator/self"
+role = "annotation-lower"
+surface = "type-operator"
+slot = "self"
+oxc_variant = "TSType::TSTypeOperatorType"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m20_keyof"
+
+[[surface]]
+id = "annotation-lower/type-operator/unique-operand"
+role = "annotation-lower"
+surface = "type-operator"
+slot = "unique-operand"
+oxc_variant = "TSType::TSTypeOperatorType"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "unique symbol operator not lowered"
+
+[[surface]]
+id = "annotation-lower/type-predicate/self"
+role = "annotation-lower"
+surface = "type-predicate"
+slot = "self"
+oxc_variant = "TSType::TSTypePredicate"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "../cases/b73_surface_accounting/typeof_query.ts"
+
+[[surface]]
+id = "annotation-lower/type-query/self"
+role = "annotation-lower"
+surface = "type-query"
+slot = "self"
+oxc_variant = "TSType::TSTypeQuery"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "../cases/b73_surface_accounting/typeof_query.ts"
+
+[[surface]]
+id = "annotation-lower/type-query/typeof"
+role = "annotation-lower"
+surface = "type-query"
+slot = "typeof"
+oxc_variant = "TSType::TSTypeQuery"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "../cases/b73_surface_accounting/typeof_query.ts"
+
+[[surface]]
+id = "annotation-lower/type-reference/self"
+role = "annotation-lower"
+surface = "type-reference"
+slot = "self"
+oxc_variant = "TSType::TSTypeReference"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m22_unresolved_type"
+
+[[surface]]
+id = "annotation-lower/union-type/self"
+role = "annotation-lower"
+surface = "union-type"
+slot = "self"
+oxc_variant = "TSType::TSUnionType"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m4_unions"
+
+# ------------------------------------------------------------------------------
+# role: call
+# ------------------------------------------------------------------------------
+
+[[surface]]
+id = "call/call-arguments/argument"
+role = "call"
+surface = "call-arguments"
+slot = "argument"
+oxc_variant = "CallExpression::arguments"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/f1_object_interface_call"
+
+[[surface]]
+id = "call/call-arguments/spread-argument"
+role = "call"
+surface = "call-arguments"
+slot = "spread-argument"
+oxc_variant = "CallExpression::arguments"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "../cases/b73_surface_accounting/array_spread.ts"
+
+# ------------------------------------------------------------------------------
+# role: decl
+# ------------------------------------------------------------------------------
+
+[[surface]]
+id = "decl/class-declaration/self"
+role = "decl"
+surface = "class-declaration"
+slot = "self"
+oxc_variant = "Declaration::ClassDeclaration"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m11_classes"
+
+[[surface]]
+id = "decl/enum-declaration/self"
+role = "decl"
+surface = "enum-declaration"
+slot = "self"
+oxc_variant = "Declaration::TSEnumDeclaration"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/42-enums-type-side.md"
+witness = "enum type side not modeled"
+
+[[surface]]
+id = "decl/export-all/self"
+role = "decl"
+surface = "export-all"
+slot = "self"
+oxc_variant = "ModuleDeclaration::ExportAllDeclaration"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/15-modules-imports.md"
+witness = "export * from not modeled"
+
+[[surface]]
+id = "decl/export-assignment/self"
+role = "decl"
+surface = "export-assignment"
+slot = "self"
+oxc_variant = "ModuleDeclaration::TSExportAssignment"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/15-modules-imports.md"
+witness = "export = not modeled"
+
+[[surface]]
+id = "decl/export-default/self"
+role = "decl"
+surface = "export-default"
+slot = "self"
+oxc_variant = "ModuleDeclaration::ExportDefaultDeclaration"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/15-modules-imports.md"
+witness = "export default binding not modeled"
+
+[[surface]]
+id = "decl/export-named/self"
+role = "decl"
+surface = "export-named"
+slot = "self"
+oxc_variant = "ModuleDeclaration::ExportNamedDeclaration"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/sr_wu2_export_space"
+
+[[surface]]
+id = "decl/function-declaration/self"
+role = "decl"
+surface = "function-declaration"
+slot = "self"
+oxc_variant = "Declaration::FunctionDeclaration"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m3_functions"
+
+[[surface]]
+id = "decl/global-declaration/self"
+role = "decl"
+surface = "global-declaration"
+slot = "self"
+oxc_variant = "Declaration::TSGlobalDeclaration"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/43-namespaces-declaration-merging.md"
+witness = "global augmentation not modeled"
+
+[[surface]]
+id = "decl/import-declaration/self"
+role = "decl"
+surface = "import-declaration"
+slot = "self"
+oxc_variant = "ModuleDeclaration::ImportDeclaration"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m29_modules"
+
+[[surface]]
+id = "decl/import-equals/self"
+role = "decl"
+surface = "import-equals"
+slot = "self"
+oxc_variant = "Declaration::TSImportEqualsDeclaration"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/15-modules-imports.md"
+witness = "import = require not modeled"
+
+[[surface]]
+id = "decl/interface-declaration/self"
+role = "decl"
+surface = "interface-declaration"
+slot = "self"
+oxc_variant = "Declaration::TSInterfaceDeclaration"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b28_interface_extends"
+
+[[surface]]
+id = "decl/module-declaration/self"
+role = "decl"
+surface = "module-declaration"
+slot = "self"
+oxc_variant = "Declaration::TSModuleDeclaration"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/43-namespaces-declaration-merging.md"
+witness = "namespace/module declaration type side not modeled"
+
+[[surface]]
+id = "decl/namespace-export/self"
+role = "decl"
+surface = "namespace-export"
+slot = "self"
+oxc_variant = "ModuleDeclaration::TSNamespaceExportDeclaration"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/43-namespaces-declaration-merging.md"
+witness = "export as namespace not modeled"
+
+[[surface]]
+id = "decl/type-alias/self"
+role = "decl"
+surface = "type-alias"
+slot = "self"
+oxc_variant = "Declaration::TSTypeAliasDeclaration"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m22_unresolved_type"
+
+[[surface]]
+id = "decl/variable-declaration/self"
+role = "decl"
+surface = "variable-declaration"
+slot = "self"
+oxc_variant = "Declaration::VariableDeclaration"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m0_assign_primitives"
+
+# ------------------------------------------------------------------------------
+# role: class
+# ------------------------------------------------------------------------------
+
+[[surface]]
+id = "class/accessor-property/self"
+role = "class"
+surface = "accessor-property"
+slot = "self"
+oxc_variant = "ClassElement::AccessorProperty"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "auto-accessor field not checked"
+
+[[surface]]
+id = "class/class-index-signature/self"
+role = "class"
+surface = "class-index-signature"
+slot = "self"
+oxc_variant = "ClassElement::TSIndexSignature"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "class index signature not collected"
+
+[[surface]]
+id = "class/method-definition/computed-key"
+role = "class"
+surface = "method-definition"
+slot = "computed-key"
+oxc_variant = "ClassElement::MethodDefinition"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "../cases/b73_surface_accounting/computed_key.ts"
+
+[[surface]]
+id = "class/method-definition/self"
+role = "class"
+surface = "method-definition"
+slot = "self"
+oxc_variant = "ClassElement::MethodDefinition"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/f3_class_member_collection"
+
+[[surface]]
+id = "class/property-definition/self"
+role = "class"
+surface = "property-definition"
+slot = "self"
+oxc_variant = "ClassElement::PropertyDefinition"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b61_field_initializers"
+
+[[surface]]
+id = "class/static-block/self"
+role = "class"
+surface = "static-block"
+slot = "self"
+oxc_variant = "ClassElement::StaticBlock"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "static initialization block body not checked"
+
+# ------------------------------------------------------------------------------
+# role: signature
+# ------------------------------------------------------------------------------
+
+[[surface]]
+id = "signature/call-signature/self"
+role = "signature"
+surface = "call-signature"
+slot = "self"
+oxc_variant = "TSSignature::TSCallSignatureDeclaration"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/f1_object_interface_call"
+
+[[surface]]
+id = "signature/construct-signature/self"
+role = "signature"
+surface = "construct-signature"
+slot = "self"
+oxc_variant = "TSSignature::TSConstructSignatureDeclaration"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/f1_object_interface_construct"
+
+[[surface]]
+id = "signature/index-signature/self"
+role = "signature"
+surface = "index-signature"
+slot = "self"
+oxc_variant = "TSSignature::TSIndexSignature"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/m19_index_sig"
+
+[[surface]]
+id = "signature/method-signature/self"
+role = "signature"
+surface = "method-signature"
+slot = "self"
+oxc_variant = "TSSignature::TSMethodSignature"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/f1_object_interface_methods"
+
+[[surface]]
+id = "signature/property-signature/computed-key"
+role = "signature"
+surface = "property-signature"
+slot = "computed-key"
+oxc_variant = "TSSignature::TSPropertySignature"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "../cases/b73_surface_accounting/computed_key.ts"
+
+[[surface]]
+id = "signature/property-signature/self"
+role = "signature"
+surface = "property-signature"
+slot = "self"
+oxc_variant = "TSSignature::TSPropertySignature"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/f1_object_interface_methods"
