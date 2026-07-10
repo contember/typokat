@@ -132,10 +132,14 @@ tail that the census discovers.
   precedence even when ordinary diagnostics also exist; all output is still rendered). No new TK
   diagnostic and no `--allow-incomplete` escape hatch. Update official-suite parsing so exit `3`
   becomes an identity-bearing `OOS:unsupported` discovery result; an IN→unsupported move remains a
-  regression, and crash/signal/unparseable-output handling remains strict.
+  regression, and crash/signal/unparseable-output handling remains strict. The exit-`3` scoreboard
+  record keeps carrying the full diagnostic diff (matched/fn/fp identities) alongside the
+  incomplete identities — demotion must not blind the harness to diagnostic regressions inside
+  now-unsupported tests, and `diag-recall`/`matched %` must stay comparable across the boundary.
 - **Acceptance / witness.** Unit/black-box tests cover all four exits, incomplete+diagnostic
   coexistence, deterministic rich/compact rendering, project aggregation, duplicate suppression,
-  and official-suite identity round trips. Exit `0` with any diagnostic or incomplete record is a
+  and official-suite identity round trips (an exit-`3` record round-trips both its incomplete
+  identities and its diagnostic diff). Exit `0` with any diagnostic or incomplete record is a
   hard inconsistency.
 - **Touch points.** `src/driver.rs`, the shared checker result in `src/check/checker/mod.rs`,
   `src/main.rs`, `src/diagnostics/` or a sibling incomplete renderer,
@@ -250,6 +254,11 @@ tail that the census discovers.
 - **Verify first.** Audit the commit map and every WU7 PASS; confirm all WU0 fixtures are enabled or
   deliberately remain a linked future-owner witness, and diff official-suite identities before
   changing its scoreboard.
+- **Expected fallout.** The first honest run demotes a large share of the 497 in-scope tests —
+  especially the 214 expected-clean ones (the exact false-trust candidates) — to `OOS:unsupported`
+  via exit `3`. This is the sprint working, not a regression wave. Audit the movement **aggregated
+  by incomplete identity** (one identity explains many tests), never test by test; each aggregate
+  group needs a disposition (correct demotion vs. accounting bug) before the re-baseline `--save`.
 - **Scope.** Run the complete quality gate, audit any official-suite status/identity movement, and
   update public limitations plus tooling docs. Close/delete backlog `73` only if every covered role
   is executable end to end. Keep/rescope `75` to its remaining semantic families after marking its
@@ -333,3 +342,11 @@ gate is recorded in the run log before WU1 begins.
 - **2026-07-10 — Plan registered.** Recommended accounting-first over `38`/`72` and Track A;
   implementation has not started. Prerequisite: commit the pending post-audit roadmap patch before
   WU0 so the spec commit remains isolated.
+- **2026-07-10 — Prerequisite satisfied.** The post-audit roadmap patch landed as `4d91921`,
+  before the plan commit `c38ed51`; the working tree is clean. WU0 is unblocked.
+- **2026-07-10 — Plan amended before WU0 (review).** Two gaps closed: (a) WU2 — the exit-`3`
+  official-suite record must keep the full diagnostic diff alongside incomplete identities, so the
+  demotion does not hide diagnostic regressions inside now-unsupported tests; (b) WU8 — an
+  explicit **expected fallout** note: the first honest run will mass-demote in-scope tests
+  (baseline: 497 in-scope, 214 expected-clean), and the audit runs aggregated by incomplete
+  identity, not per test, to keep WU8 at effort M.
