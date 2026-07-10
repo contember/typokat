@@ -761,74 +761,79 @@ impl<'a> Relater<'a> {
             return Relation::No(ReasonChain::leaf(src, tgt));
         }
 
-        // Snapshot (name, target type, optional, contributing source types) per target
-        // property BEFORE any recursive relate, so no store borrow is held across it. The
-        // contributor list is sorted + deduped, so a property named by one DISTINCT type
-        // takes the single-contributor path (exact `self.relate`) even if two members
-        // agree on it.
+        // Snapshot (target property + contributing source properties) per target property
+        // BEFORE any recursive relate, so no store borrow is held across it. The full
+        // contributor `PropertyType` is carried (not just `.ty`) so the nominal-origin
+        // rule (M13) can be enforced on the merged path exactly as on the normal object
+        // path — otherwise an intersection source would satisfy a private/protected target
+        // member structurally (an unsound accept). The value-relation list is still keyed
+        // by DISTINCT type (sorted + deduped), so a property named by one type takes the
+        // single-contributor path even if two members agree on it.
         struct Obligation {
-            name: String,
-            tgt_ty: TypeId,
-            optional: bool,
-            subcands: Vec<TypeId>,
+            tgt_prop: PropertyType,
+            contributors: Vec<PropertyType>,
         }
         let obligations: Vec<Obligation> = tgt_obj
             .properties
             .iter()
             .map(|tgt_prop| {
-                let mut subcands: Vec<TypeId> = cands
+                let contributors: Vec<PropertyType> = cands
                     .iter()
                     .filter_map(|&m| {
                         self.store
                             .object_type(m)
                             .and_then(|o| o.property(&tgt_prop.name))
-                            .map(|p| p.ty)
+                            .cloned()
                     })
                     .collect();
-                subcands.sort_unstable();
-                subcands.dedup();
                 Obligation {
-                    name: tgt_prop.name.clone(),
-                    tgt_ty: tgt_prop.ty,
-                    optional: tgt_prop.optional,
-                    subcands,
+                    tgt_prop: tgt_prop.clone(),
+                    contributors,
                 }
             })
             .collect();
 
         for ob in obligations {
-            if ob.subcands.is_empty() {
+            let name = ob.tgt_prop.name.clone();
+            if ob.contributors.is_empty() {
                 // An optional target property may be absent from the merged source;
                 // a required one is genuinely missing.
-                if ob.optional {
+                if ob.tgt_prop.optional {
                     continue;
                 }
-                return Relation::No(ReasonChain::of(Reason::MissingProperty {
-                    name: ob.name,
-                    src,
-                    tgt,
-                }));
+                return Relation::No(ReasonChain::of(Reason::MissingProperty { name, src, tgt }));
             }
+            // M13 nominal rule on the merged path: a non-public target member requires at
+            // least one contributing source member to share its origin (same visibility +
+            // declaring class). A purely structural intersection (public members, no
+            // origin) therefore cannot satisfy a private/protected target — the same
+            // deterministic, assumption-free leaf failure the normal path reports. Checked
+            // before any recursive relate, so it never depends on an in-flight assumption
+            // and cannot make the cached verdict query-order dependent.
+            if !ob
+                .contributors
+                .iter()
+                .any(|src_prop| nominal_origin_ok(&ob.tgt_prop, src_prop))
+            {
+                return Relation::No(ReasonChain::leaf(src, tgt));
+            }
+            let mut subcands: Vec<TypeId> = ob.contributors.iter().map(|p| p.ty).collect();
+            subcands.sort_unstable();
+            subcands.dedup();
+            let tgt_ty = ob.tgt_prop.ty;
             // Part A — a single DISTINCT contributor: the merged value IS that type, so
             // delegate to the cycle-guarded main engine (exact `(c) <: tgt_ty` ≡
             // `relate(c, tgt_ty)`; reuses the cache + cycle stack, threads `assumed`).
             // Part B — several contributors: a genuine merged value, recursed through the
             // in-flight-guarded merged engine. Both thread the shared `assumed` (an AND).
-            let child = if let [only] = ob.subcands.as_slice() {
-                self.relate(*only, ob.tgt_ty, kind, assumed)
+            let child = if let [only] = subcands.as_slice() {
+                self.relate(*only, tgt_ty, kind, assumed)
             } else {
-                self.relate_source_members_to(
-                    src,
-                    &ob.subcands,
-                    ob.tgt_ty,
-                    kind,
-                    assumed,
-                    in_flight,
-                )
+                self.relate_source_members_to(src, &subcands, tgt_ty, kind, assumed, in_flight)
             };
             if let Relation::No(child) = child {
                 return Relation::No(ReasonChain::of(Reason::Property {
-                    name: ob.name,
+                    name,
                     src,
                     tgt,
                     because: Box::new(child.head),

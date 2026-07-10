@@ -274,6 +274,72 @@ fn nominal_protected_member_breaks_structural_assignability() {
     );
 }
 
+/// WU3 — the nominal-origin rule must hold when the SOURCE is an intersection (the
+/// merged-source relation path). A purely structural intersection cannot satisfy a
+/// private-member target (unsound accept if it could); an intersection that INCLUDES the
+/// nominal class does. Same-origin acceptance stays intact, and repeated/reordered
+/// queries are stable (the fix adds a deterministic, assumption-free leaf rejection, so
+/// the cache never becomes query-order dependent).
+#[test]
+fn nominal_origin_holds_through_intersection_source() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let secret = ClassId(0);
+
+    // `class Secret { private p: number }` (its nominal instance type).
+    let secret_ty = interner.intern_object(ObjectType {
+        properties: vec![nominal_prop("p", wk.number, Visibility::Private, Some(secret))],
+        ..Default::default()
+    });
+    let struct_p = interner.intern_object(ObjectType {
+        properties: vec![prop("p", wk.number)],
+        ..Default::default()
+    });
+    let struct_q = interner.intern_object(ObjectType {
+        properties: vec![prop("q", wk.number)],
+        ..Default::default()
+    });
+
+    // Structural `{ p: number } & { q: number }` — no nominal origin for `p`.
+    let bad_inter = interner.intersection(vec![struct_p, struct_q]);
+    // `Secret & { q: number }` — `Secret` contributes the matching-origin `p`.
+    let good_inter = interner.intersection(vec![secret_ty, struct_q]);
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    // The structural intersection must NOT satisfy the private-member class.
+    match rel.is_assignable(bad_inter, secret_ty) {
+        Relation::No(chain) => assert!(
+            matches!(chain.head(), Reason::Leaf { .. }),
+            "expected an object-level Leaf failure, got {:?}",
+            chain.head()
+        ),
+        Relation::Yes => panic!("a structural intersection must not satisfy a private target"),
+    }
+    // An intersection that includes `Secret` itself does.
+    assert!(
+        rel.is_assignable(good_inter, secret_ty).is_yes(),
+        "an intersection carrying the nominal class satisfies it"
+    );
+    // The same structural intersection IS assignable to a purely structural target.
+    assert!(
+        rel.is_assignable(bad_inter, struct_p).is_yes(),
+        "a public structural target imposes no origin requirement"
+    );
+
+    // Stability: repeated and reordered queries give identical verdicts (no
+    // query-order dependence introduced by the nominal check).
+    assert!(!rel.is_assignable(bad_inter, secret_ty).is_yes());
+    assert!(rel.is_assignable(good_inter, secret_ty).is_yes());
+
+    let store = interner.store();
+    let mut rel2 = Relater::new(store, wk);
+    // Reverse order in a fresh relater — same results.
+    assert!(rel2.is_assignable(good_inter, secret_ty).is_yes());
+    assert!(!rel2.is_assignable(bad_inter, secret_ty).is_yes());
+}
+
 /// M14 — `readonly` is part of a member's structural identity (a `{ readonly x }`
 /// interns to a *distinct* id from `{ x }`), but it must **NOT** affect
 /// assignability: a readonly-bearing object and a mutable one relate **both ways**.

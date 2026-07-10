@@ -35,9 +35,35 @@ impl CheckOutput {
     }
 }
 
+/// The worker-thread stack for a single parse→check. oxc's recursive-descent parser has
+/// no nesting limit, so a pathologically deep annotation (e.g. a 4000-deep type literal)
+/// would overflow a default 2 MiB test-thread / 8 MiB main stack in the PARSER, before
+/// the checker's own graceful nesting budget (backlog 63k, `MAX_ANNOTATION_DEPTH`) can
+/// report `TK2589`. Running the pipeline on a large fixed stack lets such input parse far
+/// enough to hit that budget and emit a stable diagnostic instead of aborting the
+/// process. The reservation is lazily committed (virtual), so idle RSS is unaffected.
+/// Arbitrarily deeper adversarial input still overflows — a residual owned by 63k until
+/// the parser gains its own limit.
+const CHECK_STACK_SIZE: usize = 256 * 1024 * 1024;
+
 /// Parse and check one TypeScript source. The local `Allocator` owns the AST only
 /// for this call; owned diagnostics are extracted before it drops.
 pub fn check_source(source: &str) -> CheckOutput {
+    // Run on a large-stack worker so deep input meets the checker's nesting budget rather
+    // than a native parser stack overflow (see `CHECK_STACK_SIZE`). The oxc AST is
+    // `!Send`, so the whole parse→check stays inside; only the owned `CheckOutput` (Send)
+    // crosses back out of the scope.
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(CHECK_STACK_SIZE)
+            .spawn_scoped(scope, || check_source_inner(source))
+            .expect("spawn check worker")
+            .join()
+            .expect("check worker panicked")
+    })
+}
+
+fn check_source_inner(source: &str) -> CheckOutput {
     let allocator = Allocator::default();
     // TypeScript, non-JSX, module semantics.
     let source_type = SourceType::ts();
@@ -104,8 +130,22 @@ pub fn check_files(inputs: Vec<FileInput>) -> Vec<FileReport> {
 }
 
 /// Check a local relative-module project in one serial type universe, resolving
-/// only `./` / `../` specifiers among the provided `.ts` files.
+/// only `./` / `../` specifiers among the provided `.ts` files. Runs on a large-stack
+/// worker for the same reason as [`check_source`] (deep input meets the checker's nesting
+/// budget rather than a native parser stack overflow); `inputs` and the returned reports
+/// are owned/`Send`, so they cross the scope cleanly.
 pub fn check_project(inputs: Vec<FileInput>) -> Vec<FileReport> {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(CHECK_STACK_SIZE)
+            .spawn_scoped(scope, || check_project_inner(inputs))
+            .expect("spawn check worker")
+            .join()
+            .expect("check worker panicked")
+    })
+}
+
+fn check_project_inner(inputs: Vec<FileInput>) -> Vec<FileReport> {
     if inputs.is_empty() {
         return Vec::new();
     }
@@ -433,6 +473,40 @@ mod tests {
             assert_eq!(debug_diags(&a.output), debug_diags(&b.output));
             assert_eq!(a.output.parse_errors, b.output.parse_errors);
         }
+    }
+
+    /// WU3 / backlog 63k — the annotation nesting budget fires gracefully: a type
+    /// literal nested past `MAX_ANNOTATION_DEPTH` reports `TK2589` instead of overflowing
+    /// the native stack, while a shallow one lowers cleanly. A very deep witness (past the
+    /// oxc parser's own stack limit on a default stack) still returns a diagnostic — the
+    /// large-stack worker (`check_source`) keeps the parse alive to reach the budget.
+    #[test]
+    fn deep_annotation_reports_tk2589_without_overflow() {
+        let deep = |depth: usize| {
+            format!(
+                "type Deep = {}number{};",
+                "{ a: ".repeat(depth),
+                " }".repeat(depth)
+            )
+        };
+        // Shallow: no depth diagnostic.
+        let shallow = check_source(&deep(5));
+        assert!(
+            !codes(&shallow).contains(&"TK2589"),
+            "a shallow annotation must not trip the budget"
+        );
+        // Just past the budget: TK2589, no crash.
+        let over = check_source(&deep(400));
+        assert!(
+            codes(&over).contains(&"TK2589"),
+            "an over-budget annotation reports TK2589"
+        );
+        // Far past the parser's default-stack limit: still a controlled diagnostic.
+        let very_deep = check_source(&deep(4000));
+        assert!(
+            codes(&very_deep).contains(&"TK2589"),
+            "a pathologically deep annotation is bounded, not a native overflow"
+        );
     }
 
     /// The diagnostic codes emitted for `source`, in order.

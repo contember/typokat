@@ -319,6 +319,10 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// Incremented only across type constructors; unions/intersections/`keyof` stay
     /// surface cycles. Missed increments over-report `TK2456`, the safe direction.
     pub(in crate::check::checker) alias_indirection_depth: u32,
+    /// Current syntactic nesting depth of the annotation being lowered (backlog 63k).
+    /// Bounds host recursion in `lower_annotation` so a pathologically deep type literal
+    /// reports `TK2589` instead of overflowing the stack. Balanced through every return.
+    pub(in crate::check::checker) annotation_depth: u32,
     /// B29 — aliases confirmed to be part of a **surface cycle** (`TK2456` reported).
     /// Their resolution is forced to the error type (final, not provisional — a detected
     /// cycle is a settled verdict), so the M22 silent-downstream discipline holds.

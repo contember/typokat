@@ -713,3 +713,110 @@ fn required_strips_undefined_from_optional_source_values() {
         "a non-optional source member keeps its undefined"
     );
 }
+
+/// WU3 — `keyof` over index signatures (single source of truth [`keyof_of_object`]):
+/// a **string** index sig covers numeric keys too (`string | number`); a **number**
+/// index sig covers only `number`; a mixed object unions its named keys with both.
+#[test]
+fn keyof_over_index_signatures_covers_number_for_string_index() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    let union_of = |interner: &mut Interner, members: Vec<TypeId>| interner.union(members);
+
+    // `{ [k: string]: number }` → `string | number`.
+    let string_dict = interner.intern_object(ObjectType {
+        string_index: Some(wk.number),
+        ..Default::default()
+    });
+    let expect_str = union_of(&mut interner, vec![wk.string, wk.number]);
+    assert_eq!(
+        keyof_of_object(&mut interner, string_dict).expect("keys"),
+        expect_str,
+        "keyof a string index signature is string | number"
+    );
+
+    // `{ [i: number]: string }` → `number`.
+    let number_dict = interner.intern_object(ObjectType {
+        number_index: Some(wk.string),
+        ..Default::default()
+    });
+    assert_eq!(
+        keyof_of_object(&mut interner, number_dict).expect("keys"),
+        wk.number,
+        "keyof a number index signature is number"
+    );
+
+    // `{ a: boolean; [k: string]: number }` → `"a" | string | number`.
+    let mixed = interner.intern_object(ObjectType {
+        properties: vec![prop("a", wk.boolean)],
+        string_index: Some(wk.number),
+        ..Default::default()
+    });
+    let a = interner.intern_literal(LiteralValue::String("a".into()));
+    let expect_mixed = union_of(&mut interner, vec![a, wk.string, wk.number]);
+    assert_eq!(
+        keyof_of_object(&mut interner, mixed).expect("keys"),
+        expect_mixed,
+        "keyof unions named keys with string | number"
+    );
+}
+
+/// WU3 — a mapped type whose value template is a genuinely **cyclic** object (a
+/// recursive alias built via reserve/fill) evaluates WITHOUT overflowing the native
+/// stack, preserves the recursive identity, and yields the same `TypeId` on repeated /
+/// reordered evaluation (the `replace_mapped_value` cycle guard is deterministic and
+/// never poisons the durable memo).
+#[test]
+fn recursive_mapped_value_terminates_with_stable_identity() {
+    use crate::types::repr::{MappedType, ModifierOp};
+    let mut interner = Interner::with_intrinsics();
+
+    // `type Rec = { self: Rec }` — a real TypeId cycle via reserve/fill.
+    let rec = interner.reserve_object();
+    interner.fill_object(
+        rec,
+        ObjectType {
+            properties: vec![prop("self", rec)],
+            ..Default::default()
+        },
+    );
+
+    // Source `{ a: 1 }` and the homomorphic map `{ [K in keyof source]: Rec }` — the
+    // value template `Rec` carries no `T[K]` placeholder, so each key maps to `Rec`.
+    let one = interner.intern_literal(LiteralValue::Number(1.0));
+    let source = interner.intern_object(ObjectType {
+        properties: vec![prop("a", one)],
+        ..Default::default()
+    });
+    let mapped = interner.intern_mapped(MappedType {
+        homomorphic: true,
+        key_source: source,
+        value_template: rec,
+        modifiers_source: None,
+        optional_modifier: ModifierOp::Keep,
+        readonly_modifier: ModifierOp::Keep,
+    });
+
+    let mut next = 0u32;
+    let mut memo = FxHashMap::default();
+    // Completing at all proves the recursion terminates (no native stack overflow).
+    let first = eval(&mut interner, &mut next, &mut memo, mapped);
+
+    // The result is `{ a: Rec }` — the cyclic value's identity is preserved.
+    let result_obj = interner
+        .store()
+        .object_type(first)
+        .expect("mapped result is an object");
+    assert_eq!(result_obj.properties.len(), 1);
+    assert_eq!(result_obj.properties[0].name, "a");
+    assert_eq!(
+        result_obj.properties[0].ty, rec,
+        "the recursive value template keeps its identity"
+    );
+
+    // Repeated evaluation (fresh memo) yields the SAME id — stable and deterministic.
+    let mut memo2 = FxHashMap::default();
+    let second = eval(&mut interner, &mut next, &mut memo2, mapped);
+    assert_eq!(first, second, "repeated recursive evaluation is stable");
+}

@@ -110,7 +110,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // recursive mapped types, deep-annotation depth guard (findings 7-10 + backlog
     // 63k). NOTE: recursive_mapped.ts and deep_annotation.ts stack-overflow at HEAD
     // and only become safe to run once WU3's recursion/depth guards land.
-    ("sr_wu3_types_recursion", false),
+    ("sr_wu3_types_recursion", true),
     // Deferred ledger — known unfixtured under-reports from backlogs 30, 56, 60,
     // 62, 66, 67. Stays `false` beyond this sprint until each backlog item ships.
     ("sr_deferred_ledger", false),

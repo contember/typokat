@@ -114,10 +114,13 @@ pub(in crate::check::checker) fn keyof_of_object(
     for name in names {
         members.push(interner.intern_literal(LiteralValue::String(name)));
     }
+    // A string index signature's key domain is `string | number`: tsc coerces numeric
+    // keys to strings, so `keyof { [k: string]: T }` is `string | number`, not `string`.
+    // A number index covers only numeric keys.
     if has_string_index {
         members.push(wk.string);
     }
-    if has_number_index {
+    if has_string_index || has_number_index {
         members.push(wk.number);
     }
     Some(interner.union(members))
@@ -168,10 +171,16 @@ fn keyof_of_union(interner: &mut Interner, members: &[TypeId]) -> Option<TypeId>
             keys.push(interner.intern_literal(LiteralValue::String(name)));
         }
     }
+    // `keyof (A | B)` is `keyof A & keyof B` (the intersection of key domains). `string`
+    // survives only if EVERY member has a string index; `number` survives if every member
+    // covers numeric keys — via a string index (numeric keys coerce) OR a number index.
     if infos.iter().all(|info| info.has_string_index) {
         keys.push(wk.string);
     }
-    if infos.iter().all(|info| info.has_number_index) {
+    if infos
+        .iter()
+        .all(|info| info.has_string_index || info.has_number_index)
+    {
         keys.push(wk.number);
     }
     Some(interner.union(keys))

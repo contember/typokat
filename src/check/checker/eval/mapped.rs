@@ -1,5 +1,17 @@
 use super::*;
 
+/// Per-call context for [`ConditionalEvaluator::replace_mapped_value`] (M26 `T[K]`
+/// substitution). Kept SEPARATE from the evaluator's `in_flight`/`memo` so a provisional
+/// rewrite over a cyclic value template can never poison the durable evaluator memo.
+struct MappedRewrite {
+    /// The source property type that replaces every `T[K]` placeholder.
+    value: TypeId,
+    /// Ids currently being rewritten — breaks recursion over a cyclic TypeId graph.
+    in_progress: FxHashSet<TypeId>,
+    /// `input id → rewritten id` for fully-resolved nodes (shared-subgraph short-circuit).
+    memo: FxHashMap<TypeId, TypeId>,
+}
+
 impl<'a> ConditionalEvaluator<'a> {
     /// Schedule mapped-type evaluation. Free key sources defer conservatively;
     /// concrete key sources evaluate as tail steps before [`Task::AssembleMapped`]
@@ -451,20 +463,55 @@ impl<'a> ConditionalEvaluator<'a> {
     /// template rebinds its OWN placeholder and stays untouched (the cross-binder case
     /// is out of subset, safe over-report).
     pub(super) fn replace_mapped_value(&mut self, ty: TypeId, value: TypeId) -> TypeId {
+        // Own recursion-aware context (separate from the evaluator's `in_flight`/`memo`
+        // so a provisional cyclic rewrite can never poison the durable evaluator memo).
+        // The value template's TypeId graph can be genuinely cyclic (a recursive object
+        // alias via reserve/fill), so the host-recursive walk needs a cycle guard or it
+        // stack-overflows (recursive_mapped fixture). Repeated/reordered calls stay stable
+        // because interning is deterministic and the walk order is fixed.
+        let mut ctx = MappedRewrite {
+            value,
+            in_progress: FxHashSet::default(),
+            memo: FxHashMap::default(),
+        };
+        self.replace_mapped_value_rec(ty, &mut ctx)
+    }
+
+    /// Cycle guard around [`Self::replace_mapped_value_body`]. `ctx.memo` short-circuits
+    /// shared subgraphs; `ctx.in_progress` breaks cycles: re-entering an in-flight node
+    /// returns it unchanged (provisional — NOT memoized). A recursive value template in
+    /// the M26 subset carries no `T[K]` placeholder along its cycle, so identity is exact
+    /// there; a placeholder inside a genuine cycle is out of subset and safely
+    /// over-reported (the walk still terminates and never yields the error type). The body
+    /// keeps its `return ty` early-exits; cleanup here runs on every path.
+    fn replace_mapped_value_rec(&mut self, ty: TypeId, ctx: &mut MappedRewrite) -> TypeId {
+        if let Some(&done) = ctx.memo.get(&ty) {
+            return done;
+        }
+        if !ctx.in_progress.insert(ty) {
+            return ty;
+        }
+        let result = self.replace_mapped_value_body(ty, ctx);
+        ctx.in_progress.remove(&ty);
+        ctx.memo.insert(ty, result);
+        result
+    }
+
+    fn replace_mapped_value_body(&mut self, ty: TypeId, ctx: &mut MappedRewrite) -> TypeId {
         match self.interner.store().tag(ty) {
-            TypeTag::MappedValue => value,
+            TypeTag::MappedValue => ctx.value,
             TypeTag::Intrinsic | TypeTag::Literal | TypeTag::TypeParam | TypeTag::Infer => ty,
             TypeTag::Mapped => {
                 let Some(mapped) = self.interner.store().mapped_type(ty).copied() else {
                     return ty;
                 };
-                let key_source = self.replace_mapped_value(mapped.key_source, value);
+                let key_source = self.replace_mapped_value_rec(mapped.key_source, ctx);
                 // M28: the modifiers source is outer-scoped like the key source (the
                 // captured `T` of a nested `{ [P in K]: T[P] }` may be the OUTER map's
                 // placeholder) — descend into it too.
                 let modifiers_source = mapped
                     .modifiers_source
-                    .map(|ms| self.replace_mapped_value(ms, value));
+                    .map(|ms| self.replace_mapped_value_rec(ms, ctx));
                 if key_source == mapped.key_source && modifiers_source == mapped.modifiers_source {
                     return ty;
                 }
@@ -481,17 +528,17 @@ impl<'a> ConditionalEvaluator<'a> {
                 let mut changed = false;
                 let mut new = object.clone();
                 for prop in &mut new.properties {
-                    let nt = self.replace_mapped_value(prop.ty, value);
+                    let nt = self.replace_mapped_value_rec(prop.ty, ctx);
                     changed |= nt != prop.ty;
                     prop.ty = nt;
                 }
                 new.string_index = object.string_index.map(|v| {
-                    let nv = self.replace_mapped_value(v, value);
+                    let nv = self.replace_mapped_value_rec(v, ctx);
                     changed |= nv != v;
                     nv
                 });
                 new.number_index = object.number_index.map(|v| {
-                    let nv = self.replace_mapped_value(v, value);
+                    let nv = self.replace_mapped_value_rec(v, ctx);
                     changed |= nv != v;
                     nv
                 });
@@ -499,7 +546,7 @@ impl<'a> ConditionalEvaluator<'a> {
                     .call_signatures
                     .iter()
                     .map(|&s| {
-                        let ns = self.replace_mapped_value(s, value);
+                        let ns = self.replace_mapped_value_rec(s, ctx);
                         changed |= ns != s;
                         ns
                     })
@@ -508,7 +555,7 @@ impl<'a> ConditionalEvaluator<'a> {
                     .construct_signatures
                     .iter()
                     .map(|&s| {
-                        let ns = self.replace_mapped_value(s, value);
+                        let ns = self.replace_mapped_value_rec(s, ctx);
                         changed |= ns != s;
                         ns
                     })
@@ -526,11 +573,11 @@ impl<'a> ConditionalEvaluator<'a> {
                 let mut changed = false;
                 let mut new = function.clone();
                 for param in &mut new.params {
-                    let nt = self.replace_mapped_value(param.ty, value);
+                    let nt = self.replace_mapped_value_rec(param.ty, ctx);
                     changed |= nt != param.ty;
                     param.ty = nt;
                 }
-                let nr = self.replace_mapped_value(function.ret, value);
+                let nr = self.replace_mapped_value_rec(function.ret, ctx);
                 changed |= nr != function.ret;
                 new.ret = nr;
                 if changed {
@@ -548,7 +595,7 @@ impl<'a> ConditionalEvaluator<'a> {
                 let subst: Vec<TypeId> = members
                     .iter()
                     .map(|&m| {
-                        let nm = self.replace_mapped_value(m, value);
+                        let nm = self.replace_mapped_value_rec(m, ctx);
                         changed |= nm != m;
                         nm
                     })
@@ -570,7 +617,7 @@ impl<'a> ConditionalEvaluator<'a> {
                 let subst: Vec<TypeId> = members
                     .iter()
                     .map(|&m| {
-                        let nm = self.replace_mapped_value(m, value);
+                        let nm = self.replace_mapped_value_rec(m, ctx);
                         changed |= nm != m;
                         nm
                     })
@@ -585,7 +632,7 @@ impl<'a> ConditionalEvaluator<'a> {
                 let Some(element) = self.interner.store().array_type(ty).map(|a| a.element) else {
                     return ty;
                 };
-                let ne = self.replace_mapped_value(element, value);
+                let ne = self.replace_mapped_value_rec(element, ctx);
                 if ne != element {
                     self.interner.intern_array(ne)
                 } else {
@@ -601,13 +648,13 @@ impl<'a> ConditionalEvaluator<'a> {
                     .elements
                     .iter()
                     .map(|&e| {
-                        let ne = self.replace_mapped_value(e, value);
+                        let ne = self.replace_mapped_value_rec(e, ctx);
                         changed |= ne != e;
                         ne
                     })
                     .collect();
                 let rest = tuple.rest.map(|rest| {
-                    let nt = self.replace_mapped_value(rest.ty, value);
+                    let nt = self.replace_mapped_value_rec(rest.ty, ctx);
                     changed |= nt != rest.ty;
                     TupleRestType { ty: nt, ..rest }
                 });
@@ -622,7 +669,7 @@ impl<'a> ConditionalEvaluator<'a> {
                 let Some(operand) = self.interner.store().readonly_operand(ty) else {
                     return ty;
                 };
-                let no = self.replace_mapped_value(operand, value);
+                let no = self.replace_mapped_value_rec(operand, ctx);
                 if no != operand {
                     self.interner.intern_readonly(no)
                 } else {
@@ -633,10 +680,10 @@ impl<'a> ConditionalEvaluator<'a> {
                 let Some(cond) = self.interner.store().conditional_type(ty).copied() else {
                     return ty;
                 };
-                let check = self.replace_mapped_value(cond.check, value);
-                let extends_ty = self.replace_mapped_value(cond.extends_ty, value);
-                let true_branch = self.replace_mapped_value(cond.true_branch, value);
-                let false_branch = self.replace_mapped_value(cond.false_branch, value);
+                let check = self.replace_mapped_value_rec(cond.check, ctx);
+                let extends_ty = self.replace_mapped_value_rec(cond.extends_ty, ctx);
+                let true_branch = self.replace_mapped_value_rec(cond.true_branch, ctx);
+                let false_branch = self.replace_mapped_value_rec(cond.false_branch, ctx);
                 if check == cond.check
                     && extends_ty == cond.extends_ty
                     && true_branch == cond.true_branch
@@ -663,7 +710,7 @@ impl<'a> ConditionalEvaluator<'a> {
                     .args
                     .iter()
                     .map(|&(p, v)| {
-                        let nv = self.replace_mapped_value(v, value);
+                        let nv = self.replace_mapped_value_rec(v, ctx);
                         changed |= nv != v;
                         (p, nv)
                     })
@@ -685,7 +732,7 @@ impl<'a> ConditionalEvaluator<'a> {
                     .holes
                     .iter()
                     .map(|&hole| {
-                        let nh = self.replace_mapped_value(hole, value);
+                        let nh = self.replace_mapped_value_rec(hole, ctx);
                         changed |= nh != hole;
                         nh
                     })
@@ -705,7 +752,7 @@ impl<'a> ConditionalEvaluator<'a> {
                 let Some(operand) = self.interner.store().keyof_operand(ty) else {
                     return ty;
                 };
-                let no = self.replace_mapped_value(operand, value);
+                let no = self.replace_mapped_value_rec(operand, ctx);
                 if no != operand {
                     self.interner.intern_keyof(no)
                 } else {

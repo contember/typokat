@@ -686,6 +686,7 @@ fn build_pass<'a, 'ast>(
         resolving_alias_stack: Vec::new(),
         circular_aliases: FxHashSet::default(),
         alias_indirection_depth: 0,
+        annotation_depth: 0,
         mapped_frames: Vec::new(),
         current_this: None,
         current_class: None,

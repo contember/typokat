@@ -447,17 +447,36 @@
             "an intersection of only unknown → unknown"
         );
 
-        // Absorption: `any` swallows the whole intersection (cascade suppression),
-        // winning over everything including `never`.
+        // Absorption: `any` swallows an ordinary intersection member (cascade
+        // suppression).
         assert_eq!(
             interner.intersection(vec![a, wk.any]),
             wk.any,
             "any absorbs the intersection"
         );
+        // tsc checks Never before Any in `getIntersectionType`, so `never` annihilates:
+        // `any & never` is `never`, not `any`.
         assert_eq!(
             interner.intersection(vec![wk.never, wk.any]),
+            wk.never,
+            "never annihilates (any & never = never)"
+        );
+        assert_eq!(
+            interner.intersection(vec![wk.any, wk.never]),
+            wk.never,
+            "never annihilates regardless of member order"
+        );
+        assert_eq!(
+            interner.intersection(vec![a, wk.never]),
+            wk.never,
+            "never absorbs an ordinary member"
+        );
+        // The internal error type stays absorbing even against `never` (deliberate
+        // cascade suppression for the distinct error type — `error & never` = `any`).
+        assert_eq!(
+            interner.intersection(vec![wk.error, wk.never]),
             wk.any,
-            "any wins over never"
+            "error keeps suppressing cascades, even with never present"
         );
 
         // Flatten: `(A & B) & C` ≡ `A & B & C` (built directly), sharing one id.

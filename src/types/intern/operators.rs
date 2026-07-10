@@ -83,10 +83,14 @@ impl Interner {
     /// but with **inverted** absorption/identity (architecture §3.3 / sprint plan):
     ///
     ///  1. **flatten** nested intersections (`A & (B & C)` → `A & B & C`),
-    ///  2. **absorb**: any `any`/error member makes the whole intersection `any`
-    ///     (same as union — cascades stay suppressed); otherwise any `never` member
-    ///     makes it `never` (the DUAL of union's `unknown` absorption — `never` is the
-    ///     bottom of `&`),
+    ///  2. **absorb**, in tsc's order (Never before Any — `getIntersectionType`): the
+    ///     internal **error** type absorbs first (→ `any`, treated like `any` so
+    ///     cascades stay suppressed); then any `never` member makes it `never` (the
+    ///     annihilator of `&`, so `any & never` is `never`, matching tsc); then a
+    ///     remaining `any` member absorbs (→ `any`). The error-first ordering keeps the
+    ///     deliberate cascade suppression for the distinct internal error type
+    ///     (`error & never` stays `any`), while source-level `any & never` normalizes to
+    ///     `never`.
     ///  3. **drop** `unknown` members (`X & unknown` → `X`; `unknown` is the identity of
     ///     `&` — the DUAL of union dropping `never`),
     ///  4. **sort** by `TypeId` and **dedup** (`A & B` ≡ `B & A`; `A & A` → `A`),
@@ -108,12 +112,18 @@ impl Interner {
             }
         }
 
-        // `any`/error suppress cascades; otherwise `never` absorbs the intersection.
-        if flat.iter().any(|&m| m == wk.any || m == wk.error) {
+        // Absorption order mirrors tsc's `getIntersectionType` (Never before Any). The
+        // internal error type absorbs FIRST (→ `any`) so a cascade stays suppressed even
+        // against `never` (`error & never` = `any`); then `never` annihilates (so
+        // source-level `any & never` = `never`); then a remaining `any` absorbs.
+        if flat.contains(&wk.error) {
             return wk.any;
         }
         if flat.contains(&wk.never) {
             return wk.never;
+        }
+        if flat.contains(&wk.any) {
+            return wk.any;
         }
 
         // `unknown` is the identity element of `&`.

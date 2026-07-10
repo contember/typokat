@@ -19,7 +19,14 @@ use oxc_ast::ast::{
     TSTemplateLiteralType, TSTupleElement, TSType, TSTypeAnnotation, TSTypeName,
     TSTypeOperatorOperator, UnaryOperator,
 };
+use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
+
+/// Host-recursion budget for [`Pass::lower_annotation`] (backlog 63k). Chosen far above
+/// any realistic annotation nesting yet far below the stack-overflow threshold on both
+/// the CLI (8 MiB) and cargo-test (2 MiB) thread stacks; the HEAD crash needed ~2.5k
+/// levels on 8 MiB, so 200 keeps a wide margin in every context.
+const MAX_ANNOTATION_DEPTH: u32 = 200;
 
 mod composites;
 mod functions;
@@ -31,6 +38,29 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// declaration ids, never inlined structures, so recursive aliases/interfaces
     /// terminate by pointing at the reserved id (mvp-plan M5, §3, §6.3).
     pub(in crate::check::checker) fn lower_annotation(
+        &mut self,
+        scope: ScopeId,
+        ts_type: &TSType<'_>,
+    ) -> Option<TypeId> {
+        // Graceful nesting budget (backlog 63k). Lowering is host-recursive, so an
+        // absurdly deep type literal would overflow the stack; past the budget we report
+        // TK2589 and stop descending. tsc itself RangeError-crashes around ~3k, so there
+        // is no oracle — the contract is a bounded diagnostic, never a native crash and
+        // never a silent permissive type. The limit sits far below the stack-overflow
+        // threshold on both the CLI (8 MiB) and cargo-test (2 MiB) thread stacks.
+        self.annotation_depth += 1;
+        if self.annotation_depth > MAX_ANNOTATION_DEPTH {
+            self.annotation_depth -= 1;
+            self.diagnostics
+                .push(Diagnostic::excessively_deep(Span::from_oxc(ts_type.span())));
+            return Some(self.interner.well_known().error);
+        }
+        let result = self.lower_annotation_inner(scope, ts_type);
+        self.annotation_depth -= 1;
+        result
+    }
+
+    fn lower_annotation_inner(
         &mut self,
         scope: ScopeId,
         ts_type: &TSType<'_>,

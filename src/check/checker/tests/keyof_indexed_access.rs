@@ -53,26 +53,23 @@ let k: keyof Empty = \"anything\";
     assert_eq!(diags(src), vec![(2, "TK2322".to_string())]);
 }
 
-/// `keyof T` includes the **index-signature key type**: a string index sig
-/// contributes `string` (`keyof { [k: string]: V }` is `string`), so a string is
-/// assignable to it and a number is `TK2322`. A number index sig contributes
-/// `number`.
+/// `keyof T` includes the **index-signature key type**. A string index sig covers
+/// numeric keys too (tsc: numeric keys coerce to strings), so `keyof { [k: string]: V }`
+/// is `string | number` — both a string and a number are assignable to it. A number index
+/// sig contributes only `number`.
 #[test]
 fn keyof_includes_index_signature_keys() {
     let src = "\
 type Dict = { [k: string]: number };
 let sk: keyof Dict = \"k\";
-let skBad: keyof Dict = 1;
+let skNum: keyof Dict = 1;
 type NumDict = { [i: number]: string };
 let nk: keyof NumDict = 0;
 let nkBad: keyof NumDict = \"x\";
 ";
-    // `keyof Dict` is `string` (line 3: number ≁ string); `keyof NumDict` is
-    // `number` (line 6: string ≁ number).
-    assert_eq!(
-        diags(src),
-        vec![(3, "TK2322".to_string()), (6, "TK2322".to_string())]
-    );
+    // `keyof Dict` is `string | number` (lines 2 and 3 both clean — a string AND a number
+    // are keys); `keyof NumDict` is `number` (line 6: string ≁ number).
+    assert_eq!(diags(src), vec![(6, "TK2322".to_string())]);
 }
 
 /// An indexed-access type `T["literal"]` is the type of that named property:
