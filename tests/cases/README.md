@@ -32,9 +32,19 @@ Rules the harness enforces:
   (`// error[TK2322]`) to assert only the code + line — used where the rendered type strings
   aren't stable yet (object/union/alias targets, see "Type display").
 - Multiple errors on one line: separate markers with ` | `.
+- **Malformed markers fail loudly.** A ` | `-separated comment segment that starts with
+  `error[` but isn't a well-formed `error[TK<digits>]` (missing `]`, a non-`TK`/non-digit
+  code, …) panics the harness with the file, line, and segment — a silently dropped marker
+  would turn a typo like `error[TK2322` into "no expectation" and hide a real diagnostic.
+  A second `error[` in a segment's residual (e.g. space-joined `error[TK2322] error[TK2345]`
+  instead of ` | `-separated) is rejected the same way. Prose that merely mentions `error[`
+  mid-text (not at the segment start) is still ignored.
 
 Exact column spans are validated separately by dedicated M0 snapshot tests, not by every
-fixture (keeps fixtures robust to author miscounting).
+fixture (keeps fixtures robust to author miscounting). Those tests live in `src/span.rs`
+(`LineIndex` byte-column mapping) and `src/diagnostics/tests.rs` (compact/rich renderer
+columns): exact start/end columns, same-line distinction, and multiline / tab / UTF-8 /
+EOF spans.
 
 ## Error codes (tsc-compatible numbers, `TK` prefix)
 

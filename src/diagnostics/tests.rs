@@ -484,6 +484,144 @@ fn array_union_element_renders_single_line() {
     );
 }
 
+// --- Renderer column pinning (sprint WU5, finding 5) -------------------------
+
+/// Render diagnostics to a String in the requested format via the public entry
+/// point (the same path the CLI uses).
+fn render(source: &str, diags: &[Diagnostic], format: DiagnosticFormat) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    render_to_writer_with_format(&mut buf, "test.ts", source, diags, format).unwrap();
+    String::from_utf8(buf).unwrap()
+}
+
+fn diag_at(span: Span) -> Diagnostic {
+    Diagnostic::not_assignable(
+        span,
+        "Type 'string' is not assignable to type 'number'".into(),
+    )
+}
+
+/// Compact output pins the exact `(line, column)` — and two diagnostics that share
+/// a line are told apart by their (byte-based) start columns.
+#[test]
+fn compact_distinguishes_same_line_by_column() {
+    let src = "0123456789\n0123456789\n";
+    let out = render(
+        src,
+        &[diag_at(Span::new(3, 5)), diag_at(Span::new(6, 7))],
+        DiagnosticFormat::Compact,
+    );
+    assert!(out.contains("test.ts(1,4):"), "first diag at col 4:\n{out}");
+    assert!(
+        out.contains("test.ts(1,7):"),
+        "second diag same line, col 7:\n{out}"
+    );
+}
+
+/// Compact columns are byte offsets: a leading tab counts as one column.
+#[test]
+fn compact_tab_is_one_column() {
+    let out = render(
+        "\t\tx = 1;",
+        &[diag_at(Span::new(2, 3))],
+        DiagnosticFormat::Compact,
+    );
+    assert!(
+        out.contains("test.ts(1,3):"),
+        "'x' after two tabs at col 3:\n{out}"
+    );
+}
+
+/// Compact columns count multibyte and wide characters in bytes.
+#[test]
+fn compact_utf8_columns_are_byte_based() {
+    // 'é' = 2 bytes -> '=' at byte 2 -> column 3.
+    let out = render(
+        "é=x;",
+        &[diag_at(Span::new(2, 3))],
+        DiagnosticFormat::Compact,
+    );
+    assert!(
+        out.contains("test.ts(1,3):"),
+        "'=' after 2-byte 'é' at col 3:\n{out}"
+    );
+    // '🎉' = 4 bytes -> 'x' at byte 4 -> column 5.
+    let out = render(
+        "🎉x;",
+        &[diag_at(Span::new(4, 5))],
+        DiagnosticFormat::Compact,
+    );
+    assert!(
+        out.contains("test.ts(1,5):"),
+        "'x' after 4-byte emoji at col 5:\n{out}"
+    );
+}
+
+/// Compact reports a diagnostic that starts on a later line at that line.
+#[test]
+fn compact_multiline_reports_correct_line() {
+    let src = "aaa\nbbbb\nccc";
+    let out = render(src, &[diag_at(Span::new(6, 8))], DiagnosticFormat::Compact);
+    assert!(
+        out.contains("test.ts(2,3):"),
+        "byte 6 is line 2 col 3:\n{out}"
+    );
+}
+
+/// An EOF span (start == source length) renders one-past-the-end without panicking.
+#[test]
+fn compact_eof_span() {
+    let src = "abc";
+    let out = render(src, &[diag_at(Span::new(3, 3))], DiagnosticFormat::Compact);
+    assert!(out.contains("test.ts(1,4):"), "EOF span at col 4:\n{out}");
+}
+
+/// Rich output puts the exact `:line:column` in its location header, so two
+/// diagnostics on one line are distinguishable, and the caret underline width
+/// pins the span's END column (end − start bytes).
+#[test]
+fn rich_header_columns_and_caret_width() {
+    let src = "const x: number = \"hi\";\nconst y: number = \"yo\";";
+    let out = render(
+        src,
+        &[diag_at(Span::new(18, 22)), diag_at(Span::new(42, 46))],
+        DiagnosticFormat::Rich,
+    );
+    assert!(
+        out.contains("test.ts:1:19"),
+        "first diag start col 19:\n{out}"
+    );
+    assert!(
+        out.contains("test.ts:2:19"),
+        "second diag on line 2:\n{out}"
+    );
+    // A width-4 span underlines with exactly four carets.
+    assert!(
+        out.contains("^^^^"),
+        "caret width pins the 4-byte span end:\n{out}"
+    );
+    assert!(
+        !out.contains("^^^^^"),
+        "caret must not exceed the span width:\n{out}"
+    );
+}
+
+/// Rich rendering handles multiline and EOF spans without panicking.
+#[test]
+fn rich_multiline_and_eof_spans_render() {
+    let src = "aaa\nbbb\nccc";
+    let out = render(src, &[diag_at(Span::new(2, 6))], DiagnosticFormat::Rich);
+    assert!(
+        out.contains("test.ts:1:3"),
+        "multiline span starts line 1 col 3:\n{out}"
+    );
+    let eof = render(src, &[diag_at(Span::new(11, 11))], DiagnosticFormat::Rich);
+    assert!(
+        eof.contains("test.ts:3:4"),
+        "EOF span at line 3 col 4:\n{eof}"
+    );
+}
+
 /// M17 — a **nested-array** mismatch (`string[][]` not assignable to `number[][]`)
 /// nests each array level: the inner `string[]`/`number[]` line, then the scalar
 /// leaf, each one indent deeper. Pins that `ArrayElement` is NOT a pure

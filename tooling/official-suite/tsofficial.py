@@ -174,20 +174,40 @@ def syntax_bucket(content):
 TK_HEAD_RE = re.compile(r"^error\[TK(\d+)\]:")
 PARSE_ERR_RE = re.compile(r"^error: ")
 
+# The only exit codes the typokat CLI is documented to return: 0 (clean) and 1
+# (type/parse errors). 2 is a usage error and anything else (or a negative code =
+# killed by a signal) means the checker crashed or the harness misused it.
+OK_EXIT_CODES = (0, 1)
 
-def run_typokat(binary, content):
+
+class HarnessFailure(Exception):
+    """A checker invocation the harness cannot trust: an unexpected exit code, a
+    signal/crash, a timeout, or output whose exit-code-vs-diagnostics story is
+    inconsistent. Raised so the run aborts loudly instead of scoring the file as a
+    silent zero — dropping a crash into the ``0 diagnostics`` bucket would hide
+    exactly the false negatives this suite exists to catch."""
+
+
+def run_typokat(binary, content, rel="<unknown>"):
     """Run the binary on `content`; return (parse_errors, diagnostics) where
     diagnostics is a list of (line, code:int). Lines are 1-based, aligned to
-    `content` (which the caller has already stripped of @option directives)."""
+    `content` (which the caller has already stripped of @option directives).
+
+    Raises `HarnessFailure` (never scored as success or zero) when the process
+    times out, is killed by a signal, exits with an undocumented code, or produces
+    output inconsistent with its exit code (exit 0 with diagnostics, or exit 1 with
+    nothing parseable)."""
     with tempfile.NamedTemporaryFile("w", suffix=".ts", delete=False) as f:
         f.write(content)
         tmp = f.name
     try:
-        proc = subprocess.run([binary, "check", tmp],
-                              capture_output=True, text=True, timeout=30)
+        try:
+            proc = subprocess.run([binary, "check", tmp],
+                                  capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            raise HarnessFailure(f"{rel}: typokat timed out after 30s")
         out = proc.stderr + proc.stdout
-    except subprocess.TimeoutExpired:
-        return (["<timeout>"], [])
+        returncode = proc.returncode
     finally:
         os.unlink(tmp)
 
@@ -209,6 +229,25 @@ def run_typokat(binary, content):
             if lm:
                 diags.append((int(lm.group(1)), pending))
                 pending = None
+
+    # Validate the exit code and its consistency with the parsed output. A failure
+    # here is a harness failure, not a data point: it must never be silently scored.
+    has_output = bool(parse_errors) or bool(diags)
+    if returncode not in OK_EXIT_CODES:
+        raise HarnessFailure(
+            f"{rel}: typokat exited with unexpected code {returncode} "
+            f"(expected 0 or 1; negative = killed by signal)\n"
+            f"--- captured output ---\n{out}")
+    if returncode == 0 and has_output:
+        raise HarnessFailure(
+            f"{rel}: typokat exited 0 but reported diagnostics/parse errors "
+            f"(inconsistent: a clean exit must be silent)\n"
+            f"--- captured output ---\n{out}")
+    if returncode == 1 and not has_output:
+        raise HarnessFailure(
+            f"{rel}: typokat exited 1 but no diagnostic or parse error could be "
+            f"parsed (unparseable / lost output)\n"
+            f"--- captured output ---\n{out}")
     return parse_errors, diags
 
 
@@ -237,7 +276,9 @@ def parse_baseline(text):
 
 def diff(expected, actual):
     """expected/actual: lists of (line, code). Returns dict with matched / fn / fp
-    counts and concrete per-line detail for the misses."""
+    counts and concrete per-(line, code) detail. `matched_detail` is the *identity*
+    of the matched diagnostics (with multiplicity) — the scoreboard ratchet compares
+    these sets, so a same-count swap of WHICH diagnostics match is a regression."""
     exp = defaultdict(Counter)
     act = defaultdict(Counter)
     for ln, c in expected:
@@ -245,12 +286,15 @@ def diff(expected, actual):
     for ln, c in actual:
         act[ln][c] += 1
     matched = fn = fp = 0
+    matched_detail = []  # (line, code) both tsc and typokat agree on (identity)
     fn_detail = []  # (line, code) tsc had, typokat missed  <-- the scary bucket
     fp_detail = []  # (line, code) typokat had, tsc didn't
     for ln in set(exp) | set(act):
         e, a = exp[ln], act[ln]
         inter = e & a  # Counter intersection = min per code
         matched += sum(inter.values())
+        for c, n in inter.items():
+            matched_detail.extend([(ln, c)] * n)
         for c, n in (e - a).items():
             fn += n
             fn_detail.extend([(ln, c)] * n)
@@ -258,6 +302,7 @@ def diff(expected, actual):
             fp += n
             fp_detail.extend([(ln, c)] * n)
     return {"matched": matched, "fn": fn, "fp": fp,
+            "matched_detail": matched_detail,
             "fn_detail": fn_detail, "fp_detail": fp_detail}
 
 
@@ -373,6 +418,10 @@ def cmd_run(args):
     if not os.path.exists(binary):
         sys.exit(f"binary not found: {binary} (build it or pass --bin)")
 
+    if args.limit and args.check:
+        sys.exit("--check requires the full corpus (it enforces scoreboard "
+                 "completeness in both directions); drop --limit.")
+
     tests = list(corpus_tests())
     if args.limit:
         tests = tests[:args.limit]
@@ -389,7 +438,7 @@ def cmd_run(args):
         options, units = parse_units(source)
         rec = {"rel": rel, "bucket": None, "strict": is_strict(options),
                "matched": 0, "fn": 0, "fp": 0, "expected": 0,
-               "fn_detail": [], "fp_detail": []}
+               "matched_detail": [], "fn_detail": [], "fp_detail": []}
 
         if len(units) > 1:
             rec["bucket"] = "multifile"
@@ -408,7 +457,10 @@ def cmd_run(args):
         expected = parse_baseline(baseline)
         rec["expected"] = len(expected)
 
-        parse_errors, diags = run_typokat(binary, content)
+        try:
+            parse_errors, diags = run_typokat(binary, content, rel)
+        except HarnessFailure as e:
+            sys.exit(f"\nHARNESS FAILURE (aborting — never scored as success):\n  {e}")
         if parse_errors:
             rec["bucket"] = "parse-error"
             results.append(rec); continue
@@ -424,6 +476,7 @@ def cmd_run(args):
 
         d = diff(expected, diags)
         rec.update(matched=d["matched"], fn=d["fn"], fp=d["fp"],
+                   matched_detail=d["matched_detail"],
                    fn_detail=d["fn_detail"], fp_detail=d["fp_detail"])
         results.append(rec)
 
@@ -520,10 +573,39 @@ def _scoreboard_stats(results):
     return inscope, clean, err, clean_kept, err_exact, rec_m, rec_t
 
 
+def _fmt_ids(pairs):
+    """Serialize a list of (line, code) identities to a stable, multiplicity-
+    preserving string: sorted, `line:code` tokens joined by commas."""
+    return ",".join(f"{ln}:{c}" for ln, c in sorted(pairs))
+
+
+def _parse_ids(field):
+    """Inverse of the `<matched>|<fp>` identity column. Returns (matched, fp) as
+    lists of (line, code) with multiplicity, or (None, None) when identity was not
+    recorded (`-`, i.e. out-of-scope or a pre-identity-format scoreboard)."""
+    if field in ("-", ""):
+        return None, None
+    m_str, _, f_str = field.partition("|")
+
+    def parse_half(s):
+        out = []
+        for tok in s.split(","):
+            if not tok:
+                continue
+            ln, _, c = tok.partition(":")
+            out.append((int(ln), int(c)))
+        return out
+
+    return parse_half(m_str), parse_half(f_str)
+
+
 def write_scoreboard(results):
     """Write the committed baseline: one sorted line per test, no timestamps or
     machine paths, so a regression shows up as a single changed line in `git diff`.
-    Out-of-scope tests are recorded too (so scope flips are tracked)."""
+    Out-of-scope tests are recorded too (so scope flips are tracked). Each in-scope
+    line also carries the *identity* of its matched and false-positive diagnostics
+    (`<matched>|<fp>` as sorted `line:code` tokens) so the ratchet compares which
+    diagnostics match, not just how many — a same-count swap is a regression."""
     rows = sorted(results, key=lambda r: r["rel"])
     inscope, clean, err, clean_kept, err_exact, rec_m, rec_t = _scoreboard_stats(rows)
     with open(SCOREBOARD, "w") as f:
@@ -533,13 +615,16 @@ def write_scoreboard(results):
                 f"out-of-scope {len(rows) - len(inscope)}\n")
         f.write(f"# clean-kept {clean_kept}/{len(clean)}  "
                 f"error-exact {err_exact}/{len(err)}  diag-recall {rec_m}/{rec_t}\n")
-        f.write("# cols: status<TAB>matched fn fp expected<TAB>rel  "
-                "(status=IN | OOS:<bucket>; '-' = n/a)\n")
+        f.write("# cols: status<TAB>matched fn fp expected<TAB>ids<TAB>rel  "
+                "(status=IN | OOS:<bucket>; nums/ids '-' = n/a; "
+                "ids=<matched>|<fp> as sorted line:code identities)\n")
         for r in rows:
             if r["bucket"] is None:
-                f.write(f"IN\t{r['matched']} {r['fn']} {r['fp']} {r['expected']}\t{r['rel']}\n")
+                ids = f"{_fmt_ids(r['matched_detail'])}|{_fmt_ids(r['fp_detail'])}"
+                f.write(f"IN\t{r['matched']} {r['fn']} {r['fp']} {r['expected']}"
+                        f"\t{ids}\t{r['rel']}\n")
             else:
-                f.write(f"OOS:{r['bucket']}\t- - - -\t{r['rel']}\n")
+                f.write(f"OOS:{r['bucket']}\t- - - -\t-\t{r['rel']}\n")
     return SCOREBOARD
 
 
@@ -550,58 +635,110 @@ def read_scoreboard():
             if line.startswith("#") or not line.strip():
                 continue
             parts = line.rstrip("\n").split("\t")
-            if len(parts) != 3:
+            # New format: status<TAB>nums<TAB>ids<TAB>rel (4 fields). The pre-
+            # identity format (3 fields) is still read, with identity absent.
+            if len(parts) == 4:
+                status, nums, ids, rel = parts
+            elif len(parts) == 3:
+                status, nums, rel = parts
+                ids = "-"
+            else:
                 continue
-            status, nums, rel = parts
+
             def num(x):
                 return None if x == "-" else int(x)
             m, fn, fp, exp = (num(x) for x in nums.split())
+            matched_ids, fp_ids = _parse_ids(ids)
             out[rel] = {"status": status, "matched": m, "fn": fn, "fp": fp,
-                        "expected": exp}
+                        "expected": exp, "matched_ids": matched_ids,
+                        "fp_ids": fp_ids}
     return out
 
 
 def compare_scoreboard(results):
-    """Diff the current run against the committed baseline. Returns True if there
-    are no regressions. A regression = a previously in-scope file that now matches
-    fewer diagnostics, over-reports more, or fell out of scope."""
+    """Diff the current run against the committed baseline by stable diagnostic
+    identity. Returns True iff there are no regressions.
+
+    A regression is any of:
+      * a previously-matched diagnostic identity (line+code) no longer matched, or a
+        new false-positive identity (so a same-count swap of *which* diagnostics
+        match is caught, not hidden);
+      * a previously in-scope file that fell out of scope;
+      * a scoreboard entry missing from the checked corpus, or a corpus file missing
+        from the scoreboard (completeness is enforced in both directions)."""
     if not os.path.exists(SCOREBOARD):
         print("\n  no committed scoreboard.txt yet — run `run --save` to create one.")
         return True
     base = read_scoreboard()
     cur = {r["rel"]: r for r in results}
     regress, progress = [], []
-    for rel, c in cur.items():
+    missing_from_corpus = []   # in scoreboard, absent from this run's corpus
+    missing_from_board = []    # in corpus, absent from the scoreboard
+
+    for rel in sorted(set(base) | set(cur)):
         b = base.get(rel)
+        c = cur.get(rel)
+        if c is None:
+            missing_from_corpus.append(rel)
+            regress.append((rel, "in scoreboard.txt but absent from corpus "
+                                 "(re-fetch at the pinned SHA)"))
+            continue
         if b is None:
-            continue  # new test — not a regression
+            missing_from_board.append(rel)
+            regress.append((rel, "in corpus but absent from scoreboard.txt "
+                                 "(run --save to record it)"))
+            continue
+
         cur_in = c["bucket"] is None
         base_in = b["status"] == "IN"
         if base_in and cur_in:
-            if c["matched"] < b["matched"] or c["fp"] > b["fp"]:
-                regress.append((rel, f"matched {b['matched']}→{c['matched']}, "
-                                     f"fp {b['fp']}→{c['fp']}"))
-            elif c["matched"] > b["matched"] or c["fp"] < b["fp"]:
-                progress.append((rel, f"matched {b['matched']}→{c['matched']}, "
-                                      f"fp {b['fp']}→{c['fp']}"))
+            if b["matched_ids"] is None:
+                # Pre-identity-format baseline line: fall back to count comparison.
+                if c["matched"] < b["matched"] or c["fp"] > b["fp"]:
+                    regress.append((rel, f"matched {b['matched']}→{c['matched']}, "
+                                         f"fp {b['fp']}→{c['fp']}"))
+                elif c["matched"] > b["matched"] or c["fp"] < b["fp"]:
+                    progress.append((rel, f"matched {b['matched']}→{c['matched']}, "
+                                          f"fp {b['fp']}→{c['fp']}"))
+                continue
+            base_m = Counter(b["matched_ids"])
+            cur_m = Counter(c["matched_detail"])
+            base_fp = Counter(b["fp_ids"])
+            cur_fp = Counter(c["fp_detail"])
+            lost = base_m - cur_m
+            new_fp = cur_fp - base_fp
+            if lost or new_fp:
+                bits = []
+                if lost:
+                    bits.append("dropped " + _fmt_ids(lost.elements()))
+                if new_fp:
+                    bits.append("new fp " + _fmt_ids(new_fp.elements()))
+                regress.append((rel, "; ".join(bits)))
+            else:
+                gained = cur_m - base_m
+                removed_fp = base_fp - cur_fp
+                if gained or removed_fp:
+                    bits = []
+                    if gained:
+                        bits.append("matched " + _fmt_ids(gained.elements()))
+                    if removed_fp:
+                        bits.append("fixed fp " + _fmt_ids(removed_fp.elements()))
+                    progress.append((rel, "; ".join(bits)))
         elif base_in and not cur_in:
             regress.append((rel, f"IN → OOS:{c['bucket']} (lost coverage)"))
         elif not base_in and cur_in:
             progress.append((rel, f"{b['status']} → IN (gained coverage)"))
-    missing = [rel for rel in base if rel not in cur]
 
     print(f"\n  regression check vs scoreboard.txt — "
           f"regressions: {len(regress)}   progress: {len(progress)}   "
-          f"missing-from-corpus: {len(missing)}")
-    for rel, msg in sorted(regress)[:30]:
+          f"missing-from-corpus: {len(missing_from_corpus)}   "
+          f"missing-from-scoreboard: {len(missing_from_board)}")
+    for rel, msg in sorted(regress)[:40]:
         print(f"    ✗ REGRESS  {rel}  ({msg})")
     for rel, msg in sorted(progress)[:15]:
         print(f"    ✓ progress {rel}  ({msg})")
     if len(progress) > 15:
         print(f"    … +{len(progress) - 15} more improved")
-    if missing:
-        print(f"    note: {len(missing)} baseline files absent from corpus "
-              f"(re-fetch at the pinned SHA for a complete check)")
     return len(regress) == 0
 
 

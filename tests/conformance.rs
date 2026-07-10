@@ -241,7 +241,7 @@ fn compare_fixture_output(
     source: &str,
     output: &typokat::driver::CheckOutput,
 ) -> Result<(), Vec<String>> {
-    let expected = parse_markers(source);
+    let expected = parse_markers(&display_path(path), source);
     let line_index = LineIndex::new(source);
 
     // A parse error in an M0 fixture is always a harness/spec problem — surface
@@ -336,7 +336,15 @@ fn compare_fixture_output(
 /// primary span starts. The recognized form is `error[TK<digits>]` optionally
 /// followed by `: <substring>`. Multiple markers on one line are separated by
 /// ` | `. Prose comments (not matching the `error[TK...]` pattern) are ignored.
-fn parse_markers(source: &str) -> BTreeMap<u32, Vec<ExpectedMarker>> {
+///
+/// **Malformed markers fail loudly.** Any ` | `-separated comment segment that is
+/// *intended* as a marker — i.e. starts with `error[` — but does not parse as a
+/// well-formed `error[TK<digits>]` (a missing `]`, a non-`TK`/non-digit code, …)
+/// panics with the file, line, and segment. A silently dropped marker would turn a
+/// typo like `error[TK2322` or `error[TK12x]` into "no expectation" and hide a real
+/// diagnostic — the sharpest failure mode this corpus exists to prevent. Prose
+/// segments that merely contain `error[` mid-text are still ignored.
+fn parse_markers(display: &str, source: &str) -> BTreeMap<u32, Vec<ExpectedMarker>> {
     let mut map: BTreeMap<u32, Vec<ExpectedMarker>> = BTreeMap::new();
     for (idx, line) in source.lines().enumerate() {
         let line_no = (idx + 1) as u32;
@@ -350,8 +358,35 @@ fn parse_markers(source: &str) -> BTreeMap<u32, Vec<ExpectedMarker>> {
             continue;
         }
         for segment in comment.split(" | ") {
-            if let Some(marker) = parse_one_marker(segment) {
-                map.entry(line_no).or_default().push(marker);
+            let trimmed = segment.trim();
+            // A segment is only *intended* as a marker if it starts with `error[`;
+            // otherwise it is prose (even if `error[` appears mid-text).
+            if !trimmed.starts_with("error[") {
+                continue;
+            }
+            match parse_one_marker(trimmed) {
+                Some(marker) => {
+                    // Reject a second `error[` in the segment's residual (after the
+                    // code's closing `]`): a space-joined `error[..] error[..]` would
+                    // otherwise absorb the trailing marker as inert text. Markers on
+                    // one line must be ` | `-separated.
+                    let close = trimmed.find(']').expect("parsed marker has `]`");
+                    if trimmed[close + 1..].contains("error[") {
+                        panic!(
+                            "{display}:{line_no}: comment segment {segment:?} contains \
+                             a second `error[` after a parsed marker — separate \
+                             multiple markers with ` | `, or the trailing marker is \
+                             silently dropped."
+                        );
+                    }
+                    map.entry(line_no).or_default().push(marker)
+                }
+                None => panic!(
+                    "{display}:{line_no}: malformed conformance marker in comment \
+                     segment {segment:?} — expected `error[TK<digits>]` optionally \
+                     followed by `: <substring>`. A dropped marker would silently \
+                     hide a real diagnostic; fix or remove the segment."
+                ),
             }
         }
     }
@@ -458,4 +493,132 @@ fn display_path(path: &Path) -> String {
         .unwrap_or(path)
         .display()
         .to_string()
+}
+
+// --- Marker-parser witnesses (sprint WU5, finding 4) -------------------------
+
+/// Run `parse_markers` catching any panic, with panic output suppressed so a
+/// deliberately-malformed witness doesn't spam the test log.
+#[cfg(test)]
+fn parse_markers_catch(src: &str) -> Result<BTreeMap<u32, Vec<ExpectedMarker>>, ()> {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = std::panic::catch_unwind(|| parse_markers("witness.ts", src)).map_err(|_| ());
+    std::panic::set_hook(prev);
+    result
+}
+
+/// Well-formed markers parse: bare code, code + substring, multiple ` | `-joined
+/// markers, and prose that merely mentions `error[` mid-text is ignored.
+#[test]
+fn parse_markers_accepts_well_formed_and_ignores_prose() {
+    let src = concat!(
+        "const a = 1; // error[TK2322]\n",
+        "const b = 2; // error[TK2345]: Argument of type\n",
+        "const c = 3; // error[TK2341]: Property 'priv' is private | error[TK2445]: is protected\n",
+        "const d = 4; // this comment references error[ish] prose, not a marker\n",
+        "const e = 5; // plain prose comment\n",
+    );
+    let map = parse_markers_catch(src).expect("well-formed corpus must parse");
+    assert_eq!(map[&1].len(), 1);
+    assert_eq!(map[&1][0].code, "TK2322");
+    assert_eq!(map[&2][0].substring.as_deref(), Some("Argument of type"));
+    assert_eq!(map[&3].len(), 2, "both ` | `-joined markers parse");
+    assert_eq!(map[&3][1].code, "TK2445");
+    assert!(
+        !map.contains_key(&4),
+        "prose containing `error[` is ignored"
+    );
+    assert!(!map.contains_key(&5));
+}
+
+/// A marker missing its closing `]` must fail loudly, not be dropped.
+#[test]
+fn parse_markers_rejects_unterminated_code() {
+    assert!(
+        parse_markers_catch("const x = 1; // error[TK2322\n").is_err(),
+        "an unterminated `error[TK2322` marker must panic, not silently drop"
+    );
+}
+
+/// A code with a non-digit tail (`TK12x`) is malformed and must fail.
+#[test]
+fn parse_markers_rejects_non_digit_code() {
+    assert!(
+        parse_markers_catch("const x = 1; // error[TK12x]\n").is_err(),
+        "`error[TK12x]` is not a valid code and must panic"
+    );
+}
+
+/// A code missing the `TK` prefix (`error[2322]`) is malformed and must fail.
+#[test]
+fn parse_markers_rejects_missing_tk_prefix() {
+    assert!(
+        parse_markers_catch("const x = 1; // error[2322]\n").is_err(),
+        "`error[2322]` (no `TK`) must panic"
+    );
+}
+
+/// Two markers joined by a plain space (not ` | `) must fail loudly: the trailing
+/// `error[TK2345]` would otherwise be absorbed as inert residual text and dropped.
+#[test]
+fn parse_markers_rejects_space_joined_double_marker() {
+    assert!(
+        parse_markers_catch("const x = 1; // error[TK2322] error[TK2345]\n").is_err(),
+        "space-joined double markers must panic — use ` | ` to separate markers"
+    );
+}
+
+/// Control: a substring assertion containing the literal word "error" (without
+/// `[`) is legitimate text and still parses.
+#[test]
+fn parse_markers_accepts_substring_containing_word_error() {
+    let map =
+        parse_markers_catch("const x = 1; // error[TK2322]: reports an error for this line\n")
+            .expect("a substring containing the word `error` must parse");
+    assert_eq!(map[&1][0].code, "TK2322");
+    assert_eq!(
+        map[&1][0].substring.as_deref(),
+        Some("reports an error for this line")
+    );
+}
+
+/// A malformed marker after a ` | ` separator must fail even when the first
+/// segment is well-formed — a dropped second marker would hide a diagnostic.
+#[test]
+fn parse_markers_rejects_malformed_second_segment() {
+    assert!(
+        parse_markers_catch("const x = 1; // error[TK2322] | error[TK99\n").is_err(),
+        "a malformed segment after ` | ` must panic"
+    );
+}
+
+/// The entire committed corpus (every `.ts` fixture, enabled or not) must parse
+/// under the strict rules — proving the hardening rewrites no real markers.
+#[test]
+fn parse_markers_accepts_entire_corpus() {
+    let mut files = Vec::new();
+    collect_all_ts(&cases_root(), &mut files);
+    assert!(!files.is_empty(), "expected fixtures under tests/cases");
+    for path in files {
+        let source = std::fs::read_to_string(&path).unwrap();
+        parse_markers_catch(&source).unwrap_or_else(|_| {
+            panic!(
+                "strict marker parse rejected existing fixture {}",
+                path.display()
+            )
+        });
+    }
+}
+
+#[cfg(test)]
+fn collect_all_ts(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("read cases dir") {
+        let path = entry.expect("dir entry").path();
+        if path.is_dir() {
+            collect_all_ts(&path, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("ts") {
+            out.push(path);
+        }
+    }
 }

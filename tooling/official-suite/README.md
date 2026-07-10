@@ -90,30 +90,59 @@ changed line in `git diff`. Header lines carry the headline aggregates (corpus /
 in-scope / clean-kept / error-exact / diag-recall) at the pinned TS SHA.
 
 ```
-IN	4 8 0 12	conformance/.../assignmentCompatWithCallSignatures2.ts
-OOS:syntax:enum	- - - -	conformance/.../enumTest.ts
+IN	4 8 0 12	5:2322,9:2345|	conformance/.../assignmentCompatWithCallSignatures2.ts
+OOS:syntax:enum	- - - -	-	conformance/.../enumTest.ts
 ```
 
-(`status<TAB>matched fn fp expected<TAB>rel`; out-of-scope tests are tracked too,
-so a scope flip IN↔OOS is also a regression/progress signal.)
+Columns are `status<TAB>matched fn fp expected<TAB>ids<TAB>rel`. Out-of-scope tests
+are tracked too (a scope flip IN↔OOS is a regression/progress signal), with `-` for
+the numeric and `ids` columns.
+
+The **`ids` column is diagnostic identity**, not just a count:
+`<matched>|<fp>`, each side a comma-separated, sorted list of `line:code` tokens
+(with multiplicity). It is what makes the ratchet **identity-based** rather than
+count-based: a same-count *swap* of which diagnostics match (e.g. matching a
+different line, or a false positive moving) is a regression even though `matched`
+and `fp` are unchanged. The numeric columns are kept for the human-readable
+headline aggregates and remain exactly consistent with the identities.
 
 Workflow:
 
 - `run --save` writes/updates it. Commit it when the change is intended (the git
   history of this file *is* the score-over-time record).
-- `run --check` re-runs and diffs against it: prints **REGRESS** for any
-  previously in-scope file that now matches fewer diagnostics, over-reports more,
-  or fell out of scope, and **progress** for improvements. **Exit 1 on any
+- `run --check` re-runs and diffs against it by **diagnostic identity**: prints
+  **REGRESS** for any previously in-scope file that drops a matched identity, gains
+  a false-positive identity, or falls out of scope, and **progress** for
+  improvements. It also enforces **corpus completeness in both directions** — a
+  scoreboard entry missing from the corpus, or a corpus file missing from the
+  scoreboard, is a regression (re-fetch / `--save` respectively). **Exit 1 on any
   regression** — so it can gate CI on *regressions* without the absolute match rate
   being a gate (matches the "dashboard, not gate" decision: the number is free to
-  be low, it just must not get worse silently).
+  be low, it just must not get worse silently). `--check` requires the full corpus,
+  so it rejects `--limit`.
+
+A checker invocation the harness cannot trust — an unexpected exit code, a signal
+(crash), a timeout, or output inconsistent with the exit code (exit 0 with
+diagnostics, or exit 1 with nothing parseable) — is a **hard harness failure**: the
+run aborts loudly with the file, exit code, and captured output. It is never scored
+as success or as a silent zero (a crash masquerading as a clean file is exactly the
+false negative this suite exists to catch).
 
 Because the corpus is reproducible from `fetch` at the pinned SHA, the baseline is
-meaningful on any machine. Re-fetch at the same SHA before `--check`, or the run
-notes how many baseline files were absent.
+meaningful on any machine. Re-fetch at the same SHA before `--check`.
 
 This is the "discover → promote" path made concrete: as milestones land, `--save`
 ratchets the numbers up; `--check` keeps them from sliding back.
+
+### Harness unit tests
+
+The harness's own logic (identity ratchet, completeness, exit-code handling,
+scoreboard round-trip) has stdlib-only unit tests — no third-party deps:
+
+```sh
+cd tooling/official-suite
+python3 -m unittest test_tsofficial -v
+```
 
 ## Knobs / config (top of `tsofficial.py`)
 
