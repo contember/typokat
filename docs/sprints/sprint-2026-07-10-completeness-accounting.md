@@ -350,3 +350,12 @@ gate is recorded in the run log before WU1 begins.
   explicit **expected fallout** note: the first honest run will mass-demote in-scope tests
   (baseline: 497 in-scope, 214 expected-clean), and the audit runs aggregated by incomplete
   identity, not per test, to keep WU8 at effort M.
+- **2026-07-10 — WU0 shipped; split gate resolved: NO SPLIT.** All five probes confirmed
+  false-clean (typokat exit `0` vs tsc 6.0.3 TS2345/TS2304/TS2322). Census committed at
+  `tests/surface/census.md`: 10 dispatcher roles, wildcards located per layer; identity scheme
+  `role/surface/slot-or-variant` with `oxc_variant` as a separate drift-witness field. Gate
+  outcome: (a) **10 newly ownerless in-scope families** (>8) — kept classified/owned, not
+  implemented; each must graduate to a backlog owner before its WU3–WU5 implementation commit;
+  (b) **no second traversal architecture needed** — accounting is additive to the five existing
+  walkers, so the sprint proceeds through WU3–WU5 as planned. Deviation: local `tsc` 6.0.3 used
+  directly (npx form broken in this environment); verdicts are real 6.0.3 outputs.
