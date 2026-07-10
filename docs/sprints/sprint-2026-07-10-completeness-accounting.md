@@ -369,3 +369,14 @@ gate is recorded in the run log before WU1 begins.
   (independently recomputed, 0 mismatches); `C-deferred-divergence-census` flagged READY, flips at
   WU8. Accepted residuals (deliberate-deception class): `starts_with` preamble allowlist; `dir`
   honesty rests on adversarial review, noted inline in the ledger.
+- **2026-07-10 — WU1 shipped after WU7-A PASS + must-fix round.** Inventory: 143 records
+  (71 supported / 64 unsupported-in / 8 design-oos) over 14 dispatch enums, all classifiers
+  wildcard-free (E0004 tripwire proven ×3, including one live catch: `V8IntrinsicExpression`).
+  Review round added six missing classifiers (TSTupleElement, TSTypeName, TSLiteral,
+  ForStatementInit, ForStatementLeft, BindingPatternKind), the `assignment-pattern` record, one
+  honesty flip (named-tuple-member supported→unsupported-in), and per-role completeness. Reviewer
+  probes confirmed real false-cleans now recorded: `for (s of …)` assignment targets, `A.B`
+  qualified names, named tuple members. Carry-note for WU3/WU4 reviewers: the inherited
+  `AssignmentTarget` group maps to one constant family without per-variant delegation — a new
+  variant is absorbed compile-clean; safe today (family is unsupported-in→73) but it bounds the
+  tripwire.
