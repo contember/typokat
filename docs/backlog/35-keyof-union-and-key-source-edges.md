@@ -29,4 +29,10 @@ the remaining probes above go clean and the README divergence entries are delete
 `src/check/checker/eval.rs` (mapped key iteration),
 `src/relate/relation.rs` if pattern index signatures land.
 
+**Follow-up (2026-07-10, completeness-accounting sprint WU5):** an ALIASED keyof as a
+non-homomorphic key source (`type Keys = keyof Obj; { [K in Keys]: Obj[K] }`) collapses
+the key source — and the alias itself — to `never` (over-report; ledger
+`mapped/aliased-keyof-key-source`, witness
+`tests/cases/sr_deferred_ledger/b35_aliased_keyof_mapped.ts`).
+
 <!-- Origin: M28 review round 1 (2026-07-05), MED sound-direction findings. -->

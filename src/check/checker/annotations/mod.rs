@@ -133,6 +133,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 if op.operator == TSTypeOperatorOperator::Readonly {
                     return self.lower_readonly_array_or_tuple(scope, &op.type_annotation);
                 }
+                // `unique symbol` is the remaining operator (WU5 accounting).
+                self.record_incomplete(
+                    "annotation-lower/type-operator/unique-operand",
+                    Span::from_oxc(op.span),
+                    "unique symbol operator not lowered",
+                );
                 return None;
             }
             // M20 eager `T[K]`, except inside an M26 mapped value template where
@@ -171,6 +177,75 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             TSType::TSTemplateLiteralType(template) => {
                 return self.lower_template_type(scope, template);
             }
+            // Unmodeled `TSType` variants (WU5 accounting): record the skipped surface
+            // before degrading to `None` (→ the error type) so an unsupported annotation
+            // can no longer exit clean. Each id is the inventory identity for the variant.
+            TSType::TSTypeQuery(query) => {
+                self.record_incomplete(
+                    "annotation-lower/type-query/typeof",
+                    Span::from_oxc(query.span),
+                    "typeof type query not lowered",
+                );
+                return None;
+            }
+            TSType::TSTypePredicate(predicate) => {
+                self.record_incomplete(
+                    "annotation-lower/type-predicate/self",
+                    Span::from_oxc(predicate.span),
+                    "type predicate not lowered",
+                );
+                return None;
+            }
+            TSType::TSThisType(this_ty) => {
+                self.record_incomplete(
+                    "annotation-lower/this-type/self",
+                    Span::from_oxc(this_ty.span),
+                    "this type annotation not modeled",
+                );
+                return None;
+            }
+            TSType::TSImportType(import_ty) => {
+                self.record_incomplete(
+                    "annotation-lower/import-type/self",
+                    Span::from_oxc(import_ty.span),
+                    "import type not modeled",
+                );
+                return None;
+            }
+            TSType::TSSymbolKeyword(kw) => {
+                self.record_incomplete(
+                    "annotation-lower/symbol-keyword/self",
+                    Span::from_oxc(kw.span),
+                    "symbol keyword type not modeled",
+                );
+                return None;
+            }
+            TSType::TSBigIntKeyword(kw) => {
+                self.record_incomplete(
+                    "annotation-lower/bigint-keyword/self",
+                    Span::from_oxc(kw.span),
+                    "bigint keyword type not modeled",
+                );
+                return None;
+            }
+            TSType::TSObjectKeyword(kw) => {
+                self.record_incomplete(
+                    "annotation-lower/object-keyword/self",
+                    Span::from_oxc(kw.span),
+                    "object keyword type not modeled",
+                );
+                return None;
+            }
+            TSType::TSIntrinsicKeyword(kw) => {
+                self.record_incomplete(
+                    "annotation-lower/intrinsic-keyword/self",
+                    Span::from_oxc(kw.span),
+                    "intrinsic keyword type not modeled",
+                );
+                return None;
+            }
+            // JSDoc types are design-OOS (no in-scope child to account); a bare named
+            // tuple member reaching here is handled at its tuple site.
             _ => return None,
         };
         Some(id)

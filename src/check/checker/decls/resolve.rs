@@ -152,8 +152,26 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         type_name: &TSTypeName<'_>,
         type_arguments: Option<&TSTypeParameterInstantiation<'_>>,
     ) -> Option<TypeId> {
-        let TSTypeName::IdentifierReference(ident) = type_name else {
-            return None;
+        let ident = match type_name {
+            TSTypeName::IdentifierReference(ident) => ident,
+            // Qualified names (`A.B`) and `this`-qualified names are out of subset;
+            // record the skipped surface before degrading (WU5 accounting).
+            TSTypeName::QualifiedName(qualified) => {
+                self.record_incomplete(
+                    "annotation-lower/type-name/qualified-name",
+                    Span::from_oxc(qualified.span),
+                    "qualified type name A.B not resolved",
+                );
+                return None;
+            }
+            TSTypeName::ThisExpression(this_name) => {
+                self.record_incomplete(
+                    "annotation-lower/type-name/this",
+                    Span::from_oxc(this_name.span),
+                    "this type name not resolved",
+                );
+                return None;
+            }
         };
         let name = ident.name.as_str();
         let ref_span = Span::from_oxc(ident.span);

@@ -1,12 +1,12 @@
-Surface-accounting probe snapshots (sprint 2026-07-10, WU0 captured → WU3/WU4 updated)
-=====================================================================================
+Surface-accounting probe snapshots (sprint 2026-07-10, WU0 captured → WU3/WU4/WU5 updated)
+=========================================================================================
 
 Committed witness data. typokat = target/release/typokat check <file>;
 oracle = tsc 6.0.3 --strict --noEmit <file>. Each probe was a minimal in-scope construct that
 typokat exited clean (0 diagnostics) while tsc rejects. WU3 closed probes 1-3 (expression
-child-slot accounting) and WU4 closed probe 5 (try/catch/finally): they now exit 3 while tsc
-rejects. Probe 4 (annotation) remains open for WU5. Fixtures for probes 1-3 + 5 live in
-tests/cases/b73_surface_accounting/; probe 4 in tests/cases/b73_surface_accounting_pending/.
+child-slot accounting), WU4 closed probe 5 (try/catch/finally), and WU5 closed probe 4
+(annotation lowering): all five now exit 3 (or 1/3) while tsc rejects. All fixtures live in
+tests/cases/b73_surface_accounting/.
 
 Legend: "exit" is the process exit code. typokat: 0 = clean, 1 = diagnostics, 3 = incomplete.
 tsc 6.0.3: 0 = clean, 2 = diagnostics (this tsc build returns 2 for type errors under --noEmit).
@@ -30,9 +30,9 @@ Probe 3 — bad call inside an array spread                                 [CLO
   tsc:     exit 2 — TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
   id:      expr-infer/array-literal/spread-element
 
-Probe 4 — `typeof Missing` in a type annotation                          [OPEN — WU5]
+Probe 4 — `typeof Missing` in a type annotation                          [CLOSED by WU5]
   source:  let x: typeof Missing = 1;
-  typokat: exit 0 — (no output)
+  typokat: WU0 exit 0 — (no output)  →  WU5 exit 3 — incomplete[annotation-lower/type-query/typeof]
   tsc:     exit 2 — TS2304: Cannot find name 'Missing'.
   id:      annotation-lower/type-query/typeof
 
@@ -48,5 +48,5 @@ Probe 5 — bad assignments inside try / catch / finally                   [CLOS
 
 ------------------------------------------------------------------------------------------------
 Summary: WU0 captured 5/5 probes exiting 0 (false-clean); all 5 rejected by tsc 6.0.3 --strict.
-WU3 closed probes 1-3 and WU4 closed probe 5 (all now exit 3, no longer clean). Probe 4 remains
-open for WU5. These are false-clean silent-skip paths, not deliberate divergences.
+WU3 closed probes 1-3, WU4 closed probe 5, and WU5 closed probe 4 — all five now exit 3 (or 1/3),
+no longer clean. These were false-clean silent-skip paths, not deliberate divergences.

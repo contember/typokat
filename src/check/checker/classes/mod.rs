@@ -22,6 +22,7 @@ use oxc_ast::ast::{
     Class, ClassElement, Expression, Function, MethodDefinition, MethodDefinitionKind,
     MethodDefinitionType, PropertyDefinitionType, TSTypeParameterDeclaration,
 };
+use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// One accessor pair being assembled into a single property.
@@ -123,6 +124,25 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         class: &Class<'_>,
     ) {
         let void_ty = self.interner.well_known().void;
+
+        // WU7-E F3, record-only accounting (no new semantics): extends type arguments
+        // are never lowered (generic-base composition is deferred — divergences.md
+        // `classes/override-generic-base`) and the implements clause is unprocessed,
+        // so an unresolved name inside either was a silent false-clean.
+        if let Some(args) = class.super_type_arguments.as_deref() {
+            self.record_incomplete(
+                "class/class-heritage/type-arguments",
+                Span::from_oxc(args.span),
+                "extends type arguments not lowered",
+            );
+        }
+        for implements in &class.implements {
+            self.record_incomplete(
+                "class/implements-clause/self",
+                Span::from_oxc(implements.span),
+                "implements clause not checked",
+            );
+        }
 
         // Fill the base before composition; unresolved or cyclic bases contribute nothing.
         let base = self.resolve_base_class(scope, class);
@@ -360,6 +380,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 // or untyped/uninitialized fields are skipped.
                 ClassElement::PropertyDefinition(prop) => {
                     if prop.computed {
+                        // The computed key is not collected into the class type (WU7-E F2).
+                        self.record_incomplete(
+                            "class/property-definition/computed-key",
+                            Span::from_oxc(prop.key.span()),
+                            "computed property key not collected",
+                        );
                         continue;
                     }
                     let Some(name) = prop.key.static_name() else {
@@ -445,6 +471,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 // properties; accessors are accumulated and combined after the loop.
                 ClassElement::MethodDefinition(method) => {
                     if method.computed {
+                        // The computed key is not collected into the class type (WU5).
+                        self.record_incomplete(
+                            "class/method-definition/computed-key",
+                            Span::from_oxc(method.key.span()),
+                            "computed method key not collected",
+                        );
                         continue;
                     }
                     match method.kind {
@@ -558,7 +590,29 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     }
                 }
                 // Static blocks, accessor properties, index signatures: out of subset.
-                _ => {}
+                // Record the skipped member before dropping (WU5 accounting) — a static
+                // block body / accessor initializer is otherwise a silent false-clean.
+                ClassElement::StaticBlock(block) => {
+                    self.record_incomplete(
+                        "class/static-block/self",
+                        Span::from_oxc(block.span),
+                        "static initialization block body not checked",
+                    );
+                }
+                ClassElement::AccessorProperty(accessor) => {
+                    self.record_incomplete(
+                        "class/accessor-property/self",
+                        Span::from_oxc(accessor.span),
+                        "auto-accessor field not checked",
+                    );
+                }
+                ClassElement::TSIndexSignature(index) => {
+                    self.record_incomplete(
+                        "class/class-index-signature/self",
+                        Span::from_oxc(index.span),
+                        "class index signature not collected",
+                    );
+                }
             }
         }
 

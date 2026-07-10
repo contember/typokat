@@ -65,6 +65,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             match member {
                 TSSignature::TSPropertySignature(sig) => {
                     let Some(name) = sig.key.static_name() else {
+                        self.record_property_signature_computed_key(&sig.key);
                         continue;
                     };
                     if overloaded_method_names.contains(name.as_ref()) {
@@ -109,6 +110,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
                 TSSignature::TSMethodSignature(sig) => {
                     let Some(name) = sig.key.static_name() else {
+                        self.record_method_signature_computed_key(&sig.key);
                         continue;
                     };
                     if overloaded_method_names.contains(name.as_ref()) {

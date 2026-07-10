@@ -1150,6 +1150,16 @@ owner = "../../docs/backlog/73-unsupported-surface-audit.md"
 witness = "unique symbol operator not lowered"
 
 [[surface]]
+id = "annotation-lower/type-parameter-default/self"
+role = "annotation-lower"
+surface = "type-parameter-default"
+slot = "self"
+oxc_variant = "TSTypeParameter::default"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "../cases/b73_surface_accounting/type_param_default.ts"
+
+[[surface]]
 id = "annotation-lower/type-predicate/self"
 role = "annotation-lower"
 surface = "type-predicate"
@@ -1157,7 +1167,7 @@ slot = "self"
 oxc_variant = "TSType::TSTypePredicate"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../cases/b73_surface_accounting_pending/typeof_query.ts"
+witness = "../cases/b73_surface_accounting/typeof_query.ts"
 
 [[surface]]
 id = "annotation-lower/type-query/self"
@@ -1167,7 +1177,7 @@ slot = "self"
 oxc_variant = "TSType::TSTypeQuery"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../cases/b73_surface_accounting_pending/typeof_query.ts"
+witness = "../cases/b73_surface_accounting/typeof_query.ts"
 
 [[surface]]
 id = "annotation-lower/type-query/typeof"
@@ -1177,7 +1187,7 @@ slot = "typeof"
 oxc_variant = "TSType::TSTypeQuery"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../cases/b73_surface_accounting_pending/typeof_query.ts"
+witness = "../cases/b73_surface_accounting/typeof_query.ts"
 
 [[surface]]
 id = "annotation-lower/type-reference/self"
@@ -1392,6 +1402,16 @@ owner = "../../docs/backlog/73-unsupported-surface-audit.md"
 witness = "auto-accessor field not checked"
 
 [[surface]]
+id = "class/class-heritage/type-arguments"
+role = "class"
+surface = "class-heritage"
+slot = "type-arguments"
+oxc_variant = "Class::super_type_arguments"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "../cases/b73_surface_accounting/class_heritage.ts"
+
+[[surface]]
 id = "class/class-index-signature/self"
 role = "class"
 surface = "class-index-signature"
@@ -1400,6 +1420,16 @@ oxc_variant = "ClassElement::TSIndexSignature"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
 witness = "class index signature not collected"
+
+[[surface]]
+id = "class/implements-clause/self"
+role = "class"
+surface = "implements-clause"
+slot = "self"
+oxc_variant = "Class::implements"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "../cases/b73_surface_accounting/class_heritage.ts"
 
 [[surface]]
 id = "class/method-definition/computed-key"
@@ -1420,6 +1450,16 @@ oxc_variant = "ClassElement::MethodDefinition"
 disposition = "supported"
 owner = "shipped"
 witness = "../cases/f3_class_member_collection"
+
+[[surface]]
+id = "class/property-definition/computed-key"
+role = "class"
+surface = "property-definition"
+slot = "computed-key"
+oxc_variant = "ClassElement::PropertyDefinition"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "../cases/b73_surface_accounting/class_members.ts"
 
 [[surface]]
 id = "class/property-definition/self"
@@ -1474,6 +1514,16 @@ oxc_variant = "TSSignature::TSIndexSignature"
 disposition = "supported"
 owner = "shipped"
 witness = "../cases/m19_index_sig"
+
+[[surface]]
+id = "signature/method-signature/computed-key"
+role = "signature"
+surface = "method-signature"
+slot = "computed-key"
+oxc_variant = "TSSignature::TSMethodSignature"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "../cases/b73_surface_accounting/signature_computed_key.ts"
 
 [[surface]]
 id = "signature/method-signature/self"

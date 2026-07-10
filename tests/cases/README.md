@@ -318,7 +318,7 @@ sprint (its findings are open backlog items). Every fixture header records the
 | `sr_wu2_scope_overloads/` | WU2 | switch-local lexical scope (a case-clause `let`/`const` must not resolve after the switch — `TK2304`) and local (in-function) function overloads (no spurious `TK2391`; calls select declared overloads) |
 | `sr_wu2_export_space/` | WU2 | **project-shaped** (registered in `PROJECT_DIRS`): `export type { x }` / `export { type x }` specifier forms must not leak the value slot; a non-type-only import using such a name as a value gets `TK2304` (the M29 stand-in for tsc's `TS1362`) |
 | `sr_wu3_types_recursion/` | WU3 | `any & never` → `never` (assigning into it errors); source-intersection nominal origin (private member rejects); `keyof { [k: string]: T }` = `string \| number`; recursive mapped-value recursion guard; deep type-literal annotation depth guard (backlog 63k) |
-| `sr_deferred_ledger/` | — (stays disabled) | known unfixtured under-reports: backlog `30` (JS-exact number stringify), `56` (silent instantiation cycles), `60` (fresh literals vs union targets), `62` (index-signature source parity), `66` (protected↔protected override compat), `67` (utility-alias constraint) |
+| `sr_deferred_ledger/` | — (stays disabled) | known unfixtured under-reports: backlog `30` (JS-exact number stringify), `56` (silent instantiation cycles), `60` (fresh literals vs union targets), `62` (index-signature source parity), `66` (protected↔protected override compat), `67` (utility-alias constraint); plus the backlog `35` aliased-keyof mapped key-source **over**-report (`b35_aliased_keyof_mapped.ts`) |
 
 Construction notes:
 
@@ -357,25 +357,32 @@ marker (the identity scheme is defined in [`tests/surface/README.md`](../surface
 a nearby **supported control** on a sibling line carries the ordinary `error[TK…]`
 marker so the two paths are diffed side by side.
 
-The corpus is **split by owning work unit**. `b73_surface_accounting/` holds the WU3
-expression child-slot fixtures plus the WU4 statement-container fixtures and is
-**enabled**: the harness diffs their `incomplete[<id>]` markers
+The corpus is a single **enabled** dir, filled milestone by milestone (WU3 expression
+child slots, WU4 statement containers, WU5 annotation / signature / class-member
+accounting): the harness diffs each fixture's `incomplete[<id>]` markers
 (`compare_incomplete_output`) with the same per-line, exact-identity discipline as
 `error[TK…]` — an unexpected record or a missing expected one fails. WU4 traverses the
 try/catch/finally blocks through the existing block walker, so the try fixture now
 carries the ordinary `error[TK…]` markers (with an `incomplete[…]` only for the
-still-unmodeled catch parameter). The sibling `b73_surface_accounting_pending/` holds
-the remaining annotation (WU5) fixture and stays registered `false` until that emission
-lands; enabling it at HEAD shows the silent path directly (the `incomplete[…]` line
-produces no record while `tsc` errors). Every fixture header records the exact `tsc
-6.0.3 --strict` verdict and the `file:line` of the wildcard/`None`/skip that drops the
-position.
+still-unmodeled catch parameter). WU5 records the incomplete surface for every
+unsupported annotation/signature/class-member degradation before the error-type
+fallback, so an unsupported annotation form is no longer false-clean. Every fixture
+header records the exact `tsc 6.0.3 --strict` verdict and the `file:line` of the
+wildcard/`None`/skip that drops the position.
 
-| Fixture | Dir | Skip site | Marker id | tsc verdict |
+| Fixture | WU | Skip site | Marker id | tsc verdict |
 |---|---|---|---|---|
-| `template_interpolation.ts` | WU3 (enabled) | `infer_expr` `TemplateLiteral` arm records before `None` | `expr-infer/template-literal/interpolation` | TS2345 |
-| `computed_key.ts` | WU3 (enabled) | `infer_object_literal` records non-`static_name` keys | `expr-infer/object-literal/computed-key` | TS2345 |
-| `array_spread.ts` | WU3 (enabled) | array-element helper records spread/elision | `expr-infer/array-literal/spread-element` | TS2345 |
-| `try_catch_finally.ts` | WU4 (enabled) | `check_stmt` walks the blocks; catch param stays incomplete | `error[TK2322]` ×3 + `stmt-check/try-statement/catch-param` | TS2322 ×3 |
-| `for_of_assign_target.ts` | WU4 (enabled) | `declare_for_left` records the pre-declared target | `stmt-check/assignment-target/self` | TS2322 |
-| `typeof_query.ts` | pending (WU5) | `lower_annotation_inner` drops `TSTypeQuery` (`annotations/mod.rs:174`) | `annotation-lower/type-query/typeof` | TS2304 |
+| `template_interpolation.ts` | WU3 | `infer_expr` `TemplateLiteral` arm records before `None` | `expr-infer/template-literal/interpolation` | TS2345 |
+| `computed_key.ts` | WU3 | `infer_object_literal` records non-`static_name` keys | `expr-infer/object-literal/computed-key` | TS2345 |
+| `array_spread.ts` | WU3 | array-element helper records spread/elision | `expr-infer/array-literal/spread-element` | TS2345 |
+| `try_catch_finally.ts` | WU4 | `check_stmt` walks the blocks; catch param stays incomplete | `error[TK2322]` ×3 + `stmt-check/try-statement/catch-param` | TS2322 ×3 |
+| `for_of_assign_target.ts` | WU4 | `declare_for_left` records the pre-declared target | `stmt-check/assignment-target/self` | TS2322 |
+| `typeof_query.ts` | WU5 | `lower_annotation_inner` records before dropping `TSTypeQuery` | `annotation-lower/type-query/typeof` | TS2304 |
+| `annotation_keywords.ts` | WU5 | keyword/literal annotation leaves record before `None` | `annotation-lower/{symbol,bigint,object,intrinsic}-keyword/self`, `literal-type/bigint` | TS2304/TS2552 |
+| `tuple_members.ts` | WU5 | `lower_tuple_annotation` records the named/optional member | `annotation-lower/{named-tuple-member,tuple-optional-element}/self` | (tuple mis-shape) |
+| `type_name_qualified.ts` | WU5 | qualified/`this` name + `this`/predicate type leaves record | `annotation-lower/type-name/qualified-name`, `type-predicate/self`, `this-type/self` | TS2304 |
+| `signature_computed_key.ts` | WU5 | object/interface member collection records the computed key (property AND method signatures — WU7-E F1) | `signature/{property,method}-signature/computed-key` | TS1170/TS2304 |
+| `class_members.ts` | WU5 | `collect_class_own_members` records static-block/accessor/index-sig/computed method + property keys (WU7-E F2) | `class/{static-block,accessor-property,class-index-signature}/self`, `class/{method,property}-definition/computed-key` | (member skip) |
+| `class_heritage.ts` | WU5 | record-only: extends type arguments + implements clause never processed (WU7-E F3) | `class/class-heritage/type-arguments`, `class/implements-clause/self` | TS2304 |
+| `type_param_default.ts` | WU5 | record-only: type-parameter defaults never lowered (WU7-E F3; ledger `constraints/type-parameter-defaults`) | `annotation-lower/type-parameter-default/self` | TS2304 |
+| `supported_annotations.ts` | WU5 (control) | keyof/mapped/conditional/template/readonly stay clean — no record | — | clean |

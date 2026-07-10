@@ -289,6 +289,13 @@ primitives) also stays DEFERRED — never a permissive `{}`.
   <!-- div: id=mapped/ts2313-secondary-omitted dir=cosmetic scope=b-type-level-tail owner=design-oos witness=../../tests/cases/m26_mapped_types -->
 - **Out of scope:** `as` key remapping and template-literal keys (backlog `11`).
   <!-- div: id=mapped/as-remapping-template-keys dir=over scope=design-oos owner=design-oos witness=../../tests/cases/m26_mapped_types -->
+- **Aliased-`keyof` key source collapses (over-report):** a NON-homomorphic map whose `in`
+  clause is an **alias of a `keyof`** (`type Keys = keyof Obj; { [K in Keys]: Obj[K] }`)
+  evaluates the key source to `never` — and the alias `Keys` itself then resolves to `never`
+  at its other use sites, rejecting valid code tsc accepts (`let k: Keys = "a"` → TK2322
+  '"a"' not assignable to 'never'). The inline `keyof` (homomorphic) form is unaffected.
+  Found during the 2026-07-10 completeness-accounting sprint (WU5).
+  <!-- div: id=mapped/aliased-keyof-key-source dir=over scope=b-type-level-tail owner=../backlog/35-keyof-union-and-key-source-edges.md witness=../../tests/cases/sr_deferred_ledger/b35_aliased_keyof_mapped.ts -->
 
 ## Utility types (M28)
 

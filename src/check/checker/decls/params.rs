@@ -44,6 +44,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let error_ty = self.interner.well_known().error;
         // Pass 1: lower and record every constraint in the list.
         for (param, &id) in param_decl.params.iter().zip(ids) {
+            // WU7-E F3c, record-only: type-parameter DEFAULTS are never lowered
+            // (divergences.md `constraints/type-parameter-defaults`), so an unresolved
+            // name inside one was a silent false-clean. Dedup by span keeps repeated
+            // constraint passes (fill + resolve, per-call generic sites) at one record.
+            if let Some(default) = param.default.as_ref() {
+                self.record_incomplete(
+                    "annotation-lower/type-parameter-default/self",
+                    Span::from_oxc(default.span()),
+                    "type-parameter default not lowered",
+                );
+            }
             let Some(constraint) = param.constraint.as_ref() else {
                 continue;
             };

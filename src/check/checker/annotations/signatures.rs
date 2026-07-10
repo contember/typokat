@@ -2,6 +2,33 @@ use super::functions::parameter_from_shape;
 use super::*;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
+    /// Record the incomplete surface for a skipped computed property-signature key
+    /// (`{ [expr]: T }`, owner 75). Shared by object-type and interface member
+    /// collection so a computed key is accounted before the member is dropped (WU5).
+    pub(in crate::check::checker) fn record_property_signature_computed_key(
+        &mut self,
+        key: &oxc_ast::ast::PropertyKey<'_>,
+    ) {
+        self.record_incomplete(
+            "signature/property-signature/computed-key",
+            Span::from_oxc(key.span()),
+            "computed property signature key not visited",
+        );
+    }
+
+    /// Record the incomplete surface for a skipped computed method-signature key
+    /// (`{ [expr](): T }`, owner 75) — the method twin of the helper above (WU7-E F1).
+    pub(in crate::check::checker) fn record_method_signature_computed_key(
+        &mut self,
+        key: &oxc_ast::ast::PropertyKey<'_>,
+    ) {
+        self.record_incomplete(
+            "signature/method-signature/computed-key",
+            Span::from_oxc(key.span()),
+            "computed method signature key not visited",
+        );
+    }
+
     /// Lower a WU1 method signature: non-generic, non-`this`, non-accessor,
     /// static name. Optional methods stay out of subset.
     pub(in crate::check::checker) fn lower_method_signature_property(

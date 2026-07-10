@@ -50,10 +50,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     })?;
                     rest = Some(TupleRestType::new(lowered.len(), ty));
                 }
-                TSTupleElement::TSOptionalType(_) => return None,
+                TSTupleElement::TSOptionalType(optional) => {
+                    self.record_incomplete(
+                        "annotation-lower/tuple-optional-element/self",
+                        Span::from_oxc(optional.span),
+                        "optional tuple element aborts tuple lowering",
+                    );
+                    return None;
+                }
                 _ => {
                     let ts_type = element.as_ts_type()?;
-                    if matches!(ts_type, TSType::TSNamedTupleMember(_)) {
+                    if let TSType::TSNamedTupleMember(named) = ts_type {
+                        self.record_incomplete(
+                            "annotation-lower/named-tuple-member/self",
+                            Span::from_oxc(named.span),
+                            "named tuple member aborts tuple lowering",
+                        );
                         return None;
                     }
                     lowered.push(self.with_indirection(|p| p.lower_annotation(scope, ts_type))?);
@@ -87,11 +99,25 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 let negated = -n.value;
                 LiteralValue::Number(if negated == 0.0 { 0.0 } else { negated })
             }
-            // `bigint`, template-literal types, and other unary literal types (`+1`,
-            // `-1n`, `~1`) are out of the M8 subset.
-            TSLiteral::BigIntLiteral(_)
-            | TSLiteral::TemplateLiteral(_)
-            | TSLiteral::UnaryExpression(_) => return None,
+            // `bigint` and template-literal types are out of the M8 subset (WU5
+            // accounting); other unary literal types (`+1`, `~1`) have no distinct id.
+            TSLiteral::BigIntLiteral(lit) => {
+                self.record_incomplete(
+                    "annotation-lower/literal-type/bigint",
+                    Span::from_oxc(lit.span),
+                    "bigint literal type aborts annotation lowering",
+                );
+                return None;
+            }
+            TSLiteral::TemplateLiteral(lit) => {
+                self.record_incomplete(
+                    "annotation-lower/literal-type/template",
+                    Span::from_oxc(lit.span),
+                    "template literal in TSLiteral position aborts lowering",
+                );
+                return None;
+            }
+            TSLiteral::UnaryExpression(_) => return None,
         };
         Some(self.interner.intern_literal(value))
     }
@@ -110,7 +136,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         for member in members {
             match member {
                 TSSignature::TSPropertySignature(sig) => {
-                    let name = sig.key.static_name()?;
+                    let Some(name) = sig.key.static_name() else {
+                        self.record_property_signature_computed_key(&sig.key);
+                        return None;
+                    };
                     if overloaded_method_names.contains(name.as_ref()) {
                         continue;
                     }
@@ -140,7 +169,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     self.lower_index_signature(scope, sig, &mut object)?;
                 }
                 TSSignature::TSMethodSignature(sig) => {
-                    let name = sig.key.static_name()?;
+                    let Some(name) = sig.key.static_name() else {
+                        self.record_method_signature_computed_key(&sig.key);
+                        return None;
+                    };
                     if overloaded_method_names.contains(name.as_ref()) {
                         let name = name.into_owned();
                         if lowered_overloaded_methods.insert(name.clone()) {

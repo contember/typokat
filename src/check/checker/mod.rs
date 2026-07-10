@@ -669,6 +669,17 @@ impl Pass<'_, '_> {
         span: Span,
         context: &str,
     ) {
+        // Canonical "exactly once per site": an id+span is one skipped position even if
+        // the walk revisits it (e.g. a signature return type lowered in both fill and
+        // body-check). The renderer dedups too; keeping the vector unique also makes it
+        // the authority the conformance harness diffs.
+        if self
+            .incomplete
+            .iter()
+            .any(|rec| rec.id == id && rec.span == span)
+        {
+            return;
+        }
         self.incomplete
             .push(IncompleteSurface::new(id, span, context));
     }
