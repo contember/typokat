@@ -483,3 +483,12 @@ convention.
   (documented in divergences, owner backlog `47`); calling a local function before
   its declaration is silently unchecked (pre-existing FN, hoisting — backlog
   candidate for WU8 graduation).
+- **2026-07-10 - WU3 shipped** (commit `6c82ead`) after WU4-C PASS. Deviation
+  resolved during implementation: the 4000-deep annotation witness overflows in
+  oxc's recursive-descent parser before lowering, so the annotation budget
+  (MAX_ANNOTATION_DEPTH=200, TK2589) is paired with a 256 MiB scoped worker thread
+  in the driver (rustc-style; semantics, exit codes, and panic propagation verified
+  unchanged by WU4-C). Residual: arbitrarily deeper input still overflows the
+  parser — stays with backlog 63k as an oxc nesting-limit item. WU4-C byproduct
+  (pre-existing): assigning into `any` narrows it (`s = 5; s.foo` → TK2339
+  over-report) — unrelated to WU3, backlog candidate.
