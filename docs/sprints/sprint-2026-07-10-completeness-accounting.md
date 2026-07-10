@@ -335,6 +335,7 @@ gate is recorded in the run log before WU1 begins.
 
 ## Run log
 
+
 <!-- Append as you work: discoveries, deviations, blockers. Graduate each entry:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint when archived). -->
@@ -425,3 +426,18 @@ gate is recorded in the run log before WU1 begins.
   (real spread/spread-arg/object-spread/value-position template), **zero spurious emissions**,
   zero matched-diagnostic coverage lost (all 10 were 0-matched). `run --check` clean against the
   saved baseline. All five gates green.
+- **2026-07-10 — WU4 shipped after WU7-D PASS (first pass).** try/catch/finally now TRAVERSED
+  (binder `bind_try` + checker `check_try` reuse the existing block walker; inventory flipped to
+  supported with `requires_slots`); catch-param stays `unsupported-in` (bound, error-typed, emits
+  `stmt-check/try-statement/catch-param`); `declare_for_left` emits
+  `stmt-check/assignment-target/self`; nine declaration drops (enum/namespace/global/
+  import-equals/export-*) emit their `decl/*/self` ids. Flow pre-pass leaves try un-built like
+  the shipped for/do treatment, recorded as `flow/try-statement/self`→73. Reviewer built the
+  parent-commit binary in a worktree and proved the stale-narrowing-through-try false negative is
+  **pre-existing and shared verbatim with for/do** (owned by 73), not a WU4 regression; WU4
+  strictly improves try (silent exit-0 → accounted exit-3/TK). Scoreboard: 3 movements, all
+  0-matched before, error-exact and diag-recall unchanged. Probe 5 now exit 3; probe 4 remains
+  for WU5. Non-blocking honesty note: `with` is design-oos with an unchecked body child — its
+  record's "no hidden child" framing is imprecise but `with` is a strict-mode grammar error,
+  wholly out of scope. Carry to WU8: `tests/surface/census.md` line pointers are a WU0 snapshot,
+  now historical (e.g. `statements.rs:145`).
