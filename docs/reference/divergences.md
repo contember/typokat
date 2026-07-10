@@ -49,6 +49,24 @@ entry here is deleted.
 - `TK2454` *used before assigned* — needs definite-assignment flow analysis.
 - `TK2451` *cannot redeclare* — binder check, deferred; fixtures use unique names.
 
+### Soundness-review deferred ledger (backlog `30`/`56`/`60`/`62`/`66`/`67`)
+
+Known dropped-error (under-report) families from the 2026-07-07 cross-cutting review,
+each an open backlog item, pinned by the **disabled** `sr_deferred_ledger/` corpus
+(the fixtures assert tsc's verdict but stay `false` until the owning item ships):
+
+- **`56`** — a genuine instantiation cycle (`type Loop<T> = T extends string ? Loop<T>
+  : never`, direct or mutual) short-circuits to the error type with no diagnostic, so
+  no `TK2589` fires where tsc reports `TS2589`.
+- **`60`** — fresh object literals against UNION targets skip excess-property checking
+  (`A | B`, `A | null`) and let an optional-member union member vacuously absorb a
+  wrong-typed known property (missing `TK2353`/`TK2322`).
+- **`62`** — a declared (interface/class) source is accepted against an index-signature
+  target because there is no "source provides an index signature" rule (missing
+  `TK2322`); anonymous sources correctly keep their implicit index signature.
+- **`30`** (Template literal types), **`66`** (Classes), and **`67`** (Utility types)
+  are documented in their own sections below; the corpus adds fixtures for them.
+
 ## Narrowing (M7 / M8 / M23)
 
 Implemented: `typeof` / truthiness / `null`/`undefined` equality (M7); discriminated-union

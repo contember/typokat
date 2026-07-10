@@ -93,13 +93,40 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b54_labeled_statements", true),
     ("b59_modules_hygiene", true),
     ("b65_inference_candidate_policy", true),
+    // Soundness-review-fixes sprint (2026-07-10) WU0 corpora. Each is committed
+    // `false` (behavior-neutral spec); WU1-WU3 flip only their own dir when the
+    // fix lands, the deferred-ledger dir stays `false` beyond this sprint. See
+    // docs/sprints/sprint-2026-07-10-soundness-review-fixes.md and
+    // tests/cases/README.md ("Soundness-review corpora").
+    // WU1 — nested assignment expressions, complete return inference, loop/throw
+    // body checking (findings 1-3).
+    ("sr_wu1_expressions", false),
+    // WU2 — switch-local scope boundary + local function overloads (findings 5-6).
+    ("sr_wu2_scope_overloads", false),
+    // WU2 — type-only export/value separation (finding 4). Project-shaped; also
+    // registered in PROJECT_DIRS below.
+    ("sr_wu2_export_space", false),
+    // WU3 — any&never, source-intersection nominal origin, string-index keyof,
+    // recursive mapped types, deep-annotation depth guard (findings 7-10 + backlog
+    // 63k). NOTE: recursive_mapped.ts and deep_annotation.ts stack-overflow at HEAD
+    // and only become safe to run once WU3's recursion/depth guards land.
+    ("sr_wu3_types_recursion", false),
+    // Deferred ledger — known unfixtured under-reports from backlogs 30, 56, 60,
+    // 62, 66, 67. Stays `false` beyond this sprint until each backlog item ships.
+    ("sr_deferred_ledger", false),
 ];
 
 /// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`
 /// files per project, checked together via [`check_project`]) rather than flat
 /// single-file fixtures. Every other dir is a flat corpus. Keep in sync with the
 /// project-shaped corpora in `MILESTONE_DIRS`.
-const PROJECT_DIRS: &[&str] = &["m29_modules", "b58_project_scopes", "b59_modules_hygiene"];
+const PROJECT_DIRS: &[&str] = &[
+    "m29_modules",
+    "b58_project_scopes",
+    "b59_modules_hygiene",
+    // Soundness-review WU2 type-only export/value separation (finding 4).
+    "sr_wu2_export_space",
+];
 
 /// An expectation parsed from a single inline marker.
 #[derive(Debug, Clone)]

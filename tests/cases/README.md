@@ -281,3 +281,46 @@ too-wide union solely to make incompatible arguments fit. Markers are mostly
 code-only because the exact fixed target can be literal-, primitive-, or
 union-shaped depending on candidate priority and contextual use. The corpus keeps
 at most one mismatched argument per call, per the general call-marker rule above.
+
+## Soundness-review corpora (sprint 2026-07-10)
+
+The `sr_*` dirs are the WU0 acceptance spec for the soundness-review-fixes sprint
+(`docs/sprints/sprint-2026-07-10-soundness-review-fixes.md`). Same mechanism as the
+bug-fix corpora: each is committed `false` and flips `true` only in the commit that
+lands its owning fix — except `sr_deferred_ledger/`, which stays `false` beyond this
+sprint (its findings are open backlog items). Every fixture header records the
+`tsc 6.0.3 --strict` verdict it pins.
+
+| Dir | Owner | Findings |
+|---|---|---|
+| `sr_wu1_expressions/` | WU1 | nested assignment expressions (ternary / array-literal / condition / inner assignment), complete return inference (not first-return only), and `for`/`for-in`/`for-of`/`do` body + `throw`-operand checking |
+| `sr_wu2_scope_overloads/` | WU2 | switch-local lexical scope (a case-clause `let`/`const` must not resolve after the switch — `TK2304`) and local (in-function) function overloads (no spurious `TK2391`; calls select declared overloads) |
+| `sr_wu2_export_space/` | WU2 | **project-shaped** (registered in `PROJECT_DIRS`): `export type { x }` / `export { type x }` specifier forms must not leak the value slot; a non-type-only import using such a name as a value gets `TK2304` (the M29 stand-in for tsc's `TS1362`) |
+| `sr_wu3_types_recursion/` | WU3 | `any & never` → `never` (assigning into it errors); source-intersection nominal origin (private member rejects); `keyof { [k: string]: T }` = `string \| number`; recursive mapped-value recursion guard; deep type-literal annotation depth guard (backlog 63k) |
+| `sr_deferred_ledger/` | — (stays disabled) | known unfixtured under-reports: backlog `30` (JS-exact number stringify), `56` (silent instantiation cycles), `60` (fresh literals vs union targets), `62` (index-signature source parity), `66` (protected↔protected override compat), `67` (utility-alias constraint) |
+
+Construction notes:
+
+- **Switch scope (`sr_wu2_scope_overloads/switch_scope.ts`).** The witness is a
+  MISSING `TK2304` on the after-switch use of a case-clause `let`. Per the sprint,
+  this corpus pins ONLY the switch-local boundary; duplicate-declaration
+  diagnostics (`TK2451`/`TK2300`, including cross-case) stay owned by backlog `18`
+  and are not asserted. tsc's `TS2454` "used before being assigned" on the
+  cross-clause read is a definite-assignment check typokat does not emit (deferred),
+  so that control line expects zero typokat diagnostics.
+- **`keyof` string index (`sr_wu3_types_recursion/keyof_string_index.ts`).** The
+  missing `number` key flips a verdict in both directions: a MISSING `TK2322`
+  (assignable-to `string`) and an OVER-report (the `fromNum` line — clean under tsc,
+  errors at HEAD). Both are pinned.
+- **Native-crash fixtures (`sr_wu3_types_recursion/recursive_mapped.ts` and
+  `deep_annotation.ts`).** These STACK-OVERFLOW (SIGABRT) at HEAD — a mapped type
+  whose value template is a recursive object, and a ~4000-deep nested type literal.
+  They stay in the dir but must not be enabled until WU3's recursion/depth guards
+  land, or `cargo test` aborts. `deep_annotation.ts` has no clean tsc oracle (tsc
+  6.0.3 itself dies at ~3k); its pinned expectation is a bounded diagnostic
+  (`TK2589` as the nearest existing code — WU3 owns the final choice) rather than a
+  crash.
+- **Deferred ledger (`sr_deferred_ledger/`).** Each fixture is a minimal pin of
+  tsc's verdict for one dropped-error family plus a passing control; the dir stays
+  disabled until its backlog item ships. See the deferred-check note in
+  [`divergences.md`](../../docs/reference/divergences.md).
