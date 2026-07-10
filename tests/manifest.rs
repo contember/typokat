@@ -4,17 +4,19 @@
 //! The manifest is the machine-validated source of truth for "is typokat 1.0
 //! done?". This test parses it and enforces the invariants the sprint requires:
 //! duplicate/missing ids, unknown backlog/divergence links, missing owners or
-//! witnesses, inconsistent states, and an unpinned TypeScript lib audit all
-//! **fail** `cargo test` (and therefore CI). The parser is a small hand-rolled
+//! witnesses, inconsistent states, an unpinned TypeScript lib audit, and gaps
+//! between the Tier S/A/B scope map and criterion ownership all **fail**
+//! `cargo test` (and therefore CI). The parser is a small hand-rolled
 //! TOML subset — no serde/toml dependency — matching the committed-status-file
 //! precedent of `tooling/official-suite/scoreboard.txt`.
 //!
 //! Format: `#` comments and blank lines ignored; `[meta]` opens the singleton
 //! meta table; `[[criterion]]` opens a criterion; values are quoted strings
 //! `"..."` or arrays of quoted strings `["a", "b"]`. Paths (owner/links/deps) are
-//! resolved relative to the manifest's directory and must exist.
+//! resolved relative to the manifest's directory and must exist; `scope` arrays
+//! map criteria to stable Tier S/A/B family ids declared in scope.md.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -175,6 +177,7 @@ const CRITERION_KEYS: &[&str] = &[
     "witness",
     "links",
     "deps",
+    "scope",
 ];
 
 /// Full validation entry point: parse then check every invariant. `manifest_dir`
@@ -276,6 +279,26 @@ fn validate(text: &str, manifest_dir: &Path) -> Result<(), Vec<String>> {
         check_enum(c, "state", STATES, &label, &mut errors);
         check_enum(c, "blocks_release", BOOLS, &label, &mut errors);
 
+        match c.get("scope") {
+            Some(Value::Arr(items)) => {
+                let mut seen_families = BTreeSet::new();
+                for family in items {
+                    if !is_scope_family_id(family) {
+                        errors.push(format!(
+                            "{label}.scope: {family:?} must be a stable scope-family id such as s-assignability"
+                        ));
+                    }
+                    if !seen_families.insert(family) {
+                        errors.push(format!(
+                            "{label}.scope: duplicate scope-family {family:?} within one criterion"
+                        ));
+                    }
+                }
+            }
+            Some(Value::Str(_)) => errors.push(format!("{label}.scope must be an array")),
+            None => {}
+        }
+
         // State/owner consistency.
         let state = c.get("state").and_then(Value::as_str).unwrap_or("");
         let owner = c.get("owner").and_then(Value::as_str).unwrap_or("");
@@ -313,6 +336,165 @@ fn validate(text: &str, manifest_dir: &Path) -> Result<(), Vec<String>> {
     } else {
         Err(errors)
     }
+}
+
+/// Check that every explicit Tier S/A/B scope family is owned by exactly one
+/// completion-manifest criterion. Family ownership, rather than diagnostic-code
+/// ownership, is deliberate: one TK code can be reused by several semantic
+/// families, each with a different completion state.
+fn validate_scope_coverage(manifest_text: &str, scope_text: &str) -> Result<(), Vec<String>> {
+    let manifest = parse(manifest_text)?;
+    let mut errors = Vec::new();
+    let expected = extract_scope_families(scope_text, &mut errors);
+    let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for (idx, criterion) in manifest.criteria.iter().enumerate() {
+        let id = criterion
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("criterion #{}", idx + 1));
+
+        match criterion.get("scope") {
+            Some(Value::Arr(families)) => {
+                for family in families {
+                    if is_scope_family_id(family) {
+                        owners.entry(family.clone()).or_default().push(id.clone());
+                    }
+                }
+            }
+            Some(Value::Str(_)) => {
+                errors.push(format!("criterion {id:?}.scope must be an array"));
+            }
+            None => {}
+        }
+    }
+
+    for family in expected.keys() {
+        match owners.get(family) {
+            None => errors.push(format!(
+                "scope family {family:?} has no completion-manifest criterion owner"
+            )),
+            Some(ids) if ids.len() > 1 => errors.push(format!(
+                "scope family {family:?} has multiple completion-manifest owners: {}",
+                ids.join(", ")
+            )),
+            Some(_) => {}
+        }
+    }
+
+    for (family, ids) in &owners {
+        if !expected.contains_key(family) {
+            errors.push(format!(
+                "manifest maps unknown scope family {family:?} to {}",
+                ids.join(", ")
+            ));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+fn extract_scope_families(scope_text: &str, errors: &mut Vec<String>) -> BTreeMap<String, String> {
+    let mut families = BTreeMap::new();
+    let mut current_tier: Option<&str> = None;
+    let mut pending: Option<(String, usize)> = None;
+    let mut reached_oos = false;
+
+    for (index, raw) in scope_text.lines().enumerate() {
+        let line_no = index + 1;
+        let line = raw.trim();
+        if !line.is_empty() && !line.starts_with("<!--") && !line.starts_with("- ") {
+            if let Some((family, marker_line)) = pending.take() {
+                errors.push(format!(
+                    "scope.md line {marker_line}: scope-family {family:?} is separated from its Tier row by line {line_no}"
+                ));
+            }
+        }
+        if line.starts_with("## Out of scope by design") {
+            reached_oos = true;
+            break;
+        }
+        if line.starts_with("### Tier S") {
+            current_tier = Some("s");
+            continue;
+        }
+        if line.starts_with("### Tier A") {
+            current_tier = Some("a");
+            continue;
+        }
+        if line.starts_with("### Tier B") {
+            current_tier = Some("b");
+            continue;
+        }
+        let Some(tier) = current_tier else {
+            continue;
+        };
+
+        if let Some(family) = line
+            .strip_prefix("<!-- scope-family: ")
+            .and_then(|rest| rest.strip_suffix(" -->"))
+        {
+            if let Some((previous, previous_line)) = pending.replace((family.to_string(), line_no))
+            {
+                errors.push(format!(
+                    "scope.md line {previous_line}: scope-family {previous:?} is not followed by a Tier row"
+                ));
+            }
+            continue;
+        }
+
+        if line.starts_with("- ") {
+            let Some((family, marker_line)) = pending.take() else {
+                errors.push(format!(
+                    "scope.md line {line_no}: Tier {tier} row has no preceding `scope-family` marker"
+                ));
+                continue;
+            };
+            if !is_scope_family_id(&family) || !family.starts_with(&format!("{tier}-")) {
+                errors.push(format!(
+                    "scope.md line {marker_line}: scope-family {family:?} must be a stable Tier {tier} id"
+                ));
+                continue;
+            }
+            if let Some(previous_tier) = families.insert(family.clone(), tier.to_string()) {
+                errors.push(format!(
+                    "scope.md line {marker_line}: duplicate scope-family {family:?} (already in Tier {previous_tier})"
+                ));
+            }
+        }
+    }
+
+    if let Some((family, marker_line)) = pending {
+        errors.push(format!(
+            "scope.md line {marker_line}: scope-family {family:?} is not followed by a Tier row"
+        ));
+    }
+    if !reached_oos {
+        errors.push("scope.md is missing the `## Out of scope by design` boundary".to_string());
+    }
+    if families.is_empty() {
+        errors.push("scope.md Tier S/A/B sections contain no marked scope families".to_string());
+    }
+    families
+}
+
+fn is_scope_family_id(value: &str) -> bool {
+    let Some((tier, slug)) = value.split_once('-') else {
+        return false;
+    };
+    matches!(tier, "s" | "a" | "b")
+        && !slug.is_empty()
+        && !slug.starts_with('-')
+        && !slug.ends_with('-')
+        && slug
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 /// Every key in the table must be one of `allowed` — a typo'd key (`dpes`,
@@ -386,6 +568,17 @@ fn committed_manifest_is_valid() {
             errors.join("\n  ")
         );
     }
+
+    let scope_path = dir.join("../reference/scope.md");
+    let scope_text = std::fs::read_to_string(&scope_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", scope_path.display()));
+    if let Err(errors) = validate_scope_coverage(&text, &scope_text) {
+        panic!(
+            "scope-to-manifest coverage validation failed ({}):\n  {}",
+            errors.len(),
+            errors.join("\n  ")
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -426,6 +619,31 @@ fn valid_base() -> String {
         "deps = []\n",
     )
     .to_string()
+}
+
+fn scope_fixture() -> &'static str {
+    concat!(
+        "### Tier S — structural core\n",
+        "<!-- scope-family: s-assignability -->\n",
+        "- `TK2322` assignment\n",
+        "### Tier A — strict type model & flow\n",
+        "<!-- scope-family: a-argument-checking -->\n",
+        "- `TK2345` argument\n",
+        "### Tier B — broader semantic surface\n",
+        "<!-- scope-family: b-indexed-access -->\n",
+        "- `TK2536` indexed access\n",
+        "## Out of scope by design\n",
+        "<!-- scope-family: s-parser -->\n",
+        "- `TK1005` parser diagnostic\n",
+    )
+}
+
+fn coverage_base() -> String {
+    valid_base().replacen(
+        "deps = []\n",
+        "deps = []\nscope = [\"s-assignability\", \"a-argument-checking\", \"b-indexed-access\"]\n",
+        1,
+    )
 }
 
 #[test]
@@ -526,6 +744,30 @@ fn rejects_invalid_manifests() {
             "blocks_release",
         ),
         (
+            "scope mapping must be an array",
+            valid_base().replace(
+                "witness = \"cargo test conformance\"",
+                "witness = \"cargo test conformance\"\nscope = \"s-assignability\"",
+            ),
+            "scope must be an array",
+        ),
+        (
+            "malformed scope family",
+            valid_base().replace(
+                "witness = \"cargo test conformance\"",
+                "witness = \"cargo test conformance\"\nscope = [\"S Assignability\"]",
+            ),
+            "stable scope-family id",
+        ),
+        (
+            "duplicate scope family within criterion",
+            valid_base().replace(
+                "witness = \"cargo test conformance\"",
+                "witness = \"cargo test conformance\"\nscope = [\"s-assignability\", \"s-assignability\"]",
+            ),
+            "duplicate scope-family",
+        ),
+        (
             // A typo'd `deps` key must fail loudly, not silently skip link checking.
             "unknown criterion key (typo'd deps)",
             valid_base().replace("deps = []\n[[criterion]]", "dpes = []\n[[criterion]]"),
@@ -571,6 +813,100 @@ fn rejects_invalid_manifests() {
                     ));
                 }
             }
+        }
+    }
+    assert!(leaked.is_empty(), "{}", leaked.join("\n"));
+}
+
+#[test]
+fn scope_coverage_accepts_exact_mapping_and_ignores_oos_section() {
+    assert!(validate_scope_coverage(&coverage_base(), scope_fixture()).is_ok());
+}
+
+#[test]
+fn scope_coverage_rejects_missing_duplicate_and_unknown_mappings() {
+    let cases = [
+        (
+            "missing",
+            coverage_base().replace(", \"b-indexed-access\"", ""),
+            "b-indexed-access\" has no completion-manifest criterion owner",
+        ),
+        (
+            "duplicate",
+            coverage_base().replace(
+                "links = [\"../reference/divergences.md\"]",
+                "scope = [\"s-assignability\"]\nlinks = [\"../reference/divergences.md\"]",
+            ),
+            "s-assignability\" has multiple completion-manifest owners",
+        ),
+        (
+            "unknown",
+            coverage_base().replace(
+                "\"b-indexed-access\"]",
+                "\"b-indexed-access\", \"b-unknown\"]",
+            ),
+            "b-unknown",
+        ),
+    ];
+
+    let mut leaked = Vec::new();
+    for (name, manifest, expected_error) in cases {
+        match validate_scope_coverage(&manifest, scope_fixture()) {
+            Ok(()) => leaked.push(format!("case {name:?} was accepted but must be rejected")),
+            Err(errors) if !errors.join(" | ").contains(expected_error) => leaked.push(format!(
+                "case {name:?} did not mention {expected_error:?}: {}",
+                errors.join(" | ")
+            )),
+            Err(_) => {}
+        }
+    }
+    assert!(leaked.is_empty(), "{}", leaked.join("\n"));
+}
+
+#[test]
+fn scope_inventory_rejects_unmarked_duplicate_and_wrong_tier_families() {
+    let cases = [
+        (
+            "unmarked row",
+            scope_fixture().replace("<!-- scope-family: a-argument-checking -->\n", ""),
+            "row has no preceding `scope-family` marker",
+        ),
+        (
+            "duplicate family",
+            scope_fixture().replace(
+                "### Tier A — strict type model & flow",
+                concat!(
+                    "<!-- scope-family: s-assignability -->\n",
+                    "- another assignment row\n",
+                    "### Tier A — strict type model & flow",
+                ),
+            ),
+            "duplicate scope-family",
+        ),
+        (
+            "wrong tier prefix",
+            scope_fixture().replace("s-assignability", "a-assignability"),
+            "must be a stable Tier s id",
+        ),
+        (
+            "marker drifts across prose",
+            scope_fixture().replace(
+                "<!-- scope-family: s-assignability -->\n",
+                "<!-- scope-family: s-assignability -->\nIntervening prose.\n",
+            ),
+            "is separated from its Tier row",
+        ),
+    ];
+
+    let mut leaked = Vec::new();
+    for (name, scope, expected_error) in cases {
+        let mut errors = Vec::new();
+        extract_scope_families(&scope, &mut errors);
+        if !errors.join(" | ").contains(expected_error) {
+            leaked.push(format!(
+                "case {name:?} did not mention {expected_error:?}: {}",
+                errors.join(" | ")
+            ));
         }
     }
     assert!(leaked.is_empty(), "{}", leaked.join("\n"));

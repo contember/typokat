@@ -43,7 +43,11 @@ entry here is deleted.
 - **`var` is not hoisted to the function scope (over-report).** The binder treats
   `var` like a block-scoped declaration, so a `var` referenced outside its block or
   `switch` clause reports a spurious `TK2304` where tsc resolves it (safe
-  direction). Fix belongs with definite assignment (backlog `47`).
+  direction). Function and `var` hoisting share backlog `74`; definite-assignment
+  timing remains backlog `47`.
+- **Forward local function calls are not checked (under-report).** A call before its
+  local function declaration does not see the hoisted declaration, so argument/overload
+  diagnostics can disappear. This dropped-error family is owned by backlog `74`.
 - **`undefined` in assignment-target position (over-report).** typokat resolves
   `undefined` as a value read but not as an assignment target, so `undefined = null`
   reports `TK2304` where tsc reports `TS2539` (still an error — safe direction).

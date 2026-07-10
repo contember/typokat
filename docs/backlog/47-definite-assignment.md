@@ -17,9 +17,9 @@ variable used before its declaration — TDZ), TK2564 (property has no initializ
 not definitely assigned in the constructor). Their absence is a silent-FN family in
 strict-mode real code.
 
-Adjacent over-reports owned here (documented in divergences, 2026-07-10): `var` is not
-hoisted to the function scope (spurious TK2304 outside its block/switch clause), and
-`undefined` in assignment-target position reports TK2304 where tsc gives TS2539.
+The adjacent `undefined` assignment-target over-report remains owned here: typokat reports TK2304
+where tsc gives TS2539. Function/`var` declaration visibility and hoisting are owned together by
+backlog [`74`](./74-declaration-hoisting-parity.md); definite-assignment timing stays here.
 
 ## Approach / acceptance
 

@@ -17,11 +17,16 @@ TK7030 (not all code paths return — the `noImplicitReturns` flavor; typokat ha
 surface, so decide the always-strict stance and document it). tsc's split between
 2355/2366/7030 per shape is subtle — pin it against tsc in the spec first.
 
+The same return-model gap affects inference: a bare `return;` currently contributes no candidate,
+so it is not folded as `undefined` into the inferred return union. Mixed `return value;` / bare
+`return;` paths must infer the tsc-equivalent union and let downstream assignability report it.
+
 ## Approach / acceptance
 
 Classify each body's CFG exit node: fall-through-reachable exits vs return coverage,
 `never`-returning and throw-only bodies stay clean. Corpus first (throw-only, infinite
-loops, branch coverage, accessors); cross-check tsc 6.0.3 --strict. Generators/async are
+loops, branch coverage, accessors, bare-return-only and value-plus-bare-return inference);
+cross-check tsc 6.0.3 --strict. Generators/async are
 out of the current model — document, don't guess.
 
 ## Touch points

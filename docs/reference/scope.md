@@ -36,8 +36,11 @@ most of in/out:
 | `9xxx` | 34 | misc | mixed — case by case |
 | `18xxx` | 67 | jsx-runtime / import-attributes / target-gating | **Mostly no** — emit/resolution; a few strict-null strays |
 
-So the in-scope universe is essentially **`2xxx` + `7xxx`**, minus the `2xxx`
-module/emit exceptions listed at the end.
+The `2xxx` + `7xxx` ranges are the **candidate pool**, minus the module/emit
+exceptions below. The marked Tier S/A/B families are the canonical 1.0 inventory;
+an unlisted code is not implicitly promised. Backlog `75` owns the remaining
+candidate-range census and either promotes each family here or records a sound OOS
+disposition.
 
 ## In-scope tiers
 
@@ -51,26 +54,49 @@ The structural assignment-and-member engine. This *is* typokat; most of it is
 already emitted.
 
 **Assignability & calls**
+<!-- scope-family: s-assignability -->
 - `TK2322` Type '{0}' is not assignable to type '{1}'.
+<!-- scope-family: s-call-arguments -->
 - `TK2345` Argument of type '{0}' is not assignable to parameter of type '{1}'.
+<!-- scope-family: s-call-arity -->
 - `TK2554` Expected {0} arguments, but got {1}. · `TK2555` Expected at least {0} arguments, but got {1}.
+<!-- scope-family: s-overload-layout -->
 - `TK2391` Function implementation is missing or not immediately following the declaration.
+<!-- scope-family: s-overload-implementation -->
 - `TK2394` Overload signature is not compatible with its implementation signature.
+<!-- scope-family: s-overload-resolution -->
 - `TK2769` No overload matches this call.
-- `TK2741` Property '{0}' is missing in type '{1}' but required in type '{2}'. · `TK2739`/`TK2740` (missing **multiple** properties).
+<!-- scope-family: s-missing-property -->
+- `TK2741` Property '{0}' is missing in type '{1}' but required in type '{2}'.
+<!-- scope-family: s-multiple-missing-properties -->
+- `TK2739`/`TK2740` report multiple missing properties with tsc-compatible code selection.
+<!-- scope-family: s-excess-property -->
 - `TK2353` Object literal may only specify known properties… (excess property).
+<!-- scope-family: s-weak-type -->
 - `TK2559` Type '{0}' has no properties in common with type '{1}'.
 
 **Names & member access**
+<!-- scope-family: s-name-resolution -->
 - `TK2304` Cannot find name '{0}'.
-- `TK2339` Property '{0}' does not exist on type '{1}'. · `TK2551` …Did you mean '{2}'?
+<!-- scope-family: s-member-access -->
+- `TK2339` Property '{0}' does not exist on type '{1}'.
+<!-- scope-family: s-member-suggestion -->
+- `TK2551` …Did you mean '{2}'?
+<!-- scope-family: s-value-type-space -->
 - `TK2693` '{0}' only refers to a type, but is being used as a value here (value/type symbol spaces).
+<!-- scope-family: s-declaration-hoisting -->
+- Function declarations and `var` use TypeScript's hoisting/visibility rules so declaration order cannot hide checks.
 
 **Classes (nominal + structural OO)**
+<!-- scope-family: s-class-access -->
 - `TK2341` private · `TK2445` protected · `TK2540` assign to read-only · `TK2511` instantiate abstract.
+<!-- scope-family: s-abstract-completeness -->
 - `TK2515` Non-abstract class does not implement inherited abstract member.
+<!-- scope-family: s-class-override -->
 - `TK2416` Property in derived type is not assignable to the same property in base (override compat).
+<!-- scope-family: s-static-implements -->
 - `TK2417` Class static side incorrectly extends · `TK2420` Class incorrectly implements interface.
+<!-- scope-family: s-duplicate-declarations -->
 - `TK2451` Cannot redeclare block-scoped variable '{0}'.
 
 ### Tier A — strict type model & flow
@@ -79,25 +105,43 @@ The strict-mode and flow-sensitive layer: nullability, definite assignment,
 operators, returns, generic constraints, implicit `any`.
 
 **strict null / flow**
+<!-- scope-family: a-nullish-receivers -->
 - `TK2531` Object is possibly 'null'. · `TK2532` …'undefined'. · `TK2533` …'null' or 'undefined'.
+<!-- scope-family: a-unknown-receivers -->
 - `TK2571` Object is of type 'unknown'.
+<!-- scope-family: a-definite-assignment -->
 - `TK2454` Variable used before being assigned. · `TK2448` used before its declaration. · `TK2564` property has no initializer and is not definitely assigned.
 
 **operators & narrowing**
+<!-- scope-family: a-comparison-overlap -->
 - `TK2367` This comparison appears to be unintentional… have no overlap.
+<!-- scope-family: a-operator-operands -->
 - `TK2365` Operator '{0}' cannot be applied to types '{1}' and '{2}'. · `TK2356`/`TK2362`/`TK2363` arithmetic operand must be number/bigint/enum.
+<!-- scope-family: a-type-predicates -->
+- User-defined type predicates and assertion functions participate in the one flow model.
+<!-- scope-family: a-narrowing-tail -->
+- Remaining loop, member-path, closure, and `instanceof` narrowing forms preserve strict verdicts.
 
 **functions & returns**
+<!-- scope-family: a-missing-return -->
 - `TK2355` A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value.
+<!-- scope-family: a-return-paths -->
 - `TK2366` Function lacks ending return statement… · `TK2378` A 'get' accessor must return a value. · `TK7030` Not all code paths return a value.
-- `TK2349` This expression is not callable. · `TK2348` …Did you mean to include 'new'? · `TK2351` This expression is not constructable.
+<!-- scope-family: a-noncallable -->
+- `TK2349` This expression is not callable.
+<!-- scope-family: a-call-construct-parity -->
+- `TK2348` …Did you mean to include 'new'? · `TK2351` This expression is not constructable.
 
 **generics**
+<!-- scope-family: a-generic-constraints -->
 - `TK2344` Type '{0}' does not satisfy the constraint '{1}'.
+<!-- scope-family: a-type-argument-arity -->
 - `TK2558` Expected {0} type arguments, but got {1}.
 
 **implicit any (`noImplicitAny`)**
+<!-- scope-family: a-implicit-any-declarations -->
 - `TK7006` parameter · `TK7005` variable · `TK7008` member · `TK7031` binding element implicitly has an '{1}' type.
+<!-- scope-family: a-implicit-any-index -->
 - `TK7053` Element implicitly has an 'any' type because expression of type '{0}' can't be used to index type '{1}'.
 
 ### Tier B — broader semantic surface
@@ -106,16 +150,35 @@ Same machinery, lower centrality / higher cost. Several of these are gated on th
 type-level evaluation phase (mapped/conditional/template-literal types, `keyof`,
 indexed access — see [ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)).
 
-- Advanced type-level: `TK2536` Type '{0}' cannot be used to index type '{1}'., index-signature compat (`TK2411`), `keyof`/conditional/mapped/template-literal evaluation.
+<!-- scope-family: b-indexed-access-diagnostics -->
+- Indexed access and index-signature compatibility: `TK2536` Type '{0}' cannot be used to index type '{1}'. · `TK2411` property incompatible with index signature.
+<!-- scope-family: b-type-level-tail -->
+- Remaining `keyof`/conditional/mapped/template-literal evaluation, type-parameter defaults, optional tuples, and generic/deferred `T[K]` shapes.
+<!-- scope-family: b-implicit-this -->
 - `this` typing: `TK2683` 'this' implicitly has type 'any'…
+<!-- scope-family: b-this-parameters -->
+- Explicit `this` parameters and `ThisType<T>` preserve receiver/contextual types.
+<!-- scope-family: b-iterability -->
 - Iterables: `TK2488` Type must have a '[Symbol.iterator]()' method…
+<!-- scope-family: b-accessor-compatibility -->
 - Accessors: `TK2379`/`TK2380` get/set compatibility (incl. `exactOptionalPropertyTypes`).
-- Enums, in-file namespaces, decorators, computed/symbol property names.
-- Reachability lint: `TK7027` Unreachable code detected. · `TK2790` The operand of a 'delete' operator must be optional.
+<!-- scope-family: b-enums -->
+- Enums.
+<!-- scope-family: b-namespaces -->
+- In-file namespaces and declaration merging.
+<!-- scope-family: b-decorators-computed-members -->
+- Decorators and computed/symbol property names.
+<!-- scope-family: b-reachability -->
+- `TK7027` Unreachable code detected.
+<!-- scope-family: b-delete-operand -->
+- `TK2790` The operand of a 'delete' operator must be optional.
+<!-- scope-family: b-semantic-candidate-tail -->
+- Remaining semantic candidates from the `2xxx`/`7xxx` pool receive an explicit implemented or OOS disposition before 1.0.
 
 ## Out of scope by design
 
-These never get a `TK` code — they fall outside the type model, not merely "later".
+The whole-range entries below never get a `TK` code. The final module-resolution subsection
+separates today's supported slice, planned resolver capability, and diagnostics that remain OOS.
 
 **Whole ranges**
 - **`1xxx` parse & grammar (398).** oxc is the parser; typokat consumes its AST.
@@ -123,8 +186,9 @@ These never get a `TK` code — they fall outside the type model, not merely "la
   misplaced-modifier checks) are oxc's job and are not re-implemented under `TK`.
 - **`4xxx` declaration emit (109).** No emit ⇒ no `.d.ts` privacy/portability errors
   (`TK4025` Exported variable has or is using private name…).
-- **`5xxx` compiler options (65).** No tsconfig/flag surface (`TK5023` Unknown compiler
-  option…, `TK5055`).
+- **`5xxx` compiler options (65).** Project discovery/resolution may consume a narrow,
+  documented set of tsconfig fields (backlogs `72`/`15`), but option-validation
+  diagnostics such as `TK5023`/`TK5055` remain outside the type model.
 - **`6xxx` CLI / driver messages (50).** File-not-found, extensions, CLI plumbing
   (`TK6053`, `TK6054`) — not type errors.
 - **`8xxx` TS-in-JS (35).** typokat checks `.ts`. `checkJs`, JSDoc inference, and
@@ -138,11 +202,11 @@ These never get a `TK` code — they fall outside the type model, not merely "la
 slice** (M29, backlog `15` slice 1) resolves imports, so it **emits** `TK2307` *Cannot find
 module…* and `TK2305` *Module has no exported member…* for that slice — both are live codes in
 `src/diagnostics/mod.rs` and the README diagnostics list. What stays **out of scope** is
-**full** package/`node_modules`/`tsconfig` module resolution (backlog `15` breadth): resolving
-those wider forms, plus `TK2792` (moduleResolution hint) and `TK2459` (declares locally but not
-exported), and any `isolatedModules` / emit-target-gated `2xxx` diagnostics. So `TK2305`/`TK2307`
-are in scope for the resolvable local slice; the divergence ledger's Modules (M29) section is the
-authoritative boundary of *what* resolves.
+**currently unsupported but planned** is package/`node_modules`/tsconfig project resolution
+(preview slice `72`, full breadth `15`). Resolver diagnostics for supported forms are in scope as
+those slices land; `TK2792`, `TK2459`, unknown-option validation, and
+`isolatedModules`/emit-target-gated diagnostics stay OOS unless deliberately promoted. The
+divergence ledger's Modules section is the authoritative current boundary.
 
 ## Why this is sound to bound this way
 

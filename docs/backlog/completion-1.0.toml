@@ -4,7 +4,8 @@
 # prose definition-of-done that used to live in backlog/README.md (which now links here).
 # Enforced by `tests/manifest.rs` (runs under `cargo test`, so CI gates it): the validator
 # fails on duplicate/missing ids, unknown backlog/divergence links, missing owners or
-# witnesses, inconsistent states, and an unpinned TypeScript lib audit.
+# witnesses, inconsistent states, an unpinned TypeScript lib audit, and Tier S/A/B
+# scope families without exactly one criterion owner.
 #
 # Format (a small, hand-parsed TOML subset — no serde dependency, mirrors the committed
 # `tooling/official-suite/scoreboard.txt` precedent of a deterministic checked-in status file):
@@ -14,6 +15,8 @@
 #     `["a", "b"]`. No embedded `"` inside a value.
 #   * Paths in `owner`, `links`, and `deps` are resolved relative to THIS file's directory
 #     (docs/backlog/) and must exist. `owner = "shipped"` is the one non-path owner.
+#   * Optional `scope` arrays map criteria to the stable `scope-family` ids in scope.md;
+#     the validator requires every canonical Tier S/A/B family to be mapped exactly once.
 #
 # The four definition-of-done conditions (checker 1.0), each a `track`:
 #   A  Model completeness — no construct lowers to something silently permissive.
@@ -57,6 +60,7 @@ owner = "./42-enums-type-side.md"
 witness = "spec-first corpus; NOT required by lib.es5 core (audit: 0 enum uses) but required for DoD model completeness"
 links = ["./lib-audit-6.0.3.md"]
 deps = []
+scope = ["b-enums"]
 
 [[criterion]]
 id = "A-namespaces-declaration-merging"
@@ -68,6 +72,7 @@ owner = "./43-namespaces-declaration-merging.md"
 witness = "spec-first corpus; lib audit: interface+var same-name merges (28 pairs) + declare namespace Intl block lib.d.ts"
 links = ["./14-libdts-loading.md", "./lib-audit-6.0.3.md"]
 deps = []
+scope = ["b-namespaces"]
 
 [[criterion]]
 id = "A-satisfies-as-const"
@@ -90,6 +95,7 @@ owner = "./70-this-parameter-typing.md"
 witness = "audit-discovered gap; lib audit: Function.apply/call/bind and ObjectConstructor.defineProperty type this explicitly"
 links = ["./14-libdts-loading.md", "./lib-audit-6.0.3.md"]
 deps = []
+scope = ["b-this-parameters"]
 
 [[criterion]]
 id = "A-intersections"
@@ -123,6 +129,7 @@ owner = "shipped"
 witness = "cargo test conformance (m33_function_overloads enabled)"
 links = []
 deps = []
+scope = ["s-overload-layout", "s-overload-implementation", "s-overload-resolution"]
 
 # ---------------------------------------------------------------------------
 # Track B — checker completeness (Tier A/B diagnostic surface)
@@ -138,6 +145,7 @@ owner = "./18-duplicate-identifier-detection.md"
 witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
 links = []
 deps = []
+scope = ["s-duplicate-declarations"]
 
 [[criterion]]
 id = "B-call-of-non-callable"
@@ -149,6 +157,7 @@ owner = "./19-call-of-non-callable-diagnostic.md"
 witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
 links = []
 deps = []
+scope = ["a-noncallable"]
 
 [[criterion]]
 id = "B-operator-comparison-typing"
@@ -160,6 +169,7 @@ owner = "./45-operator-comparison-typing.md"
 witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
 links = []
 deps = []
+scope = ["a-comparison-overlap", "a-operator-operands"]
 
 [[criterion]]
 id = "B-return-path-analysis"
@@ -171,6 +181,7 @@ owner = "./46-return-path-analysis.md"
 witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
 links = []
 deps = []
+scope = ["a-missing-return", "a-return-paths"]
 
 [[criterion]]
 id = "B-definite-assignment"
@@ -182,6 +193,7 @@ owner = "./47-definite-assignment.md"
 witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
 links = []
 deps = []
+scope = ["a-definite-assignment"]
 
 [[criterion]]
 id = "B-no-implicit-any"
@@ -193,6 +205,7 @@ owner = "./48-no-implicit-any.md"
 witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
 links = []
 deps = []
+scope = ["a-implicit-any-declarations", "a-implicit-any-index"]
 
 [[criterion]]
 id = "B-possibly-undefined"
@@ -204,6 +217,7 @@ owner = "./49-possibly-undefined-family.md"
 witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
 links = []
 deps = []
+scope = ["a-nullish-receivers"]
 
 [[criterion]]
 id = "B-type-predicates-assertions"
@@ -215,6 +229,7 @@ owner = "./50-type-predicates-assertions.md"
 witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
 links = []
 deps = []
+scope = ["a-type-predicates"]
 
 [[criterion]]
 id = "B-narrowing-tail"
@@ -226,6 +241,7 @@ owner = "./51-narrowing-tail.md"
 witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
 links = []
 deps = []
+scope = ["a-narrowing-tail"]
 
 [[criterion]]
 id = "B-type-reference-tail"
@@ -237,6 +253,31 @@ owner = "./52-type-reference-tail.md"
 witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
 links = []
 deps = []
+scope = ["a-type-argument-arity"]
+
+[[criterion]]
+id = "B-shipped-core-surface"
+track = "B"
+title = "Shipped Tier S structural diagnostic families"
+state = "complete"
+blocks_release = "true"
+owner = "shipped"
+witness = "cargo test conformance (M0-M33 plus enabled bug-fix corpora)"
+links = ["../reference/scope.md"]
+deps = []
+scope = ["s-assignability", "s-call-arguments", "s-call-arity", "s-missing-property", "s-excess-property", "s-name-resolution", "s-member-access", "s-class-access", "s-abstract-completeness"]
+
+[[criterion]]
+id = "B-scope-surface-tail"
+track = "B"
+title = "Unowned Tier S/A/B diagnostic and semantic surface tail"
+state = "incomplete"
+blocks_release = "true"
+owner = "./75-scope-surface-tail.md"
+witness = "canonical scope-family inventory; each family implemented with tsc corpus or explicitly reclassified OOS"
+links = ["../reference/scope.md", "../reference/divergences.md"]
+deps = []
+scope = ["s-multiple-missing-properties", "s-weak-type", "s-member-suggestion", "s-value-type-space", "s-class-override", "s-static-implements", "a-unknown-receivers", "a-call-construct-parity", "b-indexed-access-diagnostics", "b-type-level-tail", "b-implicit-this", "b-accessor-compatibility", "b-decorators-computed-members", "b-reachability", "b-delete-operand", "b-semantic-candidate-tail"]
 
 # ---------------------------------------------------------------------------
 # Track C — parity hygiene. Silent-FN families (blocks_release=true) gate 1.0;
@@ -309,6 +350,7 @@ owner = "./67-utility-alias-constraint-enforcement.md"
 witness = "disabled acceptance spec: sr_deferred_ledger/b67_utility_constraint.ts"
 links = ["../../tests/cases/sr_deferred_ledger/b67_utility_constraint.ts", "../reference/divergences.md"]
 deps = []
+scope = ["a-generic-constraints"]
 
 [[criterion]]
 id = "C-local-class-checking"
@@ -445,17 +487,63 @@ deps = []
 [[criterion]]
 id = "C-expression-inference-fn-tail"
 track = "C"
-title = "Expression positions infer_expr still skips silently (binary, template, spread, forward-ref local calls)"
+title = "Expression/iteration positions still skipped silently (binary, template, spread, iterability)"
 state = "incomplete"
 blocks_release = "true"
 owner = "./71-expression-inference-fn-tail.md"
 witness = "spec-first corpus pinning each family vs tsc 6.0.3 --strict (2026-07-10 WU4 review byproducts)"
 links = []
 deps = []
+scope = ["b-iterability"]
+
+[[criterion]]
+id = "C-unsupported-surface-audit"
+track = "C"
+title = "Every consumed OXC AST form is supported, explicit OOS, or surfaced incomplete"
+state = "incomplete"
+blocks_release = "true"
+owner = "./73-unsupported-surface-audit.md"
+witness = "machine-validated AST surface manifest plus adversarial nested-child corpus and independent review"
+links = ["../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-declaration-hoisting"
+track = "C"
+title = "Function and var declaration hoisting parity"
+state = "incomplete"
+blocks_release = "true"
+owner = "./74-declaration-hoisting-parity.md"
+witness = "spec-first forward-call and var-scope corpus cross-checked with tsc 6.0.3 --strict"
+links = ["../reference/divergences.md"]
+deps = []
+scope = ["s-declaration-hoisting"]
+
+[[criterion]]
+id = "C-deferred-divergence-census"
+track = "C"
+title = "Every deferred divergence has stable direction, disposition, owner, and witness"
+state = "incomplete"
+blocks_release = "true"
+owner = "./75-scope-surface-tail.md"
+witness = "structured divergence-family ledger validator rejects missing owner/direction/witness and unclassified under-reports"
+links = ["../reference/divergences.md", "../reference/scope.md"]
+deps = []
 
 # ---------------------------------------------------------------------------
 # Track D — scale + IDE (the architecture §12 phase ladder)
 # ---------------------------------------------------------------------------
+
+[[criterion]]
+id = "D-real-project-preview"
+track = "D"
+title = "Public CLI produces an honest differential result on a pinned strict TS project"
+state = "incomplete"
+blocks_release = "true"
+owner = "./72-real-project-preview-readiness.md"
+witness = "pinned small real-project clean baseline + seeded faults + identity ratchet; later deptective full-stack witness"
+links = ["./38-minimal-ambient-prelude.md", "./14-libdts-loading.md", "./15-modules-imports.md"]
+deps = ["./38-minimal-ambient-prelude.md", "./73-unsupported-surface-audit.md", "./74-declaration-hoisting-parity.md"]
 
 [[criterion]]
 id = "D-minimal-ambient-prelude"

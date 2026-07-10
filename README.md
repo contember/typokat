@@ -138,8 +138,9 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   `keyof` over unions/`never`/template-literal key sources plus two tsc-parity conditional
   edges are documented divergences (backlog `26`, `27`, `35`–`37`). (A bytecode VM is a
   deferred, profiling-gated refactor — see `docs/decisions/0001-…`.)
-- **Remaining type-model gaps** — generic methods, enums, namespaces + declaration merging, and
-  `satisfies`/`as const` are not modeled yet; they are the model-completeness
+- **Remaining type-model gaps** — generic methods, enums, namespaces + declaration merging,
+  `satisfies`/`as const`, explicit `this` parameters, and `ThisType<T>` are not modeled yet; they
+  are the model-completeness
   track in [`docs/backlog/`](./docs/backlog/README.md) and the prerequisite for full
   `lib.d.ts` loading. (Intersections `A & B` landed in M31; signature shape landed in M32;
   overloads landed in M33; `&` distribution over unions,
@@ -157,9 +158,16 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   graphs, and parallel cross-file type identity. An **unresolved type name** in type position is
   `TK2304` (M22); still deferred there (distinct tsc codes): a value used as a type (`TS2749`), type
   args on a type parameter (`TS2315`), a wrong type-argument count such as bare `Array` (`TS2314`),
-  and qualified names `A.B` (`TS2503`). (Backlog `14`, `15`, `38`, `43`, `52`.)
-- Minor `tsc` divergences, all in the safe (over-report) direction, are logged in
-  [`docs/reference/divergences.md`](./docs/reference/divergences.md).
+  and qualified names `A.B` (`TS2503`). (Backlog `14`, `15`, `38`, `43`, `52`, `70`.)
+- **No trustworthy arbitrary-project clean verdict yet.** Until the AST-surface census (`73`) and
+  pinned real-project preview gate (`72`) ship, an unsupported construct can still be surfaced as
+  resolver/prelude noise or suppressed behind an incomplete/error-type path. Focused supported-
+  subset diagnostics are useful; a clean result on an unknown npm/Bun/Node project is not yet a
+  completeness claim. The full remaining scope/disposition tail is backlog `75`.
+- Remaining `tsc` divergences are logged in
+  [`docs/reference/divergences.md`](./docs/reference/divergences.md): known under-report families
+  block 1.0 through manifest Track C; documented over-report/cosmetic tails are non-blocking only
+  when they have an explicit owner and witness.
 
 ## Testing
 

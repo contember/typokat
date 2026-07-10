@@ -29,9 +29,10 @@ is built: [`../reference/dev-method.md`](../reference/dev-method.md).
 The **executable source of truth** is the machine-validated manifest
 [`completion-1.0.toml`](completion-1.0.toml), enforced by `tests/manifest.rs` under
 `cargo test`/CI (it fails on duplicate/missing ids, unknown links, missing owners/witnesses,
-inconsistent states, and an unpinned TS lib audit). Every criterion there carries a stable id,
-track, owner, witness, and complete/incomplete state — edit the manifest, not this prose, when
-status changes.
+inconsistent states, an unpinned TS lib audit, or a Tier S/A/B scope family without exactly one
+manifest owner). Every criterion there carries a stable id, track, owner, witness, and
+complete/incomplete state — edit the manifest, not this prose, when status changes. Backlog `75`
+owns the remaining structured divergence census needed to make Track C equally executable.
 
 In one line, typokat is **complete** when its four tracks are: **A** model completeness (no
 construct lowers to something silently permissive), **B** checker completeness (the
@@ -68,6 +69,7 @@ fillers.
 - [`50`](50-type-predicates-assertions.md) — type predicates (`x is T`) + assertion functions.
 - [`51`](51-narrowing-tail.md) — narrowing tail: remaining loop forms, member paths, closures.
 - [`52`](52-type-reference-tail.md) — type-reference tail (TS2749, TS2314/2315, TK2558).
+- [`75`](75-scope-surface-tail.md) — canonical Tier S/A/B ownership tail + structured deferred-divergence census.
 
 **C. Known-gap fixes — the soundness/parity tail.**
 Silent-FN kills (highest value per effort, schedule first; `54`–`65` are the 2026-07-07
@@ -82,7 +84,9 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 - [`66`](66-protected-override-compat.md) — protected↔protected incompatible override skips TK2416 (dropped TS2416).
 - [`67`](67-utility-alias-constraint-enforcement.md) — utility/prelude alias type-param constraints unenforced (`ReturnType<number>` drops TS2344).
 - [`30`](30-numeric-literal-correctness.md) — JS-exact number stringification: a non-canonical `${1e21}` digit string is **accepted** (dropped TS2322 — an under-report, not a safe FP).
-- [`71`](71-expression-inference-fn-tail.md) — expression-inference silent-FN tail (binary results, template interpolations, spread, forward-ref local calls; 2026-07-10 review byproducts).
+- [`71`](71-expression-inference-fn-tail.md) — expression/iteration traversal silent-FN tail (binary results, template interpolations, spread, iterability).
+- [`73`](73-unsupported-surface-audit.md) — machine-validated OXC surface census; no silent wildcard/`None`/error-type clean verdict.
+- [`74`](74-declaration-hoisting-parity.md) — forward local-function calls + `var` hoisting parity.
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - [`23`](23-static-method-type-params.md) — spurious TK2304 on static method type params (or close via `41`).
@@ -96,26 +100,32 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - [`63`](63-review-parity-tail.md) — 2026-07-07 review parity tail (batched small FPs, messages, depth guard).
 
 **D. Scale + IDE — the §12 phase ladder.**
+- [`72`](72-real-project-preview-readiness.md) — honest public-CLI preview on a pinned small strict project, with clean + mutation differential ratchet.
 - [`38`](38-minimal-ambient-prelude.md) — minimal ambient prelude slice (early real-world signal; replaced by `14`).
 - [`13`](13-bytecode-vm.md) — post-evaluator profiling gate (instrument shipped: `tooling/bench/`).
-- [`14`](14-libdts-loading.md) — full `lib.d.ts` + parallelism Stage 1 · blocked-by `41` `43`.
+- [`14`](14-libdts-loading.md) — full `lib.d.ts` + parallelism Stage 1 · blocked-by `41` `43` `70`.
 - [`15`](15-modules-imports.md) — module-resolver breadth (slice 2; slice 1 shipped as M29).
 - [`16`](16-parallelism-type-universe.md) — parallelism Stage 2 (cross-file identity) · blocked-by `14`, `15`.
 - [`17`](17-incrementality.md) — incrementality (Phase 5) · blocked-by `16`.
 
 ## Recommended order
 
-1. **Kill the known silent-FN families** — the five HIGH review findings (`53` `55` `57` `58`
+1. **Make incompleteness executable, then kill the known silent-FN families** — run `73`'s AST
+   census and `75`'s scope/divergence census so new silent paths cannot disappear from the plan.
+   The five HIGH review findings (`53` `55` `57` `58`
    `61`) shipped in sprint-2026-07-07-soundness-fn-fixes; `64` `34` `33` `54` `59` `65`
    shipped in follow-up sprints; the remaining silent-FN C group (`56`, `60`, `62`, `30`, `32`,
-   `21`, `22`, `66`, `67`) is next, every one a dropped-error class.
-2. **Run track A** to unblock `14` (`25` intersections shipped as M31, `24`/`39` signature
+   `21`, `22`, `66`, `67`, `71`, `74`) is next, every one a dropped-error class.
+2. **Ship the honest preview slice early:** after `73`/`74`, run `38` then `72`. Its WU0 pins a
+   genuinely small real project that fits the preview surface; it must not grow a project-specific
+   lib shim. This is the first "point it at a project" milestone.
+3. **Run track A** to unblock `14` (`25` intersections shipped as M31, `24`/`39` signature
    shape shipped as M32, and `40` overloads shipped as M33); interleave B items and C's
-   parity tail as warm-ups between the remaining A milestones. `38` (minimal prelude) and `13` (profiling
-   gate) are independent — schedule whenever the signal is worth it; `13` is cheap now that
+   parity tail as warm-ups between the remaining A milestones. `13` (profiling gate) is cheap now that
    `tooling/bench/` exists.
-3. **Climb track D** in ladder order (`14` → `15` → `16` → `17`), finishing the B/C remainder along
-   the way.
+4. **Climb the full-project/scale ladder** (`14` → `15` → `16` → `17`), finishing the B/C
+   remainder along the way. `14` + `15` must graduate the pinned deptective full-stack witness;
+   the small `72` preview is not evidence for full resolver/lib fidelity.
 
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.
