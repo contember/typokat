@@ -114,6 +114,15 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Deferred ledger — known unfixtured under-reports from backlogs 30, 56, 60,
     // 62, 66, 67. Stays `false` beyond this sprint until each backlog item ships.
     ("sr_deferred_ledger", false),
+    // Completeness-accounting sprint (2026-07-10) WU0 — surface-accounting corpus
+    // (backlog 73). DISABLED (behavior-neutral spec): the fixtures pin AST child
+    // slots / statement containers / annotation forms that currently exit clean
+    // (`incomplete[<role/surface/slot>]` markers) plus their supported controls.
+    // Stays `false` until the incomplete outcome (WU2) and the child-slot wiring
+    // (WU3/WU4/WU5) land and the harness learns the `incomplete[...]` marker. See
+    // tests/cases/README.md ("Surface-accounting corpus") and
+    // docs/sprints/sprint-2026-07-10-completeness-accounting.md.
+    ("b73_surface_accounting", false),
 ];
 
 /// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`

@@ -1,0 +1,36 @@
+# Surface-accounting fixture — MISSING RECORD (sprint 2026-07-10, WU0).
+#
+# Expected WU1-validator outcome: REJECT with a missing-child-slot error: the supported
+# wrapper "expr-infer/array-literal/self" declares `requires_slots = ["element",
+# "spread-element"]`, but no `[[surface]]` record covers the "spread-element" slot. A
+# supported wrapper must account for every in-scope child; a missing record is exactly
+# how a silent-skip child (the array spread) would slip back in unnoticed.
+# Schema: see tests/surface/README.md.
+
+[meta]
+oxc_version = "0.137.0"
+
+[[surface]]
+id = "expr-infer/array-literal/self"
+role = "expr-infer"
+surface = "array-literal"
+slot = "self"
+oxc_variant = "Expression::ArrayExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../../cases/m17_arrays"
+requires_slots = ["element", "spread-element"]
+
+[[surface]]
+id = "expr-infer/array-literal/element"
+role = "expr-infer"
+surface = "array-literal"
+slot = "element"
+oxc_variant = "Expression::ArrayExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../../cases/b73_surface_accounting/array_spread.ts"
+
+# INTENTIONALLY ABSENT: the record for slot "spread-element" required above. The
+# validator must reject the incomplete accounting rather than pass a wrapper that
+# silently drops the spread child.

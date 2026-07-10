@@ -1,0 +1,26 @@
+# Surface-accounting fixture — DEPENDENCY DRIFT (sprint 2026-07-10, WU0).
+#
+# Expected WU1/WU6-validator outcome: REJECT with a deps-vs-blocked-by mismatch on
+# criterion "A-libdts-loading". A completion criterion's `deps` must agree with its
+# backlog owner's `blocked-by` frontmatter, unless an explicit `deps_exception` field
+# documents a deliberate slice. Here `deps` names `./70-this-parameters.md` while the
+# owner's `blocked-by` names `./14-libdts-loading.md` — the historical 14/70 drift that
+# triggered backlog 75's audit. There is no `deps_exception`, so it must be rejected.
+#
+# This is completion-manifest shaped (mirrors docs/backlog/completion-1.0.toml); WU6
+# extends tests/manifest.rs to cross-check `deps` against each owner's `blocked-by`.
+
+[meta]
+schema_version = "1"
+
+[[criterion]]
+id = "A-libdts-loading"
+track = "A"
+title = "lib.d.ts loading (dependency-drift witness)"
+state = "incomplete"
+blocks_release = "true"
+owner = "./14-libdts-loading.md"
+witness = "spec-first corpus"
+# DRIFT: the owner (14) is blocked-by [./15-...]; this criterion claims a dependency on
+# 70, which does not appear in 14's `blocked-by`. No `deps_exception` field justifies it.
+deps = ["./70-this-parameters.md"]

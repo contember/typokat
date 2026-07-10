@@ -32,6 +32,16 @@ Rules the harness enforces:
   (`// error[TK2322]`) to assert only the code + line — used where the rendered type strings
   aren't stable yet (object/union/alias targets, see "Type display").
 - Multiple errors on one line: separate markers with ` | `.
+- **Incomplete-surface markers** (`// incomplete[<stable-id>]`) pin an *in-scope*
+  AST position the checker does not yet visit — an unsupported child slot, statement
+  container, or annotation form that today exits **clean** while `tsc` rejects. The
+  `<stable-id>` is the surface identity `role/surface/slot-or-variant` (see the
+  surface-accounting corpus below and `tests/surface/README.md`). It mirrors the
+  `error[TK…]` shape but asserts a *third outcome* — an incomplete record, not a
+  diagnostic. The conformance harness gains this understanding only when the
+  first-class incomplete outcome lands (sprint 2026-07-10 WU2); until then every
+  corpus carrying `incomplete[…]` markers stays registered `false`, and the markers
+  read as inert prose to the current `error[`-only parser (they contain no `error[`).
 - **Malformed markers fail loudly.** A ` | `-separated comment segment that starts with
   `error[` but isn't a well-formed `error[TK<digits>]` (missing `]`, a non-`TK`/non-digit
   code, …) panics the harness with the file, line, and segment — a silently dropped marker
@@ -334,3 +344,28 @@ Construction notes:
   tsc's verdict for one dropped-error family plus a passing control; the dir stays
   disabled until its backlog item ships. See the deferred-check note in
   [`divergences.md`](../../docs/reference/divergences.md).
+
+## Surface-accounting corpus (sprint 2026-07-10)
+
+`b73_surface_accounting/` is the WU0 acceptance spec for the completeness-accounting
+sprint (backlog `73`, `docs/sprints/sprint-2026-07-10-completeness-accounting.md`).
+Each fixture pins an **in-scope AST position the checker silently skips** — the child
+slot / statement container / annotation form exits **clean** today while `tsc 6.0.3
+--strict` rejects it. The skipped position carries an `incomplete[<role/surface/slot>]`
+marker (the identity scheme is defined in [`tests/surface/README.md`](../surface/README.md));
+a nearby **supported control** on a sibling line carries the ordinary `error[TK…]`
+marker so the two paths are diffed side by side.
+
+The dir stays registered `false` until the first-class incomplete outcome (WU2) and the
+child-slot wiring (WU3–WU5) land. Enabling a fixture at the current HEAD shows the
+silent path directly: the `incomplete[…]` line produces no diagnostic while `tsc` errors.
+Every fixture header records the exact `tsc 6.0.3 --strict` verdict and the `file:line`
+of the wildcard/`None`/skip that drops the position.
+
+| Fixture | Silent-skip site | Marker id | tsc verdict |
+|---|---|---|---|
+| `template_interpolation.ts` | `infer_expr` has no `TemplateLiteral` arm (`expr.rs:162`) | `expr-infer/template-literal/interpolation` | TS2345 |
+| `computed_key.ts` | `infer_object_literal` skips non-`static_name` keys (`expr.rs:265`) | `expr-infer/object-literal/computed-key` | TS2345 |
+| `array_spread.ts` | `infer_array_literal` skips non-expression elements (`expr.rs:290`) | `expr-infer/array-literal/spread-element` | TS2345 |
+| `try_catch_finally.ts` | `check_stmt` drops `TryStatement` (`statements.rs:145`) | `stmt-check/try-statement/{block,handler,finalizer}` | TS2322 ×3 |
+| `typeof_query.ts` | `lower_annotation_inner` drops `TSTypeQuery` (`annotations/mod.rs:174`) | `annotation-lower/type-query/typeof` | TS2304 |

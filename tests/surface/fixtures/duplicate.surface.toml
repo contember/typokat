@@ -1,0 +1,30 @@
+# Surface-accounting fixture — DUPLICATE RECORD (sprint 2026-07-10, WU0).
+#
+# Expected WU1-validator outcome: REJECT with a duplicate-id error naming
+# "stmt-check/try-statement/handler". Two `[[surface]]` records share one id; a
+# duplicate would let two disagreeing dispositions coexist and hide a regression.
+# Schema: see tests/surface/README.md.
+
+[meta]
+oxc_version = "0.137.0"
+
+[[surface]]
+id = "stmt-check/try-statement/handler"
+role = "stmt-check"
+surface = "try-statement"
+slot = "handler"
+oxc_variant = "Statement::TryStatement"
+disposition = "unsupported-in"
+owner = "../../../docs/backlog/73-unsupported-surface-audit.md"
+witness = "../../cases/b73_surface_accounting/try_catch_finally.ts"
+
+# DUPLICATE id — must be rejected.
+[[surface]]
+id = "stmt-check/try-statement/handler"
+role = "stmt-check"
+surface = "try-statement"
+slot = "handler"
+oxc_variant = "Statement::TryStatement"
+disposition = "supported"
+owner = "shipped"
+witness = "../../cases/b73_surface_accounting/try_catch_finally.ts"

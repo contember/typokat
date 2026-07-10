@@ -1,0 +1,74 @@
+# Surface-accounting fixture — VALID (sprint 2026-07-10, WU0).
+#
+# Expected WU1-validator outcome: VALIDATES CLEANLY. A representative, self-consistent
+# slice of the surface manifest: the `oxc_version` matches the Cargo pin, every id is
+# unique and well-formed, every record has an owner + witness, every `unsupported-in`
+# links a live backlog owner, and every `supported` wrapper's `requires_slots` has a
+# covering child record. Schema: see tests/surface/README.md.
+
+[meta]
+oxc_version = "0.137.0"
+
+# --- expression: object literal (a supported wrapper with in-scope children) --------
+[[surface]]
+id = "expr-infer/object-literal/self"
+role = "expr-infer"
+surface = "object-literal"
+slot = "self"
+oxc_variant = "Expression::ObjectExpression"
+disposition = "supported"
+owner = "shipped"
+witness = "../../cases/m2_objects"
+requires_slots = ["value", "computed-key", "spread-element"]
+
+[[surface]]
+id = "expr-infer/object-literal/value"
+role = "expr-infer"
+surface = "object-literal"
+slot = "value"
+oxc_variant = "ObjectPropertyKind::ObjectProperty"
+disposition = "supported"
+owner = "shipped"
+witness = "../../cases/b73_surface_accounting/computed_key.ts"
+
+[[surface]]
+id = "expr-infer/object-literal/computed-key"
+role = "expr-infer"
+surface = "object-literal"
+slot = "computed-key"
+oxc_variant = "ObjectPropertyKind::ObjectProperty"
+disposition = "unsupported-in"
+owner = "../../../docs/backlog/75-scope-surface-tail.md"
+witness = "../../cases/b73_surface_accounting/computed_key.ts"
+
+[[surface]]
+id = "expr-infer/object-literal/spread-element"
+role = "expr-infer"
+surface = "object-literal"
+slot = "spread-element"
+oxc_variant = "ObjectPropertyKind::SpreadProperty"
+disposition = "unsupported-in"
+owner = "../../../docs/backlog/71-expression-inference-fn-tail.md"
+witness = "../../cases/b73_surface_accounting/array_spread.ts"
+
+# --- annotation lowering: type query (unsupported, owned) ---------------------------
+[[surface]]
+id = "annotation-lower/type-query/typeof"
+role = "annotation-lower"
+surface = "type-query"
+slot = "typeof"
+oxc_variant = "TSType::TSTypeQuery"
+disposition = "unsupported-in"
+owner = "../../../docs/backlog/75-scope-surface-tail.md"
+witness = "../../cases/b73_surface_accounting/typeof_query.ts"
+
+# --- statement: with-statement (out of scope by design) -----------------------------
+[[surface]]
+id = "stmt-check/with-statement/self"
+role = "stmt-check"
+surface = "with-statement"
+slot = "self"
+oxc_variant = "Statement::WithStatement"
+disposition = "design-oos"
+owner = "by-design"
+witness = "sloppy-mode-only; a strict-mode syntax error, no type model"

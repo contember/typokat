@@ -1,0 +1,47 @@
+Surface-accounting probe snapshots (sprint 2026-07-10, WU0)
+==========================================================
+
+Captured at HEAD as committed witness data. typokat = target/release/typokat check <file>;
+oracle = tsc 6.0.3 --strict --noEmit <file>. Each probe is a minimal in-scope construct that
+typokat exits clean (0 diagnostics) while tsc rejects — the exact false-clean paths this sprint
+closes. The corresponding fixtures live in tests/cases/b73_surface_accounting/.
+
+Legend: "exit" is the process exit code. typokat: 0 = clean, 1 = diagnostics. tsc 6.0.3: 0 =
+clean, 2 = diagnostics (this tsc build returns 2 for type errors under --noEmit).
+
+------------------------------------------------------------------------------------------------
+Probe 1 — bad call inside a template interpolation
+  source:  const s: string = `x${need("bad")}y`;   // need(n: number): number
+  typokat: exit 0 — (no output)
+  tsc:     exit 2 — TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+  id:      expr-infer/template-literal/interpolation
+
+Probe 2 — bad call inside a computed object key
+  source:  const o = { [need("bad")]: 1 };
+  typokat: exit 0 — (no output)
+  tsc:     exit 2 — TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+  id:      expr-infer/object-literal/computed-key
+
+Probe 3 — bad call inside an array spread
+  source:  const a: number[] = [...[need("bad")]];
+  typokat: exit 0 — (no output)
+  tsc:     exit 2 — TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+  id:      expr-infer/array-literal/spread-element
+
+Probe 4 — `typeof Missing` in a type annotation
+  source:  let x: typeof Missing = 1;
+  typokat: exit 0 — (no output)
+  tsc:     exit 2 — TS2304: Cannot find name 'Missing'.
+  id:      annotation-lower/type-query/typeof
+
+Probe 5 — bad assignments inside try / catch / finally
+  source:  try { const a: number = "bad1"; }
+           catch (e) { const b: number = "bad2"; }
+           finally { const c: number = "bad3"; }
+  typokat: exit 0 — (no output)
+  tsc:     exit 2 — TS2322 ×3 (one per block: try line 2, catch line 4, finally line 6)
+  id:      stmt-check/try-statement/{block,handler,finalizer}
+
+------------------------------------------------------------------------------------------------
+Summary: 5/5 probes exit 0 (clean) in typokat; 5/5 rejected by tsc 6.0.3 --strict.
+These are false-clean silent-skip paths, not deliberate divergences.
