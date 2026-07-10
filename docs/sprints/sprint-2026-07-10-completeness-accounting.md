@@ -380,3 +380,16 @@ gate is recorded in the run log before WU1 begins.
   `AssignmentTarget` group maps to one constant family without per-variant delegation — a new
   variant is absorbed compile-clean; safe today (family is unsupported-in→73) but it bounds the
   tripwire.
+- **2026-07-10 — WU2 shipped after WU7-B FAIL→FAIL→PASS (three passes).** The incomplete channel
+  (`IncompleteSurface`, `record_incomplete`, exit `3` with precedence, rich+compact rendering,
+  dedup by id+span) was sound from round one; both FAILs were harness-parser injection: an
+  unanchored `incomplete[…]` regex let checked-source content fabricate phantom records
+  (round 1: any snippet; round 2: the leftover `\): ` compact branch). Final contract:
+  rich-only `^incomplete\[` with `.match`, exit-1+incomplete → HarnessFailure, hostile-id
+  validation at parse/serialize/read. Scoreboard byte-identical; the five WU0 probes still exit 0
+  (nothing emits yet). **Carry into WU3 acceptance (reviewer must-fix, pre-existing):**
+  `render_type` embeds raw newlines from string-literal types into diagnostic messages, producing
+  a genuine column-0 `incomplete[…]` line — today caught loudly by the exit-1 check, but after
+  WU3 emissions a legitimately-exit-3 test could silently gain a phantom identity. Fix in Rust
+  (escape control chars in string-literal type rendering; also a cosmetic tsc divergence) before
+  or with WU3's first emission commit.
