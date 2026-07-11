@@ -192,3 +192,12 @@ strictly ordered by their witnesses.
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
      trim to a one-line pointer ("→ ADR-0007"). -->
+
+- 2026-07-11 — WU1 shipped as `42f66b5`: the disabled corpus and ledger admit only
+  `console` and numeric `Math`; primitive wrapper and array instance members hit the
+  planned model-boundary gate. A follow-up code trace found a stronger blocker:
+  the prelude pass fills type declarations only and discards value declaration types,
+  so a `declare const console` or `Math` in `src/prelude.ts` binds a name but cannot
+  provide a checked value type to user code. WU2 is paused pending independent
+  architecture review and an explicit decision; no alternate loader or value-seeding
+  path will be introduced implicitly.
