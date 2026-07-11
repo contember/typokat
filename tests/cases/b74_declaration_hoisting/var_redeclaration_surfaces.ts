@@ -9,3 +9,8 @@ const conflictingRead: number = conflicting; // error[TK2322]: Type 'string' is 
 
 var stagedOnce = 1;
 var stagedOnce: MissingVarAnnotation; // error[TK2304]: Cannot find name 'MissingVarAnnotation'
+
+function parameterCollision(parameterValue: string): void {
+  parameterValue = 1; // error[TK2322]: Type 'number' is not assignable to type 'string'
+  var parameterValue: number;
+}
