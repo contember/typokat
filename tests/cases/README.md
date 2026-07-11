@@ -208,6 +208,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b28_interface_extends/` | backlog `28` | interface `extends` composition (inherited members in assignability/keyof/mapped; own overrides) |
 | `b29_alias_cycles/` | backlog `29` | surface alias cycles → `TK2456` (direct/mutual/through unions); legal member recursion resolves |
 | `b30_negative_literals/` | backlog `30` | negative numeric literal types are literals, not `any` (annotations, unions, template holes, extends) |
+| `b30_numeric_stringify/` | backlog `30` (disabled) | ECMA number-to-string thresholds and `${number}` long-decimal regression control |
 | `b55_template_memo/` | backlog `55` | template evaluation must not memoize results computed under an exhausted TK2589 budget |
 | `b58_project_scopes/` | backlog `58` | project-mode scope maps keyed per module — offset-aligned files must not collide |
 | `b61_field_initializers/` | backlog `61` | class field initializers checked against the annotation (assignability, excess, contextual typing; instance + static) |

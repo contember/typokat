@@ -4,9 +4,10 @@
 validation use ECMAScript `Number::toString` spellings without broadening the
 template-pattern grammar.
 
-**Theme.** A single shared formatter currently loses `TK2322` at JavaScript's
-fixed/exponential thresholds. This sprint pins the boundary matrix first, replaces
-only that formatter, and independently attacks both construction and pattern paths.
+**Theme.** A shared formatter currently loses `TK2322` at JavaScript's
+fixed/exponential thresholds. This sprint pins the boundary matrix first, makes
+literal construction ECMA-exact, and preserves the separate decimal acceptance rule
+used by `${number}` patterns.
 
 ## Refs re-verified at HEAD (2026-07-11)
 
@@ -20,9 +21,11 @@ only that formatter, and independently attacks both construction and pattern pat
 - ✔ `dragonbox_ecma 0.1.12` is already present in `Cargo.lock` through OXC and
   exposes the ECMA formatting used by OXC's own JavaScript string conversion. A
   direct dependency edge adds no new resolved package.
-- ⚠ `${number}` validation also has a conservative lexical gate. Expanding its
-  accepted grammar is not necessary to remove the known under-report and remains
-  outside this sprint.
+- ⚠ The backlog's matcher claim drifted: `tsc 6.0.3` accepts the long decimal
+  `"1000000000000000000000"` for `${number}` even though `String(1e21)` is
+  `"1e+21"`. The current decimal matcher also accepts it because Rust display stays
+  fixed. WU1 must decouple this acceptance check from the new JS formatter rather
+  than introduce a false positive.
 - ✔ `C-numeric-stringification` is release-blocking and incomplete in
   `docs/backlog/completion-1.0.toml`; backlog `30` is its sole owner.
 
@@ -37,8 +40,8 @@ only that formatter, and independently attacks both construction and pattern pat
   against `tsc 6.0.3 --strict` before committing markers.
 - **Scope.** Add a dedicated disabled `b30_numeric_stringify/` corpus covering both
   exponential thresholds, signs, `-0`, maximum finite, minimum subnormal, and a
-  shortest-round-trip representative. Include pattern controls that prove the known
-  non-canonical long form is rejected without claiming broader grammar parity.
+  shortest-round-trip representative. Include a pattern control proving the long
+  decimal remains accepted by `${number}` without claiming broader grammar parity.
 - **Acceptance / witness.** At old HEAD, enabling only `b30_numeric_stringify` fails
   on the known dropped errors while all clean controls match tsc. Commit the disabled
   corpus independently.
@@ -53,7 +56,9 @@ only that formatter, and independently attacks both construction and pattern pat
   especially `-0`, non-finite values, and exponent sign/casing.
 - **Scope.** Add a direct `dragonbox_ecma` dependency and route finite non-zero
   `number_to_string` values through it. Preserve explicit JavaScript spellings for
-  zero, NaN, and infinities; do not hand-roll dtoa or change numeric-property parsing.
+  zero, NaN, and infinities. Keep `${number}`'s existing decimal round-trip rule on
+  Rust fixed display in both relation and infer helpers; do not hand-roll dtoa or
+  change numeric-property parsing.
 - **Acceptance / witness.** Enable `b30_numeric_stringify`; all construction and
   pattern diagnostics match the committed spec, existing M27 and negative-literal
   corpora remain green, and `Cargo.lock` gains no package/version churn.
@@ -93,8 +98,9 @@ only that formatter, and independently attacks both construction and pattern pat
 - Use `dragonbox_ecma 0.1.12`, already locked through OXC, rather than adding another
   dtoa implementation or writing one locally. This is a narrow implementation detail
   explicitly allowed by backlog `30`, not a new architecture decision.
-- Preserve the matcher's existing lexical gate. The sprint closes the known
-  stringification under-report, not every `${number}` parity edge.
+- Preserve the matcher's existing lexical gate and long-decimal acceptance. The
+  sprint closes literal-hole stringification under-reports, not every `${number}`
+  parity edge.
 - Follow the mandatory loop: leader-owned disabled spec commit, Terra subagent
   implementation, different-agent adversarial review, leader verification and closure.
 
@@ -110,3 +116,8 @@ only that formatter, and independently attacks both construction and pattern pat
 
 <!-- Append discoveries, deviations, and blockers here. Graduate durable findings to a
      decision/backlog/reference document; leave only transient execution notes here. -->
+
+- 2026-07-11 — `tsc 6.0.3` accepts long decimal strings for `${number}`; the
+  backlog's claim that JS canonical re-stringification governs that intrinsic pattern
+  was stale. WU0 now pins the clean control and WU1 explicitly keeps the matcher rule
+  separate from literal construction.
