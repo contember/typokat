@@ -121,9 +121,12 @@ are filled too late; `var` names are bound into the wrong lexical scope.
 - **Scope.** Thread declaration kind through existing binder paths. Declare a supported
   `var` binding in the nearest `Function` or `Module` scope, but bind/check its
   initializer from the original lexical scope and keep flow evaluation at the source
-  statement. Leave `let`/`const` in the current block/loop scope. Reuse the existing
-  symbol slots and parent links; do not add a parallel hoist table or definite-assignment
-  state.
+  statement. Predeclare an explicit `var` annotation without evaluating its initializer;
+  stage any annotation records for replay at source position. Inferred forward value
+  types remain release-owned by backlog
+  [`76`](../backlog/76-lazy-value-type-resolution.md). Leave `let`/`const` in the current
+  block/loop scope. Reuse the existing symbol slots and parent links; do not add a
+  parallel hoist table or definite-assignment state.
 - **Acceptance / witness.** Enable the `var` subset of `b74_declaration_hoisting`:
   block/switch/loop `var` names resolve throughout only their containing function;
   initializers still resolve nearby lexical names correctly; nested functions do not

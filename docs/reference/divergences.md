@@ -88,6 +88,12 @@ and validated the same way.
   direction). Function and `var` hoisting share backlog `74`; definite-assignment
   timing remains backlog `47`.
   <!-- div: id=hoisting/var-block-scoped dir=over scope=s-declaration-hoisting owner=../backlog/74-declaration-hoisting-parity.md witness=../../tests/cases/b58_project_scopes -->
+- **Unannotated forward `var` value types are unresolved (under-report).** Backlog
+  `74` hoists the name and predeclares explicit annotations, but it does not evaluate a
+  later initializer to type an earlier read/write. That would move value inference ahead
+  of source-order initializer checking; exact lazy declaration/value queries belong to
+  backlog `76`.
+  <!-- div: id=hoisting/unannotated-forward-var-value dir=under scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/sr_deferred_ledger/b76_unannotated_forward_var.ts -->
 - **Forward local function calls are not checked (under-report).** A call before its
   local function declaration does not see the hoisted declaration, so argument/overload
   diagnostics can disappear. This dropped-error family is owned by backlog `74`.

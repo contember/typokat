@@ -24,6 +24,8 @@ unannotated body cannot be inferred safely at that point with the current sequen
 - `unknown` is sound but over-reports valid result-consuming forward calls;
 - checking bodies early changes diagnostic/obligation timing and still fails when a
   return expression references a later inferred value declaration.
+- a hoisted unannotated `var` has the same missing value-type problem, while using
+  `unknown` would be permissive as an assignment target.
 
 TypeScript separates declaration visibility from type availability. It resolves a
 signature return on demand, tracks `Unresolved → Resolving → Resolved/Errored`, and
