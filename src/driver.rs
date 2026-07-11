@@ -539,6 +539,25 @@ mod tests {
         output.diagnostics.iter().map(|d| d.code.as_str()).collect()
     }
 
+    /// Backlog 74 review regression: signature diagnostics discovered during the
+    /// reservation prepass still render at their declaration's source position.
+    #[test]
+    fn function_reservation_preserves_diagnostic_order() {
+        let out = check_source(
+            "const first: string = 1;\n\
+             function late(value: Missing): void {}\n\
+             const second: string = 1;",
+        );
+        assert_eq!(codes(&out), vec!["TK2322", "TK2304", "TK2322"]);
+        assert!(
+            out.diagnostics
+                .windows(2)
+                .all(|pair| pair[0].span.start < pair[1].span.start),
+            "diagnostics must remain in source order: {:?}",
+            out.diagnostics
+        );
+    }
+
     /// WU2 local overloads: a signature-only local declaration must NOT fire the
     /// spurious `TK2391`, and calls resolve against the *declared* overloads
     /// (a non-matching argument is `TK2769`, tsc's `TS2769`).
