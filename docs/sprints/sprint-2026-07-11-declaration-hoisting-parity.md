@@ -249,3 +249,12 @@ soundness fix.
   memo eviction, one CaseBlock reservation set with per-clause grouping, and staged
   signature diagnostics/incomplete records. Re-review PASS. Leader gates: 278 unit tests,
   all integration/conformance tests, fmt, and clippy `-D warnings` PASS.
+- **2026-07-11 — WU2 shipped.** The unannotated-forward-`var` boundary was assigned to
+  backlog `76` in `29d4a6e`; implementation `48f2c29` hoists bindings to their nearest
+  function/module, reserves explicit annotations, preserves lexical initializer lookup,
+  and enables the full `b74` corpus. Independent review found two HIGH bug classes:
+  lexical catch/function shadows could steal a hoisted declarator's type identity
+  (`ed224e8`), and a pre-declaration read could leave stale flow state after source
+  inference (`53cd2ab`). Both fixes passed independent re-review across every supported
+  container against TypeScript 6.0.3. Leader gates: 279 unit tests, all
+  integration/conformance tests, fmt, and clippy `-D warnings` PASS.
