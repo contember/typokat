@@ -24,6 +24,9 @@ decisions → reference → archive.
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 
+- [`sprint-2026-07-11-silent-fn-quick-wins.md`](sprints/sprint-2026-07-11-silent-fn-quick-wins.md) —
+  enforce the modeled `ReturnType` constraint and protected-pair override compatibility (`67`, `66`).
+
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
@@ -33,6 +36,8 @@ decisions → reference → archive.
   the source-backed prelude now supplies a bounded `console`/numeric-`Math` value surface
   through its canonical handoff, with 26 audited `OOS:unresolved → IN` transitions. `73`
   still blocks `72`'s honest project-preview claim.
+- **Silent-FN quick wins (`67` + `66`) active 2026-07-11** — two ready-fixtured,
+  release-blocking dropped-error families using existing constraint and override machinery.
 - **Declaration hoisting parity (`74`) shipped 2026-07-11** (archived:
   [`archive/sprint-2026-07-11-declaration-hoisting-parity.md`](archive/sprint-2026-07-11-declaration-hoisting-parity.md)) —
   forward ordinary/generic/overload calls now see stable callable surfaces; `var`

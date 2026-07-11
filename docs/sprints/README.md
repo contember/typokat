@@ -20,3 +20,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+
+- [`sprint-2026-07-11-silent-fn-quick-wins.md`](sprint-2026-07-11-silent-fn-quick-wins.md) —
+  close release-blocking backlogs `67` and `66` through existing constraint and override machinery.
