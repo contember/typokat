@@ -39,7 +39,7 @@ use context::{ClassFillState, DeclTypes, Pass, TypeDecl};
 use decls::{reserve_type_decls, type_decl_id};
 use statements::{emit_obligation_failure, emit_override_failures};
 
-/// Trusted built-in utility aliases, checked as a real prelude unit before user code.
+/// Trusted utility aliases and bounded ambient values, checked before user code.
 pub(crate) const PRELUDE_SOURCE: &str = include_str!("../../prelude.ts");
 
 /// The structured outcome of checking one module: type diagnostics plus the third

@@ -55,7 +55,7 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 | **Foundation** | primitives & intrinsics (`any`/`unknown`/`never`/`void`, strict null), objects (structural, excess/missing/depth, **optional members `a?: T`**), functions (arity, optional/default/rest params, ordered overload resolution, contravariant params, void-return rule), unions (canonicalized), **intersections (`A & B`)** (canonicalized, merged relation + member access + excess), recursive & mutually-recursive named types, literal types |
 | **Narrowing** | `typeof`, truthiness, `null`/`undefined` equality, **discriminated unions**, `in`, `switch`; **unstructured flow** via the flow-node CFG — early `return`/`throw`, `&&`/`\|\|`/ternary, assignment narrowing, `while` loop edges (back edge / exit / `break` / `continue`) |
 | **Generics** | type parameters, instantiation, **type-argument inference** from call arguments, **constraints** (`extends` — apparent types, declaration + call-site `TK2344`/`TK2345`, circularity `TK2313`) |
-| **Type-level evaluation** | conditional types (**distribution**, `infer` incl. tuple/function rest capture and anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, **the ten standard utility types as built-ins** (prelude compilation unit) + the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
+| **Type-level evaluation** | conditional types (**distribution**, `infer` incl. tuple/function rest capture and anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, **the ten standard utility types as built-ins** plus a bounded `console`/numeric-`Math` ambient prelude + the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
 | **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract` (incl. **abstract-member completeness**); **generic classes**; **override compatibility** (tsc's base-keyed method bivariance); **constructor accessibility** on `new` |
 | **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, rest elements, contextual typing), contextual fresh object/array/tuple literals, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), local relative modules with named imports/exports |
 | **Reporting** | nested reason chains (`Types of property 'x' are incompatible …`) |
@@ -116,7 +116,7 @@ values — none of which the implementation's own tests surfaced.
 ```
 src/
   driver.rs, main.rs, span.rs, diagnostics.rs   pipeline, CLI, spans, diagnostics + rendering
-  prelude.ts                                    the built-in utility-types compilation unit
+  prelude.ts                                    the built-in utility types + bounded ambient compilation unit
   types/    store · intern (hash-consing) · repr · hash · substitute   the type store
   binder/   scope · symbol (multi-slot) · bind                          scope graph
   check/    checker (incl. flowgraph) · infer (inference engine) · flow (nodes + narrowing ops)   the checkers
@@ -162,15 +162,15 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   graphs, and parallel cross-file type identity. An **unresolved type name** in type position is
   `TK2304` (M22); still deferred there (distinct tsc codes): a value used as a type (`TS2749`), type
   args on a type parameter (`TS2315`), a wrong type-argument count such as bare `Array` (`TS2314`),
-  and qualified names `A.B` (`TS2503`). (Backlog `14`, `15`, `38`, `43`, `52`, `70`.)
+  and qualified names `A.B` (`TS2503`). (Backlog `14`, `15`, `43`, `52`, `70`.)
 - **Incomplete checking is a first-class outcome (2026-07-10 accounting sprint).** The consumed
   OXC AST surface is classified in a machine-validated inventory (`tests/surface/`), and an
   unsupported in-scope construct now reports `incomplete[<surface-id>]` with exit `3` instead of
   silently exiting clean — for annotations, signatures, class members, statements/declarations,
   and the audited expression child slots (template interpolations, computed keys, spreads, spread
   arguments). A documented tail of expression *shapes* (`x++`, `x!`, `a?.b`, `await`, tagged
-  templates, …) is inventoried and owned but does not emit yet (backlog `73`); until it does — and
-  the prelude (`38`) and pinned real-project preview gate (`72`) ship — a clean result on an
+  templates, …) is inventoried and owned but does not emit yet (backlog `73`); until it and the
+  pinned real-project preview gate (`72`) ship — a clean result on an
   unknown npm/Bun/Node project is still not a completeness claim. The remaining semantic
   scope/disposition tail is backlog `75`.
 - Remaining `tsc` divergences are logged in

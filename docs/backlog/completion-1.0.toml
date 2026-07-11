@@ -553,18 +553,18 @@ state = "incomplete"
 blocks_release = "true"
 owner = "./72-real-project-preview-readiness.md"
 witness = "pinned small real-project clean baseline + seeded faults + identity ratchet; later deptective full-stack witness"
-links = ["./38-minimal-ambient-prelude.md", "./14-libdts-loading.md", "./15-modules-imports.md"]
-deps = ["./38-minimal-ambient-prelude.md", "./73-unsupported-surface-audit.md"]
+links = ["../archive/sprint-2026-07-11-minimal-ambient-prelude.md", "./14-libdts-loading.md", "./15-modules-imports.md"]
+deps = ["./73-unsupported-surface-audit.md"]
 
 [[criterion]]
 id = "D-minimal-ambient-prelude"
 track = "D"
-title = "Minimal ambient prelude slice (early real-world signal) — GO per ADR-0003"
-state = "incomplete"
+title = "Minimal ambient prelude slice (early real-world signal)"
+state = "complete"
 blocks_release = "false"
-owner = "./38-minimal-ambient-prelude.md"
-witness = "GO decision (ADR-0003): schedule a later spec-first sprint; witness = fixtures check vs tsc + official-suite unresolved bucket shrinks + clean-kept ratchets up"
-links = ["../decisions/0003-backlog-38-minimal-prelude-go.md", "./14-libdts-loading.md"]
+owner = "shipped"
+witness = "cargo test conformance (b38_minimal_ambient_prelude enabled) + independent WU2 adversarial review + official-suite 874-test identity ratchet (396→422 in-scope; clean-kept 116/149→126/159)"
+links = ["../archive/sprint-2026-07-11-minimal-ambient-prelude.md", "../decisions/0003-backlog-38-minimal-prelude-go.md", "../decisions/0004-prelude-value-type-handoff.md", "./14-libdts-loading.md"]
 deps = []
 
 [[criterion]]

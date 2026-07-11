@@ -18,7 +18,7 @@ explicit call-site type arguments) belong to the same family. Qualified names `A
 Type-reference resolution accepts shapes it should reject, in both directions: silence
 (FN — value-as-type, extra type args ignored) and confusion (bare generic checked against
 open type params). Small, self-contained, and high-noise-reduction once ambient types
-appear (`38`/`14` make misuse of generic names much more common).
+appear (the shipped minimal prelude and `14` make misuse of generic names much more common).
 
 ## Approach / acceptance
 

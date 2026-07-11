@@ -18,8 +18,8 @@ sprint-2026-07-07), `25` (M31 intersection types, sprint-2026-07-07), `33` `34`
 `54` `59` `64` (soundness-tail quick wins, sprint-2026-07-08), `24` `39`
 (M32 signature shape, sprint-2026-07-09), `65` (inference candidate policy,
 sprint-2026-07-09), `40` (M33 function overloads,
-sprint-2026-07-09), and `74` (declaration hoisting parity,
-sprint-2026-07-11) — see
+sprint-2026-07-09), `74` (declaration hoisting parity, sprint-2026-07-11), and
+`38` (minimal ambient prelude, sprint-2026-07-11) — see
 [`../archive/`](../archive/README.md). Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). How each item
@@ -102,7 +102,6 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
 **D. Scale + IDE — the §12 phase ladder.**
 - [`72`](72-real-project-preview-readiness.md) — honest public-CLI preview on a pinned small strict project, with clean + mutation differential ratchet.
-- [`38`](38-minimal-ambient-prelude.md) — minimal ambient prelude slice (early real-world signal; replaced by `14`).
 - [`13`](13-bytecode-vm.md) — post-evaluator profiling gate (instrument shipped: `tooling/bench/`).
 - [`14`](14-libdts-loading.md) — full `lib.d.ts` + parallelism Stage 1 · blocked-by `41` `43` `70`.
 - [`15`](15-modules-imports.md) — module-resolver breadth (slice 2; slice 1 shipped as M29).
@@ -118,9 +117,9 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
    `61`) shipped in sprint-2026-07-07-soundness-fn-fixes; `64` `34` `33` `54` `59` `65`
    shipped in follow-up sprints; the remaining silent-FN C group (`56`, `60`, `62`, `30`, `32`,
    `21`, `22`, `66`, `67`, `71`) is next, every one a dropped-error class. The next
-   executable chain is **`73` closure → `38` → `72`** (finish surface emission, then the
-   prelude, then the honest real-project preview).
-2. **Ship the honest preview slice early:** after `73`, run `38` then `72`. Its WU0 pins a
+   executable chain is **`73` closure → `72`**; the bounded prelude slice `38` shipped on
+   2026-07-11.
+2. **Ship the honest preview slice early:** after `73`, run `72`. Its WU0 pins a
    genuinely small real project that fits the preview surface; it must not grow a project-specific
    lib shim. This is the first "point it at a project" milestone.
 3. **Run track A** to unblock `14` (`25` intersections shipped as M31, `24`/`39` signature

@@ -22,21 +22,22 @@ decisions → reference → archive.
 
 ## Active sprints
 
-- [`sprints/sprint-2026-07-11-minimal-ambient-prelude.md`](sprints/sprint-2026-07-11-minimal-ambient-prelude.md) — backlog `38`: bounded ambient declarations through the existing prelude path, measured by conformance and the official-suite ratchet.
+<!-- list the sprint files currently in sprints/ ; empty between sprints -->
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Minimal ambient prelude (`38`) is active** — the approved, replaceable
-  source-backed slice is being specified before implementation. It may admit only
-  declarations the current model can faithfully check; `73` still blocks `72`'s honest
-  project-preview claim.
+- **Minimal ambient prelude (`38`) shipped 2026-07-11** (archived:
+  [`archive/sprint-2026-07-11-minimal-ambient-prelude.md`](archive/sprint-2026-07-11-minimal-ambient-prelude.md)) —
+  the source-backed prelude now supplies a bounded `console`/numeric-`Math` value surface
+  through its canonical handoff, with 26 audited `OOS:unresolved → IN` transitions. `73`
+  still blocks `72`'s honest project-preview claim.
 - **Declaration hoisting parity (`74`) shipped 2026-07-11** (archived:
   [`archive/sprint-2026-07-11-declaration-hoisting-parity.md`](archive/sprint-2026-07-11-declaration-hoisting-parity.md)) —
   forward ordinary/generic/overload calls now see stable callable surfaces; `var`
   binds to its function/module owner while initializer and flow timing stay lexical/source ordered.
-  Next executable chain: `73` closure → `38` → `72`.
+  Next executable chain: `73` closure → `72`.
 - **2026-07-10 completeness-accounting sprint shipped** (archived:
   [`archive/sprint-2026-07-10-completeness-accounting.md`](archive/sprint-2026-07-10-completeness-accounting.md)) —
   machine-validated OXC surface inventory with compile-time drift tripwires, a first-class
@@ -56,7 +57,7 @@ decisions → reference → archive.
   blockers: `41` generic methods, `43` namespaces/merging, `70` this-parameter
   typing. Backlog `38` is GO (ADR-0003). The post-sprint MVP audit added executable
   scope/unsupported censuses (`73`/`75`) and the first honest pinned-project preview gate
-  (`72`). **Now:** close `73`, then run `38` → `72`; track A
+  (`72`). **Now:** close `73`, then run `72`; track A
   (`41` first) continues toward full `lib.d.ts`.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint

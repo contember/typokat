@@ -1,11 +1,28 @@
+> **OUTCOME — shipped 2026-07-11.** Backlog `38` is closed: the existing source-backed
+> prelude now carries declared value types into both single-file and serial-project
+> user passes, providing a deliberately bounded `console` (`log`/`warn`/`error`) and
+> numeric `Math` surface. The required adversarial review first found two high-severity
+> cross-space shadowing false negatives; the follow-up fix made all value/type consumers
+> slot-aware, and independent re-review passed. Commit map: sprint plan → `3e33517`, WU1
+> spec → `42f66b5`, blocker record → `5e9f756`, ADR-0004 → `4840326`, WU2 + review fixes
+> → `b634803`, scoreboard ratchet → `c9ff140`. Verification: `cargo fmt --check` ·
+> `cargo test` (285 unit + 14 conformance-harness + 4 divergence + 7 incomplete + 10
+> manifest + 5 surface, 0 failed) · `cargo clippy --all-targets -- -D warnings` ·
+> `cargo build --release` · official-suite unit tests (34) · freshly fetched 874-test
+> corpus `run --check` (0 regressions). Scoreboard: 396→422 in-scope, 478→452 OOS,
+> `clean-kept` 116/149→126/159, zero lost matched identities or new false positives.
+> Backlog closed: `38`; manifest `D-minimal-ambient-prelude` complete. Deferred: primitive
+> wrapper members and array instance methods stay with the model/full-lib path; `73` still
+> gates the honest preview in `72`.
+
 # Sprint — minimal ambient prelude (2026-07-11)
 
 **Goal.** Deliver a deliberately small, tsc-checked ambient declaration slice through
 the existing prelude compilation unit, creating earlier real-world signal without
 claiming `lib.d.ts` fidelity.
 
-**Theme.** Backlog [`38`](../backlog/38-minimal-ambient-prelude.md) is the approved,
-replaceable bridge from the utility-type-only prelude to the pinned-project preview
+**Theme.** Backlog `38` was the approved, replaceable bridge from the
+utility-type-only prelude to the pinned-project preview
 in [`72`](../backlog/72-real-project-preview-readiness.md). It adds only declarations
 the implemented model can faithfully check, measures their official-suite effect, and
 leaves one canonical loading path for backlog [`14`](../backlog/14-libdts-loading.md)
@@ -210,3 +227,9 @@ strictly ordered by their witnesses.
 - 2026-07-11 — ADR-0004 accepts the narrow canonical handoff after independent review:
   retain/lower prelude value declarations into the user pass in both entry points;
   no second loader, global-name special case, primitive boxing, or array-member model.
+- 2026-07-11 — WU2 first review FAILED: a type-only local name hid an inherited prelude
+  value, and a value-only local name hid an inherited prelude type. The repair made
+  value/type lookup slot-aware across all consumers, added single/project regressions,
+  and passed independent re-review before `b634803`.
+- 2026-07-11 — WU4 audited 26 `OOS:unresolved → IN` official-suite transitions. The
+  saved ratchet has zero regressions on a fresh full-corpus check; see `c9ff140`.

@@ -1,5 +1,5 @@
-// typokat prelude (M28) — the built-in utility-type slice, checked as a REAL
-// compilation unit before every user program (sprint 2026-07-05, backlog 12).
+// typokat prelude — built-in utility aliases plus a bounded ambient value slice.
+// It is checked as a REAL compilation unit before every user program.
 // Each alias is its ordinary lib.es5-style mapped/conditional definition, so the
 // shared M25-M27 evaluator machinery does all the work (no second evaluator).
 // Divergences from lib.es5.d.ts (documented in tests/cases/README.md):

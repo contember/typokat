@@ -310,8 +310,10 @@ primitives) also stays DEFERRED — never a permissive `{}`.
 
 Implemented (M28): the standard aliases (Partial, Required, Readonly, Record, Pick, Omit, Exclude,
 Extract, NonNullable, ReturnType) are BUILT-INS via a prelude compilation unit (`src/prelude.ts`),
-each the ordinary mapped/conditional definition evaluated by the M25–M27 machinery; a user
-redeclaration shadows the prelude. `keyof <pending computation>` is a **deferred keyof** node
+each the ordinary mapped/conditional definition evaluated by the M25–M27 machinery. The same
+canonical unit also supplies the deliberately bounded `console` (`log`/`warn`/`error`) and numeric
+`Math` ambient values; it does not claim general `lib.d.ts` fidelity. A user redeclaration shadows
+the matching prelude slot. `keyof <pending computation>` is a **deferred keyof** node
 evaluated on demand (identical-node-only while deferred: rejects e.g. `x: T` against `keyof T`,
 matching tsc). Uppercase/Lowercase/Capitalize/Uncapitalize are evaluator intrinsics on string
 literals (distributing over unions; Rust char-wise case mapping — agrees with JS for the corpus,

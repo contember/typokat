@@ -18,4 +18,4 @@ decided work or status.
   the `14`–`17` scale era and profiling-gated relation/evaluator ideas.
 
 *(shipped/graduated: `benchmark-harness` → `tooling/bench/`; `minimal-prelude-slice` →
-backlog `38`.)*
+the shipped backlog `38` sprint.)*

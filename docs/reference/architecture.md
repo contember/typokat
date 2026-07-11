@@ -191,9 +191,11 @@ so it doesn't get silently folded into either neighbor.
 The implementation keeps type construction and relation queries separated because the interner
 requires `&mut Interner` while the relation engine borrows the store immutably:
 
-1. **Prelude unit.** `src/prelude.ts` is parsed, bound, reserved, and filled first in the same type
-   universe as the user program. The user pass keeps only lifetime-free resolved placeholders for
-   those declarations; string intrinsic aliases are then seeded to well-known marker types.
+1. **Prelude unit.** `src/prelude.ts` is parsed, bound, reserved, and checked first in the same type
+   universe as the user program. The user pass keeps lifetime-free resolved type placeholders and
+   the prelude's `DeclId → TypeId` value entries; string intrinsic aliases are then seeded to
+   well-known marker types. Ordinary slot-aware parent lookup keeps user value/type declarations
+   able to shadow their corresponding prelude slots independently.
 2. **Declaration fill.** Type declarations are reserve-then-fill. Interfaces, classes, conditional
    aliases, mapped aliases, and recursive object-literal aliases reserve stable ids before their
    bodies lower, so self and sibling references store ids rather than expanding inline. Generic

@@ -1,7 +1,7 @@
 ---
 id: 72
 title: Real-project preview readiness
-blocked-by: [./38-minimal-ambient-prelude.md, ./73-unsupported-surface-audit.md]
+blocked-by: [./73-unsupported-surface-audit.md]
 ---
 
 # 72 — Real-project preview readiness
@@ -34,19 +34,19 @@ Build one deliberately narrow, reusable vertical slice:
   the witness in one serial type universe. A dependency-free/local-only project is valid for this
   early gate; if WU0 selects one trivial package, only its pinned `types`/`exports` path enters the
   slice. General runtime-package, `@types`, and declaration-layout breadth stays in `15`;
-- consume the minimal ambient declarations needed by the witness through the canonical prelude
-  path from `38`; do not add an unrelated hard-coded global-name shim;
+- consume the minimal ambient declarations needed by the witness through the shipped canonical
+  prelude path; do not add an unrelated hard-coded global-name shim;
 - distinguish type diagnostics from explicit unsupported-surface notices, and never represent an
   unvisited in-scope AST form as a clean check (`73` owns the systematic guarantee);
 - emit a deterministic project summary suitable for differential comparison: roots checked,
   files checked/skipped, unsupported forms, unresolved modules, and diagnostics by code/file.
 
 WU0 must select and pin a genuinely small, public strict-TypeScript project whose ambient and
-language surface fits the shipped model plus backlog `38`. Record its repository URL, commit,
+language surface fits the shipped model plus the shipped bounded prelude. Record its repository URL, commit,
 lockfile digest, install command, tsconfig, TypeScript oracle version, and every exercised
 resolver/prelude feature before implementation. Reject candidates that require broad Node/Bun
 declarations, generic standard-library methods, or a large package graph: the preview must not
-silently expand `38` into a partial `lib.d.ts` or a project-specific shim.
+silently expand the bounded prelude into a partial `lib.d.ts` or a project-specific shim.
 
 `contember/deptective` commit `e953c79edc395f8933afaba3ad5b0c57c6afd676` remains the **later
 full-stack witness**, not the preview witness. It uses NodeNext, package `.d.ts`, Node/Bun ambient
