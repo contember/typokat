@@ -61,3 +61,11 @@ function lexicalFunctionCollision(): void {
   }
   value = "bad"; // error[TK2322]: Type 'string' is not assignable to type 'number'
 }
+
+function inferredVarRefreshesFlowMemo(flag: boolean): void {
+  if (flag) {
+    const before: unknown = later;
+    var later = 1;
+    const after: string = later; // error[TK2322]: Type 'number' is not assignable to type 'string'
+  }
+}
