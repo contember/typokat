@@ -18,7 +18,7 @@ type Exclude<T, U> = T extends U ? never : T;
 type Extract<T, U> = T extends U ? T : never;
 type Omit<T, K extends keyof any> = Pick<T, Exclude<keyof T, K>>;
 type NonNullable<T> = T extends null | undefined ? never : T;
-type ReturnType<T> = T extends (...args: never[]) => infer R ? R : never;
+type ReturnType<T extends (...args: never[]) => unknown> = T extends (...args: never[]) => infer R ? R : never;
 type Uppercase<S extends string> = intrinsic;
 type Lowercase<S extends string> = intrinsic;
 type Capitalize<S extends string> = intrinsic;

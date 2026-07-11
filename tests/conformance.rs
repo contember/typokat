@@ -95,7 +95,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b65_inference_candidate_policy", true),
     // Silent-FN quick wins (backlogs 67 and 66). Spec commit keeps each focused
     // corpus disabled; its implementation commit flips only its own directory.
-    ("b67_utility_alias_constraint", false),
+    ("b67_utility_alias_constraint", true),
     ("b66_protected_override_compat", false),
     // Backlog 38 minimal ambient prelude. WU1 commits this corpus disabled;
     // WU2 flips it on with the canonical prelude declarations.
