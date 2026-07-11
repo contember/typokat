@@ -24,10 +24,15 @@ decisions → reference → archive.
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 
+- [`sprint-2026-07-11-js-number-stringification.md`](sprints/sprint-2026-07-11-js-number-stringification.md) —
+  ECMA-exact numeric template stringification (backlog `30`).
+
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **JS-exact number stringification (`30`) is active** — focused boundary spec first,
+  then the shared formatter and an independent construction/matcher review.
 - **Minimal ambient prelude (`38`) shipped 2026-07-11** (archived:
   [`archive/sprint-2026-07-11-minimal-ambient-prelude.md`](archive/sprint-2026-07-11-minimal-ambient-prelude.md)) —
   the source-backed prelude now supplies a bounded `console`/numeric-`Math` value surface
