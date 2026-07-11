@@ -125,8 +125,13 @@ and validated the same way.
   <!-- div: id=flow/used-before-assigned dir=under scope=a-definite-assignment owner=../backlog/47-definite-assignment.md witness=../../tests/cases/m1_binder_inference -->
 - `TK2451` *cannot redeclare* — binder check, deferred; fixtures use unique names.
   <!-- div: id=binder/cannot-redeclare dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/m1_binder_inference -->
+- Duplicate function implementations are not rejected with `TK2300`/`TK2393`; the
+  existing M33 fallback can therefore expose the last implementation as the callable
+  type and suppress an independent call diagnostic. This predates declaration hoisting
+  and stays release-owned by backlog `18`.
+  <!-- div: id=binder/duplicate-function-implementation-call dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/sr_deferred_ledger/b18_duplicate_function_implementations.ts -->
 
-### Soundness-review deferred ledger (backlog `30`/`56`/`60`/`62`/`66`/`67`)
+### Soundness-review deferred ledger (backlog `18`/`30`/`56`/`60`/`62`/`66`/`67`/`76`)
 
 Known dropped-error (under-report) families from the 2026-07-07 cross-cutting review,
 each an open backlog item, pinned by the **disabled** `sr_deferred_ledger/` corpus

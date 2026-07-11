@@ -6,8 +6,9 @@ blocked-by: []
 
 # 18 — Duplicate identifier detection for object and interface members
 
-**Summary.** Missing `TK2300` duplicate-member detection lets conflicting declarations in one object
-or interface type pass silently.
+**Summary.** Missing duplicate-declaration diagnostics let conflicting members,
+block-scoped bindings, and function implementations pass silently; duplicate
+implementations can also hide independent call diagnostics.
 
 ## Problem
 
@@ -30,14 +31,22 @@ The same smell exists one level up, at scope level: `let x = 1; let x = 2;` pass
 (probe 2026-07-07; tsc: `TS2451 Cannot redeclare block-scoped variable`, on both declarations).
 Scoped here as the sibling check — same "duplicate declaration goes silent" family, binder-side.
 
+The backlog-74 WU3 review also proved that two function implementations plus a
+same-name `var` can select the last implementation as the visible callable. Besides
+the missing `TS2300`/`TS2393`, this can drop an independent `TS2345`; the disabled
+`sr_deferred_ledger/b18_duplicate_function_implementations.ts` fixture pins that
+soundness consequence.
+
 ## Approach / acceptance
 
-Add duplicate-member detection for object type literals and interfaces, reporting `TK2300` for names
-that occur more than once in the same member list when TypeScript would reject them; add `TK2451`
-for `let`/`const` redeclaration in one scope (function/class declaration merging stays legal — don't
-over-fire). Acceptance: fixture coverage for property/property and property/method duplicates in
-both object type literals and interfaces, plus block-scoped redeclare shapes, with behavior checked
-against `tsc --strict`.
+Add duplicate-member detection for object type literals and interfaces, reporting
+`TK2300` for names that occur more than once in the same member list when TypeScript
+would reject them; add `TK2451` for `let`/`const` redeclaration and the corresponding
+function-implementation/`var` conflict diagnostics (`TK2300`/`TK2393`/`TK2403`).
+Preserve legal declaration merging. Acceptance includes property/property and
+property/method duplicates, block-scoped redeclarations, duplicate function
+implementations, and proof that rejected duplicates cannot suppress independent call
+diagnostics, all checked against `tsc --strict`.
 
 ## Touch points
 
