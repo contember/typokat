@@ -18,3 +18,7 @@ function parameterCollision(parameterValue: string): void {
 function callableCollision(value: number): void {}
 var callableCollision: number;
 callableCollision("bad"); // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'
+
+const forwardConflictRead: number = forwardConflict; // error[TK2322]: Type 'string' is not assignable to type 'number'
+var forwardConflict: string;
+var forwardConflict: number;
