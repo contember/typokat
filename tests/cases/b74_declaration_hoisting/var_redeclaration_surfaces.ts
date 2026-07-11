@@ -22,3 +22,18 @@ callableCollision("bad"); // error[TK2345]: Argument of type 'string' is not ass
 const forwardConflictRead: number = forwardConflict; // error[TK2322]: Type 'string' is not assignable to type 'number'
 var forwardConflict: string;
 var forwardConflict: number;
+
+const mergedForwardWrong: string = mergedCallable(); // error[TK2322]: Type 'unknown' is not assignable to type 'string'
+function mergedCallable() {
+  return 1;
+}
+var mergedCallable;
+const mergedFinalWrong: string = mergedCallable(); // error[TK2322]: Type 'number' is not assignable to type 'string'
+mergedCallable("bad"); // error[TK2554]: Expected 0 arguments, but got 1
+
+function mergedAnnotated(value: number): number {
+  return value;
+}
+var mergedAnnotated;
+const mergedAnnotatedWrong: string = mergedAnnotated(1); // error[TK2322]: Type 'number' is not assignable to type 'string'
+mergedAnnotated("bad"); // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'
