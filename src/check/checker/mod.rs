@@ -736,6 +736,7 @@ fn build_pass<'a, 'ast>(
         class_fill,
         template_fill,
         decl_types,
+        var_annotation_surfaces: FxHashMap::default(),
         obligations: Vec::new(),
         override_checks: Vec::new(),
         diagnostics: Vec::new(),

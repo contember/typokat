@@ -107,4 +107,19 @@ impl ScopeGraph {
         }
         None
     }
+
+    /// The scope that owns a `var` declaration originating in `scope`.
+    /// Blocks and loop heads are skipped; a function boundary keeps nested
+    /// functions isolated and the module owns top-level `var`s.
+    pub fn var_scope(&self, scope: ScopeId) -> Option<ScopeId> {
+        let mut current = Some(scope);
+        while let Some(id) = current {
+            let current_scope = self.get(id)?;
+            if matches!(current_scope.kind, ScopeKind::Function | ScopeKind::Module) {
+                return Some(id);
+            }
+            current = current_scope.parent;
+        }
+        None
+    }
 }

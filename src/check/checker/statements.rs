@@ -16,7 +16,7 @@ use crate::types::WellKnown;
 use oxc_ast::ast::{
     BindingPattern, BlockStatement, Declaration, Expression, ForInStatement, ForOfStatement,
     ForStatement, ForStatementInit, ForStatementLeft, Function, Statement, TryStatement,
-    VariableDeclarationKind, VariableDeclarator,
+    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
@@ -47,6 +47,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         declared_ret: Option<TypeId>,
         inferred: &mut Option<TypeId>,
     ) {
+        // Explicit `var` annotations are visible throughout their containing
+        // function/module. The reservation does not inspect initializers or add flow.
+        self.reserve_var_annotation_surfaces(scope, statements);
         // The binder has already made every function name visible in this scope. Reserve
         // its callable signature before any executable statement can resolve that name;
         // bodies still fill at their source declaration, preserving outer type timing.
@@ -382,13 +385,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         declared_ret: Option<TypeId>,
         inferred: &mut Option<TypeId>,
     ) {
-        let block_scope = self
-            .binder
-            .block_scopes
-            .get(&(self.current_module, block.span.start))
-            .copied()
-            .unwrap_or(scope);
+        let block_scope = self.block_scope(scope, block.span.start);
         self.check_statement_list(block_scope, &block.body, declared_ret, inferred);
+    }
+
+    /// The lexical scope for a block-like container (an explicit block or switch).
+    /// A missing binder entry is defensive and preserves the enclosing scope.
+    fn block_scope(&self, scope: ScopeId, span_start: u32) -> ScopeId {
+        self.binder
+            .block_scopes
+            .get(&(self.current_module, span_start))
+            .copied()
+            .unwrap_or(scope)
     }
 
     /// The lexical scope the binder created for a loop's head (holding a `for (let i…)`
@@ -507,8 +515,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return;
         };
         for declarator in &decl.declarations {
-            if let Some(decl_id) = binding_decl_id(self.binder, scope, &declarator.id) {
-                self.decl_types.set(decl_id, element_ty);
+            if let Some(decl_id) =
+                variable_declaration_decl_id(self.binder, scope, decl.kind, &declarator.id)
+            {
+                let declared = match self.take_var_annotation_surface(decl.kind, Some(decl_id)) {
+                    Some(annotation) => annotation.unwrap_or(element_ty),
+                    None => element_ty,
+                };
+                self.publish_variable_decl_type(
+                    scope,
+                    decl.kind,
+                    &declarator.id,
+                    decl_id,
+                    declared,
+                );
             }
         }
     }
@@ -568,14 +588,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         kind: VariableDeclarationKind,
         declarator: &VariableDeclarator<'_>,
     ) {
-        let decl_id = binding_decl_id(self.binder, scope, &declarator.id);
+        let decl_id = variable_declaration_decl_id(self.binder, scope, kind, &declarator.id);
 
         // Lower the annotation first (independent of the initializer; emits no
         // initializer-dependent diagnostics) so it can provide a **tuple context** for an
         // array-literal initializer (M18 contextual typing).
-        let annotation = match declarator.type_annotation.as_ref() {
-            Some(ann) => self.lower_annotation(scope, &ann.type_annotation),
-            None => None,
+        let annotation = match self.take_var_annotation_surface(kind, decl_id) {
+            Some(annotation) => annotation,
+            None => match declarator.type_annotation.as_ref() {
+                Some(ann) => self.lower_annotation(scope, &ann.type_annotation),
+                None => None,
+            },
         };
 
         // Infer/check the initializer against the annotation, including M18 tuple
@@ -601,8 +624,184 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             (None, None) => None,
         };
         if let (Some(decl_id), Some(ty)) = (decl_id, declared) {
-            self.decl_types.set(decl_id, ty);
+            self.publish_variable_decl_type(scope, kind, &declarator.id, decl_id, ty);
         }
+    }
+
+    /// Reserve explicit `var` annotations from the complete lexical subtree of one
+    /// function/module. Nested functions and classes establish their own boundaries.
+    fn reserve_var_annotation_surfaces(&mut self, scope: ScopeId, statements: &[Statement<'_>]) {
+        for statement in statements {
+            self.reserve_var_annotation_statement(scope, statement);
+        }
+    }
+
+    fn reserve_var_annotation_statement(&mut self, scope: ScopeId, statement: &Statement<'_>) {
+        match statement {
+            Statement::VariableDeclaration(decl) => {
+                self.reserve_var_annotation_declaration(scope, decl);
+            }
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(Declaration::VariableDeclaration(decl)) = &export.declaration {
+                    self.reserve_var_annotation_declaration(scope, decl);
+                }
+            }
+            Statement::BlockStatement(block) => {
+                let block_scope = self.block_scope(scope, block.span.start);
+                self.reserve_var_annotation_surfaces(block_scope, &block.body);
+            }
+            Statement::IfStatement(if_stmt) => {
+                self.reserve_var_annotation_statement(scope, &if_stmt.consequent);
+                if let Some(alternate) = &if_stmt.alternate {
+                    self.reserve_var_annotation_statement(scope, alternate);
+                }
+            }
+            Statement::SwitchStatement(switch) => {
+                let switch_scope = self.block_scope(scope, switch.span.start);
+                for case in &switch.cases {
+                    self.reserve_var_annotation_surfaces(switch_scope, &case.consequent);
+                }
+            }
+            Statement::ForStatement(for_stmt) => {
+                let head = self.loop_head_scope(scope, for_stmt.span.start);
+                if let Some(ForStatementInit::VariableDeclaration(decl)) = &for_stmt.init {
+                    self.reserve_var_annotation_declaration(head, decl);
+                }
+                self.reserve_var_annotation_statement(head, &for_stmt.body);
+            }
+            Statement::ForInStatement(for_in) => {
+                let head = self.loop_head_scope(scope, for_in.span.start);
+                if let ForStatementLeft::VariableDeclaration(decl) = &for_in.left {
+                    self.reserve_var_annotation_declaration(head, decl);
+                }
+                self.reserve_var_annotation_statement(head, &for_in.body);
+            }
+            Statement::ForOfStatement(for_of) => {
+                let head = self.loop_head_scope(scope, for_of.span.start);
+                if let ForStatementLeft::VariableDeclaration(decl) = &for_of.left {
+                    self.reserve_var_annotation_declaration(head, decl);
+                }
+                self.reserve_var_annotation_statement(head, &for_of.body);
+            }
+            Statement::WhileStatement(while_stmt) => {
+                self.reserve_var_annotation_statement(scope, &while_stmt.body);
+            }
+            Statement::DoWhileStatement(do_stmt) => {
+                self.reserve_var_annotation_statement(scope, &do_stmt.body);
+            }
+            Statement::LabeledStatement(labeled) => {
+                self.reserve_var_annotation_statement(scope, &labeled.body);
+            }
+            Statement::TryStatement(try_stmt) => {
+                let try_scope = self.block_scope(scope, try_stmt.block.span.start);
+                self.reserve_var_annotation_surfaces(try_scope, &try_stmt.block.body);
+                if let Some(handler) = &try_stmt.handler {
+                    let handler_scope = self.block_scope(scope, handler.body.span.start);
+                    self.reserve_var_annotation_surfaces(handler_scope, &handler.body.body);
+                }
+                if let Some(finalizer) = &try_stmt.finalizer {
+                    let finalizer_scope = self.block_scope(scope, finalizer.span.start);
+                    self.reserve_var_annotation_surfaces(finalizer_scope, &finalizer.body);
+                }
+            }
+            // Function and class bodies own independent hoist containers.
+            Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => {}
+            _ => {}
+        }
+    }
+
+    fn reserve_var_annotation_declaration(
+        &mut self,
+        scope: ScopeId,
+        declaration: &VariableDeclaration<'_>,
+    ) {
+        if !declaration.kind.is_var() {
+            return;
+        }
+        for declarator in &declaration.declarations {
+            let Some(type_annotation) = &declarator.type_annotation else {
+                continue;
+            };
+            let Some(decl_id) =
+                variable_declaration_decl_id(self.binder, scope, declaration.kind, &declarator.id)
+            else {
+                continue;
+            };
+            if self.var_annotation_surfaces.contains_key(&decl_id) {
+                continue;
+            }
+            let diagnostics_start = self.diagnostics.len();
+            let incomplete_start = self.incomplete.len();
+            let annotation = self.lower_annotation(scope, &type_annotation.type_annotation);
+            let diagnostics = self.diagnostics.split_off(diagnostics_start);
+            let incomplete = self.incomplete.split_off(incomplete_start);
+            if let Some(annotation) = annotation {
+                self.publish_variable_decl_type(
+                    scope,
+                    declaration.kind,
+                    &declarator.id,
+                    decl_id,
+                    annotation,
+                );
+            }
+            self.var_annotation_surfaces.insert(
+                decl_id,
+                VarAnnotationSurface {
+                    annotation,
+                    diagnostics,
+                    incomplete,
+                },
+            );
+        }
+    }
+
+    /// Replay an explicit `var` annotation's staged records when source execution
+    /// reaches its declaration, returning the already-lowered annotation.
+    fn take_var_annotation_surface(
+        &mut self,
+        kind: VariableDeclarationKind,
+        decl_id: Option<DeclId>,
+    ) -> Option<Option<TypeId>> {
+        if !kind.is_var() {
+            return None;
+        }
+        let mut surface = self.var_annotation_surfaces.remove(&decl_id?)?;
+        self.diagnostics.append(&mut surface.diagnostics);
+        for record in std::mem::take(&mut surface.incomplete) {
+            if self
+                .incomplete
+                .iter()
+                .any(|existing| existing.id == record.id && existing.span == record.span)
+            {
+                continue;
+            }
+            self.incomplete.push(record);
+        }
+        Some(surface.annotation)
+    }
+
+    /// Publish a variable's type and discard only that symbol's stale flow reads.
+    /// An unannotated `var` changes from the defensive error type at its source
+    /// declaration, so a pre-declaration read must not survive in `flow_memo`.
+    fn publish_variable_decl_type(
+        &mut self,
+        scope: ScopeId,
+        kind: VariableDeclarationKind,
+        pattern: &BindingPattern<'_>,
+        decl_id: DeclId,
+        ty: TypeId,
+    ) {
+        let previous = self.decl_types.get(decl_id);
+        self.decl_types.set(decl_id, ty);
+        if previous == Some(ty) {
+            return;
+        }
+        let Some(symbol_id) = variable_declaration_symbol_id(self.binder, scope, kind, pattern)
+        else {
+            return;
+        };
+        self.flow_memo
+            .retain(|(_, memo_symbol), _| *memo_symbol != symbol_id);
     }
 
     /// Reserve every direct function declaration in a statement list before any of
@@ -971,6 +1170,41 @@ fn parameter_compatible(
         relater.is_assignable(overload.ty, implementation.ty),
         Relation::Yes
     )
+}
+
+/// Resolve a variable declarator's symbol from its declaration-owning scope. A
+/// lexical shadow may affect initializer lookup, but never the identity of a `var`.
+fn variable_declaration_decl_id(
+    binder: &crate::binder::Binder,
+    scope: ScopeId,
+    kind: VariableDeclarationKind,
+    pattern: &BindingPattern<'_>,
+) -> Option<DeclId> {
+    let declaration_scope = if kind.is_var() {
+        binder.graph.var_scope(scope).unwrap_or(scope)
+    } else {
+        scope
+    };
+    binding_decl_id(binder, declaration_scope, pattern)
+}
+
+fn variable_declaration_symbol_id(
+    binder: &crate::binder::Binder,
+    scope: ScopeId,
+    kind: VariableDeclarationKind,
+    pattern: &BindingPattern<'_>,
+) -> Option<crate::binder::symbol::SymbolId> {
+    let BindingPattern::BindingIdentifier(identifier) = pattern else {
+        return None;
+    };
+    let declaration_scope = if kind.is_var() {
+        binder.graph.var_scope(scope).unwrap_or(scope)
+    } else {
+        scope
+    };
+    binder
+        .graph
+        .resolve(declaration_scope, identifier.name.as_str())
 }
 
 fn function_overload_group<'stmt>(

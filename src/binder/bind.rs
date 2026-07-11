@@ -8,7 +8,8 @@ use crate::binder::symbol::{DeclId, Symbol, SymbolId, SymbolTable};
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, BlockStatement, Class, ClassElement, Declaration,
     Expression, ForStatement, ForStatementInit, ForStatementLeft, FormalParameters, Function,
-    FunctionBody, Program, Statement, SwitchStatement, TryStatement, VariableDeclarator,
+    FunctionBody, Program, Statement, SwitchStatement, TryStatement, VariableDeclarationKind,
+    VariableDeclarator,
 };
 use rustc_hash::FxHashMap;
 
@@ -284,7 +285,7 @@ fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
     match stmt {
         Statement::VariableDeclaration(decl) => {
             for declarator in &decl.declarations {
-                bind_declarator(state, scope, declarator);
+                bind_declarator(state, scope, decl.kind, declarator);
             }
         }
         Statement::FunctionDeclaration(func) => {
@@ -397,7 +398,7 @@ fn bind_declaration(state: &mut BindState, scope: ScopeId, decl: &Declaration<'_
     match decl {
         Declaration::VariableDeclaration(var) => {
             for declarator in &var.declarations {
-                bind_declarator(state, scope, declarator);
+                bind_declarator(state, scope, var.kind, declarator);
             }
         }
         Declaration::FunctionDeclaration(func) => {
@@ -456,7 +457,7 @@ fn bind_for(state: &mut BindState, parent: ScopeId, for_stmt: &ForStatement<'_>)
         match init {
             ForStatementInit::VariableDeclaration(decl) => {
                 for declarator in &decl.declarations {
-                    bind_declarator(state, head, declarator);
+                    bind_declarator(state, head, decl.kind, declarator);
                 }
             }
             other => {
@@ -493,18 +494,28 @@ fn bind_for_in_of(
     bind_expression(state, parent, right);
     if let ForStatementLeft::VariableDeclaration(decl) = left {
         for declarator in &decl.declarations {
-            bind_declarator(state, head, declarator);
+            bind_declarator(state, head, decl.kind, declarator);
         }
     }
     bind_statement(state, head, body);
 }
 
-/// Bind a variable declarator: declare its identifier (if a plain identifier) in
-/// `scope`, then recurse into the initializer for nested functions.
-fn bind_declarator(state: &mut BindState, scope: ScopeId, declarator: &VariableDeclarator<'_>) {
+/// Bind a variable declarator: a `var` name targets its nearest function/module,
+/// while the initializer remains in the original lexical scope.
+fn bind_declarator(
+    state: &mut BindState,
+    scope: ScopeId,
+    kind: VariableDeclarationKind,
+    declarator: &VariableDeclarator<'_>,
+) {
+    let declaration_scope = if kind.is_var() {
+        state.graph.var_scope(scope).unwrap_or(scope)
+    } else {
+        scope
+    };
     if let Some(name) = binding_name(&declarator.id) {
         let decl_id = state.fresh_decl();
-        declare_value(state, scope, name, decl_id);
+        declare_value(state, declaration_scope, name, decl_id);
     }
     if let Some(init) = &declarator.init {
         bind_expression(state, scope, init);
@@ -860,5 +871,65 @@ mod tests {
             .unwrap()
             .lookup_local("inner")
             .is_none());
+    }
+
+    #[test]
+    fn var_bindings_target_the_nearest_function_or_module_scope() {
+        let binder = bind(
+            "{ var module_var = 1; let module_let = 1; } \
+             function outer() { \
+               if (true) { var from_if = 1; } \
+               for (var from_for = 0; false;) {} \
+               for (var from_in in { key: 1 }) {} \
+               for (var from_of of [1]) {} \
+               while (false) { var from_while = 1; } \
+               switch (1) { case 1: var from_switch = 1; break; } \
+               { let block_let = 1; const block_const = 2; } \
+               function inner() { { var inner_only = 1; } } \
+             }",
+        );
+
+        let module_scope = binder.graph.get(binder.module).expect("module scope");
+        assert!(module_scope.lookup_local("module_var").is_some());
+        assert!(module_scope.lookup_local("module_let").is_none());
+
+        let outer_scope = binder
+            .fn_scopes
+            .values()
+            .copied()
+            .find(|scope| {
+                binder
+                    .graph
+                    .get(*scope)
+                    .is_some_and(|scope| scope.lookup_local("from_if").is_some())
+            })
+            .expect("outer function scope");
+        let outer = binder.graph.get(outer_scope).expect("outer scope");
+        for name in [
+            "from_if",
+            "from_for",
+            "from_in",
+            "from_of",
+            "from_while",
+            "from_switch",
+        ] {
+            assert!(outer.lookup_local(name).is_some(), "{name} in outer scope");
+        }
+        assert!(outer.lookup_local("block_let").is_none());
+        assert!(outer.lookup_local("block_const").is_none());
+        assert!(outer.lookup_local("inner_only").is_none());
+
+        let inner_scope = binder
+            .fn_scopes
+            .values()
+            .copied()
+            .find(|scope| {
+                binder
+                    .graph
+                    .get(*scope)
+                    .is_some_and(|scope| scope.lookup_local("inner_only").is_some())
+            })
+            .expect("inner function scope");
+        assert_ne!(outer_scope, inner_scope);
     }
 }

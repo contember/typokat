@@ -98,6 +98,14 @@ pub(in crate::check::checker) struct FunctionSurface {
     pub(in crate::check::checker) incomplete: Vec<IncompleteSurface>,
 }
 
+/// An explicit `var` annotation lowered before executable checking. The type makes
+/// the hoisted binding usable, while records wait for the declaration position.
+pub(in crate::check::checker) struct VarAnnotationSurface {
+    pub(in crate::check::checker) annotation: Option<TypeId>,
+    pub(in crate::check::checker) diagnostics: Vec<Diagnostic>,
+    pub(in crate::check::checker) incomplete: Vec<IncompleteSurface>,
+}
+
 /// A top-level type declaration's reserve-then-fill plan, indexed by type-space
 /// `DeclId`. Generic declarations carry ordered type-parameter ids and resolve to
 /// templates instantiated by substitution.
@@ -243,6 +251,9 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// by `Filling` so out-of-scope `extends` cycles terminate.
     pub(in crate::check::checker) template_fill: Vec<ClassFillState>,
     pub(in crate::check::checker) decl_types: DeclTypes,
+    /// Explicit `var` annotations reserved across one function/module hoist
+    /// container, keyed by the binder's existing value declaration identity.
+    pub(in crate::check::checker) var_annotation_surfaces: FxHashMap<DeclId, VarAnnotationSurface>,
     pub(in crate::check::checker) obligations: Vec<AssignObligation>,
     /// Backlog 06 — pending class-member override-compatibility checks (`TK2416`),
     /// collected in [`fill_class`] and decided in phase 2 (see [`OverrideCheck`]).
