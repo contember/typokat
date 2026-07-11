@@ -65,12 +65,21 @@ fn resolve_value_symbol(
     scope: ScopeId,
     name: &str,
 ) -> Option<SymbolId> {
-    graph.resolve_matching(scope, name, |symbol_id| {
-        symbols
-            .get(symbol_id)
-            .and_then(|symbol| symbol.value)
-            .is_some()
-    })
+    let mut current = Some(scope);
+    while let Some(id) = current {
+        let current_scope = graph.get(id)?;
+        if let Some(symbol_id) = current_scope.lookup_local(name) {
+            let symbol = symbols.get(symbol_id)?;
+            if symbol.value.is_some() {
+                return Some(symbol_id);
+            }
+            if symbol.blocks_value_lookup {
+                return None;
+            }
+        }
+        current = current_scope.parent;
+    }
+    None
 }
 
 fn resolve_type_symbol(
@@ -92,6 +101,7 @@ pub(crate) struct ImportedSymbol {
     name: String,
     value: Option<ImportedSlot>,
     ty: Option<ImportedSlot>,
+    value_barrier: bool,
 }
 
 impl ImportedSymbol {
@@ -100,6 +110,17 @@ impl ImportedSymbol {
             name,
             value: value.map(ImportedSlot::Existing),
             ty: ty.map(ImportedSlot::Existing),
+            value_barrier: false,
+        }
+    }
+
+    /// Keep imports whose source value is erased from reaching a parent value slot.
+    pub(crate) fn value_lookup_barrier(name: String, ty: Option<DeclId>) -> Self {
+        ImportedSymbol {
+            name,
+            value: None,
+            ty: ty.map(ImportedSlot::Existing),
+            value_barrier: true,
         }
     }
 
@@ -108,6 +129,7 @@ impl ImportedSymbol {
             name,
             value: None,
             ty: Some(ImportedSlot::Placeholder),
+            value_barrier: false,
         }
     }
 
@@ -116,6 +138,7 @@ impl ImportedSymbol {
             name,
             value: Some(ImportedSlot::Placeholder),
             ty: Some(ImportedSlot::Placeholder),
+            value_barrier: false,
         }
     }
 }
@@ -223,6 +246,7 @@ impl ProjectBinderBuilder {
                 &import.name,
                 &import.value,
                 &import.ty,
+                import.value_barrier,
             ));
         }
         bind_type_declarations(&mut self.state, module, &program.body);
@@ -244,18 +268,31 @@ impl ProjectBinderBuilder {
         }
     }
 
-    pub(crate) fn symbol_slots(
+    /// Return only slots declared directly by this module, never inherited ones.
+    /// Export lists use this to avoid leaking the ambient prelude across modules.
+    pub(crate) fn local_symbol_slots(
         &self,
         scope: ScopeId,
         name: &str,
     ) -> (Option<DeclId>, Option<DeclId>) {
-        let value = resolve_value_symbol(&self.state.graph, &self.state.symbols, scope, name)
+        self.state
+            .graph
+            .get(scope)
+            .and_then(|scope| scope.lookup_local(name))
             .and_then(|symbol_id| self.state.symbols.get(symbol_id))
-            .and_then(|symbol| symbol.value);
-        let ty = resolve_type_symbol(&self.state.graph, &self.state.symbols, scope, name)
+            .map(|symbol| (symbol.value, symbol.ty))
+            .unwrap_or((None, None))
+    }
+
+    /// Whether a local imported name blocks parent value lookup after its source
+    /// erased a value export. Re-export lists preserve this provenance.
+    pub(crate) fn local_value_lookup_barrier(&self, scope: ScopeId, name: &str) -> bool {
+        self.state
+            .graph
+            .get(scope)
+            .and_then(|scope| scope.lookup_local(name))
             .and_then(|symbol_id| self.state.symbols.get(symbol_id))
-            .and_then(|symbol| symbol.ty);
-        (value, ty)
+            .is_some_and(|symbol| symbol.blocks_value_lookup)
     }
 }
 
@@ -780,6 +817,7 @@ fn declare_import(
     name: &str,
     value: &Option<ImportedSlot>,
     ty: &Option<ImportedSlot>,
+    value_barrier: bool,
 ) -> ImportPlaceholder {
     let (value_decl, value_placeholder) = match value {
         Some(ImportedSlot::Existing(decl_id)) => (Some(*decl_id), None),
@@ -801,6 +839,7 @@ fn declare_import(
         if let Some(symbol) = state.symbols.get_mut(existing) {
             symbol.value = value_decl;
             symbol.ty = type_decl;
+            symbol.blocks_value_lookup = value_barrier;
         }
         return ImportPlaceholder {
             value: value_placeholder,
@@ -810,6 +849,7 @@ fn declare_import(
     let mut symbol = Symbol::new(name);
     symbol.value = value_decl;
     symbol.ty = type_decl;
+    symbol.blocks_value_lookup = value_barrier;
     let symbol_id: SymbolId = state.symbols.push(symbol);
     state.graph.declare(scope, name, symbol_id);
     ImportPlaceholder {

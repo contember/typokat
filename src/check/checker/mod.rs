@@ -262,6 +262,9 @@ pub enum ProjectImportSource {
 struct ExportedSlots {
     value: Option<DeclId>,
     ty: Option<DeclId>,
+    /// A type-only export hid a real local value slot. Imports must keep its
+    /// runtime barrier even though no value declaration crosses the boundary.
+    value_erased: bool,
 }
 
 type ExportSurface = BTreeMap<String, ExportedSlots>;
@@ -454,8 +457,21 @@ fn imported_symbols(
                     .copied();
                 match slots {
                     Some(slots) => {
-                        let value = if import.type_only { None } else { slots.value };
-                        imports.push(ImportedSymbol::new(import.local.clone(), value, slots.ty));
+                        let value_barrier =
+                            slots.value_erased || (import.type_only && slots.value.is_some());
+                        if value_barrier {
+                            imports.push(ImportedSymbol::value_lookup_barrier(
+                                import.local.clone(),
+                                slots.ty,
+                            ));
+                        } else {
+                            let value = if import.type_only { None } else { slots.value };
+                            imports.push(ImportedSymbol::new(
+                                import.local.clone(),
+                                value,
+                                slots.ty,
+                            ));
+                        }
                     }
                     None => {
                         diagnostics.push(Diagnostic::no_exported_member(
@@ -525,30 +541,65 @@ fn collect_declaration_export(
         Declaration::VariableDeclaration(var) => {
             for declarator in &var.declarations {
                 if let Some(name) = binding_name(&declarator.id) {
-                    let (value, _) = builder.symbol_slots(scope, name);
-                    surface.insert(name.to_string(), ExportedSlots { value, ty: None });
+                    let (value, _) = builder.local_symbol_slots(scope, name);
+                    surface.insert(
+                        name.to_string(),
+                        ExportedSlots {
+                            value,
+                            ty: None,
+                            value_erased: false,
+                        },
+                    );
                 }
             }
         }
         Declaration::FunctionDeclaration(func) => {
             if let Some(id) = &func.id {
-                let (value, _) = builder.symbol_slots(scope, id.name.as_str());
-                surface.insert(id.name.to_string(), ExportedSlots { value, ty: None });
+                let (value, _) = builder.local_symbol_slots(scope, id.name.as_str());
+                surface.insert(
+                    id.name.to_string(),
+                    ExportedSlots {
+                        value,
+                        ty: None,
+                        value_erased: false,
+                    },
+                );
             }
         }
         Declaration::ClassDeclaration(class) => {
             if let Some(id) = &class.id {
-                let (value, ty) = builder.symbol_slots(scope, id.name.as_str());
-                surface.insert(id.name.to_string(), ExportedSlots { value, ty });
+                let (value, ty) = builder.local_symbol_slots(scope, id.name.as_str());
+                surface.insert(
+                    id.name.to_string(),
+                    ExportedSlots {
+                        value,
+                        ty,
+                        value_erased: false,
+                    },
+                );
             }
         }
         Declaration::TSTypeAliasDeclaration(alias) => {
-            let (_, ty) = builder.symbol_slots(scope, alias.id.name.as_str());
-            surface.insert(alias.id.name.to_string(), ExportedSlots { value: None, ty });
+            let (_, ty) = builder.local_symbol_slots(scope, alias.id.name.as_str());
+            surface.insert(
+                alias.id.name.to_string(),
+                ExportedSlots {
+                    value: None,
+                    ty,
+                    value_erased: false,
+                },
+            );
         }
         Declaration::TSInterfaceDeclaration(iface) => {
-            let (_, ty) = builder.symbol_slots(scope, iface.id.name.as_str());
-            surface.insert(iface.id.name.to_string(), ExportedSlots { value: None, ty });
+            let (_, ty) = builder.local_symbol_slots(scope, iface.id.name.as_str());
+            surface.insert(
+                iface.id.name.to_string(),
+                ExportedSlots {
+                    value: None,
+                    ty,
+                    value_erased: false,
+                },
+            );
         }
         _ => {}
     }
@@ -568,10 +619,11 @@ fn collect_list_export(
     let Some(exported) = module_export_name(&specifier.exported) else {
         return;
     };
-    let (mut value, ty) = builder.symbol_slots(scope, local);
+    let (mut value, ty) = builder.local_symbol_slots(scope, local);
+    let local_value_barrier = builder.local_value_lookup_barrier(scope, local);
     // Existence is judged against the real symbol; a value-only local is still a
     // valid `export type { x }` target (the error surfaces on the importer, below).
-    if value.is_none() && ty.is_none() {
+    if value.is_none() && ty.is_none() && !local_value_barrier {
         diagnostics.push(Diagnostic::cannot_find_name(
             Span::from_oxc(specifier.local.span()),
             local,
@@ -582,10 +634,18 @@ fn collect_list_export(
     // supply a runtime value — suppress the value slot so a non-type-only import
     // cannot use it as a value (tsc TS1362; M29 stand-in is TK2304 on the importer).
     let type_only = outer_type_only || specifier.export_kind == ImportOrExportKind::Type;
+    let value_erased = local_value_barrier || (type_only && value.is_some());
     if type_only {
         value = None;
     }
-    surface.insert(exported.to_string(), ExportedSlots { value, ty });
+    surface.insert(
+        exported.to_string(),
+        ExportedSlots {
+            value,
+            ty,
+            value_erased,
+        },
+    );
 }
 
 fn module_export_name<'ast>(name: &'ast ModuleExportName<'ast>) -> Option<&'ast str> {

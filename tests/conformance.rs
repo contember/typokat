@@ -98,7 +98,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b38_minimal_ambient_prelude", true),
     // Backlog 38 follow-up: prelude lookup must not cross a type-only import
     // barrier or a module export boundary. Project-shaped; see PROJECT_DIRS.
-    ("b38_prelude_lookup_boundaries", false),
+    ("b38_prelude_lookup_boundaries", true),
     // Soundness-review-fixes sprint (2026-07-10) WU0 corpora. Each is committed
     // `false` (behavior-neutral spec); WU1-WU3 flip only their own dir when the
     // fix lands, the deferred-ledger dir stays `false` beyond this sprint. See

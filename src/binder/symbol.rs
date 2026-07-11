@@ -34,6 +34,9 @@ pub struct Symbol {
     pub name: String,
     /// Value-space declaration (`const`/`let`/`var`/`function`/`class` value side).
     pub value: Option<DeclId>,
+    /// An import whose source value is erased must hide parent value slots. Ordinary
+    /// type-only declarations leave this false, so cross-space lookup still falls through.
+    pub blocks_value_lookup: bool,
     /// Function declarations for this value symbol, in source order.
     ///
     /// Empty for non-function values. Overload checking uses this ordered list to
@@ -54,6 +57,7 @@ impl Symbol {
         Symbol {
             name: name.into(),
             value: None,
+            blocks_value_lookup: false,
             function_values: Vec::new(),
             ty: None,
             ns: None,
