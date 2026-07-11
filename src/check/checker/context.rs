@@ -106,6 +106,14 @@ pub(in crate::check::checker) struct VarAnnotationSurface {
     pub(in crate::check::checker) incomplete: Vec<IncompleteSurface>,
 }
 
+/// Whether a shared `var` declaration type is only a forward annotation, comes
+/// from its first source declarator, or belongs to an earlier non-`var` binding.
+pub(in crate::check::checker) enum VarValueTypeState {
+    Provisional,
+    Source,
+    Existing,
+}
+
 /// A top-level type declaration's reserve-then-fill plan, indexed by type-space
 /// `DeclId`. Generic declarations carry ordered type-parameter ids and resolve to
 /// templates instantiated by substitution.
@@ -252,8 +260,12 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     pub(in crate::check::checker) template_fill: Vec<ClassFillState>,
     pub(in crate::check::checker) decl_types: DeclTypes,
     /// Explicit `var` annotations reserved across one function/module hoist
-    /// container, keyed by the binder's existing value declaration identity.
-    pub(in crate::check::checker) var_annotation_surfaces: FxHashMap<DeclId, VarAnnotationSurface>,
+    /// container, keyed by their own `(module, declarator span)` source site.
+    pub(in crate::check::checker) var_annotation_surfaces:
+        FxHashMap<(ScopeId, u32), VarAnnotationSurface>,
+    /// Publication state for each shared `var` value declaration. This keeps a
+    /// forward annotation provisional without overwriting a parameter type.
+    pub(in crate::check::checker) var_value_type_states: FxHashMap<DeclId, VarValueTypeState>,
     pub(in crate::check::checker) obligations: Vec<AssignObligation>,
     /// Backlog 06 — pending class-member override-compatibility checks (`TK2416`),
     /// collected in [`fill_class`] and decided in phase 2 (see [`OverrideCheck`]).

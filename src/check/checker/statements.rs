@@ -6,7 +6,7 @@ use super::assignment::declared_from_init;
 use super::calls::widen;
 use super::context::*;
 use crate::binder::scope::ScopeId;
-use crate::binder::symbol::DeclId;
+use crate::binder::symbol::{DeclId, SymbolId};
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::{Reason, ReasonChain, Relater, Relation};
 use crate::span::Span;
@@ -47,13 +47,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         declared_ret: Option<TypeId>,
         inferred: &mut Option<TypeId>,
     ) {
-        // Explicit `var` annotations are visible throughout their containing
-        // function/module. The reservation does not inspect initializers or add flow.
-        self.reserve_var_annotation_surfaces(scope, statements);
         // The binder has already made every function name visible in this scope. Reserve
         // its callable signature before any executable statement can resolve that name;
         // bodies still fill at their source declaration, preserving outer type timing.
         let mut surfaces = self.reserve_function_surfaces(scope, statements);
+        // Explicit `var` annotations are visible throughout their containing
+        // function/module. The reservation does not inspect initializers or add flow.
+        self.reserve_var_annotation_surfaces(scope, statements);
         self.check_statement_list_with_surfaces(
             scope,
             statements,
@@ -518,7 +518,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             if let Some(decl_id) =
                 variable_declaration_decl_id(self.binder, scope, decl.kind, &declarator.id)
             {
-                let declared = match self.take_var_annotation_surface(decl.kind, Some(decl_id)) {
+                let declared = match self.take_var_annotation_surface(decl.kind, declarator) {
                     Some(annotation) => annotation.unwrap_or(element_ty),
                     None => element_ty,
                 };
@@ -593,7 +593,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Lower the annotation first (independent of the initializer; emits no
         // initializer-dependent diagnostics) so it can provide a **tuple context** for an
         // array-literal initializer (M18 contextual typing).
-        let annotation = match self.take_var_annotation_surface(kind, decl_id) {
+        let annotation = match self.take_var_annotation_surface(kind, declarator) {
             Some(annotation) => annotation,
             None => match declarator.type_annotation.as_ref() {
                 Some(ann) => self.lower_annotation(scope, &ann.type_annotation),
@@ -727,7 +727,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             else {
                 continue;
             };
-            if self.var_annotation_surfaces.contains_key(&decl_id) {
+            let surface_key = (self.current_module, declarator.span.start);
+            if self.var_annotation_surfaces.contains_key(&surface_key) {
                 continue;
             }
             let diagnostics_start = self.diagnostics.len();
@@ -736,7 +737,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let diagnostics = self.diagnostics.split_off(diagnostics_start);
             let incomplete = self.incomplete.split_off(incomplete_start);
             if let Some(annotation) = annotation {
-                self.publish_variable_decl_type(
+                self.reserve_variable_annotation_type(
                     scope,
                     declaration.kind,
                     &declarator.id,
@@ -745,7 +746,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 );
             }
             self.var_annotation_surfaces.insert(
-                decl_id,
+                surface_key,
                 VarAnnotationSurface {
                     annotation,
                     diagnostics,
@@ -760,12 +761,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn take_var_annotation_surface(
         &mut self,
         kind: VariableDeclarationKind,
-        decl_id: Option<DeclId>,
+        declarator: &VariableDeclarator<'_>,
     ) -> Option<Option<TypeId>> {
         if !kind.is_var() {
             return None;
         }
-        let mut surface = self.var_annotation_surfaces.remove(&decl_id?)?;
+        let mut surface = self
+            .var_annotation_surfaces
+            .remove(&(self.current_module, declarator.span.start))?;
         self.diagnostics.append(&mut surface.diagnostics);
         for record in std::mem::take(&mut surface.incomplete) {
             if self
@@ -784,6 +787,91 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// An unannotated `var` changes from the defensive error type at its source
     /// declaration, so a pre-declaration read must not survive in `flow_memo`.
     fn publish_variable_decl_type(
+        &mut self,
+        scope: ScopeId,
+        kind: VariableDeclarationKind,
+        pattern: &BindingPattern<'_>,
+        decl_id: DeclId,
+        ty: TypeId,
+    ) {
+        if kind.is_var() {
+            if let Some(function_ty) = self.function_value_type_for_var(scope, kind, pattern) {
+                self.set_variable_decl_type(scope, kind, pattern, decl_id, function_ty);
+                self.var_value_type_states
+                    .insert(decl_id, VarValueTypeState::Existing);
+                return;
+            }
+            match self.var_value_type_states.get(&decl_id) {
+                Some(VarValueTypeState::Source) | Some(VarValueTypeState::Existing) => {
+                    return;
+                }
+                Some(VarValueTypeState::Provisional) => {}
+                None if self.decl_types.get(decl_id).is_some() => {
+                    self.var_value_type_states
+                        .insert(decl_id, VarValueTypeState::Existing);
+                    return;
+                }
+                None => {}
+            }
+        }
+        self.set_variable_decl_type(scope, kind, pattern, decl_id, ty);
+        if kind.is_var() {
+            self.var_value_type_states
+                .insert(decl_id, VarValueTypeState::Source);
+        }
+    }
+
+    /// Make an explicit `var` annotation available before execution without making
+    /// it the shared value type until its own source declarator is checked.
+    fn reserve_variable_annotation_type(
+        &mut self,
+        scope: ScopeId,
+        kind: VariableDeclarationKind,
+        pattern: &BindingPattern<'_>,
+        decl_id: DeclId,
+        ty: TypeId,
+    ) {
+        if let Some(function_ty) = self.function_value_type_for_var(scope, kind, pattern) {
+            self.set_variable_decl_type(scope, kind, pattern, decl_id, function_ty);
+            self.var_value_type_states
+                .insert(decl_id, VarValueTypeState::Existing);
+            return;
+        }
+        match self.var_value_type_states.get(&decl_id) {
+            Some(VarValueTypeState::Source) | Some(VarValueTypeState::Existing) => return,
+            Some(VarValueTypeState::Provisional) => return,
+            None if self.decl_types.get(decl_id).is_some() => {
+                self.var_value_type_states
+                    .insert(decl_id, VarValueTypeState::Existing);
+                return;
+            }
+            None => {}
+        }
+        self.set_variable_decl_type(scope, kind, pattern, decl_id, ty);
+        self.var_value_type_states
+            .insert(decl_id, VarValueTypeState::Provisional);
+    }
+
+    /// A `var` merged with a function keeps the callable surface in the value slot.
+    fn function_value_type_for_var(
+        &self,
+        scope: ScopeId,
+        kind: VariableDeclarationKind,
+        pattern: &BindingPattern<'_>,
+    ) -> Option<TypeId> {
+        if !kind.is_var() {
+            return None;
+        }
+        let symbol_id = variable_declaration_symbol_id(self.binder, scope, kind, pattern)?;
+        let symbol = self.binder.symbols.get(symbol_id)?;
+        symbol
+            .function_values
+            .iter()
+            .rev()
+            .find_map(|decl_id| self.decl_types.get(*decl_id))
+    }
+
+    fn set_variable_decl_type(
         &mut self,
         scope: ScopeId,
         kind: VariableDeclarationKind,
@@ -907,25 +995,38 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         type_params: &[crate::types::repr::TypeParamId],
     ) {
         if let Some(decl_id) = self.function_decl_id(func) {
-            let previous = self.decl_types.get(decl_id);
-            self.decl_types.set(decl_id, function_ty);
-            if previous.is_some() && previous != Some(function_ty) {
-                if let Some(symbol_id) = func
-                    .id
-                    .as_ref()
-                    .and_then(|id| self.binder.graph.resolve(scope, id.name.as_str()))
+            if let Some(symbol_id) = func
+                .id
+                .as_ref()
+                .and_then(|id| self.binder.graph.resolve(scope, id.name.as_str()))
+            {
+                self.publish_symbol_value_type(decl_id, function_ty, symbol_id);
+                if let Some(merged_decl) = self
+                    .binder
+                    .symbols
+                    .get(symbol_id)
+                    .and_then(|symbol| symbol.value)
                 {
-                    // A non-START read may have memoized the reserved callable type.
-                    // Drop only this symbol's entries so the CFG recomputes from the
-                    // final declaration type without weakening unrelated flow facts.
-                    self.flow_memo
-                        .retain(|(_, memo_symbol), _| *memo_symbol != symbol_id);
+                    self.publish_symbol_value_type(merged_decl, function_ty, symbol_id);
                 }
+            } else {
+                self.decl_types.set(decl_id, function_ty);
             }
             if !type_params.is_empty() {
                 self.generic_sig_params
                     .insert(function_ty, type_params.to_vec());
             }
+        }
+    }
+
+    /// Publish a callable type into one declaration sharing `symbol_id`, evicting
+    /// only that symbol's stale flow results when its visible type changes.
+    fn publish_symbol_value_type(&mut self, decl_id: DeclId, ty: TypeId, symbol_id: SymbolId) {
+        let previous = self.decl_types.get(decl_id);
+        self.decl_types.set(decl_id, ty);
+        if previous != Some(ty) {
+            self.flow_memo
+                .retain(|(_, memo_symbol), _| *memo_symbol != symbol_id);
         }
     }
 
@@ -1067,18 +1168,25 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         implementation_decl: Option<DeclId>,
         overload_ty: TypeId,
     ) {
-        if let Some(implementation_decl) = implementation_decl {
-            self.decl_types.set(implementation_decl, overload_ty);
-        }
         if let Some(symbol_id) = self.binder.graph.resolve(scope, name) {
             if let Some(symbol) = self.binder.symbols.get(symbol_id) {
-                for decl_id in &symbol.function_values {
-                    if Some(*decl_id) == implementation_decl {
+                let function_values = symbol.function_values.clone();
+                let merged_decl = symbol.value;
+                if let Some(implementation_decl) = implementation_decl {
+                    self.publish_symbol_value_type(implementation_decl, overload_ty, symbol_id);
+                }
+                for decl_id in function_values {
+                    if Some(decl_id) == implementation_decl {
                         continue;
                     }
-                    self.decl_types.set(*decl_id, overload_ty);
+                    self.publish_symbol_value_type(decl_id, overload_ty, symbol_id);
+                }
+                if let Some(merged_decl) = merged_decl {
+                    self.publish_symbol_value_type(merged_decl, overload_ty, symbol_id);
                 }
             }
+        } else if let Some(implementation_decl) = implementation_decl {
+            self.decl_types.set(implementation_decl, overload_ty);
         }
     }
 
