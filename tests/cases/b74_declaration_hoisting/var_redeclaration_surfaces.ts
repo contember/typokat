@@ -37,3 +37,12 @@ function mergedAnnotated(value: number): number {
 var mergedAnnotated;
 const mergedAnnotatedWrong: string = mergedAnnotated(1); // error[TK2322]: Type 'number' is not assignable to type 'string'
 mergedAnnotated("bad"); // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'
+
+function mergedOverload(value: string): string;
+function mergedOverload(value: number): number;
+function mergedOverload(value: string | number): string | number {
+  return value;
+}
+var mergedOverload;
+const mergedOverloadWrong: string = mergedOverload(1); // error[TK2322]: Type 'number' is not assignable to type 'string'
+mergedOverload(true); // error[TK2769]: No overload matches this call
