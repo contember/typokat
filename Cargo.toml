@@ -25,6 +25,9 @@ oxc_ast = "0.137.0"
 oxc_allocator = "0.137.0"
 oxc_span = "0.137.0"
 
+# ECMAScript Number::toString formatting for numeric template literal construction.
+dragonbox_ecma = "0.1.12"
+
 # FxHashMap / FxHashSet for the interner dedup map and the relation cache/stack.
 rustc-hash = "2.1.2"
 

@@ -236,10 +236,10 @@ fn literal_segment(lit: &LiteralValue) -> String {
 }
 
 /// Whether a segment is a **decimal** numeric string a `` `${number}` `` hole accepts
-/// (M27): digits with at most one interior decimal point, and — to stay sound against
-/// tsc's `String(Number(s)) === s` rule — no redundant leading/trailing zeros (checked by
-/// re-stringifying). Scientific / signed / `Infinity` / `NaN` forms are conservatively
-/// rejected (over-report, documented).
+/// (M27): digits with at most one interior decimal point, and no redundant
+/// leading/trailing zeros (checked with the historical Rust `Display` round trip).
+/// Scientific / signed / `Infinity` / `NaN` forms are conservatively rejected
+/// (over-report, documented).
 fn is_numeric_segment(s: &str) -> bool {
     if s.is_empty() {
         return false;
@@ -256,7 +256,7 @@ fn is_numeric_segment(s: &str) -> bool {
         }
     }
     match s.parse::<f64>() {
-        Ok(n) => crate::types::repr::number_to_string(n) == s,
+        Ok(n) => crate::types::repr::decimal_number_to_string(n) == s,
         Err(_) => false,
     }
 }

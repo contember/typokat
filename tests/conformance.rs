@@ -81,9 +81,8 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b28_interface_extends", true),
     ("b29_alias_cycles", true),
     ("b30_negative_literals", true),
-    // Backlog 30 JS-exact number stringification. Registered false by the
-    // spec-only commit; the implementation commit flips this on.
-    ("b30_numeric_stringify", false),
+    // Backlog 30 JS-exact number stringification.
+    ("b30_numeric_stringify", true),
     ("b55_template_memo", true),
     // Project fixtures (subdirectories, m29 convention) — see `PROJECT_DIRS`.
     ("b58_project_scopes", true),

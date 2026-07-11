@@ -595,6 +595,7 @@ name = "typokat"
 version = "0.1.0"
 dependencies = [
  "codespan-reporting",
+ "dragonbox_ecma",
  "oxc_allocator",
  "oxc_ast",
  "oxc_parser",

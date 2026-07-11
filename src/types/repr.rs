@@ -664,9 +664,8 @@ pub struct TemplateType {
     pub holes: Vec<TypeId>,
 }
 
-/// Render an `f64` like JavaScript `String(n)` for the M27 subset: common finite
-/// forms round-trip, `-0` becomes `"0"`, and non-finite forms use JS spellings.
-/// Scientific/large-magnitude formatting is a documented conservative divergence.
+/// Render an `f64` like JavaScript `String(n)`: `-0` becomes `"0"` and non-finite
+/// values use JavaScript spellings.
 pub fn number_to_string(n: f64) -> String {
     if n == 0.0 {
         // Covers both `0.0` and `-0.0` (JS `String(-0)` is `"0"`).
@@ -678,6 +677,16 @@ pub fn number_to_string(n: f64) -> String {
     if n.is_infinite() {
         return if n < 0.0 { "-Infinity" } else { "Infinity" }.to_string();
     }
+    let mut buffer = dragonbox_ecma::Buffer::new();
+    buffer.format_finite(n).to_string()
+}
+
+/// Render a decimal candidate with Rust's historical `Display` behavior.
+///
+/// Template `${number}` matching deliberately keeps this separate from JavaScript
+/// `Number::toString`: TypeScript accepts some decimal spellings such as the fixed
+/// representation of `1e21` in the intrinsic pattern.
+pub(crate) fn decimal_number_to_string(n: f64) -> String {
     format!("{n}")
 }
 
@@ -725,18 +734,41 @@ pub struct MappedType {
 
 #[cfg(test)]
 mod tests {
-    use super::number_to_string;
+    use super::{decimal_number_to_string, number_to_string};
 
-    /// M27 — JS-`String(n)`-faithful number rendering for the common finite cases:
-    /// integers drop the decimal, simple decimals round-trip, and negative zero
-    /// normalizes to `"0"`.
+    /// ECMAScript Number::toString uses different fixed/exponential thresholds than
+    /// Rust's display formatter.
     #[test]
-    fn number_to_string_matches_js_for_common_cases() {
-        assert_eq!(number_to_string(1.0), "1");
-        assert_eq!(number_to_string(42.0), "42");
-        assert_eq!(number_to_string(3.5), "3.5");
-        assert_eq!(number_to_string(0.0), "0");
-        assert_eq!(number_to_string(-0.0), "0", "negative zero renders as 0");
-        assert_eq!(number_to_string(0.5), "0.5");
+    fn number_to_string_matches_ecmascript_boundary_matrix() {
+        let cases = [
+            (1.0, "1"),
+            (42.0, "42"),
+            (3.5, "3.5"),
+            (0.0, "0"),
+            (-0.0, "0"),
+            (f64::NAN, "NaN"),
+            (f64::INFINITY, "Infinity"),
+            (f64::NEG_INFINITY, "-Infinity"),
+            (0.5, "0.5"),
+            (1e20, "100000000000000000000"),
+            (1e21, "1e+21"),
+            (-1e21, "-1e+21"),
+            (1e-6, "0.000001"),
+            (1e-7, "1e-7"),
+            (-1e-7, "-1e-7"),
+            (f64::MAX, "1.7976931348623157e+308"),
+            (f64::from_bits(1), "5e-324"),
+            (0.1 + 0.2, "0.30000000000000004"),
+        ];
+
+        for (number, expected) in cases {
+            assert_eq!(number_to_string(number), expected, "{number:?}");
+        }
+    }
+
+    #[test]
+    fn decimal_number_to_string_keeps_pattern_round_trip_behavior() {
+        assert_eq!(decimal_number_to_string(1e20), "100000000000000000000");
+        assert_eq!(decimal_number_to_string(1e21), "1000000000000000000000");
     }
 }

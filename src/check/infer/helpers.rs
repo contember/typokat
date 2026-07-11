@@ -47,7 +47,7 @@ pub(super) fn segment_matches_hole(store: &Store, hole: TypeId, seg: &str) -> bo
 }
 
 /// Whether a segment is a decimal numeric string (M27 — the `` `${number}` `` acceptance
-/// rule, sound against tsc's `String(Number(s)) === s`).
+/// rule, using the historical Rust `Display` round trip).
 fn is_decimal_numeric(s: &str) -> bool {
     if s.is_empty() {
         return false;
@@ -64,7 +64,7 @@ fn is_decimal_numeric(s: &str) -> bool {
         }
     }
     match s.parse::<f64>() {
-        Ok(n) => crate::types::repr::number_to_string(n) == s,
+        Ok(n) => crate::types::repr::decimal_number_to_string(n) == s,
         Err(_) => false,
     }
 }
