@@ -96,6 +96,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Backlog 38 minimal ambient prelude. WU1 commits this corpus disabled;
     // WU2 flips it on with the canonical prelude declarations.
     ("b38_minimal_ambient_prelude", true),
+    // Backlog 38 follow-up: prelude lookup must not cross a type-only import
+    // barrier or a module export boundary. Project-shaped; see PROJECT_DIRS.
+    ("b38_prelude_lookup_boundaries", false),
     // Soundness-review-fixes sprint (2026-07-10) WU0 corpora. Each is committed
     // `false` (behavior-neutral spec); WU1-WU3 flip only their own dir when the
     // fix lands, the deferred-ledger dir stays `false` beyond this sprint. See
@@ -136,6 +139,7 @@ const PROJECT_DIRS: &[&str] = &[
     "m29_modules",
     "b58_project_scopes",
     "b59_modules_hygiene",
+    "b38_prelude_lookup_boundaries",
     // Soundness-review WU2 type-only export/value separation (finding 4).
     "sr_wu2_export_space",
 ];

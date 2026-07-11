@@ -220,6 +220,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b59_modules_hygiene/` | backlog `59` | project-mode pending diagnostics are attributed to the owning module, and export lists validate local names |
 | `b65_inference_candidate_policy/` | backlog `65` | call-site inference fixes same-parameter candidates before replaying each argument, rather than unioning incompatible candidates |
 | `b38_minimal_ambient_prelude/` | shipped backlog `38` | bounded `console` and numeric `Math` ambient declarations through the existing prelude compilation unit |
+| `b38_prelude_lookup_boundaries/` | backlog `38` follow-up | project-shaped prelude boundaries: a value-bearing `import type` blocks ambient value fallback, export lists cannot inherit prelude names, and local type-only exports do not acquire ambient value slots |
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):
