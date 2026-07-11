@@ -14,3 +14,7 @@ function parameterCollision(parameterValue: string): void {
   parameterValue = 1; // error[TK2322]: Type 'number' is not assignable to type 'string'
   var parameterValue: number;
 }
+
+function callableCollision(value: number): void {}
+var callableCollision: number;
+callableCollision("bad"); // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'
