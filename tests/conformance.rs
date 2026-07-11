@@ -121,6 +121,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // ordinary `error[TK…]`, diffed by `compare_incomplete_output` /
     // `compare_fixture_output`. See tests/cases/README.md ("Surface-accounting corpus").
     ("b73_surface_accounting", true),
+    // Backlog 74 declaration-hoisting parity. Registered false by the spec commit;
+    // WU1/WU2 enable the combined corpus after both function and var fixes land.
+    ("b74_declaration_hoisting", false),
 ];
 
 /// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`
