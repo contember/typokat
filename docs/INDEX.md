@@ -22,12 +22,16 @@ decisions → reference → archive.
 
 ## Active sprints
 
-<!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprints/sprint-2026-07-11-minimal-ambient-prelude.md`](sprints/sprint-2026-07-11-minimal-ambient-prelude.md) — backlog `38`: bounded ambient declarations through the existing prelude path, measured by conformance and the official-suite ratchet.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **Minimal ambient prelude (`38`) is active** — the approved, replaceable
+  source-backed slice is being specified before implementation. It may admit only
+  declarations the current model can faithfully check; `73` still blocks `72`'s honest
+  project-preview claim.
 - **Declaration hoisting parity (`74`) shipped 2026-07-11** (archived:
   [`archive/sprint-2026-07-11-declaration-hoisting-parity.md`](archive/sprint-2026-07-11-declaration-hoisting-parity.md)) —
   forward ordinary/generic/overload calls now see stable callable surfaces; `var`

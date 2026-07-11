@@ -19,4 +19,4 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 ## Active
 
-<!-- one line per active sprint; empty between sprints -->
+- [`sprint-2026-07-11-minimal-ambient-prelude.md`](sprint-2026-07-11-minimal-ambient-prelude.md) — backlog `38`: a bounded, source-backed ambient prelude slice for earlier real-world signal; it is not a `lib.d.ts` substitute or the project preview.
