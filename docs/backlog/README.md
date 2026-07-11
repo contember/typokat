@@ -87,6 +87,7 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 - [`71`](71-expression-inference-fn-tail.md) — expression/iteration traversal silent-FN tail (binary results, template interpolations, spread, iterability).
 - [`73`](73-unsupported-surface-audit.md) — surface-accounting emission tail (census + incomplete outcome shipped 2026-07-10; the `infer_expr` shape tail still exits clean).
 - [`74`](74-declaration-hoisting-parity.md) — forward local-function calls + `var` hoisting parity.
+- [`76`](76-lazy-value-type-resolution.md) — exact lazy declaration/value-type queries replace the safe `unknown` forward-return approximation · blocked by `46`, `48`.
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - [`23`](23-static-method-type-params.md) — spurious TK2304 on static method type params (or close via `41`).

@@ -90,16 +90,19 @@ are filled too late; `var` names are bound into the wrong lexical scope.
   ordinary/generic/overloaded local functions before executable checking. Preserve
   source order within overload groups, hide implementation signatures from calls, keep
   type-parameter ids/constraints stable, and check each body exactly once. Any
-  provisional callable state must be replaced before ordinary call checking and must
-  not become a permissive final result. Apply the same rule to every statement-list
-  context already handled by the shared walker; do not change module boundaries.
+  body-bearing function without a return annotation uses `unknown` (never `void` or the
+  permissive error type) until source-position body checking replaces its callable type.
+  Apply the same rule to every statement-list context already handled by the shared
+  walker; do not change module boundaries. Exact lazy inferred-return resolution is
+  graduated to backlog [`76`](../backlog/76-lazy-value-type-resolution.md).
 - **Acceptance / witness.** Run the forward-function fixtures directly while the
   combined `b74_declaration_hoisting` directory remains disabled until WU2:
   before/after calls produce identical call diagnostics;
   overload calls see only declared signatures; generic constraints and argument errors
-  are preserved; recursion/reordering is deterministic; no duplicate body diagnostic or
-  obligation appears. Existing M3/M9/M10/M24/M32/M33 and local-overload corpora remain
-  verdict/order stable.
+  are preserved; unannotated forward results are conservative `unknown` (including a
+  regression that forbids provisional `void` false-cleans); recursion/reordering is
+  deterministic; no duplicate body diagnostic or obligation appears. Existing
+  M3/M9/M10/M24/M32/M33 and local-overload corpora remain verdict/order stable.
 - **Touch points.** `src/check/checker/statements.rs`,
   `src/check/checker/calls.rs`, `src/check/checker/context.rs`, focused unit tests,
   `tests/conformance.rs`.
@@ -183,8 +186,10 @@ are filled too late; `var` names are bound into the wrong lexical scope.
 - Duplicate/redeclaration diagnostics (`TK2300`/`TK2451`) — backlog
   [`18`](../backlog/18-duplicate-identifier-detection.md); this sprint may preserve
   current merging behavior but must not claim those diagnostics.
-- New return-path or recursive return-inference fixpoint semantics — backlog
-  [`46`](../backlog/46-return-path-analysis.md) and existing inference policy.
+- New return-path or lazy declaration/value-type resolution semantics — backlogs
+  [`46`](../backlog/46-return-path-analysis.md),
+  [`48`](../backlog/48-no-implicit-any.md), and
+  [`76`](../backlog/76-lazy-value-type-resolution.md).
 - Destructuring binding completeness beyond the binder's supported binding-pattern
   boundary; verify and document the boundary rather than silently widening it.
 - The surface-accounting emission tail (`73`), minimal ambient prelude (`38`), and
@@ -200,6 +205,10 @@ are filled too late; `var` names are bound into the wrong lexical scope.
   declaration type availability only; it does not imply initialization or assignment.
 - Reuse M33 overload grouping and existing symbol/`DeclId` storage. No parallel symbol
   table, generic second traversal, or new architecture boundary is permitted.
+- For an unannotated forward return, use the sound `unknown` approximation and document
+  its safe over-report. `void` is forbidden because it can suppress a real
+  number/string-to-void result error; the error type is forbidden because it is any-like.
+  Exact demand-driven value typing is release-owned by backlog `76`.
 - Follow the mandatory dev loop: leader-written disabled corpus and spec commit;
   implementation through subagents; a different adversarial review subagent; fixes and
   re-review as required; leader-run verification and atomic explicit-path commits.
@@ -222,3 +231,10 @@ soundness fix.
 
 <!-- Append discoveries, deviations, and blockers here. Graduate durable findings to an
      ADR/backlog/reference document; leave only transient execution notes in this log. -->
+
+- **2026-07-11 — WU1 stop gate resolved.** The first reserve/fill implementation
+  exposed unannotated returns as `void`; three independent terra/xhigh analyses plus a
+  local TypeScript 6.0.3 source audit proved this unsound (`const x: void = f(); function
+  f() { return 1; }` became false-clean). Decision: WU1 uses conservative `unknown`;
+  exact lazy declaration/value typing graduated to release-blocking backlog `76` with
+  `46`/`48` dependencies.

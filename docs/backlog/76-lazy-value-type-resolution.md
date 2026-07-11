@@ -1,0 +1,62 @@
+---
+id: 76
+title: Lazy declaration and value-type resolution
+blocked-by: [./46-return-path-analysis.md, ./48-no-implicit-any.md]
+---
+
+# 76 — Lazy declaration and value-type resolution
+
+**Summary.** Replace the conservative `unknown` return used by an unannotated
+forward function call with a demand-driven declaration-type query that resolves
+function returns and referenced value declarations exactly, including cycle
+diagnostics, without changing source-order checking or leaking provisional types.
+
+## Problem
+
+Backlog `74` hoists the stable callable surface — parameters, generic constraints,
+explicit returns, and overload signatures — before executable statements. An
+unannotated body cannot be inferred safely at that point with the current sequential
+`DeclTypes` fill:
+
+- `void` is unsound (`const x: void = f(); function f() { return 1; }` becomes
+  falsely clean);
+- the error type is any-like and suppresses result obligations;
+- `unknown` is sound but over-reports valid result-consuming forward calls;
+- checking bodies early changes diagnostic/obligation timing and still fails when a
+  return expression references a later inferred value declaration.
+
+TypeScript separates declaration visibility from type availability. It resolves a
+signature return on demand, tracks `Unresolved → Resolving → Resolved/Errored`, and
+reports the implicit-any cycle family (TS7022/TS7023) before using a recovery type.
+typokat needs the equivalent model before it can claim exact inferred-return hoisting.
+
+## Approach / acceptance
+
+Add a declaration-plan layer keyed by `DeclId` for function declarations and the value
+declarations their return expressions can demand. Reserve stable generic ids,
+constraints, parameters, and explicit returns once; resolve inferred declaration types
+through a cycle-guarded query; publish only terminal function `TypeId`s and overload
+objects. A provisional result must never enter relation/flow caches or phase-2
+obligations.
+
+Keep normal statement/body checking source ordered and exactly once. Type-query mode
+must not evaluate parameter defaults, duplicate diagnostics/obligations, or mutate
+narrowing state. Coordinate return aggregation with backlog
+[`46`](./46-return-path-analysis.md) and TS7022/TS7023 emission with backlog
+[`48`](./48-no-implicit-any.md).
+
+Corpus first, cross-checked with `tsc 6.0.3 --strict`: forward unannotated ordinary and
+generic returns, later inferred variables referenced from function returns, direct and
+mutual return cycles, mixed value/function cycles, annotated cycle breakers, overload
+implementations, reordered declarations, and repeated-query/cache-order probes.
+Acceptance requires exact verdicts without conservative `unknown` over-reports, no
+duplicate/reordered body diagnostics, and no query-order-dependent false negative.
+
+## Touch points
+
+Value declaration plans beside `DeclTypes`, identifier/call type resolution, function
+return aggregation, generic signature metadata, overload publication, diagnostics for
+TK7022/TK7023, flow/relation cache boundaries, conformance fixtures, and the official
+suite scoreboard.
+
+<!-- Origin: sprint-2026-07-11 WU1 stop gate; TypeScript 6.0.3 getReturnTypeOfSignature audit. -->

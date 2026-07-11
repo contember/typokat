@@ -92,6 +92,13 @@ and validated the same way.
   local function declaration does not see the hoisted declaration, so argument/overload
   diagnostics can disappear. This dropped-error family is owned by backlog `74`.
   <!-- div: id=hoisting/forward-local-function-call dir=under scope=s-declaration-hoisting owner=../backlog/74-declaration-hoisting-parity.md witness=../../tests/cases/b58_project_scopes -->
+- **Unannotated forward function returns are conservative (over-report).** Backlog `74`
+  publishes the callable parameter/generic surface before the declaration, but uses
+  `unknown` for a body-inferred return until source-position body checking replaces it.
+  This preserves argument diagnostics and prevents a permissive false clean, but a valid
+  result-consuming forward call can report `TK2322`. Exact demand-driven declaration
+  types and TS7022/TS7023 cycles belong to backlog `76`.
+  <!-- div: id=hoisting/unannotated-forward-return dir=over scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/b74_declaration_hoisting/unannotated_forward_returns.ts -->
 - **`undefined` in assignment-target position (cosmetic).** typokat resolves
   `undefined` as a value read but not as an assignment target, so `undefined = null`
   reports `TK2304` where tsc reports `TS2539` — same verdict, different code.

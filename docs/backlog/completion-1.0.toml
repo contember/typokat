@@ -131,6 +131,17 @@ links = []
 deps = []
 scope = ["s-overload-layout", "s-overload-implementation", "s-overload-resolution"]
 
+[[criterion]]
+id = "A-lazy-value-type-resolution"
+track = "A"
+title = "Lazy declaration/value-type resolution with inferred-return cycle diagnostics"
+state = "incomplete"
+blocks_release = "true"
+owner = "./76-lazy-value-type-resolution.md"
+witness = "spec-first forward inferred-return/value dependency/cycle corpus cross-checked with tsc 6.0.3 --strict"
+links = ["./74-declaration-hoisting-parity.md", "./46-return-path-analysis.md", "./48-no-implicit-any.md"]
+deps = ["./46-return-path-analysis.md", "./48-no-implicit-any.md"]
+
 # ---------------------------------------------------------------------------
 # Track B — checker completeness (Tier A/B diagnostic surface)
 # ---------------------------------------------------------------------------
