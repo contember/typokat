@@ -1,3 +1,23 @@
+> **OUTCOME — shipped 2026-07-11.** Backlog `74` is closed: ordinary, generic,
+> declaration-only, and overload function declarations publish stable callable surfaces before
+> executable checking, while each body/default/signature record is processed exactly once at its
+> source position. `var` bindings now belong to their nearest function/module scope across blocks,
+> switch clauses, loops, labels, and try/catch/finally; initializers keep their lexical lookup and
+> source-order flow timing. Explicit annotations are reserved conservatively, source-site records
+> replay once, parameter/function/first-var ownership survives merges, and final ordinary/overload
+> callable publication reaches merged value identities with symbol-local flow refresh. WU1/WU2/WU3
+> each passed independent terra/xhigh adversarial review after witness-first fixes. Verification:
+> `cargo fmt --check` · `cargo test` (279 unit + all integration/conformance, 0 failed) ·
+> `cargo clippy --all-targets -- -D warnings` · `cargo build --release` · official-suite unit tests (34) ·
+> 874-test `run --check` (0 regressions, one audited `OOS:unresolved → IN` progress). Scoreboard:
+> in-scope 395→396, out-of-scope 479→478; the newly visible `typeGuardsDefeat.ts` retains its honest
+> diagnostic diff. Core commits: spec `774169f`; WU1 `eb3cf7e`; WU2 `48f2c29`; WU3
+> owner/publication hardening `3fa3450`; scoreboard `86c43da`; closure is this archive commit.
+> Deferred honestly: exact unannotated forward function/`var` value types remain release-owned by
+> backlog `76`; the review-discovered pre-existing duplicate-implementation call gap is pinned under
+> release-blocking backlog `18` (`3bd69fa`); definite assignment/TDZ stays `47`. Next executable
+> chain: `73` closure → `38` → `72`.
+
 # Sprint — declaration hoisting parity (2026-07-11)
 
 **Goal.** Close backlog `74`: forward local-function calls are checked against the
@@ -258,3 +278,10 @@ soundness fix.
   inference (`53cd2ab`). Both fixes passed independent re-review across every supported
   container against TypeScript 6.0.3. Leader gates: 279 unit tests, all
   integration/conformance tests, fmt, and clippy `-D warnings` PASS.
+- **2026-07-11 — WU3/WU4 shipped.** Cross-cutting review found source-site annotation
+  ownership, parameter/function/first-var merge ownership, and callable publication into
+  merged value identities (ordinary and overload) as additional HIGH soundness boundaries.
+  Each was fixed from a committed regression witness and independently re-reviewed. The only
+  remaining probe failure predated WU0 and is now pinned to release-blocking backlog `18`.
+  Fresh release official-suite audit: zero regressions; `typeGuardsDefeat.ts` moves from
+  unresolved to in-scope. Full gates PASS and backlog/docs/manifest closed consistently.

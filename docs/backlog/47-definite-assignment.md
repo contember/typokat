@@ -18,8 +18,9 @@ not definitely assigned in the constructor). Their absence is a silent-FN family
 strict-mode real code.
 
 The adjacent `undefined` assignment-target over-report remains owned here: typokat reports TK2304
-where tsc gives TS2539. Function/`var` declaration visibility and hoisting are owned together by
-backlog [`74`](./74-declaration-hoisting-parity.md); definite-assignment timing stays here.
+where tsc gives TS2539. Function/`var` declaration visibility shipped in the
+[`2026-07-11 hoisting sprint`](../archive/sprint-2026-07-11-declaration-hoisting-parity.md);
+definite-assignment timing stays here.
 
 ## Approach / acceptance
 

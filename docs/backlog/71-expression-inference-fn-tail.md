@@ -33,8 +33,8 @@ conformance corpus pinning each family against
 Operator *result typing* fidelity (TK2362/2365 families) stays owned by backlog `45` —
 this item only stops the silent skips.
 
-The forward local-function call found by the same review is a declaration-hoisting problem, owned
-by backlog [`74`](./74-declaration-hoisting-parity.md). Backlog
+The forward local-function call found by the same review shipped in the
+[`2026-07-11 declaration-hoisting sprint`](../archive/sprint-2026-07-11-declaration-hoisting-parity.md). Backlog
 [`73`](./73-unsupported-surface-audit.md) owns the systematic AST-variant inventory that prevents
 new silent traversal gaps; this item owns these concrete known families.
 

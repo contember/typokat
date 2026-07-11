@@ -17,8 +17,9 @@ complete), `28`–`29` (soundness warm-ups), `31` (M30 contextual literals), bac
 sprint-2026-07-07), `25` (M31 intersection types, sprint-2026-07-07), `33` `34`
 `54` `59` `64` (soundness-tail quick wins, sprint-2026-07-08), `24` `39`
 (M32 signature shape, sprint-2026-07-09), `65` (inference candidate policy,
-sprint-2026-07-09), and `40` (M33 function overloads,
-sprint-2026-07-09) — see
+sprint-2026-07-09), `40` (M33 function overloads,
+sprint-2026-07-09), and `74` (declaration hoisting parity,
+sprint-2026-07-11) — see
 [`../archive/`](../archive/README.md). Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). How each item
@@ -86,7 +87,6 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 - [`30`](30-numeric-literal-correctness.md) — JS-exact number stringification: a non-canonical `${1e21}` digit string is **accepted** (dropped TS2322 — an under-report, not a safe FP).
 - [`71`](71-expression-inference-fn-tail.md) — expression/iteration traversal silent-FN tail (binary results, template interpolations, spread, iterability).
 - [`73`](73-unsupported-surface-audit.md) — surface-accounting emission tail (census + incomplete outcome shipped 2026-07-10; the `infer_expr` shape tail still exits clean).
-- [`74`](74-declaration-hoisting-parity.md) — forward local-function calls + `var` hoisting parity.
 - [`76`](76-lazy-value-type-resolution.md) — exact lazy declaration/value-type queries replace the safe `unknown` forward-return approximation · blocked by `46`, `48`.
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
@@ -117,10 +117,10 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
    tail. The five HIGH review findings (`53` `55` `57` `58`
    `61`) shipped in sprint-2026-07-07-soundness-fn-fixes; `64` `34` `33` `54` `59` `65`
    shipped in follow-up sprints; the remaining silent-FN C group (`56`, `60`, `62`, `30`, `32`,
-   `21`, `22`, `66`, `67`, `71`, `74`) is next, every one a dropped-error class. The next
-   executable chain is **`74` → `38` → `72`** (hoisting parity, then the prelude, then the
-   honest real-project preview).
-2. **Ship the honest preview slice early:** after `73`/`74`, run `38` then `72`. Its WU0 pins a
+   `21`, `22`, `66`, `67`, `71`) is next, every one a dropped-error class. The next
+   executable chain is **`73` closure → `38` → `72`** (finish surface emission, then the
+   prelude, then the honest real-project preview).
+2. **Ship the honest preview slice early:** after `73`, run `38` then `72`. Its WU0 pins a
    genuinely small real project that fits the preview surface; it must not grow a project-specific
    lib shim. This is the first "point it at a project" milestone.
 3. **Run track A** to unblock `14` (`25` intersections shipped as M31, `24`/`39` signature

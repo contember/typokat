@@ -139,7 +139,7 @@ state = "incomplete"
 blocks_release = "true"
 owner = "./76-lazy-value-type-resolution.md"
 witness = "spec-first forward inferred-return/value dependency/cycle corpus cross-checked with tsc 6.0.3 --strict"
-links = ["./74-declaration-hoisting-parity.md", "./46-return-path-analysis.md", "./48-no-implicit-any.md"]
+links = ["../archive/sprint-2026-07-11-declaration-hoisting-parity.md", "./46-return-path-analysis.md", "./48-no-implicit-any.md"]
 deps = ["./46-return-path-analysis.md", "./48-no-implicit-any.md"]
 
 # ---------------------------------------------------------------------------
@@ -521,12 +521,12 @@ deps = []
 [[criterion]]
 id = "C-declaration-hoisting"
 track = "C"
-title = "Function and var declaration hoisting parity"
-state = "incomplete"
+title = "Function and var declaration hoisting parity — shipped 2026-07-11"
+state = "complete"
 blocks_release = "true"
-owner = "./74-declaration-hoisting-parity.md"
-witness = "spec-first forward-call and var-scope corpus cross-checked with tsc 6.0.3 --strict"
-links = ["../reference/divergences.md"]
+owner = "shipped"
+witness = "cargo test conformance (b74_declaration_hoisting enabled) + independent WU1/WU2/WU3 adversarial reviews against tsc 6.0.3 --strict"
+links = ["../reference/divergences.md", "../archive/sprint-2026-07-11-declaration-hoisting-parity.md"]
 deps = []
 scope = ["s-declaration-hoisting"]
 
@@ -554,7 +554,7 @@ blocks_release = "true"
 owner = "./72-real-project-preview-readiness.md"
 witness = "pinned small real-project clean baseline + seeded faults + identity ratchet; later deptective full-stack witness"
 links = ["./38-minimal-ambient-prelude.md", "./14-libdts-loading.md", "./15-modules-imports.md"]
-deps = ["./38-minimal-ambient-prelude.md", "./73-unsupported-surface-audit.md", "./74-declaration-hoisting-parity.md"]
+deps = ["./38-minimal-ambient-prelude.md", "./73-unsupported-surface-audit.md"]
 
 [[criterion]]
 id = "D-minimal-ambient-prelude"

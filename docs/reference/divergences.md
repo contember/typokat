@@ -82,24 +82,15 @@ and validated the same way.
   the first. Fixtures keep at most one mismatched argument per call so the corpus
   matches both.
   <!-- div: id=calls/multiple-mismatched-arguments dir=over scope=s-call-arguments owner=design-oos witness=../../tests/cases/m3_functions -->
-- **`var` is not hoisted to the function scope (over-report).** The binder treats
-  `var` like a block-scoped declaration, so a `var` referenced outside its block or
-  `switch` clause reports a spurious `TK2304` where tsc resolves it (safe
-  direction). Function and `var` hoisting share backlog `74`; definite-assignment
-  timing remains backlog `47`.
-  <!-- div: id=hoisting/var-block-scoped dir=over scope=s-declaration-hoisting owner=../backlog/74-declaration-hoisting-parity.md witness=../../tests/cases/b58_project_scopes -->
-- **Unannotated forward `var` value types are unresolved (under-report).** Backlog
-  `74` hoists the name and predeclares explicit annotations, but it does not evaluate a
-  later initializer to type an earlier read/write. That would move value inference ahead
-  of source-order initializer checking; exact lazy declaration/value queries belong to
-  backlog `76`.
+- **Unannotated forward `var` value types are unresolved (under-report).** The
+  declaration-hoisting sprint shipped name hoisting and explicit-annotation reservation, but a later
+  unannotated initializer still does not type an earlier read/write. Moving value
+  inference ahead of source-order initializer checking requires the exact lazy
+  declaration/value queries owned by backlog `76`.
   <!-- div: id=hoisting/unannotated-forward-var-value dir=under scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/sr_deferred_ledger/b76_unannotated_forward_var.ts -->
-- **Forward local function calls are not checked (under-report).** A call before its
-  local function declaration does not see the hoisted declaration, so argument/overload
-  diagnostics can disappear. This dropped-error family is owned by backlog `74`.
-  <!-- div: id=hoisting/forward-local-function-call dir=under scope=s-declaration-hoisting owner=../backlog/74-declaration-hoisting-parity.md witness=../../tests/cases/b58_project_scopes -->
-- **Unannotated forward function returns are conservative (over-report).** Backlog `74`
-  publishes the callable parameter/generic surface before the declaration, but uses
+- **Unannotated forward function returns are conservative (over-report).** The shipped
+  declaration-hoisting path publishes the callable parameter/generic surface before
+  the declaration, but uses
   `unknown` for a body-inferred return until source-position body checking replaces it.
   This preserves argument diagnostics and prevents a permissive false clean, but a valid
   result-consuming forward call can report `TK2322`. Exact demand-driven declaration

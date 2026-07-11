@@ -1,7 +1,7 @@
 ---
 id: 72
 title: Real-project preview readiness
-blocked-by: [./38-minimal-ambient-prelude.md, ./73-unsupported-surface-audit.md, ./74-declaration-hoisting-parity.md]
+blocked-by: [./38-minimal-ambient-prelude.md, ./73-unsupported-surface-audit.md]
 ---
 
 # 72 — Real-project preview readiness

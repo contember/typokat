@@ -13,8 +13,9 @@ diagnostics, without changing source-order checking or leaking provisional types
 
 ## Problem
 
-Backlog `74` hoists the stable callable surface — parameters, generic constraints,
-explicit returns, and overload signatures — before executable statements. An
+The shipped declaration-hoisting sprint reserves the stable callable surface —
+parameters, generic constraints, explicit returns, and overload signatures — before
+executable statements. An
 unannotated body cannot be inferred safely at that point with the current sequential
 `DeclTypes` fill:
 
