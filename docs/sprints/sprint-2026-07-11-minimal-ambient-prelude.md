@@ -83,18 +83,21 @@ to replace.
   fill path. Confirm all added declarations parse clean as both trusted prelude source
   and ordinary user source, preserve existing utility aliases, and retain ordinary
   user shadowing.
-- **Scope.** Extend `src/prelude.ts` only with WU1's admitted ambient declarations.
-  Reuse the existing source-backed prelude/binder path without a second source string,
-  special global lookup, or user-project shim. Add narrow unit coverage for prelude
-  cleanliness/shadowing only where the conformance corpus cannot observe the invariant.
-  Flip the `b38_minimal_ambient_prelude` corpus to enabled in the same implementation
-  commit.
+- **Scope.** Per [ADR-0004](../decisions/0004-prelude-value-type-handoff.md), extend
+  the existing source-backed prelude pipeline so its declared value types are lowered
+  and handed into the user pass in both single-file and serial-project modes. Then add
+  only WU1's admitted `console` and numeric `Math` declarations to `src/prelude.ts`.
+  Reuse the existing prelude/binder path without a second source string, special global
+  lookup, new type universe, or user-project shim. Add narrow unit coverage for
+  prelude cleanliness, value-table alignment, and user shadowing where the conformance
+  corpus cannot observe the invariant. Flip the `b38_minimal_ambient_prelude` corpus
+  to enabled in the same implementation commit.
 - **Acceptance / witness.** Every enabled b38 fixture produces the same clean/error
   verdict as `tsc 6.0.3 --strict`; each declared callable rejects its pinned bad call,
   absent members stay unresolved, and a user declaration shadows the ambient one
   without duplicate-name noise. Existing M28/M32/M33 and all previous conformance
   fixtures retain their diagnostic identities.
-- **Touch points.** `src/prelude.ts`, potentially
+- **Touch points.** `src/prelude.ts`, `src/check/checker/mod.rs`, potentially
   `src/check/checker/tests/utility_types.rs`,
   `tests/cases/b38_minimal_ambient_prelude/`, and `tests/conformance.rs`.
 
@@ -152,7 +155,7 @@ to replace.
   [`43`](../backlog/43-namespaces-declaration-merging.md),
   [`70`](../backlog/70-this-parameter-typing.md), [`42`](../backlog/42-enums-type-side.md),
   and [`44`](../backlog/44-satisfies-as-const.md).
-- A new primitive-boxing or array instance-member architecture. If WU1 establishes
+- A new primitive-boxing or array instance-member architecture. WU1 established
   that it is required for a proposed name, the sprint stops and asks rather than
   silently widening its design.
 - Project discovery, tsconfig handling, resolver breadth, package declarations, and
@@ -173,6 +176,9 @@ to replace.
   WU2 enables it, WU3 is independently reviewed, and WU4 audits and closes it.
 - The sprint creates earlier signal but does not change the preview dependency: `72`
   still waits for `73`'s complete surface-accounting criterion.
+- ADR-0004 approves the localized prelude value-type handoff discovered in WU1. It
+  must preserve declaration-index alignment in both checker entry points and may not
+  turn a visible prelude value into an error-typed false-clean.
 
 ## Sequencing
 
@@ -201,3 +207,6 @@ strictly ordered by their witnesses.
   provide a checked value type to user code. WU2 is paused pending independent
   architecture review and an explicit decision; no alternate loader or value-seeding
   path will be introduced implicitly.
+- 2026-07-11 — ADR-0004 accepts the narrow canonical handoff after independent review:
+  retain/lower prelude value declarations into the user pass in both entry points;
+  no second loader, global-name special case, primitive boxing, or array-member model.
