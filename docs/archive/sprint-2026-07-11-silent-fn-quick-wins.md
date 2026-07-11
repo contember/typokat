@@ -1,3 +1,19 @@
+> **OUTCOME — shipped partially 2026-07-11.** Backlog `67` is closed: the canonical
+> `ReturnType` alias now carries the modeled `(...args: never[]) => unknown` constraint,
+> so non-callables emit `TK2344` through the shared alias-instantiation path while
+> nullary, positional, optional, rest, union-callable, `any`, `never`, and constrained
+> generic shapes retain tsc-parity verdicts. Backlog `66` hit its planned architecture
+> stop gate and remains open, now blocked by `63(d)`: admitting protected pairs exposes
+> false-positive nominal-origin failures for nested base→derived protected lineages, and
+> an exact fix requires an approved override-specific relation policy. A new pre-existing
+> `ReturnType` callable-object inference false-negative was graduated to backlog `77`.
+> Commit map: plan `0de77ce`; spec `60e75b8`; WU1 `36a4dbd`; WU2 stop-gate fixture
+> `d0b322d`. Verification: `cargo fmt --check` · `cargo test` (285 unit + 14
+> conformance-harness + 4 divergence + 7 incomplete + 10 manifest + 5 surface, 0
+> failed) · `cargo clippy --all-targets -- -D warnings` · `cargo build --release` ·
+> official-suite 874-test `run --check` (0 regressions, 0 progress). Backlog closed:
+> `67`. Retained/rescoped: `66`; added: `77`.
+
 # Sprint — silent-FN quick wins (2026-07-11)
 
 **Goal.** Close backlogs `67` and `66`: enforce the modeled `ReturnType` constraint
@@ -152,3 +168,11 @@ family gets an isolated implementation commit and review evidence.
 <!-- Append discoveries, deviations, and blockers here. Graduate durable findings to an
      ADR/backlog/reference document; leave only transient execution notes in the run log. -->
 
+- 2026-07-11 — WU1 independent review PASS: the modeled `ReturnType` constraint matched
+  tsc across represented callable/non-callable shapes and preserved M28 constraint
+  identities. The review found a pre-existing callable-object conditional-infer FN →
+  backlog `77`.
+- 2026-07-11 — WU2 independent review FAILED: the simple protected-pair admission rule
+  introduced three `TK2416` false positives for nested protected lineage. The
+  implementation was fully reverted; the clean stop-gate fixture remains disabled and
+  backlog `66` is now blocked by `63(d)` rather than forcing a relation-policy change.

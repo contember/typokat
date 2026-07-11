@@ -122,7 +122,7 @@ and validated the same way.
   and stays release-owned by backlog `18`.
   <!-- div: id=binder/duplicate-function-implementation-call dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/sr_deferred_ledger/b18_duplicate_function_implementations.ts -->
 
-### Soundness-review deferred ledger (backlog `18`/`30`/`56`/`60`/`62`/`66`/`67`/`76`)
+### Soundness-review deferred ledger (backlog `18`/`30`/`56`/`60`/`62`/`66`/`76`/`77`)
 
 Known dropped-error (under-report) families from the 2026-07-07 cross-cutting review,
 each an open backlog item, pinned by the **disabled** `sr_deferred_ledger/` corpus
@@ -140,7 +140,7 @@ each an open backlog item, pinned by the **disabled** `sr_deferred_ledger/` corp
   target because there is no "source provides an index signature" rule (missing
   `TK2322`); anonymous sources correctly keep their implicit index signature.
   <!-- div: id=ledger/index-signature-source dir=under scope=b-indexed-access-diagnostics owner=../backlog/62-index-signature-relation-parity.md witness=../../tests/cases/sr_deferred_ledger/b62_index_signature.ts -->
-- **`30`** (Template literal types), **`66`** (Classes), and **`67`** (Utility types)
+- **`30`** (Template literal types), **`66`** (Classes), and **`77`** (Utility types)
   are documented in their own sections below; the corpus adds fixtures for them.
 
 ## Narrowing (M7 / M8 / M23)
@@ -187,7 +187,7 @@ type, clamp-to-constraint inference reporting `TK2345`, `TK2313` for a circular 
   the constraint clamp; typed values, primitives, structural values, and call-site contextual
   reshaping of fresh literal arguments clamp/check normally. Type-parameter defaults are deferred.
   <!-- div: id=constraints/generic-keyof dir=over scope=b-type-level-tail owner=../backlog/35-keyof-union-and-key-source-edges.md witness=../../tests/cases/m24_generic_constraints -->
-  <!-- div: id=constraints/fresh-literal-excess-exempt dir=under scope=a-generic-constraints owner=../backlog/67-utility-alias-constraint-enforcement.md witness=../../tests/cases/m24_generic_constraints -->
+  <!-- div: id=constraints/fresh-literal-excess-exempt dir=under scope=a-generic-constraints owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/m24_generic_constraints -->
   <!-- div: id=constraints/type-parameter-defaults dir=over scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/m24_generic_constraints -->
 - **Representation note (deviation from architecture §3.1, not a tsc divergence):** type
   parameters keep a **named unique-id** representation, not de Bruijn indices; the constraint is a
@@ -327,9 +327,12 @@ including multi-char expansions like `ß` → `"SS"`).
 - **Documented divergences:**
   - The prelude `ReturnType` uses a strict/sound `(...args: never[]) => infer R` match, so it handles
     non-nullary and rest functions without introducing the lib's permissive `any[]` constraint.
-    Its lib constraint is still dropped (`ReturnType<number>` is `never`, not `TS2344` — a
-    documented under-report, **dropped error**, backlog `67`).
-    <!-- div: id=utility/returntype-constraint-dropped dir=under scope=a-generic-constraints owner=../backlog/67-utility-alias-constraint-enforcement.md witness=../../tests/cases/sr_deferred_ledger/b67_utility_constraint.ts -->
+    Its modeled `(...args: never[]) => unknown` constraint is enforced through the shared alias
+    constraint path, so non-callables report `TK2344` without introducing `any`.
+  - Conditional `infer R` still fails to extract represented object call signatures: a callable
+    object or overload set satisfies the `ReturnType` constraint but degrades to the error type,
+    dropping wrong-result assignments (backlog `77`).
+    <!-- div: id=utility/returntype-call-signature-infer dir=under scope=b-type-level-tail owner=../backlog/77-returntype-call-signature-infer.md witness=../../tests/cases/sr_deferred_ledger/b77_returntype_call_signatures.ts -->
   - A **symbolic** intrinsic application (`Uppercase<S>` over a pattern/`string`/free param)
     relates conservatively — assignable to `string` (and an identical node) only, nothing flows
     INTO it — rejecting values tsc's string-mapping algebra accepts (over-report; witnessed by the
@@ -342,7 +345,7 @@ including multi-char expansions like `ß` → `"SS"`).
     lands at concrete instantiation). Generic-call inference uses the same evaluate-then-gate
     discipline, so `K extends keyof T` rejects bad concrete keys while genuinely free wrappers stay
     deferred.
-    <!-- div: id=utility/omit-idiom-constraint-skip dir=under scope=a-generic-constraints owner=../backlog/67-utility-alias-constraint-enforcement.md witness=../../tests/cases/m28_utility_types/constraint_arguments.ts -->
+    <!-- div: id=utility/omit-idiom-constraint-skip dir=under scope=a-generic-constraints owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/m28_utility_types/constraint_arguments.ts -->
   - `TK2344` **argument** checks EVALUATE first, then always run: a decidable composition checks
     precisely (`Pick<P, Exclude<"a" | 1, "a">>` → `1` → `TK2344`, tsc-exact); a still-deferred
     argument checks conservatively — tsc-exact on unprovable shapes

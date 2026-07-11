@@ -93,8 +93,8 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b54_labeled_statements", true),
     ("b59_modules_hygiene", true),
     ("b65_inference_candidate_policy", true),
-    // Silent-FN quick wins (backlogs 67 and 66). Spec commit keeps each focused
-    // corpus disabled; its implementation commit flips only its own directory.
+    // Backlog 67 shipped; backlog 66 remains disabled behind its protected-lineage
+    // architecture stop gate (backlog 63d).
     ("b67_utility_alias_constraint", true),
     ("b66_protected_override_compat", false),
     // Backlog 38 minimal ambient prelude. WU1 commits this corpus disabled;
@@ -122,7 +122,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // and only become safe to run once WU3's recursion/depth guards land.
     ("sr_wu3_types_recursion", true),
     // Deferred ledger — known unfixtured under-reports from backlogs 18, 30, 56,
-    // 60, 62, 66, 67, 76. Stays `false` until each backlog item ships.
+    // 60, 62, 66, 76, 77. Stays `false` until each backlog item ships.
     ("sr_deferred_ledger", false),
     // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
     // (backlog 73). ENABLED by WU3 (expression child slots), WU4 (statement

@@ -1,6 +1,7 @@
 ---
 id: 66
 title: protected↔protected override compatibility (TK2416)
+blocked-by: [./63-review-parity-tail.md]
 ---
 
 # 66 — protected↔protected override compatibility (TK2416)
@@ -30,17 +31,24 @@ false negative.
 
 ## Approach / acceptance
 
-**Acceptance spec (ready):** the disabled
-[`tests/cases/sr_deferred_ledger/b66_protected_override.ts`](../../tests/cases/sr_deferred_ledger/b66_protected_override.ts)
-fixture pins the dropped `TK2416` on an incompatible protected override plus the
-legal-redeclaration control that must stay clean.
+**Acceptance spec (ready):** the disabled focused
+[`tests/cases/b66_protected_override_compat/`](../../tests/cases/b66_protected_override_compat/)
+corpus pins incompatible methods/fields, compatible and covariant controls, visibility
+boundaries, and the nested protected-lineage stop gate.
+
+The 2026-07-11 implementation attempt proved this item is blocked by backlog `63(d)`.
+Admitting protected pairs to the existing override queue correctly reports primitive
+mismatches, but nested types whose derived class legally redeclares a protected member are
+rejected as unrelated nominal origins. The global relation currently sees exact
+`declaring_class` identity but not base→derived lineage. The
+`nested_protected_lineage.ts` control must stay clean before this corpus can be enabled.
 
 Run the existing `TK2416` variance query (method bivariant / field strict, keyed on
 the base member's declaration kind — already implemented for public) on
 `protected`↔`protected` pairs, comparing **signatures structurally** and bypassing the
-nominal same-declaration guard *for the override-compat check specifically* (the
-derived member IS the override of the base member — they share lineage, so the guard
-that rejects unrelated private/protected declarations must not fire here).
+nominal same-declaration guard *for the override-compat check specifically*. Fix `63(d)`
+with lineage-aware protected-origin handling without weakening private identity or
+accepting unrelated protected classes; then reuse that policy here.
 
 Acceptance: the fixture above → `TK2416`; a *legal* compatible protected override
 (`protected m(x: string)` over `protected m(x: string)`, or a covariant-return

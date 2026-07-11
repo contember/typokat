@@ -347,21 +347,32 @@ title = "protected<->protected incompatible override skips TK2416"
 state = "incomplete"
 blocks_release = "true"
 owner = "./66-protected-override-compat.md"
-witness = "disabled acceptance spec: sr_deferred_ledger/b66_protected_override.ts"
-links = ["../../tests/cases/sr_deferred_ledger/b66_protected_override.ts", "../reference/divergences.md"]
-deps = []
+witness = "disabled focused corpus: b66_protected_override_compat; nested_protected_lineage.ts is the backlog 63(d) architecture stop gate"
+links = ["../../tests/cases/b66_protected_override_compat/protected_methods.ts", "../../tests/cases/b66_protected_override_compat/protected_fields.ts", "../../tests/cases/b66_protected_override_compat/nested_protected_lineage.ts", "../reference/divergences.md"]
+deps = ["./63-review-parity-tail.md"]
 
 [[criterion]]
 id = "C-utility-alias-constraint"
 track = "C"
-title = "Utility/prelude alias type-param constraints unenforced (missing TK2344)"
-state = "incomplete"
+title = "Utility/prelude alias type-param constraint enforced — shipped 2026-07-11"
+state = "complete"
 blocks_release = "true"
-owner = "./67-utility-alias-constraint-enforcement.md"
-witness = "disabled acceptance spec: sr_deferred_ledger/b67_utility_constraint.ts"
-links = ["../../tests/cases/sr_deferred_ledger/b67_utility_constraint.ts", "../reference/divergences.md"]
+owner = "shipped"
+witness = "cargo test conformance (b67_utility_alias_constraint enabled) + independent tsc 6.0.3 differential review"
+links = ["../../tests/cases/b67_utility_alias_constraint/return_type_constraint.ts", "../archive/sprint-2026-07-11-silent-fn-quick-wins.md"]
 deps = []
 scope = ["a-generic-constraints"]
+
+[[criterion]]
+id = "C-returntype-call-signature-infer"
+track = "C"
+title = "ReturnType conditional infer extracts represented object call signatures"
+state = "incomplete"
+blocks_release = "true"
+owner = "./77-returntype-call-signature-infer.md"
+witness = "disabled acceptance spec: sr_deferred_ledger/b77_returntype_call_signatures.ts"
+links = ["../../tests/cases/sr_deferred_ledger/b77_returntype_call_signatures.ts", "../reference/divergences.md"]
+deps = []
 
 [[criterion]]
 id = "C-local-class-checking"

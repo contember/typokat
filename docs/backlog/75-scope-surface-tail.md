@@ -34,6 +34,12 @@ The currently unowned tail includes:
   generic `keyof`/intersection key domains, call arguments dropped from `arg_types` (backlog
   `63g`), and any other deferred entry found by the required parity census.
 
+The constraint tail also owns two under-report records left after backlog `67` shipped:
+fresh-literal inference candidates exempt from constraint-side excess checks, and the
+canonical Omit/deferred-`keyof` constraint check whose completeness across every
+concretization path is not yet proved. They remain structured divergence entries until
+implemented or explicitly re-scoped.
+
 Template-expression traversal and spread expressions are not duplicated here: their concrete
 silent-skip owner is [`71`](./71-expression-inference-fn-tail.md), enforced systematically by
 [`73`](./73-unsupported-surface-audit.md). Iterability belongs to `71`; optional

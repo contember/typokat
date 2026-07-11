@@ -219,8 +219,8 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b54_labeled_statements/` | backlog `54` | labeled statements are checked and labeled `break` / `continue` participate in flow |
 | `b59_modules_hygiene/` | backlog `59` | project-mode pending diagnostics are attributed to the owning module, and export lists validate local names |
 | `b65_inference_candidate_policy/` | backlog `65` | call-site inference fixes same-parameter candidates before replaying each argument, rather than unioning incompatible candidates |
-| `b67_utility_alias_constraint/` | backlog `67` | the modeled `ReturnType` callable constraint rejects non-callable arguments while represented function shapes preserve their evaluated return types |
-| `b66_protected_override_compat/` | backlog `66` | protected↔protected method and field overrides enter the existing TK2416 variance path; private and mixed-visibility pairs remain outside this slice |
+| `b67_utility_alias_constraint/` | shipped backlog `67` | the modeled `ReturnType` callable constraint rejects non-callable arguments while represented function shapes preserve their evaluated return types |
+| `b66_protected_override_compat/` | backlog `66` (disabled) | acceptance target for protected↔protected TK2416 plus the nested protected-lineage architecture stop gate owned by `63(d)` |
 | `b38_minimal_ambient_prelude/` | shipped backlog `38` | bounded `console` and numeric `Math` ambient declarations through the existing prelude compilation unit |
 | `b38_prelude_lookup_boundaries/` | backlog `38` follow-up | project-shaped prelude boundaries: a value-bearing `import type` blocks ambient value fallback, export lists cannot inherit prelude names, and local type-only exports do not acquire ambient value slots |
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
@@ -323,7 +323,7 @@ sprint (its findings are open backlog items). Every fixture header records the
 | `sr_wu2_scope_overloads/` | WU2 | switch-local lexical scope (a case-clause `let`/`const` must not resolve after the switch — `TK2304`) and local (in-function) function overloads (no spurious `TK2391`; calls select declared overloads) |
 | `sr_wu2_export_space/` | WU2 | **project-shaped** (registered in `PROJECT_DIRS`): `export type { x }` / `export { type x }` specifier forms must not leak the value slot; a non-type-only import using such a name as a value gets `TK2304` (the M29 stand-in for tsc's `TS1362`) |
 | `sr_wu3_types_recursion/` | WU3 | `any & never` → `never` (assigning into it errors); source-intersection nominal origin (private member rejects); `keyof { [k: string]: T }` = `string \| number`; recursive mapped-value recursion guard; deep type-literal annotation depth guard (backlog 63k) |
-| `sr_deferred_ledger/` | — (stays disabled) | known unfixtured under-reports: backlog `30` (JS-exact number stringify), `56` (silent instantiation cycles), `60` (fresh literals vs union targets), `62` (index-signature source parity), `66` (protected↔protected override compat), `67` (utility-alias constraint), `76` (unannotated forward `var` value type); plus the backlog `35` aliased-keyof mapped key-source **over**-report (`b35_aliased_keyof_mapped.ts`) |
+| `sr_deferred_ledger/` | — (stays disabled) | known unfixtured under-reports: backlog `30` (JS-exact number stringify), `56` (silent instantiation cycles), `60` (fresh literals vs union targets), `62` (index-signature source parity), `66` (protected↔protected override compat), `76` (unannotated forward `var` value type), `77` (`ReturnType` call-signature infer); plus the backlog `35` aliased-keyof mapped key-source **over**-report (`b35_aliased_keyof_mapped.ts`) |
 
 Construction notes:
 
