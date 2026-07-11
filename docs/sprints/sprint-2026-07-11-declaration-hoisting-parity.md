@@ -238,3 +238,11 @@ soundness fix.
   f() { return 1; }` became false-clean). Decision: WU1 uses conservative `unknown`;
   exact lazy declaration/value typing graduated to release-blocking backlog `76` with
   `46`/`48` dependencies.
+- **2026-07-11 — WU0/WU1 shipped.** Spec `774169f`; conservative-return boundary and
+  backlog `76` `802a981`; adversarial regressions `9539b6b`; diagnostic-order spec
+  `76231e6` corrected/narrowed by `eeda659`; implementation `eb3cf7e`. The first
+  independent review found two HIGH bugs (stale provisional `flow_memo`, cross-clause
+  switch false negative) and one eager-record ordering regression. Fixes use symbol-local
+  memo eviction, one CaseBlock reservation set with per-clause grouping, and staged
+  signature diagnostics/incomplete records. Re-review PASS. Leader gates: 278 unit tests,
+  all integration/conformance tests, fmt, and clippy `-D warnings` PASS.
