@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
-# corpus 874  in-scope 395  out-of-scope 479
-# clean-kept 116/149  error-exact 27/246  diag-recall 379/1841
+# corpus 874  in-scope 396  out-of-scope 478
+# clean-kept 116/149  error-exact 27/247  diag-recall 379/1845
 # cols: status<TAB>matched fn fp expected<TAB>ids<TAB>rel  (status=IN | OOS:<bucket>; nums/ids '-' = n/a; ids=<matched>|<fp> as sorted line:code identities; OOS:unsupported carries nums + <matched>|<fp>|<incomplete> — an exit-3 demotion keeps its diagnostic diff plus its surface identities)
 IN	4 4 2 8	15:2341,18:2341,20:2341,23:2341|16:2339,21:2339	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	4 4 2 8	15:2445,18:2445,20:2445,23:2445|16:2339,21:2339	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -379,7 +379,7 @@ OOS:syntax:instanceof	- - - -	-	conformance/expressions/typeGuards/typeGuardOfFr
 IN	4 10 4 14	3:2339,5:2339,7:2339,9:2339|3:2339,5:2339,7:2339,9:2339	conformance/expressions/typeGuards/typeGuardRedundancy.ts
 IN	0 2 0 2	|	conformance/expressions/typeGuards/typeGuardTautologicalConsistiency.ts
 IN	0 0 0 0	|	conformance/expressions/typeGuards/typeGuardTypeOfUndefined.ts
-OOS:unresolved	- - - -	-	conformance/expressions/typeGuards/typeGuardsDefeat.ts
+IN	0 4 3 4	|9:2339,17:2339,29:2339	conformance/expressions/typeGuards/typeGuardsDefeat.ts
 IN	0 0 20 0	|12:2339,16:2339,23:2339,26:2339,30:2339,35:2339,39:2339,46:2339,49:2339,53:2339,58:2339,62:2339,69:2339,72:2339,76:2339,81:2339,85:2339,92:2339,95:2339,99:2339	conformance/expressions/typeGuards/typeGuardsInClassAccessors.ts
 IN	0 20 15 20	|10:2339,14:2339,17:2339,22:2339,26:2339,29:2339,34:2339,38:2339,41:2339,46:2339,50:2339,53:2339,58:2339,62:2339,65:2339	conformance/expressions/typeGuards/typeGuardsInClassMethods.ts
 IN	0 0 4 0	|10:2339,59:2339,69:2339,85:2339	conformance/expressions/typeGuards/typeGuardsInConditionalExpression.ts
