@@ -84,6 +84,20 @@ impl DeclTypes {
     }
 }
 
+/// A function declaration's callable signature, reserved before statement bodies
+/// are checked. The reservation owns the stable generic ids and lowered signature;
+/// body checking later fills only an unannotated return type.
+pub(in crate::check::checker) struct FunctionSurface {
+    pub(in crate::check::checker) params: Vec<crate::types::repr::ParameterType>,
+    pub(in crate::check::checker) type_params: Vec<TypeParamId>,
+    pub(in crate::check::checker) type_param_frame: FxHashMap<String, TypeId>,
+    pub(in crate::check::checker) declared_return: Option<TypeId>,
+    pub(in crate::check::checker) function_ty: TypeId,
+    /// Records produced by eager signature lowering, replayed at source position.
+    pub(in crate::check::checker) diagnostics: Vec<Diagnostic>,
+    pub(in crate::check::checker) incomplete: Vec<IncompleteSurface>,
+}
+
 /// A top-level type declaration's reserve-then-fill plan, indexed by type-space
 /// `DeclId`. Generic declarations carry ordered type-parameter ids and resolve to
 /// templates instantiated by substitution.

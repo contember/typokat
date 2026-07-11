@@ -19,6 +19,7 @@ use oxc_ast::ast::{
     VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_span::GetSpan;
+use rustc_hash::FxHashMap;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Check a list of statements in `scope` at the **module top level** (no enclosing
@@ -46,11 +47,45 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         declared_ret: Option<TypeId>,
         inferred: &mut Option<TypeId>,
     ) {
+        // The binder has already made every function name visible in this scope. Reserve
+        // its callable signature before any executable statement can resolve that name;
+        // bodies still fill at their source declaration, preserving outer type timing.
+        let mut surfaces = self.reserve_function_surfaces(scope, statements);
+        self.check_statement_list_with_surfaces(
+            scope,
+            statements,
+            declared_ret,
+            inferred,
+            &mut surfaces,
+        );
+    }
+
+    /// Check one statement list using callable surfaces reserved across its whole
+    /// lexical container. Switch clauses share one such set while retaining their
+    /// own source-local overload grouping.
+    pub(in crate::check::checker) fn check_statement_list_with_surfaces(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+        declared_ret: Option<TypeId>,
+        inferred: &mut Option<TypeId>,
+        surfaces: &mut FxHashMap<u32, FunctionSurface>,
+    ) {
         let mut index = 0;
         while index < statements.len() {
             if let Some((name, end)) = function_overload_group(statements, index) {
-                self.check_function_declaration_group(scope, &statements[index..end], name);
+                self.finalize_function_declaration_group(
+                    scope,
+                    &statements[index..end],
+                    name,
+                    surfaces,
+                );
                 index = end;
+                continue;
+            }
+            if let Some(func) = function_decl_from_statement(&statements[index]) {
+                self.finalize_function_declaration(scope, func, surfaces);
+                index += 1;
                 continue;
             }
             self.check_stmt(scope, &statements[index], declared_ret, inferred);
@@ -570,37 +605,205 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    /// Check a function declaration and bind its function type. Generic functions
-    /// also record the template plus type-parameter ids for call-site instantiation.
-    fn check_function_declaration(&mut self, scope: ScopeId, func: &Function<'_>) {
-        let (fn_ty, params) = self.infer_function(scope, func);
-        if let Some(id) = &func.id {
-            if let Some(decl_id) = self
-                .binder
-                .graph
-                .resolve(scope, id.name.as_str())
-                .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
-                .and_then(|s| s.value)
-            {
-                self.decl_types.set(decl_id, fn_ty);
-                if !params.is_empty() {
-                    self.generic_sig_params.insert(fn_ty, params);
+    /// Reserve every direct function declaration in a statement list before any of
+    /// its executable statements run. Consecutive M33 groups publish their visible
+    /// overload object immediately; ordinary functions publish their own signature.
+    fn reserve_function_surfaces(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+    ) -> FxHashMap<u32, FunctionSurface> {
+        let mut surfaces = FxHashMap::default();
+        self.reserve_function_surfaces_into(scope, statements, &mut surfaces);
+        surfaces
+    }
+
+    /// Reserve direct functions from several statement lists that share one lexical
+    /// scope, without treating declarations across list boundaries as consecutive.
+    pub(in crate::check::checker) fn reserve_function_surfaces_for_lists(
+        &mut self,
+        scope: ScopeId,
+        statement_lists: &[&[Statement<'_>]],
+    ) -> FxHashMap<u32, FunctionSurface> {
+        let mut surfaces = FxHashMap::default();
+        for statements in statement_lists {
+            self.reserve_function_surfaces_into(scope, statements, &mut surfaces);
+        }
+        surfaces
+    }
+
+    fn reserve_function_surfaces_into(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+        surfaces: &mut FxHashMap<u32, FunctionSurface>,
+    ) {
+        let mut index = 0;
+        while index < statements.len() {
+            if let Some((name, end)) = function_overload_group(statements, index) {
+                for stmt in &statements[index..end] {
+                    let Some(func) = function_decl_from_statement(stmt) else {
+                        continue;
+                    };
+                    self.reserve_function_surface(scope, func, surfaces);
                 }
-                if func.body.is_none() && !func.declare {
-                    self.diagnostics
-                        .push(Diagnostic::overload_missing_implementation(Span::from_oxc(
-                            func.span,
-                        )));
+                self.publish_reserved_overload_group(
+                    scope,
+                    &statements[index..end],
+                    name,
+                    surfaces,
+                );
+                index = end;
+                continue;
+            }
+            if let Some(func) = function_decl_from_statement(&statements[index]) {
+                self.reserve_function_surface(scope, func, surfaces);
+            }
+            index += 1;
+        }
+    }
+
+    fn reserve_function_surface(
+        &mut self,
+        scope: ScopeId,
+        func: &Function<'_>,
+        surfaces: &mut FxHashMap<u32, FunctionSurface>,
+    ) {
+        let surface = self.reserve_function(scope, func);
+        self.publish_function_type(scope, func, surface.function_ty, &surface.type_params);
+        surfaces.insert(func.span.start, surface);
+    }
+
+    fn fill_reserved_function_body(
+        &mut self,
+        scope: ScopeId,
+        func: &Function<'_>,
+        surfaces: &mut FxHashMap<u32, FunctionSurface>,
+        publish_value: bool,
+    ) -> bool {
+        let Some(mut surface) = surfaces.remove(&func.span.start) else {
+            // Defensive fallback for an AST shape outside the shared statement-list
+            // walker (for example a labeled declaration).
+            self.check_function_declaration(scope, func);
+            return false;
+        };
+        self.replay_function_surface_records(&mut surface);
+        let function_ty = self.fill_reserved_function(scope, func, &surface);
+        let type_params = surface.type_params.clone();
+        surface.function_ty = function_ty;
+        if publish_value {
+            self.publish_function_type(scope, func, function_ty, &type_params);
+        } else if !type_params.is_empty() {
+            self.generic_sig_params.insert(function_ty, type_params);
+        }
+        surfaces.insert(func.span.start, surface);
+        true
+    }
+
+    fn publish_function_type(
+        &mut self,
+        scope: ScopeId,
+        func: &Function<'_>,
+        function_ty: TypeId,
+        type_params: &[crate::types::repr::TypeParamId],
+    ) {
+        if let Some(decl_id) = self.function_decl_id(func) {
+            let previous = self.decl_types.get(decl_id);
+            self.decl_types.set(decl_id, function_ty);
+            if previous.is_some() && previous != Some(function_ty) {
+                if let Some(symbol_id) = func
+                    .id
+                    .as_ref()
+                    .and_then(|id| self.binder.graph.resolve(scope, id.name.as_str()))
+                {
+                    // A non-START read may have memoized the reserved callable type.
+                    // Drop only this symbol's entries so the CFG recomputes from the
+                    // final declaration type without weakening unrelated flow facts.
+                    self.flow_memo
+                        .retain(|(_, memo_symbol), _| *memo_symbol != symbol_id);
                 }
+            }
+            if !type_params.is_empty() {
+                self.generic_sig_params
+                    .insert(function_ty, type_params.to_vec());
             }
         }
     }
 
-    fn check_function_declaration_group(
+    fn function_decl_id(&self, func: &Function<'_>) -> Option<DeclId> {
+        self.binder
+            .fn_decl_ids
+            .get(&(self.current_module, func.span.start))
+            .copied()
+    }
+
+    fn publish_reserved_overload_group(
         &mut self,
         scope: ScopeId,
         statements: &[Statement<'_>],
         name: &str,
+        surfaces: &FxHashMap<u32, FunctionSurface>,
+    ) {
+        let signatures: Vec<TypeId> = statements
+            .iter()
+            .filter_map(function_decl_from_statement)
+            .filter(|func| func.body.is_none())
+            .filter_map(|func| surfaces.get(&func.span.start))
+            .map(|surface| surface.function_ty)
+            .collect();
+        if signatures.is_empty() {
+            return;
+        }
+        let overload_ty = self.interner.intern_object(ObjectType {
+            call_signatures: signatures,
+            ..Default::default()
+        });
+        let implementation_decl = statements
+            .iter()
+            .filter_map(function_decl_from_statement)
+            .filter(|func| func.body.is_some())
+            .filter_map(|func| self.function_decl_id(func))
+            .next_back();
+        self.expose_overload_value(scope, name, implementation_decl, overload_ty);
+    }
+
+    /// Check a function declaration outside the shared statement-list prepass and
+    /// bind its completed function type. This keeps uncommon direct walker paths
+    /// behaviorally equivalent without introducing a second declaration model.
+    fn check_function_declaration(&mut self, scope: ScopeId, func: &Function<'_>) {
+        let (fn_ty, params) = self.infer_function(scope, func);
+        self.publish_function_type(scope, func, fn_ty, &params);
+        if func.body.is_none() && !func.declare {
+            self.diagnostics
+                .push(Diagnostic::overload_missing_implementation(Span::from_oxc(
+                    func.span,
+                )));
+        }
+    }
+
+    fn finalize_function_declaration(
+        &mut self,
+        scope: ScopeId,
+        func: &Function<'_>,
+        surfaces: &mut FxHashMap<u32, FunctionSurface>,
+    ) {
+        if !self.fill_reserved_function_body(scope, func, surfaces, true) {
+            return;
+        }
+        if func.body.is_none() && !func.declare {
+            self.diagnostics
+                .push(Diagnostic::overload_missing_implementation(Span::from_oxc(
+                    func.span,
+                )));
+        }
+    }
+
+    fn finalize_function_declaration_group(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+        name: &str,
+        surfaces: &mut FxHashMap<u32, FunctionSurface>,
     ) {
         let mut signatures: Vec<(TypeId, Span)> = Vec::new();
         let mut implementation: Option<(TypeId, DeclId)> = None;
@@ -608,21 +811,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let Some(func) = function_decl_from_statement(stmt) else {
                 continue;
             };
-            let decl_id = self
-                .binder
-                .fn_decl_ids
-                .get(&(self.current_module, func.span.start))
-                .copied();
-            let (fn_ty, params) = self.infer_function(scope, func);
-            if let Some(decl_id) = decl_id {
-                self.decl_types.set(decl_id, fn_ty);
-                if !params.is_empty() {
-                    self.generic_sig_params.insert(fn_ty, params);
-                }
+            self.fill_reserved_function_body(scope, func, surfaces, false);
+            let Some(decl_id) = self.function_decl_id(func) else {
+                continue;
+            };
+            if let Some(surface) = surfaces.get(&func.span.start) {
                 if func.body.is_some() {
-                    implementation = Some((fn_ty, decl_id));
+                    implementation = Some((surface.function_ty, decl_id));
                 } else {
-                    signatures.push((fn_ty, Span::from_oxc(func.span)));
+                    signatures.push((surface.function_ty, Span::from_oxc(func.span)));
                 }
             }
         }

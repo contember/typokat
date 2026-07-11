@@ -68,13 +68,25 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .get(&(self.current_module, switch.span.start))
             .copied()
             .unwrap_or(scope);
+        let consequents: Vec<&[Statement<'_>]> = switch
+            .cases
+            .iter()
+            .map(|case| case.consequent.as_slice())
+            .collect();
+        let mut surfaces = self.reserve_function_surfaces_for_lists(switch_scope, &consequents);
         for case in &switch.cases {
             if let Some(test) = &case.test {
                 self.infer_expr(switch_scope, test);
             }
-            // Route the consequent through the shared list walker so a local overload
-            // set declared inside a clause is grouped like any other (M33).
-            self.check_statement_list(switch_scope, &case.consequent, declared_ret, inferred);
+            // Every clause shares one lexical scope, but consecutive overload grouping
+            // remains local to the clause's own statement list.
+            self.check_statement_list_with_surfaces(
+                switch_scope,
+                &case.consequent,
+                declared_ret,
+                inferred,
+                &mut surfaces,
+            );
         }
     }
 

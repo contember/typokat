@@ -983,53 +983,127 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         (ctor, instance)
     }
 
-    /// Infer a function type and check its body. Generic functions push their type
-    /// parameters for the whole signature/body and return the template plus ids for
-    /// call-site instantiation.
-    pub(in crate::check::checker) fn infer_function(
+    /// Reserve a function declaration's callable signature before its body is checked.
+    /// Generic ids, constraints, parameters, and a declared return are established
+    /// exactly once so callers can use the surface during the body-fill phase.
+    pub(in crate::check::checker) fn reserve_function(
         &mut self,
         enclosing: ScopeId,
         func: &Function<'_>,
-    ) -> (TypeId, Vec<TypeParamId>) {
-        let param_ids =
+    ) -> FunctionSurface {
+        let diagnostics_start = self.diagnostics.len();
+        let incomplete_start = self.incomplete.len();
+        let type_params =
             alloc_type_param_ids(func.type_parameters.as_deref(), &mut self.next_type_param);
-        let frame = self.build_type_param_frame(func.type_parameters.as_deref(), &param_ids);
-
-        let fn_ty = self.with_type_params(frame, |pass| {
+        let type_param_frame =
+            self.build_type_param_frame(func.type_parameters.as_deref(), &type_params);
+        let (params, declared_return) = self.with_type_params(type_param_frame.clone(), |pass| {
             // M24: lower the parameters' `extends` constraints with the frame active.
             pass.lower_type_param_constraints(
                 enclosing,
                 func.type_parameters.as_deref(),
-                &param_ids,
+                &type_params,
             );
             let fn_scope = pass
                 .binder
                 .fn_scopes
                 .get(&(pass.current_module, func.span.start))
                 .copied();
-            let params = pass.lower_parameters(enclosing, fn_scope, &func.params);
+            let params = pass.lower_parameters(enclosing, fn_scope, &func.params, false);
+            // Type references in the signature resolve from the enclosing scope,
+            // while declared type parameters resolve through the pushed frame.
+            let declared_return = func
+                .return_type
+                .as_ref()
+                .and_then(|ann| pass.lower_annotation(enclosing, &ann.type_annotation));
+            (params, declared_return)
+        });
+        let ret = declared_return.unwrap_or_else(|| {
+            let well_known = self.interner.well_known();
+            if func.body.is_some() {
+                // Backlog 76 owns pre-body return inference. `unknown` keeps forward
+                // reads conservative without pretending the function returns `void`.
+                well_known.unknown
+            } else {
+                well_known.void
+            }
+        });
+        let function_ty = self.interner.intern_function(FunctionType {
+            params: params.clone(),
+            ret,
+        });
+        let diagnostics = self.diagnostics.split_off(diagnostics_start);
+        let incomplete = self.incomplete.split_off(incomplete_start);
+        FunctionSurface {
+            params,
+            type_params,
+            type_param_frame,
+            declared_return,
+            function_ty,
+            diagnostics,
+            incomplete,
+        }
+    }
 
-            // Declared return type from the annotation, if any. Type references in the
-            // signature resolve from the enclosing scope (where the type names live);
-            // type parameters resolve through the pushed frame.
-            let declared_ret = match func.return_type.as_ref() {
-                Some(ann) => pass.lower_annotation(enclosing, &ann.type_annotation),
-                None => None,
-            };
+    /// Replay eager signature-lowering records at the declaration's source position.
+    /// Function expressions and methods call this immediately; declarations defer it
+    /// until their source walk reaches the reserved surface.
+    pub(in crate::check::checker) fn replay_function_surface_records(
+        &mut self,
+        surface: &mut FunctionSurface,
+    ) {
+        self.diagnostics.append(&mut surface.diagnostics);
+        for record in std::mem::take(&mut surface.incomplete) {
+            if self
+                .incomplete
+                .iter()
+                .any(|existing| existing.id == record.id && existing.span == record.span)
+            {
+                continue;
+            }
+            self.incomplete.push(record);
+        }
+    }
 
-            // Descend into the body (in the function scope) to check returns against a
-            // declared return type and/or infer the return type from `return` statements.
+    /// Check a previously reserved function body and return its completed callable
+    /// type. Reservation has already installed parameters and constraints, so this
+    /// pass visits only the body and cannot duplicate signature diagnostics.
+    pub(in crate::check::checker) fn fill_reserved_function(
+        &mut self,
+        enclosing: ScopeId,
+        func: &Function<'_>,
+        surface: &FunctionSurface,
+    ) -> TypeId {
+        let params = surface.params.clone();
+        self.with_type_params(surface.type_param_frame.clone(), |pass| {
+            let fn_scope = pass
+                .binder
+                .fn_scopes
+                .get(&(pass.current_module, func.span.start))
+                .copied();
             let body_scope = fn_scope.unwrap_or(enclosing);
-            let inferred_ret = func
+            pass.check_reserved_parameter_initializers(body_scope, &func.params, &surface.params);
+            let inferred_return = func
                 .body
                 .as_ref()
-                .map(|body| pass.check_function_body(body_scope, body, declared_ret));
-
-            let ret = resolve_return_type(pass.interner, declared_ret, inferred_ret);
+                .map(|body| pass.check_function_body(body_scope, body, surface.declared_return));
+            let ret = resolve_return_type(pass.interner, surface.declared_return, inferred_return);
             pass.interner.intern_function(FunctionType { params, ret })
-        });
+        })
+    }
 
-        (fn_ty, param_ids)
+    /// Infer a function expression or class member type and check its body. Function
+    /// declarations use the reserve/fill split above so their callable surfaces can
+    /// be published to forward calls before executable statements are checked.
+    pub(in crate::check::checker) fn infer_function(
+        &mut self,
+        enclosing: ScopeId,
+        func: &Function<'_>,
+    ) -> (TypeId, Vec<TypeParamId>) {
+        let mut surface = self.reserve_function(enclosing, func);
+        self.replay_function_surface_records(&mut surface);
+        let fn_ty = self.fill_reserved_function(enclosing, func, &surface);
+        (fn_ty, surface.type_params)
     }
 
     /// Infer an arrow's type and check its body. Generic arrow type parameters are
@@ -1065,7 +1139,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .fn_scopes
             .get(&(self.current_module, arrow.span.start))
             .copied();
-        let params = self.lower_parameters(enclosing, fn_scope, &arrow.params);
+        let params = self.lower_parameters(enclosing, fn_scope, &arrow.params, true);
 
         let declared_ret = match arrow.return_type.as_ref() {
             Some(ann) => self.lower_annotation(enclosing, &ann.type_annotation),
@@ -1120,6 +1194,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         enclosing: ScopeId,
         fn_scope: Option<ScopeId>,
         params: &FormalParameters<'_>,
+        check_initializers: bool,
     ) -> Vec<ParameterType> {
         let error_ty = self.interner.well_known().error;
         let mut lowered: Vec<ParameterType> =
@@ -1148,8 +1223,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
             }
 
-            if let (Some(init), Some(annotation_ty)) = (&param.initializer, annotation_ty) {
-                self.check_annotated_initializer(parameter_scope, Some(annotation_ty), init);
+            if check_initializers {
+                if let (Some(init), Some(annotation_ty)) = (&param.initializer, annotation_ty) {
+                    self.check_annotated_initializer(parameter_scope, Some(annotation_ty), init);
+                }
             }
 
             // Bind the parameter's type into the function scope so the body resolves
@@ -1191,6 +1268,24 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             lowered.push(ParameterType::rest(name, ty));
         }
         lowered
+    }
+
+    /// Parameter defaults are executable expressions, so declaration pre-reservation
+    /// leaves them until the original function source position. Their parameter types
+    /// were lowered once into the reserved surface.
+    fn check_reserved_parameter_initializers(
+        &mut self,
+        scope: ScopeId,
+        params: &FormalParameters<'_>,
+        lowered: &[ParameterType],
+    ) {
+        for (param, parameter) in params.items.iter().zip(lowered) {
+            if param.type_annotation.is_some() {
+                if let Some(init) = &param.initializer {
+                    self.check_annotated_initializer(scope, Some(parameter.ty), init);
+                }
+            }
+        }
     }
 
     /// Walk a function body, checking returns against a declared type or inferring
