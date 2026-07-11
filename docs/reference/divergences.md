@@ -392,11 +392,11 @@ conservative model — a deferred template IS assignable to `string`).
   - ADJACENT infer holes (no literal separator) **poison** the conditional — deferred, conservative
     (tsc resolves them: first hole takes one char).
     <!-- div: id=template/adjacent-infer-holes dir=over scope=b-type-level-tail owner=design-oos witness=../../tests/cases/m27_template_literals -->
-  - Scientific/large-magnitude numeric stringification is a **known unsound gap — backlog `30`**:
-    numeric holes and `${number}` segment validation stringify via Rust's shortest-form Display,
-    not JS `String(n)` (`` `${1e21}` `` constructs `"1000000000000000000000"` where tsc's type is
-    `"1e+21"`, so typokat accepts a string tsc rejects — an UNDER-report, not conservative).
-    <!-- div: id=template/numeric-stringification dir=under scope=b-type-level-tail owner=../backlog/30-numeric-literal-correctness.md witness=../../tests/cases/sr_deferred_ledger/b30_numeric_stringify.ts -->
+  - Numeric literal holes use ECMAScript `Number::toString`. The intrinsic `${number}`
+    pattern remains a decimal-only subset: tsc also accepts parseable signed, exponent,
+    hexadecimal, and redundant-zero spellings, while typokat rejects them conservatively
+    (backlog `63(e)`).
+    <!-- div: id=template/number-pattern-parse-only dir=over scope=b-type-level-tail owner=../backlog/63-review-parity-tail.md witness=../../tests/cases/m27_template_literals/pattern_assignability.ts -->
   - A hole that itself needs evaluation (a nested template, a conditional / alias instantiation)
     stays symbolic and relates conservatively — rejects strings tsc accepts (over-report, safe).
     <!-- div: id=template/evaluable-hole-conservative dir=over scope=b-type-level-tail owner=design-oos witness=../../tests/cases/m27_template_literals -->

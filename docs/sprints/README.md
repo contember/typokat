@@ -20,6 +20,3 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-
-- [`sprint-2026-07-11-js-number-stringification.md`](sprint-2026-07-11-js-number-stringification.md) —
-  close backlog `30` with an ECMA-exact shared number formatter and focused boundary review.

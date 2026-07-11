@@ -1,3 +1,19 @@
+> **OUTCOME — shipped 2026-07-11.** Numeric template-literal holes now use
+> ECMAScript-exact `Number::toString` formatting through the already-locked
+> `dragonbox_ecma 0.1.12`, including the `1e20`/`1e21` and `1e-6`/`1e-7`
+> boundaries, signs, negative zero, maximum finite, minimum subnormal, and
+> shortest-round-trip values. The `${number}` matcher deliberately retains its
+> separate decimal acceptance rule, preventing a new false positive for tsc-clean
+> long fixed decimals. Independent review PASS (high confidence) covered adjacent
+> f64 values, 2^53, JS rounding traps, tagged templates, literal unions, and all
+> formatter call sites. Commit map: plan `2eff1b2`; spec `2a1a6a3`; implementation
+> `1a12df1`. Verification: `cargo fmt --check` · `cargo test` (286 unit + 14
+> conformance-harness + 4 divergence + 7 incomplete + 10 manifest + 5 surface, 0
+> failed) · `cargo clippy --all-targets -- -D warnings` · `cargo build --release` ·
+> official-suite 874-test `run --check` (0 regressions, 0 progress). Backlog closed:
+> `30`. Deferred unchanged: parse-only `${number}` parity remains backlog `63(e)`;
+> profiling gate `13` needs host profiler authority.
+
 # Sprint — JS-exact number stringification (2026-07-11)
 
 **Goal.** Close backlog `30` by making numeric template-literal construction and
@@ -121,3 +137,6 @@ used by `${number}` patterns.
   backlog's claim that JS canonical re-stringification governs that intrinsic pattern
   was stale. WU0 now pins the clean control and WU1 explicitly keeps the matcher rule
   separate from literal construction.
+- 2026-07-11 — Independent WU2 review PASS (high confidence); the only observed
+  conditional-template rejection was the existing `template/adjacent-infer-holes`
+  design divergence, so no new owner was needed.

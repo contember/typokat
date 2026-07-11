@@ -19,8 +19,9 @@ sprint-2026-07-07), `25` (M31 intersection types, sprint-2026-07-07), `33` `34`
 (M32 signature shape, sprint-2026-07-09), `65` (inference candidate policy,
 sprint-2026-07-09), `40` (M33 function overloads,
 sprint-2026-07-09), `74` (declaration hoisting parity, sprint-2026-07-11),
-`38` (minimal ambient prelude, sprint-2026-07-11), and `67` (modeled `ReturnType`
-constraint, sprint-2026-07-11) — see
+`38` (minimal ambient prelude, sprint-2026-07-11), `67` (modeled `ReturnType`
+constraint, sprint-2026-07-11), and `30` (JS-exact number stringification,
+sprint-2026-07-11) — see
 [`../archive/`](../archive/README.md). Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). How each item
@@ -84,7 +85,6 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 - [`22`](22-new-callee-forms.md) — `new (C)()` / aliased `new` miss class-keyed checks.
 - [`32`](32-eager-keyof-forward-references.md) — eager `keyof` over forward references.
 - [`66`](66-protected-override-compat.md) — protected↔protected incompatible override skips TK2416 (dropped TS2416).
-- [`30`](30-numeric-literal-correctness.md) — JS-exact number stringification: a non-canonical `${1e21}` digit string is **accepted** (dropped TS2322 — an under-report, not a safe FP).
 - [`71`](71-expression-inference-fn-tail.md) — expression/iteration traversal silent-FN tail (binary results, template interpolations, spread, iterability).
 - [`73`](73-unsupported-surface-audit.md) — surface-accounting emission tail (census + incomplete outcome shipped 2026-07-10; the `infer_expr` shape tail still exits clean).
 - [`76`](76-lazy-value-type-resolution.md) — exact lazy declaration/value-type queries replace the safe `unknown` forward-return approximation · blocked by `46`, `48`.
@@ -116,7 +116,7 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
    census, so new silent paths can no longer disappear from the plan; `73` keeps the emission
    tail. The five HIGH review findings (`53` `55` `57` `58`
    `61`) shipped in sprint-2026-07-07-soundness-fn-fixes; `64` `34` `33` `54` `59` `65`
-   shipped in follow-up sprints; the remaining silent-FN C group (`56`, `60`, `62`, `30`, `32`,
+   shipped in follow-up sprints; the remaining silent-FN C group (`56`, `60`, `62`, `32`,
    `21`, `22`, `66`, `71`, `77`) is next, every one a dropped-error class. The next
    executable chain is **`73` closure → `72`**; the bounded prelude slice `38` shipped on
    2026-07-11.

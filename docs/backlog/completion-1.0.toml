@@ -333,11 +333,11 @@ deps = []
 id = "C-numeric-stringification"
 track = "C"
 title = "JS-exact number stringification (String(n) dtoa) — UNDER-report, not safe FP"
-state = "incomplete"
+state = "complete"
 blocks_release = "true"
-owner = "./30-numeric-literal-correctness.md"
-witness = "disabled acceptance spec: sr_deferred_ledger/b30_numeric_stringify.ts"
-links = ["../../tests/cases/sr_deferred_ledger/b30_numeric_stringify.ts", "../reference/divergences.md"]
+owner = "shipped"
+witness = "cargo test conformance (b30_numeric_stringify enabled) + independent tsc 6.0.3 f64 boundary review"
+links = ["../../tests/cases/b30_numeric_stringify/construction.ts", "../../tests/cases/b30_numeric_stringify/pattern_controls.ts", "../archive/sprint-2026-07-11-js-number-stringification.md"]
 deps = []
 
 [[criterion]]

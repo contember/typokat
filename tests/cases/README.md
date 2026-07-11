@@ -207,8 +207,8 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b20_ctor_accessibility/` | backlog `20` | private/protected constructor accessibility on direct `new C()` (`TK2673`/`TK2674`) |
 | `b28_interface_extends/` | backlog `28` | interface `extends` composition (inherited members in assignability/keyof/mapped; own overrides) |
 | `b29_alias_cycles/` | backlog `29` | surface alias cycles → `TK2456` (direct/mutual/through unions); legal member recursion resolves |
-| `b30_negative_literals/` | backlog `30` | negative numeric literal types are literals, not `any` (annotations, unions, template holes, extends) |
-| `b30_numeric_stringify/` | backlog `30` (disabled) | ECMA number-to-string thresholds and `${number}` long-decimal regression control |
+| `b30_negative_literals/` | shipped backlog `30` | negative numeric literal types are literals, not `any` (annotations, unions, template holes, extends) |
+| `b30_numeric_stringify/` | shipped backlog `30` | ECMA number-to-string thresholds and `${number}` long-decimal regression control |
 | `b55_template_memo/` | backlog `55` | template evaluation must not memoize results computed under an exhausted TK2589 budget |
 | `b58_project_scopes/` | backlog `58` | project-mode scope maps keyed per module — offset-aligned files must not collide |
 | `b61_field_initializers/` | backlog `61` | class field initializers checked against the annotation (assignability, excess, contextual typing; instance + static) |
@@ -324,7 +324,7 @@ sprint (its findings are open backlog items). Every fixture header records the
 | `sr_wu2_scope_overloads/` | WU2 | switch-local lexical scope (a case-clause `let`/`const` must not resolve after the switch — `TK2304`) and local (in-function) function overloads (no spurious `TK2391`; calls select declared overloads) |
 | `sr_wu2_export_space/` | WU2 | **project-shaped** (registered in `PROJECT_DIRS`): `export type { x }` / `export { type x }` specifier forms must not leak the value slot; a non-type-only import using such a name as a value gets `TK2304` (the M29 stand-in for tsc's `TS1362`) |
 | `sr_wu3_types_recursion/` | WU3 | `any & never` → `never` (assigning into it errors); source-intersection nominal origin (private member rejects); `keyof { [k: string]: T }` = `string \| number`; recursive mapped-value recursion guard; deep type-literal annotation depth guard (backlog 63k) |
-| `sr_deferred_ledger/` | — (stays disabled) | known unfixtured under-reports: backlog `30` (JS-exact number stringify), `56` (silent instantiation cycles), `60` (fresh literals vs union targets), `62` (index-signature source parity), `66` (protected↔protected override compat), `76` (unannotated forward `var` value type), `77` (`ReturnType` call-signature infer); plus the backlog `35` aliased-keyof mapped key-source **over**-report (`b35_aliased_keyof_mapped.ts`) |
+| `sr_deferred_ledger/` | — (stays disabled) | known unfixtured under-reports: backlog `56` (silent instantiation cycles), `60` (fresh literals vs union targets), `62` (index-signature source parity), `66` (protected↔protected override compat), `76` (unannotated forward `var` value type), `77` (`ReturnType` call-signature infer); plus the backlog `35` aliased-keyof mapped key-source **over**-report (`b35_aliased_keyof_mapped.ts`) |
 
 Construction notes:
 

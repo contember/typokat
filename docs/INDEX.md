@@ -24,15 +24,14 @@ decisions → reference → archive.
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 
-- [`sprint-2026-07-11-js-number-stringification.md`](sprints/sprint-2026-07-11-js-number-stringification.md) —
-  ECMA-exact numeric template stringification (backlog `30`).
-
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **JS-exact number stringification (`30`) is active** — focused boundary spec first,
-  then the shared formatter and an independent construction/matcher review.
+- **JS-exact number stringification (`30`) shipped 2026-07-11** (archived:
+  [`archive/sprint-2026-07-11-js-number-stringification.md`](archive/sprint-2026-07-11-js-number-stringification.md)) —
+  numeric literal holes now use ECMA-exact formatting; `${number}` keeps its
+  tsc-clean long-decimal acceptance; independent boundary review PASS.
 - **Minimal ambient prelude (`38`) shipped 2026-07-11** (archived:
   [`archive/sprint-2026-07-11-minimal-ambient-prelude.md`](archive/sprint-2026-07-11-minimal-ambient-prelude.md)) —
   the source-backed prelude now supplies a bounded `console`/numeric-`Math` value surface
@@ -75,5 +74,4 @@ decisions → reference → archive.
   poisoning, `57` Tuple↔Array inference, `58` project scope-key collision, `61` class field
   initializers, all five reviews PASS). The follow-up quick-wins sprint then closed `64` `34`
   `33` `54` `59`; the dedicated inference-policy sprint then closed `65`. The remaining C
-  silent-FN tail is now `30` `56` `60` `62` `32` `21` `22` `66` `77` (`30` reclassified
-  into it 2026-07-10 — a dropped-error under-report, not a safe FP).
+  silent-FN tail is now `56` `60` `62` `32` `21` `22` `66` `77`.

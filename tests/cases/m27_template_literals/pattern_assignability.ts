@@ -14,6 +14,9 @@ type NumHole = `n${number}`;
 const n1: NumHole = "n42";
 const n2: NumHole = "n3.5";
 const n3: NumHole = "nx"; // error[TK2322]
+// tsc accepts all parseable number spellings; backlog 63(e) owns these safe FPs.
+const n4: NumHole = "n01"; // error[TK2322]
+const n5: NumHole = "n1e3"; // error[TK2322]
 
 // Multiple wide holes: anchored on the literal separator.
 type WideHole = `${string}-${string}`;
