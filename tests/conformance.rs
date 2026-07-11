@@ -95,7 +95,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b65_inference_candidate_policy", true),
     // Backlog 38 minimal ambient prelude. WU1 commits this corpus disabled;
     // WU2 flips it on with the canonical prelude declarations.
-    ("b38_minimal_ambient_prelude", false),
+    ("b38_minimal_ambient_prelude", true),
     // Soundness-review-fixes sprint (2026-07-10) WU0 corpora. Each is committed
     // `false` (behavior-neutral spec); WU1-WU3 flip only their own dir when the
     // fix lands, the deferred-ledger dir stays `false` beyond this sprint. See

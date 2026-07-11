@@ -54,7 +54,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // whether a type obligation is collected below.
         let value = rhs.map(|(ty, _)| (ty, assign_span));
 
-        let symbol_id = match self.binder.graph.resolve(scope, target.name.as_str()) {
+        let symbol_id = match self.binder.resolve_value(scope, target.name.as_str()) {
             Some(symbol_id) => symbol_id,
             None => {
                 self.diagnostics.push(Diagnostic::cannot_find_name(
@@ -551,6 +551,6 @@ pub(in crate::check::checker) fn binding_decl_id(
         BindingPattern::BindingIdentifier(ident) => ident.name.as_str(),
         _ => return None,
     };
-    let symbol_id = binder.graph.resolve(scope, name)?;
+    let symbol_id = binder.resolve_value(scope, name)?;
     binder.symbols.get(symbol_id).and_then(|s| s.value)
 }

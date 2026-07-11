@@ -23,3 +23,19 @@ type Uppercase<S extends string> = intrinsic;
 type Lowercase<S extends string> = intrinsic;
 type Capitalize<S extends string> = intrinsic;
 type Uncapitalize<S extends string> = intrinsic;
+
+declare const console: {
+  log(...data: unknown[]): void;
+  warn(...data: unknown[]): void;
+  error(...data: unknown[]): void;
+};
+
+declare const Math: {
+  abs(x: number): number;
+  ceil(x: number): number;
+  floor(x: number): number;
+  max(...values: number[]): number;
+  min(...values: number[]): number;
+  round(x: number): number;
+  random(): number;
+};

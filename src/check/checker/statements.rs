@@ -998,7 +998,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             if let Some(symbol_id) = func
                 .id
                 .as_ref()
-                .and_then(|id| self.binder.graph.resolve(scope, id.name.as_str()))
+                .and_then(|id| self.binder.resolve_value(scope, id.name.as_str()))
             {
                 self.publish_symbol_value_type(decl_id, function_ty, symbol_id);
                 if let Some(merged_decl) = self
@@ -1168,7 +1168,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         implementation_decl: Option<DeclId>,
         overload_ty: TypeId,
     ) {
-        if let Some(symbol_id) = self.binder.graph.resolve(scope, name) {
+        if let Some(symbol_id) = self.binder.resolve_value(scope, name) {
             if let Some(symbol) = self.binder.symbols.get(symbol_id) {
                 let function_values = symbol.function_values.clone();
                 let merged_decl = symbol.value;
@@ -1310,9 +1310,7 @@ fn variable_declaration_symbol_id(
     } else {
         scope
     };
-    binder
-        .graph
-        .resolve(declaration_scope, identifier.name.as_str())
+    binder.resolve_value(declaration_scope, identifier.name.as_str())
 }
 
 fn function_overload_group<'stmt>(

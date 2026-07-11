@@ -45,6 +45,48 @@ pub struct Binder {
     pub block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
 }
 
+impl Binder {
+    /// Resolve a value-space binding, skipping same-named type-only symbols while
+    /// walking parents.
+    pub(crate) fn resolve_value(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
+        resolve_value_symbol(&self.graph, &self.symbols, scope, name)
+    }
+
+    /// Resolve a type-space binding, skipping same-named value-only symbols while
+    /// walking parents.
+    pub(crate) fn resolve_type(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
+        resolve_type_symbol(&self.graph, &self.symbols, scope, name)
+    }
+}
+
+fn resolve_value_symbol(
+    graph: &ScopeGraph,
+    symbols: &SymbolTable,
+    scope: ScopeId,
+    name: &str,
+) -> Option<SymbolId> {
+    graph.resolve_matching(scope, name, |symbol_id| {
+        symbols
+            .get(symbol_id)
+            .and_then(|symbol| symbol.value)
+            .is_some()
+    })
+}
+
+fn resolve_type_symbol(
+    graph: &ScopeGraph,
+    symbols: &SymbolTable,
+    scope: ScopeId,
+    name: &str,
+) -> Option<SymbolId> {
+    graph.resolve_matching(scope, name, |symbol_id| {
+        symbols
+            .get(symbol_id)
+            .and_then(|symbol| symbol.ty)
+            .is_some()
+    })
+}
+
 /// Mutable binder state threaded through the recursive walk.
 pub(crate) struct ImportedSymbol {
     name: String,
@@ -207,14 +249,13 @@ impl ProjectBinderBuilder {
         scope: ScopeId,
         name: &str,
     ) -> (Option<DeclId>, Option<DeclId>) {
-        let Some(symbol_id) = self.state.graph.resolve(scope, name) else {
-            return (None, None);
-        };
-        self.state
-            .symbols
-            .get(symbol_id)
-            .map(|symbol| (symbol.value, symbol.ty))
-            .unwrap_or((None, None))
+        let value = resolve_value_symbol(&self.state.graph, &self.state.symbols, scope, name)
+            .and_then(|symbol_id| self.state.symbols.get(symbol_id))
+            .and_then(|symbol| symbol.value);
+        let ty = resolve_type_symbol(&self.state.graph, &self.state.symbols, scope, name)
+            .and_then(|symbol_id| self.state.symbols.get(symbol_id))
+            .and_then(|symbol| symbol.ty);
+        (value, ty)
     }
 }
 

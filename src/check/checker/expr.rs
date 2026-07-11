@@ -101,18 +101,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 if ident.name.as_str() == "undefined" {
                     return Some((well_known.undefined, span));
                 }
-                match self.binder.graph.resolve(scope, ident.name.as_str()) {
-                    Some(symbol_id) => match self.binder.symbols.get(symbol_id) {
-                        Some(symbol) if symbol.value.is_some() => Some((
-                            self.resolve_identifier_type(symbol_id, ident.span.start),
-                            span,
-                        )),
-                        _ => {
-                            self.diagnostics
-                                .push(Diagnostic::cannot_find_name(span, ident.name.as_str()));
-                            Some((well_known.error, span))
-                        }
-                    },
+                match self.binder.resolve_value(scope, ident.name.as_str()) {
+                    Some(symbol_id) => Some((
+                        self.resolve_identifier_type(symbol_id, ident.span.start),
+                        span,
+                    )),
                     None => {
                         self.diagnostics
                             .push(Diagnostic::cannot_find_name(span, ident.name.as_str()));

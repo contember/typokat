@@ -134,8 +134,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
                     return None;
                 };
-                let symbol = self.binder.graph.resolve(scope, target.name.as_str())?;
-                self.binder.symbols.get(symbol)?.value?;
+                let symbol = self.binder.resolve_value(scope, target.name.as_str())?;
                 Some(GuardFact {
                     symbol,
                     op: NarrowOp::Truthy,
@@ -348,10 +347,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         if ident.name.as_str() == "undefined" {
             return None;
         }
-        let symbol_id = self.binder.graph.resolve(scope, ident.name.as_str())?;
-        // Only a value binding (a local/parameter) is narrowable.
-        self.binder.symbols.get(symbol_id)?.value?;
-        Some(symbol_id)
+        self.binder.resolve_value(scope, ident.name.as_str())
     }
 
     /// Analyze `"prop" in x` as an M8 guard. The left side must be a string literal

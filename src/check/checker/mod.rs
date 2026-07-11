@@ -99,8 +99,8 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
     let total_type_decls = binder.type_decl_count as usize;
     let mut type_resolved: Vec<Option<TypeId>> = vec![None; total_type_decls];
 
-    // Fill prelude aliases in the prelude scope so user shadows cannot capture their
-    // internal references.
+    // Fill prelude declarations in the prelude scope so user shadows cannot capture
+    // their internal references.
     let mut prelude_decls: Vec<TypeDecl> = Vec::new();
     reserve_type_decls(
         interner,
@@ -117,11 +117,13 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
         &binder,
         prelude_decls,
         type_resolved,
-        DeclTypes::new(0),
+        DeclTypes::new(binder.decl_count),
         next_type_param,
     );
     prelude_pass.current_module = binder.prelude_module;
     prelude_pass.fill_type_decls(binder.prelude_module);
+    prelude_pass.build_flow_graph(binder.prelude_module, &prelude_parsed.program.body);
+    prelude_pass.check_statements(binder.prelude_module, &prelude_parsed.program.body);
     // Prelude diagnostics are never surfaced to users; debug builds still assert it is clean.
     debug_assert!(
         prelude_pass.diagnostics.is_empty(),
@@ -141,6 +143,7 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
         .collect();
     let Pass {
         mut type_resolved,
+        decl_types,
         next_type_param: prelude_next_type_param,
         ..
     } = prelude_pass;
@@ -178,7 +181,6 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
         &mut type_decls,
         &mut type_resolved,
     );
-    let decl_types = DeclTypes::new(binder.decl_count);
     let mut pass = build_pass(
         interner,
         &binder,
@@ -325,11 +327,13 @@ pub fn check_project_programs<'ast>(
         &binder,
         prelude_decls,
         type_resolved,
-        DeclTypes::new(0),
+        DeclTypes::new(binder.decl_count),
         next_type_param,
     );
     prelude_pass.current_module = binder.prelude_module;
     prelude_pass.fill_type_decls(binder.prelude_module);
+    prelude_pass.build_flow_graph(binder.prelude_module, &prelude_parsed.program.body);
+    prelude_pass.check_statements(binder.prelude_module, &prelude_parsed.program.body);
     debug_assert!(
         prelude_pass.diagnostics.is_empty(),
         "the prelude must check clean: {:?}",
@@ -347,6 +351,7 @@ pub fn check_project_programs<'ast>(
         .collect();
     let Pass {
         mut type_resolved,
+        mut decl_types,
         next_type_param: prelude_next_type_param,
         ..
     } = prelude_pass;
@@ -382,7 +387,6 @@ pub fn check_project_programs<'ast>(
         type_decl_ranges.push((start, type_decls.len()));
     }
 
-    let mut decl_types = DeclTypes::new(binder.decl_count);
     for placeholders in &module_placeholders {
         for placeholder in placeholders {
             if let Some(decl_id) = placeholder.value {

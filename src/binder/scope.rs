@@ -108,6 +108,26 @@ impl ScopeGraph {
         None
     }
 
+    /// Resolve `name` by walking parent links until a matching symbol satisfies
+    /// `accept`. A declaration in the other namespace does not block a value/type
+    /// lookup from reaching an ancestor's matching slot.
+    pub fn resolve_matching<F>(&self, scope: ScopeId, name: &str, mut accept: F) -> Option<SymbolId>
+    where
+        F: FnMut(SymbolId) -> bool,
+    {
+        let mut current = Some(scope);
+        while let Some(id) = current {
+            let s = self.get(id)?;
+            if let Some(symbol) = s.lookup_local(name) {
+                if accept(symbol) {
+                    return Some(symbol);
+                }
+            }
+            current = s.parent;
+        }
+        None
+    }
+
     /// The scope that owns a `var` declaration originating in `scope`.
     /// Blocks and loop heads are skipped; a function boundary keeps nested
     /// functions isolated and the module owns top-level `var`s.

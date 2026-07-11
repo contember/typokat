@@ -182,13 +182,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// Resolve an assignment-target name to its narrowable value symbol, or `None`
     /// for an unresolvable / non-value binding.
     fn assignable_symbol(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
-        self.binder.graph.resolve(scope, name).filter(|&s| {
-            self.binder
-                .symbols
-                .get(s)
-                .and_then(|sym| sym.value)
-                .is_some()
-        })
+        self.binder.resolve_value(scope, name)
     }
 
     /// Emit a reset-to-declared assignment node for `symbol` (the value changed in a

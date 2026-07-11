@@ -1233,7 +1233,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // it (the binder declared the parameter symbol + DeclId).
             if let Some(scope) = fn_scope {
                 if let Some(decl_id) = parameter_name(&param.pattern)
-                    .and_then(|n| self.binder.graph.resolve(scope, &n))
+                    .and_then(|n| self.binder.resolve_value(scope, &n))
                     .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
                     .and_then(|s| s.value)
                 {
@@ -1258,7 +1258,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             };
             if let Some(scope) = fn_scope {
                 if let Some(decl_id) = parameter_name(&rest.rest.argument)
-                    .and_then(|n| self.binder.graph.resolve(scope, &n))
+                    .and_then(|n| self.binder.resolve_value(scope, &n))
                     .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
                     .and_then(|s| s.value)
                 {

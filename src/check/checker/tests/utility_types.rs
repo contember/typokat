@@ -3,7 +3,7 @@
 //! preservation. Fixture acceptance lives in `m28_utility_types/`.
 
 use crate::check::checker::PRELUDE_SOURCE;
-use crate::driver::check_source;
+use crate::driver::{check_project, check_source, FileInput};
 
 /// Run the checker and return the sorted `(1-based line, code)` of every
 /// diagnostic, keyed on its primary-span start line (matching the conformance
@@ -54,6 +54,131 @@ const x: Partial<{ a: string }> = \"s\";
         vec![(2, "TK2322".to_string())],
         "the user Partial (= number) must win over the prelude's"
     );
+}
+
+/// Prelude values are lowered in the prelude pass and their declaration table is
+/// carried into the single-file user pass, so calls do not silently use `error`.
+#[test]
+fn prelude_values_reach_single_file_user_pass() {
+    let src = "\
+console.log(\"ready\", 1, { enabled: true });
+Math.max(1, 2, 3);
+Math.abs(\"wrong\");
+const wrongResult: string = Math.ceil(1);
+";
+    assert_eq!(
+        diags(src),
+        vec![(3, "TK2345".to_string()), (4, "TK2322".to_string())],
+        "prelude calls retain their parameter and return types in user code"
+    );
+}
+
+/// A user value declaration naturally shadows the inherited prelude value through
+/// the binder's inner scope, with no duplicate declaration diagnostic.
+#[test]
+fn user_declaration_shadows_prelude_value() {
+    let src = "\
+declare const console: { log(value: number): void };
+console.log(\"wrong\");
+";
+    assert_eq!(
+        diags(src),
+        vec![(2, "TK2345".to_string())],
+        "the user console declaration must replace the inherited rest signature"
+    );
+}
+
+/// A local type-only declaration does not mask the inherited `Math` value. Value
+/// lookup continues to the parent scope until it finds a value-space slot.
+#[test]
+fn local_type_does_not_shadow_prelude_value() {
+    let src = "\
+type Math = { local: true };
+Math.abs(\"wrong\");
+";
+    assert_eq!(
+        diags(src),
+        vec![(2, "TK2345".to_string())],
+        "a type-only Math declaration must not hide the inherited Math value"
+    );
+}
+
+/// A local value-only declaration does not mask the inherited `Partial` type.
+/// Type lookup continues to the parent scope until it finds a type-space slot.
+#[test]
+fn local_value_does_not_shadow_prelude_type() {
+    let src = "\
+declare const Partial: number;
+const bad: Partial<{ a: string }> = \"wrong\";
+";
+    assert_eq!(
+        diags(src),
+        vec![(2, "TK2322".to_string())],
+        "a value-only Partial declaration must not hide the inherited Partial type"
+    );
+}
+
+/// Project mode uses the same prelude pass and value-table handoff for every user
+/// module, including modules after the first one in serial checking order.
+#[test]
+fn prelude_values_reach_project_user_passes() {
+    let reports = check_project(vec![
+        FileInput {
+            name: "first.ts".to_string(),
+            source: "console.error({ message: \"failed\" });".to_string(),
+        },
+        FileInput {
+            name: "second.ts".to_string(),
+            source: "Math.min(1, \"wrong\");\nconst wrongResult: string = Math.round(1);"
+                .to_string(),
+        },
+    ]);
+
+    assert!(
+        reports[0].output.diagnostics.is_empty(),
+        "the first project module receives the inherited console value"
+    );
+    let codes: Vec<String> = reports[1]
+        .output
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str().to_string())
+        .collect();
+    assert_eq!(codes, vec!["TK2345", "TK2322"]);
+}
+
+/// Project modules share the same slot-aware parent traversal as a single-file
+/// pass, so a cross-space local declaration cannot hide an inherited prelude slot.
+#[test]
+fn cross_space_lookup_reaches_prelude_in_project_passes() {
+    let reports = check_project(vec![
+        FileInput {
+            name: "value.ts".to_string(),
+            source: "type Math = { local: true };\nMath.abs(\"wrong\");".to_string(),
+        },
+        FileInput {
+            name: "type.ts".to_string(),
+            source:
+                "declare const Partial: number;\nconst bad: Partial<{ a: string }> = \"wrong\";"
+                    .to_string(),
+        },
+    ]);
+
+    let first_codes: Vec<String> = reports[0]
+        .output
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str().to_string())
+        .collect();
+    assert_eq!(first_codes, vec!["TK2345"]);
+
+    let second_codes: Vec<String> = reports[1]
+        .output
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str().to_string())
+        .collect();
+    assert_eq!(second_codes, vec!["TK2322"]);
 }
 
 /// `Pick` preserves the picked member's value type and optionality via the M28

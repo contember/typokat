@@ -528,7 +528,7 @@ pub(in crate::check::checker) fn type_decl_id(
     scope: ScopeId,
     name: &str,
 ) -> Option<DeclId> {
-    let symbol_id = binder.graph.resolve(scope, name)?;
+    let symbol_id = binder.resolve_type(scope, name)?;
     binder.symbols.get(symbol_id).and_then(|s| s.ty)
 }
 
@@ -540,6 +540,6 @@ pub(in crate::check::checker) fn value_decl_id(
     scope: ScopeId,
     name: &str,
 ) -> Option<DeclId> {
-    let symbol_id = binder.graph.resolve(scope, name)?;
+    let symbol_id = binder.resolve_value(scope, name)?;
     binder.symbols.get(symbol_id).and_then(|s| s.value)
 }
