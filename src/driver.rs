@@ -544,11 +544,11 @@ mod tests {
     #[test]
     fn function_reservation_preserves_diagnostic_order() {
         let out = check_source(
-            "const first: string = 1;\n\
+            "missingBefore;\n\
              function late(value: Missing): void {}\n\
-             const second: string = 1;",
+             missingAfter;",
         );
-        assert_eq!(codes(&out), vec!["TK2322", "TK2304", "TK2322"]);
+        assert_eq!(codes(&out), vec!["TK2304", "TK2304", "TK2304"]);
         assert!(
             out.diagnostics
                 .windows(2)
