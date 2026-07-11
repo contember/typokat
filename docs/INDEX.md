@@ -24,12 +24,16 @@ decisions → reference → archive.
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 
-*(none — between sprints)*
+- [`sprint-2026-07-11-declaration-hoisting-parity.md`](sprints/sprint-2026-07-11-declaration-hoisting-parity.md)
+  — close backlog `74`: forward local-function calls + function/module-scoped `var`.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **Active: declaration hoisting parity (`74`)** — spec-first forward-call and `var`
+  scope corpus, checker callable-surface predeclaration, binder `var` placement, and
+  independent adversarial review. On closure, finish `73`, then run `38` → `72`.
 - **2026-07-10 completeness-accounting sprint shipped** (archived:
   [`archive/sprint-2026-07-10-completeness-accounting.md`](archive/sprint-2026-07-10-completeness-accounting.md)) —
   machine-validated OXC surface inventory with compile-time drift tripwires, a first-class

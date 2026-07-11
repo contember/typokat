@@ -20,3 +20,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+- [`sprint-2026-07-11-declaration-hoisting-parity.md`](sprint-2026-07-11-declaration-hoisting-parity.md)
+  — close backlog `74`: predeclare local function callable surfaces and bind `var` in
+  its containing function/module scope before the `73` → `38` → `72` preview chain.
