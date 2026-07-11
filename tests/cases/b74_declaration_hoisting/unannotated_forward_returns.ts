@@ -32,3 +32,29 @@ function dependentBody(): void {
     return 1;
   }
 }
+
+// Review regression: a forward read at a non-START flow node must not leave the
+// provisional unknown in flow_memo after source-position body fill.
+function flowMemoRefresh(flag: boolean): void {
+  if (flag) {
+    const before: unknown = flowNumber();
+
+    function flowNumber() {
+      return 1;
+    }
+
+    const after: number = flowNumber();
+  }
+}
+
+function genericFlowMemoRefresh(flag: boolean): void {
+  if (flag) {
+    const before: unknown = flowGeneric(1);
+
+    function flowGeneric<T>(value: T) {
+      return value;
+    }
+
+    const after: number = flowGeneric(1);
+  }
+}

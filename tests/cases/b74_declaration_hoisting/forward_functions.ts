@@ -38,3 +38,15 @@ function mutuallyReferential(): void {
     return first(value);
   }
 }
+
+// A switch CaseBlock is one lexical scope: a declaration in a later clause is
+// visible to an earlier clause even though each consequent is checked separately.
+function switchClauseForward(tag: number): void {
+  switch (tag) {
+    case 0:
+      switchLater("bad"); // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'
+      break;
+    default:
+      function switchLater(value: number): void {}
+  }
+}
