@@ -43,3 +43,21 @@ function lexicalControls(): void {
   blockLet = 3; // error[TK2304]: Cannot find name 'blockLet'
   const missingConst: number = blockConst; // error[TK2304]: Cannot find name 'blockConst'
 }
+
+function catchParameterCollision(): void {
+  try {
+  } catch (caught) { // incomplete[stmt-check/try-statement/catch-param]
+    var caught: number = 1;
+  }
+  caught = "bad"; // error[TK2322]: Type 'string' is not assignable to type 'number'
+}
+
+function lexicalFunctionCollision(): void {
+  {
+    function value(): number {
+      return 1;
+    }
+    var value = 1;
+  }
+  value = "bad"; // error[TK2322]: Type 'string' is not assignable to type 'number'
+}
