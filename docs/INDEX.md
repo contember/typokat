@@ -23,16 +23,20 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-07-12-generic-methods.md`](sprints/sprint-2026-07-12-generic-methods.md) —
+  persistent generic member/call/construct signatures, inference, constraints, and relation for
+  backlog `41`.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
-  public project discovery, witness-bounded NodeNext resolution, and a clean/mutation identity
-  ratchet for backlog `72`.
+  paused at WU0's zero-threshold witness gate after public candidate screening.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Real-project preview (`72`) active 2026-07-12** — WU0 first pins a zero-threshold public strict
-  project, CLI/summary contract, clean oracle, and mutation identities before implementation.
+- **Generic methods (`41`) active 2026-07-12** — first Track A critical-path sprint; WU0 must replace
+  pass-local generic metadata with a substitution- and relation-sound persistent representation.
+- **Real-project preview (`72`) paused at WU0** — no screened public project met the multi-file,
+  minimal-graph, zero-threshold contract; no implementation or prelude expansion started.
 - **Surface-accounting tail shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-surface-accounting-tail.md`](archive/sprint-2026-07-12-surface-accounting-tail.md)) —
   all inventoried expression shapes now report incomplete explicitly or have a durable semantic

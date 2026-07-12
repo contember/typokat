@@ -20,5 +20,7 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+- [`sprint-2026-07-12-generic-methods.md`](sprint-2026-07-12-generic-methods.md) —
+  model persistent generic member/call/construct signatures and close backlog `41`.
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
-  close backlog `72` with a pinned strict-project CLI witness and identity ratchet.
+  paused at WU0's zero-threshold public-witness gate; no implementation started.
