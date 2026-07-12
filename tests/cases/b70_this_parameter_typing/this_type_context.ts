@@ -9,7 +9,7 @@ type NumericContext = {
 const numeric: NumericContext = {
   n: 1,
   check() {
-    this.n.toFixed();
+    const numericValue: number = this.n;
   },
 };
 
@@ -21,6 +21,6 @@ type StringContext = {
 const stringContext: StringContext = {
   n: 1,
   check() {
-    this.n.missing(); // error[TK2339]
+    const wrongValue: number = this.n; // error[TK2322]
   },
 };

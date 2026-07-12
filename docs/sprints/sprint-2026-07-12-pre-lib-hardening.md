@@ -258,3 +258,6 @@ the original Terra implementer and repeats the relevant independent gate before 
 - 2026-07-12 — Before WU4, the surface ledger's polymorphic `this` type annotation/name
   rows moved from `70` to `75`: they are distinct from explicit receiver parameters and
   the contextual `ThisType<T>` marker, so implementing them here would expand scope.
+- 2026-07-12 — WU4 checkpoint 2 verify-first amended the corpus: clean receiver controls
+  no longer call `number.toFixed()` (which requires full `lib.d.ts`); direct typed
+  assignments prove the receiver, and the string `ThisType` case now expects `TK2322`.

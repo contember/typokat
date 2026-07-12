@@ -11,7 +11,7 @@ function render(this: { n: number }, value: string): number {
 }
 
 function wrongReceiver(this: { n: string }, value: string): number {
-  return value.length;
+  return 0;
 }
 
 const bound = bind(render, { n: 1 });

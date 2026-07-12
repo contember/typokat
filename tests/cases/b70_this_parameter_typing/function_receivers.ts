@@ -3,7 +3,7 @@
 // Cross-checked with tsc 6.0.3 --strict.
 
 function needsReceiver(this: { n: number }, value: number): string {
-  this.n.toFixed();
+  const receiverNumber: number = this.n;
   this.n.missing(); // error[TK2339]
   return "ok";
 }
