@@ -117,3 +117,23 @@ interface ConstructorSlots {
 declare let constructorSlots: ConstructorSlots;
 constructorSlots.same = splitSlotsConstructor;
 splitSlotsConstructor = constructorSlots.same; // error[TK2322]: not assignable
+
+declare let callable: (value: number) => number;
+declare let callableCopy: (value: number) => number;
+declare let constructable: new (value: number) => number;
+declare let constructableCopy: new (value: number) => number;
+
+callable = callableCopy;
+constructable = constructableCopy;
+callable = constructable; // error[TK2322]: not assignable
+constructable = callable; // error[TK2322]: not assignable
+
+declare let genericCallable: <T>(value: T) => T;
+declare let genericCallableCopy: <T>(value: T) => T;
+declare let genericConstructable: new <T>(value: T) => T;
+declare let genericConstructableCopy: new <T>(value: T) => T;
+
+genericCallable = genericCallableCopy;
+genericConstructable = genericConstructableCopy;
+genericCallable = genericConstructable; // error[TK2322]: not assignable
+genericConstructable = genericCallable; // error[TK2322]: not assignable
