@@ -50,64 +50,95 @@ namespaces/declaration merging, and the audit-discovered `70` `this`-parameter t
 es5 core; `42`/`44` are not used by es5 core). The official-suite scoreboard is the ratchet on
 the way there — its syntax gates flip OOS→IN as features land — not a numeric pass/fail gate.
 
+## Roadmap at a glance
+
+The active backlog has **42 items**: **33 checker-1.0 release blockers** and **9 non-blocking,
+safe-direction parity items**. The release classification comes from
+[`completion-1.0.toml`](completion-1.0.toml); the grouping below is the human roadmap view.
+
+| Track | Active items | Typical effort | Role |
+|---|---:|---|---|
+| **A — model completeness** | 6 | L–XL | Eliminate silently-permissive model gaps; `41`/`43`/`70` directly unblock full `lib.d.ts`. |
+| **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
+| **C — soundness/parity tail** | 19 | S–L | Ten release-blocking known gaps plus nine safe-direction parity improvements. |
+| **D — scale + IDE** | 6 | XL | Preview, full standard library, resolver breadth, parallel identity, and incrementality. |
+
+Effort is a **relative planning estimate**, not a time promise:
+
+- **S** — one focused work unit, normally one subsystem;
+- **M** — a bounded feature or bug family spanning a few touch points;
+- **L** — cross-cutting semantics or several independently reviewable slices;
+- **XL** — a milestone-sized architectural or integration project.
+
+Re-check the estimate against HEAD when scheduling the item; the mandatory spec → implementation →
+independent-review loop still applies at every size. Unless noted otherwise, every item below blocks
+checker 1.0. The FP/tsc-parity subsection is the only non-blocking group.
+
 ## Items
 
-**A. Model completeness — the `lib.d.ts` critical path.** Each kills a silently-permissive
-family; together they unblock `14`, whose source text uses all of them.
-- [`41`](41-generic-methods.md) — generic methods (method-level type params; subsumes `23`).
-- [`42`](42-enums-type-side.md) — enums, type side (not needed by lib.d.ts itself; same family).
-- [`43`](43-namespaces-declaration-merging.md) — namespaces (type side) + declaration merging.
-- [`44`](44-satisfies-as-const.md) — `satisfies` + `as const` semantics.
-- [`70`](70-this-parameter-typing.md) — `this`-parameter typing + `ThisType<T>` (lib.d.ts prerequisite; audit-discovered).
+**A. Model completeness — the `lib.d.ts` critical path plus exact declaration types.** Every item
+kills a silently-permissive or deliberately approximate model family. `41`, `43`, and `70` are the
+direct blockers of `14`; `42`, `44`, and `76` still block checker 1.0 but are not needed by the
+`lib.es5.d.ts` core.
+
+- **XL** · [`41`](41-generic-methods.md) — generic methods across lowering, inference, constraints, and relation; subsumes `23`.
+- **L** · [`42`](42-enums-type-side.md) — enum type/value sides, nominal member types, and narrowing.
+- **XL** · [`43`](43-namespaces-declaration-merging.md) — namespace binding, qualified names, and declaration merging.
+- **L** · [`44`](44-satisfies-as-const.md) — `satisfies` checking plus readonly literal/tuple semantics for `as const`.
+- **L** · [`70`](70-this-parameter-typing.md) — `this` signature slots and contextual `ThisType<T>`; direct `lib.d.ts` blocker.
+- **XL** · [`76`](76-lazy-value-type-resolution.md) — demand-driven declaration/value types and inferred-return cycles · blocked by `46`, `48`.
 
 **B. Checker completeness — Tier A/B diagnostic surface.** Independent of A; good sprint
 fillers.
-- [`18`](18-duplicate-identifier-detection.md) — duplicate identifiers (`TK2300` members + `TK2451` redeclare).
-- [`19`](19-call-of-non-callable-diagnostic.md) — `TK2349` call-of-non-callable (unblocked by `40`'s callability model).
-- [`45`](45-operator-comparison-typing.md) — operator & comparison typing (TK2362/2363/2365, TK2367).
-- [`46`](46-return-path-analysis.md) — return-path analysis (TK2355/2366/2378/7030).
-- [`47`](47-definite-assignment.md) — definite assignment (TK2454/2448/2564).
-- [`48`](48-no-implicit-any.md) — `noImplicitAny` family (TK7005/7006/7008/7031/7053).
-- [`49`](49-possibly-undefined-family.md) — possibly-undefined/null family + optional methods/accessors.
-- [`50`](50-type-predicates-assertions.md) — type predicates (`x is T`) + assertion functions.
-- [`51`](51-narrowing-tail.md) — narrowing tail: remaining loop forms, member paths, closures.
-- [`52`](52-type-reference-tail.md) — type-reference tail (TS2749, TS2314/2315, TK2558).
-- [`75`](75-scope-surface-tail.md) — canonical Tier S/A/B semantic ownership tail (its divergence-census infrastructure shipped 2026-07-10).
+
+- **L** · [`18`](18-duplicate-identifier-detection.md) — duplicate members, bindings, and function implementations without breaking legal merging.
+- **M** · [`19`](19-call-of-non-callable-diagnostic.md) — provable `TK2349` call-of-non-callable without false positives on deferred signatures.
+- **L** · [`45`](45-operator-comparison-typing.md) — arithmetic, unary, comparison-overlap, `in`, and `instanceof` typing.
+- **M** · [`46`](46-return-path-analysis.md) — CFG return coverage, accessors, and bare-return inference.
+- **L** · [`47`](47-definite-assignment.md) — use-before-assignment, TDZ, and constructor property initialization.
+- **M** · [`48`](48-no-implicit-any.md) — implicit-any declarations, binding elements, and element access.
+- **L** · [`49`](49-possibly-undefined-family.md) — nullable receivers, optional members/calls, optional chaining, and non-null assertions.
+- **L** · [`50`](50-type-predicates-assertions.md) — predicate/assertion signatures wired into flow narrowing.
+- **XL** · [`51`](51-narrowing-tail.md) — remaining loops, member-path invalidation, and closure narrowing.
+- **M** · [`52`](52-type-reference-tail.md) — value/type-space misuse, generic arity, and explicit call-site type args.
+- **XL** · [`75`](75-scope-surface-tail.md) — family-by-family disposition of the remaining Tier S/A/B semantic surface.
 
 **C. Known-gap fixes — the soundness/parity tail.**
 Silent-FN kills (highest value per effort, schedule first; `54`–`65` are the 2026-07-07
 cross-cutting soundness review findings, leader-verified vs tsc 6.0.3). The five HIGH
 items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundness-fn-fixes.
-- [`56`](56-silent-instantiation-cycles.md) — instantiation cycles silently resolve to error.
-- [`60`](60-fresh-literal-union-targets.md) — fresh literals vs union targets: excess + assignability skipped.
-- [`62`](62-index-signature-relation-parity.md) — index-signature relation parity (implicit-index rule, numeric names).
-- [`21`](21-local-class-checking.md) — function-local classes entirely unchecked.
-- [`22`](22-new-callee-forms.md) — `new (C)()` / aliased `new` miss class-keyed checks.
-- [`32`](32-eager-keyof-forward-references.md) — eager `keyof` over forward references.
-- [`66`](66-protected-override-compat.md) — protected↔protected incompatible override skips TK2416 (dropped TS2416).
-- [`71`](71-expression-inference-fn-tail.md) — expression/iteration traversal silent-FN tail (binary results, template interpolations, spread, iterability).
-- [`73`](73-unsupported-surface-audit.md) — surface-accounting emission tail (census + incomplete outcome shipped 2026-07-10; the `infer_expr` shape tail still exits clean).
-- [`76`](76-lazy-value-type-resolution.md) — exact lazy declaration/value-type queries replace the safe `unknown` forward-return approximation · blocked by `46`, `48`.
-- [`77`](77-returntype-call-signature-infer.md) — `ReturnType` conditional infer drops represented object/overload call-signature returns.
+
+- **M** · [`56`](56-silent-instantiation-cycles.md) — instantiation cycles silently resolve to an error type without `TK2589`.
+- **L** · [`60`](60-fresh-literal-union-targets.md) — fresh-literal excess and assignability checks are skipped for union targets.
+- **M** · [`62`](62-index-signature-relation-parity.md) — declared-source implicit indexes, numeric names, and optional `undefined` parity.
+- **M** · [`21`](21-local-class-checking.md) — function-local classes entirely miss class-keyed checks.
+- **S** · [`22`](22-new-callee-forms.md) — parenthesized/aliased `new` misses abstract and constructor-accessibility checks.
+- **L** · [`32`](32-eager-keyof-forward-references.md) — eager `keyof` over forward references silently degrades through fill order.
+- **L** · [`66`](66-protected-override-compat.md) — protected override compatibility and lineage-aware nominal origins · blocked by `63(d)`.
+- **L** · [`71`](71-expression-inference-fn-tail.md) — binary results, template interpolations, spread, and iterability traversal gaps.
+- **L** · [`73`](73-unsupported-surface-audit.md) — finish explicit incomplete emissions for inventoried expression shapes.
+- **M** · [`77`](77-returntype-call-signature-infer.md) — infer `ReturnType` from object and overload call signatures.
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
-- [`23`](23-static-method-type-params.md) — spurious TK2304 on static method type params (or close via `41`).
-- [`26`](26-cross-binder-nested-infer.md) — cross-binder nested `infer` (de Bruijn shifting on embed).
-- [`27`](27-template-buried-conditional-evaluation.md) — evaluate template-buried conditionals.
-- [`35`](35-keyof-union-and-key-source-edges.md) — `keyof` over unions + edge key sources.
-- [`36`](36-conditional-structural-operand-parity.md) — conditional parity for structurally-wrapped operands.
-- [`37`](37-constraint-approximation-deferred-args.md) — TK2344 constraint approximation for deferred args.
-- [`68`](68-contravariant-infer-intersection.md) — same-name contravariant `infer` over-reports to `never` (should intersect).
-- [`69`](69-signature-rest-parity-tail.md) — signature rest parity tail (embedded tuple-rest inference, variadic source tuple infer).
-- [`63`](63-review-parity-tail.md) — 2026-07-07 review parity tail (batched small FPs, messages, depth guard).
+
+- **S** · [`23`](23-static-method-type-params.md) — suppress spurious `TK2304` on static method type params, or close through `41`.
+- **L** · [`26`](26-cross-binder-nested-infer.md) — correct de Bruijn shifting/levels for nested `infer` binders.
+- **L** · [`27`](27-template-buried-conditional-evaluation.md) — demand-evaluate conditionals buried in named structural templates.
+- **L** · [`35`](35-keyof-union-and-key-source-edges.md) — `never`, template-pattern, and aliased-`keyof` mapped key sources.
+- **L** · [`36`](36-conditional-structural-operand-parity.md) — tsc's eager-false/demand behavior for structurally wrapped operands.
+- **M** · [`37`](37-constraint-approximation-deferred-args.md) — upper-bound approximation for provable deferred arguments.
+- **M** · [`68`](68-contravariant-infer-intersection.md) — intersect same-name contravariant `infer` candidates instead of collapsing to `never`.
+- **M** · [`69`](69-signature-rest-parity-tail.md) — embedded tuple-rest and variadic source-tuple inference.
+- **L** · [`63`](63-review-parity-tail.md) — batched evaluator/relation/checker FPs, messages, and residual parser-depth guard.
 
 **D. Scale + IDE — the §12 phase ladder.**
-- [`72`](72-real-project-preview-readiness.md) — honest public-CLI preview on a pinned small strict project, with clean + mutation differential ratchet.
-- [`13`](13-bytecode-vm.md) — post-evaluator profiling gate (instrument shipped: `tooling/bench/`).
-- [`14`](14-libdts-loading.md) — full `lib.d.ts` + parallelism Stage 1 · blocked-by `41` `43` `70`.
-- [`15`](15-modules-imports.md) — module-resolver breadth (slice 2; slice 1 shipped as M29).
-- [`16`](16-parallelism-type-universe.md) — parallelism Stage 2 (cross-file identity) · blocked-by `14`, `15`.
-- [`17`](17-incrementality.md) — incrementality (Phase 5) · blocked-by `16`.
+
+- **XL** · [`72`](72-real-project-preview-readiness.md) — public project CLI, pinned strict project, mutation pack, and differential CI ratchet · blocked by `73`.
+- **S gate / XL if triggered** · [`13`](13-bytecode-vm.md) — profile the evaluator; build a VM only if dispatch is the measured bottleneck.
+- **XL** · [`14`](14-libdts-loading.md) — full `lib.d.ts` and shared-prelude parallelism Stage 1 · blocked by `41`, `43`, `70`.
+- **XL** · [`15`](15-modules-imports.md) — NodeNext/package/tsconfig resolver breadth; the local-relative slice shipped as M29.
+- **XL** · [`16`](16-parallelism-type-universe.md) — deterministic parallel cross-file type identity · blocked by `14`, `15`.
+- **XL** · [`17`](17-incrementality.md) — semantic batch cache followed by a Salsa-style IDE query layer · blocked by `16`.
 
 ## Recommended order
 
