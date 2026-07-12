@@ -1,3 +1,16 @@
+> **OUTCOME — shipped 2026-07-12.** Backlogs `41` and `23` are closed: persistent generic
+> binders now cover free, class/interface/object method, call, and construct signatures across
+> lowering, outer substitution, inference, constraints, overloads, and relation. Commit map: plan
+> `66650a2`; ADR/spec `ace6a0f`; persistent representation/lowering `1878ec4`; binder-aware
+> relation `0108551`; review controls/remediations `4bc8561`, `afae7ad`, and `dfda792`; final
+> identity ratchet `31c2651`. Verification: `cargo fmt --check`; `cargo test` (309 unit + 14
+> conformance + 4 divergence + 7 incomplete + 10 manifest + 5 surface); `cargo clippy
+> --all-targets -- -D warnings`; `cargo build --release`; official-suite harness tests (34); and
+> fresh official-suite 874-test `run --check` (0 regressions / 0 progress). The ratchet moved
+> in-scope 358→368 and diagnostic recall 385/1880→418/1954 after an owner audit: B75's multi-key
+> duplicate is gone, while member projection, generic/deferred `T[K]`, optional methods, explicit
+> `this` parameters, namespaces/merging, and full `lib.d.ts` remain separately owned.
+
 # Sprint — generic methods and signatures (2026-07-12)
 
 **Goal.** Close backlog `41` (and its narrow `23` symptom) by representing method-level generic
@@ -14,14 +27,13 @@ members, ambient declarations, or close the blocked real-project preview.
 
 `✔` = confirmed live · `⚠` = drift/nuance caught.
 
-- ✔ Backlog `41` owns class/interface/object generic methods, generic call signatures, generic
-  construct signatures, inference, constraints, and relation; it subsumes the static-method
-  `TK2304` symptom in backlog `23` — `docs/backlog/41-generic-methods.md`,
-  `docs/backlog/23-static-method-type-params.md`.
-- ✔ Generic methods are the dominant construct blocker in the pinned `lib.es5.d.ts` audit
-  (`Array.map<U>`, `reduce<U>`, `Object.defineProperty<T>`, `freeze<T>`, `bind<T>`), while `43` and
-  `70` remain separate mandatory blockers of `14` — `docs/backlog/lib-audit-6.0.3.md`,
-  `docs/backlog/14-libdts-loading.md`.
+- ✔ At sprint start, backlog `41` owned class/interface/object generic methods, generic call and
+  construct signatures, inference, constraints, and relation; it subsumed the static-method
+  `TK2304` symptom in backlog `23`. Both are closed by this archived sprint.
+- ✔ At sprint start, generic methods were the dominant construct blocker in the pinned
+  `lib.es5.d.ts` audit (`Array.map<U>`, `reduce<U>`, `Object.defineProperty<T>`, `freeze<T>`,
+  `bind<T>`). B41 now models those signature forms; `43` and `70` remain the separate mandatory
+  blockers of `14` — `docs/backlog/lib-audit-6.0.3.md`, `docs/backlog/14-libdts-loading.md`.
 - ⚠ Generic signature binders currently live only in a pass-local
   `TypeId → Vec<TypeParamId>` side map. They are not part of `FunctionType` or its structural hash —
   `src/check/checker/context.rs:224-227`, `src/types/repr.rs:457-471`,

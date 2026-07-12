@@ -704,7 +704,7 @@ fn valid_base() -> String {
         "title = \"an open thing\"\n",
         "state = \"incomplete\"\n",
         "blocks_release = \"false\"\n",
-        "owner = \"./41-generic-methods.md\"\n",
+        "owner = \"./43-namespaces-declaration-merging.md\"\n",
         "witness = \"spec-first corpus\"\n",
         "links = [\"../reference/divergences.md\"]\n",
         "deps = []\n",
@@ -768,7 +768,7 @@ fn rejects_invalid_manifests() {
         ),
         (
             "missing owner",
-            valid_base().replace("owner = \"./41-generic-methods.md\"\n", ""),
+            valid_base().replace("owner = \"./43-namespaces-declaration-merging.md\"\n", ""),
             "owner",
         ),
         (
@@ -779,18 +779,18 @@ fn rejects_invalid_manifests() {
         (
             // flip the shipped criterion's owner to a path while keeping state=complete
             "inconsistent: complete but owner is a link",
-            valid_base().replace("owner = \"shipped\"", "owner = \"./41-generic-methods.md\""),
+            valid_base().replace("owner = \"shipped\"", "owner = \"./43-namespaces-declaration-merging.md\""),
             "requires owner",
         ),
         (
             "inconsistent: incomplete but owner=shipped",
-            valid_base().replace("owner = \"./41-generic-methods.md\"", "owner = \"shipped\""),
+            valid_base().replace("owner = \"./43-namespaces-declaration-merging.md\"", "owner = \"shipped\""),
             "inconsistent",
         ),
         (
             "unknown backlog owner link",
             valid_base().replace(
-                "owner = \"./41-generic-methods.md\"",
+                "owner = \"./43-namespaces-declaration-merging.md\"",
                 "owner = \"./999-does-not-exist.md\"",
             ),
             "does not exist",
@@ -1007,16 +1007,16 @@ fn scope_inventory_rejects_unmarked_duplicate_and_wrong_tier_families() {
 // deps <-> blocked-by parity witnesses (table-driven).
 //
 // The `open-one` criterion owns backlog `14`, whose real `blocked-by` frontmatter
-// is `[41, 43, 70]`; a matching `deps` array makes the base pass. Each mutation
+// is `[43, 70]`; a matching `deps` array makes the base pass. Each mutation
 // then drifts one side and must be rejected unless a `deps_exception` justifies it.
 // ---------------------------------------------------------------------------
 
 fn deps_parity_base() -> String {
     valid_base()
-        .replace("owner = \"./41-generic-methods.md\"", "owner = \"./14-libdts-loading.md\"")
+        .replace("owner = \"./43-namespaces-declaration-merging.md\"", "owner = \"./14-libdts-loading.md\"")
         .replace(
             "deps = []\n",
-            "deps = [\"./41-generic-methods.md\", \"./43-namespaces-declaration-merging.md\", \"./70-this-parameter-typing.md\"]\n",
+            "deps = [\"./43-namespaces-declaration-merging.md\", \"./70-this-parameter-typing.md\"]\n",
         )
 }
 
@@ -1038,11 +1038,10 @@ fn rejects_deps_parity_drift() {
 
     let cases: Vec<(&str, String, &str)> = vec![
         (
-            // The historical 14/70 drift: claim 70 as the only dep while the owner's
-            // blocked-by lists 41/43/70 — 41 and 43 go missing.
-            "14/70 drift (deps drop 41 and 43)",
+            // Claim 70 as the only dep while the owner's blocked-by lists 43/70 — 43 goes missing.
+            "14/70 drift (deps drop 43)",
             deps_parity_base().replace(
-                "deps = [\"./41-generic-methods.md\", \"./43-namespaces-declaration-merging.md\", \"./70-this-parameter-typing.md\"]",
+                "deps = [\"./43-namespaces-declaration-merging.md\", \"./70-this-parameter-typing.md\"]",
                 "deps = [\"./70-this-parameter-typing.md\"]",
             ),
             "disagree with owner",
@@ -1057,11 +1056,11 @@ fn rejects_deps_parity_drift() {
             "disagree with owner",
         ),
         (
-            // Owner (41) has no blocked-by, but the criterion claims a dep.
+            // Owner (43) has no blocked-by, but the criterion claims a dep.
             "deps on an owner with empty blocked-by",
             valid_base().replace(
-                "owner = \"./41-generic-methods.md\"\nwitness = \"spec-first corpus\"\nlinks = [\"../reference/divergences.md\"]\ndeps = []",
-                "owner = \"./41-generic-methods.md\"\nwitness = \"spec-first corpus\"\nlinks = [\"../reference/divergences.md\"]\ndeps = [\"./70-this-parameter-typing.md\"]",
+                "owner = \"./43-namespaces-declaration-merging.md\"\nwitness = \"spec-first corpus\"\nlinks = [\"../reference/divergences.md\"]\ndeps = []",
+                "owner = \"./43-namespaces-declaration-merging.md\"\nwitness = \"spec-first corpus\"\nlinks = [\"../reference/divergences.md\"]\ndeps = [\"./70-this-parameter-typing.md\"]",
             ),
             "disagree with owner",
         ),
@@ -1089,7 +1088,7 @@ fn deps_exception_permits_a_declared_slice() {
     // A drift with an explicit rationale is allowed (a deliberate dependency slice).
     let text = deps_parity_base()
         .replace(
-            "deps = [\"./41-generic-methods.md\", \"./43-namespaces-declaration-merging.md\", \"./70-this-parameter-typing.md\"]",
+            "deps = [\"./43-namespaces-declaration-merging.md\", \"./70-this-parameter-typing.md\"]",
             "deps = [\"./70-this-parameter-typing.md\"]\ndeps_exception = \"slice depends only on the this-parameter prerequisite\"",
         );
     assert!(

@@ -10,8 +10,7 @@ blocked-by: []
 (`fn(this: T, …)`) and the `ThisType<T>` marker are unmodeled, so any signature
 that types `this` lowers to something silently permissive. Surfaced by the TS 6.0.3
 `lib.d.ts` surface audit ([`lib-audit-6.0.3.md`](lib-audit-6.0.3.md)): a third
-`lib.es5.d.ts` blocker for backlog `14`, alongside `41` (generic methods) and `43`
-(namespaces + declaration merging).
+`lib.es5.d.ts` blocker for backlog `14`, alongside `43` (namespaces + declaration merging).
 
 ## Problem
 
@@ -30,8 +29,8 @@ listed out-of-scope in the M28 utility-type divergences.
 Model the `this` parameter as a distinct, non-positional signature slot (it does not
 count toward arity and is checked contravariantly against the receiver), and give
 `ThisType<T>` its contextual-`this` meaning inside object-literal methods. Reuse the
-M32 signature-shape machinery for the slot; keep generic `this` (`apply<T, R>`)
-coordinated with `41`. Corpus first; cross-check `tsc 6.0.3 --strict`.
+M32 signature-shape machinery for the slot; compose it with the shipped persistent generic
+signature representation for `apply<T, R>`. Corpus first; cross-check `tsc 6.0.3 --strict`.
 
 Acceptance: fixtures for `this`-typed methods/free functions, `Function.bind`-shaped
 signatures, and a `ThisType`-annotated object literal check vs tsc; no regression on

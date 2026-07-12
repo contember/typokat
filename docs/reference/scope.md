@@ -136,7 +136,10 @@ operators, returns, generic constraints, implicit `any`.
 <!-- scope-family: a-generic-constraints -->
 - `TK2344` Type '{0}' does not satisfy the constraint '{1}'.
 <!-- scope-family: a-type-argument-arity -->
-- `TK2558` Expected {0} type arguments, but got {1}.
+- `TK2558` Expected {0} type arguments, but got {1}. Persistent generic free,
+  class/interface/object method, call, and construct signatures lower, infer, instantiate, and
+  relate under their own binder frames. Generic/deferred indexed access (`T[K]`) remains part of
+  the Tier B type-level tail.
 
 **implicit any (`noImplicitAny`)**
 <!-- scope-family: a-implicit-any-declarations -->

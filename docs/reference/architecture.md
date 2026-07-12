@@ -214,6 +214,16 @@ transparent aliases memoize their resolved target; object-literal aliases seed a
 for the non-generic recursive shape. Type parameters are named unique ids, while `infer` binders use
 the scoped de Bruijn representation described in ADR-0002.
 
+Generic binders are persistent fields of every generic `FunctionType`: free functions and class,
+interface/object method, call, and construct signatures share ordered descriptors carrying a unique
+parameter id plus optional constraint/default. Outer substitution preserves those inner descriptors
+while rewriting their free outer references; call instantiation consumes the selected signature's
+descriptors through the existing inference/constraint path. Generic-to-generic relation aligns the
+descriptors locally and bypasses the durable cache below that binder context, so only the completed
+outer relation remains cacheable. This is the B41 representation recorded in ADR-0005.
+It does not synthesize instance members or load library declarations; generic/deferred indexed
+access (`T[K]`), optional methods, and explicit `this` parameters remain separately owned tails.
+
 Classes bind both spaces: the type slot is the instance type, and the value slot is the static side /
 constructor lookup key. Instance and static members are composed base-first with own declarations
 overriding by name. Private/protected members carry `visibility` plus `declaring_class` identity for

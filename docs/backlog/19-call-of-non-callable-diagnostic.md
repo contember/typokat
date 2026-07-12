@@ -11,12 +11,12 @@ can distinguish true non-callable values from unsupported signatures.
 
 ## Problem
 
-F1 made object/interface call signatures callable and M32/M33 added signature shape plus overload
-lists, but typokat still deliberately defers generic method signatures and signatures whose
-annotations do not lower. Emitting a not-callable diagnostic for every value without represented
-callability would therefore create false positives: some values are genuinely non-callable, while
-others only lost their call signature because it is outside typokat's current subset. Unions need
-the same care.
+F1 made object/interface call signatures callable, M32/M33 added signature shape plus overload
+lists, and B41 added persistent generic method/call/construct signatures. Annotations and optional
+methods that do not yet lower still exist, however. Emitting a not-callable diagnostic for every
+value without represented callability would therefore create false positives: some values are
+genuinely non-callable, while others only lost their call signature because it is outside
+typokat's current subset. Unions need the same care.
 
 ## Approach / acceptance
 

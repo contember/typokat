@@ -541,7 +541,7 @@ surface = "instantiation-expression"
 slot = "self"
 oxc_variant = "Expression::TSInstantiationExpression"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/41-generic-methods.md"
+owner = "../../docs/backlog/52-type-reference-tail.md"
 witness = "../cases/b73_expression_shape_tail/instantiation.ts"
 
 [[surface]]

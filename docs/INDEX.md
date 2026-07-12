@@ -23,9 +23,6 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-07-12-generic-methods.md`](sprints/sprint-2026-07-12-generic-methods.md) —
-  persistent generic member/call/construct signatures, inference, constraints, and relation for
-  backlog `41`.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
 
@@ -33,8 +30,11 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Generic methods (`41`) active 2026-07-12** — first Track A critical-path sprint; WU0 must replace
-  pass-local generic metadata with a substitution- and relation-sound persistent representation.
+- **Generic methods (`41`) shipped 2026-07-12** (archived:
+  [`archive/sprint-2026-07-12-generic-methods.md`](archive/sprint-2026-07-12-generic-methods.md)) —
+  persistent generic method/call/construct binders now survive substitution and relate under a
+  cache-safe local alignment. The remaining model/lib blockers are `43` namespaces/merging and
+  `70` explicit `this`/`ThisType<T>`.
 - **Real-project preview (`72`) paused at WU0** — no screened public project met the multi-file,
   minimal-graph, zero-threshold contract; no implementation or prelude expansion started.
 - **Surface-accounting tail shipped 2026-07-12** (archived:
@@ -76,11 +76,11 @@ decisions → reference → archive.
   [`backlog/completion-1.0.toml`](backlog/completion-1.0.toml) validated by
   `tests/manifest.rs`, with the pinned TS 6.0.3 lib audit
   ([`backlog/lib-audit-6.0.3.md`](backlog/lib-audit-6.0.3.md)) naming the es5
-  blockers: `41` generic methods, `43` namespaces/merging, `70` this-parameter
-  typing. Backlog `38` is GO (ADR-0003). The post-sprint MVP audit added executable
+  blockers: `43` namespaces/merging and `70` this-parameter typing. Backlog `38` is GO
+  (ADR-0003). The post-sprint MVP audit added executable
   scope/unsupported censuses (`73`/`75`) and the first honest pinned-project preview gate
-  (`72`). **Now:** run `72`; track A
-  (`41` first) continues toward full `lib.d.ts`.
+  (`72`). **Now:** `72` remains paused at its witness gate; track A
+  (`43`/`70` next) continues toward full `lib.d.ts`.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
   invariants CLEAN and filed `53`–`65`; the five HIGH silent-FN families then shipped through

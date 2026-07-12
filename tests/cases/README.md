@@ -227,7 +227,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b66_protected_override_compat/` | backlog `66` (disabled) | acceptance target for protected↔protected TK2416 plus the nested protected-lineage architecture stop gate owned by `63(d)` |
 | `b38_minimal_ambient_prelude/` | shipped backlog `38` | bounded `console` and numeric `Math` ambient declarations through the existing prelude compilation unit |
 | `b38_prelude_lookup_boundaries/` | backlog `38` follow-up | project-shaped prelude boundaries: a value-bearing `import type` blocks ambient value fallback, export lists cannot inherit prelude names, and local type-only exports do not acquire ambient value slots |
-| `b41_generic_methods/` | backlog `41` | generic method/call/construct signatures: persistent binders through outer substitution, calls, relation, overloads, inheritance, and cache order |
+| `b41_generic_methods/` | shipped B41 | generic method/call/construct signatures: persistent binders through outer substitution, calls, relation, overloads, inheritance, and cache order |
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):

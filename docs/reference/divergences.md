@@ -518,15 +518,14 @@ set), contextual fresh-literal shaping, and the M24 circular-constraint walk (`T
 ## Object / interface signatures (F1 corpora)
 
 Method signatures become function-typed properties; call/construct signatures make values
-callable/constructable (F1, backlog `05`). Since M33, ordered overload lists are preserved for
-object/interface call and construct signatures plus non-generic method overloads. Method-level type
-parameters are still deferred to backlog `41`; such method overloads stay represented
-conservatively instead of becoming permissive calls. Optional method signatures are deferred (out of
-the WU1 subset on the sound side, so accessing a dropped optional method member over-reports
+callable/constructable (F1, backlog `05`). Since M33, ordered overload lists are preserved; B41
+adds persistent generic binders for free, class/interface/object method, call, and construct
+signatures, including outer substitution, inference, constraints, and binder-aware relation.
+Optional method signatures are still deferred (out of the WU1 subset on the sound side, so accessing
+a dropped optional method member over-reports
 instead of dropping a possibly-undefined call error). `tsc --strict` 6.0.3 reports `TS7010` for a
 method signature whose return annotation is omitted; typokat is silent — a dropped error
 (under-report, backlog `48`), pinned by the disabled ledger fixture.
-<!-- div: id=signatures/method-type-params dir=over scope=design-oos owner=../backlog/41-generic-methods.md witness=../../tests/cases/f1_object_interface_methods -->
 <!-- div: id=signatures/optional-method dir=over scope=a-nullish-receivers owner=../backlog/49-possibly-undefined-family.md witness=../../tests/cases/f1_object_interface_methods -->
 <!-- div: id=signatures/ts7010-omitted-return dir=under scope=a-implicit-any-declarations owner=../backlog/48-no-implicit-any.md witness=../../tests/cases/sr_deferred_ledger/b48_implicit_any_return.ts -->
 

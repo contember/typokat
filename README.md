@@ -54,7 +54,7 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 |---|---|
 | **Foundation** | primitives & intrinsics (`any`/`unknown`/`never`/`void`, strict null), objects (structural, excess/missing/depth, **optional members `a?: T`**), functions (arity, optional/default/rest params, ordered overload resolution, contravariant params, void-return rule), unions (canonicalized), **intersections (`A & B`)** (canonicalized, merged relation + member access + excess), recursive & mutually-recursive named types, literal types |
 | **Narrowing** | `typeof`, truthiness, `null`/`undefined` equality, **discriminated unions**, `in`, `switch`; **unstructured flow** via the flow-node CFG — early `return`/`throw`, `&&`/`\|\|`/ternary, assignment narrowing, `while` loop edges (back edge / exit / `break` / `continue`) |
-| **Generics** | type parameters, instantiation, **type-argument inference** from call arguments, **constraints** (`extends` — apparent types, declaration + call-site `TK2344`/`TK2345`, circularity `TK2313`) |
+| **Generics** | type parameters, instantiation, **type-argument inference** from call arguments, **constraints** (`extends` — apparent types, declaration + call-site `TK2344`/`TK2345`, circularity `TK2313`), persistent generic free/member/call/construct signatures |
 | **Type-level evaluation** | conditional types (**distribution**, `infer` incl. tuple/function rest capture and anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, **the ten standard utility types as built-ins** plus a bounded `console`/numeric-`Math` ambient prelude + the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
 | **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract` (incl. **abstract-member completeness**); **generic classes**; **override compatibility** (tsc's base-keyed method bivariance); **constructor accessibility** on `new` |
 | **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, rest elements, contextual typing), contextual fresh object/array/tuple literals, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), local relative modules with named imports/exports |
@@ -142,10 +142,11 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   `keyof` over unions/`never`/template-literal key sources plus two tsc-parity conditional
   edges are documented divergences (backlog `26`, `27`, `35`–`37`). (A bytecode VM is a
   deferred, profiling-gated refactor — see `docs/decisions/0001-…`.)
-- **Remaining type-model gaps** — generic methods, enums, namespaces + declaration merging,
-  `satisfies`/`as const`, explicit `this` parameters, and `ThisType<T>` are not modeled yet; they
-  are the model-completeness
-  track in [`docs/backlog/`](./docs/backlog/README.md) and the prerequisite for full
+- **Remaining type-model gaps** — enums, namespaces + declaration merging, `satisfies`/`as const`,
+  explicit `this` parameters, and `ThisType<T>` are not modeled yet. Generic methods plus object
+  call/construct signatures are modeled persistently, but generic/deferred indexed access (`T[K]`),
+  optional methods, member projection, and library loading remain separate gaps. The remaining
+  model-completeness track is in [`docs/backlog/`](./docs/backlog/README.md) and is the prerequisite for full
   `lib.d.ts` loading. (Intersections `A & B` landed in M31; signature shape landed in M32;
   overloads landed in M33; `&` distribution over unions,
   `keyof`/indexed-access over an intersection, and overload-signature intersection remain

@@ -43,11 +43,11 @@ lib_audit_artifact = "./lib-audit-6.0.3.md"
 id = "A-generic-methods"
 track = "A"
 title = "Generic methods (method-level type parameters)"
-state = "incomplete"
+state = "complete"
 blocks_release = "true"
-owner = "./41-generic-methods.md"
-witness = "spec-first corpus; lib audit flags method-level <T> pervasive in lib.es5 (Array.map<U>, Object.defineProperty<T>)"
-links = ["./14-libdts-loading.md", "./lib-audit-6.0.3.md"]
+owner = "shipped"
+witness = "cargo test conformance (b41_generic_methods enabled) + independent tsc 6.0.3 adversarial review/remediation for persistent generic method, call, and construct signatures"
+links = ["../../tests/cases/b41_generic_methods", "../archive/sprint-2026-07-12-generic-methods.md", "./lib-audit-6.0.3.md"]
 deps = []
 
 [[criterion]]
@@ -410,12 +410,12 @@ deps = []
 [[criterion]]
 id = "C-parity-tail-static-method-type-params"
 track = "C"
-title = "Spurious TK2304 on static method type params (safe FP; may close via 41)"
-state = "incomplete"
+title = "Static method-level type parameters — shipped with generic signatures"
+state = "complete"
 blocks_release = "false"
-owner = "./23-static-method-type-params.md"
-witness = "documented safe-direction over-report; reference/divergences.md"
-links = ["../reference/divergences.md"]
+owner = "shipped"
+witness = "cargo test conformance (b41_generic_methods enabled); static generic signatures lower in their own binder frame"
+links = ["../../tests/cases/b41_generic_methods", "../archive/sprint-2026-07-12-generic-methods.md"]
 deps = []
 
 [[criterion]]
@@ -598,7 +598,7 @@ blocks_release = "true"
 owner = "./14-libdts-loading.md"
 witness = "fixtures using console/array methods/Promise check vs tsc; lib audit records the blocking families"
 links = ["./lib-audit-6.0.3.md"]
-deps = ["./41-generic-methods.md", "./43-namespaces-declaration-merging.md", "./70-this-parameter-typing.md"]
+deps = ["./43-namespaces-declaration-merging.md", "./70-this-parameter-typing.md"]
 
 [[criterion]]
 id = "D-module-resolver-breadth"

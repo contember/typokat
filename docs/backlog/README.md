@@ -21,7 +21,8 @@ sprint-2026-07-09), `40` (M33 function overloads,
 sprint-2026-07-09), `74` (declaration hoisting parity, sprint-2026-07-11),
 `38` (minimal ambient prelude, sprint-2026-07-11), `67` (modeled `ReturnType`
 constraint, sprint-2026-07-11), and `30` (JS-exact number stringification,
-sprint-2026-07-11) — see
+sprint-2026-07-11), and `41` + `23` (persistent generic method/call/construct signatures,
+including the static generic binder path, sprint-2026-07-12) — see
 [`../archive/`](../archive/README.md). Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). How each item
@@ -45,22 +46,22 @@ in [`divergences.md`](../reference/divergences.md)), **D** scale + IDE (the §12
 `lib.d.ts` → modules → parallelism → incrementality, plus the `13` profiling gate decided).
 
 The pinned TS 6.0.3 `lib.d.ts` surface audit — what actually blocks `14` — is
-[`lib-audit-6.0.3.md`](lib-audit-6.0.3.md) (headline: `41` generic methods, `43`
-namespaces/declaration merging, and the audit-discovered `70` `this`-parameter typing block the
-es5 core; `42`/`44` are not used by es5 core). The official-suite scoreboard is the ratchet on
+[`lib-audit-6.0.3.md`](lib-audit-6.0.3.md) (generic method/call/construct signatures shipped with
+`41`; `43` namespaces/declaration merging and the audit-discovered `70` `this`-parameter typing
+still block the es5 core; `42`/`44` are not used by es5 core). The official-suite scoreboard is the ratchet on
 the way there — its syntax gates flip OOS→IN as features land — not a numeric pass/fail gate.
 
 ## Roadmap at a glance
 
-The active backlog has **41 items**: **32 checker-1.0 release blockers** and **9 non-blocking,
+The active backlog has **39 items**: **31 checker-1.0 release blockers** and **8 non-blocking,
 safe-direction parity items**. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml); the grouping below is the human roadmap view.
 
 | Track | Active items | Typical effort | Role |
 |---|---:|---|---|
-| **A — model completeness** | 6 | L–XL | Eliminate silently-permissive model gaps; `41`/`43`/`70` directly unblock full `lib.d.ts`. |
+| **A — model completeness** | 5 | L–XL | Eliminate silently-permissive model gaps; `43`/`70` directly unblock full `lib.d.ts`. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 18 | S–L | Nine release-blocking known gaps plus nine safe-direction parity improvements. |
+| **C — soundness/parity tail** | 17 | S–L | Nine release-blocking known gaps plus eight safe-direction parity improvements. |
 | **D — scale + IDE** | 6 | XL | Preview, full standard library, resolver breadth, parallel identity, and incrementality. |
 
 Effort is a **relative planning estimate**, not a time promise:
@@ -77,11 +78,10 @@ checker 1.0. The FP/tsc-parity subsection is the only non-blocking group.
 ## Items
 
 **A. Model completeness — the `lib.d.ts` critical path plus exact declaration types.** Every item
-kills a silently-permissive or deliberately approximate model family. `41`, `43`, and `70` are the
-direct blockers of `14`; `42`, `44`, and `76` still block checker 1.0 but are not needed by the
+kills a silently-permissive or deliberately approximate model family. `43` and `70` are the direct
+blockers of `14`; `42`, `44`, and `76` still block checker 1.0 but are not needed by the
 `lib.es5.d.ts` core.
 
-- **XL** · [`41`](41-generic-methods.md) — generic methods across lowering, inference, constraints, and relation; subsumes `23`.
 - **L** · [`42`](42-enums-type-side.md) — enum type/value sides, nominal member types, and narrowing.
 - **XL** · [`43`](43-namespaces-declaration-merging.md) — namespace binding, qualified names, and declaration merging.
 - **L** · [`44`](44-satisfies-as-const.md) — `satisfies` checking plus readonly literal/tuple semantics for `as const`.
@@ -120,7 +120,6 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
-- **S** · [`23`](23-static-method-type-params.md) — suppress spurious `TK2304` on static method type params, or close through `41`.
 - **L** · [`26`](26-cross-binder-nested-infer.md) — correct de Bruijn shifting/levels for nested `infer` binders.
 - **L** · [`27`](27-template-buried-conditional-evaluation.md) — demand-evaluate conditionals buried in named structural templates.
 - **L** · [`35`](35-keyof-union-and-key-source-edges.md) — `never`, template-pattern, and aliased-`keyof` mapped key sources.
@@ -134,28 +133,24 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
 - **XL** · [`72`](72-real-project-preview-readiness.md) — public project CLI, pinned strict project, mutation pack, and differential CI ratchet.
 - **S gate / XL if triggered** · [`13`](13-bytecode-vm.md) — profile the evaluator; build a VM only if dispatch is the measured bottleneck.
-- **XL** · [`14`](14-libdts-loading.md) — full `lib.d.ts` and shared-prelude parallelism Stage 1 · blocked by `41`, `43`, `70`.
+- **XL** · [`14`](14-libdts-loading.md) — full `lib.d.ts` and shared-prelude parallelism Stage 1 · blocked by `43`, `70`.
 - **XL** · [`15`](15-modules-imports.md) — NodeNext/package/tsconfig resolver breadth; the local-relative slice shipped as M29.
 - **XL** · [`16`](16-parallelism-type-universe.md) — deterministic parallel cross-file type identity · blocked by `14`, `15`.
 - **XL** · [`17`](17-incrementality.md) — semantic batch cache followed by a Salsa-style IDE query layer · blocked by `16`.
 
 ## Recommended order
 
-1. **Ship the honest preview slice next** — the accounting sprints (2026-07-10 and 2026-07-12)
-   shipped the AST census, explicit incomplete outcome, and the final expression-shape emission
-   tail, so new silent paths can no longer disappear from the plan. The five HIGH review findings (`53` `55` `57` `58`
-   `61`) shipped in sprint-2026-07-07-soundness-fn-fixes; `64` `34` `33` `54` `59` `65`
-   shipped in follow-up sprints; the remaining silent-FN C group (`56`, `60`, `62`, `32`,
+1. **Keep `72` paused at its WU0 witness gate.** The accounting sprints (2026-07-10 and
+   2026-07-12) shipped the AST census, explicit incomplete outcome, and the final expression-shape
+   emission tail, but no public candidate met the preview contract without a project-specific shim.
+   The five HIGH review findings (`53` `55` `57` `58` `61`) shipped in
+   sprint-2026-07-07-soundness-fn-fixes; the remaining silent-FN C group (`56`, `60`, `62`, `32`,
    `21`, `22`, `66`, `71`, `77`) remains available as independently valuable dropped-error work.
-   The next executable item is **`72`**; the bounded prelude slice `38` shipped on 2026-07-11.
-2. **Run `72`:** its WU0 pins a
-   genuinely small real project that fits the preview surface; it must not grow a project-specific
-   lib shim. This is the first "point it at a project" milestone.
-3. **Run track A** to unblock `14` (`25` intersections shipped as M31, `24`/`39` signature
-   shape shipped as M32, and `40` overloads shipped as M33); interleave B items and C's
-   parity tail as warm-ups between the remaining A milestones. `13` (profiling gate) is cheap now that
-   `tooling/bench/` exists.
-4. **Climb the full-project/scale ladder** (`14` → `15` → `16` → `17`), finishing the B/C
+2. **Run the remaining model/lib prerequisites `43` and `70`.** Generic methods, calls, and
+   construct signatures shipped with `41`; namespaces/declaration merging and explicit
+   `this`/`ThisType<T>` are now the next Track A blockers of `14`. Interleave B items and C's
+   parity tail as warm-ups. `13` (profiling gate) is cheap now that `tooling/bench/` exists.
+3. **Climb the full-project/scale ladder** (`14` → `15` → `16` → `17`), finishing the B/C
    remainder along the way. `14` + `15` must graduate the pinned deptective full-stack witness;
    the small `72` preview is not evidence for full resolver/lib fidelity.
 
