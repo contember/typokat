@@ -486,8 +486,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return wk.error;
         }
 
-        // Any other key (a non-literal `string`, a type parameter, …) is out of the M20
-        // scope → error type (no crash).
+        // A singleton constrained key keeps `Map[K]` usable; multi-key correlation is
+        // deferred to backlog 75 rather than guessed from the value union.
+        if let Some(parameter) = store.type_param(index) {
+            if let Some(constraint) = store.type_param_constraint(parameter.id) {
+                if constraint != index {
+                    return self.indexed_access_type(object, constraint);
+                }
+            }
+        }
+
+        // Any other key (a non-literal `string`, an unconstrained type parameter, …) is
+        // out of the M20 scope → error type (no crash).
         wk.error
     }
 }

@@ -452,8 +452,53 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         .ok_or(CandidateBuildFailure::Unavailable)?
                         .params
                         .clone();
-                    let inference_args =
-                        self.contextual_inference_args(scope, &params, args.types, args.exprs);
+                    // Fix only source arguments that precede a direct contextual callback.
+                    // This gives `on("event", listener)` its event-name `K` before
+                    // contextualizing `listener`, without perturbing ordinary fresh-literal
+                    // inference (which deliberately needs the full candidate policy).
+                    let contextual_start = args
+                        .exprs
+                        .iter()
+                        .position(|expr| matches!(expr, Expression::ArrowFunctionExpression(_)));
+                    let contextual_params = if let Some(start) = contextual_start {
+                        let raw_args: Vec<TypeId> = args.types[..start]
+                            .iter()
+                            .map(|(argument, _)| *argument)
+                            .collect();
+                        let preliminary = infer::infer_signature_type_arguments_from_params(
+                            self.interner,
+                            &mut self.next_type_param,
+                            &generic_params,
+                            &params,
+                            &raw_args,
+                            &args.fresh[..start],
+                        );
+                        let unknown = self.interner.well_known().unknown;
+                        let contextual_map: FxHashMap<TypeParamId, TypeId> = preliminary
+                            .into_iter()
+                            .filter(|(_, ty)| *ty != unknown)
+                            .collect();
+                        if contextual_map.is_empty() {
+                            params.clone()
+                        } else {
+                            let contextual_signature =
+                                instantiate_function(self.interner, signature_ty, &contextual_map);
+                            self.interner
+                                .store()
+                                .function_type(contextual_signature)
+                                .ok_or(CandidateBuildFailure::Unavailable)?
+                                .params
+                                .clone()
+                        }
+                    } else {
+                        params.clone()
+                    };
+                    let inference_args = self.contextual_inference_args(
+                        scope,
+                        &contextual_params,
+                        args.types,
+                        args.exprs,
+                    );
                     infer::infer_signature_type_arguments_from_params(
                         self.interner,
                         &mut self.next_type_param,
@@ -645,6 +690,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) {
         self.check_call_arity(params, arg_types.len(), call_span);
 
+        let never = self.interner.well_known().never;
         let targets = self.call_argument_targets(params, arg_types.len());
         for (((arg_ty, arg_span), arg_expr), param_ty) in
             arg_types.iter().zip(arg_exprs).zip(targets)
@@ -672,6 +718,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 src_span,
                 kind: self.call_argument_obligation_kind(arg_expr, param_ty),
             });
+            // A `never` parameter makes this call candidate impossible. Later
+            // contextual callback targets are recovery artifacts of that failure,
+            // not independent argument errors.
+            if param_ty == never {
+                break;
+            }
         }
     }
 
@@ -779,6 +831,29 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .collect()
     }
 
+    /// Contextual arrows use the same positional/rest expansion as calls, so an
+    /// arrow against `(...args: [A, B]) => R` receives `A` then `B` bindings.
+    pub(in crate::check::checker) fn contextual_parameter_target(
+        &self,
+        params: &[ParameterType],
+        index: usize,
+        parameter_count: usize,
+    ) -> Option<TypeId> {
+        let fixed_count = params
+            .iter()
+            .filter(|parameter| parameter.is_fixed())
+            .count();
+        let minimum_count = params
+            .iter()
+            .find(|parameter| parameter.rest)
+            .map(|rest| fixed_count + self.rest_parameter_arity(rest.ty).min)
+            .unwrap_or(fixed_count);
+        self.call_argument_targets(params, parameter_count.max(minimum_count))
+            .get(index)
+            .copied()
+            .flatten()
+    }
+
     fn rest_argument_target(
         &self,
         rest_ty: TypeId,
@@ -834,6 +909,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             variadic: rest_shape.variadic,
             suffix: combined_suffix,
         })
+    }
+
+    /// Return the contextual type for a tuple-literal position, including a represented
+    /// rest segment and its trailing fixed suffix.
+    pub(in crate::check::checker) fn tuple_context_element(
+        &self,
+        tuple: &TupleType,
+        index: usize,
+        total_elements: usize,
+    ) -> Option<TypeId> {
+        self.tuple_call_shape(tuple)?
+            .element_at(index, total_elements)
     }
 
     fn call_argument_obligation_kind(
@@ -1348,6 +1435,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         arrow: &ArrowFunctionExpression<'_>,
         context: TypeId,
     ) -> Option<TypeId> {
+        self.infer_contextual_arrow_with_return_context(enclosing, arrow, context, true)
+    }
+
+    /// Contextualize an arrow's parameters and, when requested, its return. Call
+    /// arguments retain their source return so the enclosing argument obligation owns
+    /// a callback incompatibility (`TK2345`) instead of an inner assignment diagnostic.
+    pub(in crate::check::checker) fn infer_contextual_arrow_with_return_context(
+        &mut self,
+        enclosing: ScopeId,
+        arrow: &ArrowFunctionExpression<'_>,
+        context: TypeId,
+        contextual_return: bool,
+    ) -> Option<TypeId> {
         if arrow.type_parameters.is_some() {
             return None;
         }
@@ -1365,6 +1465,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         );
         let declared_ret = match arrow.return_type.as_ref() {
             Some(ann) => self.lower_annotation(enclosing, &ann.type_annotation),
+            None if !contextual_return => None,
             // An unresolved generic return is the inference variable itself. Infer
             // the callback return normally so that variable can receive a candidate;
             // a concrete expected return is checked in the arrow body instead.
@@ -1391,9 +1492,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .as_ref()
                 .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation));
             let ty = annotation_ty.unwrap_or_else(|| {
-                context
-                    .get(index)
-                    .map(|parameter| parameter.ty)
+                self.contextual_parameter_target(context, index, params.items.len())
                     .unwrap_or(error_ty)
             });
             if let Some(scope) = fn_scope {

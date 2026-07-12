@@ -182,6 +182,40 @@ new GenericBox<number, string>(1);
 }
 
 #[test]
+fn contextual_callback_arguments_keep_argument_diagnostic_ownership() {
+    let source = "\
+declare function acceptsCallback(callback: (value: number) => number): void;
+acceptsCallback((value: number) => \"wrong\");
+const assignedCallback: (value: number) => number = (value: number) => \"wrong\";
+";
+    assert_eq!(
+        diagnostic_lines(source),
+        vec![(2, "TK2345".to_string()), (3, "TK2322".to_string())]
+    );
+}
+
+#[test]
+fn generic_rest_callback_and_tuple_rest_callbacks_receive_positional_context() {
+    let source = "\
+interface EventMap { pair: [number, string]; }
+interface Client {
+  on<K extends keyof EventMap>(event: K, listener: (...args: EventMap[K]) => void): void;
+}
+declare const client: Client;
+declare function acceptsString(value: string): number;
+client.on(\"pair\", (first, second) => acceptsString(second));
+declare function callbacks(
+  values: [(value: number) => number, ...((value: string) => number)[]],
+): void;
+callbacks([value => value, value => acceptsString(value), value => acceptsString(value)]);
+";
+    assert!(
+        diagnostic_codes(source).is_empty(),
+        "generic rest and tuple-rest callbacks must receive their positional parameter types"
+    );
+}
+
+#[test]
 fn generic_class_overload_implementation_is_checked_under_aligned_binders() {
     let source = "\
 class GenericOverloadProbe {

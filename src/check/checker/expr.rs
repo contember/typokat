@@ -706,7 +706,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let obligation_len = self.obligations.len();
             let override_len = self.override_checks.len();
             let decl_types = (!retain_contextual_arrow_checks).then(|| self.decl_types.clone());
-            let contextual = self.infer_contextual_arrow(scope, arrow, context);
+            let contextual =
+                self.infer_contextual_arrow_with_return_context(scope, arrow, context, false);
             if !retain_contextual_arrow_checks {
                 self.diagnostics.truncate(diagnostics_len);
                 self.obligations.truncate(obligation_len);
@@ -726,9 +727,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let obligation_len = self.obligations.len();
         let override_len = self.override_checks.len();
         let contextual = self.infer_initializer(scope, expr, Some(context));
-        self.diagnostics.truncate(diagnostic_len);
-        self.obligations.truncate(obligation_len);
-        self.override_checks.truncate(override_len);
+        if !retain_contextual_arrow_checks {
+            self.diagnostics.truncate(diagnostic_len);
+            self.obligations.truncate(obligation_len);
+            self.override_checks.truncate(override_len);
+        }
         contextual.unwrap_or(raw)
     }
 
@@ -844,15 +847,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         array: &ArrayExpression<'_>,
         context: TypeId,
     ) -> TypeId {
-        // Snapshot the target tuple's element types up front (immutable borrow) so the
-        // recursive `infer_initializer` below can take `&mut pass`. Element *i*'s context
-        // is the target tuple's element *i*, when present.
-        let context_elements: Vec<TypeId> = self
-            .interner
-            .store()
-            .tuple_type(context)
-            .map(|t| t.elements.clone())
-            .unwrap_or_default();
+        // Snapshot the target tuple up front (immutable borrow) so the recursive
+        // contextual inference below can take `&mut self`. The shared tuple call-shape
+        // helper accounts for a represented rest segment and a trailing fixed suffix.
+        let context_tuple = self.interner.store().tuple_type(context).cloned();
 
         let mut elements: Vec<TypeId> = Vec::with_capacity(array.elements.len());
         for (index, element) in array.elements.iter().enumerate() {
@@ -861,10 +859,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let Some(expr) = self.array_element_expr(element) else {
                 continue;
             };
-            // Contextually type this position against the target tuple's element *i* (if
-            // any), so a nested array-literal-in-tuple-position becomes a tuple too.
-            let elem_context = context_elements.get(index).copied();
-            let Some((elem_ty, _)) = self.infer_initializer(scope, expr, elem_context) else {
+            // Contextually type this position against its tuple element. In particular,
+            // direct callback elements need their function parameter bindings before the
+            // arrow body is checked.
+            let elem_context = context_tuple
+                .as_ref()
+                .and_then(|tuple| self.tuple_context_element(tuple, index, array.elements.len()));
+            let inferred = match (expr, elem_context) {
+                (Expression::ArrowFunctionExpression(arrow), Some(ctx))
+                    if self.interner.store().function_type(ctx).is_some() =>
+                {
+                    self.infer_contextual_arrow(scope, arrow, ctx)
+                        .map(|ty| (ty, Span::from_oxc(arrow.span)))
+                }
+                _ => self.infer_initializer(scope, expr, elem_context),
+            };
+            let Some((elem_ty, _)) = inferred else {
                 continue;
             };
             // Do NOT widen: the literal element type relates correctly to BOTH a literal

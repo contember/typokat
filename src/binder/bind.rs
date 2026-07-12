@@ -749,6 +749,13 @@ fn bind_expression(state: &mut BindState, scope: ScopeId, expr: &Expression<'_>)
                 }
             }
         }
+        Expression::ArrayExpression(array) => {
+            for element in &array.elements {
+                if let Some(expression) = element.as_expression() {
+                    bind_expression(state, scope, expression);
+                }
+            }
+        }
         Expression::ParenthesizedExpression(paren) => {
             bind_expression(state, scope, &paren.expression);
         }
