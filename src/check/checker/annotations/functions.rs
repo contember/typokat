@@ -1,4 +1,6 @@
+use super::super::decls::alloc_type_param_ids;
 use super::*;
+use oxc_ast::ast::TSTypeParameterDeclaration;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Lower a constructor-type annotation (`new (x: T) => U`) to an object carrying
@@ -9,37 +11,50 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         ctor: &TSConstructorType<'_>,
     ) -> Option<TypeId> {
-        if ctor.r#abstract || ctor.type_parameters.is_some() {
+        if ctor.r#abstract {
             return None;
         }
-        if !self.signature_annotations_are_locally_resolvable(
+        if ctor.type_parameters.is_none()
+            && !self.signature_annotations_are_locally_resolvable(
+                scope,
+                &ctor.params,
+                &ctor.return_type,
+            )
+        {
+            return None;
+        }
+        let signature = self.lower_generic_strict_construct_function_type(
             scope,
+            ctor.type_parameters.as_deref(),
             &ctor.params,
             &ctor.return_type,
-        ) {
-            return None;
-        }
-        let signature =
-            self.lower_strict_construct_function_type(scope, &ctor.params, &ctor.return_type)?;
+        )?;
         Some(self.interner.intern_object(ObjectType {
             construct_signatures: vec![signature],
             ..Default::default()
         }))
     }
 
-    pub(super) fn lower_strict_construct_function_type(
+    pub(super) fn lower_generic_strict_construct_function_type(
         &mut self,
         scope: ScopeId,
+        type_parameter_decl: Option<&TSTypeParameterDeclaration<'_>>,
         params: &FormalParameters<'_>,
         return_type: &TSTypeAnnotation<'_>,
     ) -> Option<TypeId> {
-        let lowered = self.lower_strict_signature_parameters(scope, params, true)?;
-        let ret =
-            self.with_indirection(|p| p.lower_annotation(scope, &return_type.type_annotation))?;
-        Some(self.interner.intern_function(FunctionType {
-            params: lowered,
-            ret,
-        }))
+        let ids = alloc_type_param_ids(type_parameter_decl, &mut self.next_type_param);
+        let frame = self.build_type_param_frame(type_parameter_decl, &ids);
+        self.with_type_params(frame, |pass| {
+            let type_params = pass.lower_signature_type_params(scope, type_parameter_decl, &ids);
+            let params = pass.lower_strict_signature_parameters(scope, params, true)?;
+            let ret =
+                pass.with_indirection(|p| p.lower_annotation(scope, &return_type.type_annotation))?;
+            Some(pass.interner.intern_function(FunctionType {
+                type_params,
+                params,
+                ret,
+            }))
+        })
     }
 
     pub(super) fn signature_annotations_are_locally_resolvable(
@@ -175,26 +190,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
             _ => false,
         }
-    }
-
-    /// Lower object/interface signatures only when every parameter and return type
-    /// is representable. Unlike class/free-function lowering, bad parameters do
-    /// not become the error type because that would create fake callability.
-    pub(super) fn lower_strict_signature_function_type(
-        &mut self,
-        scope: ScopeId,
-        params: &FormalParameters<'_>,
-        return_type: Option<&TSTypeAnnotation<'_>>,
-    ) -> Option<TypeId> {
-        let lowered = self.lower_strict_signature_parameters(scope, params, false)?;
-        let ret = match return_type {
-            Some(ann) => self.lower_annotation(scope, &ann.type_annotation)?,
-            None => self.interner.well_known().void,
-        };
-        Some(self.interner.intern_function(FunctionType {
-            params: lowered,
-            ret,
-        }))
     }
 
     pub(super) fn lower_strict_signature_parameters(

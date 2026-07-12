@@ -1,4 +1,6 @@
+use super::super::decls::alloc_type_param_ids;
 use super::*;
+use oxc_ast::ast::TSTypeParameterDeclaration;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Lower `A | B | …` to a canonical interned union. Any unlowerable member
@@ -198,20 +200,27 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(self.interner.intern_object(object))
     }
 
-    /// Lower a function type annotation to an interned function. Missing or
-    /// unlowerable parameters abort rather than silently mis-stating the signature.
-    pub(super) fn lower_function_annotation(
+    /// Lower a function type annotation to an interned function. Its binders own
+    /// a nested frame, so generic annotation parameters cannot capture or leak.
+    pub(super) fn lower_generic_function_annotation(
         &mut self,
         scope: ScopeId,
+        type_parameter_decl: Option<&TSTypeParameterDeclaration<'_>>,
         params: &FormalParameters<'_>,
         return_type: &TSType<'_>,
     ) -> Option<TypeId> {
-        let lowered = self.lower_strict_signature_parameters(scope, params, true)?;
-        let ret = self.with_indirection(|p| p.lower_annotation(scope, return_type))?;
-        Some(self.interner.intern_function(FunctionType {
-            params: lowered,
-            ret,
-        }))
+        let ids = alloc_type_param_ids(type_parameter_decl, &mut self.next_type_param);
+        let frame = self.build_type_param_frame(type_parameter_decl, &ids);
+        self.with_type_params(frame, |pass| {
+            let type_params = pass.lower_signature_type_params(scope, type_parameter_decl, &ids);
+            let params = pass.lower_strict_signature_parameters(scope, params, true)?;
+            let ret = pass.with_indirection(|p| p.lower_annotation(scope, return_type))?;
+            Some(pass.interner.intern_function(FunctionType {
+                type_params,
+                params,
+                ret,
+            }))
+        })
     }
 
     pub(super) fn lower_readonly_array_or_tuple(

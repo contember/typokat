@@ -175,7 +175,11 @@ impl<'a> InferenceConstraintEvaluator<'a> {
         self.in_progress.remove(&ty);
 
         if changed {
-            self.interner.intern_function(FunctionType { params, ret })
+            self.interner.intern_function(FunctionType {
+                type_params: Vec::new(),
+                params,
+                ret,
+            })
         } else {
             ty
         }

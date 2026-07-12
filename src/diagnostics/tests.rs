@@ -2,7 +2,8 @@ use super::*;
 use crate::relate::Reason;
 use crate::span::Span;
 use crate::types::repr::{
-    FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TupleRestType, TupleType,
+    FunctionType, GenericTypeParam, LiteralValue, ObjectType, ParameterType, PropertyType,
+    TupleRestType, TupleType, TypeParamId,
 };
 use crate::types::store::TypeId;
 use crate::types::Interner;
@@ -142,10 +143,12 @@ fn parameter_chain_names_parameter_and_nests_leaf() {
     let wk = interner.well_known();
 
     let str_to_num = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![ParameterType::required("x", wk.string)],
         ret: wk.number,
     });
     let num_to_num = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![ParameterType::required("x", wk.number)],
         ret: wk.number,
     });
@@ -258,6 +261,7 @@ fn array_type_renders_with_parenthesized_element() {
 
     // A function element IS parenthesized.
     let func = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![ParameterType::required("x", wk.number)],
         ret: wk.string,
     });
@@ -276,6 +280,7 @@ fn function_signature_shape_renders_optional_and_rest_params() {
     let wk = interner.well_known();
     let string_array = interner.intern_array(wk.string);
     let func = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![
             ParameterType::required("x", wk.number),
             ParameterType::optional("y", wk.boolean),
@@ -287,6 +292,27 @@ fn function_signature_shape_renders_optional_and_rest_params() {
     assert_eq!(
         render_type(interner.store(), func, false),
         "(x: number, y?: boolean, ...args: string[]) => void"
+    );
+}
+
+#[test]
+fn generic_function_signature_renders_persistent_binders() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(90), "T");
+    let func = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: TypeParamId(90),
+            constraint: Some(wk.number),
+            default: Some(wk.string),
+        }],
+        params: vec![ParameterType::required("value", t)],
+        ret: t,
+    });
+
+    assert_eq!(
+        render_type(interner.store(), func, false),
+        "<T extends number = string>(value: T) => T"
     );
 }
 

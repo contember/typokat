@@ -15,7 +15,7 @@ use context::InferenceContext;
 use helpers::widen;
 
 use crate::relate::Relater;
-use crate::types::repr::{IntrinsicKind, ParameterType, TypeParamId, TypeTag};
+use crate::types::repr::{GenericTypeParam, IntrinsicKind, ParameterType, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
 use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -73,17 +73,17 @@ pub fn infer_from_types_for_conditional(
 /// call's argument types (the M10 entry point used by the checker).
 ///
 /// Every declared parameter id gets an entry: one fixed from its collected
-/// candidates if any landed, otherwise the parameter's **constraint** (M24) or
-/// **`unknown`** (the sound no-candidate fallback — `unknown` cannot mask a
-/// downstream error the way `any` would). The returned map is fed straight to the
-/// existing M9 substitution.
+/// candidates if any landed, otherwise the parameter's **default**, then its
+/// **constraint** (M24), or **`unknown`** (the sound no-candidate fallback —
+/// `unknown` cannot mask a downstream error the way `any` would). The returned map
+/// is fed straight to the existing M9 substitution.
 ///
 /// `next_type_param` is the module-wide allocator used when constraint evaluation
 /// freshens `infer` binders while fixing parameters.
 ///
 /// `fresh_args` marks, positionally (parallel to `args`), which arguments are
 /// **fresh object/array literals** at the call site. A parameter is exempt from the
-/// M24 clamp-to-constraint (see [`fix_params`]) only when **EVERY** candidate it
+/// M24 clamp-to-constraint (see [`fix_signature_params`]) only when **EVERY** candidate it
 /// received came from a fresh literal (review F4 — the exemption is per-ARGUMENT: a
 /// fresh satisfying literal must not shield a separate non-fresh violating argument
 /// binding the same parameter). tsc contextually retypes a fresh literal against
@@ -123,10 +123,45 @@ pub fn infer_type_arguments_from_params(
     args: &[TypeId],
     fresh_args: &[bool],
 ) -> FxHashMap<crate::types::repr::TypeParamId, TypeId> {
+    let type_params: Vec<GenericTypeParam> = type_params
+        .iter()
+        .map(|&id| GenericTypeParam {
+            id,
+            constraint: interner.store().type_param_constraint(id),
+            default: None,
+        })
+        .collect();
+    infer_signature_type_arguments_from_params(
+        interner,
+        next_type_param,
+        &type_params,
+        params,
+        args,
+        fresh_args,
+    )
+}
+
+/// Infer a generic function signature's arguments from the call arguments.
+///
+/// Function binders own their constraints/defaults, so this intentionally reads
+/// the persistent descriptors rather than the store's declaration-side column.
+/// That keeps an outer-substituted member signature sound at its later call site.
+pub fn infer_signature_type_arguments_from_params(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    type_params: &[GenericTypeParam],
+    params: &[ParameterType],
+    args: &[TypeId],
+    fresh_args: &[bool],
+) -> FxHashMap<TypeParamId, TypeId> {
     let candidates = collect_call_site_candidates(interner, params, args, fresh_args);
     let exempt = fresh_exempt_params(&candidates);
-    let fixed = fix_call_site_candidates(interner, candidates);
-    fix_params(interner, next_type_param, type_params, fixed, &exempt)
+    let constraints: FxHashMap<TypeParamId, Option<TypeId>> = type_params
+        .iter()
+        .map(|param| (param.id, param.constraint))
+        .collect();
+    let fixed = fix_call_site_candidates(interner, candidates, &constraints);
+    fix_signature_params(interner, next_type_param, type_params, fixed, &exempt)
 }
 
 fn collect_call_site_candidates(
@@ -304,10 +339,12 @@ fn tuple_inference_target(
 fn fix_call_site_candidates(
     interner: &mut Interner,
     candidates: CallSiteCandidates,
+    constraints: &FxHashMap<TypeParamId, Option<TypeId>>,
 ) -> FxHashMap<crate::types::repr::TypeParamId, TypeId> {
     let mut map = FxHashMap::default();
     for (param, cands) in candidates {
-        if let Some(fixed) = fix_call_site_candidates_for_param(interner, param, &cands) {
+        let constraint = constraints.get(&param).copied().flatten();
+        if let Some(fixed) = fix_call_site_candidates_for_param(interner, constraint, &cands) {
             map.insert(param, fixed);
         }
     }
@@ -316,30 +353,34 @@ fn fix_call_site_candidates(
 
 fn fix_call_site_candidates_for_param(
     interner: &mut Interner,
-    param: TypeParamId,
+    constraint: Option<TypeId>,
     cands: &[CallSiteCandidate],
 ) -> Option<TypeId> {
     let contributions = candidate_contributions(cands);
     let mut iter = contributions.iter();
     let first = iter.next()?;
-    let primitive_constraint = has_primitive_constraint(interner, param);
+    let primitive_constraint = constraint.is_some_and(|ty| is_primitive_ish(interner.store(), ty));
     if contributions.len() == 1 {
         return Some(fix_candidate_set(
             interner,
-            param,
+            constraint,
             first.candidates.iter().copied(),
         ));
     }
 
     let mut current = raw_candidate_set(interner, first.candidates.iter().copied());
-    let mut current_prepared = fix_candidate_set(interner, param, first.candidates.iter().copied());
+    let mut current_prepared =
+        fix_candidate_set(interner, constraint, first.candidates.iter().copied());
     let mut preserve_current = primitive_constraint || first.candidates.len() > 1;
     let mut current_fresh = first.fresh;
 
     for contribution in iter {
         let next = raw_candidate_set(interner, contribution.candidates.iter().copied());
-        let next_prepared =
-            fix_candidate_set(interner, param, contribution.candidates.iter().copied());
+        let next_prepared = fix_candidate_set(
+            interner,
+            constraint,
+            contribution.candidates.iter().copied(),
+        );
 
         if is_assignable_type(interner, next, current) {
             if current_fresh
@@ -431,14 +472,15 @@ fn raw_candidate_set(interner: &mut Interner, cands: impl Iterator<Item = TypeId
 
 fn fix_candidate_set(
     interner: &mut Interner,
-    param: TypeParamId,
+    constraint: Option<TypeId>,
     cands: impl Iterator<Item = TypeId>,
 ) -> TypeId {
-    let prepared: Vec<TypeId> = if has_primitive_constraint(interner, param) {
-        cands.collect()
-    } else {
-        cands.map(|c| widen(interner, c)).collect()
-    };
+    let prepared: Vec<TypeId> =
+        if constraint.is_some_and(|ty| is_primitive_ish(interner.store(), ty)) {
+            cands.collect()
+        } else {
+            cands.map(|c| widen(interner, c)).collect()
+        };
     interner.union(prepared)
 }
 
@@ -589,19 +631,6 @@ fn primitive_base(interner: &Interner, family: PrimitiveFamily) -> TypeId {
     }
 }
 
-/// Whether a type parameter has a **primitive constraint** (tsc `hasPrimitiveConstraint`),
-/// so literal candidates inferred for it are **not** widened (M24/M27). True when the
-/// constraint is (or, for a union, contains) a primitive intrinsic
-/// (`string`/`number`/`boolean`/`null`/`undefined`/`void`), a literal, or a template
-/// literal pattern; false for an unconstrained parameter or an object/`unknown`/`any`
-/// constraint.
-fn has_primitive_constraint(interner: &Interner, param: TypeParamId) -> bool {
-    match interner.store().type_param_constraint(param) {
-        Some(constraint) => is_primitive_ish(interner.store(), constraint),
-        None => false,
-    }
-}
-
 fn is_primitive_ish(store: &Store, ty: TypeId) -> bool {
     match store.tag(ty) {
         TypeTag::Literal | TypeTag::Template => true,
@@ -641,10 +670,10 @@ fn infer_from_types_raw(
 }
 
 /// Complete a partially-fixed map to cover **every** declared type parameter,
-/// applying each parameter's **constraint** (M24). Processing parameters in declared
-/// order builds the map incrementally, so a constraint that references an earlier
-/// parameter (`<T, U extends T>`) is substituted with that parameter's already-fixed
-/// argument. For each parameter:
+/// applying each parameter's **constraint** (M24) and default. Processing parameters
+/// in declared order builds the map incrementally, so a constraint/default that
+/// references an earlier parameter (`<T, U extends T = T>`) is substituted with that
+/// parameter's already-fixed argument. For each parameter:
 ///
 ///  - **a candidate landed** → keep it, unless it **violates** the (substituted)
 ///    constraint, in which case **clamp to the constraint** (so the ordinary argument
@@ -656,30 +685,32 @@ fn infer_from_types_raw(
 ///    scope, documented deferral), so clamping it would over-report; a parameter
 ///    with **any** non-fresh candidate (a typed value — primitive OR structural,
 ///    which tsc cannot reshape) clamps normally;
-///  - **no candidate** → fall back to the (substituted) **constraint** when the
-///    parameter has one, else to **`unknown`** (the sound M10 fallback — `unknown`
-///    cannot mask a downstream error the way `any` would).
+///  - **no candidate** → use the (substituted) declaration **default** when present,
+///    otherwise fall back to the (substituted) **constraint** or **`unknown`** (the
+///    sound M10 fallback — `unknown` cannot mask a downstream error the way `any`
+///    would).
 ///
 /// An **unconstrained** parameter is unchanged from the M10 behaviour (candidate as-is,
 /// or `unknown`), so existing generic inference is untouched.
-fn fix_params(
+fn fix_signature_params(
     interner: &mut Interner,
     next_type_param: &mut u32,
-    type_params: &[crate::types::repr::TypeParamId],
-    fixed: FxHashMap<crate::types::repr::TypeParamId, TypeId>,
-    fresh_exempt: &FxHashSet<crate::types::repr::TypeParamId>,
-) -> FxHashMap<crate::types::repr::TypeParamId, TypeId> {
+    type_params: &[GenericTypeParam],
+    fixed: FxHashMap<TypeParamId, TypeId>,
+    fresh_exempt: &FxHashSet<TypeParamId>,
+) -> FxHashMap<TypeParamId, TypeId> {
     let wk = interner.well_known();
     // Start from **all** collected candidates — this preserves bindings for parameters
     // NOT in `type_params` (e.g. a derived generic class inheriting its base's
     // constructor, whose parameter belongs to the *base*'s list); the constraint pass
     // below only overrides the declared ones.
     let mut map = fixed;
-    for &param in type_params {
+    for type_param in type_params {
+        let param = type_param.id;
         // The parameter's constraint, substituted with the arguments fixed so far
         // (releases the immutable borrow before the `&mut` substitute). `None` when the
         // parameter is unconstrained.
-        let raw_constraint = interner.store().type_param_constraint(param);
+        let raw_constraint = type_param.constraint;
         let constraint = raw_constraint.map(|c| {
             let substituted = substitute(interner, c, &map);
             let evaluated = crate::check::checker::eval::evaluate_inference_constraint(
@@ -720,8 +751,15 @@ fn fix_params(
                 }
                 None => candidate,
             },
-            // No candidate: fall back to the constraint if any, else `unknown`.
-            None => constraint.unwrap_or(wk.unknown),
+            // No candidate: a declaration default wins over the substituted
+            // constraint; otherwise retain the existing conservative `unknown`
+            // fallback. Defaults are evaluated only after earlier parameters have
+            // been fixed, so `<T, U = T>` observes the final `T` binding.
+            None => type_param
+                .default
+                .map(|default| substitute(interner, default, &map))
+                .or(constraint)
+                .unwrap_or(wk.unknown),
         };
         map.insert(param, value);
     }

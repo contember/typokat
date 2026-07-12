@@ -790,7 +790,6 @@ fn build_pass<'a, 'ast>(
         type_param_scopes: Vec::new(),
         next_type_param,
         class_parents: FxHashMap::default(),
-        generic_sig_params: FxHashMap::default(),
         class_ctors: FxHashMap::default(),
         class_ctor_overloads: FxHashMap::default(),
         class_type_params: FxHashMap::default(),

@@ -173,14 +173,14 @@ const b: Box<string> = { value: 1 };
     assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
 }
 
-/// **Graceful arity**: a wrong type-argument count must not panic and must not
-/// emit a new diagnostic (the `TK2558` check is out of M9 scope). Too few and
-/// too many arguments are both handled best-effort.
+/// Persistent generic function signatures reject an explicit wrong type-argument
+/// count with `TK2558`. Generic type-reference arity remains the older M9
+/// best-effort path, so this test keeps one control for that separate surface.
 #[test]
-fn wrong_type_argument_count_does_not_panic() {
-    // Too few type args on a 2-parameter generic, and too many on a
-    // 1-parameter generic. Neither should panic; we only assert the run
-    // completes and produces no *new-code* diagnostic from the arity mismatch.
+fn wrong_function_type_argument_count_reports_tk2558() {
+    // Too few explicit arguments for `pick` now uses the persistent function
+    // descriptor and reports `TK2558`; the unrelated `Box` type reference still
+    // exercises the established graceful type-reference path.
     let src = "\
 function pick<A, B>(a: A, b: B): A { return a; }
 interface Box<T> { value: T; }
@@ -189,12 +189,5 @@ const x: Box<number> = { value: 1 };
 type Bad = Box<number, string>;
 const y: Bad = { value: 1 };
 ";
-    // The run completes (no panic). No diagnostic carries an out-of-M9 code; the
-    // only codes that may appear are the existing M0–M9 ones. We assert there is
-    // no TK2558 (the future wrong-arity code) and the run is well-formed.
-    let codes: Vec<String> = diags(src).into_iter().map(|(_, c)| c).collect();
-    assert!(
-        !codes.iter().any(|c| c == "TK2558"),
-        "wrong type-arg arity must not emit TK2558 in M9, got {codes:?}"
-    );
+    assert_eq!(diags(src), vec![(3, "TK2558".to_string())]);
 }

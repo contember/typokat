@@ -1,6 +1,7 @@
 use super::*;
 use crate::types::repr::{
-    FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TupleRestType, TupleType,
+    FunctionType, GenericTypeParam, LiteralValue, ObjectType, ParameterType, PropertyType,
+    TupleRestType, TupleType, TypeParamId,
 };
 
 /// Build a required public property `name: ty`.
@@ -185,11 +186,13 @@ fn function_interning_dedups_by_signature() {
 
     // `(x: number) => string`
     let f1 = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![param("x", wk.number)],
         ret: wk.string,
     });
     // The exact same signature interns to the same id.
     let f1_again = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![param("x", wk.number)],
         ret: wk.string,
     });
@@ -200,6 +203,7 @@ fn function_interning_dedups_by_signature() {
 
     // A different return type is a distinct function type.
     let f_ret = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![param("x", wk.number)],
         ret: wk.number,
     });
@@ -207,6 +211,7 @@ fn function_interning_dedups_by_signature() {
 
     // A different parameter type is a distinct function type.
     let f_param = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![param("x", wk.string)],
         ret: wk.string,
     });
@@ -214,6 +219,7 @@ fn function_interning_dedups_by_signature() {
 
     // Different arity is distinct.
     let f_arity = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![param("x", wk.number), param("y", wk.string)],
         ret: wk.string,
     });
@@ -223,14 +229,45 @@ fn function_interning_dedups_by_signature() {
     // `(a: string, b: number)` are the same arity with the same *set* of
     // parameter types but in a different order — they must NOT dedup.
     let ab = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![param("a", wk.number), param("b", wk.string)],
         ret: wk.void,
     });
     let ba = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![param("a", wk.string), param("b", wk.number)],
         ret: wk.void,
     });
     assert_ne!(ab, ba, "parameter order is part of function identity");
+}
+
+#[test]
+fn function_interning_includes_generic_binders() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(40), "T");
+
+    let generic = |constraint, default| FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: TypeParamId(40),
+            constraint,
+            default,
+        }],
+        params: vec![param("value", t)],
+        ret: t,
+    };
+
+    let first = interner.intern_function(generic(Some(wk.number), Some(wk.string)));
+    let again = interner.intern_function(generic(Some(wk.number), Some(wk.string)));
+    let different_constraint = interner.intern_function(generic(Some(wk.string), Some(wk.string)));
+    let different_default = interner.intern_function(generic(Some(wk.number), Some(wk.number)));
+
+    assert_eq!(first, again, "equal binders must deduplicate");
+    assert_ne!(
+        first, different_constraint,
+        "constraints are identity-bearing"
+    );
+    assert_ne!(first, different_default, "defaults are identity-bearing");
 }
 
 /// M32/WU2: optional/default/rest parameter shape is part of function identity.
@@ -241,22 +278,27 @@ fn function_interning_includes_signature_shape() {
     let string_array = interner.intern_array(wk.string);
 
     let required = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![ParameterType::required("x", wk.number)],
         ret: wk.void,
     });
     let optional = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![ParameterType::optional("x", wk.number)],
         ret: wk.void,
     });
     let optional_again = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![ParameterType::optional("x", wk.number)],
         ret: wk.void,
     });
     let defaulted = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![ParameterType::defaulted("x", wk.number)],
         ret: wk.void,
     });
     let rest = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![ParameterType::rest("x", string_array)],
         ret: wk.void,
     });
@@ -267,6 +309,7 @@ fn function_interning_includes_signature_shape() {
     assert_ne!(required, rest, "required and rest are distinct");
 
     let mixed = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![
             ParameterType::required("a", wk.number),
             ParameterType::optional("b", wk.boolean),

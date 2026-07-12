@@ -3,6 +3,7 @@ mod accessor_abstract;
 mod array;
 mod classes;
 mod generic_class;
+mod generic_methods;
 mod generics;
 mod index_signature;
 mod inheritance;

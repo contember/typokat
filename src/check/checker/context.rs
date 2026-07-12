@@ -89,7 +89,7 @@ impl DeclTypes {
 /// body checking later fills only an unannotated return type.
 pub(in crate::check::checker) struct FunctionSurface {
     pub(in crate::check::checker) params: Vec<crate::types::repr::ParameterType>,
-    pub(in crate::check::checker) type_params: Vec<TypeParamId>,
+    pub(in crate::check::checker) generic_params: Vec<crate::types::repr::GenericTypeParam>,
     pub(in crate::check::checker) type_param_frame: FxHashMap<String, TypeId>,
     pub(in crate::check::checker) declared_return: Option<TypeId>,
     pub(in crate::check::checker) function_ty: TypeId,
@@ -221,10 +221,6 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// Parent class by stable [`ClassId`], built from resolvable `extends`.
     /// Used by `protected` access and independent of interned type identity.
     pub(in crate::check::checker) class_parents: FxHashMap<ClassId, ClassId>,
-    /// Generic signature metadata keyed by the template function type itself.
-    /// Overload resolution walks signature `TypeId`s, so generic overloads need
-    /// the candidate-local type parameters here instead of a global callee entry.
-    pub(in crate::check::checker) generic_sig_params: FxHashMap<TypeId, Vec<TypeParamId>>,
     /// Class `new`-info (M11), keyed by a class's **value-space** `DeclId`. Filled in
     /// phase 0 (fill) once each class's instance type and constructor signature are
     /// built; read by `new ClassName(args)` ([`infer_new`]) to check the arguments

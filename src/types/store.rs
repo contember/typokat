@@ -172,6 +172,16 @@ impl Store {
         self.type_params.get(self.payload(id) as usize)
     }
 
+    /// The display name of a declared type parameter by its stable id. Generic
+    /// signature binders keep ids in their structural representation while names
+    /// remain rendering-only on the interned parameter node.
+    pub fn type_param_name(&self, id: TypeParamId) -> Option<&str> {
+        self.type_params
+            .iter()
+            .find(|param| param.id == id)
+            .map(|param| param.name.as_str())
+    }
+
     /// The `ArrayType` (its element id) of an array type, or `None` if `id` is not
     /// an array (M17).
     pub fn array_type(&self, id: TypeId) -> Option<&ArrayType> {

@@ -4,7 +4,7 @@
 //! returns the original id on self-referential nominal types; recursive generic
 //! instantiation remains out of scope.
 
-use crate::types::repr::{TypeParamId, TypeTag};
+use crate::types::repr::{FunctionType, TypeParamId, TypeTag};
 use crate::types::store::TypeId;
 use crate::types::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -20,6 +20,9 @@ pub struct Substitution<'a> {
     /// Type ids currently being rewritten on the recursion stack — re-entry
     /// returns the original id, breaking a (nominal) cycle. See the module docs.
     in_progress: FxHashSet<TypeId>,
+    /// Generic function binders currently crossed while applying an outer
+    /// substitution. They shadow matching ids in `map` until that signature exits.
+    blocked: FxHashSet<TypeParamId>,
 }
 
 impl<'a> Substitution<'a> {
@@ -28,6 +31,7 @@ impl<'a> Substitution<'a> {
         Substitution {
             map,
             in_progress: FxHashSet::default(),
+            blocked: FxHashSet::default(),
         }
     }
 
@@ -47,7 +51,10 @@ impl<'a> Substitution<'a> {
             // leave it untouched.
             TypeTag::TypeParam => {
                 let param_id = interner.store().type_param(ty).map(|p| p.id);
-                match param_id.and_then(|id| self.map.get(&id).copied()) {
+                match param_id
+                    .filter(|id| !self.blocked.contains(id))
+                    .and_then(|id| self.map.get(&id).copied())
+                {
                     Some(arg) => arg,
                     None => ty,
                 }
@@ -93,4 +100,34 @@ pub fn substitute(
     map: &FxHashMap<TypeParamId, TypeId>,
 ) -> TypeId {
     Substitution::new(map).apply(interner, ty)
+}
+
+/// Instantiate a generic function's own binders for one call candidate.
+///
+/// Unlike [`substitute`], this consumes the outer function's binder list while
+/// preserving binders nested inside parameter or return types.
+pub fn instantiate_function(
+    interner: &mut Interner,
+    ty: TypeId,
+    map: &FxHashMap<TypeParamId, TypeId>,
+) -> TypeId {
+    let Some(function) = interner.store().function_type(ty) else {
+        return ty;
+    };
+    let params = function.params.clone();
+    let ret = function.ret;
+    let mut substitution = Substitution::new(map);
+    let params = params
+        .into_iter()
+        .map(|mut param| {
+            param.ty = substitution.apply(interner, param.ty);
+            param
+        })
+        .collect();
+    let ret = substitution.apply(interner, ret);
+    interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        params,
+        ret,
+    })
 }

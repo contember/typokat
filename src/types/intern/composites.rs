@@ -67,17 +67,19 @@ impl Interner {
         self.store.set_object(id, object);
     }
 
-    /// Intern a function type. Parameters are positional and never sorted; two
-    /// functions share an id only when parameters match in order and return ids match.
+    /// Intern a function type. Generic binders and parameters are positional and
+    /// never sorted; all call-observable fields participate in identity.
     pub fn intern_function(&mut self, function: FunctionType) -> TypeId {
         let key = StructuralKey::Function {
+            type_params: &function.type_params,
             params: &function.params,
             ret: function.ret,
         };
         let hash = structural_hash(&key);
         if let Some(existing) = self.lookup(hash, |store, id| {
             store.function_type(id).is_some_and(|existing| {
-                existing.ret == function.ret
+                existing.type_params == function.type_params
+                    && existing.ret == function.ret
                     && function_params_eq(&existing.params, &function.params)
             })
         }) {

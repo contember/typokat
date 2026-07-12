@@ -71,7 +71,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Expression::FunctionExpression(func) => {
                 // Generic function expressions scope type params to the body, but
                 // are not registered for explicit call-site type arguments.
-                let (id, _params) = self.infer_function(scope, func);
+                let id = self.infer_function(scope, func);
                 Some((id, Span::from_oxc(func.span)))
             }
             Expression::ArrowFunctionExpression(arrow) => {

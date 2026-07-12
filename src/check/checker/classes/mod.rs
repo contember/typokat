@@ -237,12 +237,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // `new` reads only the parameters; the function return is unused.
         let ctor = match own_members.ctor_params {
             Some(params) => self.interner.intern_function(FunctionType {
+                type_params: Vec::new(),
                 params,
                 ret: void_ty,
             }),
             None => match base {
                 Some(base_info) => base_info.ctor,
                 None => self.interner.intern_function(FunctionType {
+                    type_params: Vec::new(),
                     params: Vec::new(),
                     ret: void_ty,
                 }),
@@ -268,6 +270,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .into_iter()
                 .map(|params| {
                     self.interner.intern_function(FunctionType {
+                        type_params: Vec::new(),
                         params,
                         ret: reserved,
                     })
@@ -281,6 +284,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .map(|func| func.params.clone())
                 .unwrap_or_default();
             vec![self.interner.intern_function(FunctionType {
+                type_params: Vec::new(),
                 params,
                 ret: reserved,
             })]
@@ -485,6 +489,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                                 let params =
                                     self.lower_signature_parameters(scope, &method.value.params);
                                 let signature = self.interner.intern_function(FunctionType {
+                                    type_params: Vec::new(),
                                     params,
                                     ret: self.interner.well_known().void,
                                 });
@@ -626,6 +631,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         if let Some(params) = &ctor_params {
             let implementation = self.interner.intern_function(FunctionType {
+                type_params: Vec::new(),
                 params: params.clone(),
                 ret: self.interner.well_known().void,
             });
@@ -662,7 +668,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let mut call_signatures: Vec<TypeId> = Vec::new();
         let mut overloads: Vec<(TypeId, Span)> = Vec::new();
         let mut implementation: Option<TypeId> = None;
-        let mut unsupported = false;
+        let mut has_generic_signature = false;
         for element in &class.body.body {
             let ClassElement::MethodDefinition(method) = element else {
                 continue;
@@ -674,11 +680,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             {
                 continue;
             }
-            if method.value.type_parameters.is_some() {
-                unsupported = true;
-                continue;
-            }
             let signature = self.lower_method_signature(scope, &method.value)?;
+            has_generic_signature |= self
+                .interner
+                .store()
+                .function_type(signature)
+                .is_some_and(|function| !function.type_params.is_empty());
             if method.value.body.is_some() {
                 implementation = Some(signature);
                 continue;
@@ -686,21 +693,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             call_signatures.push(signature);
             overloads.push((signature, Span::from_oxc(method.span)));
         }
-        if unsupported {
-            return Some(PropertyType {
-                name: name.to_string(),
-                ty: self.interner.well_known().never,
-                optional: false,
-                visibility,
-                declaring_class: Some(class_id),
-                readonly: false,
-                is_accessor: false,
-            });
-        }
         if call_signatures.is_empty() {
             return None;
         }
-        if let Some(implementation) = implementation {
+        if let Some(implementation) = implementation.filter(|_| !has_generic_signature) {
             self.check_class_overload_compatibility(implementation, &overloads);
         }
         let ty = self.interner.intern_object(ObjectType {
@@ -800,7 +796,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// Parameters are positional annotations; an omitted return is `void`.
     /// Returns `None` only when a present return annotation cannot be lowered.
     fn lower_method_signature(&mut self, scope: ScopeId, func: &Function<'_>) -> Option<TypeId> {
-        self.lower_signature_function_type(scope, &func.params, func.return_type.as_deref())
+        self.lower_generic_signature_function_type(
+            scope,
+            func.type_parameters.as_deref(),
+            &func.params,
+            func.return_type.as_deref(),
+        )
     }
 
     /// Effective optional-field type shared by member construction and initializer checks.

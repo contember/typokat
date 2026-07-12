@@ -13,13 +13,13 @@ use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::{Relater, Relation};
 use crate::span::Span;
 use crate::types::repr::{
-    FunctionType, IntrinsicKind, ParameterType, TupleType, TypeParamId, TypeTag,
+    FunctionType, GenericTypeParam, IntrinsicKind, ParameterType, TupleType, TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
-use crate::types::{substitute, Interner, WellKnown};
+use crate::types::{instantiate_function, substitute, Interner, WellKnown};
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, CallExpression, Expression, FormalParameters,
-    Function, FunctionBody, NewExpression,
+    Function, FunctionBody, NewExpression, TSTypeParameterInstantiation,
 };
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
@@ -45,12 +45,50 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         args: &[(TypeId, Span)],
         map: &FxHashMap<TypeParamId, TypeId>,
     ) {
+        let checks: Vec<(Option<TypeId>, TypeId, Span)> = type_params
+            .iter()
+            .zip(args)
+            .map(|(&param, &(arg, span))| {
+                (
+                    self.interner.store().type_param_constraint(param),
+                    arg,
+                    span,
+                )
+            })
+            .collect();
+        self.check_constraint_arguments(&checks, map);
+    }
+
+    /// Check explicit function-signature arguments against their persistent
+    /// descriptors. The descriptor can already have been rewritten by an outer
+    /// class/interface substitution, unlike the declaration-side store column.
+    fn check_signature_type_argument_constraints(
+        &mut self,
+        type_params: &[GenericTypeParam],
+        args: &[(TypeId, Span)],
+        map: &FxHashMap<TypeParamId, TypeId>,
+    ) {
+        let checks: Vec<(Option<TypeId>, TypeId, Span)> = type_params
+            .iter()
+            .zip(args)
+            .map(|(param, &(arg, span))| (param.constraint, arg, span))
+            .collect();
+        self.check_constraint_arguments(&checks, map);
+    }
+
+    /// Check already-lowered type arguments against constraint sources. Signature
+    /// default validation shares this with call-site explicit arguments.
+    pub(in crate::check::checker) fn check_constraint_arguments(
+        &mut self,
+        args: &[(Option<TypeId>, TypeId, Span)],
+        map: &FxHashMap<TypeParamId, TypeId>,
+    ) {
         // Build the (argument, substituted-constraint, span) checks up front — this needs
         // `&mut Interner` (substitution may intern new types), which cannot overlap the
         // relation engine's immutable store borrow below.
         let mut checks: Vec<(TypeId, TypeId, TypeId, Span)> = Vec::new();
-        for (&param, &(arg, span)) in type_params.iter().zip(args) {
-            let Some(constraint) = self.interner.store().type_param_constraint(param) else {
+        for &(raw_constraint, arg, span) in args {
+            let Some(constraint) = raw_constraint else {
                 continue;
             };
             let substituted = substitute(self.interner, constraint, map);
@@ -320,60 +358,111 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         call_span: Span,
         commit_constraints: bool,
     ) -> Result<CallCandidate, CandidateBuildFailure> {
-        let params = self.generic_sig_params.get(&signature_ty).cloned();
-        let instantiated = match params {
-            Some(type_params) if !type_params.is_empty() => {
-                let map = match call.type_arguments.as_deref() {
-                    Some(args) => {
-                        let mut arg_infos: Vec<(TypeId, Span)> =
-                            Vec::with_capacity(args.params.len());
-                        for arg in &args.params {
-                            arg_infos.push((
-                                self.lower_annotation(scope, arg)
-                                    .ok_or(CandidateBuildFailure::Unavailable)?,
-                                Span::from_oxc(arg.span()),
-                            ));
-                        }
-                        let mut map: FxHashMap<TypeParamId, TypeId> = FxHashMap::default();
-                        for (&param, &(arg, _)) in type_params.iter().zip(&arg_infos) {
-                            map.insert(param, arg);
-                        }
-                        if commit_constraints {
-                            self.check_type_argument_constraints(&type_params, &arg_infos, &map);
-                        } else {
-                            let diagnostics_len = self.diagnostics.len();
-                            self.check_type_argument_constraints(&type_params, &arg_infos, &map);
-                            if self.diagnostics.len() != diagnostics_len {
-                                let diagnostics = self.diagnostics[diagnostics_len..].to_vec();
-                                self.diagnostics.truncate(diagnostics_len);
-                                return Err(CandidateBuildFailure::Constraint(diagnostics));
-                            }
-                        }
-                        map
+        self.instantiate_signature_candidate(
+            scope,
+            signature_ty,
+            call.type_arguments.as_deref(),
+            args,
+            call_span,
+            commit_constraints,
+        )
+    }
+
+    /// Build one callable or constructable signature candidate from its persistent
+    /// generic descriptors. Both `f<T>(...)` and `new C<T>(...)` share this path so
+    /// outer-substituted constraints/defaults cannot fall back to stale store state.
+    fn instantiate_signature_candidate(
+        &mut self,
+        scope: ScopeId,
+        signature_ty: TypeId,
+        type_arguments: Option<&TSTypeParameterInstantiation<'_>>,
+        args: PreparedCallArgs<'_, '_>,
+        call_span: Span,
+        commit_constraints: bool,
+    ) -> Result<CallCandidate, CandidateBuildFailure> {
+        let generic_params = self
+            .interner
+            .store()
+            .function_type(signature_ty)
+            .map(|function| function.type_params.clone())
+            .ok_or(CandidateBuildFailure::Unavailable)?;
+        let instantiated = if generic_params.is_empty() {
+            signature_ty
+        } else {
+            let map = match type_arguments {
+                Some(type_arguments) => {
+                    let mut arg_infos: Vec<(TypeId, Span)> =
+                        Vec::with_capacity(type_arguments.params.len());
+                    for arg in &type_arguments.params {
+                        arg_infos.push((
+                            self.lower_annotation(scope, arg)
+                                .ok_or(CandidateBuildFailure::Unavailable)?,
+                            Span::from_oxc(arg.span()),
+                        ));
                     }
-                    None => {
-                        let params: Vec<ParameterType> = self
-                            .interner
-                            .store()
-                            .function_type(signature_ty)
-                            .ok_or(CandidateBuildFailure::Unavailable)?
-                            .params
-                            .clone();
-                        let inference_args =
-                            self.contextual_inference_args(scope, &params, args.types, args.exprs);
-                        infer::infer_type_arguments_from_params(
-                            self.interner,
-                            &mut self.next_type_param,
-                            &type_params,
-                            &params,
-                            &inference_args,
-                            args.fresh,
-                        )
+                    let min = generic_params
+                        .iter()
+                        .filter(|param| param.default.is_none())
+                        .count();
+                    let max = generic_params.len();
+                    if arg_infos.len() < min || arg_infos.len() > max {
+                        let diagnostic = Diagnostic::wrong_type_argument_count(
+                            Span::from_oxc(type_arguments.span),
+                            min,
+                            max,
+                            arg_infos.len(),
+                        );
+                        return Err(
+                            self.candidate_constraint_failure(commit_constraints, diagnostic)
+                        );
                     }
-                };
-                substitute(self.interner, signature_ty, &map)
-            }
-            _ => signature_ty,
+                    let mut map: FxHashMap<TypeParamId, TypeId> = FxHashMap::default();
+                    for (param, &(arg, _)) in generic_params.iter().zip(&arg_infos) {
+                        map.insert(param.id, arg);
+                    }
+                    let map = self.complete_signature_type_arguments(&generic_params, map);
+                    if commit_constraints {
+                        self.check_signature_type_argument_constraints(
+                            &generic_params,
+                            &arg_infos,
+                            &map,
+                        );
+                    } else {
+                        let diagnostics_len = self.diagnostics.len();
+                        self.check_signature_type_argument_constraints(
+                            &generic_params,
+                            &arg_infos,
+                            &map,
+                        );
+                        if self.diagnostics.len() != diagnostics_len {
+                            let diagnostics = self.diagnostics[diagnostics_len..].to_vec();
+                            self.diagnostics.truncate(diagnostics_len);
+                            return Err(CandidateBuildFailure::Constraint(diagnostics));
+                        }
+                    }
+                    map
+                }
+                None => {
+                    let params: Vec<ParameterType> = self
+                        .interner
+                        .store()
+                        .function_type(signature_ty)
+                        .ok_or(CandidateBuildFailure::Unavailable)?
+                        .params
+                        .clone();
+                    let inference_args =
+                        self.contextual_inference_args(scope, &params, args.types, args.exprs);
+                    infer::infer_signature_type_arguments_from_params(
+                        self.interner,
+                        &mut self.next_type_param,
+                        &generic_params,
+                        &params,
+                        &inference_args,
+                        args.fresh,
+                    )
+                }
+            };
+            instantiate_function(self.interner, signature_ty, &map)
         };
 
         let func = self
@@ -385,6 +474,44 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let ret = func.ret;
         let params = self.evaluate_parameters(params, call_span);
         Ok(CallCandidate { params, ret })
+    }
+
+    /// Fill omitted function binders in declaration order. Explicit arguments are
+    /// retained verbatim (so their constraint error is reported as `TK2344`), while
+    /// defaults observe the already-completed earlier bindings.
+    fn complete_signature_type_arguments(
+        &mut self,
+        type_params: &[GenericTypeParam],
+        mut map: FxHashMap<TypeParamId, TypeId>,
+    ) -> FxHashMap<TypeParamId, TypeId> {
+        let unknown = self.interner.well_known().unknown;
+        for type_param in type_params {
+            if map.contains_key(&type_param.id) {
+                continue;
+            }
+            let value = type_param
+                .default
+                .map(|default| substitute(self.interner, default, &map))
+                .or_else(|| {
+                    type_param
+                        .constraint
+                        .map(|constraint| substitute(self.interner, constraint, &map))
+                })
+                .unwrap_or(unknown);
+            map.insert(type_param.id, value);
+        }
+        map
+    }
+
+    fn candidate_constraint_failure(
+        &mut self,
+        commit: bool,
+        diagnostic: Diagnostic,
+    ) -> CandidateBuildFailure {
+        if commit {
+            self.diagnostics.push(diagnostic.clone());
+        }
+        CandidateBuildFailure::Constraint(vec![diagnostic])
     }
 
     fn try_call_candidate(
@@ -596,6 +723,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
     fn call_arity(&self, params: &[ParameterType]) -> CallArity {
         let function = FunctionType {
+            type_params: Vec::new(),
             params: params.to_vec(),
             ret: self.interner.well_known().void,
         };
@@ -785,8 +913,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     if let Some(candidate) = self.select_construct_candidate(
                         scope,
                         &signatures,
-                        &arg_types,
-                        &arg_exprs,
+                        new_expr.type_arguments.as_deref(),
+                        PreparedCallArgs {
+                            types: &arg_types,
+                            fresh: &arg_fresh,
+                            exprs: &arg_exprs,
+                        },
                         new_span,
                     ) {
                         self.check_call_arguments(
@@ -819,9 +951,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
 
         if let Some(overloads) = self.class_ctor_overloads.get(&decl_id).cloned() {
-            if let Some(candidate) =
-                self.select_construct_candidate(scope, &overloads, &arg_types, &arg_exprs, new_span)
-            {
+            if let Some(candidate) = self.select_construct_candidate(
+                scope,
+                &overloads,
+                new_expr.type_arguments.as_deref(),
+                PreparedCallArgs {
+                    types: &arg_types,
+                    fresh: &arg_fresh,
+                    exprs: &arg_exprs,
+                },
+                new_span,
+            ) {
                 self.check_call_arguments(
                     scope,
                     &candidate.params,
@@ -878,44 +1018,82 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         signatures: &[TypeId],
-        arg_types: &[(TypeId, Span)],
-        arg_exprs: &[&Expression<'_>],
+        type_arguments: Option<&TSTypeParameterInstantiation<'_>>,
+        args: PreparedCallArgs<'_, '_>,
         span: Span,
     ) -> Option<CallCandidate> {
         let overload = signatures.len() > 1;
+        if !overload {
+            let signature = signatures.first().copied()?;
+            return match self.instantiate_signature_candidate(
+                scope,
+                signature,
+                type_arguments,
+                args,
+                span,
+                true,
+            ) {
+                Ok(candidate) => Some(candidate),
+                Err(CandidateBuildFailure::Constraint(_))
+                | Err(CandidateBuildFailure::Unavailable) => None,
+            };
+        }
+
         let mut arity_failures: Vec<CallArity> = Vec::new();
         let mut saw_non_arity_failure = false;
-        let mut first_candidate: Option<CallCandidate> = None;
+        let mut first_constraint_failure: Option<Vec<Diagnostic>> = None;
 
         for signature in signatures {
-            let func = self.interner.store().function_type(*signature)?;
-            let params = func.params.clone();
-            let ret = func.ret;
-            let params = self.evaluate_parameters(params, span);
-            let candidate = CallCandidate { params, ret };
-            if first_candidate.is_none() {
-                first_candidate = Some(CallCandidate {
-                    params: candidate.params.clone(),
-                    ret: candidate.ret,
-                });
-            }
-            match self.try_call_candidate(scope, &candidate.params, arg_types, arg_exprs, span) {
-                CandidateTrial::Match => return Some(candidate),
+            let candidate = match self.instantiate_signature_candidate(
+                scope,
+                *signature,
+                type_arguments,
+                args,
+                span,
+                false,
+            ) {
+                Ok(candidate) => candidate,
+                Err(CandidateBuildFailure::Constraint(diagnostics)) => {
+                    if first_constraint_failure.is_none() {
+                        first_constraint_failure = Some(diagnostics);
+                    }
+                    saw_non_arity_failure = true;
+                    continue;
+                }
+                Err(CandidateBuildFailure::Unavailable) => {
+                    saw_non_arity_failure = true;
+                    continue;
+                }
+            };
+            match self.try_call_candidate(scope, &candidate.params, args.types, args.exprs, span) {
+                CandidateTrial::Match => {
+                    let committed = match self.instantiate_signature_candidate(
+                        scope,
+                        *signature,
+                        type_arguments,
+                        args,
+                        span,
+                        true,
+                    ) {
+                        Ok(candidate) => candidate,
+                        Err(CandidateBuildFailure::Constraint(_))
+                        | Err(CandidateBuildFailure::Unavailable) => return None,
+                    };
+                    return Some(committed);
+                }
                 CandidateTrial::Arity(arity) => arity_failures.push(arity),
                 CandidateTrial::Mismatch => saw_non_arity_failure = true,
             }
         }
 
-        if overload {
-            if !arity_failures.is_empty() && !saw_non_arity_failure {
-                self.emit_overload_arity_failure(&arity_failures, arg_types.len(), span);
-            } else {
-                self.diagnostics.push(Diagnostic::no_overload_matches(span));
-            }
-            None
+        if let Some(diagnostics) = first_constraint_failure {
+            self.diagnostics.extend(diagnostics);
+        } else if !arity_failures.is_empty() && !saw_non_arity_failure {
+            self.emit_overload_arity_failure(&arity_failures, args.types.len(), span);
         } else {
-            first_candidate
+            self.diagnostics.push(Diagnostic::no_overload_matches(span));
         }
+        None
     }
 
     /// M16 generic-class substitution for `new`: explicit type args or M10
@@ -997,27 +1175,27 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             alloc_type_param_ids(func.type_parameters.as_deref(), &mut self.next_type_param);
         let type_param_frame =
             self.build_type_param_frame(func.type_parameters.as_deref(), &type_params);
-        let (params, declared_return) = self.with_type_params(type_param_frame.clone(), |pass| {
-            // M24: lower the parameters' `extends` constraints with the frame active.
-            pass.lower_type_param_constraints(
-                enclosing,
-                func.type_parameters.as_deref(),
-                &type_params,
-            );
-            let fn_scope = pass
-                .binder
-                .fn_scopes
-                .get(&(pass.current_module, func.span.start))
-                .copied();
-            let params = pass.lower_parameters(enclosing, fn_scope, &func.params, false);
-            // Type references in the signature resolve from the enclosing scope,
-            // while declared type parameters resolve through the pushed frame.
-            let declared_return = func
-                .return_type
-                .as_ref()
-                .and_then(|ann| pass.lower_annotation(enclosing, &ann.type_annotation));
-            (params, declared_return)
-        });
+        let (generic_params, params, declared_return) =
+            self.with_type_params(type_param_frame.clone(), |pass| {
+                let generic_params = pass.lower_signature_type_params(
+                    enclosing,
+                    func.type_parameters.as_deref(),
+                    &type_params,
+                );
+                let fn_scope = pass
+                    .binder
+                    .fn_scopes
+                    .get(&(pass.current_module, func.span.start))
+                    .copied();
+                let params = pass.lower_parameters(enclosing, fn_scope, &func.params, false);
+                // Type references in the signature resolve from the enclosing scope,
+                // while declared type parameters resolve through the pushed frame.
+                let declared_return = func
+                    .return_type
+                    .as_ref()
+                    .and_then(|ann| pass.lower_annotation(enclosing, &ann.type_annotation));
+                (generic_params, params, declared_return)
+            });
         let ret = declared_return.unwrap_or_else(|| {
             let well_known = self.interner.well_known();
             if func.body.is_some() {
@@ -1029,6 +1207,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         });
         let function_ty = self.interner.intern_function(FunctionType {
+            type_params: generic_params.clone(),
             params: params.clone(),
             ret,
         });
@@ -1036,7 +1215,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let incomplete = self.incomplete.split_off(incomplete_start);
         FunctionSurface {
             params,
-            type_params,
+            generic_params,
             type_param_frame,
             declared_return,
             function_ty,
@@ -1075,6 +1254,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         surface: &FunctionSurface,
     ) -> TypeId {
         let params = surface.params.clone();
+        let generic_params = surface.generic_params.clone();
         self.with_type_params(surface.type_param_frame.clone(), |pass| {
             let fn_scope = pass
                 .binder
@@ -1088,7 +1268,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .as_ref()
                 .map(|body| pass.check_function_body(body_scope, body, surface.declared_return));
             let ret = resolve_return_type(pass.interner, surface.declared_return, inferred_return);
-            pass.interner.intern_function(FunctionType { params, ret })
+            pass.interner.intern_function(FunctionType {
+                type_params: generic_params,
+                params,
+                ret,
+            })
         })
     }
 
@@ -1099,11 +1283,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         enclosing: ScopeId,
         func: &Function<'_>,
-    ) -> (TypeId, Vec<TypeParamId>) {
+    ) -> TypeId {
         let mut surface = self.reserve_function(enclosing, func);
         self.replay_function_surface_records(&mut surface);
-        let fn_ty = self.fill_reserved_function(enclosing, func, &surface);
-        (fn_ty, surface.type_params)
+        self.fill_reserved_function(enclosing, func, &surface)
     }
 
     /// Infer an arrow's type and check its body. Generic arrow type parameters are
@@ -1182,7 +1365,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         };
 
         let ret = resolve_return_type(self.interner, declared_ret, inferred_ret);
-        self.interner.intern_function(FunctionType { params, ret })
+        self.interner.intern_function(FunctionType {
+            type_params: Vec::new(),
+            params,
+            ret,
+        })
     }
 
     /// Lower a function's/arrow's parameters to `ParameterType`s and, when a function

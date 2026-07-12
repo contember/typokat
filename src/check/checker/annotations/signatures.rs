@@ -1,5 +1,7 @@
+use super::super::decls::alloc_type_param_ids;
 use super::functions::parameter_from_shape;
 use super::*;
+use oxc_ast::ast::TSTypeParameterDeclaration;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Record the incomplete surface for a skipped computed property-signature key
@@ -29,24 +31,21 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         );
     }
 
-    /// Lower a WU1 method signature: non-generic, non-`this`, non-accessor,
-    /// static name. Optional methods stay out of subset.
+    /// Lower a method signature with a fresh nested method frame. Explicit `this`
+    /// parameters and optional methods remain deferred.
     pub(in crate::check::checker) fn lower_method_signature_property(
         &mut self,
         scope: ScopeId,
         sig: &TSMethodSignature<'_>,
     ) -> Option<PropertyType> {
-        if sig.kind != TSMethodSignatureKind::Method
-            || sig.type_parameters.is_some()
-            || sig.this_param.is_some()
-            || sig.optional
-        {
+        if sig.kind != TSMethodSignatureKind::Method || sig.this_param.is_some() || sig.optional {
             return None;
         }
 
         let name = sig.key.static_name()?;
-        let ty = self.lower_strict_signature_function_type(
+        let ty = self.lower_generic_strict_signature_function_type(
             scope,
+            sig.type_parameters.as_deref(),
             &sig.params,
             sig.return_type.as_deref(),
         )?;
@@ -68,16 +67,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             if sig.key.static_name().as_deref() != Some(name) {
                 continue;
             }
-            if sig.kind != TSMethodSignatureKind::Method
-                || sig.type_parameters.is_some()
-                || sig.this_param.is_some()
-                || sig.optional
+            if sig.kind != TSMethodSignatureKind::Method || sig.this_param.is_some() || sig.optional
             {
                 unsupported = true;
                 continue;
             }
-            let signature = self.lower_strict_signature_function_type(
+            let signature = self.lower_generic_strict_signature_function_type(
                 scope,
+                sig.type_parameters.as_deref(),
                 &sig.params,
                 sig.return_type.as_deref(),
             )?;
@@ -99,52 +96,87 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(PropertyType::public(name.to_string(), overload_ty))
     }
 
-    /// Lower a WU2 call signature: non-generic, non-`this`, with represented
-    /// optional/default/rest parameter shape.
-    /// Other signatures stay out of subset and do not create callability.
+    /// Lower a call signature with represented optional/default/rest shape. Explicit
+    /// `this` parameters remain out of subset.
     pub(in crate::check::checker) fn lower_call_signature(
         &mut self,
         scope: ScopeId,
         sig: &TSCallSignatureDeclaration<'_>,
     ) -> Option<TypeId> {
-        if sig.type_parameters.is_some() || sig.this_param.is_some() {
+        if sig.this_param.is_some() {
             return None;
         }
-        self.lower_strict_signature_function_type(scope, &sig.params, sig.return_type.as_deref())
+        self.lower_generic_strict_signature_function_type(
+            scope,
+            sig.type_parameters.as_deref(),
+            &sig.params,
+            sig.return_type.as_deref(),
+        )
     }
 
-    /// Lower a WU3 construct signature: non-generic with a representable instance
-    /// type. Other signatures do not create constructability.
+    /// Lower a construct signature with a representable instance type.
     pub(in crate::check::checker) fn lower_construct_signature(
         &mut self,
         scope: ScopeId,
         sig: &TSConstructSignatureDeclaration<'_>,
     ) -> Option<TypeId> {
-        if sig.type_parameters.is_some() {
-            return None;
-        }
         let return_type = sig.return_type.as_deref()?;
-        if !self.signature_annotations_are_locally_resolvable(scope, &sig.params, return_type) {
-            return None;
-        }
-        self.lower_strict_construct_function_type(scope, &sig.params, return_type)
+        self.lower_generic_strict_construct_function_type(
+            scope,
+            sig.type_parameters.as_deref(),
+            &sig.params,
+            return_type,
+        )
     }
 
-    /// Lower a function-like signature. Bad parameter annotations become the error
-    /// type to suppress cascades; missing returns become `void`.
-    pub(in crate::check::checker) fn lower_signature_function_type(
+    /// Lower a class/function-like surface whose own type parameters shadow any
+    /// enclosing class or interface frame.
+    pub(in crate::check::checker) fn lower_generic_signature_function_type(
         &mut self,
         scope: ScopeId,
+        type_parameter_decl: Option<&TSTypeParameterDeclaration<'_>>,
         params: &FormalParameters<'_>,
         return_type: Option<&TSTypeAnnotation<'_>>,
     ) -> Option<TypeId> {
-        let void_ty = self.interner.well_known().void;
-        let params = self.lower_signature_parameters(scope, params);
-        let ret = match return_type {
-            Some(ann) => self.lower_annotation(scope, &ann.type_annotation)?,
-            None => void_ty,
-        };
-        Some(self.interner.intern_function(FunctionType { params, ret }))
+        let ids = alloc_type_param_ids(type_parameter_decl, &mut self.next_type_param);
+        let frame = self.build_type_param_frame(type_parameter_decl, &ids);
+        self.with_type_params(frame, |pass| {
+            let type_params = pass.lower_signature_type_params(scope, type_parameter_decl, &ids);
+            let params = pass.lower_signature_parameters(scope, params);
+            let ret = match return_type {
+                Some(ann) => pass.lower_annotation(scope, &ann.type_annotation)?,
+                None => pass.interner.well_known().void,
+            };
+            Some(pass.interner.intern_function(FunctionType {
+                type_params,
+                params,
+                ret,
+            }))
+        })
+    }
+
+    pub(in crate::check::checker) fn lower_generic_strict_signature_function_type(
+        &mut self,
+        scope: ScopeId,
+        type_parameter_decl: Option<&TSTypeParameterDeclaration<'_>>,
+        params: &FormalParameters<'_>,
+        return_type: Option<&TSTypeAnnotation<'_>>,
+    ) -> Option<TypeId> {
+        let ids = alloc_type_param_ids(type_parameter_decl, &mut self.next_type_param);
+        let frame = self.build_type_param_frame(type_parameter_decl, &ids);
+        self.with_type_params(frame, |pass| {
+            let type_params = pass.lower_signature_type_params(scope, type_parameter_decl, &ids);
+            let params = pass.lower_strict_signature_parameters(scope, params, false)?;
+            let ret = match return_type {
+                Some(ann) => pass.lower_annotation(scope, &ann.type_annotation)?,
+                None => pass.interner.well_known().void,
+            };
+            Some(pass.interner.intern_function(FunctionType {
+                type_params,
+                params,
+                ret,
+            }))
+        })
     }
 
     /// Lower signature parameters for function-typed properties and class

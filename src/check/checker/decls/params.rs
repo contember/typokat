@@ -2,8 +2,9 @@ use super::*;
 use crate::binder::scope::ScopeId;
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
-use crate::types::repr::TypeParamId;
+use crate::types::repr::{GenericTypeParam, TypeParamId};
 use crate::types::store::TypeId;
+use crate::types::substitute;
 use oxc_ast::ast::TSTypeParameterDeclaration;
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -38,6 +39,101 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         param_decl: Option<&TSTypeParameterDeclaration<'_>>,
         ids: &[TypeParamId],
     ) {
+        self.lower_type_param_constraints_inner(scope, param_decl, ids, true);
+    }
+
+    /// Lower the persistent binder descriptors of a function-like signature.
+    /// The caller must have pushed this signature's frame, nested inside any
+    /// enclosing class/interface frame, before invoking this helper.
+    pub(in crate::check::checker) fn lower_signature_type_params(
+        &mut self,
+        scope: ScopeId,
+        param_decl: Option<&TSTypeParameterDeclaration<'_>>,
+        ids: &[TypeParamId],
+    ) -> Vec<GenericTypeParam> {
+        self.lower_type_param_constraints_inner(scope, param_decl, ids, false);
+        let Some(param_decl) = param_decl else {
+            return Vec::new();
+        };
+        let mut type_params: Vec<GenericTypeParam> = Vec::with_capacity(ids.len());
+        for (index, (param, &id)) in param_decl.params.iter().zip(ids).enumerate() {
+            let default = param.default.as_ref().and_then(|default| {
+                let lowered = self.lower_annotation(scope, default)?;
+                if self.default_references_later_signature_binder(index, param, ids, lowered) {
+                    self.diagnostics
+                        .push(Diagnostic::type_parameter_default_forward_reference(
+                            Span::from_oxc(default.span()),
+                        ));
+                    return None;
+                }
+                Some(lowered)
+            });
+            type_params.push(GenericTypeParam {
+                id,
+                constraint: self.interner.store().type_param_constraint(id),
+                default,
+            });
+        }
+        self.validate_signature_type_param_defaults(&type_params, param_decl);
+        type_params
+    }
+
+    /// Signature defaults see earlier binders only, while constraints retain their
+    /// TypeScript-wide declaration visibility. Detect a later binder after lowering
+    /// under the existing full frame, then discard that default so it cannot become
+    /// a permissive call-site fallback.
+    fn default_references_later_signature_binder(
+        &mut self,
+        index: usize,
+        param: &oxc_ast::ast::TSTypeParameter<'_>,
+        ids: &[TypeParamId],
+        default: TypeId,
+    ) -> bool {
+        let Some(current) = self.lookup_type_param(param.name.name.as_str()) else {
+            return false;
+        };
+        let mut replacements: FxHashMap<TypeParamId, TypeId> = FxHashMap::default();
+        for &later in &ids[index.saturating_add(1)..] {
+            replacements.insert(later, current);
+        }
+        !replacements.is_empty() && substitute(self.interner, default, &replacements) != default
+    }
+
+    /// Validate function-like declaration defaults in source order. A default may
+    /// reference earlier binders, so each descriptor's constraint is checked only
+    /// after those prior defaults have been substituted into the working map.
+    fn validate_signature_type_param_defaults(
+        &mut self,
+        type_params: &[GenericTypeParam],
+        param_decl: &TSTypeParameterDeclaration<'_>,
+    ) {
+        let mut map: FxHashMap<TypeParamId, TypeId> = FxHashMap::default();
+        let mut checks: Vec<(Option<TypeId>, TypeId, Span)> = Vec::new();
+        for (type_param, param) in type_params.iter().zip(&param_decl.params) {
+            let Some(default) = type_param.default else {
+                continue;
+            };
+            let Some(default_ast) = param.default.as_ref() else {
+                continue;
+            };
+            let default = substitute(self.interner, default, &map);
+            map.insert(type_param.id, default);
+            checks.push((
+                type_param.constraint,
+                default,
+                Span::from_oxc(default_ast.span()),
+            ));
+        }
+        self.check_constraint_arguments(&checks, &map);
+    }
+
+    fn lower_type_param_constraints_inner(
+        &mut self,
+        scope: ScopeId,
+        param_decl: Option<&TSTypeParameterDeclaration<'_>>,
+        ids: &[TypeParamId],
+        report_defaults: bool,
+    ) {
         let Some(param_decl) = param_decl else {
             return;
         };
@@ -48,12 +144,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // (divergences.md `constraints/type-parameter-defaults`), so an unresolved
             // name inside one was a silent false-clean. Dedup by span keeps repeated
             // constraint passes (fill + resolve, per-call generic sites) at one record.
-            if let Some(default) = param.default.as_ref() {
-                self.record_incomplete(
-                    "annotation-lower/type-parameter-default/self",
-                    Span::from_oxc(default.span()),
-                    "type-parameter default not lowered",
-                );
+            if report_defaults {
+                if let Some(default) = param.default.as_ref() {
+                    self.record_incomplete(
+                        "annotation-lower/type-parameter-default/self",
+                        Span::from_oxc(default.span()),
+                        "type-parameter default not lowered",
+                    );
+                }
             }
             let Some(constraint) = param.constraint.as_ref() else {
                 continue;

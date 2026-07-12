@@ -1,6 +1,7 @@
 use super::*;
 use crate::types::repr::{
-    FunctionType, ObjectType, ParameterType, PropertyType, TupleRestType, TupleType,
+    FunctionType, GenericTypeParam, ObjectType, ParameterType, PropertyType, TupleRestType,
+    TupleType,
 };
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
@@ -44,6 +45,7 @@ fn substitution_recurses_into_object_function_union() {
     });
     // (x: T) => T
     let fn_t = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![ParameterType::required("x", t)],
         ret: t,
     });
@@ -59,6 +61,7 @@ fn substitution_recurses_into_object_function_union() {
         ..Default::default()
     });
     let fn_num = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![ParameterType::required("x", wk.number)],
         ret: wk.number,
     });
@@ -80,6 +83,7 @@ fn substitution_preserves_function_signature_shape() {
     let t_array = interner.intern_array(t);
 
     let shaped = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![
             ParameterType::required("a", t),
             ParameterType::optional("b", u),
@@ -95,6 +99,7 @@ fn substitution_preserves_function_signature_shape() {
 
     let number_array = interner.intern_array(wk.number);
     let expected = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![
             ParameterType::required("a", wk.number),
             ParameterType::optional("b", wk.string),
@@ -105,6 +110,61 @@ fn substitution_preserves_function_signature_shape() {
     });
 
     assert_eq!(substitute(&mut interner, shaped, &map), expected);
+}
+
+#[test]
+fn outer_substitution_preserves_inner_generic_binder() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let outer = interner.intern_type_param(TypeParamId(80), "T");
+    let inner = interner.intern_type_param(TypeParamId(81), "U");
+    let callback = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        params: vec![ParameterType::required("value", outer)],
+        ret: inner,
+    });
+    let map = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: TypeParamId(81),
+            constraint: Some(outer),
+            default: Some(outer),
+        }],
+        params: vec![ParameterType::required("transform", callback)],
+        ret: inner,
+    });
+    let box_template = interner.intern_object(ObjectType {
+        properties: vec![prop("map", map)],
+        ..Default::default()
+    });
+
+    let mut substitutions = FxHashMap::default();
+    substitutions.insert(TypeParamId(80), wk.number);
+    substitutions.insert(TypeParamId(81), wk.string);
+    let box_number = substitute(&mut interner, box_template, &substitutions);
+
+    let expected_callback = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        params: vec![ParameterType::required("value", wk.number)],
+        ret: inner,
+    });
+    let expected_map = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: TypeParamId(81),
+            constraint: Some(wk.number),
+            default: Some(wk.number),
+        }],
+        params: vec![ParameterType::required("transform", expected_callback)],
+        ret: inner,
+    });
+    let expected_box = interner.intern_object(ObjectType {
+        properties: vec![prop("map", expected_map)],
+        ..Default::default()
+    });
+
+    assert_eq!(
+        box_number, expected_box,
+        "Box<T>.map<U> keeps U after T substitution"
+    );
 }
 
 /// Substitution rewrites an array's element (M17): `T[]` → `number[]`, nested

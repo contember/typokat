@@ -4,8 +4,8 @@
 //! cross-run content hash slot and deliberately returns a zero digest today.
 
 use crate::types::repr::{
-    IntrinsicKind, LiteralValue, ModifierOp, ParameterType, PropertyType, TupleType, TypeParamId,
-    TypeTag,
+    GenericTypeParam, IntrinsicKind, LiteralValue, ModifierOp, ParameterType, PropertyType,
+    TupleType, TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
 use rustc_hash::FxHasher;
@@ -26,11 +26,10 @@ pub enum StructuralKey<'a> {
         call_signatures: &'a [TypeId],
         construct_signatures: &'a [TypeId],
     },
-    /// A function type, keyed over its **positional** parameter list (never
-    /// sorted) and return type. Two function types collide only when their
-    /// parameters match in order (name, shape flags, type) and their return types
-    /// are the same interned id.
+    /// A function type, keyed over its ordered generic binders, its **positional**
+    /// parameter list (never sorted), and return type.
     Function {
+        type_params: &'a [GenericTypeParam],
         params: &'a [ParameterType],
         ret: TypeId,
     },
@@ -165,8 +164,18 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
                 prop.is_accessor.hash(&mut h);
             }
         }
-        StructuralKey::Function { params, ret } => {
+        StructuralKey::Function {
+            type_params,
+            params,
+            ret,
+        } => {
             TypeTag::Function.hash_discriminant(&mut h);
+            type_params.len().hash(&mut h);
+            for param in *type_params {
+                param.id.0.hash(&mut h);
+                param.constraint.map(|ty| ty.0).hash(&mut h);
+                param.default.map(|ty| ty.0).hash(&mut h);
+            }
             // Arity first so a shorter parameter list cannot collide with a
             // prefix of a longer one under the streaming hasher.
             params.len().hash(&mut h);

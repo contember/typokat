@@ -216,11 +216,13 @@ fn infers_through_function_parameter() {
     let t = interner.intern_type_param(TypeParamId(0), "T");
     // Parameter type `(x: T) => T`.
     let target = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![ParameterType::required("x", t)],
         ret: t,
     });
     // Argument type `(x: number) => number`.
     let source = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![ParameterType::required("x", wk.number)],
         ret: wk.number,
     });
@@ -719,6 +721,7 @@ fn conditional_function_rest_infer_captures_parameter_tuple() {
     let wk = interner.well_known();
     let a = interner.intern_type_param(TypeParamId(0), "A");
     let source = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![
             ParameterType::required("x", wk.string),
             ParameterType::required("y", wk.number),
@@ -726,6 +729,7 @@ fn conditional_function_rest_infer_captures_parameter_tuple() {
         ret: wk.boolean,
     });
     let target = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![ParameterType::rest("args", a)],
         ret: wk.unknown,
     });

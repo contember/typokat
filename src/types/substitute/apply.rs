@@ -89,9 +89,9 @@ impl<'a> Substitution<'a> {
         }
     }
 
-    /// Substitute through a function type, rewriting each parameter type and the
-    /// return type, then re-interning **only when something changed** (else the
-    /// original id is returned). Parameters stay positional.
+    /// Substitute through a function type while preserving its own binders.
+    /// Method-local binders shadow the incoming outer map, but their constraints
+    /// and defaults still rewrite free outer references.
     pub(super) fn apply_function(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
         if self.in_progress.contains(&ty) {
             return ty;
@@ -99,11 +99,28 @@ impl<'a> Substitution<'a> {
         let Some(function) = interner.store().function_type(ty) else {
             return ty;
         };
+        let type_params = function.type_params.clone();
         let params = function.params.clone();
         let ret = function.ret;
 
         self.in_progress.insert(ty);
+        let newly_blocked: Vec<TypeParamId> = type_params
+            .iter()
+            .filter_map(|param| self.blocked.insert(param.id).then_some(param.id))
+            .collect();
         let mut changed = false;
+        let type_params = type_params
+            .into_iter()
+            .map(|mut param| {
+                let old_constraint = param.constraint;
+                let old_default = param.default;
+                param.constraint =
+                    old_constraint.map(|constraint| self.apply(interner, constraint));
+                param.default = old_default.map(|default| self.apply(interner, default));
+                changed |= param.constraint != old_constraint || param.default != old_default;
+                param
+            })
+            .collect();
         let lowered = params
             .into_iter()
             .map(|mut param| {
@@ -116,10 +133,14 @@ impl<'a> Substitution<'a> {
             .collect();
         let new_ret = self.apply(interner, ret);
         changed |= new_ret != ret;
+        for id in newly_blocked {
+            self.blocked.remove(&id);
+        }
         self.in_progress.remove(&ty);
 
         if changed {
             interner.intern_function(FunctionType {
+                type_params,
                 params: lowered,
                 ret: new_ret,
             })

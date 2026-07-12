@@ -107,7 +107,8 @@ fn render_type_inner(
         TypeTag::Function => match store.function_type(id) {
             Some(func) => {
                 let (params, ret) = render_function_parts(store, func, rendering);
-                format!("({}) => {}", params.join(", "), ret)
+                let type_params = render_generic_type_params(store, func, rendering);
+                format!("{}({}) => {}", type_params, params.join(", "), ret)
             }
             // Defensive fallback; a function always has a side-table entry.
             None => "<unsupported>".to_string(),
@@ -339,7 +340,8 @@ fn render_call_signature(store: &Store, id: TypeId, rendering: &mut Vec<TypeId>)
     match store.function_type(id) {
         Some(func) => {
             let (params, ret) = render_function_parts(store, func, rendering);
-            format!("({}): {}", params.join(", "), ret)
+            let type_params = render_generic_type_params(store, func, rendering);
+            format!("{}({}): {}", type_params, params.join(", "), ret)
         }
         None => "<unsupported>".to_string(),
     }
@@ -349,7 +351,8 @@ fn render_construct_signature(store: &Store, id: TypeId, rendering: &mut Vec<Typ
     match store.function_type(id) {
         Some(func) => {
             let (params, ret) = render_function_parts(store, func, rendering);
-            format!("new ({}): {}", params.join(", "), ret)
+            let type_params = render_generic_type_params(store, func, rendering);
+            format!("new {}({}): {}", type_params, params.join(", "), ret)
         }
         None => "<unsupported>".to_string(),
     }
@@ -374,6 +377,33 @@ fn render_function_parts(
         .collect();
     let ret = render_type_inner(store, func.ret, false, rendering);
     (params, ret)
+}
+
+fn render_generic_type_params(
+    store: &Store,
+    func: &crate::types::repr::FunctionType,
+    rendering: &mut Vec<TypeId>,
+) -> String {
+    if func.type_params.is_empty() {
+        return String::new();
+    }
+    let params: Vec<String> = func
+        .type_params
+        .iter()
+        .map(|param| {
+            let mut rendered = store.type_param_name(param.id).unwrap_or("T").to_string();
+            if let Some(constraint) = param.constraint {
+                rendered.push_str(" extends ");
+                rendered.push_str(&render_type_inner(store, constraint, false, rendering));
+            }
+            if let Some(default) = param.default {
+                rendered.push_str(" = ");
+                rendered.push_str(&render_type_inner(store, default, false, rendering));
+            }
+            rendered
+        })
+        .collect();
+    format!("<{}>", params.join(", "))
 }
 
 fn render_parameter_name(param: &crate::types::repr::ParameterType) -> String {

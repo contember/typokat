@@ -454,6 +454,18 @@ pub struct TypeParamType {
     pub name: String,
 }
 
+/// One persistent binder owned by a generic function signature.
+///
+/// The id preserves the named-unique declaration-parameter invariant. Constraint
+/// and default types belong here as well: substituting an outer generic parameter
+/// must not lose or stale a method binder's call-observable shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GenericTypeParam {
+    pub id: TypeParamId,
+    pub constraint: Option<TypeId>,
+    pub default: Option<TypeId>,
+}
+
 /// Structural function type (`(x: number) => string`).
 ///
 /// Parameters are stored **positionally** (source order, never sorted — only
@@ -466,6 +478,10 @@ pub struct TypeParamType {
 /// `void` when none is written), and `TypeId` has no meaningful default.
 #[derive(Clone, Debug)]
 pub struct FunctionType {
+    /// Ordered method/function-local binders. Names remain on their interned
+    /// [`TypeParamType`] nodes for display only; ids, constraints, and defaults
+    /// participate in the function's structural identity.
+    pub type_params: Vec<GenericTypeParam>,
     pub params: Vec<ParameterType>,
     pub ret: TypeId,
 }

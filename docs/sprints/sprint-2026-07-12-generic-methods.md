@@ -257,3 +257,18 @@ Exact full gate: `cargo fmt --check`; `cargo test`; `cargo clippy --all-targets 
   `tsc 6.0.3 --strict`. → ADR-0005
 - 2026-07-12 — Re-audited every WU0 marker after materializing the defaulted generic return before
   its negative assignment: 31 inline markers, 31 matching `tsc 6.0.3 --strict` primary diagnostics.
+- 2026-07-12 — WU1 persistent generic binders are now identity-bearing function fields. Outer
+  substitution preserves inner binders while rewriting their constraints/defaults; generic class,
+  object/interface, call, and construct surfaces lower under nested frames. The WU0 corpus remains
+  disabled pending WU2/WU3 call and relation work.
+- 2026-07-12 — Independent WU1 review: FAIL. Added disabled regressions for declaration-default
+  constraints, outer-substituted method constraints/defaults, and generic function/constructor
+  type annotations; remediation returns to WU1/WU2 before the corpus can be enabled.
+- 2026-07-12 — WU1 review remediation: persistent call/construct candidates now consume
+  descriptor constraints/defaults after outer substitution; signature defaults validate in order,
+  generic type annotations lower, and explicit arity reports `TK2558`. All focused probes match;
+  `b41` remains disabled pending binder-aware relation/overload work in WU3.
+- 2026-07-12 — Re-review: FAIL. A forward generic default (`<T = U, U = string>`) remains
+  false-clean instead of `TK2744`; the disabled declaration-default regression returns to WU1.
+- 2026-07-12 — Forward-default remediation: signature default lowering now rejects later binder
+  references as `TK2744` and discards the invalid default before persistent call instantiation.

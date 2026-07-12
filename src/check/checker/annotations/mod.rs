@@ -78,8 +78,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             TSType::TSLiteralType(lit) => return self.lower_literal_type(&lit.literal),
             TSType::TSTypeLiteral(lit) => return self.lower_object_annotation(scope, &lit.members),
             TSType::TSFunctionType(func) => {
-                return self.lower_function_annotation(
+                return self.lower_generic_function_annotation(
                     scope,
+                    func.type_parameters.as_deref(),
                     &func.params,
                     &func.return_type.type_annotation,
                 );

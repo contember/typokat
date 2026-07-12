@@ -74,10 +74,14 @@ pub enum DiagnosticCode {
     TK2554,
     /// Too few call arguments for a variadic signature.
     TK2555,
+    /// Wrong number of explicit type arguments.
+    TK2558,
     /// Type instantiation is excessively deep and possibly infinite — M25.
     TK2589,
     /// Property is missing in type but required.
     TK2741,
+    /// Type parameter defaults can only reference preceding type parameters.
+    TK2744,
     /// No overload matches this call.
     TK2769,
 }
@@ -109,8 +113,10 @@ impl DiagnosticCode {
             DiagnosticCode::TK2540 => "TK2540",
             DiagnosticCode::TK2554 => "TK2554",
             DiagnosticCode::TK2555 => "TK2555",
+            DiagnosticCode::TK2558 => "TK2558",
             DiagnosticCode::TK2589 => "TK2589",
             DiagnosticCode::TK2741 => "TK2741",
+            DiagnosticCode::TK2744 => "TK2744",
             DiagnosticCode::TK2769 => "TK2769",
         }
     }
@@ -500,6 +506,36 @@ impl Diagnostic {
             code: DiagnosticCode::TK2555,
             severity: Severity::Error,
             message: format!("Expected at least {min} arguments, but got {got}"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2558` arity error for explicit type arguments.
+    pub fn wrong_type_argument_count(span: Span, min: usize, max: usize, got: usize) -> Self {
+        let expected = if min == max {
+            min.to_string()
+        } else {
+            format!("{min}-{max}")
+        };
+        Diagnostic {
+            code: DiagnosticCode::TK2558,
+            severity: Severity::Error,
+            message: format!("Expected {expected} type arguments, but got {got}"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2744` default-visibility error for a type parameter that
+    /// references a later binder in the same declaration.
+    pub fn type_parameter_default_forward_reference(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2744,
+            severity: Severity::Error,
+            message:
+                "Type parameter defaults can only reference previously declared type parameters."
+                    .to_string(),
             span,
             elaboration: Vec::new(),
         }

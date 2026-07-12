@@ -12,7 +12,7 @@ use crate::relate::{Reason, ReasonChain, Relater, Relation};
 use crate::span::Span;
 use crate::types::repr::{ObjectType, ParameterType};
 use crate::types::store::{Store, TypeId};
-use crate::types::WellKnown;
+use crate::types::{instantiate_function, WellKnown};
 use oxc_ast::ast::{
     BindingPattern, BlockStatement, Declaration, Expression, ForInStatement, ForOfStatement,
     ForStatement, ForStatementInit, ForStatementLeft, Function, Statement, TryStatement,
@@ -957,7 +957,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         surfaces: &mut FxHashMap<u32, FunctionSurface>,
     ) {
         let surface = self.reserve_function(scope, func);
-        self.publish_function_type(scope, func, surface.function_ty, &surface.type_params);
+        self.publish_function_type(scope, func, surface.function_ty);
         surfaces.insert(func.span.start, surface);
     }
 
@@ -976,24 +976,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         };
         self.replay_function_surface_records(&mut surface);
         let function_ty = self.fill_reserved_function(scope, func, &surface);
-        let type_params = surface.type_params.clone();
         surface.function_ty = function_ty;
         if publish_value {
-            self.publish_function_type(scope, func, function_ty, &type_params);
-        } else if !type_params.is_empty() {
-            self.generic_sig_params.insert(function_ty, type_params);
+            self.publish_function_type(scope, func, function_ty);
         }
         surfaces.insert(func.span.start, surface);
         true
     }
 
-    fn publish_function_type(
-        &mut self,
-        scope: ScopeId,
-        func: &Function<'_>,
-        function_ty: TypeId,
-        type_params: &[crate::types::repr::TypeParamId],
-    ) {
+    fn publish_function_type(&mut self, scope: ScopeId, func: &Function<'_>, function_ty: TypeId) {
         if let Some(decl_id) = self.function_decl_id(func) {
             if let Some(symbol_id) = func
                 .id
@@ -1011,10 +1002,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
             } else {
                 self.decl_types.set(decl_id, function_ty);
-            }
-            if !type_params.is_empty() {
-                self.generic_sig_params
-                    .insert(function_ty, type_params.to_vec());
             }
         }
     }
@@ -1071,8 +1058,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// bind its completed function type. This keeps uncommon direct walker paths
     /// behaviorally equivalent without introducing a second declaration model.
     fn check_function_declaration(&mut self, scope: ScopeId, func: &Function<'_>) {
-        let (fn_ty, params) = self.infer_function(scope, func);
-        self.publish_function_type(scope, func, fn_ty, &params);
+        let fn_ty = self.infer_function(scope, func);
+        self.publish_function_type(scope, func, fn_ty);
         if func.body.is_none() && !func.declare {
             self.diagnostics
                 .push(Diagnostic::overload_missing_implementation(Span::from_oxc(
@@ -1218,10 +1205,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         overload_ty: TypeId,
         implementation_ty: TypeId,
     ) -> TypeId {
-        let Some(overload_params) = self.generic_sig_params.get(&overload_ty).cloned() else {
+        let Some(overload_params) = self
+            .interner
+            .store()
+            .function_type(overload_ty)
+            .map(|function| function.type_params.clone())
+        else {
             return overload_ty;
         };
-        let Some(implementation_params) = self.generic_sig_params.get(&implementation_ty).cloned()
+        let Some(implementation_params) = self
+            .interner
+            .store()
+            .function_type(implementation_ty)
+            .map(|function| function.type_params.clone())
         else {
             return overload_ty;
         };
@@ -1232,10 +1228,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         for (overload_param, implementation_param) in
             overload_params.into_iter().zip(implementation_params)
         {
-            let target = self.interner.intern_type_param(implementation_param, "T");
-            map.insert(overload_param, target);
+            let target = self
+                .interner
+                .intern_type_param(implementation_param.id, "T");
+            map.insert(overload_param.id, target);
         }
-        crate::types::substitute(self.interner, overload_ty, &map)
+        instantiate_function(self.interner, overload_ty, &map)
     }
 }
 
