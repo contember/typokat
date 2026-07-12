@@ -179,7 +179,8 @@ to replace.
   the public preview CLI — backlog [`72`](../backlog/72-real-project-preview-readiness.md)
   and [`15`](../backlog/15-modules-imports.md).
 - Closing the `infer_expr` emission tail or representing arbitrary unknown-project
-  code as complete — backlog [`73`](../backlog/73-unsupported-surface-audit.md).
+  code as complete — the surface-accounting tail (archived
+  [`2026-07-12`](sprint-2026-07-12-surface-accounting-tail.md)).
 
 ## Decisions
 

@@ -1,3 +1,17 @@
+> **OUTCOME — shipped 2026-07-12.** The final expression-shape accounting tail now reports
+> incomplete explicitly while preserving independently reachable diagnostics, and every remaining
+> unsupported surface has a durable semantic owner. Three independent review/audit rounds found
+> failures before PASS: update/direct optional access, nested optional chains, and private-field
+> false positives. Commit map: plan `967fc56`; spec `45943bb`; review witnesses
+> `7b11620`/`e1ecf87`/`5830b04`; implementation `0858508`; private-boundary fix `9ecd164`;
+> official ratchet `45ac8d9`. Verification: `cargo test` (286 unit + 14 conformance + 4
+> divergences + 7 incomplete + 10 manifest + 5 surface) · `cargo fmt --check` ·
+> `cargo clippy --all-targets -- -D warnings` · `cargo build --release` · official-suite 874
+> `run --check` (0 regressions). Ratchet: in-scope 422→358, unsupported 151→223; 64
+> IN→unsupported + 7 unresolved→unsupported + 1 parse-error→unsupported; matched identities
+> preserved, no new FP after remediation; clean-kept 126/159→100/132, diag-recall
+> 379/1868→385/1880. Backlog `73` closed; `72` unblocked.
+
 # Sprint — surface-accounting expression tail (2026-07-12)
 
 **Goal.** Close backlog `73`: no inventoried in-scope expression shape may leave
@@ -20,7 +34,8 @@ deferred expression semantics themselves.
   `tests/surface/inventory.toml:437-826`, `src/surface.rs`.
 - ⚠ `for_stmt.update` always enters `infer_expr`; emitting `update-expression/self` for every
   update would demote ordinary numeric `for` loops even when their operand is fully traversable —
-  `src/check/checker/statements.rs:441`, `docs/backlog/73-unsupported-surface-audit.md:31-40`.
+  `src/check/checker/statements.rs:441`,
+  `../archive/sprint-2026-07-12-surface-accounting-tail.md` (archived outcome).
 - ✔ OXC exposes existing child expressions for the unsupported wrappers; update expressions are
   the exception because their operand is a `SimpleAssignmentTarget`, so they need a narrow target
   walker rather than a second expression traversal.
@@ -190,3 +205,6 @@ Exact full gate: `cargo fmt --check`; `cargo test`; `cargo clippy --all-targets 
   full official-suite audit preserved every matched identity but FAILED on two new `TK2304` false
   positives from object-rest receivers under private-field access. Binder expansion was rejected as
   out of scope; regression witness `5830b04` pins the record-only boundary before remediation.
+- 2026-07-12 — Private-field boundary remediation shipped as `9ecd164`; the official-suite ratchet
+  `45ac8d9` verified the stated identity movement with no new false positive after remediation.
+  Backlog `73` is closed, its ownership migrated to live items, and `72` is unblocked.

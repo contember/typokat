@@ -13,7 +13,8 @@ ambient/prelude slice (`38`) is allowed before this item when it buys useful rea
 ## Problem
 
 Without `lib.d.ts`, `console`, array methods, `Promise`, etc. are absent, so most real code can't be
-checked. The lib's own source text uses nearly the whole type model, which is why this item is
+checked. The lib's own source text uses nearly the whole type model, including the `RegExp` value
+surface that owns regexp literals, which is why this item is
 blocked by the remaining model-completeness track: generic methods (`41`),
 namespaces + declaration merging (`43`), and `this`-parameter typing / `ThisType<T>` (`70`).
 Loading the lib with any of those

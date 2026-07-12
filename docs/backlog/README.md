@@ -52,7 +52,7 @@ the way there — its syntax gates flip OOS→IN as features land — not a nume
 
 ## Roadmap at a glance
 
-The active backlog has **42 items**: **33 checker-1.0 release blockers** and **9 non-blocking,
+The active backlog has **41 items**: **32 checker-1.0 release blockers** and **9 non-blocking,
 safe-direction parity items**. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml); the grouping below is the human roadmap view.
 
@@ -60,7 +60,7 @@ safe-direction parity items**. The release classification comes from
 |---|---:|---|---|
 | **A — model completeness** | 6 | L–XL | Eliminate silently-permissive model gaps; `41`/`43`/`70` directly unblock full `lib.d.ts`. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 19 | S–L | Ten release-blocking known gaps plus nine safe-direction parity improvements. |
+| **C — soundness/parity tail** | 18 | S–L | Nine release-blocking known gaps plus nine safe-direction parity improvements. |
 | **D — scale + IDE** | 6 | XL | Preview, full standard library, resolver breadth, parallel identity, and incrementality. |
 
 Effort is a **relative planning estimate**, not a time promise:
@@ -115,8 +115,7 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 - **S** · [`22`](22-new-callee-forms.md) — parenthesized/aliased `new` misses abstract and constructor-accessibility checks.
 - **L** · [`32`](32-eager-keyof-forward-references.md) — eager `keyof` over forward references silently degrades through fill order.
 - **L** · [`66`](66-protected-override-compat.md) — protected override compatibility and lineage-aware nominal origins · blocked by `63(d)`.
-- **L** · [`71`](71-expression-inference-fn-tail.md) — binary results, template interpolations, spread, and iterability traversal gaps.
-- **L** · [`73`](73-unsupported-surface-audit.md) — finish explicit incomplete emissions for inventoried expression shapes.
+- **L** · [`71`](71-expression-inference-fn-tail.md) — expression/iteration traversal: elisions, object/call spreads, tagged templates, and iteration targets.
 - **M** · [`77`](77-returntype-call-signature-infer.md) — infer `ReturnType` from object and overload call signatures.
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
@@ -133,7 +132,7 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
 **D. Scale + IDE — the §12 phase ladder.**
 
-- **XL** · [`72`](72-real-project-preview-readiness.md) — public project CLI, pinned strict project, mutation pack, and differential CI ratchet · blocked by `73`.
+- **XL** · [`72`](72-real-project-preview-readiness.md) — public project CLI, pinned strict project, mutation pack, and differential CI ratchet.
 - **S gate / XL if triggered** · [`13`](13-bytecode-vm.md) — profile the evaluator; build a VM only if dispatch is the measured bottleneck.
 - **XL** · [`14`](14-libdts-loading.md) — full `lib.d.ts` and shared-prelude parallelism Stage 1 · blocked by `41`, `43`, `70`.
 - **XL** · [`15`](15-modules-imports.md) — NodeNext/package/tsconfig resolver breadth; the local-relative slice shipped as M29.
@@ -142,16 +141,14 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
 ## Recommended order
 
-1. **Make incompleteness executable, then kill the known silent-FN families** — the accounting
-   sprint (2026-07-10) shipped `73`'s AST census + incomplete outcome and `75`'s divergence
-   census, so new silent paths can no longer disappear from the plan; `73` keeps the emission
-   tail. The five HIGH review findings (`53` `55` `57` `58`
+1. **Ship the honest preview slice next** — the accounting sprints (2026-07-10 and 2026-07-12)
+   shipped the AST census, explicit incomplete outcome, and the final expression-shape emission
+   tail, so new silent paths can no longer disappear from the plan. The five HIGH review findings (`53` `55` `57` `58`
    `61`) shipped in sprint-2026-07-07-soundness-fn-fixes; `64` `34` `33` `54` `59` `65`
    shipped in follow-up sprints; the remaining silent-FN C group (`56`, `60`, `62`, `32`,
-   `21`, `22`, `66`, `71`, `77`) is next, every one a dropped-error class. The next
-   executable chain is **`73` closure → `72`**; the bounded prelude slice `38` shipped on
-   2026-07-11.
-2. **Ship the honest preview slice early:** after `73`, run `72`. Its WU0 pins a
+   `21`, `22`, `66`, `71`, `77`) remains available as independently valuable dropped-error work.
+   The next executable item is **`72`**; the bounded prelude slice `38` shipped on 2026-07-11.
+2. **Run `72`:** its WU0 pins a
    genuinely small real project that fits the preview surface; it must not grow a project-specific
    lib shim. This is the first "point it at a project" milestone.
 3. **Run track A** to unblock `14` (`25` intersections shipped as M31, `24`/`39` signature

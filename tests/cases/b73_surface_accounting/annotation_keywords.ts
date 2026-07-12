@@ -4,7 +4,7 @@
 //
 // Skip accounted: `lower_annotation_inner` / `lower_literal_type` had no arm for these
 // variants, so each lowered to `None` → the error type silently. WU5 records the surface
-// first. These stay owned by backlog 73 (a real type model needs lib.d.ts symbols).
+// first. Their remaining semantic model is owned by backlog 75.
 
 // INCOMPLETE: the `symbol` keyword type is not modeled — the initializer degrades silently.
 let s: symbol = 0; // incomplete[annotation-lower/symbol-keyword/self]

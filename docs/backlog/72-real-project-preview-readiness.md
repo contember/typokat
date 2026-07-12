@@ -1,7 +1,7 @@
 ---
 id: 72
 title: Real-project preview readiness
-blocked-by: [./73-unsupported-surface-audit.md]
+blocked-by: []
 ---
 
 # 72 — Real-project preview readiness
@@ -18,6 +18,10 @@ workflow. A normal project starts from a directory or `tsconfig.json`, commonly 
 `./x.js` specifiers that resolve to `x.ts`, imports package declarations, and depends on ambient
 library names. Running today's checker on such a project mixes genuine checker diagnostics with
 resolution/prelude noise; unsupported AST paths can also make a clean result untrustworthy.
+
+The surface-accounting prerequisite shipped on 2026-07-12: every inventoried in-scope surface
+now either produces an incomplete record or has a durable semantic owner. This item is therefore
+unblocked; it owns the remaining project-level accounting and preview promise.
 
 Without a pinned project-level witness, the model and resolver roadmaps can turn green without
 proving the concrete preview promise: "point typokat at a project and understand the result."
@@ -37,7 +41,8 @@ Build one deliberately narrow, reusable vertical slice:
 - consume the minimal ambient declarations needed by the witness through the shipped canonical
   prelude path; do not add an unrelated hard-coded global-name shim;
 - distinguish type diagnostics from explicit unsupported-surface notices, and never represent an
-  unvisited in-scope AST form as a clean check (`73` owns the systematic guarantee);
+  unvisited in-scope AST form as a clean check (the shipped surface inventory enforces the
+  systematic guarantee);
 - emit a deterministic project summary suitable for differential comparison: roots checked,
   files checked/skipped, unsupported forms, unresolved modules, and diagnostics by code/file.
 

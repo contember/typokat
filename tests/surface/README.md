@@ -1,14 +1,9 @@
 # Surface-accounting fixtures (sprint 2026-07-10, WU0)
 
-This directory is the **code-adjacent schema fixture data** for the completeness-accounting
-sprint (backlog [`73`](../../docs/backlog/73-unsupported-surface-audit.md) and the
-inventory/validator slice of [`75`](../../docs/backlog/75-scope-surface-tail.md)). WU0
-defines the schema and the fixtures; **WU1 writes the validator** (`tests/surface.rs`,
-patterned after `tests/manifest.rs`) that consumes them. There is **no validator here yet** —
-these files are inert data until WU1.
-
-Everything committed here is behavior-neutral: no `#[test]` reads it, so `cargo test`,
-`cargo clippy`, and `cargo fmt --check` are unaffected.
+This directory is the **code-adjacent schema fixture data** for the executable
+surface-accounting validator (`tests/surface.rs`) and the remaining semantic-disposition tail
+(backlog [`75`](../../docs/backlog/75-scope-surface-tail.md)). The validator consumes the
+inventory and fixtures under `cargo test --test surface`.
 
 ## Why a surface inventory exists
 
@@ -74,7 +69,7 @@ quoted string or a bracketed array of quoted strings.
 | `oxc_variant` | yes | The `oxc` enum path this record maps to (drift witness), e.g. `Expression::TemplateLiteral`. |
 | `disposition` | yes | `supported` \| `unsupported-in` \| `design-oos`. |
 | `owner` | yes | For `unsupported-in`: a live backlog path (`../../docs/backlog/NN-*.md`). For `design-oos`: `by-design`. For `supported`: `shipped`. |
-| `witness` | yes | A fixture path or descriptor proving the disposition (a `tests/cases/**` fixture for `supported`; a `b73_surface_accounting/*` incomplete fixture for `unsupported-in`). |
+| `witness` | yes | A fixture path or descriptor proving the disposition (a `tests/cases/**` fixture for `supported`; an incomplete fixture or concise semantic boundary for `unsupported-in`). |
 | `requires_slots` | when `supported` and the node has in-scope children | The child slots this wrapper MUST visit; each must have its own covering `[[surface]]` record. Enforces "a supported wrapper does not silently drop an in-scope child". |
 
 ## What the WU1 validator must reject (the fixtures below)

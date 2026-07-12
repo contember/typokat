@@ -584,7 +584,7 @@ fn valid_base(oxc: &str) -> String {
             "slot = \"spread-element\"\n",
             "oxc_variant = \"ObjectPropertyKind::SpreadProperty\"\n",
             "disposition = \"unsupported-in\"\n",
-            "owner = \"../../docs/backlog/73-unsupported-surface-audit.md\"\n",
+            "owner = \"../../docs/backlog/71-expression-inference-fn-tail.md\"\n",
             "witness = \"../cases/b73_surface_accounting/array_spread.ts\"\n",
             "[[surface]]\n",
             "id = \"stmt-check/with-statement/self\"\n",
@@ -628,7 +628,7 @@ fn rejects_mutated_inventories() {
                     "slot = \"spread-element\"\n",
                     "oxc_variant = \"ObjectPropertyKind::SpreadProperty\"\n",
                     "disposition = \"unsupported-in\"\n",
-                    "owner = \"../../docs/backlog/73-unsupported-surface-audit.md\"\n",
+                    "owner = \"../../docs/backlog/71-expression-inference-fn-tail.md\"\n",
                     "witness = \"../cases/b73_surface_accounting/array_spread.ts\"\n",
                 ),
                 "",
@@ -659,7 +659,7 @@ fn rejects_mutated_inventories() {
         (
             "dead owner link",
             base.replace(
-                "owner = \"../../docs/backlog/73-unsupported-surface-audit.md\"",
+                "owner = \"../../docs/backlog/71-expression-inference-fn-tail.md\"",
                 "owner = \"../../docs/backlog/999-does-not-exist.md\"",
             ),
             "not a live backlog file",
@@ -675,7 +675,7 @@ fn rejects_mutated_inventories() {
         (
             "missing owner",
             base.replace(
-                "owner = \"../../docs/backlog/73-unsupported-surface-audit.md\"\n",
+                "owner = \"../../docs/backlog/71-expression-inference-fn-tail.md\"\n",
                 "",
             ),
             "owner",
@@ -713,7 +713,7 @@ fn rejects_mutated_inventories() {
         (
             "unsupported-in with owner shipped",
             base.replace(
-                "owner = \"../../docs/backlog/73-unsupported-surface-audit.md\"",
+                "owner = \"../../docs/backlog/71-expression-inference-fn-tail.md\"",
                 "owner = \"shipped\"",
             ),
             "live backlog owner",

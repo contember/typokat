@@ -107,7 +107,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // semantics, out of scope). References inside them miss `reference_flow` and
             // fall back to the declared type — conservative, so narrowing is only lost,
             // never unsoundly gained. The cross-layer difference is recorded as the
-            // `flow/{for,do-while,try}-statement/self` unsupported-in surfaces (backlog 73).
+            // `for`/`do-while` stay with backlog 51; exception flow stays with backlog 75.
             _ => {}
         }
     }

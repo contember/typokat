@@ -521,12 +521,12 @@ scope = ["b-iterability"]
 [[criterion]]
 id = "C-unsupported-surface-audit"
 track = "C"
-title = "Every consumed OXC AST form is supported, explicit OOS, or surfaced incomplete"
-state = "incomplete"
+title = "Every consumed OXC AST form is supported, explicit OOS, or surfaced incomplete — shipped 2026-07-12"
+state = "complete"
 blocks_release = "true"
-owner = "./73-unsupported-surface-audit.md"
-witness = "machine-validated AST surface manifest plus adversarial nested-child corpus and independent review"
-links = ["../reference/divergences.md"]
+owner = "shipped"
+witness = "machine-validated AST surface manifest; old b73_surface_accounting and new b73_expression_shape_tail corpora; three adversarial review/audit failures remediated before PASS; archived 2026-07-12 surface-accounting sprint"
+links = ["../reference/divergences.md", "../archive/sprint-2026-07-12-surface-accounting-tail.md"]
 deps = []
 
 [[criterion]]
@@ -565,7 +565,7 @@ blocks_release = "true"
 owner = "./72-real-project-preview-readiness.md"
 witness = "pinned small real-project clean baseline + seeded faults + identity ratchet; later deptective full-stack witness"
 links = ["../archive/sprint-2026-07-11-minimal-ambient-prelude.md", "./14-libdts-loading.md", "./15-modules-imports.md"]
-deps = ["./73-unsupported-surface-audit.md"]
+deps = []
 
 [[criterion]]
 id = "D-minimal-ambient-prelude"

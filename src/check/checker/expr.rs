@@ -461,7 +461,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     }
 
     /// The expression of an array element, or `None` after recording the incomplete
-    /// surface for a spread/elision child slot (owner 71/73). Every array-literal
+    /// surface for a spread/elision child slot (owner 71). Every array-literal
     /// walker routes through this so no in-scope child is silently dropped.
     fn array_element_expr<'e, 'x>(
         &mut self,
@@ -489,7 +489,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     }
 
     /// Record the incomplete surface for a skipped object-literal spread member
-    /// (`{ ...x }`, owner 73), keeping every object walker's `continue` accounted for.
+    /// (`{ ...x }`, owner 71), keeping every object walker's `continue` accounted for.
     fn record_object_spread_skip(&mut self, member: &ObjectPropertyKind<'_>) {
         self.record_incomplete(
             "expr-infer/object-literal/spread-element",

@@ -6,7 +6,8 @@ title: Type predicates (x is T) and assertion functions (asserts x)
 # 50 — Type predicates + assertion functions
 
 **Summary.** User-defined type guards — `function isFoo(x: unknown): x is Foo` — and
-assertion signatures (`asserts x`, `asserts x is Foo`) are a documented M23 deferral:
+annotation-level type predicates and assertion signatures (`asserts x`, `asserts x is Foo`) are a
+documented M23 deferral:
 calls to them narrow nothing (safe direction, but they are the idiomatic narrowing tool
 of real-world code, and `lib.d.ts` ships them — `Array.isArray`).
 
@@ -19,7 +20,7 @@ statement (its false path is unreachable-by-throw).
 
 ## Approach / acceptance
 
-Lower predicate/assertion return types onto the signature repr (identity-bearing); the
+Lower predicate/assertion annotations and return types onto the signature repr (identity-bearing); the
 CFG condition node recognizes guard calls keyed on the argument symbol (member paths
 follow `51`); assertion calls insert a narrowing flow node after the statement. Corpus
 first: positive/negative branches, unions, `asserts` with and without `is`,

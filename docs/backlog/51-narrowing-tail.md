@@ -5,8 +5,8 @@ title: Narrowing tail — remaining loop forms, member paths, closures
 
 # 51 — Narrowing tail: `for`/`for-of`/`do-while`, member paths, closures
 
-**Summary.** The M23 deferrals that remain after the CFG landed: `for`/`for-of`/
-`do-while` bodies fall back to declared types (safe), member-path narrowing (`x.a` —
+**Summary.** The M23 deferrals that remain after the CFG landed: flow through `for`/`for-of`/
+`do-while` bodies falls back to declared types (safe), member-path narrowing (`x.a` —
 narrowing is symbol-keyed today, so a discriminant check through a property doesn't
 narrow that path), and closure narrowing of never-reassigned bindings. All
 safe-direction, all common idioms.

@@ -138,7 +138,7 @@ Families already owned (classified, not new): template interpolation + array spr
 → `71`; computed/symbol member keys, decorators, delete, reachability, indexed-access compat →
 `75`; enums → `42`; namespaces / module declarations → `43`; `this` type/params → `70`; module
 breadth → `15`/`29`. The **for/do flow-comment drift** (flow claims "not walked" while
-`stmt-check` walks them) is an accounting bug owned by `73`, not a semantic family.
+`stmt-check` walks them) is a narrowing gap owned by `51`.
 
 Consequence of >8: this is **volume, which the gate says does NOT trigger the architecture
 split** ("Difficulty or volume alone does not trigger the split"). It only mandates classify +

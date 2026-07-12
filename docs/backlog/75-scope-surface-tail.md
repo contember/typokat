@@ -26,6 +26,9 @@ The currently unowned tail includes:
   (`TK7027`), delete-operand checking (`TK2790`), decorators, and computed/symbol properties;
 - deferred model shapes without an exact dedicated diagnostic: type-parameter defaults, optional
   tuple elements, and generic/deferred `T[K]` outside mapped templates;
+- exception/catch flow, async/generator expression semantics, bigint/symbol/object/unique and
+  literal-type forms, private expressions, and class static blocks, auto-accessors, and index
+  signatures;
 - silent/deferred parity families already recorded in `divergences.md` but lacking a stable owner:
   fresh-literal constraint-side excess checks, unequal-raw-arity and generic-base override checks,
   visibility/kind heritage checks (`TS2415`/`TS2425`/`TS2426`), private-base construction
@@ -40,9 +43,9 @@ canonical Omit/deferred-`keyof` constraint check whose completeness across every
 concretization path is not yet proved. They remain structured divergence entries until
 implemented or explicitly re-scoped.
 
-Template-expression traversal and spread expressions are not duplicated here: their concrete
-silent-skip owner is [`71`](./71-expression-inference-fn-tail.md), enforced systematically by
-[`73`](./73-unsupported-surface-audit.md). Iterability belongs to `71`; optional
+Template-expression traversal, elisions, object/call spreads, tagged templates, and iteration
+targets are not duplicated here: their concrete silent-skip owner is [`71`](./71-expression-inference-fn-tail.md),
+and the shipped surface inventory enforces their accounting. Iterability belongs to `71`; optional
 methods/accessors belong to `49`; enums/namespaces/`this` parameters belong to `42`/`43`/`70`.
 
 ## Approach / acceptance

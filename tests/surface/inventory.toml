@@ -23,7 +23,7 @@ surface = "binding-pattern"
 slot = "array-pattern"
 oxc_variant = "BindingPattern::ArrayPattern"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/48-no-implicit-any.md"
 witness = "array destructuring pattern not bound to types"
 
 [[surface]]
@@ -33,7 +33,7 @@ surface = "binding-pattern"
 slot = "assignment-pattern"
 oxc_variant = "BindingPattern::AssignmentPattern"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/48-no-implicit-any.md"
 witness = "destructuring default (assignment pattern) not bound to types"
 
 [[surface]]
@@ -53,7 +53,7 @@ surface = "binding-pattern"
 slot = "object-pattern"
 oxc_variant = "BindingPattern::ObjectPattern"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/48-no-implicit-any.md"
 witness = "object destructuring pattern not bound to types"
 
 # ------------------------------------------------------------------------------
@@ -67,7 +67,7 @@ surface = "do-while-statement"
 slot = "self"
 oxc_variant = "Statement::DoWhileStatement"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/51-narrowing-tail.md"
 witness = "flow graph claims do-while not walked (cross-layer drift)"
 
 [[surface]]
@@ -77,7 +77,7 @@ surface = "for-statement"
 slot = "self"
 oxc_variant = "Statement::ForStatement"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/51-narrowing-tail.md"
 witness = "flow graph claims for-statement not walked (cross-layer drift)"
 
 [[surface]]
@@ -87,7 +87,7 @@ surface = "try-statement"
 slot = "self"
 oxc_variant = "Statement::TryStatement"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "stmt-check walks try blocks but the flow pre-pass leaves them conservative (cross-layer difference)"
 
 # ------------------------------------------------------------------------------
@@ -125,7 +125,7 @@ surface = "assignment-target"
 slot = "self"
 oxc_variant = "ForStatementLeft::AssignmentTarget"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/71-expression-inference-fn-tail.md"
 witness = "../cases/b73_surface_accounting/for_of_assign_target.ts"
 
 [[surface]]
@@ -305,7 +305,7 @@ surface = "try-statement"
 slot = "catch-param"
 oxc_variant = "Statement::TryStatement"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "../cases/b73_surface_accounting/try_catch_finally.ts"
 
 [[surface]]
@@ -380,7 +380,7 @@ surface = "array-literal"
 slot = "elision"
 oxc_variant = "Expression::ArrayExpression"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/71-expression-inference-fn-tail.md"
 witness = "array hole [, x] elided"
 
 [[surface]]
@@ -441,7 +441,7 @@ surface = "await-expression"
 slot = "self"
 oxc_variant = "Expression::AwaitExpression"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "../cases/b73_expression_shape_tail/await.ts"
 
 [[surface]]
@@ -451,7 +451,7 @@ surface = "bigint-literal"
 slot = "self"
 oxc_variant = "Expression::BigIntLiteral"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "../cases/b73_expression_shape_tail/bigint_literal.ts"
 
 [[surface]]
@@ -611,7 +611,7 @@ surface = "non-null-assertion"
 slot = "self"
 oxc_variant = "Expression::TSNonNullExpression"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/49-possibly-undefined-family.md"
 witness = "../cases/b73_expression_shape_tail/non_null.ts"
 
 [[surface]]
@@ -642,7 +642,7 @@ surface = "object-literal"
 slot = "spread-element"
 oxc_variant = "ObjectPropertyKind::SpreadProperty"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/71-expression-inference-fn-tail.md"
 witness = "../cases/b73_surface_accounting/array_spread.ts"
 
 [[surface]]
@@ -662,7 +662,7 @@ surface = "optional-chain"
 slot = "self"
 oxc_variant = "Expression::ChainExpression"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/49-possibly-undefined-family.md"
 witness = "../cases/b73_expression_shape_tail/optional_chain.ts"
 
 [[surface]]
@@ -682,7 +682,7 @@ surface = "private-field-access"
 slot = "self"
 oxc_variant = "Expression::PrivateFieldExpression"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "../cases/b73_expression_shape_tail/private_field_access.ts"
 
 [[surface]]
@@ -692,7 +692,7 @@ surface = "private-in-expression"
 slot = "self"
 oxc_variant = "Expression::PrivateInExpression"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "../cases/b73_expression_shape_tail/private_in.ts"
 
 [[surface]]
@@ -702,7 +702,7 @@ surface = "regexp-literal"
 slot = "self"
 oxc_variant = "Expression::RegExpLiteral"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/14-libdts-loading.md"
 witness = "../cases/b73_expression_shape_tail/regexp_literal.ts"
 
 [[surface]]
@@ -742,7 +742,7 @@ surface = "tagged-template"
 slot = "self"
 oxc_variant = "Expression::TaggedTemplateExpression"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/71-expression-inference-fn-tail.md"
 witness = "../cases/b73_expression_shape_tail/tagged_template.ts"
 
 [[surface]]
@@ -822,7 +822,7 @@ surface = "yield-expression"
 slot = "self"
 oxc_variant = "Expression::YieldExpression"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "../cases/b73_expression_shape_tail/yield.ts"
 
 # ------------------------------------------------------------------------------
@@ -846,7 +846,7 @@ surface = "bigint-keyword"
 slot = "self"
 oxc_variant = "TSType::TSBigIntKeyword"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "bigint keyword type not modeled"
 
 [[surface]]
@@ -926,7 +926,7 @@ surface = "intrinsic-keyword"
 slot = "self"
 oxc_variant = "TSType::TSIntrinsicKeyword"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "intrinsic keyword type not modeled"
 
 [[surface]]
@@ -946,7 +946,7 @@ surface = "literal-type"
 slot = "bigint"
 oxc_variant = "TSLiteral::BigIntLiteral"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "bigint literal type aborts annotation lowering"
 
 [[surface]]
@@ -966,7 +966,7 @@ surface = "literal-type"
 slot = "template"
 oxc_variant = "TSLiteral::TemplateLiteral"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "template literal in TSLiteral position aborts lowering"
 
 [[surface]]
@@ -996,7 +996,7 @@ surface = "named-tuple-member"
 slot = "self"
 oxc_variant = "TSType::TSNamedTupleMember"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "named tuple member aborts tuple annotation lowering"
 
 [[surface]]
@@ -1006,7 +1006,7 @@ surface = "object-keyword"
 slot = "self"
 oxc_variant = "TSType::TSObjectKeyword"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "object keyword type not modeled"
 
 [[surface]]
@@ -1036,7 +1036,7 @@ surface = "symbol-keyword"
 slot = "self"
 oxc_variant = "TSType::TSSymbolKeyword"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "symbol keyword type not modeled"
 
 [[surface]]
@@ -1066,7 +1066,7 @@ surface = "tuple-optional-element"
 slot = "self"
 oxc_variant = "TSTupleElement::TSOptionalType"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "optional tuple element aborts tuple lowering"
 
 [[surface]]
@@ -1146,7 +1146,7 @@ surface = "type-operator"
 slot = "unique-operand"
 oxc_variant = "TSType::TSTypeOperatorType"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "unique symbol operator not lowered"
 
 [[surface]]
@@ -1166,17 +1166,7 @@ surface = "type-predicate"
 slot = "self"
 oxc_variant = "TSType::TSTypePredicate"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "../cases/b73_surface_accounting/typeof_query.ts"
-
-[[surface]]
-id = "annotation-lower/type-query/self"
-role = "annotation-lower"
-surface = "type-query"
-slot = "self"
-oxc_variant = "TSType::TSTypeQuery"
-disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/50-type-predicates-assertions.md"
 witness = "../cases/b73_surface_accounting/typeof_query.ts"
 
 [[surface]]
@@ -1186,7 +1176,7 @@ surface = "type-query"
 slot = "typeof"
 oxc_variant = "TSType::TSTypeQuery"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/52-type-reference-tail.md"
 witness = "../cases/b73_surface_accounting/typeof_query.ts"
 
 [[surface]]
@@ -1230,7 +1220,7 @@ surface = "call-arguments"
 slot = "spread-argument"
 oxc_variant = "CallExpression::arguments"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/71-expression-inference-fn-tail.md"
 witness = "../cases/b73_surface_accounting/array_spread.ts"
 
 # ------------------------------------------------------------------------------
@@ -1398,7 +1388,7 @@ surface = "accessor-property"
 slot = "self"
 oxc_variant = "ClassElement::AccessorProperty"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "auto-accessor field not checked"
 
 [[surface]]
@@ -1418,7 +1408,7 @@ surface = "class-index-signature"
 slot = "self"
 oxc_variant = "ClassElement::TSIndexSignature"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "class index signature not collected"
 
 [[surface]]
@@ -1478,7 +1468,7 @@ surface = "static-block"
 slot = "self"
 oxc_variant = "ClassElement::StaticBlock"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
 witness = "static initialization block body not checked"
 
 # ------------------------------------------------------------------------------

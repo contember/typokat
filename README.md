@@ -167,12 +167,11 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   OXC AST surface is classified in a machine-validated inventory (`tests/surface/`), and an
   unsupported in-scope construct now reports `incomplete[<surface-id>]` with exit `3` instead of
   silently exiting clean — for annotations, signatures, class members, statements/declarations,
-  and the audited expression child slots (template interpolations, computed keys, spreads, spread
-  arguments). A documented tail of expression *shapes* (`x++`, `x!`, `a?.b`, `await`, tagged
-  templates, …) is inventoried and owned but does not emit yet (backlog `73`); until it and the
-  pinned real-project preview gate (`72`) ship — a clean result on an
-  unknown npm/Bun/Node project is still not a completeness claim. The remaining semantic
-  scope/disposition tail is backlog `75`.
+  and every audited expression shape. The remaining expression-shape semantics are explicitly
+  incomplete, never silently clean: `x!`/`a?.b` remain backlog `49`; traversal/iteration forms
+  such as elisions, spreads, and tagged templates remain `71`; the other deferred surface tail is
+  `75`. The pinned real-project preview gate (`72`) is still required, so a clean result on an
+  unknown npm/Bun/Node project is not yet a completeness claim.
 - Remaining `tsc` divergences are logged in
   [`docs/reference/divergences.md`](./docs/reference/divergences.md): known under-report families
   block 1.0 through manifest Track C; documented over-report/cosmetic tails are non-blocking only

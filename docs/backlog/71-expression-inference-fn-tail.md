@@ -17,8 +17,11 @@ WU4-A adversarial review (all verified pre-existing at that sprint's HEAD).
   `TK2322` even at top level (tsc: TS2322).
 - **Template-literal interpolations are unchecked** — no `TemplateLiteral` arm, so
   `` `${a = "bad"}` `` never checks the embedded assignment or expression.
-- **Array-spread elements are skipped** — `infer_array_literal` explicitly skips
-  spread elements, so `[...(a = "bad")]` escapes checking.
+- **Array elisions and spreads are incomplete** — array holes, array/object spread elements,
+  and call spread arguments can lose traversal or value obligations.
+- **Tagged templates and iteration targets are incomplete** — tagged-template operands and
+  assignment targets in `for-in`/`for-of` need structural traversal before their semantic rules
+  can be checked.
 - **`for-of` over a non-iterable / `for-in` over a non-object are undiagnosed**
   (tsc TS2488/TS2407) — the element type falls back to the error type (no cascade,
   but no diagnostic either). Needs at least a structural iterability check; full
@@ -26,17 +29,18 @@ WU4-A adversarial review (all verified pre-existing at that sprint's HEAD).
 
 ## Approach / acceptance
 
-Add the missing `infer_expr` arms (binary, template) and spread handling, reusing the
-existing operand-checking machinery and add the missing iteration obligations. Acceptance: a
+Add the missing `infer_expr` arms (binary, template), elision/object/call spread and tagged-template
+traversal, and the missing iteration-target obligations, reusing the existing operand-checking
+machinery. Acceptance: a
 conformance corpus pinning each family against
 `tsc 6.0.3 --strict`; controls prove no over-reports on well-typed operands.
 Operator *result typing* fidelity (TK2362/2365 families) stays owned by backlog `45` —
 this item only stops the silent skips.
 
 The forward local-function call found by the same review shipped in the
-[`2026-07-11 declaration-hoisting sprint`](../archive/sprint-2026-07-11-declaration-hoisting-parity.md). Backlog
-[`73`](./73-unsupported-surface-audit.md) owns the systematic AST-variant inventory that prevents
-new silent traversal gaps; this item owns these concrete known families.
+[`2026-07-11 declaration-hoisting sprint`](../archive/sprint-2026-07-11-declaration-hoisting-parity.md).
+The shipped surface-accounting inventory prevents new silent traversal gaps; this item owns these
+concrete known families.
 
 ## Touch points
 

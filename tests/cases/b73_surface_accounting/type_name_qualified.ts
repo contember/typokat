@@ -8,7 +8,7 @@
 // INCOMPLETE: a qualified type name `A.B` is not resolved (owner 43).
 type Q = A.B; // incomplete[annotation-lower/type-name/qualified-name]
 
-// INCOMPLETE: a type predicate return annotation is not lowered (owner 73).
+// INCOMPLETE: a type predicate return annotation is not lowered (owner 50).
 function isStr(x: unknown): x is string { // incomplete[annotation-lower/type-predicate/self]
   return typeof x === "string";
 }

@@ -9,16 +9,17 @@ title: Possibly-undefined/null diagnostics + optional methods/accessors
 TK2533 (object is possibly null/undefined), TK2722 (cannot invoke a possibly-undefined
 value), the TK18047/TK18048 strays — and the M21 deferrals still stand: optional
 **methods**/accessors (`go?(): T`) and narrowing an optional through a member-access
-guard (currently over-reports `T | undefined`).
+guard (currently over-reports `T | undefined`). Optional-chain and non-null assertion expression
+semantics are part of the same strict-null boundary.
 
 ## Problem
 
 M21 made optional-property reads yield `T | undefined`, so misuse surfaces as a generic
 TK2322/TK2345 at best — but tsc's dedicated codes fire at positions typokat doesn't check
 at all: with `declare const o: { a: number } | undefined`, `o.a` must be TK2532. Optional
-methods don't exist in the model (verify their current lowering at spec time). The
-non-null assertion operator (`x!`) must be honored when these checks land, or every `!`
-becomes a false positive.
+methods don't exist in the model (verify their current lowering at spec time). Optional chains
+must preserve their nullish boundary, and the non-null assertion operator (`x!`) must be honored
+when these checks land, or every `!` becomes a false positive.
 
 ## Approach / acceptance
 

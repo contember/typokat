@@ -26,7 +26,7 @@ use rustc_hash::FxHashMap;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Record the incomplete surface for a skipped spread call/`new` argument
-    /// (`f(...xs)` / `new C(...xs)`, owner 73) — the argument collectors share this so
+    /// (`f(...xs)` / `new C(...xs)`, owner 71) — the argument collectors share this so
     /// no in-scope argument is silently dropped before arity/assignability checking.
     fn record_spread_argument_skip(&mut self, arg: &oxc_ast::ast::Argument<'_>) {
         self.record_incomplete(
@@ -189,7 +189,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     arg_exprs.push(arg_expr);
                 }
             } else {
-                // A spread argument `f(...xs)` is not paired against a parameter (owner 73).
+                // A spread argument `f(...xs)` is not paired against a parameter (owner 71).
                 self.record_spread_argument_skip(arg);
             }
         }

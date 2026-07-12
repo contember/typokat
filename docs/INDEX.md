@@ -23,16 +23,16 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-07-12-surface-accounting-tail.md`](sprints/sprint-2026-07-12-surface-accounting-tail.md) —
-  explicit expression-shape accounting, durable semantic ownership, and backlog `73` closure.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Surface-accounting tail (`73`) active 2026-07-12** — the remaining `infer_expr`
-  shapes are being made explicit before `72` starts; ordinary update operands get narrow traversal
-  rather than a blanket incomplete result.
+- **Surface-accounting tail shipped 2026-07-12** (archived:
+  [`archive/sprint-2026-07-12-surface-accounting-tail.md`](archive/sprint-2026-07-12-surface-accounting-tail.md)) —
+  all inventoried expression shapes now report incomplete explicitly or have a durable semantic
+  owner; three review/audit failures were remediated before PASS. Backlog `73` is closed and
+  **`72` is next**.
 - **JS-exact number stringification (`30`) shipped 2026-07-11** (archived:
   [`archive/sprint-2026-07-11-js-number-stringification.md`](archive/sprint-2026-07-11-js-number-stringification.md)) —
   numeric literal holes now use ECMA-exact formatting; `${number}` keeps its
@@ -40,8 +40,8 @@ decisions → reference → archive.
 - **Minimal ambient prelude (`38`) shipped 2026-07-11** (archived:
   [`archive/sprint-2026-07-11-minimal-ambient-prelude.md`](archive/sprint-2026-07-11-minimal-ambient-prelude.md)) —
   the source-backed prelude now supplies a bounded `console`/numeric-`Math` value surface
-  through its canonical handoff, with 26 audited `OOS:unresolved → IN` transitions. `73`
-  still blocks `72`'s honest project-preview claim.
+  through its canonical handoff, with 26 audited `OOS:unresolved → IN` transitions. The shipped
+  surface-accounting closure unblocked `72`'s honest project-preview claim.
 - **Silent-FN quick wins sprint shipped partially 2026-07-11** (archived:
   [`archive/sprint-2026-07-11-silent-fn-quick-wins.md`](archive/sprint-2026-07-11-silent-fn-quick-wins.md)) —
   `67` shipped with independent review PASS; `66` hit the `63(d)` protected-lineage
@@ -50,7 +50,7 @@ decisions → reference → archive.
   [`archive/sprint-2026-07-11-declaration-hoisting-parity.md`](archive/sprint-2026-07-11-declaration-hoisting-parity.md)) —
   forward ordinary/generic/overload calls now see stable callable surfaces; `var`
   binds to its function/module owner while initializer and flow timing stay lexical/source ordered.
-  Next executable chain: `73` closure → `72`.
+  Next executable item: `72`.
 - **2026-07-10 completeness-accounting sprint shipped** (archived:
   [`archive/sprint-2026-07-10-completeness-accounting.md`](archive/sprint-2026-07-10-completeness-accounting.md)) —
   machine-validated OXC surface inventory with compile-time drift tripwires, a first-class
@@ -70,7 +70,7 @@ decisions → reference → archive.
   blockers: `41` generic methods, `43` namespaces/merging, `70` this-parameter
   typing. Backlog `38` is GO (ADR-0003). The post-sprint MVP audit added executable
   scope/unsupported censuses (`73`/`75`) and the first honest pinned-project preview gate
-  (`72`). **Now:** close `73`, then run `72`; track A
+  (`72`). **Now:** run `72`; track A
   (`41` first) continues toward full `lib.d.ts`.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
