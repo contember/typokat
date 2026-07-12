@@ -192,6 +192,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         }
 
+        if self.static_class_type_param_reference(name) {
+            self.diagnostics
+                .push(Diagnostic::static_member_references_class_type_parameter(
+                    ref_span,
+                ));
+            return Some(self.interner.well_known().error);
+        }
+
         // M17: intercept built-in `Array<T>` without `lib.d.ts`; user shadowing and
         // wrong arity are deferred. Every `Array` path returns here so bad arity never
         // falls through to the unresolved-name arm and emits `TK2304`.
@@ -240,6 +248,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         //    value-position demand site.
         if let Some(args) = type_arguments {
             let instantiated = self.instantiate_type_reference(scope, decl_id, args)?;
+            // A class body can mention its own generic instance (`class Box<T> {
+            // map<U>(): Box<U> }`) before the reserved template has members. Keep
+            // that instance lazy until the class fill completes; eager evaluation
+            // would snapshot the empty template and lose both binders.
+            if self.class_is_filling(decl_id) {
+                return Some(instantiated);
+            }
             return Some(self.maybe_evaluate(instantiated, ref_span));
         }
 
@@ -292,7 +307,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // erase intrinsic identity; non-recursive mapped aliases remain equivalent via
         // evaluator-side expansion.
         let template_tag = self.interner.store().tag(template);
-        if template_tag == TypeTag::Conditional
+        if self.class_is_filling(decl_id)
+            || template_tag == TypeTag::Conditional
             || template_tag == TypeTag::Mapped
             || self
                 .interner
@@ -308,6 +324,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
 
         Some(substitute(self.interner, template, &map))
+    }
+
+    fn class_is_filling(&self, decl_id: DeclId) -> bool {
+        matches!(
+            self.type_decls.get(decl_id.index()),
+            Some(TypeDecl::Class { .. })
+        ) && self.class_fill.get(decl_id.index()) == Some(&ClassFillState::Filling)
     }
 
     /// The ordered type-parameter ids of a type declaration (M9), or an empty list for

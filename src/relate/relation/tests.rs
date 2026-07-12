@@ -517,40 +517,48 @@ fn function_variance_arity_and_void_return() {
 
     // Reference: `(x: number) => number`.
     let num_to_num = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![param("x", wk.number)],
         ret: wk.number,
     });
     // `(x: unknown) => number`.
     let unknown_to_num = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![param("x", wk.unknown)],
         ret: wk.number,
     });
     // `(x: string) => number`.
     let str_to_num = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![param("x", wk.string)],
         ret: wk.number,
     });
     // `() => number` (FEWER params than `num_to_num`).
     let nullary_to_num = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![],
         ret: wk.number,
     });
     // `(x: number) => string` (incompatible return).
     let num_to_str = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![param("x", wk.number)],
         ret: wk.string,
     });
     // `(x: number, y: number) => number` (MORE params than `num_to_num`).
     let two_to_num = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![param("x", wk.number), param("y", wk.number)],
         ret: wk.number,
     });
     // `() => void` and `() => number` for the void-return rule.
     let nullary_to_void = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![],
         ret: wk.void,
     });
     let nullary_to_num_only = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![],
         ret: wk.number,
     });
@@ -627,6 +635,474 @@ fn function_variance_arity_and_void_return() {
     assert!(rel.is_assignable(num_to_num, num_to_num).is_yes());
 }
 
+/// B41 — generic function binders compare by position, never declaration id.
+/// The aligned type-parameter children are local to the signature comparison and
+/// must not become durable raw-id cache entries.
+#[test]
+fn generic_function_binders_alpha_align_and_specialize_one_way() {
+    use crate::types::repr::{FunctionType, GenericTypeParam, ParameterType, TypeParamId};
+
+    fn generic_identity(
+        interner: &mut Interner,
+        id: TypeParamId,
+        name: &str,
+        constraint: Option<TypeId>,
+    ) -> TypeId {
+        let param_ty = interner.intern_type_param(id, name);
+        interner.intern_function(FunctionType {
+            type_params: vec![GenericTypeParam {
+                id,
+                constraint,
+                default: None,
+            }],
+            params: vec![ParameterType::required("value", param_ty)],
+            ret: param_ty,
+        })
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source_id = TypeParamId(10_001);
+    let target_id = TypeParamId(10_002);
+    let source_param_ty = interner.intern_type_param(source_id, "T");
+    let target_param_ty = interner.intern_type_param(target_id, "U");
+    let alpha_source = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: source_id,
+            constraint: None,
+            default: None,
+        }],
+        params: vec![ParameterType::required("value", source_param_ty)],
+        ret: source_param_ty,
+    });
+    let alpha_target = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: target_id,
+            constraint: None,
+            default: None,
+        }],
+        params: vec![ParameterType::required("value", target_param_ty)],
+        ret: target_param_ty,
+    });
+    let number_bound = generic_identity(&mut interner, TypeParamId(10_003), "T", Some(wk.number));
+    let string_bound = generic_identity(&mut interner, TypeParamId(10_004), "U", Some(wk.string));
+    let specific_string = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        params: vec![ParameterType::required("value", wk.string)],
+        ret: wk.string,
+    });
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    assert!(rel.is_assignable(alpha_source, alpha_target).is_yes());
+    assert!(rel.is_assignable(alpha_target, alpha_source).is_yes());
+    assert!(rel.is_assignable(alpha_source, specific_string).is_yes());
+    assert!(!rel.is_assignable(specific_string, alpha_source).is_yes());
+    assert!(!rel.is_assignable(number_bound, string_bound).is_yes());
+    assert!(!rel.is_assignable(string_bound, number_bound).is_yes());
+
+    assert_eq!(
+        rel.cache.get(RelationKey::new(
+            source_param_ty,
+            target_param_ty,
+            RelationKind::Assignable,
+        )),
+        None,
+        "alpha-aligned binder children must bypass the durable raw-id cache"
+    );
+}
+
+/// B41 — recursive generic signatures retain the existing cycle rule while the
+/// binder-local child verdicts stay isolated from cache/query ordering.
+#[test]
+fn recursive_generic_signature_relations_are_order_independent() {
+    use crate::types::repr::{FunctionType, GenericTypeParam, ParameterType, TypeParamId};
+
+    fn generic_identity(
+        interner: &mut Interner,
+        id: TypeParamId,
+        constraint: Option<TypeId>,
+    ) -> TypeId {
+        let param_ty = interner.intern_type_param(id, "T");
+        interner.intern_function(FunctionType {
+            type_params: vec![GenericTypeParam {
+                id,
+                constraint,
+                default: None,
+            }],
+            params: vec![ParameterType::required("value", param_ty)],
+            ret: param_ty,
+        })
+    }
+
+    fn build(interner: &mut Interner) -> (TypeId, TypeId, TypeId, TypeId) {
+        let wk = interner.well_known();
+        let (left, right, number, string) = (
+            interner.reserve_object(),
+            interner.reserve_object(),
+            interner.reserve_object(),
+            interner.reserve_object(),
+        );
+        let left_map = generic_identity(interner, TypeParamId(10_101), None);
+        let right_map = generic_identity(interner, TypeParamId(10_102), None);
+        let number_map = generic_identity(interner, TypeParamId(10_103), Some(wk.number));
+        let string_map = generic_identity(interner, TypeParamId(10_104), Some(wk.string));
+        for (object, map) in [
+            (left, left_map),
+            (right, right_map),
+            (number, number_map),
+            (string, string_map),
+        ] {
+            interner.fill_object(
+                object,
+                ObjectType {
+                    properties: vec![prop("map", map), prop("next", object)],
+                    ..Default::default()
+                },
+            );
+        }
+        (left, right, number, string)
+    }
+
+    let first_order = {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let (left, right, number, string) = build(&mut interner);
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+        assert!(!rel.is_assignable(string, number).is_yes());
+        assert!(rel.is_assignable(left, right).is_yes());
+        assert!(rel.is_assignable(right, left).is_yes());
+        rel.is_assignable(number, string).is_yes()
+    };
+
+    let second_order = {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let (_left, _right, number, string) = build(&mut interner);
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+        rel.is_assignable(number, string).is_yes()
+    };
+
+    assert_eq!(first_order, second_order);
+    assert!(!second_order);
+}
+
+#[derive(Copy, Clone)]
+enum RecursiveGenericShape {
+    Direct,
+    StructuralPayload,
+    NestedGenericCallback,
+}
+
+fn recursive_generic_pair(
+    interner: &mut Interner,
+    shape: RecursiveGenericShape,
+    left_outer_id: TypeParamId,
+    right_outer_id: TypeParamId,
+    left_outer_constraint: Option<TypeId>,
+    right_outer_constraint: Option<TypeId>,
+) -> (TypeId, TypeId) {
+    use crate::types::repr::{FunctionType, GenericTypeParam, ParameterType};
+
+    fn generic_param(id: TypeParamId, constraint: Option<TypeId>) -> GenericTypeParam {
+        GenericTypeParam {
+            id,
+            constraint,
+            default: None,
+        }
+    }
+
+    fn payload(interner: &mut Interner, self_ty: TypeId, item: TypeId) -> TypeId {
+        interner.intern_object(ObjectType {
+            properties: vec![prop("self", self_ty), prop("item", item)],
+            ..Default::default()
+        })
+    }
+
+    let left = interner.reserve_object();
+    let right = interner.reserve_object();
+    let left_outer = interner.intern_type_param(left_outer_id, "T");
+    let right_outer = interner.intern_type_param(right_outer_id, "U");
+
+    let (left_map, right_map) = match shape {
+        RecursiveGenericShape::Direct => {
+            let left_map = interner.intern_function(FunctionType {
+                type_params: vec![generic_param(left_outer_id, left_outer_constraint)],
+                params: vec![ParameterType::required("value", left)],
+                ret: left,
+            });
+            let right_map = interner.intern_function(FunctionType {
+                type_params: vec![generic_param(right_outer_id, right_outer_constraint)],
+                params: vec![ParameterType::required("value", right)],
+                ret: right,
+            });
+            (left_map, right_map)
+        }
+        RecursiveGenericShape::StructuralPayload => {
+            let left_payload = payload(interner, left, left_outer);
+            let right_payload = payload(interner, right, right_outer);
+            let left_map = interner.intern_function(FunctionType {
+                type_params: vec![generic_param(left_outer_id, left_outer_constraint)],
+                params: vec![ParameterType::required("value", left_payload)],
+                ret: left_payload,
+            });
+            let right_map = interner.intern_function(FunctionType {
+                type_params: vec![generic_param(right_outer_id, right_outer_constraint)],
+                params: vec![ParameterType::required("value", right_payload)],
+                ret: right_payload,
+            });
+            (left_map, right_map)
+        }
+        RecursiveGenericShape::NestedGenericCallback => {
+            let left_callback_id = TypeParamId(left_outer_id.0 + 1);
+            let right_callback_id = TypeParamId(right_outer_id.0 + 1);
+            let left_callback = interner.intern_type_param(left_callback_id, "V");
+            let right_callback = interner.intern_type_param(right_callback_id, "W");
+            let left_input = payload(interner, left, left_outer);
+            let right_input = payload(interner, right, right_outer);
+            let left_output = payload(interner, left, left_callback);
+            let right_output = payload(interner, right, right_callback);
+            let left_callback = interner.intern_function(FunctionType {
+                type_params: vec![generic_param(left_callback_id, None)],
+                params: vec![ParameterType::required("value", left_input)],
+                ret: left_output,
+            });
+            let right_callback = interner.intern_function(FunctionType {
+                type_params: vec![generic_param(right_callback_id, None)],
+                params: vec![ParameterType::required("value", right_input)],
+                ret: right_output,
+            });
+            let left_map = interner.intern_function(FunctionType {
+                type_params: vec![generic_param(left_outer_id, left_outer_constraint)],
+                params: vec![ParameterType::required("callback", left_callback)],
+                ret: left_input,
+            });
+            let right_map = interner.intern_function(FunctionType {
+                type_params: vec![generic_param(right_outer_id, right_outer_constraint)],
+                params: vec![ParameterType::required("callback", right_callback)],
+                ret: right_input,
+            });
+            (left_map, right_map)
+        }
+    };
+
+    for (object, map) in [(left, left_map), (right, right_map)] {
+        interner.fill_object(
+            object,
+            ObjectType {
+                properties: vec![prop("self", object), prop("map", map)],
+                ..Default::default()
+            },
+        );
+    }
+    (left, right)
+}
+
+/// A direct `Left.map<T>(value: Left): Left` relation must reach its recursive
+/// generic frame again and terminate under the same effective binder environment.
+#[test]
+fn recursive_direct_generic_methods_terminate_in_both_directions() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (left, right) = recursive_generic_pair(
+        &mut interner,
+        RecursiveGenericShape::Direct,
+        TypeParamId(10_301),
+        TypeParamId(10_302),
+        None,
+        None,
+    );
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    assert!(rel.is_assignable(left, right).is_yes());
+    assert!(rel.is_assignable(right, left).is_yes());
+}
+
+/// A recursively structural `{ self; item: T }` payload keeps its alpha-aligned
+/// item binder as the relation descends through function parameters and returns.
+#[test]
+fn recursive_structural_generic_payload_terminates_in_both_directions() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (left, right) = recursive_generic_pair(
+        &mut interner,
+        RecursiveGenericShape::StructuralPayload,
+        TypeParamId(10_311),
+        TypeParamId(10_312),
+        None,
+        None,
+    );
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    assert!(rel.is_assignable(left, right).is_yes());
+    assert!(rel.is_assignable(right, left).is_yes());
+}
+
+/// An outer method binder plus a generic callback binder must also collapse to
+/// the same recursive environment, rather than growing one unique stack frame per descent.
+#[test]
+fn recursive_nested_generic_callback_terminates_in_both_directions() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (left, right) = recursive_generic_pair(
+        &mut interner,
+        RecursiveGenericShape::NestedGenericCallback,
+        TypeParamId(10_321),
+        TypeParamId(10_322),
+        None,
+        None,
+    );
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    assert!(rel.is_assignable(left, right).is_yes());
+    assert!(rel.is_assignable(right, left).is_yes());
+}
+
+/// Distinct contextual specializations of an otherwise recursive structural
+/// method must remain distinct in either query order.
+#[test]
+fn recursive_structural_specializations_reject_in_both_orders() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (number, string) = recursive_generic_pair(
+        &mut interner,
+        RecursiveGenericShape::StructuralPayload,
+        TypeParamId(10_331),
+        TypeParamId(10_332),
+        Some(wk.number),
+        Some(wk.string),
+    );
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    assert!(!rel.is_assignable(string, number).is_yes());
+    assert!(!rel.is_assignable(number, string).is_yes());
+}
+
+/// Equivalent nested frames have identical effective meaning and must share an
+/// in-flight cycle identity; a reversed alpha alignment must not share it.
+#[test]
+fn cycle_stack_keys_are_semantic_not_frame_allocations() {
+    use crate::types::repr::GenericTypeParam;
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source_id = TypeParamId(10_341);
+    let target_id = TypeParamId(10_342);
+    let source_ty = interner.intern_type_param(source_id, "T");
+    let target_ty = interner.intern_type_param(target_id, "U");
+    let source = interner.intern_object(ObjectType {
+        properties: vec![prop("value", source_ty)],
+        ..Default::default()
+    });
+    let target = interner.intern_object(ObjectType {
+        properties: vec![prop("value", target_ty)],
+        ..Default::default()
+    });
+    let source_binders = vec![GenericTypeParam {
+        id: source_id,
+        constraint: None,
+        default: None,
+    }];
+    let target_binders = vec![GenericTypeParam {
+        id: target_id,
+        constraint: None,
+        default: None,
+    }];
+    let raw = RelationKey::new(source, target, RelationKind::Assignable);
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+    let single = rel.with_binder_context(
+        BinderRelationContext::aligned(&source_binders, &target_binders),
+        |relater| relater.stack_relation_key(raw),
+    );
+    let repeated = rel.with_binder_context(
+        BinderRelationContext::aligned(&source_binders, &target_binders),
+        |relater| {
+            relater.with_binder_context(
+                BinderRelationContext::aligned(&source_binders, &target_binders),
+                |relater| relater.stack_relation_key(raw),
+            )
+        },
+    );
+    let reversed = rel.with_binder_context(
+        BinderRelationContext::aligned(&target_binders, &source_binders),
+        |relater| relater.stack_relation_key(raw),
+    );
+
+    assert!(single == repeated);
+    assert!(single != reversed);
+}
+
+/// B41/WU4 — an in-flight raw object pair under one binder environment must
+/// not short-circuit the same pair under a nested environment that specializes
+/// its parameter differently. The nested result must match a standalone query.
+#[test]
+fn cycle_stack_distinguishes_nested_binder_contexts() {
+    use crate::types::repr::{GenericTypeParam, TypeParamId};
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let param_id = TypeParamId(10_201);
+    let param_ty = interner.intern_type_param(param_id, "T");
+    let source = interner.intern_object(ObjectType {
+        properties: vec![prop("value", param_ty)],
+        ..Default::default()
+    });
+    let target = interner.intern_object(ObjectType {
+        properties: vec![prop("value", wk.string)],
+        ..Default::default()
+    });
+    let binders = vec![GenericTypeParam {
+        id: param_id,
+        constraint: None,
+        default: None,
+    }];
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+    let standalone = {
+        let mut number_specialization = BinderRelationContext::source_specialization(&binders);
+        number_specialization
+            .source_instantiations
+            .insert(param_id, wk.number);
+        rel.with_binder_context(number_specialization, |relater| {
+            relater.is_assignable(source, target).is_yes()
+        })
+    };
+    let nested = {
+        let outer = BinderRelationContext::source_specialization(&binders);
+        rel.with_binder_context(outer, |relater| {
+            let raw = RelationKey::new(source, target, RelationKind::Assignable);
+            let outer_stack_key = relater.stack_relation_key(raw);
+            relater.stack.insert(outer_stack_key.clone());
+
+            let mut number_specialization = BinderRelationContext::source_specialization(&binders);
+            number_specialization
+                .source_instantiations
+                .insert(param_id, wk.number);
+            let nested = relater.with_binder_context(number_specialization, |relater| {
+                let nested_stack_key = relater.stack_relation_key(raw);
+                assert!(!relater.stack.contains(&nested_stack_key));
+                relater.is_assignable(source, target).is_yes()
+            });
+
+            relater.stack.remove(&outer_stack_key);
+            nested
+        })
+    };
+
+    assert_eq!(nested, standalone);
+    assert!(!standalone);
+}
+
 /// M32 function-shape relation: optional/default slots lower required arity, rest
 /// parameters compare by their element slots, and an optional target contributes an
 /// explicit `undefined` possibility in the contravariant parameter direction.
@@ -644,18 +1120,22 @@ fn function_optional_and_rest_shape_assignability() {
     let number_arr = interner.intern_array(wk.number);
 
     let required = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![req("a", wk.number), req("b", wk.string)],
         ret: wk.void,
     });
     let optional = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![req("a", wk.number), ParameterType::optional("b", wk.string)],
         ret: wk.void,
     });
     let rest = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![req("a", wk.number), ParameterType::rest("b", string_arr)],
         ret: wk.void,
     });
     let number_rest = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
         params: vec![req("a", wk.number), ParameterType::rest("b", number_arr)],
         ret: wk.void,
     });

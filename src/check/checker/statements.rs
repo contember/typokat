@@ -10,9 +10,9 @@ use crate::binder::symbol::{DeclId, SymbolId};
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::{Reason, ReasonChain, Relater, Relation};
 use crate::span::Span;
-use crate::types::repr::{ObjectType, ParameterType};
+use crate::types::repr::ObjectType;
 use crate::types::store::{Store, TypeId};
-use crate::types::{instantiate_function, WellKnown};
+use crate::types::WellKnown;
 use oxc_ast::ast::{
     BindingPattern, BlockStatement, Declaration, Expression, ForInStatement, ForOfStatement,
     ForStatement, ForStatementInit, ForStatementLeft, Function, Statement, TryStatement,
@@ -1183,99 +1183,24 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         signatures: &[(TypeId, Span)],
     ) {
         for (signature_ty, span) in signatures {
-            let signature_ty = self.align_overload_type_params(*signature_ty, implementation_ty);
             let wk = self.interner.well_known();
             let store = self.interner.store();
             let mut relater = Relater::new(store, wk);
-            if !overload_implementation_compatible(
-                store,
-                &mut relater,
-                signature_ty,
-                implementation_ty,
-            ) {
+            if !overload_implementation_compatible(&mut relater, *signature_ty, implementation_ty) {
                 self.diagnostics
                     .push(Diagnostic::overload_incompatible(*span));
                 break;
             }
         }
     }
-
-    fn align_overload_type_params(
-        &mut self,
-        overload_ty: TypeId,
-        implementation_ty: TypeId,
-    ) -> TypeId {
-        let Some(overload_params) = self
-            .interner
-            .store()
-            .function_type(overload_ty)
-            .map(|function| function.type_params.clone())
-        else {
-            return overload_ty;
-        };
-        let Some(implementation_params) = self
-            .interner
-            .store()
-            .function_type(implementation_ty)
-            .map(|function| function.type_params.clone())
-        else {
-            return overload_ty;
-        };
-        if overload_params.len() != implementation_params.len() {
-            return overload_ty;
-        }
-        let mut map = rustc_hash::FxHashMap::default();
-        for (overload_param, implementation_param) in
-            overload_params.into_iter().zip(implementation_params)
-        {
-            let target = self
-                .interner
-                .intern_type_param(implementation_param.id, "T");
-            map.insert(overload_param.id, target);
-        }
-        instantiate_function(self.interner, overload_ty, &map)
-    }
 }
 
 pub(in crate::check::checker) fn overload_implementation_compatible(
-    store: &Store,
     relater: &mut Relater<'_>,
     overload_ty: TypeId,
     implementation_ty: TypeId,
 ) -> bool {
-    let Some(overload) = store.function_type(overload_ty) else {
-        return false;
-    };
-    let Some(implementation) = store.function_type(implementation_ty) else {
-        return false;
-    };
-    if overload.params.len() > implementation.params.len() {
-        return false;
-    }
-    for (overload_param, implementation_param) in overload.params.iter().zip(&implementation.params)
-    {
-        if !parameter_compatible(relater, overload_param, implementation_param) {
-            return false;
-        }
-    }
-    matches!(
-        relater.is_assignable(overload.ret, implementation.ret),
-        Relation::Yes
-    )
-}
-
-fn parameter_compatible(
-    relater: &mut Relater<'_>,
-    overload: &ParameterType,
-    implementation: &ParameterType,
-) -> bool {
-    if overload.rest != implementation.rest {
-        return false;
-    }
-    matches!(
-        relater.is_assignable(overload.ty, implementation.ty),
-        Relation::Yes
-    )
+    relater.overload_implementation_compatible(overload_ty, implementation_ty)
 }
 
 /// Resolve a variable declarator's symbol from its declaration-owning scope. A

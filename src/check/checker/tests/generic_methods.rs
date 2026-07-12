@@ -180,3 +180,17 @@ new GenericBox<number, string>(1);
         ]
     );
 }
+
+#[test]
+fn generic_class_overload_implementation_is_checked_under_aligned_binders() {
+    let source = "\
+class GenericOverloadProbe {
+  select<T extends number>(value: T): number;
+  select<T extends string>(value: T): string;
+  select<T extends number | string>(value: T): number {
+    return 1;
+  }
+}
+";
+    assert_eq!(diagnostic_lines(source), vec![(3, "TK2394".to_string())]);
+}

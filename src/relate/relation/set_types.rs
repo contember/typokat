@@ -10,7 +10,7 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         // Snapshot the member ids so the immutable borrow of the store does not
         // overlap the recursive `self.relate` calls below (which also borrow it).
@@ -45,7 +45,7 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         // Snapshot the member ids (see `relate_union_source` for the borrow note).
         let Some(members) = self.store.union_members(tgt) else {
@@ -60,7 +60,7 @@ impl<'a> Relater<'a> {
         // accumulator and only the winning one is merged up. On overall failure no
         // assumptions are merged (a `No` is genuine — it never rests on one).
         for member in members {
-            let mut member_assumed: FxHashSet<RelationKey> = FxHashSet::default();
+            let mut member_assumed: AssumedSet = FxHashSet::default();
             if self.relate(src, member, kind, &mut member_assumed).is_yes() {
                 assumed.extend(member_assumed);
                 return Relation::Yes;
@@ -85,7 +85,7 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         // Snapshot the member ids so the immutable borrow does not overlap the
         // recursive `self.relate` calls (see `relate_union_source` for the borrow note).
@@ -120,7 +120,7 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         let Some(members) = self.store.intersection_members(src) else {
             return Relation::No(ReasonChain::leaf(src, tgt));

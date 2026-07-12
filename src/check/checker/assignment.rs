@@ -82,8 +82,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .and_then(|decl_id| self.decl_types.get(decl_id));
 
         if let (Some(tgt), Some(raw)) = (target_ty, rhs) {
-            let (src, src_span) =
-                self.infer_contextual_source_after_walked(scope, &assign.right, tgt, raw);
+            let (src, src_span) = self.infer_contextual_source_after_walked(
+                scope,
+                &assign.right,
+                tgt,
+                raw,
+                false,
+                false,
+            );
             check_excess_properties(
                 self.interner.store(),
                 &assign.right,
@@ -210,8 +216,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Skipped when the RHS type is the error type (incomplete inference — see the doc
         // comment); the primary span is the RHS.
         if let Some(raw) = rhs {
-            let (src, src_span) =
-                self.infer_contextual_source_after_walked(scope, &assign.right, prop_ty, raw);
+            let (src, src_span) = self.infer_contextual_source_after_walked(
+                scope,
+                &assign.right,
+                prop_ty,
+                raw,
+                false,
+                false,
+            );
             if src != wk.error {
                 check_excess_properties(
                     self.interner.store(),

@@ -9,10 +9,10 @@ mod objects;
 mod set_types;
 
 use crate::relate::cache::{RelationCache, RelationKey};
-use crate::types::repr::{IntrinsicKind, TypeTag};
+use crate::types::repr::{GenericTypeParam, IntrinsicKind, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
 use crate::types::WellKnown;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Distinct relation kinds must not share cache entries (architecture §6.1).
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -169,7 +169,82 @@ pub struct Relater<'a> {
     /// resolving the fixpoint as the stack unwinds. It fires as of M5, where
     /// recursive/mutually-recursive types (`interface List { tail: List | null }`)
     /// re-enter an in-flight key and rely on this to terminate.
-    stack: FxHashSet<RelationKey>,
+    stack: FxHashSet<StackRelationKey>,
+    /// Temporary generic-binder alignments and one-way source specializations.
+    /// Every relation below one of these frames bypasses the durable three-word
+    /// cache because its verdict depends on this local environment.
+    binder_contexts: Vec<BinderRelationContext>,
+}
+
+/// The in-flight cycle identity. The durable cache intentionally remains the
+/// architecture's three-word [`RelationKey`], while an assume-true dependency
+/// must additionally capture the binder environment that gives raw type
+/// parameters their local meaning.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct StackRelationKey {
+    relation: RelationKey,
+    environment: StackBinderEnvironment,
+}
+
+/// The semantic part of an in-flight key. Context frames are lexical machinery;
+/// repeated recursion through alpha-equivalent frames must see the same key, while
+/// different alignments, constraints, or specializations must remain distinct.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct StackBinderEnvironment {
+    source_to_target: Vec<(TypeParamId, TypeParamId)>,
+    target_to_source: Vec<(TypeParamId, TypeParamId)>,
+    constraints: Vec<(TypeParamId, Option<TypeId>)>,
+    source_instantiations: Vec<(TypeParamId, TypeId)>,
+}
+
+type AssumedSet = FxHashSet<StackRelationKey>;
+
+/// A local function-relation environment. Type-parameter ids stay persistent in
+/// the store; this only gives their comparison a lexical meaning for one generic
+/// signature pair, never a cache key.
+#[derive(Default)]
+struct BinderRelationContext {
+    parameters: FxHashSet<TypeParamId>,
+    constraints: FxHashMap<TypeParamId, Option<TypeId>>,
+    source_to_target: FxHashMap<TypeParamId, TypeParamId>,
+    target_to_source: FxHashMap<TypeParamId, TypeParamId>,
+    instantiable_source: FxHashSet<TypeParamId>,
+    source_instantiations: FxHashMap<TypeParamId, TypeId>,
+}
+
+impl BinderRelationContext {
+    fn aligned(source: &[GenericTypeParam], target: &[GenericTypeParam]) -> Self {
+        let mut context = BinderRelationContext::default();
+        for (source_param, target_param) in source.iter().zip(target) {
+            context.parameters.insert(source_param.id);
+            context.parameters.insert(target_param.id);
+            context
+                .constraints
+                .insert(source_param.id, source_param.constraint);
+            context
+                .constraints
+                .insert(target_param.id, target_param.constraint);
+            context
+                .source_to_target
+                .insert(source_param.id, target_param.id);
+            context
+                .target_to_source
+                .insert(target_param.id, source_param.id);
+        }
+        context
+    }
+
+    fn source_specialization(source: &[GenericTypeParam]) -> Self {
+        let mut context = BinderRelationContext::default();
+        for source_param in source {
+            context.parameters.insert(source_param.id);
+            context
+                .constraints
+                .insert(source_param.id, source_param.constraint);
+            context.instantiable_source.insert(source_param.id);
+        }
+        context
+    }
 }
 
 impl<'a> Relater<'a> {
@@ -179,6 +254,7 @@ impl<'a> Relater<'a> {
             well_known,
             cache: RelationCache::new(),
             stack: FxHashSet::default(),
+            binder_contexts: Vec::new(),
         }
     }
 
@@ -210,14 +286,20 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         // Identity fast path: `T` relates to `T` under every relation.
         if src == tgt {
             return Relation::Yes;
         }
 
+        if let Some(result) = self.relate_contextual_type_params(src, tgt, kind, assumed) {
+            return result;
+        }
+
         let key = RelationKey::new(src, tgt, kind);
+        let stack_key = self.stack_relation_key(key);
+        let cacheable = self.binder_contexts.is_empty();
 
         // Cycle stack FIRST (architecture §6.3): re-entry on an in-flight relation
         // is assumed true and continues, resolving the fixpoint as the stack
@@ -228,8 +310,8 @@ impl<'a> Relater<'a> {
         // flight, and terminates rather than recomputing forever (M5 — §6.3). The
         // assumed key is recorded so the caller's verdict is treated as provisional
         // until that key is discharged at its own root.
-        if self.stack.contains(&key) {
-            assumed.insert(key);
+        if self.stack.contains(&stack_key) {
+            assumed.insert(stack_key);
             return Relation::Yes;
         }
 
@@ -240,26 +322,26 @@ impl<'a> Relater<'a> {
         // stack-guarded recompute so the checker still sees the precise
         // missing-vs-mismatch reason (the cache stores only the bool verdict —
         // architecture §6.1 — not the reason).
-        let cached = self.cache.get(key);
+        let cached = cacheable.then(|| self.cache.get(key)).flatten();
         if cached == Some(true) {
             return Relation::Yes;
         }
 
-        self.stack.insert(key);
+        self.stack.insert(stack_key.clone());
         // This frame's own assumption accumulator. Children record the ancestor
         // keys (including, possibly, this frame's own key) they assumed true.
-        let mut frame_assumed: FxHashSet<RelationKey> = FxHashSet::default();
+        let mut frame_assumed: AssumedSet = FxHashSet::default();
         let result = self.relate_uncached(src, tgt, kind, &mut frame_assumed);
-        self.stack.remove(&key);
+        self.stack.remove(&stack_key);
 
         // Discharge the assumption about our OWN key: the fixpoint is resolved at
         // this root, so a dependency that was only on re-entry to `key` is genuine.
-        frame_assumed.remove(&key);
+        frame_assumed.remove(&stack_key);
         // Anything left is an assumption about a key still in flight ABOVE us — this
         // verdict is provisional. Surface those to the caller so its cacheability
         // accounts for them too.
         let provisional = !frame_assumed.is_empty();
-        assumed.extend(frame_assumed.iter().copied());
+        assumed.extend(frame_assumed.iter().cloned());
 
         // Commit only sound verdicts on first decision:
         //   * a `false` is ALWAYS genuine — the assume-true rule only ever
@@ -268,7 +350,7 @@ impl<'a> Relater<'a> {
         //   * a `true` is cacheable only when it rested on no outstanding ancestor
         //     assumption (otherwise it is provisional and would poison the cache).
         // A recompute of an already-cached failure must not re-insert.
-        if cached.is_none() {
+        if cacheable && cached.is_none() {
             if !result.is_yes() {
                 self.cache.insert(key, false);
             } else if !provisional {
@@ -276,6 +358,172 @@ impl<'a> Relater<'a> {
             }
         }
         result
+    }
+
+    /// Run one relation operation under a local binder environment. Nested calls
+    /// deliberately see this frame, but cannot read or write the durable cache.
+    fn with_binder_context<R>(
+        &mut self,
+        context: BinderRelationContext,
+        body: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.binder_contexts.push(context);
+        let result = body(self);
+        self.binder_contexts.pop();
+        result
+    }
+
+    fn stack_relation_key(&self, relation: RelationKey) -> StackRelationKey {
+        let mut source_to_target = FxHashMap::default();
+        let mut target_to_source = FxHashMap::default();
+        let mut constraints = FxHashMap::default();
+        let mut source_instantiations = FxHashMap::default();
+
+        // Flatten lexical frames outer-to-inner. The innermost binding is the
+        // effective meaning of a persistent parameter id, so it deliberately
+        // overrides an outer binding with the same id.
+        for context in &self.binder_contexts {
+            source_to_target.extend(
+                context
+                    .source_to_target
+                    .iter()
+                    .map(|(&source, &target)| (source, target)),
+            );
+            target_to_source.extend(
+                context
+                    .target_to_source
+                    .iter()
+                    .map(|(&target, &source)| (target, source)),
+            );
+            for &parameter in &context.parameters {
+                constraints.insert(
+                    parameter,
+                    context.constraints.get(&parameter).copied().flatten(),
+                );
+            }
+            constraints.extend(
+                context
+                    .constraints
+                    .iter()
+                    .map(|(&parameter, &constraint)| (parameter, constraint)),
+            );
+            source_instantiations.extend(
+                context
+                    .source_instantiations
+                    .iter()
+                    .map(|(&parameter, &ty)| (parameter, ty)),
+            );
+        }
+
+        let mut source_to_target: Vec<_> = source_to_target.into_iter().collect();
+        let mut target_to_source: Vec<_> = target_to_source.into_iter().collect();
+        let mut constraints: Vec<_> = constraints.into_iter().collect();
+        let mut source_instantiations: Vec<_> = source_instantiations.into_iter().collect();
+        source_to_target.sort_by_key(|(parameter, _)| *parameter);
+        target_to_source.sort_by_key(|(parameter, _)| *parameter);
+        constraints.sort_by_key(|(parameter, _)| *parameter);
+        source_instantiations.sort_by_key(|(parameter, _)| *parameter);
+
+        StackRelationKey {
+            relation,
+            environment: StackBinderEnvironment {
+                source_to_target,
+                target_to_source,
+                constraints,
+                source_instantiations,
+            },
+        }
+    }
+
+    /// Handle alpha-aligned binders and a generic source's temporary
+    /// specialization before the context-free structural rules run.
+    fn relate_contextual_type_params(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut AssumedSet,
+    ) -> Option<Relation> {
+        let src_param = self.store.type_param(src).map(|param| param.id);
+        let tgt_param = self.store.type_param(tgt).map(|param| param.id);
+
+        if let (Some(src_param), Some(tgt_param)) = (src_param, tgt_param) {
+            for context in self.binder_contexts.iter().rev() {
+                if context.source_to_target.get(&src_param) == Some(&tgt_param)
+                    || context.target_to_source.get(&src_param) == Some(&tgt_param)
+                {
+                    return Some(Relation::Yes);
+                }
+            }
+        }
+
+        let binding =
+            src_param
+                .and_then(|id| {
+                    self.binder_contexts
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find_map(|(index, context)| {
+                            context
+                                .instantiable_source
+                                .contains(&id)
+                                .then_some((index, id, tgt, true))
+                        })
+                })
+                .or_else(|| {
+                    tgt_param.and_then(|id| {
+                        self.binder_contexts.iter().enumerate().rev().find_map(
+                            |(index, context)| {
+                                context
+                                    .instantiable_source
+                                    .contains(&id)
+                                    .then_some((index, id, src, false))
+                            },
+                        )
+                    })
+                });
+        let (context_index, param, other, source_on_left) = binding?;
+
+        let existing = self
+            .binder_contexts
+            .get(context_index)
+            .and_then(|context| context.source_instantiations.get(&param).copied());
+        if let Some(existing) = existing {
+            return Some(if source_on_left {
+                self.relate(existing, other, kind, assumed)
+            } else {
+                self.relate(other, existing, kind, assumed)
+            });
+        }
+
+        let constraint = self
+            .binder_contexts
+            .get(context_index)
+            .and_then(|context| context.constraints.get(&param).copied())
+            .flatten();
+        if let Some(context) = self.binder_contexts.get_mut(context_index) {
+            context.source_instantiations.insert(param, other);
+        }
+        if let Some(constraint) = constraint {
+            if !self.relate(other, constraint, kind, assumed).is_yes() {
+                return Some(Relation::No(ReasonChain::leaf(src, tgt)));
+            }
+        }
+        Some(Relation::Yes)
+    }
+
+    /// A persistent function descriptor overrides the declaration-side constraint
+    /// column while its binder context is active. `Some(None)` is meaningful: an
+    /// unconstrained descriptor must not fall back to stale store state.
+    fn contextual_type_param_constraint(&self, ty: TypeId) -> Option<Option<TypeId>> {
+        let param = self.store.type_param(ty)?.id;
+        for context in self.binder_contexts.iter().rev() {
+            if context.parameters.contains(&param) {
+                return Some(context.constraints.get(&param).copied().flatten());
+            }
+        }
+        None
     }
 
     /// The structural rules, run when the cache and cycle stack don't decide it.
@@ -288,7 +536,7 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         let wk = self.well_known;
 
@@ -315,11 +563,14 @@ impl<'a> Relater<'a> {
         // T`) recurses into this same rule, so constraint chains resolve. On failure it
         // falls through to the leaf below (naming the parameter, not its constraint).
         if self.store.tag(src) == TypeTag::TypeParam {
-            if let Some(constraint) = self
-                .store
-                .type_param(src)
-                .and_then(|param| self.store.type_param_constraint(param.id))
-            {
+            let constraint = self
+                .contextual_type_param_constraint(src)
+                .unwrap_or_else(|| {
+                    self.store
+                        .type_param(src)
+                        .and_then(|param| self.store.type_param_constraint(param.id))
+                });
+            if let Some(constraint) = constraint {
                 if self.relate(constraint, tgt, kind, assumed).is_yes() {
                     return Relation::Yes;
                 }

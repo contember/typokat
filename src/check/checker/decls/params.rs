@@ -238,6 +238,35 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         result
     }
 
+    /// Hide the containing class's binders for one static member. An own static
+    /// method frame still sits above this barrier and therefore resolves normally.
+    pub(in crate::check::checker) fn with_static_class_type_param_barrier<R>(
+        &mut self,
+        class_type_params: &[TypeParamId],
+        body: impl FnOnce(&mut Pass) -> R,
+    ) -> R {
+        self.static_class_type_param_barriers
+            .push(class_type_params.iter().copied().collect());
+        let result = body(self);
+        self.static_class_type_param_barriers.pop();
+        result
+    }
+
+    /// Whether the innermost matching binder is one hidden by a static-member
+    /// barrier. This preserves ordinary name lookup while reporting `TK2302`
+    /// rather than degrading the class binder into an unresolved name.
+    pub(in crate::check::checker) fn static_class_type_param_reference(&self, name: &str) -> bool {
+        let Some(ty) = self
+            .type_param_scopes
+            .iter()
+            .rev()
+            .find_map(|frame| frame.get(name).copied())
+        else {
+            return false;
+        };
+        self.is_static_class_type_param(ty)
+    }
+
     /// Look a type name up in the in-scope type-parameter frames, innermost first
     /// (M9). Returns the interned [`TypeTag::TypeParam`] id if the name is a type
     /// parameter currently in scope, so it shadows a same-named named type **inside**
@@ -247,5 +276,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .iter()
             .rev()
             .find_map(|frame| frame.get(name).copied())
+            .filter(|&ty| !self.is_static_class_type_param(ty))
+    }
+
+    fn is_static_class_type_param(&self, ty: TypeId) -> bool {
+        let Some(id) = self.interner.store().type_param(ty).map(|param| param.id) else {
+            return false;
+        };
+        self.static_class_type_param_barriers
+            .iter()
+            .rev()
+            .any(|barrier| barrier.contains(&id))
     }
 }

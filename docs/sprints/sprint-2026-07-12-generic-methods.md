@@ -272,3 +272,31 @@ Exact full gate: `cargo fmt --check`; `cargo test`; `cargo clippy --all-targets 
   false-clean instead of `TK2744`; the disabled declaration-default regression returns to WU1.
 - 2026-07-12 — Forward-default remediation: signature default lowering now rejects later binder
   references as `TK2744` and discards the invalid default before persistent call instantiation.
+- 2026-07-12 — WU3: relation now alpha-aligns persistent generic binders, compares aligned
+  constraints, specializes generic sources only, and bypasses the durable cache below local
+  binder contexts while retaining the recursive assume-true stack. Generic overload
+  implementations and class overload checks use that relation directly; self-generic class
+  method returns stay lazy through class fill, and focused call-site arrow contextual typing
+  restores substituted callback inference. `b41` is enabled: every fixture matches `tsc 6.0.3
+  --strict`; full Rust tests and clippy pass.
+- 2026-07-12 — WU4 review: FAIL. Added disabled B41 regressions for illegal static references to
+  class type parameters and tsc-clean overload implementations rejected as `TK2394`; remediation
+  returns to implementation work after the spec commit.
+- 2026-07-12 — WU4 remediation: a scoped static-class-binder barrier reports `TK2302` for class
+  binders in static field and method signatures and static local annotations, while static-owned
+  binders and outer names remain usable. Generic overload implementation checks now admit the
+  tsc-clean fixed/generic and constrained-return shapes without admitting the invalid arity
+  controls. The recursive assume-true stack is qualified by its active binder contexts, with a
+  focused nested-context regression. `b41` is re-enabled; `cargo fmt --check`, `cargo test`, and
+  `cargo clippy --all-targets -- -D warnings` pass.
+- 2026-07-12 — WU4 P0 re-review: FAIL. Disabled recursive-binder corpus adds direct, structural,
+  and nested-generic-callback terminating relation pairs in both query orders; TypeScript 6.0.3
+  accepts the six alpha-equivalent assignments and rejects four number/string specialization
+  controls as `TS2322`. The current checker false-cleans all four controls, so `b41` returns to
+  disabled pending remediation.
+- 2026-07-12 — WU4 P0 remediation: in-flight cycle keys now use a canonical flattened binder
+  environment (alignment, explicit optional constraints, and source specializations), not frame
+  allocation identity. Equivalent recursive frames collapse; distinct specializations and reverse
+  alignments do not. Direct relation tests cover all three P0 terminating shapes, both query
+  orders, and the specialization separation witness. The timeout-gated fixture now emits exactly
+  four `TK2322` controls; `b41` is re-enabled.

@@ -60,7 +60,7 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         // Both ids are array-tagged here; the side-tables always resolve. The `else`
         // arms are defensive (an array tag without a payload is a store invariant
@@ -92,7 +92,7 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         // Both ids are tuple-tagged here; the side-tables always resolve. The `else`
         // arms are defensive (a tuple tag without a payload is a store invariant
@@ -146,7 +146,7 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         // `src` is tuple-tagged and `tgt` array-tagged here; the side-tables always
         // resolve. The `else` arms are defensive and produce a leaf.
@@ -194,7 +194,7 @@ impl<'a> Relater<'a> {
         src_shape: TupleShape,
         tgt_shape: TupleShape,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         if tgt_shape.variadic.is_none()
             || src_shape.min_len() < tgt_shape.min_len()

@@ -168,6 +168,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     arg_expr,
                     target,
                     (*arg_ty, *arg_span),
+                    true,
+                    false,
                 )
                 .0
             })
@@ -540,6 +542,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 arg_expr,
                 param_ty,
                 (*arg_ty, *arg_span),
+                true,
+                false,
             );
             let diagnostics_len = self.diagnostics.len();
             check_excess_properties(
@@ -653,6 +657,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 arg_expr,
                 param_ty,
                 (*arg_ty, *arg_span),
+                true,
+                true,
             );
             check_excess_properties(
                 self.interner.store(),
@@ -1329,6 +1335,118 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             None => None,
         };
 
+        self.finish_arrow_inference(enclosing, arrow, fn_scope, params, declared_ret)
+    }
+
+    /// Re-infer a non-generic arrow against a function parameter's shape. This is
+    /// intentionally limited to call-site contextual typing: the first uncontextual
+    /// walk has already handled side effects, while this pass supplies the callback
+    /// parameter types needed for generic method inference and checking.
+    pub(in crate::check::checker) fn infer_contextual_arrow(
+        &mut self,
+        enclosing: ScopeId,
+        arrow: &ArrowFunctionExpression<'_>,
+        context: TypeId,
+    ) -> Option<TypeId> {
+        if arrow.type_parameters.is_some() {
+            return None;
+        }
+        let context = self.interner.store().function_type(context).cloned()?;
+        let fn_scope = self
+            .binder
+            .fn_scopes
+            .get(&(self.current_module, arrow.span.start))
+            .copied();
+        let params = self.lower_contextual_arrow_parameters(
+            enclosing,
+            fn_scope,
+            &arrow.params,
+            &context.params,
+        );
+        let declared_ret = match arrow.return_type.as_ref() {
+            Some(ann) => self.lower_annotation(enclosing, &ann.type_annotation),
+            // An unresolved generic return is the inference variable itself. Infer
+            // the callback return normally so that variable can receive a candidate;
+            // a concrete expected return is checked in the arrow body instead.
+            None if self.interner.store().tag(context.ret) == TypeTag::TypeParam => None,
+            None => Some(context.ret),
+        };
+        Some(self.finish_arrow_inference(enclosing, arrow, fn_scope, params, declared_ret))
+    }
+
+    fn lower_contextual_arrow_parameters(
+        &mut self,
+        enclosing: ScopeId,
+        fn_scope: Option<ScopeId>,
+        params: &FormalParameters<'_>,
+        context: &[ParameterType],
+    ) -> Vec<ParameterType> {
+        let error_ty = self.interner.well_known().error;
+        let mut lowered =
+            Vec::with_capacity(params.items.len() + usize::from(params.rest.is_some()));
+        for (index, param) in params.items.iter().enumerate() {
+            let name = parameter_name(&param.pattern).unwrap_or_default();
+            let annotation_ty = param
+                .type_annotation
+                .as_ref()
+                .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation));
+            let ty = annotation_ty.unwrap_or_else(|| {
+                context
+                    .get(index)
+                    .map(|parameter| parameter.ty)
+                    .unwrap_or(error_ty)
+            });
+            if let Some(scope) = fn_scope {
+                if let Some(decl_id) = parameter_name(&param.pattern)
+                    .and_then(|name| self.binder.resolve_value(scope, &name))
+                    .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
+                    .and_then(|symbol| symbol.value)
+                {
+                    self.decl_types.set(decl_id, ty);
+                }
+            }
+            lowered.push(parameter_from_shape(
+                name,
+                ty,
+                param.optional,
+                param.initializer.is_some(),
+            ));
+        }
+        if let Some(rest) = &params.rest {
+            let name = parameter_name(&rest.rest.argument).unwrap_or_default();
+            let annotation_ty = rest
+                .type_annotation
+                .as_ref()
+                .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation));
+            let ty = annotation_ty.unwrap_or_else(|| {
+                context
+                    .iter()
+                    .find(|parameter| parameter.rest)
+                    .map(|parameter| parameter.ty)
+                    .unwrap_or(error_ty)
+            });
+            if let Some(scope) = fn_scope {
+                if let Some(decl_id) = parameter_name(&rest.rest.argument)
+                    .and_then(|name| self.binder.resolve_value(scope, &name))
+                    .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
+                    .and_then(|symbol| symbol.value)
+                {
+                    self.decl_types.set(decl_id, ty);
+                }
+            }
+            lowered.push(ParameterType::rest(name, ty));
+        }
+        lowered
+    }
+
+    fn finish_arrow_inference(
+        &mut self,
+        enclosing: ScopeId,
+        arrow: &ArrowFunctionExpression<'_>,
+        fn_scope: Option<ScopeId>,
+        params: Vec<ParameterType>,
+        declared_ret: Option<TypeId>,
+    ) -> TypeId {
         let body_scope = fn_scope.unwrap_or(enclosing);
 
         let inferred_ret = if let Some(body_expr) = arrow.get_expression() {

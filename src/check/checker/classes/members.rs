@@ -3,9 +3,9 @@
 use super::super::context::*;
 use super::super::decls::value_decl_id;
 use crate::binder::scope::ScopeId;
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{Diagnostic, DiagnosticCode};
 use crate::span::Span;
-use crate::types::repr::{ClassId, Visibility};
+use crate::types::repr::{ClassId, TypeParamId, Visibility};
 use crate::types::store::TypeId;
 use oxc_ast::ast::{Class, ClassElement, MethodDefinitionKind, ObjectPattern};
 use oxc_span::GetSpan;
@@ -67,7 +67,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         // Member bodies share the class type-parameter frame.
         self.with_type_params(frame, |pass| {
-            pass.check_class_member_bodies(scope, class, static_this)
+            pass.check_class_member_bodies(scope, class, static_this, &type_params)
         });
 
         self.current_this = saved_this;
@@ -85,6 +85,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         class: &Class<'_>,
         static_this: Option<TypeId>,
+        class_type_params: &[TypeParamId],
     ) {
         for element in &class.body.body {
             let ClassElement::MethodDefinition(method) = element else {
@@ -133,7 +134,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 if let Some(static_this) = static_this {
                     self.current_this = Some(static_this);
                 }
-                let _ = self.infer_function(scope, &method.value);
+                let diagnostics_start = self.diagnostics.len();
+                self.with_static_class_type_param_barrier(class_type_params, |pass| {
+                    let _ = pass.infer_function(scope, &method.value);
+                });
+                self.discard_static_signature_binder_diagnostics(
+                    diagnostics_start,
+                    method.value.body.as_ref().map(|body| body.span.start),
+                );
                 self.current_this = saved_member_this;
             } else {
                 // M14: mark the constructor body so a `this.readonly = …` assignment is
@@ -146,6 +154,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 self.current_in_ctor = saved_in_ctor;
             }
         }
+    }
+
+    /// Static signatures were already lowered during class collection. The body
+    /// pass re-lowers them to type-check executable code, so discard its duplicate
+    /// signature diagnostics while retaining `TK2302` from local body annotations.
+    fn discard_static_signature_binder_diagnostics(
+        &mut self,
+        start: usize,
+        body_start: Option<u32>,
+    ) {
+        let mut generated = self.diagnostics.split_off(start);
+        generated.retain(|diagnostic| {
+            diagnostic.code != DiagnosticCode::TK2302
+                || body_start.is_some_and(|body_start| diagnostic.span.start >= body_start)
+        });
+        self.diagnostics.extend(generated);
     }
 
     /// Apply M13 access control to a found member access.

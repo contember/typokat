@@ -62,6 +62,7 @@ pub(in crate::check::checker) struct OverrideCheck {
 /// Per-declaration computed types, indexed by `DeclId`. `None` means a
 /// declaration whose type could not be computed (out of subset); a reference to
 /// it resolves to the error type defensively.
+#[derive(Clone)]
 pub(in crate::check::checker) struct DeclTypes {
     types: Vec<Option<TypeId>>,
 }
@@ -214,6 +215,9 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// Frames are pushed only around their generic declaration, and innermost
     /// frames shadow binder type slots so `T` does not leak.
     pub(in crate::check::checker) type_param_scopes: Vec<FxHashMap<String, TypeId>>,
+    /// Class binders hidden while a static member is lowered or checked. The
+    /// enclosing frame remains present so an own method binder can shadow it.
+    pub(in crate::check::checker) static_class_type_param_barriers: Vec<FxHashSet<TypeParamId>>,
     /// Running counter allocating a unique [`TypeParamId`] per declared type
     /// parameter across the whole module (the named-unique-id representation — see
     /// [`crate::types::repr::TypeParamId`]).

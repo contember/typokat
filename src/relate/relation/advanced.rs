@@ -13,7 +13,7 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         let Some(cond) = self.store.conditional_type(src) else {
             return Relation::No(ReasonChain::leaf(src, tgt));

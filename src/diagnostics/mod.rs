@@ -22,6 +22,8 @@ use crate::span::Span;
 /// listed; later milestones add variants.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum DiagnosticCode {
+    /// Static member references its containing class's type parameter.
+    TK2302,
     /// Cannot find name (unresolved identifier).
     TK2304,
     /// Module has no exported member.
@@ -90,6 +92,7 @@ impl DiagnosticCode {
     /// The rendered code string, e.g. `"TK2322"`.
     pub fn as_str(self) -> &'static str {
         match self {
+            DiagnosticCode::TK2302 => "TK2302",
             DiagnosticCode::TK2304 => "TK2304",
             DiagnosticCode::TK2305 => "TK2305",
             DiagnosticCode::TK2307 => "TK2307",
@@ -154,6 +157,17 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
+    /// Construct a `TK2302` static-member class-binder error.
+    pub fn static_member_references_class_type_parameter(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2302,
+            severity: Severity::Error,
+            message: "Static members cannot reference class type parameters.".to_string(),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
     /// Construct a `TK2322` "not assignable" error with the given primary span
     /// and fully-rendered message.
     pub fn not_assignable(span: Span, message: String) -> Self {

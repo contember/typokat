@@ -698,7 +698,26 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         expr: &Expression<'_>,
         context: TypeId,
         raw: (TypeId, Span),
+        use_contextual_arrow: bool,
+        retain_contextual_arrow_checks: bool,
     ) -> (TypeId, Span) {
+        if let (true, Expression::ArrowFunctionExpression(arrow)) = (use_contextual_arrow, expr) {
+            let diagnostics_len = self.diagnostics.len();
+            let obligation_len = self.obligations.len();
+            let override_len = self.override_checks.len();
+            let decl_types = (!retain_contextual_arrow_checks).then(|| self.decl_types.clone());
+            let contextual = self.infer_contextual_arrow(scope, arrow, context);
+            if !retain_contextual_arrow_checks {
+                self.diagnostics.truncate(diagnostics_len);
+                self.obligations.truncate(obligation_len);
+                self.override_checks.truncate(override_len);
+                if let Some(decl_types) = decl_types {
+                    self.decl_types = decl_types;
+                }
+            }
+            return contextual.map(|ty| (ty, raw.1)).unwrap_or(raw);
+        }
+
         if !self.context_can_shape_fresh_literal(expr, context) {
             return raw;
         }

@@ -178,7 +178,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let own_members = self.with_type_params(frame, |pass| {
             // M24: lower the parameters' `extends` constraints with the frame active.
             pass.lower_type_param_constraints(scope, param_decl, type_params);
-            pass.collect_class_own_members(scope, class_id, class)
+            pass.collect_class_own_members(scope, class_id, class, type_params)
         });
 
         // Snapshot base members so the immutable store borrow ends before interning.
@@ -365,6 +365,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         class_id: ClassId,
         class: &Class<'_>,
+        class_type_params: &[TypeParamId],
     ) -> ClassOwnMembers {
         let mut own_instance: Vec<PropertyType> = Vec::new();
         let mut own_static: Vec<PropertyType> = Vec::new();
@@ -398,6 +399,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     let Some(ty) = (match prop.type_annotation.as_ref() {
                         // Annotated: lower the declared type (M11). `None` (unlowerable /
                         // out of subset) keeps the field skipped.
+                        Some(annotation) if prop.r#static => self
+                            .with_static_class_type_param_barrier(class_type_params, |pass| {
+                                pass.lower_annotation(scope, &annotation.type_annotation)
+                            }),
                         Some(annotation) => {
                             self.lower_annotation(scope, &annotation.type_annotation)
                         }
@@ -559,7 +564,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                                 }
                                 continue;
                             }
-                            let Some(ty) = self.lower_method_signature(scope, &method.value) else {
+                            let lowered = if method.r#static {
+                                self.with_static_class_type_param_barrier(
+                                    class_type_params,
+                                    |pass| pass.lower_method_signature(scope, &method.value),
+                                )
+                            } else {
+                                self.lower_method_signature(scope, &method.value)
+                            };
+                            let Some(ty) = lowered else {
                                 continue;
                             };
                             let member = PropertyType {
@@ -665,10 +678,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         is_static: bool,
         visibility: Visibility,
     ) -> Option<PropertyType> {
+        let class_type_params: Vec<TypeParamId> = class
+            .type_parameters
+            .as_deref()
+            .into_iter()
+            .flat_map(|params| &params.params)
+            .filter_map(|param| {
+                self.lookup_type_param(param.name.name.as_str())
+                    .and_then(|ty| self.interner.store().type_param(ty).map(|param| param.id))
+            })
+            .collect();
         let mut call_signatures: Vec<TypeId> = Vec::new();
         let mut overloads: Vec<(TypeId, Span)> = Vec::new();
         let mut implementation: Option<TypeId> = None;
-        let mut has_generic_signature = false;
         for element in &class.body.body {
             let ClassElement::MethodDefinition(method) = element else {
                 continue;
@@ -680,12 +702,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             {
                 continue;
             }
-            let signature = self.lower_method_signature(scope, &method.value)?;
-            has_generic_signature |= self
-                .interner
-                .store()
-                .function_type(signature)
-                .is_some_and(|function| !function.type_params.is_empty());
+            let signature = if is_static {
+                self.with_static_class_type_param_barrier(&class_type_params, |pass| {
+                    pass.lower_method_signature(scope, &method.value)
+                })?
+            } else {
+                self.lower_method_signature(scope, &method.value)?
+            };
             if method.value.body.is_some() {
                 implementation = Some(signature);
                 continue;
@@ -696,7 +719,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         if call_signatures.is_empty() {
             return None;
         }
-        if let Some(implementation) = implementation.filter(|_| !has_generic_signature) {
+        if let Some(implementation) = implementation {
             self.check_class_overload_compatibility(implementation, &overloads);
         }
         let ty = self.interner.intern_object(ObjectType {
@@ -723,12 +746,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let wk = self.interner.well_known();
             let store = self.interner.store();
             let mut relater = Relater::new(store, wk);
-            if !overload_implementation_compatible(
-                store,
-                &mut relater,
-                *signature_ty,
-                implementation_ty,
-            ) {
+            if !overload_implementation_compatible(&mut relater, *signature_ty, implementation_ty) {
                 self.diagnostics
                     .push(Diagnostic::overload_incompatible(*span));
                 break;

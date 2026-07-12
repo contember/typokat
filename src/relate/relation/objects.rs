@@ -75,7 +75,7 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         // Both ids are object-tagged here; the side-tables always resolve. The
         // `else` arms are defensive (an object tag without a payload is a store
@@ -254,7 +254,7 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         let Some(tgt_obj) = self.store.object_type(tgt) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
@@ -275,7 +275,7 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         let Some(tgt_obj) = self.store.object_type(tgt) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
@@ -296,7 +296,7 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         let Some(src_obj) = self.store.object_type(src) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
@@ -318,7 +318,7 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         let Some(tgt_obj) = self.store.object_type(tgt) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
@@ -360,7 +360,7 @@ impl<'a> Relater<'a> {
         src_signatures: &[TypeId],
         tgt_signatures: &[TypeId],
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         if src_signatures.is_empty() || tgt_signatures.is_empty() {
             return Relation::No(ReasonChain::leaf(src, tgt));
@@ -410,19 +410,185 @@ impl<'a> Relater<'a> {
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         // Both ids are function-tagged here; the side-tables always resolve. The
         // `else` arms are defensive (a function tag without a payload is a store
         // invariant violation, never expected) and produce a leaf rather than
         // panicking.
-        let Some(src_fn) = self.store.function_type(src) else {
+        let Some(src_fn) = self.store.function_type(src).cloned() else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
-        let Some(tgt_fn) = self.store.function_type(tgt) else {
+        let Some(tgt_fn) = self.store.function_type(tgt).cloned() else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
 
+        match (src_fn.type_params.is_empty(), tgt_fn.type_params.is_empty()) {
+            (true, true) => self.relate_function_shapes(src, tgt, &src_fn, &tgt_fn, kind, assumed),
+            // A non-generic implementation cannot stand in for every instantiation
+            // a generic target permits. Keep this rejection explicit rather than
+            // falling through to the declaration-side apparent-type rule.
+            (true, false) => Relation::No(ReasonChain::leaf(src, tgt)),
+            // A generic source can be specialized for a concrete target. The local
+            // context fixes a binder at its first compatible target occurrence and
+            // checks the persistent descriptor constraint before accepting it.
+            (false, true) => {
+                let context = BinderRelationContext::source_specialization(&src_fn.type_params);
+                self.with_binder_context(context, |relater| {
+                    relater.relate_function_shapes(src, tgt, &src_fn, &tgt_fn, kind, assumed)
+                })
+            }
+            (false, false) => {
+                if src_fn.type_params.len() != tgt_fn.type_params.len() {
+                    return Relation::No(ReasonChain::leaf(src, tgt));
+                }
+                let context =
+                    BinderRelationContext::aligned(&src_fn.type_params, &tgt_fn.type_params);
+                self.with_binder_context(context, |relater| {
+                    if !relater
+                        .generic_function_constraints_compatible(&src_fn, &tgt_fn, kind, assumed)
+                    {
+                        return Relation::No(ReasonChain::leaf(src, tgt));
+                    }
+                    relater.relate_function_shapes(src, tgt, &src_fn, &tgt_fn, kind, assumed)
+                })
+            }
+        }
+    }
+
+    /// Compare two alpha-aligned generic constraints. A target generic can be
+    /// instantiated anywhere inside its constraint, so its bound must be accepted
+    /// by the source bound (`target constraint -> source constraint`). Defaults are
+    /// intentionally call-site-only and never affect this relation.
+    fn generic_function_constraints_compatible(
+        &mut self,
+        src_fn: &FunctionType,
+        tgt_fn: &FunctionType,
+        kind: RelationKind,
+        assumed: &mut AssumedSet,
+    ) -> bool {
+        for (src_param, tgt_param) in src_fn.type_params.iter().zip(&tgt_fn.type_params) {
+            let src_constraint = src_param.constraint.unwrap_or(self.well_known.unknown);
+            let tgt_constraint = tgt_param.constraint.unwrap_or(self.well_known.unknown);
+            if !self
+                .relate(tgt_constraint, src_constraint, kind, assumed)
+                .is_yes()
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Whether an overload declaration is compatible with its implementation.
+    /// This has intentionally different parameter variance from ordinary function
+    /// assignment: the implementation must accept each overload argument and
+    /// return something the overload promises.
+    pub fn overload_implementation_compatible(
+        &mut self,
+        overload_ty: TypeId,
+        implementation_ty: TypeId,
+    ) -> bool {
+        let Some(overload) = self.store.function_type(overload_ty).cloned() else {
+            return false;
+        };
+        let Some(implementation) = self.store.function_type(implementation_ty).cloned() else {
+            return false;
+        };
+
+        match (
+            overload.type_params.is_empty(),
+            implementation.type_params.is_empty(),
+        ) {
+            // Preserve the existing non-generic overload rule: implementations may
+            // return a representable supertype (for example `number | string` for
+            // separate `number`/`string` overloads).
+            (true, true) => self.overload_implementation_shapes(&overload, &implementation, false),
+            // A generic implementation can specialize to one fixed overload. This
+            // is ordinary function assignability in implementation -> overload
+            // direction: overload arguments flow into the implementation and its
+            // specialized result flows back out to the overload caller.
+            (true, false) => self.is_assignable(implementation_ty, overload_ty).is_yes(),
+            (false, true) => {
+                let context = BinderRelationContext::source_specialization(&overload.type_params);
+                self.with_binder_context(context, |relater| {
+                    relater.overload_implementation_shapes(&overload, &implementation, true)
+                })
+            }
+            (false, false) => {
+                if overload.type_params.len() != implementation.type_params.len() {
+                    return false;
+                }
+                let context = BinderRelationContext::aligned(
+                    &overload.type_params,
+                    &implementation.type_params,
+                );
+                self.with_binder_context(context, |relater| {
+                    for (overload_param, implementation_param) in
+                        overload.type_params.iter().zip(&implementation.type_params)
+                    {
+                        let overload_constraint = overload_param
+                            .constraint
+                            .unwrap_or(relater.well_known.unknown);
+                        let implementation_constraint = implementation_param
+                            .constraint
+                            .unwrap_or(relater.well_known.unknown);
+                        if !relater
+                            .is_assignable(overload_constraint, implementation_constraint)
+                            .is_yes()
+                        {
+                            return false;
+                        }
+                    }
+                    relater.overload_implementation_shapes(&overload, &implementation, true)
+                })
+            }
+        }
+    }
+
+    fn overload_implementation_shapes(
+        &mut self,
+        overload: &FunctionType,
+        implementation: &FunctionType,
+        implementation_return_to_overload: bool,
+    ) -> bool {
+        if implementation.required_param_count() > overload.required_param_count() {
+            return false;
+        }
+        for (overload_param, implementation_param) in
+            overload.params.iter().zip(&implementation.params)
+        {
+            if overload_param.rest != implementation_param.rest
+                || !self
+                    .is_assignable(overload_param.ty, implementation_param.ty)
+                    .is_yes()
+            {
+                return false;
+            }
+        }
+        let overload_to_implementation = self
+            .is_assignable(overload.ret, implementation.ret)
+            .is_yes();
+        if !implementation_return_to_overload {
+            return overload_to_implementation;
+        }
+        overload_to_implementation
+            || self
+                .is_assignable(implementation.ret, overload.ret)
+                .is_yes()
+    }
+
+    /// The context-free positional function rule, reused after a generic relation
+    /// frame has aligned binders or temporarily specialized a generic source.
+    fn relate_function_shapes(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        src_fn: &FunctionType,
+        tgt_fn: &FunctionType,
+        kind: RelationKind,
+        assumed: &mut AssumedSet,
+    ) -> Relation {
         let Some(src_params) = self.function_param_shape(src_fn) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
@@ -473,7 +639,7 @@ impl<'a> Relater<'a> {
         src_params: &ParamShape,
         tgt_params: &ParamShape,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         for index in 0..src_params.prefix.len() {
             if !tgt_params.can_have_index(index) {
@@ -552,7 +718,7 @@ impl<'a> Relater<'a> {
         src_slot: ParamSlot,
         tgt_slot: ParamSlot,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
     ) -> Relation {
         if let Relation::No(child) = self.relate(src_slot.ty, tgt_slot.ty, kind, assumed) {
             if tgt_slot.accepts_undefined
@@ -705,7 +871,7 @@ impl<'a> Relater<'a> {
         cands: &[TypeId],
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
         in_flight: &mut MergedInFlightSet,
     ) -> Relation {
         if self.store.tag(tgt) == TypeTag::Object {
@@ -729,7 +895,7 @@ impl<'a> Relater<'a> {
         // suffices (OR — per-attempt accumulator, merge only the winner).
         let mut last_child: Option<ReasonChain> = None;
         for &cand in cands {
-            let mut cand_assumed: FxHashSet<RelationKey> = FxHashSet::default();
+            let mut cand_assumed: AssumedSet = FxHashSet::default();
             match self.relate(cand, tgt, kind, &mut cand_assumed) {
                 Relation::Yes => {
                     assumed.extend(cand_assumed);
@@ -750,7 +916,7 @@ impl<'a> Relater<'a> {
         cands: &[TypeId],
         tgt: TypeId,
         kind: RelationKind,
-        assumed: &mut FxHashSet<RelationKey>,
+        assumed: &mut AssumedSet,
         in_flight: &mut MergedInFlightSet,
     ) -> Relation {
         let Some(tgt_obj) = self.store.object_type(tgt) else {

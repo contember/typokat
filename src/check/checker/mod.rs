@@ -788,6 +788,7 @@ fn build_pass<'a, 'ast>(
         type_decls,
         type_resolved,
         type_param_scopes: Vec::new(),
+        static_class_type_param_barriers: Vec::new(),
         next_type_param,
         class_parents: FxHashMap::default(),
         class_ctors: FxHashMap::default(),
