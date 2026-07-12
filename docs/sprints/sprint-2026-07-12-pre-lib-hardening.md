@@ -238,3 +238,8 @@ the original Terra implementer and repeats the relevant independent gate before 
   Two independent proposals converged on `22`/`56`/`77`/`70`/`13` with `43` deferred;
   the YAGNI critic's valid review-bottleneck objection is addressed by one-writer
   integration, per-item commits/reviews, stop gates, and pipelined read-only agent work.
+- 2026-07-12 — WU1 review round 1 FAIL: parenthesized generic class values were
+  incorrectly grouped with generic aliases, leaving abstract/private generic construction
+  silent. Parentheses are transparent; a spec amendment now requires direct generic
+  behavior through parentheses. Generic `const` aliases remain the separate stop-gated
+  boundary because they require alias-level generic substitution.
