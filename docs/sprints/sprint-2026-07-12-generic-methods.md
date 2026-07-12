@@ -300,3 +300,9 @@ Exact full gate: `cargo fmt --check`; `cargo test`; `cargo clippy --all-targets 
   alignments do not. Direct relation tests cover all three P0 terminating shapes, both query
   orders, and the specialization separation witness. The timeout-gated fixture now emits exactly
   four `TK2322` controls; `b41` is re-enabled.
+- 2026-07-12 — WU5 ratchet audit: fresh official-suite `--check` found 20 regressions and 26
+  improvements, so the scoreboard remains unsaved and closure is paused. Three `IN → unresolved`
+  changes and ten new `TK2304` identities expose lib globals now reached by generic lowering;
+  one non-strict optional-overload change and the generic-body `.slice`/`.length` reports belong to
+  already-open `49`/`14`. The remaining strict generic relation/contextual-callback regressions are
+  pinned in a disabled B41 source fixture before remediation.
