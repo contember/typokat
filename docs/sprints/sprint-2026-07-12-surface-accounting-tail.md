@@ -46,8 +46,10 @@ deferred expression semantics themselves.
   document it. Cover: update operands; non-null and optional-chain wrappers; await/yield; tagged
   templates; `satisfies`; explicit instantiation; dynamic import; bigint and regexp literals;
   class expressions; private-field access; and private-in expressions. Child-bearing fixtures pin
-  both the wrapper's incomplete identity and any diagnostic already expressible through existing
-  call/member/annotation walkers. Update fixtures pin a missing-name operand and a clean ordinary
+  both the wrapper's incomplete identity and standalone child diagnostics reachable without
+  implementing the wrapper's deferred semantics. Optional-chain fixtures explicitly do not require
+  member/call compatibility after the optional boundary; they require structural child traversal
+  plus the incomplete identity. Update fixtures pin a missing-name operand and a clean ordinary
   numeric `for` loop.
 - **Acceptance / witness.** One behavior-neutral spec commit. Enabling the directory at old HEAD
   fails only because the new expectations are absent. Every expected incomplete identity matches
@@ -63,16 +65,19 @@ deferred expression semantics themselves.
   entry point where one exists. Confirm the update target variants can be covered without casts,
   `unsafe`, or a new traversal boundary.
 - **Scope.** Replace the wildcard behavior with explicit arms. Child-bearing unsupported wrappers
-  traverse their existing child expressions/annotations, record exactly one stable self identity,
-  and return `None`; leaf literals record and return `None`; class expressions record without
-  partially invoking top-level class lowering. Add a narrow `SimpleAssignmentTarget` walker for
+  structurally traverse their existing child expressions/annotations, record exactly one stable
+  self identity, and return `None`; leaf literals record and return `None`; class expressions record
+  without partially invoking top-level class lowering. Once a `ChainExpression` crosses an optional
+  member/call boundary, traverse the rest of that chain structurally without ordinary member/call
+  compatibility, which belongs to backlog `49`. Add a narrow `SimpleAssignmentTarget` walker for
   update operands, return the existing coarse error type, and change the inventory identity from
   `update-expression/self` to supported `update-expression/operand`. Update-operator type
   validation remains backlog `45`. Update inventory witnesses and the historical census slot name.
   Enable the WU0 corpus.
 - **Acceptance / witness.** The new corpus passes; routine numeric `for` loops remain complete;
-  each unsupported wrapper records one deterministic identity; nested diagnostics are retained;
-  all existing conformance and surface-validator tests pass.
+  each unsupported wrapper records one deterministic identity; standalone nested diagnostics are
+  retained without optional-chain false positives; all existing conformance and surface-validator
+  tests pass.
 - **Touch points.** `src/check/checker/expr.rs`, `tests/surface/inventory.toml`,
   `tests/surface/census.md`, `tests/conformance.rs`.
 
@@ -119,6 +124,9 @@ deferred expression semantics themselves.
 - Semantic typing for `await`, `yield`, optional chains, non-null assertions, `satisfies`, explicit
   instantiation, dynamic imports, bigint/regexp values, private expressions, tagged templates, or
   class expressions; their existing/new semantic backlog owners remain live.
+- Optional member/call compatibility after an optional-chain boundary, including argument checking
+  against the non-null callable branch — backlog [`49`](../backlog/49-possibly-undefined-family.md).
+  The chain records incomplete and only preserves diagnostics arising independently in its children.
 - Update-operator operand compatibility and result fidelity (`TK2362`/`TK2365` family) — backlog
   [`45`](../backlog/45-operator-comparison-typing.md). WU1 only prevents operand traversal loss.
 - Template/spread/iteration value semantics — backlog
@@ -134,8 +142,10 @@ deferred expression semantics themselves.
 - Treat update expressions as a supported operand-traversal wrapper, matching the existing coarse
   treatment of arithmetic expressions; keep actual operator validation in `45`. This is the narrow
   path that preserves clean routine `for` loops without claiming `++/--` parity.
-- Unsupported child-bearing wrappers retain reachable child diagnostics before recording their own
-  incomplete identity. No wrapper is promoted to semantically supported by traversal alone.
+- Unsupported child-bearing wrappers retain standalone child diagnostics before recording their own
+  incomplete identity. Optional chains are walked structurally after the optional boundary; applying
+  member/call compatibility there would implement backlog `49`, so the incomplete result deliberately
+  carries no such claim. No wrapper is promoted to semantically supported by traversal alone.
 - Reuse existing backlog owners; no new semantic backlog is needed. Backlog `75` is the explicit
   owner for the remaining census-discovered surface families without a narrower owner.
 - Stop rather than improvise if any shape needs a new traversal boundary, forbidden type workaround,
@@ -163,3 +173,8 @@ Exact full gate: `cargo fmt --check`; `cargo test`; `cargo clippy --all-targets 
 - 2026-07-12 — Plan grounded at `143a19f`; working tree clean. Terra read-only grounding confirmed
   existing OXC child accessors, the update-target granularity boundary, and that all current `73`
   inventory owners can migrate to existing backlogs.
+- 2026-07-12 — WU0 spec shipped as `45943bb`; enabling it at old behavior produced exactly 24
+  missing expectations across the fourteen planned shapes. Independent WU2 review then FAILED twice:
+  update-target wrappers and direct optional access (`7b11620`), followed by nested optional chains
+  (`e1ecf87`). The optional-call finding clarified the accounting boundary above rather than
+  expanding this sprint into backlog `49` semantics.
