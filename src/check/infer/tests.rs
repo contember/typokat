@@ -243,6 +243,42 @@ fn infers_through_function_parameter() {
     );
 }
 
+#[test]
+fn conditional_infer_callable_object_uses_last_call_signature() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let r = interner.intern_type_param(TypeParamId(0), "R");
+    let target = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        params: Vec::new(),
+        ret: r,
+    });
+    let first = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        params: vec![ParameterType::required("value", wk.string)],
+        ret: wk.number,
+    });
+    let last = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        params: vec![ParameterType::required("value", wk.number)],
+        ret: wk.string,
+    });
+    let source = interner.intern_object(ObjectType {
+        properties: vec![prop("tag", wk.boolean)],
+        call_signatures: vec![first, last],
+        ..Default::default()
+    });
+
+    let mut candidates = Candidates::default();
+    infer_from_types_for_conditional(&mut interner, source, target, &mut candidates);
+
+    assert_eq!(
+        candidates.get(&TypeParamId(0)).map(|c| c.as_slice()),
+        Some(&[wk.string][..]),
+        "only the final call signature contributes the inferred return",
+    );
+}
+
 /// Incompatible candidates from different arguments do not union into a target
 /// wide enough to accept both; fixing keeps a replay target that will reject the
 /// later string argument.

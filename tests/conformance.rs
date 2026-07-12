@@ -111,7 +111,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b70_this_parameter_typing", false),
     // Backlog 77 — conditional infer must extract the last represented object
     // call-signature return. WU0 commits disabled; WU3 enables.
-    ("b77_returntype_call_signatures", false),
+    ("b77_returntype_call_signatures", true),
     // Backlog 78 — generic class const aliases retain substitution and class facts.
     // Review byproduct from backlog 22; independently disabled.
     ("b78_generic_class_value_aliases", false),

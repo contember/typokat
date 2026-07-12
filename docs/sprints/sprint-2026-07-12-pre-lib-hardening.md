@@ -251,3 +251,7 @@ the original Terra implementer and repeats the relevant independent gate before 
   active memo ancestor, remains distinct from budget exhaustion and ordinary error
   values, emits one `TK2589` per demand, and leaves terminating siblings/query order
   exact. Constraint evaluation conservatively retains written constraints on a cycle.
+- 2026-07-12 — WU3 independent review PASS: conditional-only Object→Function inference
+  consumes exactly the last represented call signature; forward/reverse overloads,
+  optional/rest calls, nested extraction, zero-signature controls, relation, and raw
+  call-site inference retain their tsc-equivalent verdicts. Backlog `68` is untouched.

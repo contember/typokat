@@ -24,7 +24,8 @@ constraint, sprint-2026-07-11), and `30` (JS-exact number stringification,
 sprint-2026-07-11), and `41` + `23` (persistent generic method/call/construct signatures,
 including the static generic binder path, sprint-2026-07-12), and `22` (parenthesized and
 non-generic class-value construction facts, sprint-2026-07-12), and `56` (cycle-aware
-evaluator memoization + `TK2589`, sprint-2026-07-12) — see
+evaluator memoization + `TK2589`, sprint-2026-07-12), and `77` (callable-object
+`ReturnType` extraction, sprint-2026-07-12) — see
 [`../archive/`](../archive/README.md). Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). How each item
@@ -55,7 +56,7 @@ the way there — its syntax gates flip OOS→IN as features land — not a nume
 
 ## Roadmap at a glance
 
-The active backlog has **38 items**: **30 checker-1.0 release blockers** and **8 non-blocking,
+The active backlog has **37 items**: **29 checker-1.0 release blockers** and **8 non-blocking,
 safe-direction parity items**. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml); the grouping below is the human roadmap view.
 
@@ -63,7 +64,7 @@ safe-direction parity items**. The release classification comes from
 |---|---:|---|---|
 | **A — model completeness** | 5 | L–XL | Eliminate silently-permissive model gaps; `43`/`70` directly unblock full `lib.d.ts`. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 16 | S–L | Eight release-blocking known gaps plus eight safe-direction parity improvements. |
+| **C — soundness/parity tail** | 15 | S–L | Seven release-blocking known gaps plus eight safe-direction parity improvements. |
 | **D — scale + IDE** | 6 | XL | Preview, full standard library, resolver breadth, parallel identity, and incrementality. |
 
 Effort is a **relative planning estimate**, not a time promise:
@@ -116,7 +117,6 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 - **L** · [`32`](32-eager-keyof-forward-references.md) — eager `keyof` over forward references silently degrades through fill order.
 - **L** · [`66`](66-protected-override-compat.md) — protected override compatibility and lineage-aware nominal origins · blocked by `63(d)`.
 - **L** · [`71`](71-expression-inference-fn-tail.md) — expression/iteration traversal: elisions, object/call spreads, tagged templates, and iteration targets.
-- **M** · [`77`](77-returntype-call-signature-infer.md) — infer `ReturnType` from object and overload call signatures.
 - **M** · [`78`](78-generic-class-value-aliases.md) — generic class const aliases retain substitution and class-keyed construction facts.
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
@@ -146,7 +146,7 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
    emission tail, but no public candidate met the preview contract without a project-specific shim.
    The five HIGH review findings (`53` `55` `57` `58` `61`) shipped in
    sprint-2026-07-07-soundness-fn-fixes; the remaining silent-FN C group (`60`, `62`, `32`,
-   `21`, `66`, `71`, `77`, `78`) remains available as independently valuable dropped-error work.
+   `21`, `66`, `71`, `78`) remains available as independently valuable dropped-error work.
 2. **Run the remaining model/lib prerequisites `43` and `70`.** Generic methods, calls, and
    construct signatures shipped with `41`; namespaces/declaration merging and explicit
    `this`/`ThisType<T>` are now the next Track A blockers of `14`. Interleave B items and C's

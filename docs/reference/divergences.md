@@ -122,7 +122,7 @@ and validated the same way.
   and stays release-owned by backlog `18`.
   <!-- div: id=binder/duplicate-function-implementation-call dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/sr_deferred_ledger/b18_duplicate_function_implementations.ts -->
 
-### Soundness-review deferred ledger (backlog `18`/`30`/`60`/`62`/`66`/`76`/`77`)
+### Soundness-review deferred ledger (backlog `18`/`30`/`60`/`62`/`66`/`76`)
 
 Known dropped-error (under-report) families from the 2026-07-07 cross-cutting review,
 each an open backlog item, pinned by the **disabled** `sr_deferred_ledger/` corpus
@@ -136,7 +136,7 @@ each an open backlog item, pinned by the **disabled** `sr_deferred_ledger/` corp
   target because there is no "source provides an index signature" rule (missing
   `TK2322`); anonymous sources correctly keep their implicit index signature.
   <!-- div: id=ledger/index-signature-source dir=under scope=b-indexed-access-diagnostics owner=../backlog/62-index-signature-relation-parity.md witness=../../tests/cases/sr_deferred_ledger/b62_index_signature.ts -->
-- **`30`** (Template literal types), **`66`** (Classes), and **`77`** (Utility types)
+- **`30`** (Template literal types) and **`66`** (Classes)
   are documented in their own sections below; the corpus adds fixtures for them.
 
 ## Narrowing (M7 / M8 / M23)
@@ -336,10 +336,6 @@ including multi-char expansions like `ß` → `"SS"`).
     non-nullary and rest functions without introducing the lib's permissive `any[]` constraint.
     Its modeled `(...args: never[]) => unknown` constraint is enforced through the shared alias
     constraint path, so non-callables report `TK2344` without introducing `any`.
-  - Conditional `infer R` still fails to extract represented object call signatures: a callable
-    object or overload set satisfies the `ReturnType` constraint but degrades to the error type,
-    dropping wrong-result assignments (backlog `77`).
-    <!-- div: id=utility/returntype-call-signature-infer dir=under scope=b-type-level-tail owner=../backlog/77-returntype-call-signature-infer.md witness=../../tests/cases/b77_returntype_call_signatures/single_call_signature.ts -->
   - A **symbolic** intrinsic application (`Uppercase<S>` over a pattern/`string`/free param)
     relates conservatively — assignable to `string` (and an identical node) only, nothing flows
     INTO it — rejecting values tsc's string-mapping algebra accepts (over-report; witnessed by the

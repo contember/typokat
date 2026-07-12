@@ -140,6 +140,12 @@ impl InferenceContext {
             (TypeTag::Object, TypeTag::Object) => {
                 self.infer_objects(interner, source, target, candidates);
             }
+            // B77: conditional `infer` over a callable object follows TypeScript's
+            // last-overload rule. Call-site inference keeps its separate candidate
+            // provenance policy.
+            (TypeTag::Object, TypeTag::Function) if self.union_target_descent => {
+                self.infer_object_call_signature(interner, source, target, candidates);
+            }
             (TypeTag::Function, TypeTag::Function) => {
                 self.infer_functions(interner, source, target, candidates);
             }
@@ -230,6 +236,25 @@ impl InferenceContext {
             if let Some((_, source_ty)) = source_pairs.iter().find(|(n, _)| n == name) {
                 self.infer(interner, *source_ty, *target_ty, candidates);
             }
+        }
+    }
+
+    /// Only the final call signature of a callable object contributes conditional
+    /// inference candidates, matching `ReturnType`'s overload behavior.
+    fn infer_object_call_signature(
+        &mut self,
+        interner: &mut Interner,
+        source: TypeId,
+        target: TypeId,
+        candidates: &mut Candidates,
+    ) {
+        let signature = interner
+            .store()
+            .object_type(source)
+            .and_then(|object| object.call_signatures.last())
+            .copied();
+        if let Some(signature) = signature {
+            self.infer(interner, signature, target, candidates);
         }
     }
 
