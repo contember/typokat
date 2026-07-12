@@ -87,6 +87,7 @@ EOF spans.
 | `TK2673` | Constructor of class is private (direct `new` outside the declaring class) |
 | `TK2674` | Constructor of class is protected (direct `new` outside the declaring class/subclasses) |
 | `TK2741` | Property is missing in type but required |
+| `TK2744` | Type parameter defaults can only reference previously declared type parameters |
 | `TK2769` | No overload matches this call |
 
 ## Type display format (what the renderer must print)
