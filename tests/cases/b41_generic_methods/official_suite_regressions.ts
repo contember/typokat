@@ -75,3 +75,70 @@ declare let incompatibleConstructorResult: new <T extends Base>(
   value: new (input: T) => Derived,
 ) => string;
 incompatibleConstructorResult = fixedConstructor; // error[TK2322]: not assignable
+
+interface MultiEventMap {
+  warn: [string];
+  shardDisconnect: [DisconnectEvent, number];
+}
+
+interface DisconnectEvent {
+  code: number;
+  wasClean: boolean;
+  reason: string;
+}
+
+interface MultiEventClient {
+  on<K extends keyof MultiEventMap>(event: K, listener: (...args: MultiEventMap[K]) => void): void;
+}
+
+declare const multiEventClient: MultiEventClient;
+declare function acceptsDisconnect(event: DisconnectEvent): void;
+declare function acceptsShard(shard: number): void;
+
+multiEventClient.on("shardDisconnect", (event, shard) => {
+  acceptsDisconnect(event);
+  acceptsShard(shard);
+});
+multiEventClient.on("shardDisconnect", event => acceptsDisconnect(event));
+
+declare let sameSlotsConstructor: new <T>(
+  first: { foo: T },
+  second: { foo: T; bar: T },
+) => Base;
+declare let splitSlotsConstructor: new <T, U>(
+  first: { foo: T },
+  second: { foo: U; bar: U },
+) => Base;
+
+sameSlotsConstructor = splitSlotsConstructor;
+splitSlotsConstructor = sameSlotsConstructor; // error[TK2322]: not assignable
+
+declare let samePairConstructor: new <T>(value: { a: T; b: T }) => T[];
+declare let splitPairConstructor: new <U, V>(value: { a: U; b: V }) => U[];
+
+samePairConstructor = splitPairConstructor;
+splitPairConstructor = samePairConstructor; // error[TK2322]: not assignable
+
+declare let broaderConstructor: new <T extends Base, U extends Base>(
+  value: new (input: T) => U,
+) => T;
+
+constrainedConstructor = broaderConstructor;
+broaderConstructor = constrainedConstructor; // error[TK2322]: not assignable
+
+declare let overloadedGenericConstructors: {
+  new <T extends Derived>(factory: new (value: T) => T): T[];
+  new <T extends Base>(factory: new (value: T) => T): T[];
+};
+declare let genericOuterConstructor: new <T>(factory: new (value: T) => T) => T[];
+
+overloadedGenericConstructors = genericOuterConstructor;
+genericOuterConstructor = overloadedGenericConstructors;
+
+interface ConstructorSlots {
+  same: new <T>(first: { foo: T }, second: { foo: T; bar: T }) => Base;
+}
+
+declare let constructorSlots: ConstructorSlots;
+constructorSlots.same = splitSlotsConstructor;
+splitSlotsConstructor = constructorSlots.same; // error[TK2322]: not assignable
