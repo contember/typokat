@@ -92,8 +92,8 @@ title = "this-parameter typing + ThisType<T>"
 state = "incomplete"
 blocks_release = "true"
 owner = "./70-this-parameter-typing.md"
-witness = "audit-discovered gap; lib audit: Function.apply/call/bind and ObjectConstructor.defineProperty type this explicitly"
-links = ["./14-libdts-loading.md", "./lib-audit-6.0.3.md"]
+witness = "disabled acceptance spec: b70_this_parameter_typing; lib audit: Function.apply/call/bind and ObjectConstructor.defineProperty type this explicitly"
+links = ["../../tests/cases/b70_this_parameter_typing/function_receivers.ts", "./14-libdts-loading.md", "./lib-audit-6.0.3.md"]
 deps = []
 scope = ["b-this-parameters"]
 

@@ -26,6 +26,12 @@ listed out-of-scope in the M28 utility-type divergences.
 
 ## Approach / acceptance
 
+**Acceptance spec (ready):** the disabled
+[`tests/cases/b70_this_parameter_typing/`](../../tests/cases/b70_this_parameter_typing/)
+corpus pins receiver call diagnostics/variance, method and object call signatures, a generic
+bind-shaped declaration, the `ThisParameterType`/`OmitThisParameter` lib aliases, and contextual
+`ThisType<T>` object methods against `tsc 6.0.3 --strict`.
+
 Model the `this` parameter as a distinct, non-positional signature slot (it does not
 count toward arity and is checked contravariantly against the receiver), and give
 `ThisType<T>` its contextual-`this` meaning inside object-literal methods. Reuse the

@@ -324,10 +324,14 @@ literals (distributing over unions; Rust char-wise case mapping — agrees with 
 including multi-char expansions like `ß` → `"SS"`).
 
 - **Out of scope:** `Parameters`/`ConstructorParameters`,
-  `InstanceType`/`ThisType`, `Awaited`, `NoInfer`, and the `intrinsic` keyword outside the four (a
+  `InstanceType`, `Awaited`, `NoInfer`, and the `intrinsic` keyword outside the four (a
   user `= intrinsic` alias silently degrades to the error type).
   <!-- div: id=utility/unsupported-aliases dir=over scope=design-oos owner=design-oos witness=../../tests/cases/m28_utility_types -->
   <!-- div: id=utility/intrinsic-degradation dir=under scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/m28_utility_types -->
+- **Deferred receiver utilities/context:** explicit `this` signature slots,
+  `ThisType<T>`, `ThisParameterType<T>`, and `OmitThisParameter<T>` are owned by backlog `70`;
+  dropping the receiver currently makes calls and relation silently permissive.
+  <!-- div: id=utility/this-receiver-family dir=under scope=b-this-parameters owner=../backlog/70-this-parameter-typing.md witness=../../tests/cases/b70_this_parameter_typing/function_receivers.ts -->
 - **Documented divergences:**
   - The prelude `ReturnType` uses a strict/sound `(...args: never[]) => infer R` match, so it handles
     non-nullary and rest functions without introducing the lib's permissive `any[]` constraint.

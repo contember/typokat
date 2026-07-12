@@ -87,6 +87,7 @@ EOF spans.
 | `TK2589` | Type instantiation is excessively deep and possibly infinite |
 | `TK2673` | Constructor of class is private (direct `new` outside the declaring class) |
 | `TK2674` | Constructor of class is protected (direct `new` outside the declaring class/subclasses) |
+| `TK2684` | The `this` context of a call is not assignable to the method's explicit receiver type |
 | `TK2741` | Property is missing in type but required |
 | `TK2744` | Type parameter defaults can only reference previously declared type parameters |
 | `TK2769` | No overload matches this call |
@@ -226,6 +227,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b59_modules_hygiene/` | backlog `59` | project-mode pending diagnostics are attributed to the owning module, and export lists validate local names |
 | `b65_inference_candidate_policy/` | backlog `65` | call-site inference fixes same-parameter candidates before replaying each argument, rather than unioning incompatible candidates |
 | `b67_utility_alias_constraint/` | shipped backlog `67` | the modeled `ReturnType` callable constraint rejects non-callable arguments while represented function shapes preserve their evaluated return types |
+| `b70_this_parameter_typing/` | backlog `70` (disabled) | explicit non-positional receiver slots, receiver calls/relation, ThisParameterType/OmitThisParameter, and contextual ThisType |
 | `b77_returntype_call_signatures/` | backlog `77` (disabled) | ReturnType extracts single and last-overload returns from represented object call signatures |
 | `b66_protected_override_compat/` | backlog `66` (disabled) | acceptance target for protected↔protected TK2416 plus the nested protected-lineage architecture stop gate owned by `63(d)` |
 | `b38_minimal_ambient_prelude/` | shipped backlog `38` | bounded `console` and numeric `Math` ambient declarations through the existing prelude compilation unit |
