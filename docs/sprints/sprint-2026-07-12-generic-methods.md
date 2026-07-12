@@ -253,3 +253,7 @@ Exact full gate: `cargo fmt --check`; `cargo test`; `cargo clippy --all-targets 
   independent Terra analyses agreed `41` is the highest-leverage next Track A feature and does not
   by itself make the rejected candidates preview-clean. Adversarial analysis identified the
   substitution-lost side-map binder as the design gate captured in WU0.
+- 2026-07-12 — WU0 corpus and persistent-binder decision prepared; each fixture was checked against
+  `tsc 6.0.3 --strict`. → ADR-0005
+- 2026-07-12 — Re-audited every WU0 marker after materializing the defaulted generic return before
+  its negative assignment: 31 inline markers, 31 matching `tsc 6.0.3 --strict` primary diagnostics.
