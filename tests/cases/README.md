@@ -61,6 +61,7 @@ EOF spans.
 
 | Code | Meaning |
 |---|---|
+| `TK2302` | Static members cannot reference class type parameters |
 | `TK2304` | Cannot find name (unresolved identifier) |
 | `TK2305` | Module has no exported member |
 | `TK2307` | Cannot find module |
