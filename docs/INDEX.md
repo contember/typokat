@@ -23,11 +23,16 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
+  public project discovery, witness-bounded NodeNext resolution, and a clean/mutation identity
+  ratchet for backlog `72`.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **Real-project preview (`72`) active 2026-07-12** — WU0 first pins a zero-threshold public strict
+  project, CLI/summary contract, clean oracle, and mutation identities before implementation.
 - **Surface-accounting tail shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-surface-accounting-tail.md`](archive/sprint-2026-07-12-surface-accounting-tail.md)) —
   all inventoried expression shapes now report incomplete explicitly or have a durable semantic
