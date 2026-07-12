@@ -1,4 +1,4 @@
-// Surface-accounting spec (backlog 43 / 70). ENABLED by WU5: annotation lowering records
+// Surface-accounting spec (backlog 43 / 75). ENABLED by WU5: annotation lowering records
 // the incomplete surface for qualified type names, `this` types, and type predicates
 // before degrading. See tests/cases/README.md ("Surface-accounting corpus").
 //
@@ -14,7 +14,7 @@ function isStr(x: unknown): x is string { // incomplete[annotation-lower/type-pr
 }
 
 class Chain {
-  // INCOMPLETE: a `this` return type is not modeled (owner 70).
+  // INCOMPLETE: a polymorphic `this` return type is not modeled (owner 75).
   self(): this { // incomplete[annotation-lower/this-type/self]
     return this;
   }

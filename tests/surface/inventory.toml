@@ -1056,8 +1056,8 @@ surface = "this-type"
 slot = "self"
 oxc_variant = "TSType::TSThisType"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/70-this-parameter-typing.md"
-witness = "this type annotation not modeled"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "polymorphic this type annotation is outside explicit receiver-slot backlog 70"
 
 [[surface]]
 id = "annotation-lower/tuple-optional-element/self"
@@ -1126,8 +1126,8 @@ surface = "type-name"
 slot = "this"
 oxc_variant = "TSTypeName::ThisExpression"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/70-this-parameter-typing.md"
-witness = "this type name not resolved"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "this type name resolution is outside explicit receiver-slot backlog 70"
 
 [[surface]]
 id = "annotation-lower/type-operator/self"

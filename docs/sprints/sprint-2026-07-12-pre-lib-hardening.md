@@ -255,3 +255,6 @@ the original Terra implementer and repeats the relevant independent gate before 
   consumes exactly the last represented call signature; forward/reverse overloads,
   optional/rest calls, nested extraction, zero-signature controls, relation, and raw
   call-site inference retain their tsc-equivalent verdicts. Backlog `68` is untouched.
+- 2026-07-12 — Before WU4, the surface ledger's polymorphic `this` type annotation/name
+  rows moved from `70` to `75`: they are distinct from explicit receiver parameters and
+  the contextual `ThisType<T>` marker, so implementing them here would expand scope.

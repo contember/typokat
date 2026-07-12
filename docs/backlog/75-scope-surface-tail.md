@@ -28,7 +28,8 @@ The currently unowned tail includes:
   tuple elements, and generic/deferred `T[K]` outside mapped templates;
 - exception/catch flow, async/generator expression semantics, bigint/symbol/object/unique and
   literal-type forms, private expressions, and class static blocks, auto-accessors, and index
-  signatures;
+  signatures; polymorphic `this` type annotations/qualified `this` type names (distinct from
+  backlog `70`'s explicit receiver slot and contextual `ThisType<T>` marker);
 - silent/deferred parity families already recorded in `divergences.md` but lacking a stable owner:
   fresh-literal constraint-side excess checks, unequal-raw-arity and generic-base override checks,
   visibility/kind heritage checks (`TS2415`/`TS2425`/`TS2426`), private-base construction
