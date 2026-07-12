@@ -153,8 +153,8 @@ title = "Duplicate identifiers (TK2300 members + TK2451 redeclare)"
 state = "incomplete"
 blocks_release = "true"
 owner = "./18-duplicate-identifier-detection.md"
-witness = "disabled acceptance spec: b22_new_callee_forms"
-links = ["../../tests/cases/b22_new_callee_forms/abstract_and_visibility.ts"]
+witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
+links = []
 deps = []
 scope = ["s-duplicate-declarations"]
 
@@ -392,8 +392,8 @@ title = "new (C)() / aliased new miss class-keyed checks"
 state = "incomplete"
 blocks_release = "true"
 owner = "./22-new-callee-forms.md"
-witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
-links = []
+witness = "disabled acceptance spec: b22_new_callee_forms"
+links = ["../../tests/cases/b22_new_callee_forms/abstract_and_visibility.ts"]
 deps = []
 
 [[criterion]]
