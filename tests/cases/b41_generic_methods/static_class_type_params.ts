@@ -1,6 +1,10 @@
 // Backlog 41 WU4 regression — static members have no access to a class binder.
 // Cross-checked with tsc 6.0.3 --strict.
 
+interface OuterName {
+  label: string;
+}
+
 class StaticLeak<T> {
   constructor(readonly value: T) {}
 
@@ -19,7 +23,9 @@ class StaticLeak<T> {
   static own<U>(value: U): U { const captured: U = value; return captured; }
   static ownConstraint<U extends { id: number }>(value: U): U { return value; }
   static ownDefault<U = string>(value: U): U { return value; }
+  static outerName(value: OuterName): OuterName { return value; }
 }
 
 const instance: number = new StaticLeak(1).instance(1);
 const own: string = StaticLeak.own("ok");
+const outerName: OuterName = StaticLeak.outerName({ label: "ok" });
