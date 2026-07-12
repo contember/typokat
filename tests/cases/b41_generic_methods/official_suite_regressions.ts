@@ -167,3 +167,9 @@ declare let baseReturnConstructor: new <T>(value: T) => Base;
 
 baseReturnConstructor = derivedReturnConstructor;
 derivedReturnConstructor = baseReturnConstructor; // error[TK2322]: not assignable
+
+declare let sourceExtraReturnConstructor: new <T, U>(value: T) => U;
+declare let targetOneReturnConstructor: new <T>(value: T) => T;
+
+targetOneReturnConstructor = sourceExtraReturnConstructor;
+sourceExtraReturnConstructor = targetOneReturnConstructor; // error[TK2322]: not assignable
