@@ -106,6 +106,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Backlog 67 shipped; backlog 66 remains disabled behind its protected-lineage
     // architecture stop gate (backlog 63d).
     ("b67_utility_alias_constraint", true),
+    // Backlog 77 — conditional infer must extract the last represented object
+    // call-signature return. WU0 commits disabled; WU3 enables.
+    ("b77_returntype_call_signatures", false),
     ("b66_protected_override_compat", false),
     // Backlog 38 minimal ambient prelude. WU1 commits this corpus disabled;
     // WU2 flips it on with the canonical prelude declarations.
@@ -131,8 +134,8 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // 63k). NOTE: recursive_mapped.ts and deep_annotation.ts stack-overflow at HEAD
     // and only become safe to run once WU3's recursion/depth guards land.
     ("sr_wu3_types_recursion", true),
-    // Deferred ledger — known under-reports from backlogs 18, 60, 62, 66, 76,
-    // and 77. Backlog 56 moved to its isolated corpus above.
+    // Deferred ledger — known under-reports from backlogs 18, 60, 62, 66, and
+    // 76. Backlogs 56 and 77 moved to isolated corpora above.
     ("sr_deferred_ledger", false),
     // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
     // (backlog 73). ENABLED by WU3 (expression child slots), WU4 (statement

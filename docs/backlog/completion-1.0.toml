@@ -370,8 +370,8 @@ title = "ReturnType conditional infer extracts represented object call signature
 state = "incomplete"
 blocks_release = "true"
 owner = "./77-returntype-call-signature-infer.md"
-witness = "disabled acceptance spec: sr_deferred_ledger/b77_returntype_call_signatures.ts"
-links = ["../../tests/cases/sr_deferred_ledger/b77_returntype_call_signatures.ts", "../reference/divergences.md"]
+witness = "disabled acceptance spec: b77_returntype_call_signatures"
+links = ["../../tests/cases/b77_returntype_call_signatures/single_call_signature.ts", "../reference/divergences.md"]
 deps = []
 
 [[criterion]]

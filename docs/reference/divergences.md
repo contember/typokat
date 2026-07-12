@@ -336,7 +336,7 @@ including multi-char expansions like `ß` → `"SS"`).
   - Conditional `infer R` still fails to extract represented object call signatures: a callable
     object or overload set satisfies the `ReturnType` constraint but degrades to the error type,
     dropping wrong-result assignments (backlog `77`).
-    <!-- div: id=utility/returntype-call-signature-infer dir=under scope=b-type-level-tail owner=../backlog/77-returntype-call-signature-infer.md witness=../../tests/cases/sr_deferred_ledger/b77_returntype_call_signatures.ts -->
+    <!-- div: id=utility/returntype-call-signature-infer dir=under scope=b-type-level-tail owner=../backlog/77-returntype-call-signature-infer.md witness=../../tests/cases/b77_returntype_call_signatures/single_call_signature.ts -->
   - A **symbolic** intrinsic application (`Uppercase<S>` over a pattern/`string`/free param)
     relates conservatively — assignable to `string` (and an identical node) only, nothing flows
     INTO it — rejecting values tsc's string-mapping algebra accepts (over-report; witnessed by the

@@ -30,7 +30,7 @@ accepts both callables; the pre-existing failure is in conditional infer extract
 ## Approach / acceptance
 
 **Acceptance spec (ready):** the disabled
-[`tests/cases/sr_deferred_ledger/b77_returntype_call_signatures.ts`](../../tests/cases/sr_deferred_ledger/b77_returntype_call_signatures.ts)
+[`tests/cases/b77_returntype_call_signatures/single_call_signature.ts`](../../tests/cases/b77_returntype_call_signatures/single_call_signature.ts)
 fixture pins single-signature callable-object return extraction and tsc's last-overload
 return rule.
 
@@ -44,4 +44,3 @@ cross-check mixed properties, optional/rest signatures, and nested conditional u
 Conditional infer candidate collection/evaluation under `src/check/`, object call-signature
 representation in `src/types/`, focused M25/M28 fixtures, and backlog `68` only if code
 tracing proves the same variance-aware candidate reducer is shared.
-
