@@ -245,7 +245,7 @@ completeness (`TK2515`/`TK2654`) (b06); private/protected constructor accessibil
   `new` checks (the same pre-existing boundary the `TK2511` abstract check has).
   <!-- div: id=classes/ts2675-heritage-private-ctor dir=under scope=s-class-access owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/b20_ctor_accessibility/private_ctor.ts -->
   <!-- div: id=classes/ctor-accessibility-generic-name dir=cosmetic scope=s-class-access owner=design-oos witness=../../tests/cases/b20_ctor_accessibility -->
-  <!-- div: id=classes/new-callee-forms dir=under scope=s-class-access owner=../backlog/22-new-callee-forms.md witness=../../tests/cases/b20_ctor_accessibility -->
+  <!-- div: id=classes/new-callee-forms dir=under scope=s-class-access owner=../backlog/22-new-callee-forms.md witness=../../tests/cases/b22_new_callee_forms/abstract_and_visibility.ts -->
 
 ## Arrays & tuples (M17 / M18 / M30)
 

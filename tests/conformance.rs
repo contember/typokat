@@ -80,6 +80,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b41_generic_methods", true),
     ("b06_class_completeness", true),
     ("b20_ctor_accessibility", true),
+    // Backlog 22 — parenthesized/const-aliased class values must retain abstract
+    // and constructor-accessibility facts. WU0 commits disabled; WU1 enables.
+    ("b22_new_callee_forms", false),
     ("b28_interface_extends", true),
     ("b29_alias_cycles", true),
     ("b30_negative_literals", true),
