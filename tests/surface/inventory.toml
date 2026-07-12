@@ -442,7 +442,7 @@ slot = "self"
 oxc_variant = "Expression::AwaitExpression"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "async/await result typing not modeled"
+witness = "../cases/b73_expression_shape_tail/await.ts"
 
 [[surface]]
 id = "expr-infer/bigint-literal/self"
@@ -452,7 +452,7 @@ slot = "self"
 oxc_variant = "Expression::BigIntLiteral"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "bigint literal value has no type model yet"
+witness = "../cases/b73_expression_shape_tail/bigint_literal.ts"
 
 [[surface]]
 id = "expr-infer/binary-expression/self"
@@ -482,7 +482,7 @@ slot = "self"
 oxc_variant = "Expression::ClassExpression"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/21-local-class-checking.md"
-witness = "class expression value not checked"
+witness = "../cases/b73_expression_shape_tail/class_expression.ts"
 
 [[surface]]
 id = "expr-infer/conditional-expression/self"
@@ -532,7 +532,7 @@ slot = "self"
 oxc_variant = "Expression::ImportExpression"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/15-modules-imports.md"
-witness = "dynamic import() not modeled"
+witness = "../cases/b73_expression_shape_tail/dynamic_import.ts"
 
 [[surface]]
 id = "expr-infer/instantiation-expression/self"
@@ -542,7 +542,7 @@ slot = "self"
 oxc_variant = "Expression::TSInstantiationExpression"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/41-generic-methods.md"
-witness = "explicit instantiation f<T> not modeled"
+witness = "../cases/b73_expression_shape_tail/instantiation.ts"
 
 [[surface]]
 id = "expr-infer/jsx/self"
@@ -612,7 +612,7 @@ slot = "self"
 oxc_variant = "Expression::TSNonNullExpression"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "non-null assertion (x!) not modeled"
+witness = "../cases/b73_expression_shape_tail/non_null.ts"
 
 [[surface]]
 id = "expr-infer/object-literal/computed-key"
@@ -663,7 +663,7 @@ slot = "self"
 oxc_variant = "Expression::ChainExpression"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "optional chain (a?.b) not inferred"
+witness = "../cases/b73_expression_shape_tail/optional_chain.ts"
 
 [[surface]]
 id = "expr-infer/parenthesized-expression/self"
@@ -683,7 +683,7 @@ slot = "self"
 oxc_variant = "Expression::PrivateFieldExpression"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "private field access (obj.#x) not inferred"
+witness = "../cases/b73_expression_shape_tail/private_field_access.ts"
 
 [[surface]]
 id = "expr-infer/private-in-expression/self"
@@ -693,7 +693,7 @@ slot = "self"
 oxc_variant = "Expression::PrivateInExpression"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "#field in obj not modeled"
+witness = "../cases/b73_expression_shape_tail/private_in.ts"
 
 [[surface]]
 id = "expr-infer/regexp-literal/self"
@@ -703,7 +703,7 @@ slot = "self"
 oxc_variant = "Expression::RegExpLiteral"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "RegExp literal typing depends on lib.d.ts"
+witness = "../cases/b73_expression_shape_tail/regexp_literal.ts"
 
 [[surface]]
 id = "expr-infer/satisfies-expression/self"
@@ -713,7 +713,7 @@ slot = "self"
 oxc_variant = "Expression::TSSatisfiesExpression"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/44-satisfies-as-const.md"
-witness = "satisfies expression not modeled"
+witness = "../cases/b73_expression_shape_tail/satisfies.ts"
 
 [[surface]]
 id = "expr-infer/sequence-expression/self"
@@ -743,7 +743,7 @@ slot = "self"
 oxc_variant = "Expression::TaggedTemplateExpression"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "tagged template expression not inferred"
+witness = "../cases/b73_expression_shape_tail/tagged_template.ts"
 
 [[surface]]
 id = "expr-infer/template-literal/interpolation"
@@ -796,14 +796,14 @@ owner = "shipped"
 witness = "../cases/sr_wu1_expressions"
 
 [[surface]]
-id = "expr-infer/update-expression/self"
+id = "expr-infer/update-expression/operand"
 role = "expr-infer"
 surface = "update-expression"
-slot = "self"
+slot = "operand"
 oxc_variant = "Expression::UpdateExpression"
-disposition = "unsupported-in"
-owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "update expression (x++) operand not resolved"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b73_expression_shape_tail/update_operand.ts"
 
 [[surface]]
 id = "expr-infer/v8-intrinsic/self"
@@ -823,7 +823,7 @@ slot = "self"
 oxc_variant = "Expression::YieldExpression"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/73-unsupported-surface-audit.md"
-witness = "generator yield result not modeled"
+witness = "../cases/b73_expression_shape_tail/yield.ts"
 
 # ------------------------------------------------------------------------------
 # role: annotation-lower

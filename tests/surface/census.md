@@ -73,7 +73,7 @@ past a child slot / a `None` degradation to the error type — none of which rec
 
 | Child-slot role | Dispatch fn | Silent drop |
 |---|---|---|
-| expression | `infer_expr` | `expr.rs:162` `_ => None` — no arm for template-literal, tagged-template, optional-chain, non-null, update, await, yield, satisfies, instantiation, import-expr |
+| expression | `infer_expr` | `expr.rs` explicit incomplete arms retain child diagnostics for the deferred expression tail; the remaining `_ => None` is design-OOS only |
 | object-literal member kind | `infer_object_literal` | `expr.rs:263` (SpreadProperty skipped) |
 | object-literal key | `infer_object_literal` | `expr.rs:265` (computed key skipped via `static_name`) |
 | array-literal element | `infer_array_literal` | `expr.rs:290` (spread / elision skipped via `as_expression`) |

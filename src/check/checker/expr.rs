@@ -12,9 +12,10 @@ use crate::types::repr::{
 };
 use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
-    ArrayExpression, ArrayExpressionElement, BinaryExpression, BinaryOperator,
+    ArrayExpression, ArrayExpressionElement, BinaryExpression, BinaryOperator, ChainElement,
     ComputedMemberExpression, Expression, LogicalExpression, ObjectExpression, ObjectPropertyKind,
-    StaticMemberExpression, TSType, TSTypeName, UnaryExpression, UnaryOperator,
+    SimpleAssignmentTarget, StaticMemberExpression, TSType, TSTypeName, UnaryExpression,
+    UnaryOperator,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -171,7 +172,297 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 self.record_incomplete(id, Span::from_oxc(tpl.span), context);
                 None
             }
+            Expression::AwaitExpression(await_expr) => {
+                self.infer_expr(scope, &await_expr.argument);
+                self.record_incomplete(
+                    "expr-infer/await-expression/self",
+                    Span::from_oxc(await_expr.span),
+                    "await result typing not modeled",
+                );
+                None
+            }
+            Expression::BigIntLiteral(lit) => {
+                self.record_incomplete(
+                    "expr-infer/bigint-literal/self",
+                    Span::from_oxc(lit.span),
+                    "bigint literal value has no type model",
+                );
+                None
+            }
+            // Class expressions need dedicated local binding and value/type duality semantics.
+            Expression::ClassExpression(class) => {
+                self.record_incomplete(
+                    "expr-infer/class-expression/self",
+                    Span::from_oxc(class.span),
+                    "class expression not modeled",
+                );
+                None
+            }
+            Expression::ChainExpression(chain) => {
+                self.infer_chain_element(scope, &chain.expression);
+                self.record_incomplete(
+                    "expr-infer/optional-chain/self",
+                    Span::from_oxc(chain.span),
+                    "optional chain not inferred",
+                );
+                None
+            }
+            Expression::ImportExpression(import) => {
+                self.infer_expr(scope, &import.source);
+                if let Some(options) = &import.options {
+                    self.infer_expr(scope, options);
+                }
+                self.record_incomplete(
+                    "expr-infer/import-expression/self",
+                    Span::from_oxc(import.span),
+                    "dynamic import not modeled",
+                );
+                None
+            }
+            Expression::TaggedTemplateExpression(tagged) => {
+                self.infer_expr(scope, &tagged.tag);
+                if let Some(type_arguments) = &tagged.type_arguments {
+                    self.lower_type_arguments(scope, type_arguments);
+                }
+                for expression in &tagged.quasi.expressions {
+                    self.infer_expr(scope, expression);
+                }
+                self.record_incomplete(
+                    "expr-infer/tagged-template/self",
+                    Span::from_oxc(tagged.span),
+                    "tagged template not inferred",
+                );
+                None
+            }
+            Expression::UpdateExpression(update) => {
+                self.infer_update_target(scope, &update.argument);
+                Some((well_known.error, Span::from_oxc(update.span)))
+            }
+            Expression::YieldExpression(yield_expr) => {
+                if let Some(argument) = &yield_expr.argument {
+                    self.infer_expr(scope, argument);
+                }
+                self.record_incomplete(
+                    "expr-infer/yield-expression/self",
+                    Span::from_oxc(yield_expr.span),
+                    "generator yield result not modeled",
+                );
+                None
+            }
+            Expression::PrivateInExpression(private_in) => {
+                self.infer_expr(scope, &private_in.right);
+                self.record_incomplete(
+                    "expr-infer/private-in-expression/self",
+                    Span::from_oxc(private_in.span),
+                    "private-in expression not modeled",
+                );
+                None
+            }
+            Expression::TSSatisfiesExpression(satisfies) => {
+                self.infer_expr(scope, &satisfies.expression);
+                self.lower_annotation(scope, &satisfies.type_annotation);
+                self.record_incomplete(
+                    "expr-infer/satisfies-expression/self",
+                    Span::from_oxc(satisfies.span),
+                    "satisfies expression not modeled",
+                );
+                None
+            }
+            Expression::TSNonNullExpression(non_null) => {
+                self.infer_expr(scope, &non_null.expression);
+                self.record_incomplete(
+                    "expr-infer/non-null-assertion/self",
+                    Span::from_oxc(non_null.span),
+                    "non-null assertion not modeled",
+                );
+                None
+            }
+            Expression::TSInstantiationExpression(instantiation) => {
+                self.infer_expr(scope, &instantiation.expression);
+                self.lower_type_arguments(scope, &instantiation.type_arguments);
+                self.record_incomplete(
+                    "expr-infer/instantiation-expression/self",
+                    Span::from_oxc(instantiation.span),
+                    "instantiation expression not modeled",
+                );
+                None
+            }
+            Expression::PrivateFieldExpression(private_field) => {
+                self.infer_expr(scope, &private_field.object);
+                self.record_incomplete(
+                    "expr-infer/private-field-access/self",
+                    Span::from_oxc(private_field.span),
+                    "private field access not inferred",
+                );
+                None
+            }
+            Expression::RegExpLiteral(lit) => {
+                self.record_incomplete(
+                    "expr-infer/regexp-literal/self",
+                    Span::from_oxc(lit.span),
+                    "RegExp literal value has no type model",
+                );
+                None
+            }
             _ => None,
+        }
+    }
+
+    /// Walk a complete optional chain structurally; its enclosing record owns the semantics.
+    fn infer_chain_element(&mut self, scope: ScopeId, element: &ChainElement<'_>) {
+        match element {
+            ChainElement::CallExpression(call) => {
+                self.infer_chain_call_children(scope, call);
+            }
+            ChainElement::StaticMemberExpression(member) => {
+                self.infer_chain_expression(scope, &member.object);
+            }
+            ChainElement::ComputedMemberExpression(member) => {
+                self.infer_chain_expression(scope, &member.object);
+                self.infer_expr(scope, &member.expression);
+            }
+            ChainElement::PrivateFieldExpression(member) => {
+                self.infer_chain_expression(scope, &member.object);
+            }
+            ChainElement::TSNonNullExpression(non_null) => {
+                self.infer_chain_expression(scope, &non_null.expression);
+            }
+        }
+    }
+
+    /// Visit only an update expression's target; operator compatibility stays deferred.
+    fn infer_update_target(&mut self, scope: ScopeId, target: &SimpleAssignmentTarget<'_>) {
+        match target {
+            SimpleAssignmentTarget::AssignmentTargetIdentifier(ident) => {
+                if ident.name.as_str() == "undefined" {
+                    return;
+                }
+                if self
+                    .binder
+                    .resolve_value(scope, ident.name.as_str())
+                    .is_none()
+                {
+                    self.diagnostics.push(Diagnostic::cannot_find_name(
+                        Span::from_oxc(ident.span),
+                        ident.name.as_str(),
+                    ));
+                }
+            }
+            SimpleAssignmentTarget::StaticMemberExpression(member) => {
+                self.infer_member_access(scope, member);
+            }
+            SimpleAssignmentTarget::ComputedMemberExpression(member) => {
+                self.infer_element_access(scope, member);
+            }
+            SimpleAssignmentTarget::PrivateFieldExpression(member) => {
+                self.infer_expr(scope, &member.object);
+                self.record_incomplete(
+                    "expr-infer/private-field-access/self",
+                    Span::from_oxc(member.span),
+                    "private field access not inferred",
+                );
+            }
+            SimpleAssignmentTarget::TSAsExpression(assertion) => {
+                self.infer_expr(scope, &assertion.expression);
+                self.lower_annotation(scope, &assertion.type_annotation);
+            }
+            SimpleAssignmentTarget::TSSatisfiesExpression(satisfies) => {
+                self.infer_expr(scope, &satisfies.expression);
+                self.lower_annotation(scope, &satisfies.type_annotation);
+                self.record_incomplete(
+                    "expr-infer/satisfies-expression/self",
+                    Span::from_oxc(satisfies.span),
+                    "satisfies expression not modeled",
+                );
+            }
+            SimpleAssignmentTarget::TSNonNullExpression(non_null) => {
+                self.infer_expr(scope, &non_null.expression);
+                self.record_incomplete(
+                    "expr-infer/non-null-assertion/self",
+                    Span::from_oxc(non_null.span),
+                    "non-null assertion not modeled",
+                );
+            }
+            SimpleAssignmentTarget::TSTypeAssertion(assertion) => {
+                self.infer_expr(scope, &assertion.expression);
+                self.lower_annotation(scope, &assertion.type_annotation);
+            }
+        }
+    }
+
+    /// Walk a chain expression without resolving calls or member access on its spine.
+    fn infer_chain_expression(&mut self, scope: ScopeId, expression: &Expression<'_>) {
+        match expression {
+            Expression::CallExpression(call) => self.infer_chain_call_children(scope, call),
+            Expression::StaticMemberExpression(member) => {
+                self.infer_chain_expression(scope, &member.object);
+            }
+            Expression::ComputedMemberExpression(member) => {
+                self.infer_chain_expression(scope, &member.object);
+                self.infer_expr(scope, &member.expression);
+            }
+            Expression::PrivateFieldExpression(member) => {
+                self.infer_chain_expression(scope, &member.object);
+            }
+            Expression::ParenthesizedExpression(paren) => {
+                self.infer_chain_expression(scope, &paren.expression);
+            }
+            Expression::TSAsExpression(assertion) => {
+                self.infer_chain_expression(scope, &assertion.expression);
+                self.lower_annotation(scope, &assertion.type_annotation);
+            }
+            Expression::TSTypeAssertion(assertion) => {
+                self.infer_chain_expression(scope, &assertion.expression);
+                self.lower_annotation(scope, &assertion.type_annotation);
+            }
+            Expression::TSSatisfiesExpression(satisfies) => {
+                self.infer_chain_expression(scope, &satisfies.expression);
+                self.lower_annotation(scope, &satisfies.type_annotation);
+            }
+            Expression::TSNonNullExpression(non_null) => {
+                self.infer_chain_expression(scope, &non_null.expression);
+            }
+            Expression::TSInstantiationExpression(instantiation) => {
+                self.infer_chain_expression(scope, &instantiation.expression);
+                self.lower_type_arguments(scope, &instantiation.type_arguments);
+            }
+            _ => {
+                self.infer_expr(scope, expression);
+            }
+        }
+    }
+
+    /// Walk a chain call's children without applying ordinary callability rules.
+    fn infer_chain_call_children(
+        &mut self,
+        scope: ScopeId,
+        call: &oxc_ast::ast::CallExpression<'_>,
+    ) {
+        self.infer_chain_expression(scope, &call.callee);
+        if let Some(type_arguments) = &call.type_arguments {
+            self.lower_type_arguments(scope, type_arguments);
+        }
+        for argument in &call.arguments {
+            if let Some(expression) = argument.as_expression() {
+                self.infer_expr(scope, expression);
+            } else {
+                self.record_incomplete(
+                    "call/call-arguments/spread-argument",
+                    Span::from_oxc(argument.span()),
+                    "spread call argument not visited",
+                );
+            }
+        }
+    }
+
+    /// Lower explicit type arguments solely to retain annotation diagnostics.
+    fn lower_type_arguments(
+        &mut self,
+        scope: ScopeId,
+        type_arguments: &oxc_ast::ast::TSTypeParameterInstantiation<'_>,
+    ) {
+        for argument in &type_arguments.params {
+            self.lower_annotation(scope, argument);
         }
     }
 
