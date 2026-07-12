@@ -22,3 +22,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 <!-- one line per active sprint; empty between sprints -->
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold public-witness gate; no implementation started.
+- [`sprint-2026-07-12-pre-lib-hardening.md`](sprint-2026-07-12-pre-lib-hardening.md) —
+  active; closing `22`, `56`, `77`, `70`, and the `13` profiling gate before the dedicated
+  namespace/declaration-merging sprint (`43`).

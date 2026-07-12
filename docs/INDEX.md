@@ -25,11 +25,18 @@ decisions → reference → archive.
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
+- [`sprint-2026-07-12-pre-lib-hardening.md`](sprints/sprint-2026-07-12-pre-lib-hardening.md) —
+  active; five independently reviewed release blockers (`22`, `56`, `77`, `70`, `13`)
+  before the dedicated namespace/declaration-merging sprint.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **Pre-lib hardening sprint active** — isolated spec/implementation/review loops for
+  aliased construction (`22`), evaluator cycles (`56`), callable-object `ReturnType`
+  inference (`77`), explicit `this`/`ThisType<T>` (`70`), and the profiling decision
+  (`13`). Namespace/declaration merging (`43`) is explicitly the next dedicated sprint.
 - **Generic methods (`41`) shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-generic-methods.md`](archive/sprint-2026-07-12-generic-methods.md)) —
   persistent generic method/call/construct binders now survive substitution and relate under a
