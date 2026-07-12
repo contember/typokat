@@ -288,7 +288,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 None
             }
             Expression::PrivateFieldExpression(private_field) => {
-                self.infer_expr(scope, &private_field.object);
                 self.record_incomplete(
                     "expr-infer/private-field-access/self",
                     Span::from_oxc(private_field.span),
@@ -321,9 +320,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 self.infer_chain_expression(scope, &member.object);
                 self.infer_expr(scope, &member.expression);
             }
-            ChainElement::PrivateFieldExpression(member) => {
-                self.infer_chain_expression(scope, &member.object);
-            }
+            ChainElement::PrivateFieldExpression(_) => {}
             ChainElement::TSNonNullExpression(non_null) => {
                 self.infer_chain_expression(scope, &non_null.expression);
             }
@@ -355,7 +352,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 self.infer_element_access(scope, member);
             }
             SimpleAssignmentTarget::PrivateFieldExpression(member) => {
-                self.infer_expr(scope, &member.object);
                 self.record_incomplete(
                     "expr-infer/private-field-access/self",
                     Span::from_oxc(member.span),
@@ -401,9 +397,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 self.infer_chain_expression(scope, &member.object);
                 self.infer_expr(scope, &member.expression);
             }
-            Expression::PrivateFieldExpression(member) => {
-                self.infer_chain_expression(scope, &member.object);
-            }
+            Expression::PrivateFieldExpression(_) => {}
             Expression::ParenthesizedExpression(paren) => {
                 self.infer_chain_expression(scope, &paren.expression);
             }
