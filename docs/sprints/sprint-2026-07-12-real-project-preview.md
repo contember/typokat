@@ -260,3 +260,12 @@ official-suite unit tests; fresh official-suite fetch and `run --check`.
   executable item. HEAD confirms the existing serial type universe, bounded prelude, and exhaustive
   incomplete channel; the missing vertical pieces are project discovery, local NodeNext `.js`
   mapping, project-level identity accounting, and the reproducible witness ratchet.
+- 2026-07-12 — WU0 BLOCKED at its zero-threshold witness gate after public-candidate screening.
+  `0xaldric/is-strictly-seven@95011ae6321f8bf29d40e06006762960c0ec2086` is clean under both
+  `tsc 6.0.3` and current typokat and admits `TK2322`/`TK2345`/`TK2339` mutations, but has one root,
+  no import graph, and a 151-entry tooling lockfile, so it cannot witness the promised project path.
+  `morkg/jabr@9415fdad8b98dc0f1aba09c8badc5fc209bc30ba` has eight roots and a minimal TypeScript
+  lockfile, but requires unsupported array methods/ambient names and mapped/conditional/tuple
+  semantics, producing diagnostics and incomplete records at HEAD. Other screened candidates
+  (`Lulzx/tinypdf`, `vercel/async-sema`) require broad Web/Node surfaces. No implementation or
+  prelude expansion started; continuing requires explicit approval to change the witness contract.
