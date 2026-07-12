@@ -306,3 +306,12 @@ Exact full gate: `cargo fmt --check`; `cargo test`; `cargo clippy --all-targets 
   one non-strict optional-overload change and the generic-body `.slice`/`.length` reports belong to
   already-open `49`/`14`. The remaining strict generic relation/contextual-callback regressions are
   pinned in a disabled B41 source fixture before remediation.
+- 2026-07-12 — WU5 final ratchet audit: the fresh 17-regression / 29-progress run has zero dropped
+  matched identities. Backlog `14` owns callback-body member false positives at
+  `dependentDestructuredVariables` 196/199 (`.toFixed`/`.toUpperCase`), `restTupleElements1`
+  68×2 (`.length`/`.charCodeAt`), and `variadicTuples2` 112 (array `.length`); it also owns the
+  three `IN → unresolved` flips and 17 ambient `TK2304` identities. Backlog `49` owns the optional
+  generic-overload false positive at `methodSignaturesWithOverloads2` 27:2322. The B75 multi-key
+  callback duplicate is gone; no B41 or ownerless regression remains. Progress identities: 13
+  promotions, 11 matched diagnostics, 34 fixed false positives, and 1 incomplete promotion. The
+  audited ratchet is safe to save; closure docs remain deferred until the post-save check.
