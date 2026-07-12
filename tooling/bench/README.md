@@ -132,6 +132,59 @@ CLI startup and whole-run parse/bind/check time. The runner uses
 `hyperfine --shell=none` by default so shell startup is not counted. The results
 do not model editor incrementality or long-lived server warm caches.
 
+## ADR-0001 profiling-gate protocol
+
+Backlog `13` is a decision gate, not authorization to build a VM. Run this protocol
+against the semantic HEAD being evaluated and commit the resulting report separately.
+The ordinary application-style witness is `flow`; the deliberately type-level-heavy
+witness is `typelevel`.
+
+Record the host/kernel/CPU, Rust and tool versions, git SHA, exact commands, corpus
+manifest, timing/RSS table, and profile sample shares. Build the timing binary normally;
+build a separate symbolized/frame-pointer binary for sampling:
+
+```sh
+cargo build --release
+cd tooling/bench
+python3 typobench.py generate --families flow,typelevel --sizes 100000
+python3 typobench.py run \
+  --families flow,typelevel --sizes 100000 --runs 10 --memory-runs 3 \
+  --typokat ../../target/release/typokat
+
+cd ../..
+CARGO_PROFILE_RELEASE_DEBUG=1 CARGO_PROFILE_RELEASE_STRIP=none \
+  RUSTFLAGS="-C force-frame-pointers=yes" cargo build --release
+cd tooling/bench
+samply record --save-only --unstable-presymbolicate --rate 1000 \
+  --iteration-count 25 --profile-name typokat-flow \
+  --output report/flow-profile.json.gz -- \
+  ../../target/release/typokat check corpus/flow-100000.ts
+samply record --save-only --unstable-presymbolicate --rate 1000 \
+  --iteration-count 25 --profile-name typokat-typelevel \
+  --output report/typelevel-profile.json.gz -- \
+  ../../target/release/typokat check corpus/typelevel-100000.ts
+```
+
+Use `perf` instead of `samply` only where the host permits unprivileged sampling; record
+the profiler and sampling rate either way. Repeat each profile at least three times.
+Classify self/inclusive samples into these non-overlapping decision buckets:
+
+- evaluator task dispatch (`ConditionalEvaluator::evaluate` loop/match itself);
+- evaluator algorithms below dispatch (conditional/mapped/template/keyof builders);
+- relation;
+- instantiation/substitution/inference;
+- allocation/hash-consing;
+- parse/bind/report/other.
+
+The VM trigger is intentionally strict and fixed before measurement: evaluator **dispatch
+self-time** must be the largest actionable bucket in every type-level-heavy repetition,
+account for at least 25% of user-space samples, and exceed each of relation,
+instantiation/substitution/inference, and allocation/hash-consing. Inclusive evaluator
+time, a hot evaluator child algorithm, timing versus tsgo, or a single noisy profile does
+not satisfy the trigger. If any condition fails, record **DEFER / no VM** and close the
+gate. If all conditions hold, record **GO to a separately approved VM sprint**; do not
+implement the VM as part of profiling.
+
 ## Caveats
 
 The single-file families keep most of the corpus in a per-file scope, which

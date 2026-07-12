@@ -586,7 +586,7 @@ state = "incomplete"
 blocks_release = "true"
 owner = "./13-bytecode-vm.md"
 witness = "tooling/bench numbers + a recorded go/defer decision (ADR-0001 governs the deferral)"
-links = []
+links = ["../../tooling/bench/README.md"]
 deps = []
 
 [[criterion]]
