@@ -23,11 +23,16 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-07-12-surface-accounting-tail.md`](sprints/sprint-2026-07-12-surface-accounting-tail.md) —
+  explicit expression-shape accounting, durable semantic ownership, and backlog `73` closure.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **Surface-accounting tail (`73`) active 2026-07-12** — the remaining `infer_expr`
+  shapes are being made explicit before `72` starts; ordinary update operands get narrow traversal
+  rather than a blanket incomplete result.
 - **JS-exact number stringification (`30`) shipped 2026-07-11** (archived:
   [`archive/sprint-2026-07-11-js-number-stringification.md`](archive/sprint-2026-07-11-js-number-stringification.md)) —
   numeric literal holes now use ECMA-exact formatting; `${number}` keeps its

@@ -20,3 +20,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+- [`sprint-2026-07-12-surface-accounting-tail.md`](sprint-2026-07-12-surface-accounting-tail.md) —
+  close backlog `73`'s expression-shape emission tail and unblock the real-project preview.
