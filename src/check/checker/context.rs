@@ -230,6 +230,9 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// built; read by `new ClassName(args)` ([`infer_new`]) to check the arguments
     /// and yield the instance type.
     pub(in crate::check::checker) class_ctors: FxHashMap<DeclId, ClassInfo>,
+    /// One-step `const Alias = Class` origins. `infer_new` uses this only to retain
+    /// the direct class's abstract and constructor-accessibility facts.
+    pub(in crate::check::checker) class_value_aliases: FxHashMap<DeclId, DeclId>,
     /// Direct constructor overload signatures for class values, keyed like
     /// [`class_ctors`](Pass::class_ctors). Empty/absent means the implementation
     /// constructor signature is the externally callable one.

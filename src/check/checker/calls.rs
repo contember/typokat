@@ -959,18 +959,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let wk = self.interner.well_known();
         let new_span = Span::from_oxc(new_expr.span);
 
-        // Resolve direct class identifiers before callee inference so unresolved
-        // names still emit exactly one `TK2304`; keep `DeclId` for M16 generics.
-        let class_resolved: Option<(DeclId, ClassInfo)> = match &new_expr.callee {
-            Expression::Identifier(ident) => value_decl_id(self.binder, scope, ident.name.as_str())
-                .and_then(|decl_id| {
-                    self.class_ctors
-                        .get(&decl_id)
-                        .copied()
-                        .map(|info| (decl_id, info))
-                }),
-            _ => None,
-        };
+        // Resolve a direct class identifier, parenthesized class callee, or one-step
+        // `const Alias = Class` before callee inference. Keep the class declaration
+        // id for the generic constructor path below.
+        let class_resolved = self.class_new_target(scope, &new_expr.callee);
 
         // Always infer the callee for its side effects (resolving its name / emitting
         // `TK2304`, descending into a callee expression). For non-class callees the
@@ -1093,6 +1085,40 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.check_call_arguments(scope, &params, &arg_types, &arg_exprs, new_span);
 
         Some((instance, new_span))
+    }
+
+    /// Resolve the intentionally narrow class-value forms that retain class-only
+    /// construction facts. Generic aliases remain on the existing structural path.
+    fn class_new_target(
+        &self,
+        scope: ScopeId,
+        callee: &Expression<'_>,
+    ) -> Option<(DeclId, ClassInfo)> {
+        let callee = match callee {
+            Expression::ParenthesizedExpression(paren) => {
+                return self.class_new_target(scope, &paren.expression)
+            }
+            Expression::Identifier(ident) => ident,
+            _ => return None,
+        };
+        let value_decl = value_decl_id(self.binder, scope, callee.name.as_str())?;
+        let class_decl = self
+            .class_value_aliases
+            .get(&value_decl)
+            .copied()
+            .unwrap_or(value_decl);
+        if value_decl != class_decl
+            && self
+                .class_type_params
+                .get(&class_decl)
+                .is_some_and(|params| !params.is_empty())
+        {
+            return None;
+        }
+        self.class_ctors
+            .get(&class_decl)
+            .copied()
+            .map(|info| (class_decl, info))
     }
 
     /// Construct signatures after apparent-type resolution.

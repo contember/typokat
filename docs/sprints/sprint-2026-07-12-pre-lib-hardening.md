@@ -243,3 +243,7 @@ the original Terra implementer and repeats the relevant independent gate before 
   silent. Parentheses are transparent; a spec amendment now requires direct generic
   behavior through parentheses. Generic `const` aliases remain the separate stop-gated
   boundary because they require alias-level generic substitution.
+- 2026-07-12 — WU1 remediation review PASS: direct generic classes now retain explicit
+  and inferred construction plus class facts through arbitrary parentheses; non-generic
+  one-step const aliases preserve lexical accessibility and declaring-class messages.
+  The genuine generic-alias remainder graduated to backlog `78` with an isolated corpus.

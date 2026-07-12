@@ -5,6 +5,7 @@ use super::assignment::check_excess_properties;
 use super::assignment::declared_from_init;
 use super::calls::widen;
 use super::context::*;
+use super::decls::value_decl_id;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::{DeclId, SymbolId};
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
@@ -608,6 +609,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .as_ref()
             .and_then(|init| self.check_annotated_initializer(scope, annotation, init));
 
+        self.record_class_value_alias(scope, kind, declarator, decl_id);
+
         // F4: object destructuring bindings run M13 access checks against the
         // initializer type; binding the destructured names' types is deferred.
         if let BindingPattern::ObjectPattern(object) = &declarator.id {
@@ -625,6 +628,33 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         };
         if let (Some(decl_id), Some(ty)) = (decl_id, declared) {
             self.publish_variable_decl_type(scope, kind, &declarator.id, decl_id, ty);
+        }
+    }
+
+    /// Preserve class-only `new` facts through exactly one `const Alias = Class`
+    /// declaration. Chained aliases and non-identifier initializers stay outside this
+    /// narrow syntactic slice.
+    fn record_class_value_alias(
+        &mut self,
+        scope: ScopeId,
+        kind: VariableDeclarationKind,
+        declarator: &VariableDeclarator<'_>,
+        alias_decl: Option<DeclId>,
+    ) {
+        if !kind.is_const() {
+            return;
+        }
+        let Some(alias_decl) = alias_decl else {
+            return;
+        };
+        let Some(Expression::Identifier(source)) = declarator.init.as_ref() else {
+            return;
+        };
+        let Some(class_decl) = value_decl_id(self.binder, scope, source.name.as_str()) else {
+            return;
+        };
+        if self.class_ctors.contains_key(&class_decl) {
+            self.class_value_aliases.insert(alias_decl, class_decl);
         }
     }
 

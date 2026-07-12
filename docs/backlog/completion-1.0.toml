@@ -389,11 +389,11 @@ deps = []
 id = "C-new-callee-forms"
 track = "C"
 title = "new (C)() / aliased new miss class-keyed checks"
-state = "incomplete"
-blocks_release = "true"
-owner = "./22-new-callee-forms.md"
-witness = "disabled acceptance spec: b22_new_callee_forms"
-links = ["../../tests/cases/b22_new_callee_forms/abstract_and_visibility.ts"]
+state = "complete"
+blocks_release = "false"
+owner = "shipped"
+witness = "cargo test conformance (b22_new_callee_forms enabled) + independent review PASS after generic-parentheses remediation"
+links = ["../../tests/cases/b22_new_callee_forms/abstract_and_visibility.ts", "../sprints/sprint-2026-07-12-pre-lib-hardening.md"]
 deps = []
 
 [[criterion]]

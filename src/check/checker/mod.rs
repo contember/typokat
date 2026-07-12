@@ -792,6 +792,7 @@ fn build_pass<'a, 'ast>(
         next_type_param,
         class_parents: FxHashMap::default(),
         class_ctors: FxHashMap::default(),
+        class_value_aliases: FxHashMap::default(),
         class_ctor_overloads: FxHashMap::default(),
         class_type_params: FxHashMap::default(),
         class_pending_abstract: FxHashMap::default(),
