@@ -41,3 +41,37 @@ declare let fixedConstructor: new <T extends Base>(value: new (input: T) => Deri
 
 constrainedConstructor = fixedConstructor;
 fixedConstructor = constrainedConstructor;
+
+interface ConstructorBase {
+  base: string;
+}
+
+interface ConstructorDerived extends ConstructorBase {
+  derived: string;
+}
+
+interface ConstructorDerived2 extends ConstructorDerived {
+  derived2: string;
+}
+
+declare let overloadedConstructors: {
+  new (factory: {
+    new <T extends ConstructorDerived>(value: T): T;
+    new <T extends ConstructorBase>(value: T): T;
+  }): unknown[];
+  new (factory: {
+    new <T extends ConstructorDerived2>(value: T): T;
+    new <T extends ConstructorBase>(value: T): T;
+  }): unknown[];
+};
+declare let genericConstructorFactory: new (
+  factory: new <T>(value: T) => T,
+) => unknown[];
+
+overloadedConstructors = genericConstructorFactory;
+genericConstructorFactory = overloadedConstructors;
+
+declare let incompatibleConstructorResult: new (
+  factory: new <T>(value: T) => number,
+) => string[];
+incompatibleConstructorResult = overloadedConstructors; // error[TK2322]: not assignable
