@@ -76,8 +76,8 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("f4_destructuring_access", true),
     ("f5_union_readonly", true),
     // Backlog corpora (same mechanism, named by backlog item ID).
-    // Backlog 41 generic methods/signatures. WU4 adds a disabled regression
-    // spec for static-class binders and overload implementation parity.
+    // Backlog 41 generic methods/signatures. WU4 P0 recursive-binder review
+    // regressions are spec-only pending remediation.
     ("b41_generic_methods", false),
     ("b06_class_completeness", true),
     ("b20_ctor_accessibility", true),
