@@ -171,8 +171,12 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   and every audited expression shape. The remaining expression-shape semantics are explicitly
   incomplete, never silently clean: `x!`/`a?.b` remain backlog `49`; traversal/iteration forms
   such as elisions, spreads, and tagged templates remain `71`; the other deferred surface tail is
-  `75`. The pinned real-project preview gate (`72`) is still required, so a clean result on an
-  unknown npm/Bun/Node project is not yet a completeness claim.
+  `75`. The pinned real-project preview gate (`72`) remains required but **paused**: no screened
+  public project met its multi-file, minimal-graph, zero-threshold witness contract. Do not resume
+  `72`, add a project-specific shim, or expand the prelude merely to manufacture that witness; the
+  next recommended model/lib work is namespaces and declaration merging (`43`) followed by explicit
+  `this`/`ThisType<T>` typing (`70`). A clean result on an arbitrary npm/Bun/Node project is not yet
+  a completeness claim.
 - Remaining `tsc` divergences are logged in
   [`docs/reference/divergences.md`](./docs/reference/divergences.md): known under-report families
   block 1.0 through manifest Track C; documented over-report/cosmetic tails are non-blocking only

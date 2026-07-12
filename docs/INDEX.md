@@ -40,8 +40,9 @@ decisions → reference → archive.
 - **Surface-accounting tail shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-surface-accounting-tail.md`](archive/sprint-2026-07-12-surface-accounting-tail.md)) —
   all inventoried expression shapes now report incomplete explicitly or have a durable semantic
-  owner; three review/audit failures were remediated before PASS. Backlog `73` is closed and
-  **`72` is next**.
+  owner; three review/audit failures were remediated before PASS. Backlog `73` is closed, but this
+  did not produce the qualifying public witness required by `72`; **do not resume `72` until such
+  a witness exists**.
 - **JS-exact number stringification (`30`) shipped 2026-07-11** (archived:
   [`archive/sprint-2026-07-11-js-number-stringification.md`](archive/sprint-2026-07-11-js-number-stringification.md)) —
   numeric literal holes now use ECMA-exact formatting; `${number}` keeps its
@@ -50,7 +51,8 @@ decisions → reference → archive.
   [`archive/sprint-2026-07-11-minimal-ambient-prelude.md`](archive/sprint-2026-07-11-minimal-ambient-prelude.md)) —
   the source-backed prelude now supplies a bounded `console`/numeric-`Math` value surface
   through its canonical handoff, with 26 audited `OOS:unresolved → IN` transitions. The shipped
-  surface-accounting closure unblocked `72`'s honest project-preview claim.
+  surface-accounting closure made `72`'s gate measurable; it did not satisfy the public-witness
+  gate and does not authorize a project-specific prelude expansion.
 - **Silent-FN quick wins sprint shipped partially 2026-07-11** (archived:
   [`archive/sprint-2026-07-11-silent-fn-quick-wins.md`](archive/sprint-2026-07-11-silent-fn-quick-wins.md)) —
   `67` shipped with independent review PASS; `66` hit the `63(d)` protected-lineage
@@ -59,7 +61,7 @@ decisions → reference → archive.
   [`archive/sprint-2026-07-11-declaration-hoisting-parity.md`](archive/sprint-2026-07-11-declaration-hoisting-parity.md)) —
   forward ordinary/generic/overload calls now see stable callable surfaces; `var`
   binds to its function/module owner while initializer and flow timing stay lexical/source ordered.
-  Next executable item: `72`.
+  `72` was subsequently screened and paused; the next recommended model/lib work is `43`/`70`.
 - **2026-07-10 completeness-accounting sprint shipped** (archived:
   [`archive/sprint-2026-07-10-completeness-accounting.md`](archive/sprint-2026-07-10-completeness-accounting.md)) —
   machine-validated OXC surface inventory with compile-time drift tripwires, a first-class
