@@ -28,6 +28,24 @@ declare function callbackResult(callback: (value: number) => number): (value: nu
 callbackResult(value => returnsNumber(value));
 callbackResult((value: number) => "wrong"); // error[TK2345]: Argument of type '(value: number) => string' is not assignable to parameter of type '(value: number) => number'
 
+declare function takesString(value: string): void;
+declare function withNumberCallback(callback: (value: number) => void): void;
+
+withNumberCallback(value => takesString(value)); // error[TK2345]
+eventClient.on("pair", first => takesString(first)); // error[TK2345]
+
+interface TupleEvents {
+  pair: [number, string];
+}
+
+declare function tupleOn<K extends keyof TupleEvents>(
+  event: K,
+  callbacks: [(...args: TupleEvents[K]) => void],
+): void;
+
+tupleOn("pair", [first => takesString(first)]); // error[TK2345]
+tupleOn("pair", [(_first, second) => takesString(second)]);
+
 interface Base {
   base: string;
 }
@@ -137,3 +155,15 @@ genericCallable = genericCallableCopy;
 genericConstructable = genericConstructableCopy;
 genericCallable = genericConstructable; // error[TK2322]: not assignable
 genericConstructable = genericCallable; // error[TK2322]: not assignable
+
+declare let oneBinderConstructor: new <T>(value: T) => T;
+declare let unusedTargetBinderConstructor: new <T, U>(value: T) => T;
+
+unusedTargetBinderConstructor = oneBinderConstructor;
+oneBinderConstructor = unusedTargetBinderConstructor;
+
+declare let derivedReturnConstructor: new <T, U extends Derived>(value: T) => U;
+declare let baseReturnConstructor: new <T>(value: T) => Base;
+
+baseReturnConstructor = derivedReturnConstructor;
+derivedReturnConstructor = baseReturnConstructor; // error[TK2322]: not assignable
