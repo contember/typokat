@@ -275,6 +275,10 @@ object types as the common-key set (b34), evaluated eagerly (M20/M28).
   <!-- div: id=keyof/generic-keyof dir=over scope=b-type-level-tail owner=../backlog/35-keyof-union-and-key-source-edges.md witness=../../tests/cases/m20_keyof -->
   <!-- div: id=keyof/keyof-intersection-nonobject dir=over scope=b-type-level-tail owner=../backlog/35-keyof-union-and-key-source-edges.md witness=../../tests/cases/m31_intersections -->
   <!-- div: id=keyof/generic-indexed-access dir=under scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/m20_keyof -->
+- **Contextual generic callbacks over a multi-key `Events[K]` conservatively reject selected-key
+  listeners that tsc accepts (over-report).** This was exposed by contextual callback typing; the
+  underlying generic indexed-access model remains the backlog `75` deferral.
+  <!-- div: id=keyof/generic-indexed-contextual-callback dir=over scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/sr_deferred_ledger/b75_generic_indexed_access.ts -->
 
 ## Mapped types (M26)
 

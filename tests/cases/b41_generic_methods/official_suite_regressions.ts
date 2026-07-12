@@ -76,31 +76,6 @@ declare let incompatibleConstructorResult: new <T extends Base>(
 ) => string;
 incompatibleConstructorResult = fixedConstructor; // error[TK2322]: not assignable
 
-interface MultiEventMap {
-  warn: [string];
-  shardDisconnect: [DisconnectEvent, number];
-}
-
-interface DisconnectEvent {
-  code: number;
-  wasClean: boolean;
-  reason: string;
-}
-
-interface MultiEventClient {
-  on<K extends keyof MultiEventMap>(event: K, listener: (...args: MultiEventMap[K]) => void): void;
-}
-
-declare const multiEventClient: MultiEventClient;
-declare function acceptsDisconnect(event: DisconnectEvent): void;
-declare function acceptsShard(shard: number): void;
-
-multiEventClient.on("shardDisconnect", (event, shard) => {
-  acceptsDisconnect(event);
-  acceptsShard(shard);
-});
-multiEventClient.on("shardDisconnect", event => acceptsDisconnect(event));
-
 declare let sameSlotsConstructor: new <T>(
   first: { foo: T },
   second: { foo: T; bar: T },
