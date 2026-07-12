@@ -71,7 +71,7 @@ declare let genericConstructorFactory: new (
 overloadedConstructors = genericConstructorFactory;
 genericConstructorFactory = overloadedConstructors;
 
-declare let incompatibleConstructorResult: new (
-  factory: new <T>(value: T) => number,
-) => string[];
-incompatibleConstructorResult = overloadedConstructors; // error[TK2322]: not assignable
+declare let incompatibleConstructorResult: new <T extends Base>(
+  value: new (input: T) => Derived,
+) => string;
+incompatibleConstructorResult = fixedConstructor; // error[TK2322]: not assignable

@@ -14,7 +14,7 @@ const numericBox = new Box(1);
 const mappedBoolean: Box<boolean> = numericBox.map(value => value > 0);
 const mappedWrong: Box<string> = numericBox.map(value => value); // error[TK2322]
 const mappedExplicit: Box<string> = numericBox.map<string>(() => "mapped");
-numericBox.map<string>(value => value); // error[TK2322]
+numericBox.map<string>(value => value); // error[TK2345]
 
 class Factory {
   static of<U>(value: U): Box<U> {
