@@ -76,9 +76,8 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("f4_destructuring_access", true),
     ("f5_union_readonly", true),
     // Backlog corpora (same mechanism, named by backlog item ID).
-    // Backlog 41 generic methods/signatures. WU5 official-suite regressions are
-    // spec-only pending remediation.
-    ("b41_generic_methods", false),
+    // Backlog 41 generic methods/signatures.
+    ("b41_generic_methods", true),
     ("b06_class_completeness", true),
     ("b20_ctor_accessibility", true),
     ("b28_interface_extends", true),

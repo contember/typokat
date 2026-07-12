@@ -288,7 +288,14 @@ impl<'a> Relater<'a> {
         };
         let src_signatures = src_obj.construct_signatures.clone();
         let tgt_signatures = tgt_obj.construct_signatures.clone();
-        self.relate_signature_sets(src, tgt, &src_signatures, &tgt_signatures, kind, assumed)
+        self.relate_construct_signature_sets(
+            src,
+            tgt,
+            &src_signatures,
+            &tgt_signatures,
+            kind,
+            assumed,
+        )
     }
 
     pub(super) fn relate_object_to_function(
@@ -326,7 +333,6 @@ impl<'a> Relater<'a> {
         if tgt_obj.call_signatures.is_empty() {
             return Relation::No(ReasonChain::leaf(src, tgt));
         }
-
         // A plain function value has no represented named members. It can satisfy
         // optional target properties by omission, but any required target member is
         // missing and remains a `TK2741`-shaped relation failure.
@@ -343,7 +349,6 @@ impl<'a> Relater<'a> {
         if !tgt_obj.construct_signatures.is_empty() {
             return Relation::No(ReasonChain::leaf(src, tgt));
         }
-
         let tgt_signatures = tgt_obj.call_signatures.clone();
         for tgt_sig in tgt_signatures {
             if let Relation::No(_) = self.relate(src, tgt_sig, kind, assumed) {
@@ -381,6 +386,261 @@ impl<'a> Relater<'a> {
             }
         }
         Relation::Yes
+    }
+
+    fn relate_construct_signature_sets(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        src_signatures: &[TypeId],
+        tgt_signatures: &[TypeId],
+        kind: RelationKind,
+        assumed: &mut AssumedSet,
+    ) -> Relation {
+        if src_signatures.is_empty() || tgt_signatures.is_empty() {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        }
+        for tgt_sig in tgt_signatures {
+            let mut matched = false;
+            for src_sig in src_signatures {
+                if matches!(
+                    self.relate_construct_functions(*src_sig, *tgt_sig, kind, assumed),
+                    Relation::Yes
+                ) {
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched && src_signatures.len() > 1 {
+                for src_sig in src_signatures {
+                    if matches!(
+                        self.relate_overloaded_construct_to_generic_target(
+                            *src_sig, *tgt_sig, kind, assumed
+                        ),
+                        Relation::Yes
+                    ) {
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+            if !matched {
+                return Relation::No(ReasonChain::leaf(src, tgt));
+            }
+        }
+        Relation::Yes
+    }
+
+    /// Construct signatures use the normal function relation except when their
+    /// generic arities differ. In that case TypeScript compares the shared shape
+    /// under source specialization while extra target binders stay constrained.
+    fn relate_construct_functions(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut AssumedSet,
+    ) -> Relation {
+        let Some(src_fn) = self.store.function_type(src).cloned() else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let Some(tgt_fn) = self.store.function_type(tgt).cloned() else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        if src_fn.type_params.is_empty()
+            || tgt_fn.type_params.is_empty()
+            || src_fn.type_params.len() == tgt_fn.type_params.len()
+        {
+            return self.relate_functions(src, tgt, kind, assumed);
+        }
+
+        let Some(context) = BinderRelationContext::construct_arity_specialization(
+            &src_fn.type_params,
+            &tgt_fn.type_params,
+        ) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let mut context = context;
+        let shared = src_fn.type_params.len().min(tgt_fn.type_params.len());
+
+        // An unconstrained return-only source binder can specialize to the target
+        // return shape. A constrained return-only binder instead contributes its
+        // apparent constraint; parameter occurrences retain specialization.
+        for parameter in &src_fn.type_params[shared..] {
+            if parameter.constraint.is_some()
+                && !self.function_parameters_contain_type_param(&src_fn, parameter.id)
+            {
+                context.instantiable_source.remove(&parameter.id);
+            }
+        }
+
+        // An unused target binder has no observable call shape, so it cannot make
+        // an otherwise compatible constructor fail. A used target binder remains
+        // universal; without an apparent constraint, accepting it would be a
+        // false negative.
+        for parameter in &tgt_fn.type_params[shared..] {
+            if !self.function_shape_contains_type_param(&tgt_fn, parameter.id) {
+                context.parameters.remove(&parameter.id);
+                context.constraints.remove(&parameter.id);
+            } else if parameter.constraint.is_none() {
+                return Relation::No(ReasonChain::leaf(src, tgt));
+            }
+        }
+        self.with_binder_context(context, |relater| {
+            if !relater.generic_function_constraints_compatible(&src_fn, &tgt_fn, kind, assumed) {
+                return Relation::No(ReasonChain::leaf(src, tgt));
+            }
+            relater.relate_function_shapes(src, tgt, &src_fn, &tgt_fn, kind, assumed)
+        })
+    }
+
+    fn function_parameters_contain_type_param(
+        &self,
+        function: &FunctionType,
+        parameter: TypeParamId,
+    ) -> bool {
+        function
+            .params
+            .iter()
+            .any(|slot| self.type_contains_type_param(slot.ty, parameter))
+    }
+
+    fn function_shape_contains_type_param(
+        &self,
+        function: &FunctionType,
+        parameter: TypeParamId,
+    ) -> bool {
+        self.function_parameters_contain_type_param(function, parameter)
+            || self.type_contains_type_param(function.ret, parameter)
+    }
+
+    /// Check a signature child structurally rather than treating a binder as
+    /// observable merely because it was declared. The visited set makes recursive
+    /// object and alias shapes safe to inspect.
+    fn type_contains_type_param(&self, ty: TypeId, parameter: TypeParamId) -> bool {
+        let mut pending = vec![ty];
+        let mut seen = FxHashSet::default();
+
+        while let Some(current) = pending.pop() {
+            if !seen.insert(current) {
+                continue;
+            }
+            match self.store.tag(current) {
+                TypeTag::TypeParam => {
+                    if self.store.type_param(current).map(|item| item.id) == Some(parameter) {
+                        return true;
+                    }
+                }
+                TypeTag::Object => {
+                    if let Some(object) = self.store.object_type(current) {
+                        pending.extend(object.properties.iter().map(|property| property.ty));
+                        pending.extend(object.string_index);
+                        pending.extend(object.number_index);
+                        pending.extend(object.call_signatures.iter().copied());
+                        pending.extend(object.construct_signatures.iter().copied());
+                    }
+                }
+                TypeTag::Function => {
+                    if let Some(nested) = self.store.function_type(current) {
+                        pending.extend(nested.params.iter().map(|slot| slot.ty));
+                        pending.push(nested.ret);
+                        pending.extend(
+                            nested
+                                .type_params
+                                .iter()
+                                .flat_map(|binder| [binder.constraint, binder.default])
+                                .flatten(),
+                        );
+                    }
+                }
+                TypeTag::Union => {
+                    if let Some(members) = self.store.union_members(current) {
+                        pending.extend(members.iter().copied());
+                    }
+                }
+                TypeTag::Intersection => {
+                    if let Some(members) = self.store.intersection_members(current) {
+                        pending.extend(members.iter().copied());
+                    }
+                }
+                TypeTag::Array => {
+                    if let Some(array) = self.store.array_type(current) {
+                        pending.push(array.element);
+                    }
+                }
+                TypeTag::Tuple => {
+                    if let Some(tuple) = self.store.tuple_type(current) {
+                        pending.extend(tuple.elements.iter().copied());
+                        pending.extend(tuple.rest.map(|rest| rest.ty));
+                    }
+                }
+                TypeTag::Readonly => {
+                    pending.extend(self.store.readonly_operand(current));
+                }
+                TypeTag::Conditional => {
+                    if let Some(conditional) = self.store.conditional_type(current) {
+                        pending.extend([
+                            conditional.check,
+                            conditional.extends_ty,
+                            conditional.true_branch,
+                            conditional.false_branch,
+                        ]);
+                    }
+                }
+                TypeTag::Instantiation => {
+                    if let Some(instantiation) = self.store.instantiation_type(current) {
+                        pending.push(instantiation.base);
+                        pending.extend(instantiation.args.iter().map(|(_, argument)| *argument));
+                    }
+                }
+                TypeTag::Mapped => {
+                    if let Some(mapped) = self.store.mapped_type(current) {
+                        pending.extend(
+                            [
+                                Some(mapped.key_source),
+                                Some(mapped.value_template),
+                                mapped.modifiers_source,
+                            ]
+                            .into_iter()
+                            .flatten(),
+                        );
+                    }
+                }
+                TypeTag::Template => {
+                    if let Some(template) = self.store.template_type(current) {
+                        pending.extend(template.holes.iter().copied());
+                    }
+                }
+                TypeTag::Keyof => {
+                    pending.extend(self.store.keyof_operand(current));
+                }
+                TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => {}
+            }
+        }
+
+        false
+    }
+
+    fn relate_overloaded_construct_to_generic_target(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut AssumedSet,
+    ) -> Relation {
+        let Some(src_fn) = self.store.function_type(src).cloned() else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let Some(tgt_fn) = self.store.function_type(tgt).cloned() else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        if src_fn.type_params.is_empty() || src_fn.type_params.len() != tgt_fn.type_params.len() {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        }
+        let context = BinderRelationContext::aligned(&src_fn.type_params, &tgt_fn.type_params);
+        self.with_binder_context(context, |relater| {
+            relater.relate_function_shapes(src, tgt, &src_fn, &tgt_fn, kind, assumed)
+        })
     }
 
     /// Function assignability (mvp-plan §6.5, architecture §6.5). `src` is

@@ -245,6 +245,32 @@ impl BinderRelationContext {
         }
         context
     }
+
+    /// Construct signatures compare their common binders positionally. Extra source
+    /// binders are eligible for specialization from a parameter occurrence; an
+    /// extra target binder is only constrained when it actually occurs in the
+    /// target shape. The caller decides those occurrence-sensitive details.
+    fn construct_arity_specialization(
+        source: &[GenericTypeParam],
+        target: &[GenericTypeParam],
+    ) -> Option<Self> {
+        let shared = source.len().min(target.len());
+        let mut context = Self::aligned(&source[..shared], &target[..shared]);
+        for parameter in &source[shared..] {
+            context.parameters.insert(parameter.id);
+            context
+                .constraints
+                .insert(parameter.id, parameter.constraint);
+            context.instantiable_source.insert(parameter.id);
+        }
+        for parameter in &target[shared..] {
+            context.parameters.insert(parameter.id);
+            context
+                .constraints
+                .insert(parameter.id, parameter.constraint);
+        }
+        Some(context)
+    }
 }
 
 impl<'a> Relater<'a> {

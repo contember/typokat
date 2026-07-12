@@ -713,6 +713,218 @@ fn generic_function_binders_alpha_align_and_specialize_one_way() {
     );
 }
 
+/// B41 — construct signatures may specialize an unconstrained extra source
+/// binder from a return-only occurrence, while a constrained return-only binder
+/// continues to use its apparent type.
+#[test]
+fn construct_signature_extra_source_binders_follow_return_occurrence_rules() {
+    use crate::types::repr::{FunctionType, GenericTypeParam, ParameterType, TypeParamId};
+
+    fn binder(id: TypeParamId, constraint: Option<TypeId>) -> GenericTypeParam {
+        GenericTypeParam {
+            id,
+            constraint,
+            default: None,
+        }
+    }
+
+    fn constructable(
+        interner: &mut Interner,
+        type_params: Vec<GenericTypeParam>,
+        parameter: TypeId,
+        ret: TypeId,
+    ) -> TypeId {
+        let signature = interner.intern_function(FunctionType {
+            type_params,
+            params: vec![ParameterType::required("value", parameter)],
+            ret,
+        });
+        interner.intern_object(ObjectType {
+            construct_signatures: vec![signature],
+            ..Default::default()
+        })
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    let source_shared = interner.intern_type_param(TypeParamId(10_051), "T");
+    let source_extra = interner.intern_type_param(TypeParamId(10_052), "U");
+    let target_shared = interner.intern_type_param(TypeParamId(10_053), "T");
+    let source_extra_return = constructable(
+        &mut interner,
+        vec![
+            binder(TypeParamId(10_051), None),
+            binder(TypeParamId(10_052), None),
+        ],
+        source_shared,
+        source_extra,
+    );
+    let target_one_return = constructable(
+        &mut interner,
+        vec![binder(TypeParamId(10_053), None)],
+        target_shared,
+        target_shared,
+    );
+
+    let parameter_extra = interner.intern_type_param(TypeParamId(10_055), "U");
+    let parameter_target = interner.intern_type_param(TypeParamId(10_056), "T");
+    let source_extra_parameter = constructable(
+        &mut interner,
+        vec![
+            binder(TypeParamId(10_054), None),
+            binder(TypeParamId(10_055), None),
+        ],
+        parameter_extra,
+        parameter_extra,
+    );
+    let target_one_parameter = constructable(
+        &mut interner,
+        vec![binder(TypeParamId(10_056), None)],
+        parameter_target,
+        parameter_target,
+    );
+
+    let base = interner.intern_object(ObjectType {
+        properties: vec![prop("base", wk.string)],
+        ..Default::default()
+    });
+    let derived = interner.intern_object(ObjectType {
+        properties: vec![prop("base", wk.string), prop("derived", wk.string)],
+        ..Default::default()
+    });
+    let constrained_shared = interner.intern_type_param(TypeParamId(10_057), "T");
+    let constrained_extra = interner.intern_type_param(TypeParamId(10_058), "U");
+    let constrained_target = interner.intern_type_param(TypeParamId(10_059), "T");
+    let source_extra_constrained = constructable(
+        &mut interner,
+        vec![
+            binder(TypeParamId(10_057), None),
+            binder(TypeParamId(10_058), Some(derived)),
+        ],
+        constrained_shared,
+        constrained_extra,
+    );
+    let target_base_return = constructable(
+        &mut interner,
+        vec![binder(TypeParamId(10_059), None)],
+        constrained_target,
+        base,
+    );
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    assert!(
+        rel.is_assignable(source_extra_return, target_one_return)
+            .is_yes(),
+        "an unconstrained return-only source binder specializes to the target return"
+    );
+    assert!(
+        !rel.is_assignable(target_one_return, source_extra_return)
+            .is_yes(),
+        "the extra target binder remains universal"
+    );
+    assert!(
+        rel.is_assignable(source_extra_parameter, target_one_parameter)
+            .is_yes(),
+        "a parameter-occurring source binder retains specialization"
+    );
+    assert!(
+        !rel.is_assignable(target_one_parameter, source_extra_parameter)
+            .is_yes(),
+        "a parameter-occurring extra target binder remains universal"
+    );
+    assert!(
+        rel.is_assignable(source_extra_constrained, target_base_return)
+            .is_yes(),
+        "a constrained return-only source binder uses its apparent type"
+    );
+    assert!(
+        !rel.is_assignable(target_base_return, source_extra_constrained)
+            .is_yes(),
+        "a constrained extra target binder remains universal"
+    );
+}
+
+/// B41 — recursive construct-signature relation must retain the occurrence-aware
+/// extra-binder meaning independently of a preceding reverse query.
+#[test]
+fn recursive_construct_signature_extra_source_return_binder_is_order_independent() {
+    use crate::types::repr::{FunctionType, GenericTypeParam, ParameterType, TypeParamId};
+
+    fn build(interner: &mut Interner) -> (TypeId, TypeId) {
+        let source = interner.reserve_object();
+        let target = interner.reserve_object();
+        let source_shared = interner.intern_type_param(TypeParamId(10_061), "T");
+        let source_extra = interner.intern_type_param(TypeParamId(10_062), "U");
+        let target_shared = interner.intern_type_param(TypeParamId(10_063), "T");
+        let source_signature = interner.intern_function(FunctionType {
+            type_params: vec![
+                GenericTypeParam {
+                    id: TypeParamId(10_061),
+                    constraint: None,
+                    default: None,
+                },
+                GenericTypeParam {
+                    id: TypeParamId(10_062),
+                    constraint: None,
+                    default: None,
+                },
+            ],
+            params: vec![ParameterType::required("value", source_shared)],
+            ret: source_extra,
+        });
+        let target_signature = interner.intern_function(FunctionType {
+            type_params: vec![GenericTypeParam {
+                id: TypeParamId(10_063),
+                constraint: None,
+                default: None,
+            }],
+            params: vec![ParameterType::required("value", target_shared)],
+            ret: target_shared,
+        });
+        interner.fill_object(
+            source,
+            ObjectType {
+                properties: vec![prop("next", source)],
+                construct_signatures: vec![source_signature],
+                ..Default::default()
+            },
+        );
+        interner.fill_object(
+            target,
+            ObjectType {
+                properties: vec![prop("next", target)],
+                construct_signatures: vec![target_signature],
+                ..Default::default()
+            },
+        );
+        (source, target)
+    }
+
+    let first_order = {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let (source, target) = build(&mut interner);
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+        assert!(!rel.is_assignable(target, source).is_yes());
+        rel.is_assignable(source, target).is_yes()
+    };
+    let second_order = {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let (source, target) = build(&mut interner);
+        let store = interner.store();
+        let mut rel = Relater::new(store, wk);
+        rel.is_assignable(source, target).is_yes()
+    };
+
+    assert!(first_order);
+    assert_eq!(first_order, second_order);
+}
+
 /// B41 — recursive generic signatures retain the existing cycle rule while the
 /// binder-local child verdicts stay isolated from cache/query ordering.
 #[test]
