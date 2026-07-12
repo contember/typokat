@@ -718,7 +718,7 @@ fn fix_signature_params(
                 next_type_param,
                 substituted,
             );
-            if evaluated.exhausted {
+            if evaluated.exhausted || evaluated.cycle_detected {
                 substituted
             } else {
                 evaluated.result

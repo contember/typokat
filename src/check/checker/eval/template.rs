@@ -29,7 +29,12 @@ impl<'a> ConditionalEvaluator<'a> {
         // error type and is NOT memoized (backlog 55 — the template path formerly
         // bypassed this gate and poisoned the shared memo; mirrors the other node
         // kinds and invariants §1).
-        if self.in_flight.contains(&ty) || self.exhausted {
+        if self.in_flight.contains(&ty) {
+            self.note_cycle();
+            values.push(error);
+            return;
+        }
+        if self.exhausted {
             values.push(error);
             return;
         }

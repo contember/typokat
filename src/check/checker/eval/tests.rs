@@ -6,6 +6,184 @@ fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
 }
 
+fn instantiate_one(
+    interner: &mut Interner,
+    template: TypeId,
+    param: TypeParamId,
+    argument: TypeId,
+) -> TypeId {
+    interner.intern_instantiation(template, vec![(param, argument)])
+}
+
+fn substituted_conditional(
+    interner: &mut Interner,
+    template: TypeId,
+    param: TypeParamId,
+    argument: TypeId,
+) -> TypeId {
+    let mut map = FxHashMap::default();
+    map.insert(param, argument);
+    substitute(interner, template, &map)
+}
+
+fn maybe_loop_template(interner: &mut Interner) -> (TypeId, TypeParamId, TypeId) {
+    let wk = interner.well_known();
+    let param = TypeParamId(0);
+    let t = interner.intern_type_param(param, "T");
+    let template = interner.reserve_conditional();
+    let recur = instantiate_one(interner, template, param, t);
+    let done = interner.intern_literal(LiteralValue::String("done".into()));
+    interner.fill_conditional(
+        template,
+        ConditionalType {
+            check: t,
+            extends_ty: wk.string,
+            true_branch: recur,
+            false_branch: done,
+            infer_count: 0,
+            distributive: true,
+            poisoned: false,
+        },
+    );
+    (template, param, done)
+}
+
+/// An in-flight cycle is reported separately from budget exhaustion and must taint every
+/// active memo frame, while a terminating sibling of the same template remains cacheable.
+#[test]
+fn instantiation_cycle_taints_ancestors_without_poisoning_terminating_sibling() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (template, param, done) = maybe_loop_template(&mut interner);
+    let cycle = instantiate_one(&mut interner, template, param, wk.string);
+    let cycle_conditional = substituted_conditional(&mut interner, template, param, wk.string);
+    let terminating = instantiate_one(&mut interner, template, param, wk.number);
+    let terminating_conditional =
+        substituted_conditional(&mut interner, template, param, wk.number);
+    let mut next = 1;
+    let mut memo = FxHashMap::default();
+    let mut ev =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    assert_eq!(
+        ev.evaluate(cycle),
+        wk.any,
+        "the union assembly preserves the existing error-to-any cascade behavior"
+    );
+    assert!(ev.cycle_detected, "the in-flight re-entry is observable");
+    assert!(!ev.exhausted, "a cycle is not a budget exhaustion");
+    assert!(
+        !ev.memo.contains_key(&cycle) && !ev.memo.contains_key(&cycle_conditional),
+        "neither the recursive root nor its active conditional ancestor may memoize error"
+    );
+    assert!(ev.in_flight.is_empty(), "every active frame must drain");
+    assert!(
+        ev.cycle_tainted.is_empty(),
+        "SetMemo consumes every frame taint"
+    );
+
+    assert_eq!(ev.evaluate(terminating), done);
+    assert!(
+        !ev.cycle_detected,
+        "a later independent root must not inherit the prior cycle status"
+    );
+    assert_eq!(ev.memo.get(&terminating), Some(&done));
+    assert_eq!(ev.memo.get(&terminating_conditional), Some(&done));
+}
+
+/// Reversing the demand order cannot make the terminating instantiation depend on the
+/// later cycle, and repeated lookup still sees its durable result.
+#[test]
+fn terminating_instantiation_stays_memoized_before_a_later_cycle() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (template, param, done) = maybe_loop_template(&mut interner);
+    let cycle = instantiate_one(&mut interner, template, param, wk.string);
+    let terminating = instantiate_one(&mut interner, template, param, wk.number);
+    let mut next = 1;
+    let mut memo = FxHashMap::default();
+
+    {
+        let mut ev =
+            ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+        assert_eq!(ev.evaluate(terminating), done);
+        assert!(!ev.cycle_detected);
+        assert_eq!(ev.memo.get(&terminating), Some(&done));
+    }
+    {
+        let mut ev =
+            ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+        assert_eq!(ev.evaluate(cycle), wk.any);
+        assert!(ev.cycle_detected);
+        assert!(!ev.memo.contains_key(&cycle));
+    }
+    {
+        let mut ev =
+            ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+        assert_eq!(ev.evaluate(terminating), done);
+        assert!(!ev.cycle_detected);
+    }
+}
+
+/// Mutual aliases must taint both templates' active roots rather than memoizing either
+/// error-derived result.
+#[test]
+fn mutual_instantiation_cycle_taints_every_active_template() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let ping_param = TypeParamId(10);
+    let pong_param = TypeParamId(11);
+    let ping_t = interner.intern_type_param(ping_param, "PingT");
+    let pong_t = interner.intern_type_param(pong_param, "PongT");
+    let ping = interner.reserve_conditional();
+    let pong = interner.reserve_conditional();
+    let ping_to_pong = instantiate_one(&mut interner, pong, pong_param, ping_t);
+    let pong_to_ping = instantiate_one(&mut interner, ping, ping_param, pong_t);
+    interner.fill_conditional(
+        ping,
+        ConditionalType {
+            check: ping_t,
+            extends_ty: wk.string,
+            true_branch: ping_to_pong,
+            false_branch: wk.never,
+            infer_count: 0,
+            distributive: true,
+            poisoned: false,
+        },
+    );
+    interner.fill_conditional(
+        pong,
+        ConditionalType {
+            check: pong_t,
+            extends_ty: wk.string,
+            true_branch: pong_to_ping,
+            false_branch: wk.never,
+            infer_count: 0,
+            distributive: true,
+            poisoned: false,
+        },
+    );
+    let root = instantiate_one(&mut interner, ping, ping_param, wk.string);
+    let ping_conditional = substituted_conditional(&mut interner, ping, ping_param, wk.string);
+    let pong_conditional = substituted_conditional(&mut interner, pong, pong_param, wk.string);
+    let mut next = 12;
+    let mut memo = FxHashMap::default();
+    let mut ev =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    assert_eq!(ev.evaluate(root), wk.any);
+    assert!(ev.cycle_detected);
+    assert!(!ev.exhausted);
+    assert!(
+        !ev.memo.contains_key(&root)
+            && !ev.memo.contains_key(&ping_conditional)
+            && !ev.memo.contains_key(&pong_conditional),
+        "all active mutual-cycle frames must remain absent from the durable memo"
+    );
+    assert!(ev.in_flight.is_empty());
+    assert!(ev.cycle_tainted.is_empty());
+}
+
 /// Witness (architecture §7.2 item b): a ~10 000-deep nested `{ v: … }` type
 /// evaluated by an `Unwrap`-style recursive conditional resolves to the innermost
 /// type **without overflowing the native stack**. Built programmatically via the
@@ -431,6 +609,11 @@ fn template_construction_keeps_symbolic_and_suppresses_error() {
         eval(&mut interner, &mut next, &mut memo, err),
         wk.error,
         "an error-typed hole degrades the template to the error type"
+    );
+    assert_eq!(
+        memo.get(&err),
+        Some(&wk.error),
+        "an ordinary upstream error remains a cacheable cascade-suppression result"
     );
 }
 

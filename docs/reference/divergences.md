@@ -122,16 +122,12 @@ and validated the same way.
   and stays release-owned by backlog `18`.
   <!-- div: id=binder/duplicate-function-implementation-call dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/sr_deferred_ledger/b18_duplicate_function_implementations.ts -->
 
-### Soundness-review deferred ledger (backlog `18`/`30`/`56`/`60`/`62`/`66`/`76`/`77`)
+### Soundness-review deferred ledger (backlog `18`/`30`/`60`/`62`/`66`/`76`/`77`)
 
 Known dropped-error (under-report) families from the 2026-07-07 cross-cutting review,
 each an open backlog item, pinned by the **disabled** `sr_deferred_ledger/` corpus
 (the fixtures assert tsc's verdict but stay `false` until the owning item ships):
 
-- **`56`** — a genuine instantiation cycle (`type Loop<T> = T extends string ? Loop<T>
-  : never`, direct or mutual) short-circuits to the error type with no diagnostic, so
-  no `TK2589` fires where tsc reports `TS2589`.
-  <!-- div: id=ledger/instantiation-cycles dir=under scope=b-type-level-tail owner=../backlog/56-silent-instantiation-cycles.md witness=../../tests/cases/b56_instantiation_cycles/cycles_and_reuse.ts -->
 - **`60`** — fresh object literals against UNION targets skip excess-property checking
   (`A | B`, `A | null`) and let an optional-member union member vacuously absorb a
   wrong-typed known property (missing `TK2353`/`TK2322`).

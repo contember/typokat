@@ -33,7 +33,12 @@ impl<'a> ConditionalEvaluator<'a> {
             values.push(ty);
             return;
         }
-        if self.in_flight.contains(&ty) || self.exhausted {
+        if self.in_flight.contains(&ty) {
+            self.note_cycle();
+            values.push(error);
+            return;
+        }
+        if self.exhausted {
             values.push(error);
             return;
         }

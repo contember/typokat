@@ -91,7 +91,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b55_template_memo", true),
     // Backlog 56 — cycles must diagnose and taint ancestor evaluator frames so
     // no error-derived value reaches the durable memo. WU0 disabled; WU2 enables.
-    ("b56_instantiation_cycles", false),
+    ("b56_instantiation_cycles", true),
     // Project fixtures (subdirectories, m29 convention) — see `PROJECT_DIRS`.
     ("b58_project_scopes", true),
     ("b61_field_initializers", true),

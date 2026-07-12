@@ -3,6 +3,9 @@ use super::*;
 pub(in crate::check) struct InferenceConstraintEvaluation {
     pub(in crate::check) result: TypeId,
     pub(in crate::check) exhausted: bool,
+    /// A constraint evaluator has no diagnostic span; retain the written constraint
+    /// rather than accepting a cycle-derived error type.
+    pub(in crate::check) cycle_detected: bool,
 }
 
 /// Demand-evaluate a constraint while fixing inferred type arguments. This mirrors
@@ -19,6 +22,7 @@ pub(in crate::check) fn evaluate_inference_constraint(
     InferenceConstraintEvaluation {
         result,
         exhausted: ev.exhausted,
+        cycle_detected: ev.cycle_detected,
     }
 }
 
@@ -28,6 +32,7 @@ struct InferenceConstraintEvaluator<'a> {
     memo: &'a mut FxHashMap<TypeId, TypeId>,
     in_progress: FxHashSet<TypeId>,
     exhausted: bool,
+    cycle_detected: bool,
 }
 
 impl<'a> InferenceConstraintEvaluator<'a> {
@@ -42,6 +47,7 @@ impl<'a> InferenceConstraintEvaluator<'a> {
             memo,
             in_progress: FxHashSet::default(),
             exhausted: false,
+            cycle_detected: false,
         }
     }
 
@@ -73,6 +79,7 @@ impl<'a> InferenceConstraintEvaluator<'a> {
     fn evaluate_pending(&mut self, ty: TypeId) -> TypeId {
         let result;
         let exhausted;
+        let cycle_detected;
         {
             let mut ev = ConditionalEvaluator::new(
                 self.interner,
@@ -82,9 +89,11 @@ impl<'a> InferenceConstraintEvaluator<'a> {
             );
             result = ev.evaluate(ty);
             exhausted = ev.exhausted;
+            cycle_detected = ev.cycle_detected;
         }
-        if exhausted {
+        if exhausted || cycle_detected {
             self.exhausted = true;
+            self.cycle_detected |= cycle_detected;
             return ty;
         }
         if result == ty {

@@ -48,6 +48,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
         let result;
         let exhausted;
+        let cycle_detected;
         {
             let mut ev = ConditionalEvaluator::new(
                 &mut *self.interner,
@@ -57,8 +58,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             );
             result = ev.evaluate(ty);
             exhausted = ev.exhausted;
+            cycle_detected = ev.cycle_detected;
         }
-        if exhausted {
+        if exhausted || cycle_detected {
             self.diagnostics.push(Diagnostic::excessively_deep(span));
         }
         result
@@ -167,12 +169,18 @@ pub struct ConditionalEvaluator<'a> {
     /// `O(depth²)`.
     concrete: FxHashMap<TypeId, bool>,
     /// The ids currently in flight (scheduled but not yet memoized). Re-entering one is a
-    /// genuine cycle → the error type (never memoized).
+    /// genuine cycle → the error type.
     in_flight: FxHashSet<TypeId>,
+    /// Active memo frames whose result depends on an in-flight re-entry. Each is removed
+    /// by its matching [`Task::SetMemo`] without writing a durable result.
+    cycle_tainted: FxHashSet<TypeId>,
     budget: u32,
     steps: u32,
     /// Set once the per-root budget is exhausted; the caller reports `TK2589`.
     pub exhausted: bool,
+    /// Set for the current root when an in-flight evaluator node re-enters. This is
+    /// distinct from budget exhaustion: only tainted ancestors skip durable memoization.
+    pub cycle_detected: bool,
 }
 
 impl<'a> ConditionalEvaluator<'a> {
@@ -188,16 +196,27 @@ impl<'a> ConditionalEvaluator<'a> {
             memo,
             concrete: FxHashMap::default(),
             in_flight: FxHashSet::default(),
+            cycle_tainted: FxHashSet::default(),
             budget,
             steps: 0,
             exhausted: false,
+            cycle_detected: false,
         }
+    }
+
+    /// Taint every active memo frame after a genuine evaluator cycle. The task stack
+    /// evaluates children to completion, so every in-flight id is an ancestor of this
+    /// re-entry rather than an unrelated sibling.
+    fn note_cycle(&mut self) {
+        self.cycle_detected = true;
+        self.cycle_tainted.extend(self.in_flight.iter().copied());
     }
 
     /// Evaluate `root`, resolving every concrete conditional / lazy instantiation it
     /// directly denotes (and, for a union, its members) to a result type. A deferred
     /// conditional (free check), or any non-conditional type, is returned unchanged.
     pub fn evaluate(&mut self, root: TypeId) -> TypeId {
+        self.cycle_detected = false;
         let mut tasks: Vec<Task> = vec![Task::Eval(root)];
         let mut values: Vec<TypeId> = Vec::new();
         let error = self.interner.well_known().error;
@@ -206,9 +225,10 @@ impl<'a> ConditionalEvaluator<'a> {
             match task {
                 Task::SetMemo(id) => {
                     let value = values.pop().unwrap_or(error);
-                    // Never durably memoize a result reached under budget exhaustion
-                    // (provisional) — invariants §1 mirror.
-                    if !self.exhausted {
+                    // Never durably memoize a result reached under budget exhaustion or
+                    // through an in-flight cycle — both are provisional (§1 invariant).
+                    let cycle_tainted = self.cycle_tainted.remove(&id);
+                    if !self.exhausted && !cycle_tainted {
                         self.memo.insert(id, value);
                     }
                     self.in_flight.remove(&id);
@@ -294,9 +314,14 @@ impl<'a> ConditionalEvaluator<'a> {
             values.push(ty);
             return;
         }
-        // A genuine self-cycle (the same id re-entered while in flight) → error, and it
-        // is NOT memoized.
-        if self.in_flight.contains(&ty) || self.exhausted {
+        // A genuine self-cycle taints every active ancestor so no error-derived value
+        // reaches the durable memo. Budget exhaustion is a separate provisional state.
+        if self.in_flight.contains(&ty) {
+            self.note_cycle();
+            values.push(error);
+            return;
+        }
+        if self.exhausted {
             values.push(error);
             return;
         }

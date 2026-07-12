@@ -300,11 +300,11 @@ scope = ["s-multiple-missing-properties", "s-weak-type", "s-member-suggestion", 
 id = "C-instantiation-cycles"
 track = "C"
 title = "Instantiation cycles silently resolve to error (missing TK2589)"
-state = "incomplete"
-blocks_release = "true"
-owner = "./56-silent-instantiation-cycles.md"
-witness = "disabled acceptance spec: b56_instantiation_cycles"
-links = ["../../tests/cases/b56_instantiation_cycles/cycles_and_reuse.ts", "../reference/divergences.md"]
+state = "complete"
+blocks_release = "false"
+owner = "shipped"
+witness = "cargo test conformance (b56_instantiation_cycles enabled) + evaluator memo-order unit tests + independent adversarial review PASS"
+links = ["../../tests/cases/b56_instantiation_cycles/cycles_and_reuse.ts", "../sprints/sprint-2026-07-12-pre-lib-hardening.md"]
 deps = []
 
 [[criterion]]

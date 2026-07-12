@@ -247,3 +247,7 @@ the original Terra implementer and repeats the relevant independent gate before 
   and inferred construction plus class facts through arbitrary parentheses; non-generic
   one-step const aliases preserve lexical accessibility and declaring-class messages.
   The genuine generic-alias remainder graduated to backlog `78` with an isolated corpus.
+- 2026-07-12 — WU2 independent review PASS: genuine evaluator re-entry taints every
+  active memo ancestor, remains distinct from budget exhaustion and ordinary error
+  values, emits one `TK2589` per demand, and leaves terminating siblings/query order
+  exact. Constraint evaluation conservatively retains written constraints on a cycle.
