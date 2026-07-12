@@ -89,6 +89,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Backlog 30 JS-exact number stringification.
     ("b30_numeric_stringify", true),
     ("b55_template_memo", true),
+    // Backlog 56 — cycles must diagnose and taint ancestor evaluator frames so
+    // no error-derived value reaches the durable memo. WU0 disabled; WU2 enables.
+    ("b56_instantiation_cycles", false),
     // Project fixtures (subdirectories, m29 convention) — see `PROJECT_DIRS`.
     ("b58_project_scopes", true),
     ("b61_field_initializers", true),
@@ -128,8 +131,8 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // 63k). NOTE: recursive_mapped.ts and deep_annotation.ts stack-overflow at HEAD
     // and only become safe to run once WU3's recursion/depth guards land.
     ("sr_wu3_types_recursion", true),
-    // Deferred ledger — known unfixtured under-reports from backlogs 18, 56, 60,
-    // 62, 66, 76, 77. Stays `false` until each backlog item ships.
+    // Deferred ledger — known under-reports from backlogs 18, 60, 62, 66, 76,
+    // and 77. Backlog 56 moved to its isolated corpus above.
     ("sr_deferred_ledger", false),
     // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
     // (backlog 73). ENABLED by WU3 (expression child slots), WU4 (statement

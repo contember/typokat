@@ -214,6 +214,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b30_negative_literals/` | shipped backlog `30` | negative numeric literal types are literals, not `any` (annotations, unions, template holes, extends) |
 | `b30_numeric_stringify/` | shipped backlog `30` | ECMA number-to-string thresholds and `${number}` long-decimal regression control |
 | `b55_template_memo/` | backlog `55` | template evaluation must not memoize results computed under an exhausted TK2589 budget |
+| `b56_instantiation_cycles/` | backlog `56` (disabled) | direct/mutual instantiation cycles emit TK2589 without poisoning terminating siblings or query order |
 | `b58_project_scopes/` | backlog `58` | project-mode scope maps keyed per module — offset-aligned files must not collide |
 | `b61_field_initializers/` | backlog `61` | class field initializers checked against the annotation (assignability, excess, contextual typing; instance + static) |
 | `b53_cfg_assignments/` | backlog `53` | assignments survive `&&`/`||`/ternary, `switch` clauses, `while` tests, and sequence expressions in the flow graph |

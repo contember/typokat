@@ -23,10 +23,10 @@ today, but it contradicts the module header's stated invariant; fix or re-state 
 ## Approach / acceptance
 
 **Acceptance spec (ready):** the disabled
-[`tests/cases/sr_deferred_ledger/b56_instantiation_cycles.ts`](../../tests/cases/sr_deferred_ledger/b56_instantiation_cycles.ts)
+[`tests/cases/b56_instantiation_cycles/cycles_and_reuse.ts`](../../tests/cases/b56_instantiation_cycles/cycles_and_reuse.ts)
 fixture pins tsc's verdict (direct + mutual cycle → `TK2589`, plus a
-cycle-then-legitimate-reuse control). Enable `sr_deferred_ledger` in
-`tests/conformance.rs` when this ships.
+cycle-then-legitimate-reuse control). The dedicated corpus stays disabled until
+this item ships; enable only `b56_instantiation_cycles` in `tests/conformance.rs`.
 
 On in-flight re-entry, surface a diagnostic (TK2589 to match tsc's verdict on these
 shapes) and/or taint the result so ancestors don't memoize it as final. Corpus:

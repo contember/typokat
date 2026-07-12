@@ -131,7 +131,7 @@ each an open backlog item, pinned by the **disabled** `sr_deferred_ledger/` corp
 - **`56`** — a genuine instantiation cycle (`type Loop<T> = T extends string ? Loop<T>
   : never`, direct or mutual) short-circuits to the error type with no diagnostic, so
   no `TK2589` fires where tsc reports `TS2589`.
-  <!-- div: id=ledger/instantiation-cycles dir=under scope=b-type-level-tail owner=../backlog/56-silent-instantiation-cycles.md witness=../../tests/cases/sr_deferred_ledger/b56_instantiation_cycles.ts -->
+  <!-- div: id=ledger/instantiation-cycles dir=under scope=b-type-level-tail owner=../backlog/56-silent-instantiation-cycles.md witness=../../tests/cases/b56_instantiation_cycles/cycles_and_reuse.ts -->
 - **`60`** — fresh object literals against UNION targets skip excess-property checking
   (`A | B`, `A | null`) and let an optional-member union member vacuously absorb a
   wrong-typed known property (missing `TK2353`/`TK2322`).

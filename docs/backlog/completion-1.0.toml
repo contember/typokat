@@ -303,8 +303,8 @@ title = "Instantiation cycles silently resolve to error (missing TK2589)"
 state = "incomplete"
 blocks_release = "true"
 owner = "./56-silent-instantiation-cycles.md"
-witness = "disabled acceptance spec: sr_deferred_ledger/b56_instantiation_cycles.ts"
-links = ["../../tests/cases/sr_deferred_ledger/b56_instantiation_cycles.ts", "../reference/divergences.md"]
+witness = "disabled acceptance spec: b56_instantiation_cycles"
+links = ["../../tests/cases/b56_instantiation_cycles/cycles_and_reuse.ts", "../reference/divergences.md"]
 deps = []
 
 [[criterion]]
