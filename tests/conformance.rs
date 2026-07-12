@@ -133,6 +133,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // ordinary `error[TK…]`, diffed by `compare_incomplete_output` /
     // `compare_fixture_output`. See tests/cases/README.md ("Surface-accounting corpus").
     ("b73_surface_accounting", true),
+    // Backlog 73 expression-shape tail. WU0 commits this corpus disabled; WU1
+    // enables it after every remaining `infer_expr` shape is explicit.
+    ("b73_expression_shape_tail", false),
     // Backlog 74 declaration-hoisting parity. Enabled after WU1 and WU2 land.
     ("b74_declaration_hoisting", true),
 ];

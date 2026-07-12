@@ -392,3 +392,13 @@ wildcard/`None`/skip that drops the position.
 | `class_heritage.ts` | WU5 | record-only: extends type arguments + implements clause never processed (WU7-E F3) | `class/class-heritage/type-arguments`, `class/implements-clause/self` | TS2304 |
 | `type_param_default.ts` | WU5 | record-only: type-parameter defaults never lowered (WU7-E F3; ledger `constraints/type-parameter-defaults`) | `annotation-lower/type-parameter-default/self` | TS2304 |
 | `supported_annotations.ts` | WU5 (control) | keyof/mapped/conditional/template/readonly stay clean — no record | — | clean |
+
+## Surface-accounting expression tail (sprint 2026-07-12)
+
+`b73_expression_shape_tail/` is the disabled WU0 acceptance spec for closing backlog `73`.
+It covers every expression variant that still reaches `infer_expr`'s wildcard at the planning
+HEAD. Child-bearing wrappers require both their exact `incomplete[expr-infer/…/self]` identity and
+any nested diagnostic reachable through an existing checker path. The update-expression fixture is
+the deliberate exception: WU1 makes its operand traversal supported, so `Missing++` reports
+`TK2304` while a routine numeric `for` update remains complete and clean. Semantic typing for all
+wrappers remains with the backlog owners recorded in `tests/surface/inventory.toml`.
