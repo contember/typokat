@@ -49,8 +49,9 @@ deferred expression semantics themselves.
   both the wrapper's incomplete identity and standalone child diagnostics reachable without
   implementing the wrapper's deferred semantics. Optional-chain fixtures explicitly do not require
   member/call compatibility after the optional boundary; they require structural child traversal
-  plus the incomplete identity. Update fixtures pin a missing-name operand and a clean ordinary
-  numeric `for` loop.
+  plus the incomplete identity. Private-field access is record-only because its receiver can depend
+  on unsupported binding patterns; private-in still traverses its ordinary right operand. Update
+  fixtures pin a missing-name operand and a clean ordinary numeric `for` loop.
 - **Acceptance / witness.** One behavior-neutral spec commit. Enabling the directory at old HEAD
   fails only because the new expectations are absent. Every expected incomplete identity matches
   `tests/surface/inventory.toml`; every ordinary diagnostic is confirmed against tsc.
@@ -69,7 +70,9 @@ deferred expression semantics themselves.
   self identity, and return `None`; leaf literals record and return `None`; class expressions record
   without partially invoking top-level class lowering. Once a `ChainExpression` crosses an optional
   member/call boundary, traverse the rest of that chain structurally without ordinary member/call
-  compatibility, which belongs to backlog `49`. Add a narrow `SimpleAssignmentTarget` walker for
+  compatibility, which belongs to backlog `49`. Treat private-field access as an opaque record-only
+  boundary rather than exposing binder deferrals as user diagnostics. Add a narrow
+  `SimpleAssignmentTarget` walker for
   update operands, return the existing coarse error type, and change the inventory identity from
   `update-expression/self` to supported `update-expression/operand`. Update-operator type
   validation remains backlog `45`. Update inventory witnesses and the historical census slot name.
@@ -127,6 +130,9 @@ deferred expression semantics themselves.
 - Optional member/call compatibility after an optional-chain boundary, including argument checking
   against the non-null callable branch — backlog [`49`](../backlog/49-possibly-undefined-family.md).
   The chain records incomplete and only preserves diagnostics arising independently in its children.
+- Binding object/array/rest patterns — backlog [`48`](../backlog/48-no-implicit-any.md). Private-field
+  access must not emit `TK2304` merely because its receiver was introduced through an unsupported
+  binding pattern.
 - Update-operator operand compatibility and result fidelity (`TK2362`/`TK2365` family) — backlog
   [`45`](../backlog/45-operator-comparison-typing.md). WU1 only prevents operand traversal loss.
 - Template/spread/iteration value semantics — backlog
@@ -146,6 +152,8 @@ deferred expression semantics themselves.
   incomplete identity. Optional chains are walked structurally after the optional boundary; applying
   member/call compatibility there would implement backlog `49`, so the incomplete result deliberately
   carries no such claim. No wrapper is promoted to semantically supported by traversal alone.
+- Private-field access is record-only until binding-pattern and private-member semantics are modeled;
+  traversing its receiver made unsupported object-rest declarations look like missing user names.
 - Reuse existing backlog owners; no new semantic backlog is needed. Backlog `75` is the explicit
   owner for the remaining census-discovered surface families without a narrower owner.
 - Stop rather than improvise if any shape needs a new traversal boundary, forbidden type workaround,
@@ -178,3 +186,7 @@ Exact full gate: `cargo fmt --check`; `cargo test`; `cargo clippy --all-targets 
   update-target wrappers and direct optional access (`7b11620`), followed by nested optional chains
   (`e1ecf87`). The optional-call finding clarified the accounting boundary above rather than
   expanding this sprint into backlog `49` semantics.
+- 2026-07-12 — WU1 + WU2 shipped as `0858508` after the third independent review PASS. The first
+  full official-suite audit preserved every matched identity but FAILED on two new `TK2304` false
+  positives from object-rest receivers under private-field access. Binder expansion was rejected as
+  out of scope; regression witness `5830b04` pins the record-only boundary before remediation.
