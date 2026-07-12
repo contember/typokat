@@ -246,6 +246,10 @@ completeness (`TK2515`/`TK2654`) (b06); private/protected constructor accessibil
   <!-- div: id=classes/ts2675-heritage-private-ctor dir=under scope=s-class-access owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/b20_ctor_accessibility/private_ctor.ts -->
   <!-- div: id=classes/ctor-accessibility-generic-name dir=cosmetic scope=s-class-access owner=design-oos witness=../../tests/cases/b20_ctor_accessibility -->
   <!-- div: id=classes/new-callee-forms dir=under scope=s-class-access owner=../backlog/22-new-callee-forms.md witness=../../tests/cases/b22_new_callee_forms/abstract_and_visibility.ts -->
+- **Generic class value aliases remain deferred.** Parentheses around a direct generic
+  class now preserve the direct path, but `const Alias = GenericClass; new Alias<T>()`
+  still loses generic substitution and abstract/constructor-accessibility facts.
+  <!-- div: id=classes/generic-new-alias dir=under scope=s-class-access owner=../backlog/78-generic-class-value-aliases.md witness=../../tests/cases/b78_generic_class_value_aliases/generic_aliases.ts -->
 
 ## Arrays & tuples (M17 / M18 / M30)
 

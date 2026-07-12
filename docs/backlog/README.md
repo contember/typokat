@@ -53,7 +53,7 @@ the way there — its syntax gates flip OOS→IN as features land — not a nume
 
 ## Roadmap at a glance
 
-The active backlog has **39 items**: **31 checker-1.0 release blockers** and **8 non-blocking,
+The active backlog has **40 items**: **32 checker-1.0 release blockers** and **8 non-blocking,
 safe-direction parity items**. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml); the grouping below is the human roadmap view.
 
@@ -61,7 +61,7 @@ safe-direction parity items**. The release classification comes from
 |---|---:|---|---|
 | **A — model completeness** | 5 | L–XL | Eliminate silently-permissive model gaps; `43`/`70` directly unblock full `lib.d.ts`. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 17 | S–L | Nine release-blocking known gaps plus eight safe-direction parity improvements. |
+| **C — soundness/parity tail** | 18 | S–L | Ten release-blocking known gaps plus eight safe-direction parity improvements. |
 | **D — scale + IDE** | 6 | XL | Preview, full standard library, resolver breadth, parallel identity, and incrementality. |
 
 Effort is a **relative planning estimate**, not a time promise:
@@ -117,6 +117,7 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 - **L** · [`66`](66-protected-override-compat.md) — protected override compatibility and lineage-aware nominal origins · blocked by `63(d)`.
 - **L** · [`71`](71-expression-inference-fn-tail.md) — expression/iteration traversal: elisions, object/call spreads, tagged templates, and iteration targets.
 - **M** · [`77`](77-returntype-call-signature-infer.md) — infer `ReturnType` from object and overload call signatures.
+- **M** · [`78`](78-generic-class-value-aliases.md) — generic class const aliases retain substitution and class-keyed construction facts.
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
 

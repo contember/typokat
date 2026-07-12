@@ -397,6 +397,17 @@ links = ["../../tests/cases/b22_new_callee_forms/abstract_and_visibility.ts"]
 deps = []
 
 [[criterion]]
+id = "C-generic-class-value-aliases"
+track = "C"
+title = "Generic class const aliases retain substitution and class-keyed new checks"
+state = "incomplete"
+blocks_release = "true"
+owner = "./78-generic-class-value-aliases.md"
+witness = "disabled acceptance spec: b78_generic_class_value_aliases"
+links = ["../../tests/cases/b78_generic_class_value_aliases/generic_aliases.ts", "../reference/divergences.md"]
+deps = []
+
+[[criterion]]
 id = "C-eager-keyof-forward-refs"
 track = "C"
 title = "Eager keyof over forward references"
