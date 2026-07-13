@@ -235,7 +235,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b41_generic_methods/` | shipped B41 | generic method/call/construct signatures: persistent binders through outer substitution, calls, relation, overloads, inheritance, and cache order |
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
-| `sr_semantic_duplication/` | semantic-duplication sprint WU0 (disabled) | class method/constructor signatures are reserved once, preserving binder, diagnostic, overload, parameter-property, and external-return behavior |
+| `sr_semantic_duplication/` | semantic-duplication sprint WU0 + class-application architecture gate (disabled) | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):
 
@@ -406,6 +406,23 @@ unannotated class method. This over-reports when its numeric result is consumed 
 under-reports when the result is assigned to `void`; both are ledgered to backlog `76`.
 WU1 enables the directory only after member bodies consume the reserved surfaces and
 the whole fixture passes with exact diagnostic cardinality.
+
+`recursive_class_applications.ts` is the additional pre-WU1 architecture acceptance
+fixture. It requires immutable class applications to survive inside object, array,
+tuple, callback, union, intersection, deferred conditional/mapped, and indexed-access
+positions; checks mutual class SCCs in both declaration orders; repeats the same demand
+chain around clean and failing relations; directly relates regular, mutual, and
+non-regular applications with wrong arguments in both source/target orders; and proves
+`ExpandingBox<T[]>` recursion advances only one layer per demand. Private and protected
+foreign-class pairs require `declaring_class` identity to survive projection instead of
+flattening into public structural objects. Method constraint/default, constructor overload
+and parameter-property paths share that graph. The final construction block pins one
+unresolved parameter-property event, one overload failure, four distinct static-class-
+parameter events, readonly enforcement, default-only method instantiation, callback
+arguments, both conditional branches, and hidden constructor implementations, so
+publication cannot hide or duplicate diagnostics. All 58 markers have verdict/code parity with
+`tsc 6.0.3 --strict`; the directory remains disabled until the architecture WU and WU1
+implementation satisfy both fixtures.
 
 ## Surface-accounting corpus (sprint 2026-07-10)
 
