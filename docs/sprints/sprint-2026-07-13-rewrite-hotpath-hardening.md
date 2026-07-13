@@ -107,7 +107,7 @@ If work exposes an independently valuable issue that needs roadmap ownership, th
 
 Record environment, corpus scale, baseline, raw counters, and run-to-run variance in the sprint run log or a dedicated measurement note. Remove temporary production instrumentation before a product implementation commit; retained test helpers must be deterministic and scoped to tests.
 
-**Decision threshold and reversibility.** A WU5 optimization needs both semantic acceptance and either (a) at least 20% fewer directly relevant counted operations/allocations at 10k and 100k scale, or (b) at least 10% median improvement in the isolated microcorpus across five clean repetitions, with no more than 2% regression in the other measured microcorpora. A counter alone does not justify global caching. Keep each candidate in an isolated, one-purpose commit that can be reverted independently.
+**Decision threshold and reversibility.** A WU5 optimization needs both semantic acceptance and either (a) at least 20% fewer directly relevant counted operations/allocations at 10k and 100k scale, with deterministic directly relevant operation/allocation counters for both the candidate and every control, or (b) at least 10% median improvement in the isolated microcorpus across five clean repetitions, with paired high-resolution timing and the same timing metric for every control. Either path permits no more than 2% regression in the other measured microcorpora. Coarse instrumented wall-clock samples remain context, not a control metric. A counter alone does not justify global caching. Keep each candidate in an isolated, one-purpose commit that can be reverted independently.
 
 **Acceptance.** Measurements identify where work occurs and distinguish empty/contextual relation paths; they do not claim profiler attribution unavailable under the current host restriction. No checker behavior changes.
 
@@ -383,3 +383,10 @@ One Terra writer owns the active worktree and makes one work unit's source chang
   These overlap WU5a's 2–4ms and 31–36ms ranges, but their coarse millisecond
   medians are not a meaningful ≤2% timing discriminator; the unchanged direct
   operation counter is the control conclusion.
+
+- **WU6 comprehensive-review follow-up (2026-07-13).** One medium finding,
+  `CORR-1`, extends the existing host-recursive structural-walker risk to new
+  function metadata edges; it is an architecture stop pending user disposition.
+  Three low findings are remediated here: C=1 preliminary-inference assertions,
+  current-facing corpus/sprint lifecycle text, and an explicit counter-versus-timing
+  control policy. No `CORR-1` implementation or backlog item is created in this sprint.

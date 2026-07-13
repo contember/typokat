@@ -21,6 +21,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 <!-- one line per active sprint; empty between sprints -->
 - [`sprint-2026-07-13-rewrite-hotpath-hardening.md`](sprint-2026-07-13-rewrite-hotpath-hardening.md) —
-  active; WU0 defines correctness probes before bounded, evidence-backed hotpath work.
+  active; WU0-WU5b are complete and WU6 final review is in progress.
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold public-witness gate; no implementation started.

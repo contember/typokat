@@ -55,6 +55,7 @@ fn measure_call_pipeline_callback_formula() {
     assert_eq!(measure.candidate_trials, 2);
     assert_eq!(measure.candidate_matches, 1);
     assert_eq!(measure.candidate_mismatches, 1);
+    assert_eq!(measure.generic_preliminary_inference_runs, 3);
     assert_eq!(measure.generic_full_inference_runs, 3);
     assert_eq!(measure.callback_rewalks, [3, 2, 1, 0, 0]);
 }
@@ -74,6 +75,7 @@ fn measure_call_pipeline_fresh_literal_formula() {
     assert_eq!(measure.candidate_trials, 2);
     assert_eq!(measure.candidate_matches, 1);
     assert_eq!(measure.candidate_mismatches, 1);
+    assert_eq!(measure.generic_preliminary_inference_runs, 0);
     assert_eq!(measure.generic_full_inference_runs, 3);
     assert_eq!(measure.fresh_literal_rewalks, [3, 2, 1, 0, 0]);
 }
@@ -131,6 +133,7 @@ fn measure_construct_pipeline_callback_formula() {
     assert_eq!(measure.speculative_candidate_builds, 2);
     assert_eq!(measure.committed_candidate_builds, 1);
     assert_eq!(measure.candidate_trials, 2);
+    assert_eq!(measure.generic_preliminary_inference_runs, 3);
     assert_eq!(measure.callback_rewalks, [3, 2, 1, 0, 0]);
 }
 
