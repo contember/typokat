@@ -67,7 +67,7 @@ the listed policy/effects stay with their caller.
 
 | Surface | Duplication class | Neutral seam permitted | Policy/effects that must stay local | Proof before sharing |
 |---|---|---|---|---|
-| Class members | code duplication **and** repeated signature lowering | reserved, lifetime-free member callable surface consumed by the body pass | class/static type-param barriers, overload source order and implementation hiding, parameter properties, visibility/nominal metadata, initializer/body timing, diagnostic replay | class characterization corpus + exact diagnostic identity/order/cardinality |
+| Class members | code duplication, repeated signature lowering, and recursive application publication | immutable `ClassInstance` plus a lifetime-free member callable surface consumed by the body pass | declaration-SCC construction, one-layer projection, class/static type-param barriers, overload source order and implementation hiding, parameter properties, visibility/nominal metadata, initializer/body timing, ordered diagnostic replay | class characterization + recursive-application corpora and exact diagnostic identity/order/cardinality |
 | Test TOML | code duplication only | quoted string/array value parser and, only if equivalent, a parameterized table scanner | schema names, validation rules, paths, error aggregation and cursor recovery | both existing fixture suites retain exact accept/reject/error behavior |
 | Parameters | code duplication; some callers also re-lower | pure parameter shape/enumeration helper | strict vs recovery policy, contextual target, `DeclTypes` writes, destructuring access, default-expression check timing | direct shape tests + function/arrow/method/constructor corpus |
 | Prelude bootstrap | code duplication only per public entry path | parse/reserve/fill/check and lifetime-free handoff for one trusted prelude | single-file vs project module construction, import/export placeholders, module scheduling, user diagnostic channels | single/project prelude, shadowing, intrinsic-marker and declaration-index tests |
@@ -118,27 +118,161 @@ the listed policy/effects stay with their caller.
 - **Touch points.** `tests/cases/sr_semantic_duplication/`, focused existing test modules,
   `tests/conformance.rs`, `tests/cases/README.md`, and this sprint's run log. No production source.
 
-### WU1 — reserve class-member callable surfaces once (effort L)
+### WU0A — class-application architecture gate (effort L; decision/spec only)
+
+- **Problem.** WU0 exposed that the proposed reserved callable surface would sit on the current
+  mutable class-object/general-`Instantiation` recursion seam. Extending reservation to mutable
+  function rows would violate hash-consed `TypeId` identity, while eagerly constructing concrete
+  class applications would diverge on `Box<T[]>`.
+- **Verify first.** Trace recursive class applications through objects, collections, callbacks,
+  unions/intersections, deferred conditional/mapped types, indexed access, generic method metadata,
+  constructors, mutual declaration order, and repeated relation demands. Cross-check every public
+  syntax witness with `tsc 6.0.3 --strict` and review the proposal specifically against the type-store
+  and provisional relation-cache invariants.
+- **Scope.** Add the disabled recursive-class-application acceptance fixture and record the selected
+  immutable `ClassInstance` design in
+  [`ADR-0006`](../decisions/0006-immutable-class-instances-and-scc-publication.md): a finite
+  checker-side declaration graph, no-evaluation/no-relation surface mode, SCC publication barrier,
+  an explicit immutable `DeferredIndexedAccess`, bounded one-layer projection planning before a
+  read-only relation phase, query-local projection/evaluation overlays, typed exhaustion,
+  heritage-only poison propagation, transactional normalized cache/cycle keys, and ordered
+  diagnostic events. Explicitly reject mutable function rows. This unit changes no Rust and does not
+  enable the corpus.
+- **Acceptance / witness.** The new fixture covers every listed composite and demand path, mutual
+  references in both declaration orders, direct recursive relation in both source/target orders,
+  non-regular recursion, private/protected nominal origin, constructor parameter properties/
+  overloads, static cardinality and deliberate mismatches. Its 58 markers have exact line/code
+  parity with strict tsc; marker parser, divergence and docs validators pass, and no unowned false
+  negative is accepted.
+- **Review.** Architecture review must attack infinite application-graph expansion, partial SCC
+  visibility, cache poisoning, hidden evaluator work, loss of structural class relation, and
+  diagnostic duplication/order before WU1 production edits begin.
+- **Touch points.** `tests/cases/sr_semantic_duplication/`, `tests/cases/README.md`,
+  `docs/decisions/`, docs indexes, and this sprint only. No production source or Rust tests.
+
+### WU1 — immutable class-application rollout (effort XL; staged umbrella)
 
 - **Problem.** Class fill builds callable member signatures, but the body pass calls
-  `infer_function` and lowers them again; static methods then filter duplicate `TK2302` records.
-- **Verify first.** Trace each WU0 method/constructor through fill and body checking and record the
-  exact signature-lowering count, source order, overload visibility, type-param frame, and diagnostic
-  replay point.
-- **Scope.** Introduce the smallest class-member reserved-surface representation needed to carry the
-  already-lowered binder frame, receiver, parameters, declared return, and signature records into
-  body checking. Consume it without rebuilding the public member type. Preserve separate field and
-  accessor behavior; do not redesign class lowering or ordinary function hoisting.
-- **Stop gate.** Stop if one surface cannot preserve static class-type-param barriers, generic method
-  binder identity, overload implementation hiding, constructor parameter-property ownership, or
-  source-position diagnostics without a new module boundary or suppression filter.
-- **Acceptance / witness.** WU0 class fixtures retain exact diagnostics and external types; each
-  method/constructor signature is lowered once; static body-local `TK2302` remains while duplicate
-  signature `TK2302` no longer needs post-hoc deletion; class relation/nominal metadata is unchanged.
-- **Review.** Different adversarial reviewer hunts dropped errors across static/instance generic
-  methods, overloads, defaults, unresolved annotations, constructors and parameter properties.
-- **Touch points.** `src/check/checker/classes/{mod,members}.rs`, the existing function-surface seam
-  in `src/check/checker/{calls,context}.rs`, and WU0 tests only.
+  `infer_function` and lowers them again; static methods then filter duplicate `TK2302` records. The
+  current mutable reserved class object and alias-style instantiation fallback cannot soundly carry
+  the recursive application surfaces characterized by WU0A.
+- **Verify first.** Trace each WU0/WU0A method, constructor and class application through reserve,
+  declaration graph construction, SCC publication, one-layer projection, body checking and relation.
+  Record signature-lowering count, projection count, source order, overload visibility, type-param
+  frame, relation/cycle keys and diagnostic replay points.
+- **Hard stops.** No mutable function row, partially visible class projection, transitive concrete
+  application expansion, relation/evaluation during surface construction, span-based diagnostic
+  deletion, declaration-only relation cycle key, hidden mutable interner inside `Relater`, widened
+  relation-cache key, or cache/memo write from a provisional, unpublished, binder-aligned or
+  projection/evaluation-exhausted query. No durable evaluator result may be the only way read-only
+  relation sees a normalized operand, and no generic boolean helper may fold `Exhausted` into `No`.
+  Stop and re-review if any stage cannot preserve static barriers, generic method binder identity,
+  overload implementation hiding, constructor parameter-property ownership, private/protected
+  origin, heritage-poison boundaries, or ordered diagnostics.
+- **Stage rule.** WU1a-WU1d are separate spec-first implementation/review units. Each begins with
+  focused direct gates, lands atomically, and receives an independent false-negative/cache review
+  before the next stage. The disabled conformance directory is enabled only by WU1d; an earlier
+  stage must use direct Rust tests without weakening or partially enabling the acceptance fixture.
+
+#### WU1a — immutable representations and construction capabilities (effort L)
+
+- **Scope.** Add the distinct hash-consed `ClassInstance` tag/payload/side table and the immutable
+  `DeferredIndexedAccess { object, index }` form. Cover structural hash/equality, substitution,
+  rendering and every identity walker. Add the construction-state/capability API so evaluator,
+  projection and relation entrypoints that can encounter a class instance require published state;
+  `ClassSurfaceBuilder` exposes none of those operations. Do not yet redirect class consumers.
+- **Direct gates.** Prove equal complete application keys deduplicate, different class identities or
+  ordered arguments do not, and `ClassInstance` never enters alias-`Instantiation` dispatch. Prove
+  deferred indexed access hashes/substitutes/renders by both ordered children, evaluates only one
+  demanded outer layer, and is identical-only while unevaluated. Direct API tests pin
+  `DemandOutcome<T> = Ready(T) | Exhausted` and
+  `RelationOutcome = Yes | No | Exhausted`; exhaustive matching must not expose a binary
+  exhaustion-folding helper. Every public evaluation, projection and relation entrypoint must reject
+  a pre-publication application; test tripwire counts and durable cache/memo writes remain exactly
+  zero.
+- **Review / touch points.** Independently audit all type-tag matches and walkers for an accidental
+  alias fallback or missing child. Touch only the type representation/interner/substitution/display,
+  the narrow evaluator form, capability definitions and direct tests.
+
+#### WU1b — declaration graph, SCC publication, heritage, and events (effort XL)
+
+- **Scope.** Move mutability into the checker-owned finite declaration graph. Build surfaces in
+  no-evaluation/no-relation mode; attach typed pending obligations/events; extract every identity
+  edge named by ADR-0006; process the SCC condensation DAG dependency-first; publish non-heritage
+  SCCs atomically; reject/poison heritage cycles; propagate poison only through derived heritage
+  edges; compose acyclic published bases before derived publication; and freeze class type-parameter
+  constraints/default side columns at publication. Add the total diagnostic-event key and retain
+  each method/constructor callable surface for later body reuse.
+- **Direct gates.** One edge-extraction table must exercise every identity child, including nested
+  static, constructor overload/parameter-property, `ClassInstance` argument/target and deferred
+  indexed-access operands. Prove both mutual declaration orders publish the same complete SCC;
+  base-before-derived composition is stable; a cyclic heritage SCC exposes no partial members and
+  owns its cycle incomplete reason. One- and two-level derived chains from that SCC must each remain
+  unpublished and own one `class/class-heritage/poisoned-base` event at their respective `extends`;
+  an otherwise identical ordinary property/signature reference must publish and must not propagate
+  poison. A frozen type-parameter descriptor rejects later mutation. Construction tripwires remain
+  zero. Synthetic shuffled completion must replay events by
+  `(module_ordinal, source_start, event_ordinal, record_ordinal)`.
+- **Review / touch points.** Independently inspect the complete graph-child list, condensation order,
+  poison propagation, state transitions, pending obligation ownership and one-time surface lowering.
+  Touch class construction/declaration scheduling, event storage/replay and direct tests; do not add
+  relation normalization yet.
+
+#### WU1c — bounded demand projection and read-only relation protocol (effort XL)
+
+- **Scope.** Add pass-local application-to-projection memoization and the explicit
+  `ProjectionPlanner -> ProjectionPlan -> Relater` protocol from ADR-0006. Each public query gets a
+  fresh 128-distinct-application budget; the planner interns missing one-layer projections before
+  relation and records demanded conditional/mapped/`keyof`/alias/deferred-indexed evaluations in a
+  query-local `TypeId -> TypeId` overlay. Relation sees only immutable `Store` plus that overlay and
+  normalizes the concrete operand pair before the unchanged three-word cache/cycle key. Buffer
+  evaluator, projection-memo and relation writes transactionally and discard every write when
+  exhaustion or another existing non-cacheable context taints the plan/query.
+- **Direct gates.** Count one projection per complete `ClassInstance TypeId` and prove memo hits reuse
+  the exact projection id without buying depth in a later query. Before any durable memo commit,
+  read-only relation must consume query-local evaluated ids for deferred indexed access,
+  conditional, mapped, `keyof` and alias results; a probe where the raw deferred ids would mismatch
+  must relate through the overlay. Evaluator/projection memo lengths remain unchanged after planning
+  and during relation, then advance only at the explicit successful transaction commit. Alternating
+  bad/good and repeated same-pair whole-type relations must be order-independent in both directions.
+  A non-regular chain admits exactly 128 distinct
+  applications and returns typed `Exhausted` at the 129th with
+  `incomplete[relation/class-projection-budget]`; a sibling mismatch after demanded exhaustion must
+  not replace that outcome. A mismatch proven before an unreachable frontier remains `No`. Both
+  cases leave durable evaluator/projection/relation cache insert counters unchanged when planning
+  discovered exhaustion. Conditional-extends exhaustion preserves the exact original deferred
+  conditional `TypeId`, selects neither branch and writes no conditional memo. Cycle-stack probes
+  must show concrete normalized pairs, never a declaration `ClassId`.
+- **Review / touch points.** Independently audit ownership and borrow boundaries, budget accounting,
+  memo visibility, taint propagation and every cache promotion. Touch only projection planning,
+  class-aware relation normalization, required evaluator transaction seams and direct tests.
+
+#### WU1d — consumer integration, callable reuse, and corpus enablement (effort XL)
+
+- **Scope.** Route annotation/member/index/`new`/call, inheritance, contextual typing,
+  destructuring, `keyof`, static access and constructor consumers through the published projection
+  API. Reuse the retained binder frame, receiver, parameters, declared return and overload records
+  for body checking without rebuilding the public callable type. Preserve separate field/accessor
+  behavior and ordinary function hoisting. Enable the disabled semantic-duplication corpus only in
+  this final stage.
+- **Direct gates.** Exercise contextual callbacks, `const { value }` destructuring, `keyof` over a
+  class instance, static access and class-type-parameter barriers, constructor overload/access/
+  parameter-property paths, acyclic inheritance composition, cyclic-heritage rejection and both
+  poisoned-derived chain depths. Pin private/protected origin through nested carriers. Final
+  assignment/argument obligations convert typed exhaustion to conservative `No` plus one incomplete
+  record. An exhausted inference contributes no candidate/substitution. An exhausted
+  first overload candidate aborts selection and does not choose an otherwise matching later
+  overload; an earlier definitive winner still avoids later candidates. Member/index/`keyof`/call/
+  construct shape paths propagate exhaustion to their explicit recovery boundary rather than using
+  a partial/error shape. Every method/constructor signature is lowered once.
+  `class_diagnostics_preserve_current_raw_vector_order` is replaced by the exact six-record
+  source-event vector required by ADR-0006; five static `TK2302` events remain distinct and lexical.
+  Both WU0/WU0A fixtures then pass, including all 58 recursive-application markers, and ordinary
+  structural/nominal behavior remains unchanged.
+- **Review / touch points.** A different adversarial reviewer hunts dropped errors, duplicate
+  diagnostics and order dependence across every fixture demand path, inspects projection/cache
+  counters, and cross-checks fresh probes with strict tsc. Touch class consumers/body reuse and the
+  conformance enablement; do not redesign unrelated evaluator, relation or function-hoisting paths.
 
 ### WU2 — extract the test-only TOML subset helper (effort S)
 
@@ -279,8 +413,9 @@ the listed policy/effects stay with their caller.
   `TypeId`; cross-run caching, stable structural hashing, and incrementality remain separately owned.
 - Candidate-local reuse, speculative transactions, or rollback machinery without the completed WU0
   effect ledger and separate explicit approval.
-- Changes to relation cache keys/cycle policy/reason chains, CFG narrowing, class nominal identity,
-  public TypeScript coverage, diagnostic codes, or deliberate divergence policy.
+- Changes to relation cache width/kinds, provisional-cycle policy/reason chains, CFG narrowing,
+  class nominal identity, diagnostic codes, or deliberate divergence policy. WU1 owns only the
+  ADR-0006 class-projection normalization before the unchanged three-word relation key.
 - A general TOML crate/dependency, a general compilation-unit/prelude framework, a bytecode VM, or
   cosmetic extraction whose only result is fewer lines.
 - Optimizing mapped/constraint work in WU7. Measurement may propose follow-up ownership; it does not
@@ -302,23 +437,35 @@ the listed policy/effects stay with their caller.
 6. Every checker-affecting WU starts from a separate spec commit and ends with review by an agent who
    did not implement it. Review hunts false negatives first and cross-checks fresh syntax probes with
    `tsc 6.0.3 --strict`.
+7. Class applications follow
+   [ADR-0006](../decisions/0006-immutable-class-instances-and-scc-publication.md): immutable
+   application nodes distinct from alias instantiation, immutable deferred indexed access, finite
+   declaration-SCC publication with heritage-only poison propagation, a 128-application projection/
+   evaluation overlay before read-only relation, typed `Yes | No | Exhausted` outcomes,
+   transactional normalized relation keys and ordered diagnostic events. Mutable function rows are
+   forbidden.
 
 ## Sequencing
 
 | Order | Unit | Gate |
 |---:|---|---|
 | 1 | WU0 | Behavior-neutral spec commit and reviewed effect ledger before production edits. |
-| 2 | WU1 | Class reservation first; it removes the most fragile diagnostic-suppression seam. |
-| 3 | WU2 and WU3 | May run independently after WU0; one writer per disjoint file set. |
-| 4 | WU4 | After WU1 so the bootstrap helper consumes the settled surface behavior. |
-| 5 | WU5 | After WU0 ledger; selector sharing only, with candidate reuse forbidden. |
-| 6 | WU6 | Gated optimization lands and receives independent review before shared evaluator files move again. |
-| 7 | WU7 | Measurement-only follow-up starts from committed WU6; no overlapping `extends.rs`/test edits. |
-| 8 | WU8 | Independent whole-diff review, full gates, ratchet, outcome and archive. |
+| 2 | WU0A | Architecture/spec commit and independent cache/termination review before class production edits. |
+| 3 | WU1a | Establish immutable representations and enforce construction capabilities before graph work. |
+| 4 | WU1b | Publish complete declaration SCCs and event ownership before any projection/relation consumer. |
+| 5 | WU1c | Land bounded projection planning and cache transactions before class consumers switch over. |
+| 6 | WU1d | Integrate consumers/reuse, pass both class corpora, then enable the directory. |
+| 7 | WU2 and WU3 | May run independently after WU0; one writer per disjoint file set. |
+| 8 | WU4 | After WU1d so the bootstrap helper consumes settled class-surface behavior. |
+| 9 | WU5 | After WU0 ledger; selector sharing only, with candidate reuse forbidden. |
+| 10 | WU6 | Gated optimization lands and receives independent review before shared evaluator files move again. |
+| 11 | WU7 | Measurement-only follow-up starts from committed WU6; no overlapping `extends.rs`/test edits. |
+| 12 | WU8 | Independent whole-diff review, full gates, ratchet, outcome and archive. |
 
-Each production WU is an atomic implementation commit separate from WU0's spec commit. The leader
-verifies and commits; implementation and adversarial review use different agents. No failing
-performance candidate is folded into a neighboring cleanup commit.
+Each production WU, including each WU1 stage, is an atomic implementation commit after its own
+focused spec/test commit. These remain separate from WU0's characterization spec and WU0A's
+architecture/spec commit. The leader verifies and commits; implementation and adversarial review
+use different agents. No failing performance candidate is folded into a neighboring cleanup commit.
 
 ## Run log
 
@@ -382,3 +529,25 @@ unknown effect above.
 - 2026-07-13 — Leader gates passed: `cargo test` and
   `cargo clippy --all-targets -- -D warnings`. This closes the WU0 test/spec gate only; production
   implementation starts in later work units.
+- 2026-07-13 — The pre-WU1 architecture direction was selected at HEAD `8b08d84` →
+  [ADR-0006](../decisions/0006-immutable-class-instances-and-scc-publication.md). WU1 no longer
+  permits mutable reserved function rows or alias-style class recursion.
+- 2026-07-13 — WU0A's disabled recursive-class-application fixture has exact line/code parity with
+  `tsc 6.0.3 --strict`: 58 expected diagnostics across every required composite, demand, direct
+  relation direction, declaration order, nominal-origin and construction-cardinality path, with no
+  additional or unowned false negative. Whole-corpus error/incomplete marker parser checks pass; no
+  production code or corpus enablement changed.
+- 2026-07-13 — Independent ADR review initially returned **FAIL** on the unbounded non-regular
+  relation path, an implicit mutable-interner dependency in relation, incomplete identity-edge and
+  heritage publication rules, cache-taint persistence, pre-publication enforcement and rollout
+  proof. ADR-0006 and WU1a-WU1d now specify the 128-application planner, read-only relation phase,
+  transactional zero-write exhaustion, exhaustive SCC identity edges and direct heritage-cycle
+  handling, capability tripwires, immutable deferred indexed access and direct gates. The completed
+  targeted review sequence below closes this architecture gate with **PASS**.
+- 2026-07-13 — Targeted second ADR review returned **FAIL** on three remaining protocol gaps:
+  evaluated deferred nodes were not carried into read-only relation before durable memo commit;
+  exhaustion was still folded into binary relation failure; and poison propagation through derived
+  heritage chains was unspecified. ADR-0006 and WU1a-WU1d now add a query-local evaluation overlay,
+  exhaustive `Yes | No | Exhausted` caller policies, and dependency-first heritage-only poison with
+  owned incomplete events and one-/two-level chain gates. Third targeted architecture re-review:
+  **PASS** — those three corrected protocols have no remaining pre-WU1 architecture blockers.

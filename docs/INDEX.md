@@ -34,7 +34,12 @@ decisions → reference → archive.
      If everything is "hot", nothing is. -->
 - **Semantic duplication/layering sprint active 2026-07-13** — class-member reserved surfaces,
   neutral test/parameter/prelude seams, call/construct selector parity, lazy conditional-infer work,
-  and measurement-only mapped/constraint follow-up with explicit cache/reuse stop gates.
+  and measurement-only mapped/constraint follow-up with explicit cache/reuse stop gates. Before
+  staged WU1a-WU1d, [`ADR-0006`](decisions/0006-immutable-class-instances-and-scc-publication.md)
+  requires immutable class applications and deferred indexed access, declaration-SCC publication,
+  heritage-only poison propagation, bounded query-local projection/evaluation overlays before
+  read-only relation, typed exhaustion, transactional cache writes, and ordered diagnostic events;
+  mutable function rows are rejected.
 - **Bundler resolution is the 1.0 profile** —
   [`ADR-0007`](decisions/0007-bundler-resolution-via-oxc-resolver.md) delegates physical
   package/filesystem/tsconfig resolution to `oxc_resolver`; typokat retains project enumeration,
