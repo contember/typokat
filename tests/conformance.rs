@@ -153,7 +153,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("sr_rewrite_hotpath_wu7", true),
     // WU8 — mapped-value replacement still has a host-recursive structural walk.
     // Disabled spec; the local work-stack implementation enables this corpus.
-    ("sr_rewrite_hotpath_wu8", false),
+    ("sr_rewrite_hotpath_wu8", true),
     // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
     // (backlog 73). ENABLED by WU3 (expression child slots), WU4 (statement
     // containers), and WU5 (annotation / signature / class-member accounting): the

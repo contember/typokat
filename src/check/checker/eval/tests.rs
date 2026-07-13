@@ -1973,3 +1973,263 @@ fn recursive_mapped_value_terminates_with_stable_identity() {
     let second = eval(&mut interner, &mut next, &mut memo2, mapped);
     assert_eq!(first, second, "repeated recursive evaluation is stable");
 }
+
+#[test]
+fn mapped_value_rewrite_preserves_function_metadata_and_signature_shape() {
+    use crate::types::repr::{MappedType, ModifierOp};
+
+    let mut interner = Interner::with_intrinsics();
+    let placeholder = interner.intern_mapped_value();
+    let rest = interner.intern_array(placeholder);
+    let template = interner.intern_function(FunctionType {
+        type_params: vec![
+            GenericTypeParam {
+                id: TypeParamId(97_000),
+                constraint: Some(placeholder),
+                default: Some(placeholder),
+            },
+            GenericTypeParam {
+                id: TypeParamId(97_001),
+                constraint: None,
+                default: Some(placeholder),
+            },
+        ],
+        receiver: Some(placeholder),
+        params: vec![
+            ParameterType::optional("optional", placeholder),
+            ParameterType::defaulted("defaulted", placeholder),
+            ParameterType::rest("tail", rest),
+        ],
+        ret: placeholder,
+    });
+    let leaf = interner.intern_literal(LiteralValue::String("leaf".into()));
+    let source = interner.intern_object(ObjectType {
+        properties: vec![prop("value", leaf)],
+        ..Default::default()
+    });
+    let mapped = interner.intern_mapped(MappedType {
+        homomorphic: true,
+        key_source: source,
+        value_template: template,
+        modifiers_source: None,
+        optional_modifier: ModifierOp::Keep,
+        readonly_modifier: ModifierOp::Keep,
+    });
+    let mut next = 97_010;
+    let mut memo = FxHashMap::default();
+
+    let result = eval(&mut interner, &mut next, &mut memo, mapped);
+    let value = interner
+        .store()
+        .object_type(result)
+        .unwrap()
+        .property("value")
+        .unwrap()
+        .ty;
+    let leaf_array = interner.intern_array(leaf);
+    let function = interner.store().function_type(value).unwrap();
+
+    assert_eq!(
+        function.type_params,
+        vec![
+            GenericTypeParam {
+                id: TypeParamId(97_000),
+                constraint: Some(leaf),
+                default: Some(leaf),
+            },
+            GenericTypeParam {
+                id: TypeParamId(97_001),
+                constraint: None,
+                default: Some(leaf),
+            },
+        ]
+    );
+    assert_eq!(function.receiver, Some(leaf));
+    assert_eq!(
+        function.params[0],
+        ParameterType::optional("optional", leaf)
+    );
+    assert_eq!(
+        function.params[1],
+        ParameterType::defaulted("defaulted", leaf)
+    );
+    assert_eq!(function.params[2], ParameterType::rest("tail", leaf_array));
+    assert_eq!(function.ret, leaf);
+}
+
+#[test]
+fn mapped_value_rewrite_keeps_a_partial_cycle_and_reuses_its_clone() {
+    use crate::types::repr::{MappedType, ModifierOp};
+
+    let mut interner = Interner::with_intrinsics();
+    let placeholder = interner.intern_mapped_value();
+    let recursive = interner.reserve_object();
+    interner.fill_object(
+        recursive,
+        ObjectType {
+            properties: vec![prop("self", recursive), prop("value", placeholder)],
+            ..Default::default()
+        },
+    );
+    let leaf = interner.intern_literal(LiteralValue::String("leaf".into()));
+    let source = interner.intern_object(ObjectType {
+        properties: vec![prop("mapped", leaf)],
+        ..Default::default()
+    });
+    let mapped = interner.intern_mapped(MappedType {
+        homomorphic: true,
+        key_source: source,
+        value_template: recursive,
+        modifiers_source: None,
+        optional_modifier: ModifierOp::Keep,
+        readonly_modifier: ModifierOp::Keep,
+    });
+    let mut next = 97_020;
+    let mut first_memo = FxHashMap::default();
+    let first = eval(&mut interner, &mut next, &mut first_memo, mapped);
+    let first_value = interner
+        .store()
+        .object_type(first)
+        .unwrap()
+        .property("mapped")
+        .unwrap()
+        .ty;
+
+    assert_ne!(first_value, recursive);
+    let clone = interner.store().object_type(first_value).unwrap();
+    assert_eq!(clone.property("self").unwrap().ty, recursive);
+    assert_eq!(clone.property("value").unwrap().ty, leaf);
+
+    let mut second_memo = FxHashMap::default();
+    let second = eval(&mut interner, &mut next, &mut second_memo, mapped);
+    assert_eq!(first, second);
+}
+
+#[test]
+fn mapped_value_rewrite_observes_nested_mapped_and_instantiation_boundaries() {
+    use crate::types::repr::{MappedType, ModifierOp};
+
+    let mut interner = Interner::with_intrinsics();
+    let placeholder = interner.intern_mapped_value();
+    let leaf = interner.intern_literal(LiteralValue::String("leaf".into()));
+    let nested = interner.intern_mapped(MappedType {
+        homomorphic: false,
+        key_source: placeholder,
+        value_template: placeholder,
+        modifiers_source: Some(placeholder),
+        optional_modifier: ModifierOp::Keep,
+        readonly_modifier: ModifierOp::Keep,
+    });
+    let base = interner.intern_array(placeholder);
+    let instantiation =
+        interner.intern_instantiation(base, vec![(TypeParamId(97_030), placeholder)]);
+    let mut next = 97_031;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    let rewritten_nested = evaluator.replace_mapped_value(nested, leaf);
+    let nested = evaluator
+        .interner
+        .store()
+        .mapped_type(rewritten_nested)
+        .unwrap();
+    assert_eq!(nested.key_source, leaf);
+    assert_eq!(nested.modifiers_source, Some(leaf));
+    assert_eq!(nested.value_template, placeholder);
+
+    let rewritten_instantiation = evaluator.replace_mapped_value(instantiation, leaf);
+    let instantiation = evaluator
+        .interner
+        .store()
+        .instantiation_type(rewritten_instantiation)
+        .unwrap();
+    assert_eq!(instantiation.base, base);
+    assert_eq!(instantiation.args, vec![(TypeParamId(97_030), leaf)]);
+}
+
+#[test]
+fn mapped_value_rewrite_reuses_a_shared_rewritten_child() {
+    let mut interner = Interner::with_intrinsics();
+    let placeholder = interner.intern_mapped_value();
+    let shared = interner.intern_object(ObjectType {
+        properties: vec![prop("value", placeholder)],
+        ..Default::default()
+    });
+    let source = interner.intern_tuple(vec![shared, shared]);
+    let leaf = interner.intern_literal(LiteralValue::String("leaf".into()));
+    let mut next = 97_040;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    let rewritten = evaluator.replace_mapped_value(source, leaf);
+    let tuple = evaluator.interner.store().tuple_type(rewritten).unwrap();
+    assert_ne!(tuple.elements[0], shared);
+    assert_eq!(tuple.elements[0], tuple.elements[1]);
+}
+
+#[test]
+fn mapped_value_rewrite_handles_a_deep_alternating_function_spine() {
+    use crate::types::repr::{MappedType, ModifierOp};
+
+    const DEPTH: u32 = 10_005;
+
+    let mut interner = Interner::with_intrinsics();
+    let placeholder = interner.intern_mapped_value();
+    let mut template = placeholder;
+    let void = interner.well_known().void;
+    for index in 0..DEPTH {
+        let type_param = GenericTypeParam {
+            id: TypeParamId(97_100 + index),
+            constraint: (index % 5 == 0).then_some(template),
+            default: (index % 5 == 1).then_some(template),
+        };
+        template = interner.intern_function(FunctionType {
+            type_params: vec![type_param],
+            receiver: (index % 5 == 2).then_some(template),
+            params: if index % 5 == 3 {
+                vec![ParameterType::required("value", template)]
+            } else {
+                Vec::new()
+            },
+            ret: if index % 5 == 4 { template } else { void },
+        });
+    }
+    let leaf = interner.intern_literal(LiteralValue::String("leaf".into()));
+    let source = interner.intern_object(ObjectType {
+        properties: vec![prop("value", leaf)],
+        ..Default::default()
+    });
+    let mapped = interner.intern_mapped(MappedType {
+        homomorphic: true,
+        key_source: source,
+        value_template: template,
+        modifiers_source: None,
+        optional_modifier: ModifierOp::Keep,
+        readonly_modifier: ModifierOp::Keep,
+    });
+    let mut next = 98_000;
+    let mut memo = FxHashMap::default();
+
+    let result = eval(&mut interner, &mut next, &mut memo, mapped);
+    let mut current = interner
+        .store()
+        .object_type(result)
+        .unwrap()
+        .property("value")
+        .unwrap()
+        .ty;
+    for index in (0..DEPTH).rev() {
+        let function = interner.store().function_type(current).unwrap();
+        current = match index % 5 {
+            0 => function.type_params[0].constraint.unwrap(),
+            1 => function.type_params[0].default.unwrap(),
+            2 => function.receiver.unwrap(),
+            3 => function.params[0].ty,
+            4 => function.ret,
+            _ => unreachable!(),
+        };
+    }
+    assert_eq!(current, leaf);
+}

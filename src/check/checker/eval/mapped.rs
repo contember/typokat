@@ -12,6 +12,249 @@ struct MappedRewrite {
     memo: FxHashMap<TypeId, TypeId>,
 }
 
+/// One pending post-order rewrite. Each frame owns the store snapshot needed to
+/// rebuild after its child results are available.
+enum MappedRewriteFrame {
+    Identity {
+        ty: TypeId,
+        result: TypeId,
+    },
+    Mapped {
+        ty: TypeId,
+        mapped: MappedType,
+    },
+    Object {
+        ty: TypeId,
+        object: ObjectType,
+    },
+    Function {
+        ty: TypeId,
+        function: FunctionType,
+    },
+    Union {
+        ty: TypeId,
+        members: Vec<TypeId>,
+    },
+    Intersection {
+        ty: TypeId,
+        members: Vec<TypeId>,
+    },
+    Array {
+        ty: TypeId,
+        element: TypeId,
+    },
+    Tuple {
+        ty: TypeId,
+        tuple: TupleType,
+    },
+    Readonly {
+        ty: TypeId,
+        operand: TypeId,
+    },
+    Conditional {
+        ty: TypeId,
+        conditional: ConditionalType,
+    },
+    Instantiation {
+        ty: TypeId,
+        base: TypeId,
+        args: Vec<(TypeParamId, TypeId)>,
+    },
+    Template {
+        ty: TypeId,
+        template: TemplateType,
+    },
+    Keyof {
+        ty: TypeId,
+        operand: TypeId,
+    },
+}
+
+impl MappedRewriteFrame {
+    fn ty(&self) -> TypeId {
+        match self {
+            MappedRewriteFrame::Identity { ty, .. }
+            | MappedRewriteFrame::Mapped { ty, .. }
+            | MappedRewriteFrame::Object { ty, .. }
+            | MappedRewriteFrame::Function { ty, .. }
+            | MappedRewriteFrame::Union { ty, .. }
+            | MappedRewriteFrame::Intersection { ty, .. }
+            | MappedRewriteFrame::Array { ty, .. }
+            | MappedRewriteFrame::Tuple { ty, .. }
+            | MappedRewriteFrame::Readonly { ty, .. }
+            | MappedRewriteFrame::Conditional { ty, .. }
+            | MappedRewriteFrame::Instantiation { ty, .. }
+            | MappedRewriteFrame::Template { ty, .. }
+            | MappedRewriteFrame::Keyof { ty, .. } => *ty,
+        }
+    }
+
+    fn child_count(&self) -> usize {
+        match self {
+            MappedRewriteFrame::Identity { .. } => 0,
+            MappedRewriteFrame::Mapped { mapped, .. } => {
+                1 + usize::from(mapped.modifiers_source.is_some())
+            }
+            MappedRewriteFrame::Object { object, .. } => {
+                object.properties.len()
+                    + usize::from(object.string_index.is_some())
+                    + usize::from(object.number_index.is_some())
+                    + object.call_signatures.len()
+                    + object.construct_signatures.len()
+            }
+            MappedRewriteFrame::Function { function, .. } => {
+                function
+                    .type_params
+                    .iter()
+                    .map(|type_param| {
+                        usize::from(type_param.constraint.is_some())
+                            + usize::from(type_param.default.is_some())
+                    })
+                    .sum::<usize>()
+                    + usize::from(function.receiver.is_some())
+                    + function.params.len()
+                    + 1
+            }
+            MappedRewriteFrame::Union { members, .. }
+            | MappedRewriteFrame::Intersection { members, .. } => members.len(),
+            MappedRewriteFrame::Array { .. }
+            | MappedRewriteFrame::Readonly { .. }
+            | MappedRewriteFrame::Keyof { .. } => 1,
+            MappedRewriteFrame::Tuple { tuple, .. } => {
+                tuple.elements.len() + usize::from(tuple.rest.is_some())
+            }
+            MappedRewriteFrame::Conditional { .. } => 4,
+            MappedRewriteFrame::Instantiation { args, .. } => args.len(),
+            MappedRewriteFrame::Template { template, .. } => template.holes.len(),
+        }
+    }
+
+    fn push_children_reverse(&self, tasks: &mut Vec<MappedRewriteTask>) {
+        let mut push = |ty| tasks.push(MappedRewriteTask::Visit(ty));
+        match self {
+            MappedRewriteFrame::Identity { .. } => {}
+            MappedRewriteFrame::Mapped { mapped, .. } => {
+                if let Some(modifiers_source) = mapped.modifiers_source {
+                    push(modifiers_source);
+                }
+                push(mapped.key_source);
+            }
+            MappedRewriteFrame::Object { object, .. } => {
+                for &signature in object.construct_signatures.iter().rev() {
+                    push(signature);
+                }
+                for &signature in object.call_signatures.iter().rev() {
+                    push(signature);
+                }
+                if let Some(number_index) = object.number_index {
+                    push(number_index);
+                }
+                if let Some(string_index) = object.string_index {
+                    push(string_index);
+                }
+                for property in object.properties.iter().rev() {
+                    push(property.ty);
+                }
+            }
+            MappedRewriteFrame::Function { function, .. } => {
+                push(function.ret);
+                for parameter in function.params.iter().rev() {
+                    push(parameter.ty);
+                }
+                if let Some(receiver) = function.receiver {
+                    push(receiver);
+                }
+                for type_param in function.type_params.iter().rev() {
+                    if let Some(default) = type_param.default {
+                        push(default);
+                    }
+                    if let Some(constraint) = type_param.constraint {
+                        push(constraint);
+                    }
+                }
+            }
+            MappedRewriteFrame::Union { members, .. }
+            | MappedRewriteFrame::Intersection { members, .. } => {
+                for &member in members.iter().rev() {
+                    push(member);
+                }
+            }
+            MappedRewriteFrame::Array { element, .. } => push(*element),
+            MappedRewriteFrame::Tuple { tuple, .. } => {
+                if let Some(rest) = tuple.rest {
+                    push(rest.ty);
+                }
+                for &element in tuple.elements.iter().rev() {
+                    push(element);
+                }
+            }
+            MappedRewriteFrame::Readonly { operand, .. }
+            | MappedRewriteFrame::Keyof { operand, .. } => push(*operand),
+            MappedRewriteFrame::Conditional { conditional, .. } => {
+                push(conditional.false_branch);
+                push(conditional.true_branch);
+                push(conditional.extends_ty);
+                push(conditional.check);
+            }
+            MappedRewriteFrame::Instantiation { args, .. } => {
+                for &(_, value) in args.iter().rev() {
+                    push(value);
+                }
+            }
+            MappedRewriteFrame::Template { template, .. } => {
+                for &hole in template.holes.iter().rev() {
+                    push(hole);
+                }
+            }
+        }
+    }
+}
+
+enum MappedRewriteTask {
+    Visit(TypeId),
+    Finish(usize),
+}
+
+struct MappedRewriteChildren<'a> {
+    values: &'a [TypeId],
+    index: usize,
+}
+
+impl<'a> MappedRewriteChildren<'a> {
+    fn new(values: &'a [TypeId]) -> Self {
+        Self { values, index: 0 }
+    }
+
+    fn next(&mut self, original: TypeId) -> TypeId {
+        let result = self.values.get(self.index).copied();
+        debug_assert!(
+            result.is_some(),
+            "mapped rewrite frame is missing a child result"
+        );
+        self.index += 1;
+        result.unwrap_or(original)
+    }
+
+    fn take(&mut self, count: usize) -> Option<&'a [TypeId]> {
+        let start = self.index;
+        self.index += count;
+        let result = self.values.get(start..self.index);
+        debug_assert!(
+            result.is_some(),
+            "mapped rewrite frame is missing child results"
+        );
+        result
+    }
+
+    fn finish(&self) {
+        debug_assert_eq!(
+            self.index,
+            self.values.len(),
+            "mapped rewrite frame consumed the wrong number of child results"
+        );
+    }
+}
+
 impl<'a> ConditionalEvaluator<'a> {
     /// Schedule mapped-type evaluation. Free key sources defer conservatively;
     /// concrete key sources evaluate as tail steps before [`Task::AssembleMapped`]
@@ -462,211 +705,291 @@ impl<'a> ConditionalEvaluator<'a> {
     /// Replace every [`TypeTag::MappedValue`] placeholder (`T[K]`) in a mapped type's
     /// value template with `value` — the current key's source property type (M26).
     /// Recurses through structural composites and a conditional's components; re-interns
-    /// only when something changed. A **nested** mapped type descends into its
-    /// **key source only** (which is outer-scoped — `Outer<T> = { [K in keyof T]:
-    /// Ident<T[K]> }` injects the outer placeholder there, review probe X): its value
-    /// template rebinds its OWN placeholder and stays untouched (the cross-binder case
-    /// is out of subset, safe over-report).
+    /// only when something changed. A **nested** mapped type descends into its key and
+    /// modifiers sources (both outer-scoped); its value template rebinds its OWN
+    /// placeholder and stays untouched (the cross-binder case is out of subset, safe
+    /// over-report).
     pub(super) fn replace_mapped_value(&mut self, ty: TypeId, value: TypeId) -> TypeId {
-        // Own recursion-aware context (separate from the evaluator's `in_flight`/`memo`
-        // so a provisional cyclic rewrite can never poison the durable evaluator memo).
-        // The value template's TypeId graph can be genuinely cyclic (a recursive object
-        // alias via reserve/fill), so the host-recursive walk needs a cycle guard or it
-        // stack-overflows (recursive_mapped fixture). Repeated/reordered calls stay stable
-        // because interning is deterministic and the walk order is fixed.
         let mut ctx = MappedRewrite {
             value,
             in_progress: FxHashSet::default(),
             memo: FxHashMap::default(),
         };
-        self.replace_mapped_value_rec(ty, &mut ctx)
+        let mut tasks = vec![MappedRewriteTask::Visit(ty)];
+        let mut frames = Vec::new();
+        let mut values = Vec::new();
+
+        while let Some(task) = tasks.pop() {
+            match task {
+                MappedRewriteTask::Visit(ty) => {
+                    if let Some(&done) = ctx.memo.get(&ty) {
+                        values.push(done);
+                        continue;
+                    }
+                    if !ctx.in_progress.insert(ty) {
+                        values.push(ty);
+                        continue;
+                    }
+                    let frame = self.mapped_rewrite_frame(ty, ctx.value);
+                    let frame_index = frames.len();
+                    frames.push(frame);
+                    tasks.push(MappedRewriteTask::Finish(frame_index));
+                    frames[frame_index].push_children_reverse(&mut tasks);
+                }
+                MappedRewriteTask::Finish(frame_index) => {
+                    debug_assert_eq!(frame_index + 1, frames.len());
+                    let Some(frame) = frames.pop() else {
+                        debug_assert!(false, "mapped rewrite task lost its frame");
+                        continue;
+                    };
+                    let ty = frame.ty();
+                    let child_count = frame.child_count();
+                    let result = if let Some(start) = values.len().checked_sub(child_count) {
+                        let result = self.rebuild_mapped_rewrite_frame(frame, &values[start..]);
+                        values.truncate(start);
+                        result
+                    } else {
+                        debug_assert!(false, "mapped rewrite frame is missing child results");
+                        ty
+                    };
+                    debug_assert!(ctx.in_progress.remove(&ty));
+                    ctx.memo.insert(ty, result);
+                    values.push(result);
+                }
+            }
+        }
+
+        debug_assert!(
+            frames.is_empty(),
+            "mapped rewrite traversal left pending frames"
+        );
+        debug_assert!(
+            ctx.in_progress.is_empty(),
+            "mapped rewrite traversal left in-progress nodes"
+        );
+        debug_assert_eq!(
+            values.len(),
+            1,
+            "mapped rewrite traversal left extra results"
+        );
+        values.pop().unwrap_or(ty)
     }
 
-    /// Cycle guard around [`Self::replace_mapped_value_body`]. `ctx.memo` short-circuits
-    /// shared subgraphs; `ctx.in_progress` breaks cycles: re-entering an in-flight node
-    /// returns it unchanged (provisional — NOT memoized). A recursive value template in
-    /// the M26 subset carries no `T[K]` placeholder along its cycle, so identity is exact
-    /// there; a placeholder inside a genuine cycle is out of subset and safely
-    /// over-reported (the walk still terminates and never yields the error type). The body
-    /// keeps its `return ty` early-exits; cleanup here runs on every path.
-    fn replace_mapped_value_rec(&mut self, ty: TypeId, ctx: &mut MappedRewrite) -> TypeId {
-        if let Some(&done) = ctx.memo.get(&ty) {
-            return done;
-        }
-        if !ctx.in_progress.insert(ty) {
-            return ty;
-        }
-        let result = self.replace_mapped_value_body(ty, ctx);
-        ctx.in_progress.remove(&ty);
-        ctx.memo.insert(ty, result);
-        result
-    }
-
-    fn replace_mapped_value_body(&mut self, ty: TypeId, ctx: &mut MappedRewrite) -> TypeId {
+    fn mapped_rewrite_frame(&self, ty: TypeId, value: TypeId) -> MappedRewriteFrame {
+        let identity = |result| MappedRewriteFrame::Identity { ty, result };
         match self.interner.store().tag(ty) {
-            TypeTag::MappedValue => ctx.value,
-            TypeTag::Intrinsic | TypeTag::Literal | TypeTag::TypeParam | TypeTag::Infer => ty,
+            TypeTag::MappedValue => identity(value),
+            TypeTag::Intrinsic | TypeTag::Literal | TypeTag::TypeParam | TypeTag::Infer => {
+                identity(ty)
+            }
             TypeTag::Mapped => {
                 let Some(mapped) = self.interner.store().mapped_type(ty).copied() else {
-                    return ty;
+                    return identity(ty);
                 };
-                let key_source = self.replace_mapped_value_rec(mapped.key_source, ctx);
-                // M28: the modifiers source is outer-scoped like the key source (the
-                // captured `T` of a nested `{ [P in K]: T[P] }` may be the OUTER map's
-                // placeholder) — descend into it too.
-                let modifiers_source = mapped
-                    .modifiers_source
-                    .map(|ms| self.replace_mapped_value_rec(ms, ctx));
-                if key_source == mapped.key_source && modifiers_source == mapped.modifiers_source {
-                    return ty;
-                }
-                self.interner.intern_mapped(MappedType {
-                    key_source,
-                    modifiers_source,
-                    ..mapped
-                })
+                MappedRewriteFrame::Mapped { ty, mapped }
             }
             TypeTag::Object => {
                 let Some(object) = self.interner.store().object_type(ty).cloned() else {
-                    return ty;
+                    return identity(ty);
                 };
+                MappedRewriteFrame::Object { ty, object }
+            }
+            TypeTag::Function => {
+                let Some(function) = self.interner.store().function_type(ty).cloned() else {
+                    return identity(ty);
+                };
+                MappedRewriteFrame::Function { ty, function }
+            }
+            TypeTag::Union => {
+                let Some(members) = self
+                    .interner
+                    .store()
+                    .union_members(ty)
+                    .map(|members| members.to_vec())
+                else {
+                    return identity(ty);
+                };
+                MappedRewriteFrame::Union { ty, members }
+            }
+            TypeTag::Intersection => {
+                let Some(members) = self
+                    .interner
+                    .store()
+                    .intersection_members(ty)
+                    .map(|members| members.to_vec())
+                else {
+                    return identity(ty);
+                };
+                MappedRewriteFrame::Intersection { ty, members }
+            }
+            TypeTag::Array => {
+                let Some(element) = self
+                    .interner
+                    .store()
+                    .array_type(ty)
+                    .map(|array| array.element)
+                else {
+                    return identity(ty);
+                };
+                MappedRewriteFrame::Array { ty, element }
+            }
+            TypeTag::Tuple => {
+                let Some(tuple) = self.interner.store().tuple_type(ty).cloned() else {
+                    return identity(ty);
+                };
+                MappedRewriteFrame::Tuple { ty, tuple }
+            }
+            TypeTag::Readonly => {
+                let Some(operand) = self.interner.store().readonly_operand(ty) else {
+                    return identity(ty);
+                };
+                MappedRewriteFrame::Readonly { ty, operand }
+            }
+            TypeTag::Conditional => {
+                let Some(conditional) = self.interner.store().conditional_type(ty).copied() else {
+                    return identity(ty);
+                };
+                MappedRewriteFrame::Conditional { ty, conditional }
+            }
+            TypeTag::Instantiation => {
+                let Some(instantiation) = self.interner.store().instantiation_type(ty).cloned()
+                else {
+                    return identity(ty);
+                };
+                MappedRewriteFrame::Instantiation {
+                    ty,
+                    base: instantiation.base,
+                    args: instantiation.args,
+                }
+            }
+            TypeTag::Template => {
+                let Some(template) = self.interner.store().template_type(ty).cloned() else {
+                    return identity(ty);
+                };
+                MappedRewriteFrame::Template { ty, template }
+            }
+            TypeTag::Keyof => {
+                let Some(operand) = self.interner.store().keyof_operand(ty) else {
+                    return identity(ty);
+                };
+                MappedRewriteFrame::Keyof { ty, operand }
+            }
+        }
+    }
+
+    fn rebuild_mapped_rewrite_frame(
+        &mut self,
+        frame: MappedRewriteFrame,
+        child_results: &[TypeId],
+    ) -> TypeId {
+        let mut children = MappedRewriteChildren::new(child_results);
+        let result = match frame {
+            MappedRewriteFrame::Identity { result, .. } => result,
+            MappedRewriteFrame::Mapped { ty, mapped } => {
+                let key_source = children.next(mapped.key_source);
+                let modifiers_source = mapped.modifiers_source.map(|source| children.next(source));
+                if key_source != mapped.key_source || modifiers_source != mapped.modifiers_source {
+                    self.interner.intern_mapped(MappedType {
+                        key_source,
+                        modifiers_source,
+                        ..mapped
+                    })
+                } else {
+                    ty
+                }
+            }
+            MappedRewriteFrame::Object { ty, object } => {
                 let mut changed = false;
                 let mut new = object.clone();
-                for prop in &mut new.properties {
-                    let nt = self.replace_mapped_value_rec(prop.ty, ctx);
-                    changed |= nt != prop.ty;
-                    prop.ty = nt;
+                for (original, rewritten) in object.properties.iter().zip(&mut new.properties) {
+                    let value = children.next(original.ty);
+                    changed |= value != original.ty;
+                    rewritten.ty = value;
                 }
-                new.string_index = object.string_index.map(|v| {
-                    let nv = self.replace_mapped_value_rec(v, ctx);
-                    changed |= nv != v;
-                    nv
-                });
-                new.number_index = object.number_index.map(|v| {
-                    let nv = self.replace_mapped_value_rec(v, ctx);
-                    changed |= nv != v;
-                    nv
-                });
+                new.string_index = object.string_index.map(|source| children.next(source));
+                changed |= new.string_index != object.string_index;
+                new.number_index = object.number_index.map(|source| children.next(source));
+                changed |= new.number_index != object.number_index;
                 new.call_signatures = object
                     .call_signatures
                     .iter()
-                    .map(|&s| {
-                        let ns = self.replace_mapped_value_rec(s, ctx);
-                        changed |= ns != s;
-                        ns
-                    })
+                    .map(|&source| children.next(source))
                     .collect();
+                changed |= new.call_signatures != object.call_signatures;
                 new.construct_signatures = object
                     .construct_signatures
                     .iter()
-                    .map(|&s| {
-                        let ns = self.replace_mapped_value_rec(s, ctx);
-                        changed |= ns != s;
-                        ns
-                    })
+                    .map(|&source| children.next(source))
                     .collect();
+                changed |= new.construct_signatures != object.construct_signatures;
                 if changed {
                     self.interner.intern_object(new)
                 } else {
                     ty
                 }
             }
-            TypeTag::Function => {
-                let Some(function) = self.interner.store().function_type(ty).cloned() else {
-                    return ty;
-                };
+            MappedRewriteFrame::Function { ty, function } => {
                 let mut changed = false;
                 let mut new = function.clone();
-                new.receiver = function.receiver.map(|receiver| {
-                    let receiver = self.replace_mapped_value_rec(receiver, ctx);
-                    changed |= Some(receiver) != function.receiver;
-                    receiver
-                });
-                for param in &mut new.params {
-                    let nt = self.replace_mapped_value_rec(param.ty, ctx);
-                    changed |= nt != param.ty;
-                    param.ty = nt;
+                for (original, rewritten) in function.type_params.iter().zip(&mut new.type_params) {
+                    rewritten.constraint = original.constraint.map(|source| children.next(source));
+                    rewritten.default = original.default.map(|source| children.next(source));
+                    changed |= rewritten.constraint != original.constraint
+                        || rewritten.default != original.default;
                 }
-                let nr = self.replace_mapped_value_rec(function.ret, ctx);
-                changed |= nr != function.ret;
-                new.ret = nr;
+                new.receiver = function.receiver.map(|source| children.next(source));
+                changed |= new.receiver != function.receiver;
+                for (original, rewritten) in function.params.iter().zip(&mut new.params) {
+                    let value = children.next(original.ty);
+                    changed |= value != original.ty;
+                    rewritten.ty = value;
+                }
+                new.ret = children.next(function.ret);
+                changed |= new.ret != function.ret;
                 if changed {
                     self.interner.intern_function(new)
                 } else {
                     ty
                 }
             }
-            TypeTag::Union => {
-                let Some(members) = self.interner.store().union_members(ty) else {
-                    return ty;
-                };
-                let members: Vec<TypeId> = members.to_vec();
-                let mut changed = false;
-                let subst: Vec<TypeId> = members
-                    .iter()
-                    .map(|&m| {
-                        let nm = self.replace_mapped_value_rec(m, ctx);
-                        changed |= nm != m;
-                        nm
-                    })
-                    .collect();
-                if changed {
-                    self.interner.union(subst)
+            MappedRewriteFrame::Union { ty, members } => match children.take(members.len()) {
+                Some(rewritten) if rewritten != members => self.interner.union(rewritten.to_vec()),
+                Some(_) | None => ty,
+            },
+            MappedRewriteFrame::Intersection { ty, members } => {
+                match children.take(members.len()) {
+                    Some(rewritten) if rewritten != members => {
+                        self.interner.intersection(rewritten.to_vec())
+                    }
+                    Some(_) | None => ty,
+                }
+            }
+            MappedRewriteFrame::Array { ty, element } => {
+                let rewritten = children.next(element);
+                if rewritten != element {
+                    self.interner.intern_array(rewritten)
                 } else {
                     ty
                 }
             }
-            // M31: descend into intersection members like a union, re-interning through
-            // `Interner::intersection` only when a member changed.
-            TypeTag::Intersection => {
-                let Some(members) = self.interner.store().intersection_members(ty) else {
-                    return ty;
-                };
-                let members: Vec<TypeId> = members.to_vec();
-                let mut changed = false;
-                let subst: Vec<TypeId> = members
-                    .iter()
-                    .map(|&m| {
-                        let nm = self.replace_mapped_value_rec(m, ctx);
-                        changed |= nm != m;
-                        nm
-                    })
-                    .collect();
-                if changed {
-                    self.interner.intersection(subst)
-                } else {
-                    ty
-                }
-            }
-            TypeTag::Array => {
-                let Some(element) = self.interner.store().array_type(ty).map(|a| a.element) else {
-                    return ty;
-                };
-                let ne = self.replace_mapped_value_rec(element, ctx);
-                if ne != element {
-                    self.interner.intern_array(ne)
-                } else {
-                    ty
-                }
-            }
-            TypeTag::Tuple => {
-                let Some(tuple) = self.interner.store().tuple_type(ty).cloned() else {
-                    return ty;
-                };
+            MappedRewriteFrame::Tuple { ty, tuple } => {
                 let mut changed = false;
                 let elements = tuple
                     .elements
                     .iter()
-                    .map(|&e| {
-                        let ne = self.replace_mapped_value_rec(e, ctx);
-                        changed |= ne != e;
-                        ne
+                    .map(|&element| {
+                        let rewritten = children.next(element);
+                        changed |= rewritten != element;
+                        rewritten
                     })
                     .collect();
                 let rest = tuple.rest.map(|rest| {
-                    let nt = self.replace_mapped_value_rec(rest.ty, ctx);
-                    changed |= nt != rest.ty;
-                    TupleRestType { ty: nt, ..rest }
+                    let rewritten = children.next(rest.ty);
+                    changed |= rewritten != rest.ty;
+                    TupleRestType {
+                        ty: rewritten,
+                        ..rest
+                    }
                 });
                 if changed {
                     self.interner
@@ -675,100 +998,75 @@ impl<'a> ConditionalEvaluator<'a> {
                     ty
                 }
             }
-            TypeTag::Readonly => {
-                let Some(operand) = self.interner.store().readonly_operand(ty) else {
-                    return ty;
-                };
-                let no = self.replace_mapped_value_rec(operand, ctx);
-                if no != operand {
-                    self.interner.intern_readonly(no)
+            MappedRewriteFrame::Readonly { ty, operand } => {
+                let rewritten = children.next(operand);
+                if rewritten != operand {
+                    self.interner.intern_readonly(rewritten)
                 } else {
                     ty
                 }
             }
-            TypeTag::Conditional => {
-                let Some(cond) = self.interner.store().conditional_type(ty).copied() else {
-                    return ty;
-                };
-                let check = self.replace_mapped_value_rec(cond.check, ctx);
-                let extends_ty = self.replace_mapped_value_rec(cond.extends_ty, ctx);
-                let true_branch = self.replace_mapped_value_rec(cond.true_branch, ctx);
-                let false_branch = self.replace_mapped_value_rec(cond.false_branch, ctx);
-                if check == cond.check
-                    && extends_ty == cond.extends_ty
-                    && true_branch == cond.true_branch
-                    && false_branch == cond.false_branch
+            MappedRewriteFrame::Conditional { ty, conditional } => {
+                let check = children.next(conditional.check);
+                let extends_ty = children.next(conditional.extends_ty);
+                let true_branch = children.next(conditional.true_branch);
+                let false_branch = children.next(conditional.false_branch);
+                if check != conditional.check
+                    || extends_ty != conditional.extends_ty
+                    || true_branch != conditional.true_branch
+                    || false_branch != conditional.false_branch
                 {
-                    return ty;
-                }
-                self.interner.intern_conditional(ConditionalType {
-                    check,
-                    extends_ty,
-                    true_branch,
-                    false_branch,
-                    infer_count: cond.infer_count,
-                    distributive: cond.distributive,
-                    poisoned: cond.poisoned,
-                })
-            }
-            TypeTag::Instantiation => {
-                let Some(inst) = self.interner.store().instantiation_type(ty).cloned() else {
-                    return ty;
-                };
-                let mut changed = false;
-                let new_args: Vec<(TypeParamId, TypeId)> = inst
-                    .args
-                    .iter()
-                    .map(|&(p, v)| {
-                        let nv = self.replace_mapped_value_rec(v, ctx);
-                        changed |= nv != v;
-                        (p, nv)
-                    })
-                    .collect();
-                if changed {
-                    self.interner.intern_instantiation(inst.base, new_args)
-                } else {
-                    ty
-                }
-            }
-            // M27: a template's `T[K]` placeholder lives in its holes
-            // (`` `x${T[K]}` `` inside a mapped value template) — recurse into them.
-            TypeTag::Template => {
-                let Some(template) = self.interner.store().template_type(ty).cloned() else {
-                    return ty;
-                };
-                let mut changed = false;
-                let new_holes: Vec<TypeId> = template
-                    .holes
-                    .iter()
-                    .map(|&hole| {
-                        let nh = self.replace_mapped_value_rec(hole, ctx);
-                        changed |= nh != hole;
-                        nh
-                    })
-                    .collect();
-                if changed {
-                    self.interner.intern_template(TemplateType {
-                        texts: template.texts,
-                        holes: new_holes,
+                    self.interner.intern_conditional(ConditionalType {
+                        check,
+                        extends_ty,
+                        true_branch,
+                        false_branch,
+                        ..conditional
                     })
                 } else {
                     ty
                 }
             }
-            // M28: a `keyof X[K]`-style value template carries the placeholder in the
-            // keyof operand — recurse into it.
-            TypeTag::Keyof => {
-                let Some(operand) = self.interner.store().keyof_operand(ty) else {
-                    return ty;
-                };
-                let no = self.replace_mapped_value_rec(operand, ctx);
-                if no != operand {
-                    self.interner.intern_keyof(no)
+            MappedRewriteFrame::Instantiation { ty, base, args } => {
+                match children.take(args.len()) {
+                    Some(values)
+                        if args
+                            .iter()
+                            .map(|(_, value)| *value)
+                            .ne(values.iter().copied()) =>
+                    {
+                        self.interner.intern_instantiation(
+                            base,
+                            args.iter()
+                                .zip(values)
+                                .map(|(&(param, _), &value)| (param, value))
+                                .collect(),
+                        )
+                    }
+                    Some(_) | None => ty,
+                }
+            }
+            MappedRewriteFrame::Template { ty, template } => {
+                match children.take(template.holes.len()) {
+                    Some(holes) if holes != template.holes => {
+                        self.interner.intern_template(TemplateType {
+                            texts: template.texts,
+                            holes: holes.to_vec(),
+                        })
+                    }
+                    Some(_) | None => ty,
+                }
+            }
+            MappedRewriteFrame::Keyof { ty, operand } => {
+                let rewritten = children.next(operand);
+                if rewritten != operand {
+                    self.interner.intern_keyof(rewritten)
                 } else {
                     ty
                 }
             }
-        }
+        };
+        children.finish();
+        result
     }
 }
