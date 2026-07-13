@@ -8,16 +8,26 @@ use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 
-fn measure(source: &str) -> CallMeasure {
+fn measure_with_diagnostics(source: &str) -> (CallMeasure, Vec<(String, String)>) {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
     assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
     let mut interner = Interner::with_intrinsics();
     reset_call_measure();
     let result = check_program(&mut interner, &parsed.program);
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
-    call_measure()
+    let diagnostics = result
+        .diagnostics
+        .into_iter()
+        .map(|diagnostic| (diagnostic.code.as_str().to_string(), diagnostic.message))
+        .collect();
+    (call_measure(), diagnostics)
+}
+
+fn measure(source: &str) -> CallMeasure {
+    let (measure, diagnostics) = measure_with_diagnostics(source);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    measure
 }
 
 #[test]
@@ -135,6 +145,75 @@ fn measure_construct_pipeline_callback_formula() {
     assert_eq!(measure.candidate_trials, 2);
     assert_eq!(measure.generic_preliminary_inference_runs, 3);
     assert_eq!(measure.callback_rewalks, [3, 2, 1, 0, 0]);
+    assert_eq!(measure.trial_receiver_relation_queries, 0);
+    assert_eq!(measure.selected_receiver_relation_queries, 0);
+}
+
+#[test]
+fn measure_call_and_construct_constraint_failure_precedence() {
+    let (measure, diagnostics) = measure_with_diagnostics(
+        r#"
+        interface CallSelector {
+            <T extends string>(value: T): void;
+            <T extends boolean>(value: T, extra: number): void;
+        }
+        declare const callSelector: CallSelector;
+        callSelector<boolean>(true);
+
+        interface ConstructSelector {
+            new <T extends string>(value: T): { kind: "constraint" };
+            new <T extends boolean>(value: T, extra: number): { kind: "arity" };
+        }
+        declare const ConstructSelector: ConstructSelector;
+        new ConstructSelector<boolean>(true);
+
+        interface ConstraintOrderCall {
+            <T extends "first">(value: T): "first";
+            <T extends number>(value: T): "last";
+        }
+        declare const constraintOrderCall: ConstraintOrderCall;
+        constraintOrderCall<boolean>(true);
+    "#,
+    );
+
+    assert_eq!(
+        diagnostics,
+        vec![
+            (
+                "TK2344".to_string(),
+                "Type 'boolean' does not satisfy the constraint 'string'.".to_string(),
+            ),
+            (
+                "TK2344".to_string(),
+                "Type 'boolean' does not satisfy the constraint 'string'.".to_string(),
+            ),
+            (
+                "TK2344".to_string(),
+                "Type 'boolean' does not satisfy the constraint '\"first\"'.".to_string(),
+            ),
+        ]
+    );
+    assert_eq!(
+        measure,
+        CallMeasure {
+            raw_call_argument_walks: 2,
+            raw_construct_argument_walks: 1,
+            speculative_candidate_builds: 6,
+            committed_candidate_builds: 0,
+            candidate_trials: 2,
+            candidate_matches: 0,
+            candidate_mismatches: 0,
+            candidate_arity_failures: 2,
+            generic_preliminary_inference_runs: 0,
+            generic_full_inference_runs: 0,
+            callback_rewalks: [0; 5],
+            fresh_literal_rewalks: [0; 5],
+            speculative_diagnostic_rollback_events: 4,
+            speculative_diagnostics_removed: 4,
+            trial_receiver_relation_queries: 0,
+            selected_receiver_relation_queries: 0,
+        }
+    );
 }
 
 fn callback_corpus(calls: usize) -> String {

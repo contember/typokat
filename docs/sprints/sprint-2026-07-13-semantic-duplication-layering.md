@@ -329,3 +329,56 @@ performance candidate is folded into a neighboring cleanup commit.
 
 - 2026-07-13 — Plan grounded at clean HEAD `24881c7`. The rewrite/hotpath sprint is archived with
   WU7/WU8 complete; this sprint treats its private-walker boundary and measurements as shipped input.
+- 2026-07-13 — WU0 selector probes were cross-checked with `tsc 6.0.3 --strict`: constraint-before-
+  later-arity, pure arity, and receiver cases agree. Mixed mismatch/arity differs only as
+  `TK2769` vs `TS2345`; all-constraint failure text preserves typokat's first candidate while tsc
+  renders the last. Both cosmetic differences are recorded in `reference/divergences.md`.
+
+### WU0 candidate-effect ledger
+
+This ledger describes one overload candidate build/trial, not just its returned `CallCandidate`.
+The labels are operational: **rollback-safe** state is restored before the next candidate,
+**replayed** work intentionally runs again for the selected candidate, **monotonic** state persists,
+and **unknown** means there is no complete transaction proving isolation.
+
+| Effect | Classification and current sites |
+|---|---|
+| Diagnostics | **Partly rollback-safe/replayed, otherwise unknown.** Explicit-constraint diagnostics are copied then truncated (`calls.rs:617-633`), the first failure is later appended (`:535-536`, `:1513-1514`), and a winner is rebuilt in committed mode (`:514-528`, `:1492-1506`). Trial excess-property and contextual diagnostics are truncated (`calls.rs:820-835`; `expr.rs:705-743`). But speculative parameter evaluation can emit `TK2589` through `evaluate_type` (`eval/mod.rs:37-65`) without a whole-candidate diagnostic snapshot. |
+| Incomplete records | **Monotonic/unknown.** Raw spread records happen once before selection (`calls.rs:170-178`), but candidate-local annotation lowering and contextual AST rewalks can call `record_incomplete`; neither `instantiate_signature_candidate` nor `infer_contextual_source_after_walked` snapshots `Pass::incomplete` (`context.rs:277-281`, `expr.rs:705-743`). |
+| Assignment obligations | **Rollback-safe, then replayed.** Speculative contextual rewalks truncate to their saved length (`expr.rs:708-719`, `:731-742`); selected argument checking appends the committed obligations once (`calls.rs:920-963`). |
+| Override checks | **Rollback-safe, then replayed.** The same contextual boundaries save/truncate `override_checks` (`expr.rs:708-719`, `:731-742`); any selected contextual body is walked again by committed argument checking. |
+| `decl_types` / contextual bindings | **Partly rollback-safe, otherwise unknown.** Speculative contextual arrows clone and restore `decl_types` (`expr.rs:711`, `:720-722`), but the fresh-literal branch restores diagnostics/obligations/overrides only (`:731-743`). There is no transaction covering every binding mutation reachable from a contextual rewalk. |
+| `next_type_param` | **Monotonic.** Preliminary/full candidate inference advances the shared counter (`calls.rs:661-718`), and candidate type evaluation can advance it again (`eval/mod.rs:53-59`). Failed candidates are not rolled back, so removing a build changes later binder ids. |
+| Interner growth / `TypeId` order | **Monotonic.** Candidate inference, contextual lowering, substitution, `instantiate_function` (`calls.rs:683-721`), and evaluation intern into the run-local store. There is no arena rollback; skipping or reusing a candidate can change later allocation order and identity. |
+| Conditional memo/evaluator state | **Monotonic/unknown.** Candidate parameter/receiver evaluation (`calls.rs:732-733`) uses the pass-wide `cond_memo` and shared type-parameter counter (`eval/mod.rs:53-61`). Cycle/exhaustion results avoid durable memoization, but successful speculative results persist and their diagnostic side effects are not transactionally isolated. |
+| Relation cache and work | **Ephemeral, deliberately replayed.** Constraint checks, argument trials, and receiver checks construct local `Relater`s (`calls.rs:259-287`, `:837-842`, `:969-1018`); their caches die with each relation phase. Query order still determines work/reason selection and must remain unchanged even though no pass-wide cache is mutated. |
+| Contextual AST walks | **Replayed.** Candidate inference rewalks through `contextual_inference_args` (`calls.rs:290-323`), trials rewalk again (`:804-819`), and committed checking rewalks the winner (`:920-963`). The phase split is observable through diagnostics, obligations, bindings, interning, and counters. |
+| Test counters | **Monotonic.** Candidate builds/trials, rollback counts, receiver queries, and contextual phase arrays increment at the production edges (`calls.rs:562-569`, `:788-847`, `:969-1018`). `calls_measure.rs` pins the combined call/construct failure formula; reuse would intentionally change this acceptance surface. |
+| `flow_memo` | **Monotonic/unknown.** Contextual rewalks can resolve nested references into the pass-wide memo (`flowgraph/nodes.rs:218-283`), while the contextual rollback boundary does not snapshot it (`expr.rs:705-743`). |
+| `type_resolved` | **Monotonic.** Every overload can lower explicit annotations (`calls.rs:580-588`), triggering lazy declaration resolution and durable writes (`decls/resolve.rs:23-115`). Resolution order can therefore affect later `TypeId`s and diagnostics. |
+| `circular_aliases` | **Monotonic/unknown.** Candidate annotation lowering can discover and persist a surface-cycle verdict (`decls/resolve.rs:122-140`); neither candidate builder nor contextual rollback snapshots the set. |
+
+**WU0 conclusion:** candidate, inference-map, contextual-result, diagnostic, or relation-result reuse is
+forbidden. The existing speculative build → trial → committed rebuild sequence is the characterized
+contract for WU5; reuse needs a separately approved transaction design covering every monotonic and
+unknown effect above.
+
+- 2026-07-13 — The disabled WU0 class corpus is intentionally **RED** against current code: the
+  unresolved method parameter and return each appear twice, the invalid generic default appears
+  twice, and the unresolved constructor parameter-property type appears three times. These are the
+  pre-WU1 reservation/body duplication counts; WU0 makes no production change.
+- 2026-07-13 — `tsc 6.0.3 --strict` cross-check: the class probes have verdict parity except the
+  backlog-76 external `void` over/under pair; selector probes differ only in the registered cosmetic
+  mixed-failure code/span and first-vs-last constraint text. No new unowned false negative was
+  accepted.
+- 2026-07-13 — Direct characterization now pins five distinct static-binder spans, the current raw
+  nine-diagnostic class vector order, single/project trusted prelude identity and shadowing,
+  call/construct counters and first-constraint text, plus conditional-`infer` false/true rewrite
+  state. The class order witness preserves the current duplicated signature sequence before the
+  earlier source-position assignment; it does not choose a new ordering policy.
+- 2026-07-13 — Adversarial review initially blocked on ambiguous same-line static spans, shadowing
+  masking `Uppercase`, non-discriminating `Uncapitalize`, the missing call-side constraint-order
+  mirror, and unpinned raw diagnostic order. Follow-up resolved every item; final WU0 review: **PASS**.
+- 2026-07-13 — Leader gates passed: `cargo test` and
+  `cargo clippy --all-targets -- -D warnings`. This closes the WU0 test/spec gate only; production
+  implementation starts in later work units.

@@ -235,6 +235,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b41_generic_methods/` | shipped B41 | generic method/call/construct signatures: persistent binders through outer substitution, calls, relation, overloads, inheritance, and cache order |
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
+| `sr_semantic_duplication/` | semantic-duplication sprint WU0 (disabled) | class method/constructor signatures are reserved once, preserving binder, diagnostic, overload, parameter-property, and external-return behavior |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):
 
@@ -390,6 +391,21 @@ second fixture pins `T[K]` in generic function constraints and defaults; WU8 fix
 the former stale-metadata false positive, matching strict `tsc 6.0.3`. Direct arena
 tests carry the 10,005-deep acyclic public-evaluator spine because large source alias
 chains also exercise generic substitution before the mapped rewrite starts.
+
+## Semantic duplication corpus (sprint 2026-07-13)
+
+`sr_semantic_duplication/` is the disabled WU0 acceptance corpus for
+[`sprint-2026-07-13-semantic-duplication-layering.md`](../../docs/sprints/sprint-2026-07-13-semantic-duplication-layering.md).
+Its class-member fixture pins one-time reserved signature ownership: generic method
+constraints/defaults and call-site instantiation; four static signature `TK2302`s plus
+one body-local `TK2302`; one unresolved parameter/return/default diagnostic each;
+first-incompatible method/constructor overload reporting with hidden implementation
+signatures; and constructor parameter-property type reuse plus readonly enforcement.
+The final pair deliberately preserves the current externally visible `void` type of an
+unannotated class method. This over-reports when its numeric result is consumed and
+under-reports when the result is assigned to `void`; both are ledgered to backlog `76`.
+WU1 enables the directory only after member bodies consume the reserved surfaces and
+the whole fixture passes with exact diagnostic cardinality.
 
 ## Surface-accounting corpus (sprint 2026-07-10)
 

@@ -154,6 +154,10 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // WU8 — mapped-value replacement uses its own local iterative work stack;
     // the enabled corpus pins both the shallow source route and generic metadata.
     ("sr_rewrite_hotpath_wu8", true),
+    // Semantic-duplication/layering sprint WU0 — class-member callable surfaces,
+    // diagnostic cardinality, overload hiding, and parameter-property reuse.
+    // WU1 enables this after class bodies consume their reserved surfaces.
+    ("sr_semantic_duplication", false),
     // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
     // (backlog 73). ENABLED by WU3 (expression child slots), WU4 (statement
     // containers), and WU5 (annotation / signature / class-member accounting): the

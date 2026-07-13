@@ -25,6 +25,38 @@ fn diags(source: &str) -> Vec<(u32, String)> {
     v
 }
 
+/// Run one project module and preserve the single-file helper's exact line/code shape.
+fn project_diags(source: &str) -> Vec<(u32, String)> {
+    let reports = check_project(vec![FileInput {
+        name: "module.ts".to_string(),
+        source: source.to_string(),
+    }]);
+    assert_eq!(
+        reports.len(),
+        1,
+        "one input must produce one project report"
+    );
+    let output = &reports[0].output;
+    assert!(
+        output.parse_errors.is_empty(),
+        "unexpected parse error(s): {:?}",
+        output.parse_errors
+    );
+    let index = crate::span::LineIndex::new(source);
+    let mut diagnostics: Vec<(u32, String)> = output
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            (
+                index.line_of(diagnostic.span.start),
+                diagnostic.code.as_str().to_string(),
+            )
+        })
+        .collect();
+    diagnostics.sort();
+    diagnostics
+}
+
 /// The prelude checks clean both as a trusted asset and as user source, proving
 /// full user shadowing without duplicate-name or lowering diagnostics.
 #[test]
@@ -37,6 +69,63 @@ fn prelude_checks_clean() {
         diags(PRELUDE_SOURCE).is_empty(),
         "the prelude source must also check clean as ordinary user code"
     );
+}
+
+/// Single-file and one-module project bootstrap must expose identical trusted surfaces.
+#[test]
+fn single_file_and_project_trusted_prelude_surfaces_have_exact_diagnostic_parity() {
+    let src = "\
+const uppercaseOk: Uppercase<\"word\"> = \"WORD\";
+const uppercaseWrong: Uppercase<\"word\"> = \"word\";
+const lowercaseOk: Lowercase<\"WORD\"> = \"word\";
+const lowercaseWrong: Lowercase<\"WORD\"> = \"WORD\";
+const capitalizeOk: Capitalize<\"word\"> = \"Word\";
+const capitalizeWrong: Capitalize<\"word\"> = \"word\";
+const uncapitalizeOk: Uncapitalize<\"WordWORD\"> = \"wordWORD\";
+const uncapitalizeWrong: Uncapitalize<\"WordWORD\"> = \"wordword\";
+type Context = { n: number; check(): void } & ThisType<{ n: string }>;
+const contextual: Context = {
+  n: 1,
+  check() {
+    const wrongThis: number = this.n;
+  },
+};
+type WithThis = (this: { tag: string }, value: number) => string;
+declare const withoutThis: OmitThisParameter<WithThis>;
+const omittedResult: string = withoutThis(1);
+withoutThis(\"wrong\");
+const mathResult: number = Math.abs(-1);
+Math.abs(\"wrong\");
+";
+    let expected = vec![
+        (2, "TK2322".to_string()),
+        (4, "TK2322".to_string()),
+        (6, "TK2322".to_string()),
+        (8, "TK2322".to_string()),
+        (13, "TK2322".to_string()),
+        (19, "TK2345".to_string()),
+        (21, "TK2345".to_string()),
+    ];
+
+    assert_eq!(diags(src), expected);
+    assert_eq!(project_diags(src), expected);
+}
+
+/// User type/value declarations shadow only their matching prelude spaces in both modes.
+#[test]
+fn single_file_and_project_prelude_shadowing_have_exact_diagnostic_parity() {
+    let src = "\
+type Uppercase<T> = number;
+const shadowedUppercaseOk: Uppercase<\"x\"> = 1;
+const shadowedUppercaseWrong: Uppercase<\"x\"> = \"wrong\";
+declare const console: { log(value: number): void };
+console.log(1);
+console.log(\"wrong\");
+";
+    let expected = vec![(3, "TK2322".to_string()), (6, "TK2345".to_string())];
+
+    assert_eq!(diags(src), expected);
+    assert_eq!(project_diags(src), expected);
 }
 
 /// `ThisType<T>` is structurally transparent in its contextual intersection, but

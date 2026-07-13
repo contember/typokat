@@ -55,6 +55,118 @@ class Factory {
 }
 
 #[test]
+fn static_method_class_binder_diagnostics_keep_all_five_exact_spans() {
+    let source = "\
+class StaticBinderSurface<T> {
+  static capture<U extends T = T>(
+    value: T,
+  ): T {
+    const bodyValue: T = value;
+    return bodyValue;
+  }
+}
+";
+    let result = check_source(source);
+    assert!(
+        result.parse_errors.is_empty(),
+        "unexpected parse error(s): {:?}",
+        result.parse_errors
+    );
+    assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
+    assert_eq!(result.diagnostics.len(), 5);
+    for diagnostic in &result.diagnostics {
+        assert_eq!(diagnostic.code.as_str(), "TK2302");
+        assert_eq!(
+            diagnostic.message,
+            "Static members cannot reference class type parameters."
+        );
+        assert_eq!(&source[diagnostic.span.range()], "T");
+    }
+
+    let generic = source.find("U extends T = T").unwrap();
+    let parameter = source.find("value: T").unwrap();
+    let return_type = source.find("): T").unwrap();
+    let body = source.find("bodyValue: T").unwrap();
+    let expected = vec![
+        generic + "U extends ".len()..generic + "U extends T".len(),
+        generic + "U extends T = ".len()..generic + "U extends T = T".len(),
+        parameter + "value: ".len()..parameter + "value: T".len(),
+        return_type + "): ".len()..return_type + "): T".len(),
+        body + "bodyValue: ".len()..body + "bodyValue: T".len(),
+    ];
+    let actual: Vec<std::ops::Range<usize>> = result
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.span.range())
+        .collect();
+    assert_eq!(actual, expected);
+    actual
+        .windows(2)
+        .for_each(|pair| assert_ne!(pair[0], pair[1]));
+}
+
+#[test]
+fn class_diagnostics_preserve_current_raw_vector_order() {
+    let source = "\
+const earlierNonClass: string = 1;
+class DiagnosticOrderSurface {
+  method<T extends string = number>(
+    value: MissingParameter,
+  ): MissingReturn {
+    const bodyOnly: string = 2;
+    return value;
+  }
+}
+const laterNonClass: number = \"later\";
+";
+    let result = check_source(source);
+    assert!(
+        result.parse_errors.is_empty(),
+        "unexpected parse error(s): {:?}",
+        result.parse_errors
+    );
+    assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
+    let lines = crate::span::LineIndex::new(source);
+    let actual: Vec<(&str, u32, std::ops::Range<usize>, &str)> = result
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.code.as_str(),
+                lines.line_of(diagnostic.span.start),
+                diagnostic.span.range(),
+                &source[diagnostic.span.range()],
+            )
+        })
+        .collect();
+
+    let default_start = source.find("number>(").unwrap();
+    let parameter_start = source.find("MissingParameter").unwrap();
+    let return_start = source.find("MissingReturn").unwrap();
+    let earlier_start = source.find("1;").unwrap();
+    let body_start = source.find("2;").unwrap();
+    let later_start = source.find("\"later\"").unwrap();
+    let default = default_start..default_start + "number".len();
+    let parameter = parameter_start..parameter_start + "MissingParameter".len();
+    let return_type = return_start..return_start + "MissingReturn".len();
+    let earlier = earlier_start..earlier_start + "1".len();
+    let body = body_start..body_start + "2".len();
+    let later = later_start..later_start + "\"later\"".len();
+    let expected = vec![
+        ("TK2344", 3, default.clone(), "number"),
+        ("TK2304", 4, parameter.clone(), "MissingParameter"),
+        ("TK2304", 5, return_type.clone(), "MissingReturn"),
+        ("TK2344", 3, default, "number"),
+        ("TK2304", 4, parameter, "MissingParameter"),
+        ("TK2304", 5, return_type, "MissingReturn"),
+        ("TK2322", 1, earlier, "1"),
+        ("TK2322", 6, body, "2"),
+        ("TK2322", 10, later, "\"later\""),
+    ];
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn generic_object_call_and_construct_signatures_lower_without_name_errors() {
     let source = "\
 interface Methods { map<U>(value: U): U; }

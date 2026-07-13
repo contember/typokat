@@ -199,6 +199,16 @@ Implemented: fields/constructor/methods/`this`/`new`/structural instances (M11);
 completeness (`TK2515`/`TK2654`) (b06); private/protected constructor accessibility (`TK2673`/
 `TK2674`) (b20).
 
+- **Unannotated class-method returns are externally `void`.** Class fill publishes an omitted method
+  return annotation as `void`; source-order body checking does not replace that public member type.
+  Exact demand-driven value types belong to backlog `76`, and the reserved-surface refactor preserves
+  this boundary:
+  - Consuming a body-inferred numeric result as `number` reports `TK2322` where tsc is clean
+    (over-report).
+    <!-- div: id=classes/unannotated-method-return-number dir=over scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/sr_semantic_duplication/class_member_surfaces.ts -->
+  - Assigning that result to `void` is clean where tsc reports `TS2322` (under-report).
+    <!-- div: id=classes/unannotated-method-return-void dir=under scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/sr_semantic_duplication/class_member_surfaces.ts -->
+
 - **Nominal typing is one-directional (matches tsc in verdict).** typokat enforces the
   foreign→private direction — a target with a `private`/`protected` member requires the *same*
   declaration, so a structurally-identical *other* type is rejected (`TK2322`), which matches tsc.
@@ -538,6 +548,15 @@ method signature whose return annotation is omitted; typokat is silent — a dro
 (under-report, backlog `48`), pinned by the disabled ledger fixture.
 <!-- div: id=signatures/optional-method dir=over scope=a-nullish-receivers owner=../backlog/49-possibly-undefined-family.md witness=../../tests/cases/f1_object_interface_methods -->
 <!-- div: id=signatures/ts7010-omitted-return dir=under scope=a-implicit-any-declarations owner=../backlog/48-no-implicit-any.md witness=../../tests/cases/sr_deferred_ledger/b48_implicit_any_return.ts -->
+
+- **Mixed overload failure diagnostic (cosmetic).** When one call/construct candidate has a type
+  mismatch and a later candidate fails arity, typokat reports `TK2769` on the whole invocation;
+  tsc 6.0.3 reports `TS2345` on the mismatched argument. Both reject the program.
+  <!-- div: id=signatures/mixed-arity-mismatch-diagnostic dir=cosmetic scope=s-overload-resolution owner=design-oos witness=../../tests/cases/sr_semantic_duplication/selector_precedence.ts -->
+- **Explicit constraint failure selection (cosmetic).** If every call or construct overload rejects
+  the same explicit type argument by constraint, typokat preserves the first candidate's `TK2344`
+  text while tsc 6.0.3 renders the last overload's constraint. The code and rejection are identical.
+  <!-- div: id=signatures/explicit-constraint-first-failure dir=cosmetic scope=s-overload-resolution owner=design-oos witness=../../tests/cases/sr_semantic_duplication/selector_precedence.ts -->
 
 - **Accepted official-suite over-reports** (safe direction, recorded in the scoreboard rather than
   dropped errors):

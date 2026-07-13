@@ -681,6 +681,101 @@ fn measure_infer_rewrite_counts_shared_dag_and_cycle_sibling() {
 }
 
 #[test]
+fn conditional_infer_rewrites_extends_and_true_branch_for_both_outcomes() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let infer = interner.intern_infer(0);
+    let extends_ty = interner.intern_object(ObjectType {
+        properties: vec![prop("value", infer)],
+        ..Default::default()
+    });
+    let true_branch = interner.intern_tuple(vec![infer]);
+    let mut next_type_param = 90_150;
+    let mut memo = FxHashMap::default();
+
+    let false_conditional = ConditionalType {
+        check: wk.number,
+        extends_ty,
+        true_branch,
+        false_branch: wk.never,
+        infer_count: 1,
+        distributive: false,
+        poisoned: false,
+    };
+    let false_start = next_type_param;
+    let (false_matched, false_result, false_measure) = {
+        let mut evaluator = ConditionalEvaluator::new(
+            &mut interner,
+            &mut next_type_param,
+            &mut memo,
+            DEFAULT_STEP_BUDGET,
+        );
+        super::instantiation::reset_infer_rewrite_measure();
+        let (matched, result) = evaluator.run_extends_test(&false_conditional);
+        let measure = super::instantiation::infer_rewrite_measure();
+        assert!(!evaluator.exhausted);
+        assert!(!evaluator.cycle_detected);
+        assert!(evaluator.memo.is_empty());
+        (matched, result, measure)
+    };
+    assert!(!false_matched);
+    assert_eq!(next_type_param, false_start + 1);
+    assert!(memo.is_empty());
+    let expected_false = interner.intern_tuple(vec![wk.unknown]);
+    assert_eq!(false_result, expected_false);
+    assert_eq!(
+        interner.store().tuple_type(false_result).unwrap().elements,
+        vec![wk.unknown]
+    );
+    assert_eq!(
+        false_measure,
+        super::instantiation::InferRewriteMeasure {
+            top_level_runs: 2,
+            visits: 4,
+            memo_hits: 0,
+            memo_inserts: 4,
+            reentries: 0,
+            tainted_identity_returns: 0,
+        }
+    );
+
+    let matched_object = interner.intern_object(ObjectType {
+        properties: vec![prop("value", wk.string)],
+        ..Default::default()
+    });
+    let true_conditional = ConditionalType {
+        check: matched_object,
+        ..false_conditional
+    };
+    let true_start = next_type_param;
+    let (true_matched, true_result, true_measure) = {
+        let mut evaluator = ConditionalEvaluator::new(
+            &mut interner,
+            &mut next_type_param,
+            &mut memo,
+            DEFAULT_STEP_BUDGET,
+        );
+        super::instantiation::reset_infer_rewrite_measure();
+        let (matched, result) = evaluator.run_extends_test(&true_conditional);
+        let measure = super::instantiation::infer_rewrite_measure();
+        assert!(!evaluator.exhausted);
+        assert!(!evaluator.cycle_detected);
+        assert!(evaluator.memo.is_empty());
+        (matched, result, measure)
+    };
+    assert!(true_matched);
+    assert_eq!(next_type_param, true_start + 1);
+    assert!(memo.is_empty());
+    let expected_true = interner.intern_tuple(vec![wk.string]);
+    assert_eq!(true_result, expected_true);
+    assert_eq!(
+        interner.store().tuple_type(true_result).unwrap().elements,
+        vec![wk.string]
+    );
+    assert_eq!(true_measure, false_measure);
+}
+
+#[test]
 fn measure_constraint_evaluator_counts_function_metadata_fanout() {
     let mut interner = Interner::with_intrinsics();
     let uppercase = interner.well_known().uppercase;
