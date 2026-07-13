@@ -10,8 +10,8 @@ use crate::diagnostics::Diagnostic;
 use crate::relate::Relater;
 use crate::span::Span;
 use crate::types::repr::{
-    ConditionalType, FunctionType, LiteralValue, MappedType, ModifierOp, ObjectType, ParameterType,
-    PropertyType, TemplateType, TupleRestType, TupleType, TypeParamId, TypeTag,
+    ConditionalType, FunctionType, LiteralValue, MappedType, ModifierOp, ObjectType, PropertyType,
+    TemplateType, TupleRestType, TupleType, TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
 use crate::types::{substitute, Interner};

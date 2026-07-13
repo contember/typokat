@@ -149,7 +149,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("sr_rewrite_hotpath_wu0", true),
     // WU7 — auxiliary structural walkers must use heap work stacks for deep
     // acyclic generic metadata. Spec commit disabled; implementation enables.
-    ("sr_rewrite_hotpath_wu7", false),
+    ("sr_rewrite_hotpath_wu7", true),
     // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
     // (backlog 73). ENABLED by WU3 (expression child slots), WU4 (statement
     // containers), and WU5 (annotation / signature / class-member accounting): the

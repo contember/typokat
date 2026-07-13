@@ -1,5 +1,4 @@
 use super::*;
-use crate::types::repr::GenericTypeParam;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -73,6 +72,45 @@ struct InferenceConstraintEvaluator<'a> {
     cycle_detected: bool,
 }
 
+enum ConstraintFrame {
+    Object { ty: TypeId, object: ObjectType },
+    Function { ty: TypeId, function: FunctionType },
+    Union { ty: TypeId, members: Vec<TypeId> },
+    Intersection { ty: TypeId, members: Vec<TypeId> },
+    Array { ty: TypeId, element: TypeId },
+    Tuple { ty: TypeId, tuple: TupleType },
+    Readonly { ty: TypeId, operand: TypeId },
+}
+
+impl ConstraintFrame {
+    fn ty(&self) -> TypeId {
+        match self {
+            ConstraintFrame::Object { ty, .. }
+            | ConstraintFrame::Function { ty, .. }
+            | ConstraintFrame::Union { ty, .. }
+            | ConstraintFrame::Intersection { ty, .. }
+            | ConstraintFrame::Array { ty, .. }
+            | ConstraintFrame::Tuple { ty, .. }
+            | ConstraintFrame::Readonly { ty, .. } => *ty,
+        }
+    }
+
+    fn structural(&self) -> bool {
+        !matches!(
+            self,
+            ConstraintFrame::Array { .. } | ConstraintFrame::Readonly { .. }
+        )
+    }
+}
+
+enum ConstraintTask {
+    Eval(TypeId),
+    Finish {
+        frame: ConstraintFrame,
+        child_count: usize,
+    },
+}
+
 impl<'a> InferenceConstraintEvaluator<'a> {
     fn new(
         interner: &'a mut Interner,
@@ -92,36 +130,27 @@ impl<'a> InferenceConstraintEvaluator<'a> {
     }
 
     fn evaluate(&mut self, ty: TypeId) -> TypeId {
-        #[cfg(test)]
-        measure_constraint_eval(|measure| measure.evaluate_calls += 1);
-        if self.exhausted {
-            return ty;
+        let mut tasks = vec![ConstraintTask::Eval(ty)];
+        let mut values = Vec::new();
+        while let Some(task) = tasks.pop() {
+            match task {
+                ConstraintTask::Eval(ty) => self.visit(ty, &mut tasks, &mut values),
+                ConstraintTask::Finish { frame, child_count } => {
+                    let ty = frame.ty();
+                    let Some(start) = values.len().checked_sub(child_count) else {
+                        debug_assert!(false, "constraint evaluator frame is missing child results");
+                        if frame.structural() {
+                            let _ = self.leave_structural(ty);
+                        }
+                        values.push(ty);
+                        continue;
+                    };
+                    let children = values.split_off(start);
+                    values.push(self.finish(frame, &children));
+                }
+            }
         }
-        if self.in_progress.contains(&ty) {
-            #[cfg(test)]
-            measure_constraint_eval(|measure| measure.structural_reentries += 1);
-            self.note_structural_cycle(ty);
-            return ty;
-        }
-        match self.interner.store().tag(ty) {
-            TypeTag::Conditional
-            | TypeTag::Instantiation
-            | TypeTag::Mapped
-            | TypeTag::Template
-            | TypeTag::Keyof => self.evaluate_pending(ty),
-            TypeTag::Object => self.evaluate_object(ty),
-            TypeTag::Function => self.evaluate_function(ty),
-            TypeTag::Union => self.evaluate_union(ty),
-            TypeTag::Intersection => self.evaluate_intersection(ty),
-            TypeTag::Array => self.evaluate_array(ty),
-            TypeTag::Tuple => self.evaluate_tuple(ty),
-            TypeTag::Readonly => self.evaluate_readonly(ty),
-            TypeTag::Intrinsic
-            | TypeTag::Literal
-            | TypeTag::TypeParam
-            | TypeTag::Infer
-            | TypeTag::MappedValue => ty,
-        }
+        values.pop().unwrap_or(ty)
     }
 
     fn enter_structural(&mut self, ty: TypeId) {
@@ -152,7 +181,163 @@ impl<'a> InferenceConstraintEvaluator<'a> {
         }
     }
 
-    fn evaluate_pending(&mut self, ty: TypeId) -> TypeId {
+    fn visit(&mut self, ty: TypeId, tasks: &mut Vec<ConstraintTask>, values: &mut Vec<TypeId>) {
+        #[cfg(test)]
+        measure_constraint_eval(|measure| measure.evaluate_calls += 1);
+        if self.exhausted {
+            values.push(ty);
+            return;
+        }
+        if self.in_progress.contains(&ty) {
+            #[cfg(test)]
+            measure_constraint_eval(|measure| measure.structural_reentries += 1);
+            self.note_structural_cycle(ty);
+            values.push(ty);
+            return;
+        }
+        match self.interner.store().tag(ty) {
+            TypeTag::Conditional
+            | TypeTag::Instantiation
+            | TypeTag::Mapped
+            | TypeTag::Template
+            | TypeTag::Keyof => {
+                self.visit_pending(ty, tasks, values);
+            }
+            TypeTag::Object => {
+                let Some(object) = self.interner.store().object_type(ty).cloned() else {
+                    values.push(ty);
+                    return;
+                };
+                let mut children: Vec<TypeId> = object.properties.iter().map(|p| p.ty).collect();
+                children.extend(object.string_index);
+                children.extend(object.number_index);
+                children.extend(object.call_signatures.iter().copied());
+                children.extend(object.construct_signatures.iter().copied());
+                self.schedule(ConstraintFrame::Object { ty, object }, children, tasks);
+            }
+            TypeTag::Function => {
+                let Some(function) = self.interner.store().function_type(ty).cloned() else {
+                    values.push(ty);
+                    return;
+                };
+                let mut children = Vec::new();
+                for param in &function.type_params {
+                    #[cfg(test)]
+                    measure_constraint_eval(|measure| {
+                        measure.metadata_children +=
+                            param.constraint.is_some() as u64 + param.default.is_some() as u64
+                    });
+                    children.extend(param.constraint);
+                    children.extend(param.default);
+                }
+                if let Some(receiver) = function.receiver {
+                    #[cfg(test)]
+                    measure_constraint_eval(|measure| measure.signature_children += 1);
+                    children.push(receiver);
+                }
+                for param in &function.params {
+                    #[cfg(test)]
+                    measure_constraint_eval(|measure| measure.signature_children += 1);
+                    children.push(param.ty);
+                }
+                #[cfg(test)]
+                measure_constraint_eval(|measure| measure.signature_children += 1);
+                children.push(function.ret);
+                self.schedule(ConstraintFrame::Function { ty, function }, children, tasks);
+            }
+            TypeTag::Union => {
+                let Some(members) = self.interner.store().union_members(ty).map(|m| m.to_vec())
+                else {
+                    values.push(ty);
+                    return;
+                };
+                self.schedule(
+                    ConstraintFrame::Union {
+                        ty,
+                        members: members.clone(),
+                    },
+                    members,
+                    tasks,
+                );
+            }
+            TypeTag::Intersection => {
+                let Some(members) = self
+                    .interner
+                    .store()
+                    .intersection_members(ty)
+                    .map(|m| m.to_vec())
+                else {
+                    values.push(ty);
+                    return;
+                };
+                self.schedule(
+                    ConstraintFrame::Intersection {
+                        ty,
+                        members: members.clone(),
+                    },
+                    members,
+                    tasks,
+                );
+            }
+            TypeTag::Array => {
+                let Some(element) = self.interner.store().array_type(ty).map(|a| a.element) else {
+                    values.push(ty);
+                    return;
+                };
+                self.schedule(ConstraintFrame::Array { ty, element }, vec![element], tasks);
+            }
+            TypeTag::Tuple => {
+                let Some(tuple) = self.interner.store().tuple_type(ty).cloned() else {
+                    values.push(ty);
+                    return;
+                };
+                let mut children = tuple.elements.clone();
+                children.extend(tuple.rest.map(|rest| rest.ty));
+                self.schedule(ConstraintFrame::Tuple { ty, tuple }, children, tasks);
+            }
+            TypeTag::Readonly => {
+                let Some(operand) = self.interner.store().readonly_operand(ty) else {
+                    values.push(ty);
+                    return;
+                };
+                self.schedule(
+                    ConstraintFrame::Readonly { ty, operand },
+                    vec![operand],
+                    tasks,
+                );
+            }
+            TypeTag::Intrinsic
+            | TypeTag::Literal
+            | TypeTag::TypeParam
+            | TypeTag::Infer
+            | TypeTag::MappedValue => values.push(ty),
+        }
+    }
+
+    fn schedule(
+        &mut self,
+        frame: ConstraintFrame,
+        children: Vec<TypeId>,
+        tasks: &mut Vec<ConstraintTask>,
+    ) {
+        if frame.structural() {
+            self.enter_structural(frame.ty());
+        }
+        tasks.push(ConstraintTask::Finish {
+            frame,
+            child_count: children.len(),
+        });
+        for child in children.into_iter().rev() {
+            tasks.push(ConstraintTask::Eval(child));
+        }
+    }
+
+    fn visit_pending(
+        &mut self,
+        ty: TypeId,
+        tasks: &mut Vec<ConstraintTask>,
+        values: &mut Vec<TypeId>,
+    ) {
         #[cfg(test)]
         measure_constraint_eval(|measure| measure.pending_calls += 1);
         let result;
@@ -172,60 +357,19 @@ impl<'a> InferenceConstraintEvaluator<'a> {
         if exhausted || cycle_detected {
             self.exhausted = true;
             self.cycle_detected |= cycle_detected;
-            return ty;
+            values.push(ty);
+            return;
         }
         if result == ty {
-            ty
+            values.push(ty);
         } else {
-            self.evaluate(result)
+            tasks.push(ConstraintTask::Eval(result));
         }
     }
-
-    fn evaluate_object(&mut self, ty: TypeId) -> TypeId {
-        let Some(object) = self.interner.store().object_type(ty).cloned() else {
-            return ty;
-        };
-        self.enter_structural(ty);
-        let mut changed = false;
-        let properties: Vec<PropertyType> = object
-            .properties
-            .into_iter()
-            .map(|prop| {
-                let new_ty = self.evaluate(prop.ty);
-                changed |= new_ty != prop.ty;
-                PropertyType { ty: new_ty, ..prop }
-            })
-            .collect();
-        let string_index = object.string_index.map(|index_ty| {
-            let new_ty = self.evaluate(index_ty);
-            changed |= new_ty != index_ty;
-            new_ty
-        });
-        let number_index = object.number_index.map(|index_ty| {
-            let new_ty = self.evaluate(index_ty);
-            changed |= new_ty != index_ty;
-            new_ty
-        });
-        let call_signatures: Vec<TypeId> = object
-            .call_signatures
-            .into_iter()
-            .map(|signature| {
-                let new_ty = self.evaluate(signature);
-                changed |= new_ty != signature;
-                new_ty
-            })
-            .collect();
-        let construct_signatures: Vec<TypeId> = object
-            .construct_signatures
-            .into_iter()
-            .map(|signature| {
-                let new_ty = self.evaluate(signature);
-                changed |= new_ty != signature;
-                new_ty
-            })
-            .collect();
-        let tainted = self.leave_structural(ty);
-
+    fn finish(&mut self, frame: ConstraintFrame, children: &[TypeId]) -> TypeId {
+        let ty = frame.ty();
+        let structural = frame.structural();
+        let tainted = structural && self.leave_structural(ty);
         if self.exhausted || tainted {
             #[cfg(test)]
             measure_constraint_eval(|measure| {
@@ -236,260 +380,141 @@ impl<'a> InferenceConstraintEvaluator<'a> {
                     measure.tainted_identity_returns += 1;
                 }
             });
-            ty
-        } else if changed {
-            #[cfg(test)]
-            measure_constraint_eval(|measure| measure.re_interns += 1);
-            self.interner.intern_object(ObjectType {
-                properties,
-                string_index,
-                number_index,
-                call_signatures,
-                construct_signatures,
-            })
-        } else {
-            ty
-        }
-    }
-
-    fn evaluate_function(&mut self, ty: TypeId) -> TypeId {
-        let Some(function) = self.interner.store().function_type(ty).cloned() else {
             return ty;
-        };
-        self.enter_structural(ty);
-        let mut changed = false;
-        let type_params: Vec<GenericTypeParam> = function
-            .type_params
-            .into_iter()
-            .map(|type_param| {
-                #[cfg(test)]
-                measure_constraint_eval(|measure| {
-                    measure.metadata_children += type_param.constraint.is_some() as u64
-                        + type_param.default.is_some() as u64;
+        }
+        match frame {
+            ConstraintFrame::Object { object, .. } => {
+                let mut index = 0;
+                let mut changed = false;
+                let mut new = object.clone();
+                for (old, rewritten) in object.properties.iter().zip(&mut new.properties) {
+                    rewritten.ty = constraint_child(children, &mut index, old.ty);
+                    changed |= rewritten.ty != old.ty;
+                }
+                new.string_index = object
+                    .string_index
+                    .map(|old| constraint_child(children, &mut index, old));
+                changed |= new.string_index != object.string_index;
+                new.number_index = object
+                    .number_index
+                    .map(|old| constraint_child(children, &mut index, old));
+                changed |= new.number_index != object.number_index;
+                new.call_signatures = object
+                    .call_signatures
+                    .iter()
+                    .map(|&old| constraint_child(children, &mut index, old))
+                    .collect();
+                changed |= new.call_signatures != object.call_signatures;
+                new.construct_signatures = object
+                    .construct_signatures
+                    .iter()
+                    .map(|&old| constraint_child(children, &mut index, old))
+                    .collect();
+                changed |= new.construct_signatures != object.construct_signatures;
+                if changed {
+                    #[cfg(test)]
+                    measure_constraint_eval(|m| m.re_interns += 1);
+                    self.interner.intern_object(new)
+                } else {
+                    ty
+                }
+            }
+            ConstraintFrame::Function { function, .. } => {
+                let mut index = 0;
+                let mut new = function.clone();
+                for (old, rewritten) in function.type_params.iter().zip(&mut new.type_params) {
+                    rewritten.constraint = old
+                        .constraint
+                        .map(|v| constraint_child(children, &mut index, v));
+                    rewritten.default = old
+                        .default
+                        .map(|v| constraint_child(children, &mut index, v));
+                }
+                new.receiver = function
+                    .receiver
+                    .map(|v| constraint_child(children, &mut index, v));
+                for (old, rewritten) in function.params.iter().zip(&mut new.params) {
+                    rewritten.ty = constraint_child(children, &mut index, old.ty);
+                }
+                new.ret = constraint_child(children, &mut index, function.ret);
+                if new.type_params != function.type_params
+                    || new.receiver != function.receiver
+                    || new.params != function.params
+                    || new.ret != function.ret
+                {
+                    #[cfg(test)]
+                    measure_constraint_eval(|m| m.re_interns += 1);
+                    self.interner.intern_function(new)
+                } else {
+                    ty
+                }
+            }
+            ConstraintFrame::Union { members, .. } => {
+                if children != members {
+                    #[cfg(test)]
+                    measure_constraint_eval(|m| m.re_interns += 1);
+                    self.interner.union(children.to_vec())
+                } else {
+                    ty
+                }
+            }
+            ConstraintFrame::Intersection { members, .. } => {
+                if children != members {
+                    #[cfg(test)]
+                    measure_constraint_eval(|m| m.re_interns += 1);
+                    self.interner.intersection(children.to_vec())
+                } else {
+                    ty
+                }
+            }
+            ConstraintFrame::Array { element, .. } => {
+                let rewritten = children.first().copied().unwrap_or(element);
+                if rewritten != element {
+                    #[cfg(test)]
+                    measure_constraint_eval(|m| m.re_interns += 1);
+                    self.interner.intern_array(rewritten)
+                } else {
+                    ty
+                }
+            }
+            ConstraintFrame::Tuple { tuple, .. } => {
+                let mut index = 0;
+                let elements = tuple
+                    .elements
+                    .iter()
+                    .map(|&old| constraint_child(children, &mut index, old))
+                    .collect();
+                let rest = tuple.rest.map(|rest| TupleRestType {
+                    ty: constraint_child(children, &mut index, rest.ty),
+                    ..rest
                 });
-                let constraint = type_param.constraint.map(|constraint| {
-                    let new_constraint = self.evaluate(constraint);
-                    changed |= new_constraint != constraint;
-                    new_constraint
-                });
-                let default = type_param.default.map(|default| {
-                    let new_default = self.evaluate(default);
-                    changed |= new_default != default;
-                    new_default
-                });
-                GenericTypeParam {
-                    constraint,
-                    default,
-                    ..type_param
+                if elements != tuple.elements || rest != tuple.rest {
+                    #[cfg(test)]
+                    measure_constraint_eval(|m| m.re_interns += 1);
+                    self.interner
+                        .intern_tuple_type(TupleType { elements, rest })
+                } else {
+                    ty
                 }
-            })
-            .collect();
-        let receiver = function.receiver.map(|receiver| {
-            #[cfg(test)]
-            measure_constraint_eval(|measure| measure.signature_children += 1);
-            let new_receiver = self.evaluate(receiver);
-            changed |= new_receiver != receiver;
-            new_receiver
-        });
-        let params: Vec<ParameterType> = function
-            .params
-            .into_iter()
-            .map(|param| {
-                #[cfg(test)]
-                measure_constraint_eval(|measure| measure.signature_children += 1);
-                let new_ty = self.evaluate(param.ty);
-                changed |= new_ty != param.ty;
-                ParameterType {
-                    ty: new_ty,
-                    ..param
+            }
+            ConstraintFrame::Readonly { operand, .. } => {
+                let rewritten = children.first().copied().unwrap_or(operand);
+                if rewritten != operand {
+                    #[cfg(test)]
+                    measure_constraint_eval(|m| m.re_interns += 1);
+                    self.interner.intern_readonly(rewritten)
+                } else {
+                    ty
                 }
-            })
-            .collect();
-        #[cfg(test)]
-        measure_constraint_eval(|measure| measure.signature_children += 1);
-        let ret = self.evaluate(function.ret);
-        changed |= ret != function.ret;
-        let tainted = self.leave_structural(ty);
-
-        if self.exhausted || tainted {
-            #[cfg(test)]
-            measure_constraint_eval(|measure| {
-                if self.exhausted {
-                    measure.exhausted_identity_returns += 1;
-                }
-                if tainted {
-                    measure.tainted_identity_returns += 1;
-                }
-            });
-            ty
-        } else if changed {
-            #[cfg(test)]
-            measure_constraint_eval(|measure| measure.re_interns += 1);
-            self.interner.intern_function(FunctionType {
-                type_params,
-                receiver,
-                params,
-                ret,
-            })
-        } else {
-            ty
+            }
         }
     }
+}
 
-    fn evaluate_union(&mut self, ty: TypeId) -> TypeId {
-        let Some(members) = self.interner.store().union_members(ty).map(|m| m.to_vec()) else {
-            return ty;
-        };
-        self.enter_structural(ty);
-        let mut changed = false;
-        let members: Vec<TypeId> = members
-            .into_iter()
-            .map(|member| {
-                let new_ty = self.evaluate(member);
-                changed |= new_ty != member;
-                new_ty
-            })
-            .collect();
-        let tainted = self.leave_structural(ty);
-
-        if self.exhausted || tainted {
-            #[cfg(test)]
-            measure_constraint_eval(|measure| {
-                if self.exhausted {
-                    measure.exhausted_identity_returns += 1;
-                }
-                if tainted {
-                    measure.tainted_identity_returns += 1;
-                }
-            });
-            ty
-        } else if changed {
-            #[cfg(test)]
-            measure_constraint_eval(|measure| measure.re_interns += 1);
-            self.interner.union(members)
-        } else {
-            ty
-        }
-    }
-
-    fn evaluate_intersection(&mut self, ty: TypeId) -> TypeId {
-        let Some(members) = self
-            .interner
-            .store()
-            .intersection_members(ty)
-            .map(|m| m.to_vec())
-        else {
-            return ty;
-        };
-        self.enter_structural(ty);
-        let mut changed = false;
-        let members: Vec<TypeId> = members
-            .into_iter()
-            .map(|member| {
-                let new_ty = self.evaluate(member);
-                changed |= new_ty != member;
-                new_ty
-            })
-            .collect();
-        let tainted = self.leave_structural(ty);
-
-        if self.exhausted || tainted {
-            #[cfg(test)]
-            measure_constraint_eval(|measure| {
-                if self.exhausted {
-                    measure.exhausted_identity_returns += 1;
-                }
-                if tainted {
-                    measure.tainted_identity_returns += 1;
-                }
-            });
-            ty
-        } else if changed {
-            #[cfg(test)]
-            measure_constraint_eval(|measure| measure.re_interns += 1);
-            self.interner.intersection(members)
-        } else {
-            ty
-        }
-    }
-
-    fn evaluate_array(&mut self, ty: TypeId) -> TypeId {
-        let Some(element) = self
-            .interner
-            .store()
-            .array_type(ty)
-            .map(|array| array.element)
-        else {
-            return ty;
-        };
-        let element = self.evaluate(element);
-        if self
-            .interner
-            .store()
-            .array_type(ty)
-            .map(|array| array.element)
-            == Some(element)
-        {
-            ty
-        } else {
-            self.interner.intern_array(element)
-        }
-    }
-
-    fn evaluate_tuple(&mut self, ty: TypeId) -> TypeId {
-        let Some(tuple) = self.interner.store().tuple_type(ty).cloned() else {
-            return ty;
-        };
-        self.enter_structural(ty);
-        let mut changed = false;
-        let elements: Vec<TypeId> = tuple
-            .elements
-            .into_iter()
-            .map(|element| {
-                let new_ty = self.evaluate(element);
-                changed |= new_ty != element;
-                new_ty
-            })
-            .collect();
-        let rest = tuple.rest.map(|rest| {
-            let new_ty = self.evaluate(rest.ty);
-            changed |= new_ty != rest.ty;
-            TupleRestType { ty: new_ty, ..rest }
-        });
-        let tainted = self.leave_structural(ty);
-
-        if self.exhausted || tainted {
-            #[cfg(test)]
-            measure_constraint_eval(|measure| {
-                if self.exhausted {
-                    measure.exhausted_identity_returns += 1;
-                }
-                if tainted {
-                    measure.tainted_identity_returns += 1;
-                }
-            });
-            ty
-        } else if changed {
-            #[cfg(test)]
-            measure_constraint_eval(|measure| measure.re_interns += 1);
-            self.interner
-                .intern_tuple_type(TupleType { elements, rest })
-        } else {
-            ty
-        }
-    }
-
-    fn evaluate_readonly(&mut self, ty: TypeId) -> TypeId {
-        let Some(operand) = self.interner.store().readonly_operand(ty) else {
-            return ty;
-        };
-        let new_operand = self.evaluate(operand);
-        if new_operand == operand {
-            ty
-        } else {
-            self.interner.intern_readonly(new_operand)
-        }
-    }
+fn constraint_child(children: &[TypeId], index: &mut usize, original: TypeId) -> TypeId {
+    let child = children.get(*index).copied().unwrap_or(original);
+    *index += 1;
+    child
 }
 
 impl<'a> ConditionalEvaluator<'a> {

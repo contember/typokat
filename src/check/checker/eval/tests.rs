@@ -229,6 +229,173 @@ fn inference_constraint_evaluation_discards_partial_function_on_pending_cycle() 
 }
 
 #[test]
+fn inference_constraint_evaluation_handles_a_deep_alternating_function_spine() {
+    const DEPTH: u32 = 10_005;
+
+    let mut interner = Interner::with_intrinsics();
+    let uppercase = interner.well_known().uppercase;
+    let leaf = interner.intern_literal(LiteralValue::String("leaf".into()));
+    let mut source = interner.intern_instantiation(uppercase, vec![(TypeParamId(95_000), leaf)]);
+    let void = interner.well_known().void;
+
+    for index in 0..DEPTH {
+        let type_param = GenericTypeParam {
+            id: TypeParamId(95_100 + index),
+            constraint: (index % 5 == 0).then_some(source),
+            default: (index % 5 == 1).then_some(source),
+        };
+        source = interner.intern_function(FunctionType {
+            type_params: vec![type_param],
+            receiver: (index % 5 == 2).then_some(source),
+            params: if index % 5 == 3 {
+                vec![ParameterType::required("value", source)]
+            } else {
+                Vec::new()
+            },
+            ret: if index % 5 == 4 { source } else { void },
+        });
+    }
+
+    let mut next = 96_000;
+    let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
+
+    assert!(!evaluation.exhausted);
+    assert!(!evaluation.cycle_detected);
+    assert_ne!(evaluation.result, source);
+    let mut current = evaluation.result;
+    for index in (0..DEPTH).rev() {
+        let function = interner.store().function_type(current).unwrap();
+        current = match index % 5 {
+            0 => function.type_params[0].constraint.unwrap(),
+            1 => function.type_params[0].default.unwrap(),
+            2 => function.receiver.unwrap(),
+            3 => function.params[0].ty,
+            4 => function.ret,
+            _ => unreachable!(),
+        };
+    }
+    let expected = interner.intern_literal(LiteralValue::String("LEAF".into()));
+    assert_eq!(current, expected);
+}
+
+#[test]
+fn inference_constraint_evaluation_keeps_a_mutual_scc_while_rewriting_a_sibling() {
+    let mut interner = Interner::with_intrinsics();
+    let uppercase = interner.well_known().uppercase;
+    let first = interner.reserve_object();
+    let second = interner.reserve_object();
+    let function = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: TypeParamId(96_100),
+            constraint: Some(second),
+            default: None,
+        }],
+        receiver: None,
+        params: Vec::new(),
+        ret: interner.well_known().void,
+    });
+    interner.fill_object(
+        first,
+        ObjectType {
+            properties: vec![prop("function", function)],
+            ..Default::default()
+        },
+    );
+    interner.fill_object(
+        second,
+        ObjectType {
+            properties: vec![prop("first", first)],
+            ..Default::default()
+        },
+    );
+    let sibling_literal = interner.intern_literal(LiteralValue::String("sibling".into()));
+    let sibling =
+        interner.intern_instantiation(uppercase, vec![(TypeParamId(96_101), sibling_literal)]);
+    let source = interner.intern_object(ObjectType {
+        properties: vec![prop("first", first), prop("sibling", sibling)],
+        ..Default::default()
+    });
+    let mut next = 96_102;
+
+    let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
+
+    assert!(!evaluation.exhausted);
+    assert!(!evaluation.cycle_detected);
+    let expected_sibling = interner.intern_literal(LiteralValue::String("SIBLING".into()));
+    let result = interner.store().object_type(evaluation.result).unwrap();
+    assert_eq!(result.property("first").unwrap().ty, first);
+    assert_eq!(result.property("sibling").unwrap().ty, expected_sibling);
+}
+
+#[test]
+fn inference_constraint_evaluation_discards_partial_function_when_pending_precedes_change() {
+    let mut interner = Interner::with_intrinsics();
+    let uppercase = interner.well_known().uppercase;
+    let changed_literal = interner.intern_literal(LiteralValue::String("changed".into()));
+    let changed =
+        interner.intern_instantiation(uppercase, vec![(TypeParamId(96_110), changed_literal)]);
+    let (template, param, _) = maybe_loop_template(&mut interner);
+    let string = interner.well_known().string;
+    let pending_cycle = instantiate_one(&mut interner, template, param, string);
+    let source = interner.intern_function(FunctionType {
+        type_params: vec![
+            GenericTypeParam {
+                id: TypeParamId(96_111),
+                constraint: None,
+                default: Some(pending_cycle),
+            },
+            GenericTypeParam {
+                id: TypeParamId(96_112),
+                constraint: Some(changed),
+                default: None,
+            },
+        ],
+        receiver: None,
+        params: Vec::new(),
+        ret: interner.well_known().void,
+    });
+    let mut next = 96_113;
+
+    let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
+
+    assert_eq!(evaluation.result, source);
+    assert!(evaluation.exhausted);
+    assert!(evaluation.cycle_detected);
+}
+
+#[test]
+fn inference_constraint_evaluation_keeps_array_and_readonly_identity_after_exhaustion() {
+    let mut interner = Interner::with_intrinsics();
+    let (template, param, _) = maybe_loop_template(&mut interner);
+    let string = interner.well_known().string;
+    let pending_cycle = instantiate_one(&mut interner, template, param, string);
+    let bridge = interner.reserve_conditional();
+    let bridge_value = interner.intern_array(pending_cycle);
+    interner.fill_conditional(
+        bridge,
+        ConditionalType {
+            check: interner.well_known().number,
+            extends_ty: interner.well_known().number,
+            true_branch: bridge_value,
+            false_branch: interner.well_known().void,
+            infer_count: 0,
+            distributive: false,
+            poisoned: false,
+        },
+    );
+    let array = interner.intern_array(bridge);
+    let readonly = interner.intern_readonly(bridge);
+
+    for source in [array, readonly] {
+        let mut next = 96_120;
+        let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
+        assert_eq!(evaluation.result, source);
+        assert!(evaluation.exhausted);
+        assert!(evaluation.cycle_detected);
+    }
+}
+
+#[test]
 fn infer_rewrite_preserves_generic_metadata_and_signature_shape() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
