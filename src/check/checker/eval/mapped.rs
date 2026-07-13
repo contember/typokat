@@ -60,6 +60,11 @@ enum MappedRewriteFrame {
         base: TypeId,
         args: Vec<(TypeParamId, TypeId)>,
     },
+    ClassInstance {
+        ty: TypeId,
+        class: crate::types::ClassId,
+        args: Vec<TypeId>,
+    },
     Template {
         ty: TypeId,
         template: TemplateType,
@@ -67,6 +72,11 @@ enum MappedRewriteFrame {
     Keyof {
         ty: TypeId,
         operand: TypeId,
+    },
+    DeferredIndexedAccess {
+        ty: TypeId,
+        object: TypeId,
+        index: TypeId,
     },
 }
 
@@ -84,8 +94,10 @@ impl MappedRewriteFrame {
             | MappedRewriteFrame::Readonly { ty, .. }
             | MappedRewriteFrame::Conditional { ty, .. }
             | MappedRewriteFrame::Instantiation { ty, .. }
+            | MappedRewriteFrame::ClassInstance { ty, .. }
             | MappedRewriteFrame::Template { ty, .. }
-            | MappedRewriteFrame::Keyof { ty, .. } => *ty,
+            | MappedRewriteFrame::Keyof { ty, .. }
+            | MappedRewriteFrame::DeferredIndexedAccess { ty, .. } => *ty,
         }
     }
 
@@ -125,7 +137,9 @@ impl MappedRewriteFrame {
             }
             MappedRewriteFrame::Conditional { .. } => 4,
             MappedRewriteFrame::Instantiation { args, .. } => args.len(),
+            MappedRewriteFrame::ClassInstance { args, .. } => args.len(),
             MappedRewriteFrame::Template { template, .. } => template.holes.len(),
+            MappedRewriteFrame::DeferredIndexedAccess { .. } => 2,
         }
     }
 
@@ -201,10 +215,19 @@ impl MappedRewriteFrame {
                     push(value);
                 }
             }
+            MappedRewriteFrame::ClassInstance { args, .. } => {
+                for &arg in args.iter().rev() {
+                    push(arg);
+                }
+            }
             MappedRewriteFrame::Template { template, .. } => {
                 for &hole in template.holes.iter().rev() {
                     push(hole);
                 }
+            }
+            MappedRewriteFrame::DeferredIndexedAccess { object, index, .. } => {
+                push(*index);
+                push(*object);
             }
         }
     }
@@ -862,6 +885,16 @@ impl<'a> ConditionalEvaluator<'a> {
                     args: instantiation.args,
                 }
             }
+            TypeTag::ClassInstance => {
+                let Some(instance) = self.interner.store().class_instance_type(ty).cloned() else {
+                    return identity(ty);
+                };
+                MappedRewriteFrame::ClassInstance {
+                    ty,
+                    class: instance.class,
+                    args: instance.args,
+                }
+            }
             TypeTag::Template => {
                 let Some(template) = self.interner.store().template_type(ty).cloned() else {
                     return identity(ty);
@@ -873,6 +906,21 @@ impl<'a> ConditionalEvaluator<'a> {
                     return identity(ty);
                 };
                 MappedRewriteFrame::Keyof { ty, operand }
+            }
+            TypeTag::DeferredIndexedAccess => {
+                let Some(access) = self
+                    .interner
+                    .store()
+                    .deferred_indexed_access_type(ty)
+                    .copied()
+                else {
+                    return identity(ty);
+                };
+                MappedRewriteFrame::DeferredIndexedAccess {
+                    ty,
+                    object: access.object,
+                    index: access.index,
+                }
             }
         }
     }
@@ -1046,6 +1094,14 @@ impl<'a> ConditionalEvaluator<'a> {
                     Some(_) | None => ty,
                 }
             }
+            MappedRewriteFrame::ClassInstance { ty, class, args } => {
+                match children.take(args.len()) {
+                    Some(values) if values != args => {
+                        self.interner.intern_class_instance(class, values.to_vec())
+                    }
+                    Some(_) | None => ty,
+                }
+            }
             MappedRewriteFrame::Template { ty, template } => {
                 match children.take(template.holes.len()) {
                     Some(holes) if holes != template.holes => {
@@ -1061,6 +1117,16 @@ impl<'a> ConditionalEvaluator<'a> {
                 let rewritten = children.next(operand);
                 if rewritten != operand {
                     self.interner.intern_keyof(rewritten)
+                } else {
+                    ty
+                }
+            }
+            MappedRewriteFrame::DeferredIndexedAccess { ty, object, index } => {
+                let rewritten_object = children.next(object);
+                let rewritten_index = children.next(index);
+                if rewritten_object != object || rewritten_index != index {
+                    self.interner
+                        .intern_deferred_indexed_access(rewritten_object, rewritten_index)
                 } else {
                     ty
                 }

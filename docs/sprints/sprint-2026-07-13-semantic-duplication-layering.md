@@ -551,3 +551,12 @@ unknown effect above.
   exhaustive `Yes | No | Exhausted` caller policies, and dependency-first heritage-only poison with
   owned incomplete events and one-/two-level chain gates. Third targeted architecture re-review:
   **PASS** — those three corrected protocols have no remaining pre-WU1 architecture blockers.
+- 2026-07-13 — WU1a is implemented as a dormant representation boundary: immutable interned
+  class-instance and deferred-indexed-access nodes, complete ordered
+  hashing/substitution/walking/rendering,
+  construction/publication capabilities, typed evaluation/projection/relation exhaustion, and
+  legacy-entry preflight plus per-frame tripwires that reject either new tag before durable writes.
+  Existing class consumers remain unmigrated for WU1b-WU1d; direct nested rejection and forged
+  pre-publication-state tests are covered. The review-fix round passes `cargo test` (398 passed,
+  6 ignored, plus all integration tests) and `cargo clippy --all-targets -- -D warnings`. Targeted
+  independent re-review: **PASS** — all six findings are closed.

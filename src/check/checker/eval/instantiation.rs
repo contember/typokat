@@ -82,6 +82,11 @@ enum InferRewriteFrame {
         base: TypeId,
         args: Vec<(TypeParamId, TypeId)>,
     },
+    ClassInstance {
+        ty: TypeId,
+        class: crate::types::ClassId,
+        args: Vec<TypeId>,
+    },
     Template {
         ty: TypeId,
         template: TemplateType,
@@ -89,6 +94,11 @@ enum InferRewriteFrame {
     Keyof {
         ty: TypeId,
         operand: TypeId,
+    },
+    DeferredIndexedAccess {
+        ty: TypeId,
+        object: TypeId,
+        index: TypeId,
     },
 }
 
@@ -104,8 +114,10 @@ impl InferRewriteFrame {
             | InferRewriteFrame::Tuple { ty, .. }
             | InferRewriteFrame::Readonly { ty, .. }
             | InferRewriteFrame::Instantiation { ty, .. }
+            | InferRewriteFrame::ClassInstance { ty, .. }
             | InferRewriteFrame::Template { ty, .. }
-            | InferRewriteFrame::Keyof { ty, .. } => *ty,
+            | InferRewriteFrame::Keyof { ty, .. }
+            | InferRewriteFrame::DeferredIndexedAccess { ty, .. } => *ty,
         }
     }
 }
@@ -746,6 +758,20 @@ impl<'a> ConditionalEvaluator<'a> {
                     children,
                 )
             }
+            TypeTag::ClassInstance => {
+                let Some(instance) = self.interner.store().class_instance_type(ty).cloned() else {
+                    return identity();
+                };
+                let children = instance.args.clone();
+                (
+                    InferRewriteFrame::ClassInstance {
+                        ty,
+                        class: instance.class,
+                        args: instance.args,
+                    },
+                    children,
+                )
+            }
             TypeTag::Template => {
                 let Some(template) = self.interner.store().template_type(ty).cloned() else {
                     return identity();
@@ -758,6 +784,24 @@ impl<'a> ConditionalEvaluator<'a> {
                     return identity();
                 };
                 (InferRewriteFrame::Keyof { ty, operand }, vec![operand])
+            }
+            TypeTag::DeferredIndexedAccess => {
+                let Some(access) = self
+                    .interner
+                    .store()
+                    .deferred_indexed_access_type(ty)
+                    .copied()
+                else {
+                    return identity();
+                };
+                (
+                    InferRewriteFrame::DeferredIndexedAccess {
+                        ty,
+                        object: access.object,
+                        index: access.index,
+                    },
+                    vec![access.object, access.index],
+                )
             }
         }
     }
@@ -930,6 +974,18 @@ impl<'a> ConditionalEvaluator<'a> {
                     ty
                 }
             }
+            InferRewriteFrame::ClassInstance { ty, class, args } => {
+                let rewritten = args
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &arg)| children.get(index).copied().unwrap_or(arg))
+                    .collect::<Vec<_>>();
+                if rewritten != args {
+                    self.interner.intern_class_instance(class, rewritten)
+                } else {
+                    ty
+                }
+            }
             InferRewriteFrame::Template { ty, template } => {
                 let holes: Vec<TypeId> = template
                     .holes
@@ -950,6 +1006,16 @@ impl<'a> ConditionalEvaluator<'a> {
                 let rewritten = children.first().copied().unwrap_or(operand);
                 if rewritten != operand {
                     self.interner.intern_keyof(rewritten)
+                } else {
+                    ty
+                }
+            }
+            InferRewriteFrame::DeferredIndexedAccess { ty, object, index } => {
+                let rewritten_object = children.first().copied().unwrap_or(object);
+                let rewritten_index = children.get(1).copied().unwrap_or(index);
+                if rewritten_object != object || rewritten_index != index {
+                    self.interner
+                        .intern_deferred_indexed_access(rewritten_object, rewritten_index)
                 } else {
                     ty
                 }

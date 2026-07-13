@@ -629,6 +629,11 @@ impl<'a> Relater<'a> {
                         pending.extend(instantiation.args.iter().map(|(_, argument)| *argument));
                     }
                 }
+                TypeTag::ClassInstance => {
+                    if let Some(instance) = self.store.class_instance_type(current) {
+                        pending.extend(instance.args.iter().copied());
+                    }
+                }
                 TypeTag::Mapped => {
                     if let Some(mapped) = self.store.mapped_type(current) {
                         pending.extend(
@@ -649,6 +654,12 @@ impl<'a> Relater<'a> {
                 }
                 TypeTag::Keyof => {
                     pending.extend(self.store.keyof_operand(current));
+                }
+                TypeTag::DeferredIndexedAccess => {
+                    if let Some(access) = self.store.deferred_indexed_access_type(current) {
+                        pending.push(access.object);
+                        pending.push(access.index);
+                    }
                 }
                 TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => {}
             }

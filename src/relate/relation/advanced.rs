@@ -92,6 +92,11 @@ impl<'a> Relater<'a> {
                         stack.extend(inst.args.iter().map(|(_, v)| *v));
                     }
                 }
+                TypeTag::ClassInstance => {
+                    if let Some(instance) = self.store.class_instance_type(t) {
+                        stack.extend(instance.args.iter().copied());
+                    }
+                }
                 // M27: a template literal type carries its `infer` binders in its holes
                 // (`` `a${infer R}` `` in an extends position) — descend into them.
                 TypeTag::Template => {
@@ -104,6 +109,12 @@ impl<'a> Relater<'a> {
                 TypeTag::Keyof => {
                     if let Some(operand) = self.store.keyof_operand(t) {
                         stack.push(operand);
+                    }
+                }
+                TypeTag::DeferredIndexedAccess => {
+                    if let Some(access) = self.store.deferred_indexed_access_type(t) {
+                        stack.push(access.object);
+                        stack.push(access.index);
                     }
                 }
                 // A nested conditional rebinds its own infer indices — do not descend.

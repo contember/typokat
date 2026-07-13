@@ -17,9 +17,12 @@ use crate::types::store::TypeId;
 use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
+#[allow(dead_code)] // Dormant until WU1c routes planned evaluation through it.
+pub(in crate::check) mod demand;
 mod extends;
 mod instantiation;
 mod keyof;
+pub(in crate::check::checker) mod legacy_guard;
 mod mapped;
 mod template;
 #[cfg(test)]
@@ -35,6 +38,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// conditionals and other types are unchanged. Exhaustion reports `TK2589` at
     /// the demand span, a documented tsc span divergence.
     pub(in crate::check::checker) fn evaluate_type(&mut self, ty: TypeId, span: Span) -> TypeId {
+        legacy_guard::reject_legacy_semantic_types(self.interner.store(), &[ty]);
         if !matches!(
             self.interner.store().tag(ty),
             TypeTag::Conditional
@@ -215,10 +219,15 @@ impl<'a> ConditionalEvaluator<'a> {
         self.cycle_tainted.extend(self.in_flight.iter().copied());
     }
 
+    fn guard_eval_frame(&self, ty: TypeId) {
+        legacy_guard::reject_legacy_semantic_type(self.interner.store(), ty);
+    }
+
     /// Evaluate `root`, resolving every concrete conditional / lazy instantiation it
     /// directly denotes (and, for a union, its members) to a result type. A deferred
     /// conditional (free check), or any non-conditional type, is returned unchanged.
     pub fn evaluate(&mut self, root: TypeId) -> TypeId {
+        legacy_guard::reject_legacy_semantic_types(self.interner.store(), &[root]);
         self.cycle_detected = false;
         let mut tasks: Vec<Task> = vec![Task::Eval(root)];
         let mut values: Vec<TypeId> = Vec::new();
@@ -269,6 +278,7 @@ impl<'a> ConditionalEvaluator<'a> {
                     self.decide_conditional(id, &mut tasks, &mut values, error);
                 }
                 Task::Eval(ty) => {
+                    self.guard_eval_frame(ty);
                     if let Some(&cached) = self.memo.get(&ty) {
                         values.push(cached);
                         continue;
@@ -432,7 +442,8 @@ impl<'a> ConditionalEvaluator<'a> {
                 TypeTag::Conditional
                 | TypeTag::Instantiation
                 | TypeTag::Mapped
-                | TypeTag::Keyof => return true,
+                | TypeTag::Keyof
+                | TypeTag::DeferredIndexedAccess => return true,
                 TypeTag::Object => {
                     if let Some(object) = store.object_type(t) {
                         stack.extend(object.properties.iter().map(|p| p.ty));
@@ -476,6 +487,11 @@ impl<'a> ConditionalEvaluator<'a> {
                 TypeTag::Readonly => {
                     if let Some(operand) = store.readonly_operand(t) {
                         stack.push(operand);
+                    }
+                }
+                TypeTag::ClassInstance => {
+                    if let Some(instance) = store.class_instance_type(t) {
+                        stack.extend(instance.args.iter().copied());
                     }
                 }
                 // Decidable leaves — see the doc above (templates deliberately

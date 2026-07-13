@@ -1,7 +1,7 @@
 use super::*;
 use crate::types::repr::{
-    FunctionType, GenericTypeParam, ObjectType, ParameterType, PropertyType, TupleRestType,
-    TupleType,
+    ClassId, FunctionType, GenericTypeParam, ObjectType, ParameterType, PropertyType,
+    TupleRestType, TupleType,
 };
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
@@ -28,6 +28,32 @@ fn type_param_is_replaced() {
     );
     // An intrinsic is unaffected.
     assert_eq!(substitute(&mut interner, wk.string, &map), wk.string);
+}
+
+#[test]
+fn substitution_rewrites_class_arguments_in_order() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(100), "T");
+    let u = interner.intern_type_param(TypeParamId(101), "U");
+    let instance = interner.intern_class_instance(ClassId(4), vec![t, u]);
+    let expected = interner.intern_class_instance(ClassId(4), vec![wk.string, wk.number]);
+    let map = FxHashMap::from_iter([(TypeParamId(100), wk.string), (TypeParamId(101), wk.number)]);
+
+    assert_eq!(substitute(&mut interner, instance, &map), expected);
+}
+
+#[test]
+fn substitution_rewrites_both_deferred_indexed_access_operands() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(102), "T");
+    let u = interner.intern_type_param(TypeParamId(103), "U");
+    let access = interner.intern_deferred_indexed_access(t, u);
+    let expected = interner.intern_deferred_indexed_access(wk.string, wk.number);
+    let map = FxHashMap::from_iter([(TypeParamId(102), wk.string), (TypeParamId(103), wk.number)]);
+
+    assert_eq!(substitute(&mut interner, access, &map), expected);
 }
 
 /// Substitution recurses everywhere: a type parameter nested inside an object,

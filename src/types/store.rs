@@ -5,9 +5,9 @@
 
 use crate::types::hash::StableHash;
 use crate::types::repr::{
-    ArrayType, ConditionalType, FunctionType, InstantiationType, IntrinsicKind, LiteralValue,
-    MappedType, ObjectType, TemplateType, TupleType, TypeFlags, TypeParamId, TypeParamType,
-    TypeTag,
+    ArrayType, ClassInstanceType, ConditionalType, DeferredIndexedAccessType, FunctionType,
+    InstantiationType, IntrinsicKind, LiteralValue, MappedType, ObjectType, TemplateType,
+    TupleType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
 };
 use rustc_hash::FxHashMap;
 
@@ -66,6 +66,10 @@ pub struct Store {
     /// Lazy alias instantiations (M25). Addressed by the `payload` of an
     /// `Instantiation`-tagged row. Identity is `(base, sorted args)`.
     instantiations: Vec<InstantiationType>,
+    /// Immutable class applications, distinct from lazy alias instantiations.
+    class_instances: Vec<ClassInstanceType>,
+    /// Immutable deferred indexed-access operand pairs.
+    deferred_indexed_accesses: Vec<DeferredIndexedAccessType>,
     /// Mapped types (M26). Addressed by the `payload` of a `Mapped`-tagged row. The
     /// whole [`MappedType`] is its structural identity. A `MappedValue` placeholder row
     /// carries no side-table entry (payload `0`), like an intrinsic.
@@ -110,6 +114,12 @@ impl Store {
 
     pub fn is_empty(&self) -> bool {
         self.tag.is_empty()
+    }
+
+    /// O(1) gate for the dormant ADR-0006 legacy preflight. Current class consumers
+    /// emit neither node, so ordinary evaluator/relation queries avoid a second walk.
+    pub(crate) fn has_dormant_semantic_types(&self) -> bool {
+        !self.class_instances.is_empty() || !self.deferred_indexed_accesses.is_empty()
     }
 
     #[inline]
@@ -224,6 +234,24 @@ impl Store {
             return None;
         }
         self.instantiations.get(self.payload(id) as usize)
+    }
+
+    /// The immutable class application payload, or `None` for another tag.
+    pub fn class_instance_type(&self, id: TypeId) -> Option<&ClassInstanceType> {
+        if self.tag(id) != TypeTag::ClassInstance {
+            return None;
+        }
+        self.class_instances
+            .get(usize::try_from(self.payload(id)).ok()?)
+    }
+
+    /// The deferred indexed-access operands, or `None` for another tag.
+    pub fn deferred_indexed_access_type(&self, id: TypeId) -> Option<&DeferredIndexedAccessType> {
+        if self.tag(id) != TypeTag::DeferredIndexedAccess {
+            return None;
+        }
+        self.deferred_indexed_accesses
+            .get(usize::try_from(self.payload(id)).ok()?)
     }
 
     /// The de Bruijn index of an `infer` binder (M25), or `None` if `id` is not one.
@@ -457,6 +485,30 @@ impl Store {
         let payload = self.instantiations.len() as u32;
         self.instantiations.push(instantiation);
         self.push(TypeTag::Instantiation, flags, payload)
+    }
+
+    /// Append an immutable class application. Internal — `Interner` owns dedup.
+    pub(crate) fn push_class_instance(
+        &mut self,
+        instance: ClassInstanceType,
+        flags: TypeFlags,
+    ) -> TypeId {
+        let payload = u32::try_from(self.class_instances.len())
+            .expect("class-instance side table exceeds the u32 payload range");
+        self.class_instances.push(instance);
+        self.push(TypeTag::ClassInstance, flags, payload)
+    }
+
+    /// Append an immutable deferred indexed access. Internal — `Interner` owns dedup.
+    pub(crate) fn push_deferred_indexed_access(
+        &mut self,
+        access: DeferredIndexedAccessType,
+        flags: TypeFlags,
+    ) -> TypeId {
+        let payload = u32::try_from(self.deferred_indexed_accesses.len())
+            .expect("deferred-indexed-access side table exceeds the u32 payload range");
+        self.deferred_indexed_accesses.push(access);
+        self.push(TypeTag::DeferredIndexedAccess, flags, payload)
     }
 
     /// Append an infer-binder row (M25). Internal — `Interner` owns dedup (by index).

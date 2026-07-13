@@ -32,6 +32,7 @@ mod decls;
 pub(in crate::check) mod eval;
 mod expr;
 mod flowgraph;
+mod indexed_access;
 mod narrowing;
 mod statements;
 

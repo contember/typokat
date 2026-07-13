@@ -10,50 +10,50 @@ use crate::types::store::TypeId;
 pub enum TypeTag {
     /// Built-in keyword types (`number`, `string`, …). `payload` is the
     /// `IntrinsicKind` discriminant.
-    Intrinsic,
+    Intrinsic = 0,
     /// A literal type (`1`, `"x"`, `true`). `payload` indexes `Store::literals`.
-    Literal,
+    Literal = 1,
     /// An object/interface type. `payload` indexes `Store::objects`.
     /// TODO(M2): constructed by the object-literal / interface checker.
-    Object,
+    Object = 2,
     /// A union type. `payload` indexes `Store::unions`. Constructed and
     /// canonicalized by `Interner::union` (M4).
-    Union,
+    Union = 3,
     /// An **intersection** type (`A & B` — M31). `payload` indexes
     /// `Store::intersections`. The structural dual of `Union`: canonical member
     /// set, but `never` absorbs and `unknown` is dropped.
-    Intersection,
+    Intersection = 4,
     /// A function type. `payload` indexes `Store::functions`.
     /// TODO(M3): constructed by the function checker.
-    Function,
+    Function = 5,
     /// A **type parameter** (`T` in `function f<T>(…)`). `payload` indexes
     /// `Store::type_params`. Constructed by `Interner::intern_type_param` (M9).
-    TypeParam,
+    TypeParam = 6,
     /// An **array** type (`T[]` / `Array<T>`). `payload` indexes
     /// `Store::arrays`. Carries a single **element** `TypeId`; interned/hashed by
     /// that element id. Constructed by `Interner::intern_array` (M17).
-    Array,
+    Array = 7,
     /// A **tuple** type (`[A, B]`). `payload` indexes `Store::tuples`. Carries an
     /// ordered fixed element list plus an optional rest segment; interned/hashed
     /// by that full shape (order is significant — unlike a union,
     /// `[A, B]` ≠ `[B, A]`).
     /// Constructed by `Interner::intern_tuple` (M18).
-    Tuple,
+    Tuple = 8,
     /// A **readonly** array/tuple wrapper. `payload` stores the wrapped operand
     /// inline; user-written object shapes cannot satisfy it by synthetic property.
-    Readonly,
+    Readonly = 9,
     /// A **conditional** type (`C extends E ? T : F` — M25). Carries component ids,
     /// `infer` binder count, distribution flag, and poison flag; recursive alias
     /// templates are reserved/filled like nominal objects.
-    Conditional,
+    Conditional = 10,
     /// A **lazy alias instantiation** (`Alias<Args>` — M25). Denotes
     /// `substitute(base, args)` computed by the evaluator so self-recursive aliases
     /// do not expand at lowering.
-    Instantiation,
+    Instantiation = 11,
     /// An **`infer` binder** (`infer U` inside a conditional's `extends` type — M25).
     /// `payload` is the node-local de Bruijn index. Identity is the index alone, and
     /// substitution never targets it (bound variable; ADR-0002 no-capture rule).
-    Infer,
+    Infer = 12,
     /// A **mapped type** (`{ [K in S]: V }` — M26). `payload` indexes `Store::mapped`.
     /// Carries the key source, the value template (with `T[K]` represented as the
     /// node-scoped [`TypeTag::MappedValue`] placeholder), and the optional/readonly
@@ -62,11 +62,11 @@ pub enum TypeTag {
     /// parameter stays a **deferred** node under the M25 conservative relation rules
     /// (identical-only). Constructed via `Interner::intern_mapped`. See
     /// [`MappedType`].
-    Mapped,
+    Mapped = 13,
     /// The **source value placeholder** (`T[K]`) inside a mapped type's value template.
     /// A node-scoped bound variable: substitution never targets it, and the evaluator
     /// replaces it per key. Identity is the tag alone (payload `0`).
-    MappedValue,
+    MappedValue = 14,
     /// A **template literal type** (`` `a${T}` `` — M27). `payload` indexes
     /// `Store::templates`. Carries alternating literal **text** segments and **hole**
     /// `TypeId`s (the interpolated types), the holes being ordinary types folded into the
@@ -77,7 +77,7 @@ pub enum TypeTag {
     /// free declaration type parameter hole stays a **deferred** node related
     /// conservatively (identical-only, plus deferred → `string`). Constructed via
     /// `Interner::intern_template`. See [`TemplateType`].
-    Template,
+    Template = 15,
     /// A **deferred `keyof`** (`keyof T` over a not-yet-computable operand — M28).
     /// `payload` is the **operand** `TypeId` stored inline (like an `Infer` index — no
     /// cold side-table row). Constructed only when the operand is a pending type-level
@@ -89,7 +89,41 @@ pub enum TypeTag {
     /// concrete — through the SAME keyof computation used for eager operands (single
     /// source of truth). An unevaluable node relates conservatively (identical-node
     /// only). Constructed via `Interner::intern_keyof`.
-    Keyof,
+    Keyof = 16,
+    /// An immutable application of a class declaration to its effective type
+    /// arguments. The class identity and ordered argument list are the complete
+    /// structural key; member projection is checker-owned and never alias evaluation.
+    ClassInstance = 17,
+    /// A deferred indexed access `Object[Index]`. Both ordered operands are part of
+    /// identity and are resolved by the class-aware demand boundary, never by the
+    /// legacy alias evaluator.
+    DeferredIndexedAccess = 18,
+}
+
+impl TypeTag {
+    pub const fn discriminant(self) -> u8 {
+        match self {
+            TypeTag::Intrinsic => 0,
+            TypeTag::Literal => 1,
+            TypeTag::Object => 2,
+            TypeTag::Union => 3,
+            TypeTag::Intersection => 4,
+            TypeTag::Function => 5,
+            TypeTag::TypeParam => 6,
+            TypeTag::Array => 7,
+            TypeTag::Tuple => 8,
+            TypeTag::Readonly => 9,
+            TypeTag::Conditional => 10,
+            TypeTag::Instantiation => 11,
+            TypeTag::Infer => 12,
+            TypeTag::Mapped => 13,
+            TypeTag::MappedValue => 14,
+            TypeTag::Template => 15,
+            TypeTag::Keyof => 16,
+            TypeTag::ClassInstance => 17,
+            TypeTag::DeferredIndexedAccess => 18,
+        }
+    }
 }
 
 /// The fixed intrinsic set. The discriminant is the `TypeTag::Intrinsic`
@@ -644,6 +678,20 @@ pub struct InstantiationType {
     pub args: Vec<(TypeParamId, TypeId)>,
 }
 
+/// Immutable class application. Arguments remain in declaration-parameter order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClassInstanceType {
+    pub class: ClassId,
+    pub args: Vec<TypeId>,
+}
+
+/// Immutable deferred indexed access. Operand order is semantic.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct DeferredIndexedAccessType {
+    pub object: TypeId,
+    pub index: TypeId,
+}
+
 /// Mapped-type modifier arithmetic (`?`/`readonly`) — identity-bearing and folded
 /// into mapped-node hash/eq.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -762,7 +810,36 @@ pub struct MappedType {
 
 #[cfg(test)]
 mod tests {
-    use super::{decimal_number_to_string, number_to_string};
+    use super::{decimal_number_to_string, number_to_string, TypeTag};
+
+    #[test]
+    fn type_tag_discriminants_are_source_pinned_and_append_only() {
+        let tags = [
+            TypeTag::Intrinsic,
+            TypeTag::Literal,
+            TypeTag::Object,
+            TypeTag::Union,
+            TypeTag::Intersection,
+            TypeTag::Function,
+            TypeTag::TypeParam,
+            TypeTag::Array,
+            TypeTag::Tuple,
+            TypeTag::Readonly,
+            TypeTag::Conditional,
+            TypeTag::Instantiation,
+            TypeTag::Infer,
+            TypeTag::Mapped,
+            TypeTag::MappedValue,
+            TypeTag::Template,
+            TypeTag::Keyof,
+            TypeTag::ClassInstance,
+            TypeTag::DeferredIndexedAccess,
+        ];
+        assert_eq!(
+            tags.map(TypeTag::discriminant),
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+        );
+    }
 
     /// ECMAScript Number::toString uses different fixed/exponential thresholds than
     /// Rust's display formatter.

@@ -242,6 +242,26 @@ fn render_type_inner(
             }
             None => "<unsupported>".to_string(),
         },
+        TypeTag::ClassInstance => match store.class_instance_type(id) {
+            Some(instance) => {
+                if rendering.contains(&id) {
+                    return "...".to_string();
+                }
+                rendering.push(id);
+                let args = instance
+                    .args
+                    .iter()
+                    .map(|arg| render_type_inner(store, *arg, false, rendering))
+                    .collect::<Vec<_>>();
+                rendering.pop();
+                if args.is_empty() {
+                    format!("class#{}", instance.class.0)
+                } else {
+                    format!("class#{}<{}>", instance.class.0, args.join(", "))
+                }
+            }
+            None => "<unsupported>".to_string(),
+        },
         // Infer binder (M25): `infer` de Bruijn index. Only surfaces inside a deferred
         // conditional's rendered form; a stable placeholder suffices.
         TypeTag::Infer => match store.infer_index(id) {
@@ -288,6 +308,24 @@ fn render_type_inner(
                 let rendered = render_type_inner(store, operand, false, rendering);
                 rendering.pop();
                 format!("keyof {rendered}")
+            }
+            None => "<unsupported>".to_string(),
+        },
+        TypeTag::DeferredIndexedAccess => match store.deferred_indexed_access_type(id) {
+            Some(access) => {
+                if rendering.contains(&id) {
+                    return "...".to_string();
+                }
+                rendering.push(id);
+                let object = render_type_inner(store, access.object, false, rendering);
+                let object = if indexed_access_object_needs_parens(store, access.object) {
+                    format!("({object})")
+                } else {
+                    object
+                };
+                let index = render_type_inner(store, access.index, false, rendering);
+                rendering.pop();
+                format!("{object}[{index}]")
             }
             None => "<unsupported>".to_string(),
         },
@@ -461,6 +499,19 @@ fn array_element_needs_parens(store: &Store, element: TypeId) -> bool {
     matches!(
         store.tag(element),
         TypeTag::Union | TypeTag::Function | TypeTag::Intersection | TypeTag::Readonly
+    )
+}
+
+/// Postfix indexed access must delimit lower-precedence object forms.
+fn indexed_access_object_needs_parens(store: &Store, object: TypeId) -> bool {
+    matches!(
+        store.tag(object),
+        TypeTag::Union
+            | TypeTag::Intersection
+            | TypeTag::Function
+            | TypeTag::Conditional
+            | TypeTag::Readonly
+            | TypeTag::Keyof
     )
 }
 

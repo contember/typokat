@@ -2,7 +2,10 @@
 //! instantiation, mapped, keyof, template.
 
 use super::*;
-use crate::types::repr::{ConditionalType, InstantiationType, MappedType, TemplateType};
+use crate::types::repr::{
+    ClassId, ClassInstanceType, ConditionalType, DeferredIndexedAccessType, InstantiationType,
+    MappedType, TemplateType,
+};
 
 impl Interner {
     /// Intern a union type from its (un-canonicalized) member ids, returning the
@@ -237,6 +240,48 @@ impl Interner {
         let id = self
             .store
             .push_instantiation(InstantiationType { base, args }, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
+    /// Intern an immutable class application. The argument order is declaration
+    /// order and is never canonicalized or routed through alias instantiation.
+    pub(crate) fn intern_class_instance(&mut self, class: ClassId, args: Vec<TypeId>) -> TypeId {
+        let key = StructuralKey::ClassInstance { class, args: &args };
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store
+                .class_instance_type(id)
+                .is_some_and(|existing| existing.class == class && existing.args == args)
+        }) {
+            return existing;
+        }
+        let id = self
+            .store
+            .push_class_instance(ClassInstanceType { class, args }, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
+    /// Intern a deferred indexed access by its ordered `(object, index)` pair.
+    pub(crate) fn intern_deferred_indexed_access(
+        &mut self,
+        object: TypeId,
+        index: TypeId,
+    ) -> TypeId {
+        let key = StructuralKey::DeferredIndexedAccess { object, index };
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store
+                .deferred_indexed_access_type(id)
+                .is_some_and(|existing| existing.object == object && existing.index == index)
+        }) {
+            return existing;
+        }
+        let id = self.store.push_deferred_indexed_access(
+            DeferredIndexedAccessType { object, index },
+            TypeFlags::EMPTY,
+        );
         self.dedup.entry(hash).or_default().push(id);
         id
     }

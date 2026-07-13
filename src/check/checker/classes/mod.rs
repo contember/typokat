@@ -1,5 +1,7 @@
 //! classes module (extracted from checker/mod.rs).
 
+#[allow(dead_code)] // Dormant until the WU1b declaration graph adopts it.
+mod construction;
 mod inheritance;
 mod members;
 mod visibility;

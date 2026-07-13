@@ -5,9 +5,11 @@
 
 mod advanced;
 mod collections;
+pub(crate) mod legacy_guard;
 mod objects;
 mod set_types;
 
+use crate::class_semantics::{Exhaustion, PublishedClasses};
 use crate::relate::cache::{RelationCache, RelationKey};
 use crate::types::repr::{GenericTypeParam, IntrinsicKind, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
@@ -140,7 +142,7 @@ pub struct ReasonChain {
 }
 
 impl ReasonChain {
-    fn leaf(src: TypeId, tgt: TypeId) -> ReasonChain {
+    pub(crate) fn leaf(src: TypeId, tgt: TypeId) -> ReasonChain {
         ReasonChain {
             head: Reason::Leaf { src, tgt },
         }
@@ -183,6 +185,39 @@ impl ReasonChain {
 pub enum Relation {
     Yes,
     No(ReasonChain),
+}
+
+/// ADR-0006 relation result. Unlike legacy [`Relation`], projection/evaluation
+/// exhaustion remains an explicit third semantic outcome and has no boolean helper.
+#[allow(dead_code)] // Dormant until WU1c installs the planned relation protocol.
+#[derive(Clone, Debug)]
+pub(crate) enum RelationOutcome {
+    Yes,
+    No(ReasonChain),
+    Exhausted(Exhaustion),
+}
+
+/// Identical-only relation rule for an unevaluated deferred indexed access. Other
+/// pairs remain for WU1c's projection planner and relation transaction.
+#[allow(dead_code)] // Dormant until WU1c installs the planned relation protocol.
+pub(crate) fn relate_unevaluated_deferred(
+    published: &PublishedClasses,
+    store: &Store,
+    src: TypeId,
+    tgt: TypeId,
+) -> Option<RelationOutcome> {
+    if let Some(reason) = legacy_guard::publication_exhaustion(store, &[src, tgt], published) {
+        return Some(RelationOutcome::Exhausted(reason));
+    }
+    let deferred = store.tag(src) == TypeTag::DeferredIndexedAccess
+        || store.tag(tgt) == TypeTag::DeferredIndexedAccess;
+    deferred.then(|| {
+        if src == tgt {
+            RelationOutcome::Yes
+        } else {
+            RelationOutcome::No(ReasonChain::leaf(src, tgt))
+        }
+    })
 }
 
 impl Relation {
@@ -320,6 +355,7 @@ impl<'a> Relater<'a> {
     /// Is `src` assignable to `tgt`? Entry point used by the checker for
     /// annotation-vs-initializer checks (`TK2322`).
     pub fn is_assignable(&mut self, src: TypeId, tgt: TypeId) -> Relation {
+        legacy_guard::reject_legacy_semantic_types(self.store, &[src, tgt]);
         // The outermost frame has no enclosing assumptions; `assumed` collects any
         // assume-true dependencies its subtree consumes (see `relate`). Whatever
         // survives here would be an assumption about a key with no enclosing
@@ -347,6 +383,8 @@ impl<'a> Relater<'a> {
         kind: RelationKind,
         assumed: &mut AssumedSet,
     ) -> Relation {
+        legacy_guard::reject_legacy_semantic_type(self.store, src);
+        legacy_guard::reject_legacy_semantic_type(self.store, tgt);
         // Identity fast path: `T` relates to `T` under every relation.
         if src == tgt {
             return Relation::Yes;

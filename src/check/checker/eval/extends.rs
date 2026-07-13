@@ -51,6 +51,7 @@ pub(in crate::check) fn evaluate_inference_constraint(
     next_type_param: &mut u32,
     ty: TypeId,
 ) -> InferenceConstraintEvaluation {
+    legacy_guard::reject_legacy_semantic_types(interner.store(), &[ty]);
     let mut memo = FxHashMap::default();
     let mut ev = InferenceConstraintEvaluator::new(interner, next_type_param, &mut memo);
     let result = ev.evaluate(ty);
@@ -73,13 +74,44 @@ struct InferenceConstraintEvaluator<'a> {
 }
 
 enum ConstraintFrame {
-    Object { ty: TypeId, object: ObjectType },
-    Function { ty: TypeId, function: FunctionType },
-    Union { ty: TypeId, members: Vec<TypeId> },
-    Intersection { ty: TypeId, members: Vec<TypeId> },
-    Array { ty: TypeId, element: TypeId },
-    Tuple { ty: TypeId, tuple: TupleType },
-    Readonly { ty: TypeId, operand: TypeId },
+    Object {
+        ty: TypeId,
+        object: ObjectType,
+    },
+    Function {
+        ty: TypeId,
+        function: FunctionType,
+    },
+    Union {
+        ty: TypeId,
+        members: Vec<TypeId>,
+    },
+    Intersection {
+        ty: TypeId,
+        members: Vec<TypeId>,
+    },
+    Array {
+        ty: TypeId,
+        element: TypeId,
+    },
+    Tuple {
+        ty: TypeId,
+        tuple: TupleType,
+    },
+    Readonly {
+        ty: TypeId,
+        operand: TypeId,
+    },
+    ClassInstance {
+        ty: TypeId,
+        class: crate::types::ClassId,
+        args: Vec<TypeId>,
+    },
+    DeferredIndexedAccess {
+        ty: TypeId,
+        object: TypeId,
+        index: TypeId,
+    },
 }
 
 impl ConstraintFrame {
@@ -91,7 +123,9 @@ impl ConstraintFrame {
             | ConstraintFrame::Intersection { ty, .. }
             | ConstraintFrame::Array { ty, .. }
             | ConstraintFrame::Tuple { ty, .. }
-            | ConstraintFrame::Readonly { ty, .. } => *ty,
+            | ConstraintFrame::Readonly { ty, .. }
+            | ConstraintFrame::ClassInstance { ty, .. }
+            | ConstraintFrame::DeferredIndexedAccess { ty, .. } => *ty,
         }
     }
 
@@ -181,9 +215,14 @@ impl<'a> InferenceConstraintEvaluator<'a> {
         }
     }
 
+    fn guard_visit_frame(&self, ty: TypeId) {
+        legacy_guard::reject_legacy_semantic_type(self.interner.store(), ty);
+    }
+
     fn visit(&mut self, ty: TypeId, tasks: &mut Vec<ConstraintTask>, values: &mut Vec<TypeId>) {
         #[cfg(test)]
         measure_constraint_eval(|measure| measure.evaluate_calls += 1);
+        self.guard_visit_frame(ty);
         if self.exhausted {
             values.push(ty);
             return;
@@ -303,6 +342,41 @@ impl<'a> InferenceConstraintEvaluator<'a> {
                 self.schedule(
                     ConstraintFrame::Readonly { ty, operand },
                     vec![operand],
+                    tasks,
+                );
+            }
+            TypeTag::ClassInstance => {
+                let Some(instance) = self.interner.store().class_instance_type(ty).cloned() else {
+                    values.push(ty);
+                    return;
+                };
+                self.schedule(
+                    ConstraintFrame::ClassInstance {
+                        ty,
+                        class: instance.class,
+                        args: instance.args.clone(),
+                    },
+                    instance.args,
+                    tasks,
+                );
+            }
+            TypeTag::DeferredIndexedAccess => {
+                let Some(access) = self
+                    .interner
+                    .store()
+                    .deferred_indexed_access_type(ty)
+                    .copied()
+                else {
+                    values.push(ty);
+                    return;
+                };
+                self.schedule(
+                    ConstraintFrame::DeferredIndexedAccess {
+                        ty,
+                        object: access.object,
+                        index: access.index,
+                    },
+                    vec![access.object, access.index],
                     tasks,
                 );
             }
@@ -507,8 +581,43 @@ impl<'a> InferenceConstraintEvaluator<'a> {
                     ty
                 }
             }
+            ConstraintFrame::ClassInstance { class, args, .. } => {
+                if children != args {
+                    #[cfg(test)]
+                    measure_constraint_eval(|m| m.re_interns += 1);
+                    self.interner
+                        .intern_class_instance(class, children.to_vec())
+                } else {
+                    ty
+                }
+            }
+            ConstraintFrame::DeferredIndexedAccess { object, index, .. } => {
+                let rewritten_object = children.first().copied().unwrap_or(object);
+                let rewritten_index = children.get(1).copied().unwrap_or(index);
+                if rewritten_object != object || rewritten_index != index {
+                    #[cfg(test)]
+                    measure_constraint_eval(|m| m.re_interns += 1);
+                    self.interner
+                        .intern_deferred_indexed_access(rewritten_object, rewritten_index)
+                } else {
+                    ty
+                }
+            }
         }
     }
+}
+
+#[cfg(test)]
+pub(super) fn guard_inference_frame_for_test(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    memo: &mut FxHashMap<TypeId, TypeId>,
+    ty: TypeId,
+) {
+    let evaluator = InferenceConstraintEvaluator::new(interner, next_type_param, memo);
+    debug_assert!(evaluator.in_progress.is_empty());
+    debug_assert!(evaluator.active_stack.is_empty());
+    evaluator.guard_visit_frame(ty);
 }
 
 fn constraint_child(children: &[TypeId], index: &mut usize, original: TypeId) -> TypeId {
@@ -707,6 +816,10 @@ impl<'a> ConditionalEvaluator<'a> {
                 .instantiation_type(ty)
                 .map(|i| i.args.iter().map(|(_, v)| *v).collect())
                 .unwrap_or_default(),
+            TypeTag::ClassInstance => store
+                .class_instance_type(ty)
+                .map(|instance| instance.args.clone())
+                .unwrap_or_default(),
             // M26: a mapped type is concrete once its key source, value template, and
             // (M28) modifiers source are (the value template's `MappedValue`
             // placeholder is a bound variable — classified concrete above).
@@ -728,6 +841,10 @@ impl<'a> ConditionalEvaluator<'a> {
             TypeTag::Keyof => store
                 .keyof_operand(ty)
                 .map(|operand| vec![operand])
+                .unwrap_or_default(),
+            TypeTag::DeferredIndexedAccess => store
+                .deferred_indexed_access_type(ty)
+                .map(|access| vec![access.object, access.index])
                 .unwrap_or_default(),
             _ => Vec::new(),
         }

@@ -354,10 +354,12 @@ fn member_matches_typeof(
         // member in the M7 `typeof` subset — defensively false.
         | TypeTag::Conditional
         | TypeTag::Instantiation
+        | TypeTag::ClassInstance
         | TypeTag::Infer
         | TypeTag::Mapped
         | TypeTag::MappedValue
-        | TypeTag::Keyof => false,
+        | TypeTag::Keyof
+        | TypeTag::DeferredIndexedAccess => false,
     }
 }
 

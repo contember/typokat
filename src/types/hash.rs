@@ -4,8 +4,8 @@
 //! cross-run content hash slot and deliberately returns a zero digest today.
 
 use crate::types::repr::{
-    GenericTypeParam, IntrinsicKind, LiteralValue, ModifierOp, ParameterType, PropertyType,
-    TupleType, TypeParamId, TypeTag,
+    ClassId, GenericTypeParam, IntrinsicKind, LiteralValue, ModifierOp, ParameterType,
+    PropertyType, TupleType, TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
 use rustc_hash::FxHasher;
@@ -77,6 +77,12 @@ pub enum StructuralKey<'a> {
         base: TypeId,
         args: &'a [(TypeParamId, TypeId)],
     },
+    /// An immutable class application keyed by declaration identity plus arguments
+    /// in declaration order.
+    ClassInstance {
+        class: ClassId,
+        args: &'a [TypeId],
+    },
     /// An **`infer` binder** (M25), keyed over its de Bruijn index alone.
     Infer(u32),
     /// A **mapped type** (M26), keyed over its whole shape (homomorphic flag, key
@@ -103,6 +109,11 @@ pub enum StructuralKey<'a> {
     /// A **deferred `keyof`** (M28), keyed over its operand id alone. `keyof T`
     /// collides with `keyof T`; `keyof T` and `keyof U` do not.
     Keyof(TypeId),
+    /// A deferred indexed access keyed by its ordered object/index operands.
+    DeferredIndexedAccess {
+        object: TypeId,
+        index: TypeId,
+    },
 }
 
 /// Live structural hash used for hash-consing (FxHash for speed). This is the
@@ -283,6 +294,14 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
                 arg.0.hash(&mut h);
             }
         }
+        StructuralKey::ClassInstance { class, args } => {
+            TypeTag::ClassInstance.hash_discriminant(&mut h);
+            class.0.hash(&mut h);
+            args.len().hash(&mut h);
+            for arg in *args {
+                arg.0.hash(&mut h);
+            }
+        }
         StructuralKey::Infer(index) => {
             TypeTag::Infer.hash_discriminant(&mut h);
             index.hash(&mut h);
@@ -312,6 +331,11 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
             TypeTag::Keyof.hash_discriminant(&mut h);
             // Identity is the (canonical) operand id alone.
             operand.0.hash(&mut h);
+        }
+        StructuralKey::DeferredIndexedAccess { object, index } => {
+            TypeTag::DeferredIndexedAccess.hash_discriminant(&mut h);
+            object.0.hash(&mut h);
+            index.0.hash(&mut h);
         }
         StructuralKey::Template { texts, holes } => {
             TypeTag::Template.hash_discriminant(&mut h);

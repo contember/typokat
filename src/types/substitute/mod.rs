@@ -148,9 +148,11 @@ impl<'a> Substitution<'a> {
             TypeTag::Readonly => self.apply_readonly(interner, ty),
             TypeTag::Conditional => self.apply_conditional(interner, ty),
             TypeTag::Instantiation => self.apply_instantiation(interner, ty),
+            TypeTag::ClassInstance => self.apply_class_instance(interner, ty),
             TypeTag::Mapped => self.apply_mapped(interner, ty),
             TypeTag::Template => self.apply_template(interner, ty),
             TypeTag::Keyof => self.apply_keyof(interner, ty),
+            TypeTag::DeferredIndexedAccess => self.apply_deferred_indexed_access(interner, ty),
             // An `infer` binder (M25) / a mapped-value placeholder (M26) is a **bound**
             // node-scoped variable, never a free declaration parameter — the no-capture
             // rule (ADR-0002): substitution must leave it alone (the evaluator resolves

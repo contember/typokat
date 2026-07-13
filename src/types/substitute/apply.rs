@@ -361,6 +361,30 @@ impl<'a> Substitution<'a> {
         }
     }
 
+    /// Substitute class arguments in declaration order without interpreting the
+    /// application as an alias instantiation.
+    pub(super) fn apply_class_instance(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
+        let Some(instance) = interner.store().class_instance_type(ty) else {
+            return ty;
+        };
+        let class = instance.class;
+        let args = instance.args.clone();
+        let mut changed = false;
+        let args = args
+            .into_iter()
+            .map(|arg| {
+                let substituted = self.apply(interner, arg);
+                changed |= substituted != arg;
+                substituted
+            })
+            .collect();
+        if changed {
+            interner.intern_class_instance(class, args)
+        } else {
+            ty
+        }
+    }
+
     /// Substitute a mapped type's key source and value template, re-interning only
     /// on change. `MappedValue` is a bound placeholder (no-capture); free
     /// declaration parameters in the key source still rewrite.
@@ -433,6 +457,24 @@ impl<'a> Substitution<'a> {
             interner.intern_keyof(new_operand)
         } else {
             ty
+        }
+    }
+
+    /// Substitute both ordered operands of a deferred indexed access.
+    pub(super) fn apply_deferred_indexed_access(
+        &mut self,
+        interner: &mut Interner,
+        ty: TypeId,
+    ) -> TypeId {
+        let Some(access) = interner.store().deferred_indexed_access_type(ty).copied() else {
+            return ty;
+        };
+        let object = self.apply(interner, access.object);
+        let index = self.apply(interner, access.index);
+        if object == access.object && index == access.index {
+            ty
+        } else {
+            interner.intern_deferred_indexed_access(object, index)
         }
     }
 

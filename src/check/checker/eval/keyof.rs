@@ -307,6 +307,11 @@ fn push_node_children(
                 stack.extend(inst.args.iter().map(|(_, v)| *v));
             }
         }
+        TypeTag::ClassInstance => {
+            if let Some(instance) = store.class_instance_type(ty) {
+                stack.extend(instance.args.iter().copied());
+            }
+        }
         TypeTag::Mapped => {
             if let Some(m) = store.mapped_type(ty) {
                 stack.push(m.key_source);
@@ -317,6 +322,12 @@ fn push_node_children(
         TypeTag::Template => {
             if let Some(template) = store.template_type(ty) {
                 stack.extend(template.holes.iter().copied());
+            }
+        }
+        TypeTag::DeferredIndexedAccess => {
+            if let Some(access) = store.deferred_indexed_access_type(ty) {
+                stack.push(access.object);
+                stack.push(access.index);
             }
         }
         TypeTag::Intrinsic

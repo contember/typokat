@@ -277,14 +277,3 @@ pub(super) fn modifier_op(op: Option<TSMappedTypeModifierOperator>) -> ModifierO
         Some(TSMappedTypeModifierOperator::Minus) => ModifierOp::Remove,
     }
 }
-
-/// Map an `f64` literal value to a non-negative `usize` index, or `None` for a
-/// fractional / negative / non-finite / out-of-`usize` value (M20 tuple indexed
-/// access). The literal-type counterpart of [`literal_index`], which reads the
-/// index off an AST expression.
-pub(super) fn whole_index(value: f64) -> Option<usize> {
-    if !value.is_finite() || value.fract() != 0.0 || value < 0.0 || value > usize::MAX as f64 {
-        return None;
-    }
-    Some(value as usize)
-}
