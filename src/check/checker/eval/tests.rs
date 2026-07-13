@@ -291,6 +291,77 @@ fn infer_rewrite_terminates_on_recursive_shape_without_changing_identity() {
 }
 
 #[test]
+fn infer_rewrite_keeps_mutual_cycle_identity() {
+    let mut interner = Interner::with_intrinsics();
+    let first = interner.reserve_object();
+    let second = interner.reserve_object();
+    interner.fill_object(
+        first,
+        ObjectType {
+            properties: vec![prop("second", second)],
+            ..Default::default()
+        },
+    );
+    interner.fill_object(
+        second,
+        ObjectType {
+            properties: vec![prop("first", first)],
+            ..Default::default()
+        },
+    );
+    let mut next = 90_120;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    assert_eq!(evaluator.substitute_infers(first, &[]), first);
+    assert_eq!(evaluator.substitute_infers(second, &[]), second);
+}
+
+#[test]
+fn infer_rewrite_handles_10k_acyclic_generic_metadata_depth() {
+    const DEPTH: u32 = 10_000;
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let mut source = interner.intern_infer(0);
+    for index in 0..DEPTH {
+        source = interner.intern_function(FunctionType {
+            type_params: vec![GenericTypeParam {
+                id: TypeParamId(95_000 + index),
+                constraint: Some(source),
+                default: None,
+            }],
+            receiver: None,
+            params: Vec::new(),
+            ret: wk.void,
+        });
+    }
+
+    let mut next = 90_120;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    let rewritten = evaluator.substitute_infers(source, &[wk.string]);
+    assert!(!evaluator.exhausted);
+    drop(evaluator);
+
+    let mut current = rewritten;
+    for index in (0..DEPTH).rev() {
+        let function = interner
+            .store()
+            .function_type(current)
+            .expect("the deep metadata chain must remain a function");
+        assert_eq!(function.type_params[0].id, TypeParamId(95_000 + index));
+        current = function.type_params[0]
+            .constraint
+            .expect("the deep metadata chain must retain every constraint");
+    }
+    assert_eq!(current, wk.string);
+}
+
+#[test]
 fn infer_rewrite_keeps_recursive_infer_graph_identity_in_both_traversal_orders() {
     let mut interner = Interner::with_intrinsics();
     let outer_infer = interner.intern_infer(0);

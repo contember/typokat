@@ -42,6 +42,82 @@ struct InferRewrite<'a> {
     memo: FxHashMap<TypeId, TypeId>,
 }
 
+/// One pending post-order rewrite. Every frame owns its store snapshot so the
+/// interner can be mutably borrowed while the frame is rebuilt.
+enum InferRewriteFrame {
+    Identity {
+        ty: TypeId,
+        result: TypeId,
+    },
+    Object {
+        ty: TypeId,
+        object: ObjectType,
+    },
+    Function {
+        ty: TypeId,
+        function: FunctionType,
+    },
+    Union {
+        ty: TypeId,
+        members: Vec<TypeId>,
+    },
+    Intersection {
+        ty: TypeId,
+        members: Vec<TypeId>,
+    },
+    Array {
+        ty: TypeId,
+        element: TypeId,
+    },
+    Tuple {
+        ty: TypeId,
+        tuple: TupleType,
+    },
+    Readonly {
+        ty: TypeId,
+        operand: TypeId,
+    },
+    Instantiation {
+        ty: TypeId,
+        base: TypeId,
+        args: Vec<(TypeParamId, TypeId)>,
+    },
+    Template {
+        ty: TypeId,
+        template: TemplateType,
+    },
+    Keyof {
+        ty: TypeId,
+        operand: TypeId,
+    },
+}
+
+impl InferRewriteFrame {
+    fn ty(&self) -> TypeId {
+        match self {
+            InferRewriteFrame::Identity { ty, .. }
+            | InferRewriteFrame::Object { ty, .. }
+            | InferRewriteFrame::Function { ty, .. }
+            | InferRewriteFrame::Union { ty, .. }
+            | InferRewriteFrame::Intersection { ty, .. }
+            | InferRewriteFrame::Array { ty, .. }
+            | InferRewriteFrame::Tuple { ty, .. }
+            | InferRewriteFrame::Readonly { ty, .. }
+            | InferRewriteFrame::Instantiation { ty, .. }
+            | InferRewriteFrame::Template { ty, .. }
+            | InferRewriteFrame::Keyof { ty, .. } => *ty,
+        }
+    }
+}
+
+enum InferRewriteTask {
+    Visit(TypeId),
+    Finish {
+        frame: InferRewriteFrame,
+        child_count: usize,
+    },
+}
+
 impl<'a> ConditionalEvaluator<'a> {
     /// Schedule the evaluation of a lazy instantiation `substitute(base, args)`. When
     /// `base` is a **distributive** conditional and the check argument distributes
@@ -477,55 +553,92 @@ impl<'a> ConditionalEvaluator<'a> {
             cycle_tainted: FxHashSet::default(),
             memo: FxHashMap::default(),
         };
-        self.substitute_infers_rec(ty, &mut ctx)
+        let mut tasks = vec![InferRewriteTask::Visit(ty)];
+        let mut values = Vec::new();
+
+        while let Some(task) = tasks.pop() {
+            match task {
+                InferRewriteTask::Visit(ty) => {
+                    #[cfg(test)]
+                    measure_infer_rewrite(|measure| measure.visits += 1);
+                    if let Some(&done) = ctx.memo.get(&ty) {
+                        #[cfg(test)]
+                        measure_infer_rewrite(|measure| measure.memo_hits += 1);
+                        values.push(done);
+                        continue;
+                    }
+                    if !ctx.in_progress.insert(ty) {
+                        #[cfg(test)]
+                        measure_infer_rewrite(|measure| measure.reentries += 1);
+                        if let Some(cycle_start) =
+                            ctx.active.iter().position(|&active| active == ty)
+                        {
+                            ctx.cycle_tainted
+                                .extend(ctx.active[cycle_start..].iter().copied());
+                        } else {
+                            debug_assert!(false, "in-progress infer rewrite must be active");
+                        }
+                        values.push(ty);
+                        continue;
+                    }
+
+                    ctx.active.push(ty);
+                    let (frame, children) = self.infer_rewrite_frame(ty, ctx.fresh);
+                    tasks.push(InferRewriteTask::Finish {
+                        frame,
+                        child_count: children.len(),
+                    });
+                    for child in children.into_iter().rev() {
+                        tasks.push(InferRewriteTask::Visit(child));
+                    }
+                }
+                InferRewriteTask::Finish { frame, child_count } => {
+                    let ty = frame.ty();
+                    let result = if let Some(start) = values.len().checked_sub(child_count) {
+                        let children = values.split_off(start);
+                        self.rebuild_infer_rewrite_frame(frame, &children)
+                    } else {
+                        debug_assert!(false, "infer rewrite frame is missing child results");
+                        ty
+                    };
+
+                    let popped = ctx.active.pop();
+                    debug_assert_eq!(popped, Some(ty));
+                    let removed = ctx.in_progress.remove(&ty);
+                    debug_assert!(removed);
+                    if ctx.cycle_tainted.remove(&ty) {
+                        #[cfg(test)]
+                        measure_infer_rewrite(|measure| measure.tainted_identity_returns += 1);
+                        values.push(ty);
+                    } else {
+                        ctx.memo.insert(ty, result);
+                        #[cfg(test)]
+                        measure_infer_rewrite(|measure| measure.memo_inserts += 1);
+                        values.push(result);
+                    }
+                }
+            }
+        }
+
+        values.pop().unwrap_or(ty)
     }
 
-    /// A cyclic structural edge is returned unchanged only for the active re-entry.
-    /// Taint the cycle suffix, not its acyclic ancestors: each tainted node retains its
-    /// original identity, while independent parent siblings can still be rewritten.
-    fn substitute_infers_rec(&mut self, ty: TypeId, ctx: &mut InferRewrite<'_>) -> TypeId {
-        #[cfg(test)]
-        measure_infer_rewrite(|measure| measure.visits += 1);
-        if let Some(&done) = ctx.memo.get(&ty) {
-            #[cfg(test)]
-            measure_infer_rewrite(|measure| measure.memo_hits += 1);
-            return done;
-        }
-        if !ctx.in_progress.insert(ty) {
-            #[cfg(test)]
-            measure_infer_rewrite(|measure| measure.reentries += 1);
-            let cycle_start = ctx
-                .active
-                .iter()
-                .position(|&active| active == ty)
-                .expect("in-progress infer rewrite must be on the active stack");
-            ctx.cycle_tainted
-                .extend(ctx.active[cycle_start..].iter().copied());
-            return ty;
-        }
-        ctx.active.push(ty);
-        let result = self.substitute_infers_body(ty, ctx);
-        let popped = ctx.active.pop();
-        debug_assert_eq!(popped, Some(ty));
-        ctx.in_progress.remove(&ty);
-        if ctx.cycle_tainted.remove(&ty) {
-            #[cfg(test)]
-            measure_infer_rewrite(|measure| measure.tainted_identity_returns += 1);
-            ty
-        } else {
-            ctx.memo.insert(ty, result);
-            #[cfg(test)]
-            measure_infer_rewrite(|measure| measure.memo_inserts += 1);
-            result
-        }
-    }
-
-    fn substitute_infers_body(&mut self, ty: TypeId, ctx: &mut InferRewrite<'_>) -> TypeId {
+    fn infer_rewrite_frame(
+        &self,
+        ty: TypeId,
+        fresh: &[TypeId],
+    ) -> (InferRewriteFrame, Vec<TypeId>) {
+        let identity = || (InferRewriteFrame::Identity { ty, result: ty }, Vec::new());
         match self.interner.store().tag(ty) {
-            TypeTag::Infer => match self.interner.store().infer_index(ty) {
-                Some(i) => ctx.fresh.get(i as usize).copied().unwrap_or(ty),
-                None => ty,
-            },
+            TypeTag::Infer => {
+                let result = self
+                    .interner
+                    .store()
+                    .infer_index(ty)
+                    .and_then(|index| fresh.get(index as usize).copied())
+                    .unwrap_or(ty);
+                (InferRewriteFrame::Identity { ty, result }, Vec::new())
+            }
             // A nested conditional rebinds its own infer indices; a mapped type / mapped
             // value placeholder (M26) carries no conditional infer binder — all opaque.
             TypeTag::Intrinsic
@@ -533,44 +646,164 @@ impl<'a> ConditionalEvaluator<'a> {
             | TypeTag::TypeParam
             | TypeTag::Conditional
             | TypeTag::Mapped
-            | TypeTag::MappedValue => ty,
+            | TypeTag::MappedValue => identity(),
             TypeTag::Object => {
                 let Some(object) = self.interner.store().object_type(ty).cloned() else {
-                    return ty;
+                    return identity();
                 };
+                let mut children: Vec<TypeId> = object
+                    .properties
+                    .iter()
+                    .map(|property| property.ty)
+                    .collect();
+                children.extend(object.string_index);
+                children.extend(object.number_index);
+                children.extend(object.call_signatures.iter().copied());
+                children.extend(object.construct_signatures.iter().copied());
+                (InferRewriteFrame::Object { ty, object }, children)
+            }
+            TypeTag::Function => {
+                let Some(function) = self.interner.store().function_type(ty).cloned() else {
+                    return identity();
+                };
+                let mut children = Vec::new();
+                for type_param in &function.type_params {
+                    children.extend(type_param.constraint);
+                    children.extend(type_param.default);
+                }
+                children.extend(function.receiver);
+                children.extend(function.params.iter().map(|param| param.ty));
+                children.push(function.ret);
+                (InferRewriteFrame::Function { ty, function }, children)
+            }
+            TypeTag::Union => {
+                let Some(members) = self.interner.store().union_members(ty).map(|m| m.to_vec())
+                else {
+                    return identity();
+                };
+                (
+                    InferRewriteFrame::Union {
+                        ty,
+                        members: members.clone(),
+                    },
+                    members,
+                )
+            }
+            TypeTag::Intersection => {
+                let Some(members) = self
+                    .interner
+                    .store()
+                    .intersection_members(ty)
+                    .map(|m| m.to_vec())
+                else {
+                    return identity();
+                };
+                (
+                    InferRewriteFrame::Intersection {
+                        ty,
+                        members: members.clone(),
+                    },
+                    members,
+                )
+            }
+            TypeTag::Array => {
+                let Some(element) = self
+                    .interner
+                    .store()
+                    .array_type(ty)
+                    .map(|array| array.element)
+                else {
+                    return identity();
+                };
+                (InferRewriteFrame::Array { ty, element }, vec![element])
+            }
+            TypeTag::Tuple => {
+                let Some(tuple) = self.interner.store().tuple_type(ty).cloned() else {
+                    return identity();
+                };
+                let mut children = tuple.elements.clone();
+                children.extend(tuple.rest.map(|rest| rest.ty));
+                (InferRewriteFrame::Tuple { ty, tuple }, children)
+            }
+            TypeTag::Readonly => {
+                let Some(operand) = self.interner.store().readonly_operand(ty) else {
+                    return identity();
+                };
+                (InferRewriteFrame::Readonly { ty, operand }, vec![operand])
+            }
+            TypeTag::Instantiation => {
+                let Some(instantiation) = self.interner.store().instantiation_type(ty).cloned()
+                else {
+                    return identity();
+                };
+                let children = instantiation.args.iter().map(|(_, value)| *value).collect();
+                (
+                    InferRewriteFrame::Instantiation {
+                        ty,
+                        base: instantiation.base,
+                        args: instantiation.args,
+                    },
+                    children,
+                )
+            }
+            TypeTag::Template => {
+                let Some(template) = self.interner.store().template_type(ty).cloned() else {
+                    return identity();
+                };
+                let children = template.holes.clone();
+                (InferRewriteFrame::Template { ty, template }, children)
+            }
+            TypeTag::Keyof => {
+                let Some(operand) = self.interner.store().keyof_operand(ty) else {
+                    return identity();
+                };
+                (InferRewriteFrame::Keyof { ty, operand }, vec![operand])
+            }
+        }
+    }
+
+    fn rebuild_infer_rewrite_frame(
+        &mut self,
+        frame: InferRewriteFrame,
+        children: &[TypeId],
+    ) -> TypeId {
+        match frame {
+            InferRewriteFrame::Identity { result, .. } => result,
+            InferRewriteFrame::Object { ty, object } => {
+                let mut child_index = 0;
                 let mut changed = false;
                 let mut new = object.clone();
-                for prop in &mut new.properties {
-                    let nt = self.substitute_infers_rec(prop.ty, ctx);
-                    changed |= nt != prop.ty;
-                    prop.ty = nt;
+                for (property, new_property) in object.properties.iter().zip(&mut new.properties) {
+                    let rewritten = infer_rewrite_child(children, &mut child_index, property.ty);
+                    changed |= rewritten != property.ty;
+                    new_property.ty = rewritten;
                 }
-                new.string_index = object.string_index.map(|v| {
-                    let nv = self.substitute_infers_rec(v, ctx);
-                    changed |= nv != v;
-                    nv
+                new.string_index = object.string_index.map(|index_ty| {
+                    let rewritten = infer_rewrite_child(children, &mut child_index, index_ty);
+                    changed |= rewritten != index_ty;
+                    rewritten
                 });
-                new.number_index = object.number_index.map(|v| {
-                    let nv = self.substitute_infers_rec(v, ctx);
-                    changed |= nv != v;
-                    nv
+                new.number_index = object.number_index.map(|index_ty| {
+                    let rewritten = infer_rewrite_child(children, &mut child_index, index_ty);
+                    changed |= rewritten != index_ty;
+                    rewritten
                 });
                 new.call_signatures = object
                     .call_signatures
                     .iter()
-                    .map(|&s| {
-                        let ns = self.substitute_infers_rec(s, ctx);
-                        changed |= ns != s;
-                        ns
+                    .map(|&signature| {
+                        let rewritten = infer_rewrite_child(children, &mut child_index, signature);
+                        changed |= rewritten != signature;
+                        rewritten
                     })
                     .collect();
                 new.construct_signatures = object
                     .construct_signatures
                     .iter()
-                    .map(|&s| {
-                        let ns = self.substitute_infers_rec(s, ctx);
-                        changed |= ns != s;
-                        ns
+                    .map(|&signature| {
+                        let rewritten = infer_rewrite_child(children, &mut child_index, signature);
+                        changed |= rewritten != signature;
+                        rewritten
                     })
                     .collect();
                 if changed {
@@ -579,115 +812,94 @@ impl<'a> ConditionalEvaluator<'a> {
                     ty
                 }
             }
-            TypeTag::Function => {
-                let Some(function) = self.interner.store().function_type(ty).cloned() else {
-                    return ty;
-                };
+            InferRewriteFrame::Function { ty, function } => {
+                let mut child_index = 0;
                 let mut changed = false;
                 let mut new = function.clone();
                 // Function-local binders retain their ids and order, but their
                 // constraints/defaults are lexical children of the outer infer scope.
-                for type_param in &mut new.type_params {
-                    let constraint = type_param
-                        .constraint
-                        .map(|constraint| self.substitute_infers_rec(constraint, ctx));
-                    changed |= constraint != type_param.constraint;
-                    type_param.constraint = constraint;
-                    let default = type_param
-                        .default
-                        .map(|default| self.substitute_infers_rec(default, ctx));
-                    changed |= default != type_param.default;
-                    type_param.default = default;
+                for (original, rewritten) in function.type_params.iter().zip(&mut new.type_params) {
+                    rewritten.constraint = original.constraint.map(|constraint| {
+                        let value = infer_rewrite_child(children, &mut child_index, constraint);
+                        changed |= value != constraint;
+                        value
+                    });
+                    rewritten.default = original.default.map(|default| {
+                        let value = infer_rewrite_child(children, &mut child_index, default);
+                        changed |= value != default;
+                        value
+                    });
                 }
                 new.receiver = function.receiver.map(|receiver| {
-                    let receiver = self.substitute_infers_rec(receiver, ctx);
-                    changed |= Some(receiver) != function.receiver;
-                    receiver
+                    let rewritten = infer_rewrite_child(children, &mut child_index, receiver);
+                    changed |= rewritten != receiver;
+                    rewritten
                 });
-                for param in &mut new.params {
-                    let nt = self.substitute_infers_rec(param.ty, ctx);
-                    changed |= nt != param.ty;
-                    param.ty = nt;
+                for (original, rewritten) in function.params.iter().zip(&mut new.params) {
+                    let value = infer_rewrite_child(children, &mut child_index, original.ty);
+                    changed |= value != original.ty;
+                    rewritten.ty = value;
                 }
-                let nr = self.substitute_infers_rec(function.ret, ctx);
-                changed |= nr != function.ret;
-                new.ret = nr;
+                let ret = infer_rewrite_child(children, &mut child_index, function.ret);
+                changed |= ret != function.ret;
+                new.ret = ret;
                 if changed {
                     self.interner.intern_function(new)
                 } else {
                     ty
                 }
             }
-            TypeTag::Union => {
-                let Some(members) = self.interner.store().union_members(ty) else {
-                    return ty;
-                };
-                let members: Vec<TypeId> = members.to_vec();
-                let mut changed = false;
-                let subst: Vec<TypeId> = members
+            InferRewriteFrame::Union { ty, members } => {
+                let rewritten: Vec<TypeId> = members
                     .iter()
-                    .map(|&m| {
-                        let nm = self.substitute_infers_rec(m, ctx);
-                        changed |= nm != m;
-                        nm
-                    })
+                    .enumerate()
+                    .map(|(index, &member)| children.get(index).copied().unwrap_or(member))
                     .collect();
-                if changed {
-                    self.interner.union(subst)
+                if rewritten != members {
+                    self.interner.union(rewritten)
                 } else {
                     ty
                 }
             }
-            // M31: freshen infer binders inside intersection members like a union.
-            TypeTag::Intersection => {
-                let Some(members) = self.interner.store().intersection_members(ty) else {
-                    return ty;
-                };
-                let members: Vec<TypeId> = members.to_vec();
-                let mut changed = false;
-                let subst: Vec<TypeId> = members
+            InferRewriteFrame::Intersection { ty, members } => {
+                let rewritten: Vec<TypeId> = members
                     .iter()
-                    .map(|&m| {
-                        let nm = self.substitute_infers_rec(m, ctx);
-                        changed |= nm != m;
-                        nm
-                    })
+                    .enumerate()
+                    .map(|(index, &member)| children.get(index).copied().unwrap_or(member))
                     .collect();
-                if changed {
-                    self.interner.intersection(subst)
+                if rewritten != members {
+                    self.interner.intersection(rewritten)
                 } else {
                     ty
                 }
             }
-            TypeTag::Array => {
-                let Some(element) = self.interner.store().array_type(ty).map(|a| a.element) else {
-                    return ty;
-                };
-                let ne = self.substitute_infers_rec(element, ctx);
-                if ne != element {
-                    self.interner.intern_array(ne)
+            InferRewriteFrame::Array { ty, element } => {
+                let rewritten = children.first().copied().unwrap_or(element);
+                if rewritten != element {
+                    self.interner.intern_array(rewritten)
                 } else {
                     ty
                 }
             }
-            TypeTag::Tuple => {
-                let Some(tuple) = self.interner.store().tuple_type(ty).cloned() else {
-                    return ty;
-                };
+            InferRewriteFrame::Tuple { ty, tuple } => {
+                let mut child_index = 0;
                 let mut changed = false;
                 let elements = tuple
                     .elements
                     .iter()
-                    .map(|&e| {
-                        let ne = self.substitute_infers_rec(e, ctx);
-                        changed |= ne != e;
-                        ne
+                    .map(|&element| {
+                        let rewritten = infer_rewrite_child(children, &mut child_index, element);
+                        changed |= rewritten != element;
+                        rewritten
                     })
                     .collect();
                 let rest = tuple.rest.map(|rest| {
-                    let nt = self.substitute_infers_rec(rest.ty, ctx);
-                    changed |= nt != rest.ty;
-                    TupleRestType { ty: nt, ..rest }
+                    let rewritten = infer_rewrite_child(children, &mut child_index, rest.ty);
+                    changed |= rewritten != rest.ty;
+                    TupleRestType {
+                        ty: rewritten,
+                        ..rest
+                    }
                 });
                 if changed {
                     self.interner
@@ -696,75 +908,58 @@ impl<'a> ConditionalEvaluator<'a> {
                     ty
                 }
             }
-            TypeTag::Readonly => {
-                let Some(operand) = self.interner.store().readonly_operand(ty) else {
-                    return ty;
-                };
-                let no = self.substitute_infers_rec(operand, ctx);
-                if no != operand {
-                    self.interner.intern_readonly(no)
+            InferRewriteFrame::Readonly { ty, operand } => {
+                let rewritten = children.first().copied().unwrap_or(operand);
+                if rewritten != operand {
+                    self.interner.intern_readonly(rewritten)
                 } else {
                     ty
                 }
             }
-            TypeTag::Instantiation => {
-                let Some(inst) = self.interner.store().instantiation_type(ty).cloned() else {
-                    return ty;
-                };
-                let mut changed = false;
-                let new_args: Vec<(TypeParamId, TypeId)> = inst
-                    .args
+            InferRewriteFrame::Instantiation { ty, base, args } => {
+                let rewritten: Vec<(TypeParamId, TypeId)> = args
                     .iter()
-                    .map(|&(p, v)| {
-                        let nv = self.substitute_infers_rec(v, ctx);
-                        changed |= nv != v;
-                        (p, nv)
+                    .enumerate()
+                    .map(|(index, &(param, value))| {
+                        (param, children.get(index).copied().unwrap_or(value))
                     })
                     .collect();
-                if changed {
-                    self.interner.intern_instantiation(inst.base, new_args)
+                if rewritten != args {
+                    self.interner.intern_instantiation(base, rewritten)
                 } else {
                     ty
                 }
             }
-            // M27: a template's infer binders live in its holes (`` `a${infer R}` `` in an
-            // extends position) — freshen them by rewriting each hole.
-            TypeTag::Template => {
-                let Some(template) = self.interner.store().template_type(ty).cloned() else {
-                    return ty;
-                };
-                let mut changed = false;
-                let new_holes: Vec<TypeId> = template
+            InferRewriteFrame::Template { ty, template } => {
+                let holes: Vec<TypeId> = template
                     .holes
                     .iter()
-                    .map(|&hole| {
-                        let nh = self.substitute_infers_rec(hole, ctx);
-                        changed |= nh != hole;
-                        nh
-                    })
+                    .enumerate()
+                    .map(|(index, &hole)| children.get(index).copied().unwrap_or(hole))
                     .collect();
-                if changed {
+                if holes != template.holes {
                     self.interner.intern_template(TemplateType {
                         texts: template.texts,
-                        holes: new_holes,
+                        holes,
                     })
                 } else {
                     ty
                 }
             }
-            // M28: a `keyof (infer U)`-style extends component carries the binder in
-            // the keyof operand — freshen it there.
-            TypeTag::Keyof => {
-                let Some(operand) = self.interner.store().keyof_operand(ty) else {
-                    return ty;
-                };
-                let no = self.substitute_infers_rec(operand, ctx);
-                if no != operand {
-                    self.interner.intern_keyof(no)
+            InferRewriteFrame::Keyof { ty, operand } => {
+                let rewritten = children.first().copied().unwrap_or(operand);
+                if rewritten != operand {
+                    self.interner.intern_keyof(rewritten)
                 } else {
                     ty
                 }
             }
         }
     }
+}
+
+fn infer_rewrite_child(children: &[TypeId], index: &mut usize, original: TypeId) -> TypeId {
+    let rewritten = children.get(*index).copied().unwrap_or(original);
+    *index += 1;
+    rewritten
 }
