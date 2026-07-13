@@ -1,3 +1,4 @@
 corpus/
 report/
+.tools/
 __pycache__/

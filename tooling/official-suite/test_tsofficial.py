@@ -18,7 +18,6 @@ import stat
 import tempfile
 import unittest
 from unittest import mock
-from urllib.error import HTTPError
 
 import tsofficial as ts
 
@@ -163,15 +162,20 @@ class FetchIntegrityTests(unittest.TestCase):
     def _isolated_paths(self, default_dirs=("conformance/x",)):
         """Run corpus/report tests without touching the ignored real artifacts."""
         with tempfile.TemporaryDirectory() as root:
-            saved = ts.CORPUS, ts.REPORT, ts.SCOREBOARD, ts.DEFAULT_DIRS
+            saved = (ts.CORPUS, ts.REPORT, ts.SCOREBOARD, ts.DEFAULT_DIRS,
+                     ts.GIT_CACHE, ts.GIT_CACHE_MARKER, ts.TS_GIT_URL)
             ts.CORPUS = os.path.join(root, "corpus")
             ts.REPORT = os.path.join(root, "report")
             ts.SCOREBOARD = os.path.join(root, "scoreboard.txt")
             ts.DEFAULT_DIRS = list(default_dirs)
+            ts.GIT_CACHE = os.path.join(root, ".tools", "typescript.git")
+            ts.GIT_CACHE_MARKER = os.path.join(ts.GIT_CACHE, "typokat-cache-format")
+            ts.TS_GIT_URL = "https://example.invalid/TypeScript.git"
             try:
                 yield root
             finally:
-                ts.CORPUS, ts.REPORT, ts.SCOREBOARD, ts.DEFAULT_DIRS = saved
+                (ts.CORPUS, ts.REPORT, ts.SCOREBOARD, ts.DEFAULT_DIRS,
+                 ts.GIT_CACHE, ts.GIT_CACHE_MARKER, ts.TS_GIT_URL) = saved
 
     @staticmethod
     def _args(*, dirs=None, limit=None, check=False, save=False, rebaseline=False,
@@ -191,9 +195,11 @@ class FetchIntegrityTests(unittest.TestCase):
                 f.write("const value = 1;\n")
         with open(os.path.join(ts.CORPUS, "manifest.json"), "w") as f:
             json.dump({
-                "format": 2, "sha": ts.PINNED_SHA, "repo": ts.REPO,
+                "format": 3, "sha": ts.PINNED_SHA, "repo": ts.REPO,
                 "dirs": ts.DEFAULT_DIRS, "limit": None,
                 "mode": "full-default", "partial": False,
+                "transport": {"kind": "git-cache-full-blob", "url": ts.TS_GIT_URL,
+                              "revision": ts.PINNED_SHA, "cache_format": ts.GIT_CACHE_FORMAT},
                 "tests": [{"path": rel, "source": f"tests/cases/{rel}",
                            "baseline_source": "tests/baselines/reference/"
                            + os.path.basename(rel)[:-3] + ".errors.txt",
@@ -204,63 +210,210 @@ class FetchIntegrityTests(unittest.TestCase):
         with open(ts.SCOREBOARD, "rb") as f:
             return f.read()
 
+    @staticmethod
+    def _tree_entry(mode, typ, oid, path):
+        return f"{mode} {typ} {oid}\t{path}\0".encode()
+
     def test_default_dirs_use_keyof_for_indexed_access_cases(self):
         """The pinned tree has indexed-access cases in `keyof`, not a separate
         `indexedAccessTypes` directory. Keep the curated input set resolvable."""
         self.assertIn("conformance/types/keyof", ts.DEFAULT_DIRS)
         self.assertNotIn("conformance/types/indexedAccessTypes", ts.DEFAULT_DIRS)
 
-    def test_directory_api_failure_is_fatal(self):
-        """A configured subtree that cannot be listed must not look like an
-        empty, freshly fetched subtree."""
-        failed = mock.Mock(returncode=1, stdout="", stderr="gh: Not Found\n")
-        with mock.patch.object(ts.subprocess, "run", return_value=failed):
-            with self.assertRaises(ts.FetchFailure) as raised:
-                ts.gh_list_dir("tests/cases/conformance/types/missing")
-        self.assertIn("tests/cases/conformance/types/missing", str(raised.exception))
+    def test_git_cache_initializes_and_fetches_only_the_pinned_sha(self):
+        with self._isolated_paths() as root:
+            calls = []
 
-    def test_malformed_or_empty_directory_success_is_fatal(self):
-        malformed = mock.Mock(returncode=0, stdout="<html>retry later</html>\n", stderr="")
-        with mock.patch.object(ts.subprocess, "run", return_value=malformed):
-            with self.assertRaises(ts.FetchFailure):
-                ts.gh_list_dir("tests/cases/conformance/x", configured_root=True)
-        empty = mock.Mock(returncode=0, stdout="", stderr="")
-        with mock.patch.object(ts.subprocess, "run", return_value=empty):
-            with self.assertRaises(ts.FetchFailure):
-                ts.gh_list_dir("tests/cases/conformance/x", configured_root=True)
+            def git(cache, *args, **_kwargs):
+                calls.append((cache, args, _kwargs))
+                if args[:2] == ("rev-parse", "--verify"):
+                    return (ts.PINNED_SHA + "\n").encode()
+                return b"true\n" if args == ("rev-parse", "--is-bare-repository") else b""
 
-    def test_directory_rows_must_be_direct_children_of_the_requested_path(self):
-        for row in (
-                "file\tsibling.ts\ttests/cases/conformance/sibling.ts\n",
-                "file\tnested.ts\ttests/cases/conformance/x/sub/nested.ts\n"):
-            response = mock.Mock(returncode=0, stdout=row, stderr="")
-            with mock.patch.object(ts.subprocess, "run", return_value=response):
+            with mock.patch.object(ts, "run_git", side_effect=git):
+                revision = ts.prepare_git_cache()
+
+            self.assertEqual(revision, ts.PINNED_SHA)
+            self.assertIn((ts.GIT_CACHE, ("init", "--bare"), {}), calls)
+            self.assertIn((ts.GIT_CACHE, ("remote", "add", "origin", ts.TS_GIT_URL), {}), calls)
+            fetch = ("fetch", "--depth=1", "--no-tags", "origin",
+                     f"{ts.PINNED_SHA}:{ts.PINNED_REF}")
+            self.assertIn((ts.GIT_CACHE, fetch, {"timeout": 300}), calls)
+            self.assertNotIn("--filter", fetch)
+            self.assertIn((ts.GIT_CACHE, ("rev-parse", "--verify",
+                                           f"{ts.PINNED_REF}^{{commit}}"), {}), calls)
+
+    def test_git_cache_reuses_existing_cache_but_reverifies_exact_sha(self):
+        with self._isolated_paths():
+            os.makedirs(ts.GIT_CACHE)
+            with open(ts.GIT_CACHE_MARKER, "w") as f:
+                f.write(ts.GIT_CACHE_FORMAT + "\n")
+            calls = []
+
+            def git(cache, *args, **_kwargs):
+                calls.append(args)
+                if args[:2] == ("rev-parse", "--verify"):
+                    return (ts.PINNED_SHA + "\n").encode()
+                if args == ("remote", "get-url", "origin"):
+                    return (ts.TS_GIT_URL + "\n").encode()
+                if args[:2] == ("config", "--get-regexp"):
+                    return b""
+                return b"true\n"
+
+            with mock.patch.object(ts, "run_git", side_effect=git):
+                ts.prepare_git_cache()
+
+            self.assertNotIn(("init", "--bare"), calls)
+            self.assertIn(("fetch", "--depth=1", "--no-tags", "origin",
+                           f"{ts.PINNED_SHA}:{ts.PINNED_REF}"), calls)
+
+    def test_git_cache_rejects_resolved_sha_mismatch(self):
+        with self._isolated_paths():
+            os.makedirs(ts.GIT_CACHE)
+            with open(ts.GIT_CACHE_MARKER, "w") as f:
+                f.write(ts.GIT_CACHE_FORMAT + "\n")
+
+            def git(_cache, *args, **_kwargs):
+                if args[:2] == ("rev-parse", "--verify"):
+                    return ("f" * 40 + "\n").encode()
+                if args == ("remote", "get-url", "origin"):
+                    return (ts.TS_GIT_URL + "\n").encode()
+                if args[:2] == ("config", "--get-regexp"):
+                    return b""
+                return b"true\n"
+
+            with mock.patch.object(ts, "run_git", side_effect=git):
                 with self.assertRaises(ts.FetchFailure):
-                    ts.gh_list_dir("tests/cases/conformance/x")
+                    ts.prepare_git_cache()
 
-    def test_only_optional_baselines_may_be_missing(self):
-        """A 404 for a listed source is corruption; a missing `.errors.txt`
-        baseline remains the documented clean-test case."""
-        missing = HTTPError("https://example.invalid", 404, "Not Found", None, None)
-        with mock.patch.object(ts.urllib.request, "urlopen", side_effect=missing):
-            with self.assertRaises(ts.FetchFailure):
-                ts.fetch_blob("tests/cases/conformance/types/keyof/case.ts")
-        with mock.patch.object(ts.urllib.request, "urlopen", side_effect=missing):
-            with self.assertRaises(ts.FetchFailure):
-                ts.fetch_blob("tests/cases/conformance/types/keyof/case.ts",
-                              allow_missing=True)
-        with mock.patch.object(ts.urllib.request, "urlopen", side_effect=missing):
-            self.assertIsNone(ts.fetch_blob(
-                "tests/baselines/reference/case.errors.txt", allow_missing=True))
+    def test_corrupt_git_cache_is_reinitialized_before_fetching(self):
+        with self._isolated_paths():
+            os.makedirs(ts.GIT_CACHE)
+            calls = []
 
-    def test_html_blob_transport_is_fatal(self):
-        response = mock.MagicMock()
-        response.status = 200
-        response.headers.get_content_type.return_value = "text/html"
-        response.__enter__.return_value = response
-        with mock.patch.object(ts.urllib.request, "urlopen", return_value=response):
+            def git(_cache, *args, **_kwargs):
+                calls.append(args)
+                if args == ("rev-parse", "--is-bare-repository"):
+                    raise ts.FetchFailure("corrupt cache")
+                if args[:2] == ("rev-parse", "--verify"):
+                    return (ts.PINNED_SHA + "\n").encode()
+                return b""
+
+            with mock.patch.object(ts, "run_git", side_effect=git):
+                self.assertEqual(ts.prepare_git_cache(), ts.PINNED_SHA)
+            self.assertIn(("init", "--bare"), calls)
+            self.assertIn(("remote", "add", "origin", ts.TS_GIT_URL), calls)
+
+    def test_git_fsck_failure_recreates_cache_before_fetching(self):
+        with self._isolated_paths():
+            os.makedirs(ts.GIT_CACHE)
+            with open(ts.GIT_CACHE_MARKER, "w") as f:
+                f.write(ts.GIT_CACHE_FORMAT + "\n")
+            calls = []
+
+            def git(_cache, *args, **_kwargs):
+                calls.append(args)
+                if args == ("remote", "get-url", "origin"):
+                    return (ts.TS_GIT_URL + "\n").encode()
+                if args[:2] == ("config", "--get-regexp"):
+                    return b""
+                if args == ("fsck", "--no-dangling"):
+                    raise ts.FetchFailure("broken object")
+                if args[:2] == ("rev-parse", "--verify"):
+                    return (ts.PINNED_SHA + "\n").encode()
+                return b"true\n"
+
+            with mock.patch.object(ts, "run_git", side_effect=git):
+                ts.prepare_git_cache()
+
+            self.assertIn(("init", "--bare"), calls)
+
+    def test_partial_clone_cache_is_recreated_as_full_blob_cache(self):
+        with self._isolated_paths():
+            os.makedirs(ts.GIT_CACHE)
+            with open(ts.GIT_CACHE_MARKER, "w") as f:
+                f.write(ts.GIT_CACHE_FORMAT + "\n")
+            calls = []
+
+            def git(_cache, *args, **_kwargs):
+                calls.append(args)
+                if args[:2] == ("rev-parse", "--verify"):
+                    return (ts.PINNED_SHA + "\n").encode()
+                if args == ("remote", "get-url", "origin"):
+                    return (ts.TS_GIT_URL + "\n").encode()
+                if args[:2] == ("config", "--get-regexp"):
+                    return b"remote.origin.promisor true\n"
+                return b"true\n"
+
+            with mock.patch.object(ts, "run_git", side_effect=git):
+                ts.prepare_git_cache()
+            self.assertIn(("init", "--bare"), calls)
+
+    def test_git_tree_enumerates_required_roots_and_rejects_empty_one(self):
+        with self._isolated_paths(("conformance/x",)):
+            root = b"040000 tree " + b"a" * 40 + b"\ttests/cases/conformance/x\0"
+            files = self._tree_entry("100644", "blob", "b" * 40,
+                                     "tests/cases/conformance/x/case.ts")
+
+            def git(_cache, *args):
+                return root if "-r" not in args else files
+
+            with mock.patch.object(ts, "run_git", side_effect=git):
+                self.assertEqual(ts.collect_git_ts_paths(ts.PINNED_SHA, ts.DEFAULT_DIRS),
+                                 ["tests/cases/conformance/x/case.ts"])
+            with mock.patch.object(ts, "run_git", return_value=b""):
+                with self.assertRaises(ts.FetchFailure):
+                    ts.collect_git_ts_paths(ts.PINNED_SHA, ts.DEFAULT_DIRS)
+
+    def test_baseline_tree_uses_its_own_pinned_path_root(self):
+        baseline = (
+            self._tree_entry("100644", "blob", "a" * 40,
+                             "tests/baselines/reference/2dArrays.js")
+            + self._tree_entry("100644", "blob", "b" * 40,
+                               "tests/baselines/reference/case.errors.txt")
+        )
+        with self._isolated_paths():
+            with mock.patch.object(ts, "run_git", return_value=baseline):
+                self.assertEqual(ts.baseline_paths(ts.PINNED_SHA), {
+                    "tests/baselines/reference/case.errors.txt",
+                })
+        malformed = self._tree_entry("100644", "blob", "c" * 40,
+                                     "tests/baselines/reference/../bad.errors.txt")
+        with self._isolated_paths():
+            with mock.patch.object(ts, "run_git", return_value=malformed):
+                with self.assertRaises(ts.FetchFailure):
+                    ts.baseline_paths(ts.PINNED_SHA)
+
+    def test_git_tree_rejects_path_escape_and_links(self):
+        escaped = self._tree_entry("100644", "blob", "a" * 40, "tests/cases/../escape.ts")
+        with self.assertRaises(ts.FetchFailure):
+            ts.parse_git_tree(escaped, "tests/cases/conformance/x")
+        linked = self._tree_entry("120000", "blob", "a" * 40,
+                                  "tests/cases/conformance/x/link.ts")
+        with self.assertRaises(ts.FetchFailure):
+            ts.parse_git_tree(linked, "tests/cases/conformance/x")
+
+    def test_git_paths_reject_control_characters_before_batch_query(self):
+        for bad in ("tests/cases/conformance/x/a\x00.ts",
+                    "tests/cases/conformance/x/a\n.ts",
+                    "tests/cases/conformance/x/a\r.ts"):
             with self.assertRaises(ts.FetchFailure):
-                ts.fetch_blob("tests/cases/conformance/x/case.ts")
+                ts.read_git_blobs(ts.PINNED_SHA, {bad})
+
+    def test_git_blob_batch_uses_one_command_and_rejects_missing_source(self):
+        paths = {"tests/cases/conformance/x/a.ts", "tests/baselines/reference/a.errors.txt"}
+        body = (b"a" * 40 + b" blob 1\na\n" + b"b" * 40 + b" blob 1\nb\n")
+        with self._isolated_paths():
+            with mock.patch.object(ts, "run_git", return_value=body) as run:
+                self.assertEqual(ts.read_git_blobs(ts.PINNED_SHA, paths), {
+                    "tests/baselines/reference/a.errors.txt": b"a",
+                    "tests/cases/conformance/x/a.ts": b"b",
+                })
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_args.args[1:3], ("cat-file", "--batch"))
+            with mock.patch.object(ts, "run_git", return_value=b"missing\n"):
+                with self.assertRaises(ts.FetchFailure):
+                    ts.read_git_blobs(ts.PINNED_SHA, paths)
 
     def test_failed_fetch_keeps_published_corpus_and_removes_staging(self):
         """A source failure after a prior staged source cannot contaminate the
@@ -271,16 +424,11 @@ class FetchIntegrityTests(unittest.TestCase):
                 f.write('{"old": true}\n')
             with open(os.path.join(ts.CORPUS, "old.ts"), "w") as f:
                 f.write("old\n")
-            paths = ["tests/cases/conformance/x/one.ts",
-                     "tests/cases/conformance/x/two.ts"]
-
-            def fetch(path, **_kwargs):
-                if path.endswith("two.ts"):
-                    raise ts.FetchFailure("second source failed")
-                return "const one = 1;\n" if path.endswith("one.ts") else None
-
-            with mock.patch.object(ts, "collect_ts_paths", return_value=paths), \
-                 mock.patch.object(ts, "fetch_blob", side_effect=fetch):
+            paths = ["tests/cases/conformance/x/one.ts"]
+            with mock.patch.object(ts, "prepare_git_cache", return_value=ts.PINNED_SHA), \
+                 mock.patch.object(ts, "collect_git_ts_paths", return_value=paths), \
+                 mock.patch.object(ts, "baseline_paths", return_value=set()), \
+                 mock.patch.object(ts, "read_git_blobs", side_effect=ts.FetchFailure("source missing")):
                 with self.assertRaises(ts.FetchFailure):
                     ts.cmd_fetch(self._args())
 
@@ -297,11 +445,10 @@ class FetchIntegrityTests(unittest.TestCase):
                 f.write("old\n")
             path = "tests/cases/conformance/x/fresh.ts"
 
-            def fetch(blob, **_kwargs):
-                return "const fresh = 1;\n" if blob == path else None
-
-            with mock.patch.object(ts, "collect_ts_paths", return_value=[path]), \
-                 mock.patch.object(ts, "fetch_blob", side_effect=fetch):
+            with mock.patch.object(ts, "prepare_git_cache", return_value=ts.PINNED_SHA), \
+                 mock.patch.object(ts, "collect_git_ts_paths", return_value=[path]), \
+                 mock.patch.object(ts, "baseline_paths", return_value=set()), \
+                 mock.patch.object(ts, "read_git_blobs", return_value={path: b"const fresh = 1;\n"}):
                 ts.cmd_fetch(self._args())
 
             with open(os.path.join(ts.CORPUS, "manifest.json")) as f:
@@ -309,12 +456,41 @@ class FetchIntegrityTests(unittest.TestCase):
             self.assertEqual(manifest["mode"], "full-default")
             self.assertFalse(manifest["partial"])
             self.assertIsNone(manifest["limit"])
+            self.assertEqual(manifest["transport"]["revision"], ts.PINNED_SHA)
+            self.assertNotIn(ts.GIT_CACHE, json.dumps(manifest))
             self.assertEqual(manifest["tests"], [{
                 "path": "conformance/x/fresh.ts", "source": path,
                 "baseline_source": "tests/baselines/reference/fresh.errors.txt",
                 "baseline": False,
             }])
             self.assertFalse(os.path.exists(os.path.join(ts.CORPUS, "old.ts")))
+
+    def test_v1_and_v2_manifest_formats_are_rejected(self):
+        with self._isolated_paths():
+            self._write_full_manifest(["conformance/x/a.ts"])
+            manifest_path = os.path.join(ts.CORPUS, "manifest.json")
+            for legacy_format in (1, 2):
+                with open(manifest_path) as f:
+                    manifest = json.load(f)
+                manifest["format"] = legacy_format
+                with open(manifest_path, "w") as f:
+                    json.dump(manifest, f)
+                with self.assertRaises(ts.FetchFailure):
+                    ts.validate_ratchet_manifest()
+                self._write_full_manifest(["conformance/x/a.ts"])
+
+    def test_partial_git_fetch_records_exploratory_mode(self):
+        with self._isolated_paths():
+            path = "tests/cases/conformance/x/fresh.ts"
+            with mock.patch.object(ts, "prepare_git_cache", return_value=ts.PINNED_SHA), \
+                 mock.patch.object(ts, "collect_git_ts_paths", return_value=[path]), \
+                 mock.patch.object(ts, "baseline_paths", return_value=set()), \
+                 mock.patch.object(ts, "read_git_blobs", return_value={path: b"const fresh = 1;\n"}):
+                ts.cmd_fetch(self._args(dirs=["conformance/x"]))
+            with open(os.path.join(ts.CORPUS, "manifest.json")) as f:
+                manifest = json.load(f)
+            self.assertEqual(manifest["mode"], "partial")
+            self.assertTrue(manifest["partial"])
 
     def test_check_rejects_extra_or_partial_manifest_before_discovery(self):
         with self._isolated_paths():
@@ -337,16 +513,6 @@ class FetchIntegrityTests(unittest.TestCase):
             with self.assertRaises(ts.FetchFailure):
                 ts.load_manifest()
 
-    def test_collect_rejects_remote_path_escapes_before_fetching(self):
-        rows = [("file", "escape.ts", "tests/cases/conformance/x/../escape.ts")]
-        with mock.patch.object(ts, "gh_list_dir", return_value=rows):
-            with self.assertRaises(ts.FetchFailure):
-                ts.collect_ts_paths(["conformance/x"])
-        rows = [("file", "escape.ts", "tests/cases\\conformance\\x\\escape.ts")]
-        with mock.patch.object(ts, "gh_list_dir", return_value=rows):
-            with self.assertRaises(ts.FetchFailure):
-                ts.collect_ts_paths(["conformance/x"])
-
     def test_publish_rename_failure_restores_old_corpus_and_cleans_staging(self):
         with self._isolated_paths() as root:
             os.makedirs(ts.CORPUS)
@@ -360,8 +526,10 @@ class FetchIntegrityTests(unittest.TestCase):
                     raise OSError("publish rename failed")
                 return real_replace(src, dst)
 
-            with mock.patch.object(ts, "collect_ts_paths", return_value=[path]), \
-                 mock.patch.object(ts, "fetch_blob", return_value="const fresh = 1;\n"), \
+            with mock.patch.object(ts, "prepare_git_cache", return_value=ts.PINNED_SHA), \
+                 mock.patch.object(ts, "collect_git_ts_paths", return_value=[path]), \
+                 mock.patch.object(ts, "baseline_paths", return_value=set()), \
+                 mock.patch.object(ts, "read_git_blobs", return_value={path: b"const fresh = 1;\n"}), \
                  mock.patch.object(ts.os, "replace", side_effect=fail_publish_stage):
                 with self.assertRaises(OSError):
                     ts.cmd_fetch(self._args())
@@ -385,8 +553,10 @@ class FetchIntegrityTests(unittest.TestCase):
                 return real_rmtree(target, *args, **kwargs)
 
             stderr = io.StringIO()
-            with mock.patch.object(ts, "collect_ts_paths", return_value=[path]), \
-                 mock.patch.object(ts, "fetch_blob", return_value="const fresh = 1;\n"), \
+            with mock.patch.object(ts, "prepare_git_cache", return_value=ts.PINNED_SHA), \
+                 mock.patch.object(ts, "collect_git_ts_paths", return_value=[path]), \
+                 mock.patch.object(ts, "baseline_paths", return_value=set()), \
+                 mock.patch.object(ts, "read_git_blobs", return_value={path: b"const fresh = 1;\n"}), \
                  mock.patch.object(ts.shutil, "rmtree", side_effect=fail_only_backup), \
                  contextlib.redirect_stderr(stderr):
                 ts.cmd_fetch(self._args())

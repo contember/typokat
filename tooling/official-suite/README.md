@@ -46,12 +46,17 @@ and a scoreboard whose TS SHA matches `PINNED_SHA`.
 When deliberately replacing the pinned corpus/baseline, use the explicit
 `python3 tsofficial.py run --save --rebaseline` after a successful full default
 fetch and review. This is the only operation that may replace a missing or
-stale scoreboard SHA/set; it still validates the complete format-2 corpus and
+stale scoreboard SHA/set; it still validates the complete format-3 corpus and
 filesystem first. Treat it as an intentional baseline migration, not a fix for
 a failed ordinary `--save`.
 
-`fetch` needs `gh` (authenticated) for directory listing and pulls file blobs from
-`raw.githubusercontent.com`. `run` only needs Python 3 and the binary.
+`fetch` uses one explicit Git transport: it maintains an ignored bare **full-blob**
+cache in `.tools/typescript.git`, marked `full-blob-v1`. Missing/wrong markers,
+partial-clone settings, corrupt repositories, or incompatible origins are recreated
+before one non-interactive shallow fetch writes the exact pinned commit to a persistent
+`refs/typokat/pinned/<SHA>` ref. The verified local tree and blob batch then need no
+per-file network requests. There is no GitHub API or raw-file fallback. `run` only
+needs Python 3 and the binary.
 
 > **Build a current binary first.** `run` measures whatever binary you point at — a
 > *stale* `target/release/typokat` (not rebuilt after a checker change) silently
@@ -140,7 +145,7 @@ Workflow:
   this file *is* the score-over-time record).
 - `run --save --rebaseline` is the deliberate escape hatch for a reviewed
   pinned-SHA migration: it replaces a missing or stale scoreboard with results
-  from a validated full default format-2 corpus. It cannot be combined with
+  from a validated full default format-3 corpus. It cannot be combined with
   `--check` and should not be used to bypass ordinary ratchet failures.
 - `run --check` re-runs and diffs against it by **diagnostic identity**: prints
   **REGRESS** for any previously in-scope file that drops a matched identity, gains
@@ -168,8 +173,8 @@ unchanged. Incomplete records are parsed **column-0-anchored, rich-format-only**
 harness never passes `--format`), so quoted source-snippet text containing
 `incomplete[...]` can never fabricate a record.
 
-Because the corpus is reproducible from `fetch` at the pinned SHA, the baseline is
-meaningful on any machine. Re-fetch at the same SHA before `--check`.
+Because the corpus is reproducible from the verified Git cache at the pinned SHA, the
+baseline is meaningful on any machine. Re-fetch at the same SHA before `--check`.
 
 This is the "discover → promote" path made concrete: as milestones land, `--save`
 ratchets the numbers up; `--check` keeps them from sliding back.

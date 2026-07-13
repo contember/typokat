@@ -9,8 +9,9 @@ it at any prebuilt binary (default: target/release/typokat).
 
 Two subcommands:
 
-  fetch   Pull a curated slice of microsoft/TypeScript conformance tests + their
-          `.errors.txt` baselines at a pinned commit into ./corpus (gitignored).
+  fetch   Fetch one pinned Git commit into an ignored local cache, then stage a
+          curated slice of its conformance tests + `.errors.txt` baselines into
+          ./corpus (gitignored).
 
   run     For every fetched test: replicate TS's unit parsing (strip `// @option`
           directive lines so line numbers line up with the baseline), gate each
@@ -33,10 +34,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import urllib.request
-import urllib.error
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 # --- Configuration -----------------------------------------------------------
@@ -74,6 +72,11 @@ CORPUS = os.path.join(HERE, "corpus")
 REPORT = os.path.join(HERE, "report")
 # Committed (NOT gitignored) regression baseline — deterministic, diff-friendly.
 SCOREBOARD = os.path.join(HERE, "scoreboard.txt")
+GIT_CACHE = os.path.join(HERE, ".tools", "typescript.git")
+TS_GIT_URL = f"https://github.com/{REPO}.git"
+GIT_CACHE_FORMAT = "full-blob-v1"
+GIT_CACHE_MARKER = os.path.join(GIT_CACHE, "typokat-cache-format")
+PINNED_REF = f"refs/typokat/pinned/{PINNED_SHA}"
 
 # --- TS test-case parsing (replicates the bits we need of TestCaseParser) -----
 
@@ -380,7 +383,8 @@ class FetchFailure(RuntimeError):
 
 def _validate_posix_path(path, root, label):
     """Return a safe, normalized repo path rooted at ``root``."""
-    if not isinstance(path, str) or not path or "\\" in path or path.startswith("/"):
+    if (not isinstance(path, str) or not path or "\\" in path or path.startswith("/")
+            or any(char in path for char in ("\0", "\n", "\r"))):
         raise FetchFailure(f"invalid {label} path: {path!r}")
     parts = path.split("/")
     root_parts = root.split("/")
@@ -399,7 +403,8 @@ def validate_baseline_path(path):
 
 
 def validate_case_relpath(rel):
-    if not isinstance(rel, str) or not rel or "\\" in rel or rel.startswith("/"):
+    if (not isinstance(rel, str) or not rel or "\\" in rel or rel.startswith("/")
+            or any(char in rel for char in ("\0", "\n", "\r"))):
         raise FetchFailure(f"invalid corpus test path: {rel!r}")
     parts = rel.split("/")
     if any(part in ("", ".", "..") for part in parts):
@@ -421,94 +426,152 @@ def stage_path(stage, rel):
     return candidate
 
 
-def gh_list_dir(path, *, configured_root=False):
-    """List a repo dir at the pinned SHA via gh (authenticated, reliable).
-    Returns list of (type, name, path)."""
-    path = validate_case_path(path)
-    r = subprocess.run(
-        ["gh", "api", f"repos/{REPO}/contents/{path}?ref={PINNED_SHA}",
-         "--jq", r'.[] | [.type, .name, .path] | @tsv'],
-        capture_output=True, text=True)
-    if r.returncode != 0:
-        detail = r.stderr.strip().splitlines()[-1] if r.stderr.strip() else "no stderr"
-        raise FetchFailure(f"cannot list pinned directory {path}: {detail}")
-    rows = []
-    for line in r.stdout.splitlines():
-        parts = line.split("\t")
-        if len(parts) != 3 or parts[0] not in ("dir", "file") or not all(parts):
-            raise FetchFailure(f"malformed pinned directory response for {path}: {line!r}")
-        typ, name, full = parts
-        if name in (".", "..") or "/" in name or "\\" in name:
-            raise FetchFailure(f"malformed pinned directory response for {path}: {line!r}")
-        full = validate_case_path(full)
-        if full != f"{path}/{name}":
-            raise FetchFailure(f"malformed pinned directory response for {path}: {line!r}")
-        rows.append((typ, name, full))
-    if configured_root and not rows:
-        raise FetchFailure(f"configured pinned directory is empty: {path}")
-    return rows
+def run_git(cache, *args, input_data=None, timeout=60, allow_failure=False):
+    """Run one non-interactive git command against the local pinned cache."""
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    command = ["git", "-C", cache, *args]
+    try:
+        proc = subprocess.run(command, input=input_data, capture_output=True, env=env, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise FetchFailure(f"git cache command timed out: {' '.join(command)}") from e
+    if proc.returncode != 0 and not allow_failure:
+        detail = proc.stderr.decode("utf-8", "replace").strip()
+        raise FetchFailure(f"git cache command failed: {' '.join(command)}: {detail or 'no stderr'}")
+    return proc.stdout
 
 
-def collect_ts_paths(dirs):
-    """BFS the configured dirs, returning all .ts file repo-paths."""
+def recreate_git_cache():
+    """Discard only this ignored cache and initialize the required full-blob format."""
+    if os.path.exists(GIT_CACHE):
+        shutil.rmtree(GIT_CACHE)
+    os.makedirs(GIT_CACHE, exist_ok=True)
+    run_git(GIT_CACHE, "init", "--bare")
+    run_git(GIT_CACHE, "remote", "add", "origin", TS_GIT_URL)
+    with open(GIT_CACHE_MARKER, "w") as f:
+        f.write(GIT_CACHE_FORMAT + "\n")
+
+
+def cache_is_compatible():
+    """Return whether an existing cache is our full-blob cache, never trust guesswork."""
+    try:
+        with open(GIT_CACHE_MARKER) as f:
+            marker = f.read()
+        if marker != GIT_CACHE_FORMAT + "\n":
+            return False
+        if run_git(GIT_CACHE, "rev-parse", "--is-bare-repository").strip() != b"true":
+            return False
+        if run_git(GIT_CACHE, "remote", "get-url", "origin").decode().strip() != TS_GIT_URL:
+            return False
+        partial = run_git(GIT_CACHE, "config", "--get-regexp", r"(promisor|partialclone)",
+                          allow_failure=True)
+        if partial.strip():
+            return False
+        run_git(GIT_CACHE, "fsck", "--no-dangling")
+        return True
+    except (FetchFailure, OSError):
+        return False
+
+
+def prepare_git_cache():
+    """Fetch the exact commit into a versioned, GC-reachable full-blob cache."""
+    if not cache_is_compatible():
+        recreate_git_cache()
+    run_git(GIT_CACHE, "fetch", "--depth=1", "--no-tags", "origin",
+            f"{PINNED_SHA}:{PINNED_REF}", timeout=300)
+    revision = run_git(GIT_CACHE, "rev-parse", "--verify", f"{PINNED_REF}^{{commit}}")
+    revision = revision.decode().strip()
+    if revision != PINNED_SHA:
+        raise FetchFailure(f"git cache ref {PINNED_REF} resolved to unexpected commit {revision!r}")
+    return revision
+
+
+def parse_git_tree(data, requested_path):
+    """Parse NUL-delimited ls-tree records and validate their repository paths."""
+    entries = []
+    for record in data.split(b"\0"):
+        if not record:
+            continue
+        try:
+            header, raw_path = record.split(b"\t", 1)
+            mode, typ, oid = header.decode().split(" ", 2)
+            path = raw_path.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as e:
+            raise FetchFailure(f"malformed git tree record below {requested_path}") from e
+        path = _validate_posix_path(path, requested_path, "git tree entry")
+        if not path.startswith(f"{requested_path}/") and path != requested_path:
+            raise FetchFailure(f"git tree path escapes requested directory: {path!r}")
+        if mode == "120000" or typ not in ("blob", "tree") or not re.fullmatch(r"[0-9a-f]{40}", oid):
+            raise FetchFailure(f"unsafe git tree entry below {requested_path}: {path!r}")
+        entries.append((mode, typ, oid, path))
+    return entries
+
+
+def collect_git_ts_paths(revision, dirs):
+    """Enumerate requested local Git trees and require every configured root."""
     found = []
-    stack = [(validate_case_path(f"tests/cases/{d}"), True) for d in dirs]
-    while stack:
-        path, configured_root = stack.pop()
-        for typ, name, full in gh_list_dir(path, configured_root=configured_root):
-            full = validate_case_path(full)
-            if typ == "dir":
-                stack.append((full, False))
-            elif typ == "file" and name.endswith(".ts"):
-                found.append(full)
+    for configured in dirs:
+        root = validate_case_path(f"tests/cases/{configured}")
+        direct = parse_git_tree(run_git(GIT_CACHE, "ls-tree", "-z", revision, "--", root), root)
+        if len(direct) != 1 or direct[0][1] != "tree" or direct[0][3] != root:
+            raise FetchFailure(f"configured pinned directory is missing or not a tree: {root}")
+        entries = parse_git_tree(run_git(GIT_CACHE, "ls-tree", "-r", "-z", revision, "--", root), root)
+        files = [path for _mode, typ, _oid, path in entries if typ == "blob" and path.endswith(".ts")]
+        if not files:
+            raise FetchFailure(f"configured pinned directory is empty: {root}")
+        found.extend(files)
     return sorted(set(found))
 
 
-def raw_url(path):
-    return f"https://raw.githubusercontent.com/{REPO}/{PINNED_SHA}/{path}"
+def baseline_paths(revision):
+    root = "tests/baselines/reference"
+    entries = parse_git_tree(run_git(GIT_CACHE, "ls-tree", "-r", "-z", revision, "--", root), root)
+    return {
+        validate_baseline_path(path)
+        for _mode, typ, _oid, path in entries
+        if typ == "blob" and path.endswith(".errors.txt")
+    }
 
 
-def fetch_blob(path, *, allow_missing=False):
-    """Fetch one pinned blob.
-
-    A listed test source must exist. A missing `.errors.txt` is intentional for
-    expected-clean tests and is the sole allowed per-file 404.
-    """
-    if path.startswith("tests/cases/"):
-        path = validate_case_path(path)
-    elif path.startswith("tests/baselines/reference/"):
-        path = validate_baseline_path(path)
-    else:
-        raise FetchFailure(f"invalid pinned blob path: {path!r}")
-    try:
-        with urllib.request.urlopen(raw_url(path), timeout=30) as r:
-            status = getattr(r, "status", 200)
-            if status != 200:
-                raise FetchFailure(f"unexpected pinned blob status {status}: {path}")
-            content_type = r.headers.get_content_type() if getattr(r, "headers", None) else None
-            if content_type in ("application/json", "text/html"):
-                raise FetchFailure(f"unexpected pinned blob transport {content_type}: {path}")
-            try:
-                text = r.read().decode("utf-8")
-            except UnicodeDecodeError as e:
-                raise FetchFailure(f"non-text pinned blob transport: {path}") from e
-            if text.lstrip().lower().startswith(("<!doctype html", "<html")):
-                raise FetchFailure(f"HTML returned for pinned blob: {path}")
-            return text
-    except urllib.error.HTTPError as e:
-        optional_baseline = (path.startswith("tests/baselines/reference/")
-                             and path.endswith(".errors.txt"))
-        if e.code == 404 and allow_missing and optional_baseline:
-            return None
-        if e.code == 404:
-            raise FetchFailure(f"listed pinned blob is missing: {path}") from e
-        raise FetchFailure(f"cannot fetch pinned blob {path}: HTTP {e.code}") from e
+def read_git_blobs(revision, paths):
+    """Read every selected blob through one NUL-safe, local Git batch process."""
+    ordered = sorted(paths)
+    for path in ordered:
+        if path.startswith("tests/cases/"):
+            validate_case_path(path)
+        else:
+            validate_baseline_path(path)
+    query = b"".join(f"{revision}:{path}\n".encode() for path in ordered)
+    data = run_git(GIT_CACHE, "cat-file", "--batch", input_data=query)
+    files = {}
+    cursor = 0
+    for path in ordered:
+        end = data.find(b"\n", cursor)
+        if end < 0:
+            raise FetchFailure(f"malformed git blob batch header: {path}")
+        header = data[cursor:end].decode("utf-8", "replace").split()
+        cursor = end + 1
+        if len(header) != 3 or header[1] != "blob":
+            raise FetchFailure(f"missing or non-blob pinned source: {path}")
+        try:
+            size = int(header[2])
+        except ValueError as e:
+            raise FetchFailure(f"malformed git blob batch size: {path}") from e
+        content_end = cursor + size
+        if content_end >= len(data) or data[content_end:content_end + 1] != b"\n":
+            raise FetchFailure(f"truncated git blob batch content: {path}")
+        files[path] = data[cursor:content_end]
+        cursor = content_end + 1
+    if cursor != len(data):
+        raise FetchFailure("unexpected trailing data in git blob batch")
+    return files
 
 
 def cmd_fetch(args):
     dirs = args.dir or DEFAULT_DIRS
-    print(f"Listing {len(dirs)} dir(s) at {REPO}@{PINNED_SHA[:9]} ...")
-    ts_paths = collect_ts_paths(dirs)
+    print(f"Fetching pinned Git cache for {REPO}@{PINNED_SHA[:9]} ...")
+    revision = prepare_git_cache()
+    print(f"Listing {len(dirs)} dir(s) from local Git tree {revision[:9]} ...")
+    ts_paths = collect_git_ts_paths(revision, dirs)
     if args.limit:
         ts_paths = ts_paths[:args.limit]
     if not ts_paths:
@@ -517,36 +580,41 @@ def cmd_fetch(args):
 
     partial = bool(args.dir or args.limit)
     manifest = {
-        "format": 2, "sha": PINNED_SHA, "repo": REPO, "dirs": dirs,
+        "format": 3, "sha": PINNED_SHA, "repo": REPO, "dirs": dirs,
         "limit": args.limit, "mode": "partial" if partial else "full-default",
-        "partial": partial, "tests": [],
+        "partial": partial, "transport": {"kind": "git-cache-full-blob", "url": TS_GIT_URL,
+                                               "revision": revision, "cache_format": GIT_CACHE_FORMAT}, "tests": [],
     }
     stage = tempfile.mkdtemp(prefix=".corpus-fetch-", dir=os.path.dirname(CORPUS))
 
-    def fetch_one(ts_repo_path):
-        # ts_repo_path like tests/cases/conformance/.../foo.ts
-        ts_repo_path = validate_case_path(ts_repo_path)
-        rel = validate_case_relpath(ts_repo_path.removeprefix("tests/cases/"))
-        dst_ts = stage_path(stage, rel)
-        os.makedirs(os.path.dirname(dst_ts), exist_ok=True)
-        src = fetch_blob(ts_repo_path)
-        with open(dst_ts, "w") as f:
-            f.write(src)
-        base_name = os.path.basename(ts_repo_path)[:-3] + ".errors.txt"
-        baseline_source = validate_baseline_path(f"tests/baselines/reference/{base_name}")
-        base = fetch_blob(baseline_source, allow_missing=True)
-        if base is not None:
-            with open(dst_ts[:-3] + ".errors.txt", "w") as f:
-                f.write(base)
-        return {"path": rel, "source": ts_repo_path,
-                "baseline_source": baseline_source, "baseline": base is not None}
-
     try:
-        with ThreadPoolExecutor(max_workers=12) as ex:
-            for done, entry in enumerate(ex.map(fetch_one, ts_paths), start=1):
-                manifest["tests"].append(entry)
-                if done % 25 == 0:
-                    print(f"  ... {done}/{len(ts_paths)}")
+        available_baselines = baseline_paths(revision)
+        entries = []
+        archive_paths = set(ts_paths)
+        for source in ts_paths:
+            rel = validate_case_relpath(source.removeprefix("tests/cases/"))
+            baseline = validate_baseline_path(
+                "tests/baselines/reference/" + os.path.basename(source)[:-3] + ".errors.txt")
+            has_baseline = baseline in available_baselines
+            if has_baseline:
+                archive_paths.add(baseline)
+            entries.append({"path": rel, "source": source, "baseline_source": baseline,
+                            "baseline": has_baseline})
+        files = read_git_blobs(revision, archive_paths)
+        for entry in entries:
+            dst_ts = stage_path(stage, entry["path"])
+            os.makedirs(os.path.dirname(dst_ts), exist_ok=True)
+            try:
+                source = files[entry["source"]].decode("utf-8")
+                baseline = files[entry["baseline_source"]].decode("utf-8") if entry["baseline"] else None
+            except UnicodeDecodeError as e:
+                raise FetchFailure(f"non-text git archive member: {entry['source']}") from e
+            with open(dst_ts, "w") as f:
+                f.write(source)
+            if baseline is not None:
+                with open(dst_ts[:-3] + ".errors.txt", "w") as f:
+                    f.write(baseline)
+            manifest["tests"].append(entry)
         manifest["tests"].sort(key=lambda entry: entry["path"])
         with open(os.path.join(stage, "manifest.json"), "w") as f:
             json.dump(manifest, f, indent=2)
@@ -590,10 +658,17 @@ def load_manifest():
             manifest = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         raise FetchFailure("invalid or missing corpus manifest — run `tsofficial.py fetch`") from e
-    required = {"format", "sha", "repo", "dirs", "limit", "mode", "partial", "tests"}
-    if not isinstance(manifest, dict) or required - manifest.keys() or manifest["format"] != 2:
+    required = {"format", "sha", "repo", "dirs", "limit", "mode", "partial", "transport", "tests"}
+    if not isinstance(manifest, dict) or required - manifest.keys() or manifest["format"] != 3:
         raise FetchFailure("corpus manifest has an unsupported format")
     tests = manifest["tests"]
+    transport = manifest["transport"]
+    if (not isinstance(transport, dict)
+            or set(transport) != {"kind", "url", "revision", "cache_format"}
+            or transport["kind"] != "git-cache-full-blob" or transport["url"] != TS_GIT_URL
+            or transport["cache_format"] != GIT_CACHE_FORMAT
+            or transport["revision"] != manifest["sha"]):
+        raise FetchFailure("corpus manifest has invalid Git transport provenance")
     if not isinstance(tests, list) or not tests:
         raise FetchFailure("corpus manifest has no tests")
     paths = []
@@ -652,7 +727,7 @@ def validate_scoreboard_metadata():
 
 
 def validate_full_default_manifest():
-    """Require a complete format-2 default corpus before any scoreboard write."""
+    """Require a complete format-3 default corpus before any scoreboard write."""
     manifest = load_manifest()
     if (manifest["sha"] != PINNED_SHA or manifest["repo"] != REPO
             or manifest["dirs"] != DEFAULT_DIRS or manifest["limit"] is not None
