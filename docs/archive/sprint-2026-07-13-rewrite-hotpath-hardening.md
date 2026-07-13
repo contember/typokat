@@ -1,6 +1,19 @@
 # Sprint — rewrite and hotpath hardening (2026-07-13)
 
-> **Status:** active  
+> **OUTCOME — shipped 2026-07-13.** WU0–WU7 remain as recorded below; WU8 closed the
+> final evaluator-owned host-recursive structural walk. **Commit map:** WU7 spec
+> `0d8e7d0`, infer rewrite `db0a788`, constraint evaluator `092ba3d`; WU8 spec
+> `47756f5`, mapped-value rewrite `626a141`. WU8 corrects stale `T[K]` in generic
+> function constraints/defaults and uses a private frame-owned task/value machine with
+> suffix borrowing and truncation rather than per-node child/result vectors. Its public
+> evaluator witness is a 10,005-deep alternating function spine; direct witnesses pin
+> partial cycles, shared DAG reuse, and nested-mapped/instantiation binder boundaries.
+> Independent soundness review PASS; its one P2 allocation finding shipped in the same
+> implementation, and two review-of-delta passes were PASS. Final verification: format,
+> clippy, release build, full test/integration gates, focused release walker suites, and
+> the pinned official-suite ratchet all passed. No backlog item remains: the only review
+> finding was remediated in WU8.
+
 > **Owner:** one Terra writer; independent reviewers named per work unit  
 > **Started:** 2026-07-13  
 > **Related:** [architecture](../reference/architecture.md), [invariants](../reference/invariants.md), [development method](../reference/dev-method.md), [divergences](../reference/divergences.md), [backlog](../backlog/README.md), [profiling gate](../archive/backlog-13-profiling-gate.md)
@@ -183,8 +196,8 @@ policies remain local: infer rewriting keeps its fresh-binder scope, per-run
 completed memo, and SCC-suffix identity taint; constraint evaluation delegates
 pending types and returns the original structural result after global exhaustion.
 The WU7 syntax corpus is enabled and its completed verification is retained in the
-run log. WU8 reopens the sprint for the remaining mapped-value structural walk; its
-spec remains disabled until the implementation lands.
+run log. WU8 subsequently completed the remaining mapped-value structural walk and
+enabled its acceptance corpus.
 
 ### WU8 — mapped-value rewrite work stack (spec first, separate commit)
 
@@ -516,3 +529,24 @@ One Terra writer owns the active worktree and makes one work unit's source chang
   strict `tsc 6.0.3 --strict` reports only `TS2345` (bad argument) and `TS2322`
   (bad assignment), while typokat also reports a false-positive `TK2322` on the
   clean generic-signature assignment because its source constraint remains `T[K]`.
+- **WU8 implementation, review, and closure (2026-07-13).** The WU8 acceptance
+  corpus landed first in `47756f5`; `626a141` replaced `MappedRewrite` host recursion
+  with its third private iterative machine. It now rewrites function generic
+  constraints/defaults as well as receiver, parameters, and return, fixing the stale
+  `T[K]` false positive in the clean generic-signature assignment. The 10,005-deep
+  alternating function spine enters public mapped evaluation and `assemble_mapped`
+  before walking the assembled property back to the leaf. Direct tests additionally
+  prove partial-cycle clone/memo semantics, shared-DAG rewrite reuse, and the nested
+  mapped key/modifiers versus value-template and instantiation-arguments versus base
+  binder boundaries. Independent soundness review PASS found one P2 allocation issue:
+  temporary per-node child/result vectors. The implementation was refined to make each
+  frame schedule its own children and rebuild from a borrowed value suffix followed by
+  `truncate`; two independent delta reviews were PASS. A bounded audit found the
+  remaining `keyof`-intersection and template-union helper recursion safe because the
+  interner flattens those same-family nests. Final evidence: `cargo fmt --check` PASS;
+  `cargo test` 360 passed / 6 ignored; integration tests conformance 14, divergences 4,
+  incomplete 7, manifest 10, surface 5; release `mapped_value_rewrite` 5,
+  `infer_rewrite` 7 + 1 ignored, `inference_constraint` 8; clippy PASS; release build
+  PASS. Pinned official-suite `050880ce5` (874 corpus: 368 in / 506 out) reported strict
+  exact 16/44, diagnostics 15/168, FN 153, FP 30; non-strict exact 115/324,
+  diagnostics 309/1184, FN 875, FP 310; regressions/progress/missing all 0.

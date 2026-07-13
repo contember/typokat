@@ -20,7 +20,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-07-13-rewrite-hotpath-hardening.md`](sprint-2026-07-13-rewrite-hotpath-hardening.md) —
-  active; WU7 is verified and WU8 is a spec-first mapped-value rewrite follow-up.
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold public-witness gate; no implementation started.

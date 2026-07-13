@@ -151,8 +151,8 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // walkers. Enabled after their separate heap task/value stacks landed; their
     // distinct rewrite and constraint-evaluation policies remain covered directly.
     ("sr_rewrite_hotpath_wu7", true),
-    // WU8 — mapped-value replacement still has a host-recursive structural walk.
-    // Disabled spec; the local work-stack implementation enables this corpus.
+    // WU8 — mapped-value replacement uses its own local iterative work stack;
+    // the enabled corpus pins both the shallow source route and generic metadata.
     ("sr_rewrite_hotpath_wu8", true),
     // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
     // (backlog 73). ENABLED by WU3 (expression child slots), WU4 (statement

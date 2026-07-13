@@ -23,8 +23,6 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-07-13-rewrite-hotpath-hardening.md`](sprints/sprint-2026-07-13-rewrite-hotpath-hardening.md) —
-  active; WU7 is verified and WU8 is a spec-first mapped-value rewrite follow-up.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
 
@@ -38,10 +36,12 @@ decisions → reference → archive.
   (`77`), explicit `this`/`ThisType<T>` (`70`), and the `13` DEFER/no-VM decision are complete.
   The final official-suite ratchet now uses one shallow exact-revision fetch into a marked
   full-blob Git cache; the 874-test corpus check passed with zero regressions.
-- **Rewrite/hotpath hardening is active at WU8** —
-  [`sprint-2026-07-13-rewrite-hotpath-hardening.md`](sprints/sprint-2026-07-13-rewrite-hotpath-hardening.md)
-  retains WU7's verified auxiliary-walker hardening and now specifies the remaining
-  mapped-value structural rewrite as a separate local task machine.
+- **Rewrite/hotpath hardening shipped 2026-07-13** (archived:
+  [`archive/sprint-2026-07-13-rewrite-hotpath-hardening.md`](archive/sprint-2026-07-13-rewrite-hotpath-hardening.md)) —
+  `InferRewrite`, `InferenceConstraintEvaluator`, and `MappedRewrite` now use separate
+  iterative walkers with their distinct cycle/memo/exhaustion policies. WU8 also corrects
+  mapped generic constraint/default metadata; its 10,005-deep public-evaluator witness,
+  independent reviews, and zero-regression official-suite ratchet all passed.
 - **Generic methods (`41`) shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-generic-methods.md`](archive/sprint-2026-07-12-generic-methods.md)) —
   persistent generic method/call/construct binders now survive substitution and relate under a
