@@ -7,8 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 typokat — a from-scratch **TypeScript type checker in Rust**. A *checker, not a
 compiler*: it parses, binds, and type-checks TS and reports `tsc`-style diagnostics.
 Error codes mirror tsc (`TK2322` ≡ `TS2322`). Emit and JS runtime semantics are out of
-scope **by design**; module resolution is a narrow type-checking slice (local relative
-`.ts` modules). The goal is to preserve the type model.
+scope **by design**. Current M29 module coverage is a narrow type-checking slice (local relative
+`.ts` modules); the planned sole 1.0 profile is Bundler, with physical resolution delegated to
+`oxc_resolver` and alternate host profiles deferred. The goal is to preserve the type model.
 M0–M33 are implemented. Coverage: [README.md](./README.md). Full design:
 [docs/reference/architecture.md](docs/reference/architecture.md).
 

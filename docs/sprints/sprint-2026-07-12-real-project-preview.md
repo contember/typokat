@@ -6,9 +6,10 @@ TypeScript project and produce a deterministic, honest differential result throu
 **Theme.** The serial cross-file checker, bounded source-backed prelude, and exhaustive incomplete
 channel are already shipped. This sprint connects those pieces to a narrow project workflow:
 select and freeze a witness that fits the implemented model, discover its configured roots, resolve
-its local NodeNext imports, account for every selected file and result channel, and ratchet a clean
-baseline plus seeded errors in CI. It is an early preview slice, not the full `lib.d.ts` or package
-resolver milestone.
+its imports through `oxc_resolver` under the 1.0 Bundler profile, account for every selected file and
+result channel, and ratchet a clean baseline plus seeded errors in CI. It is an early preview slice,
+not the full `lib.d.ts` or module-semantics milestone. Physical resolver ownership follows
+[`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md).
 
 ## Refs re-verified at HEAD (2026-07-12)
 
@@ -24,7 +25,7 @@ resolver milestone.
   `.ts`, but `./foo.js` remains `foo.js`; default/namespace imports and non-relative specifiers are
   skipped by the scanner — `src/driver.rs:279-317`, `src/driver.rs:387-400`.
 - ✔ Project-shaped conformance fixtures already exercise the serial driver, so synthetic config and
-  NodeNext resolver witnesses can extend an established test seam —
+  Bundler resolver witnesses can extend an established test seam —
   `tests/conformance.rs:143-154`, `tests/cases/m29_modules/`.
 - ✔ The prelude is one checked source unit in the same type universe and currently exposes only the
   admitted utility aliases plus bounded `console` and numeric `Math` values; no project-only ambient
@@ -55,16 +56,17 @@ resolver milestone.
   For each candidate, run its documented install and pinned `tsc --noEmit`, enumerate the selected
   `tsconfig` roots/import forms/ambient names/AST surfaces, and probe the same files with the current
   explicit-file CLI. Reject candidates needing broad Node/Bun declarations, generic standard-library
-  methods, a package graph, unsupported type semantics, or a local declaration shim. Confirm the
-  repository license permits the chosen fetch/use pattern.
+  methods, a package graph, a non-Bundler resolution profile, unsupported type semantics, or a local
+  declaration shim. Confirm the repository license permits the chosen fetch/use pattern.
 - **Scope.** Select one candidate and record its repository URL, full commit SHA, license, lockfile
   digest, install command, exact `tsconfig.json`, TypeScript oracle version, configured roots, local
   import graph, prelude names, and exercised language/resolver surfaces in a checked-in preview
   descriptor. Pin the public directory/tsconfig CLI syntax and the deterministic summary schema with
-  black-box acceptance snapshots. Explicitly reject `extends` with a project-level unsupported notice
-  in this slice. Define three source-preserving mutations: assignability, bad call argument, and
-  missing member. Record the clean baseline, mutation identities, and an allowlist mapping every
-  accepted mismatch or unsupported identity to a live backlog/divergence owner.
+  black-box acceptance snapshots. Pin `moduleResolution: "bundler"`, all resolver condition/options,
+  and the `oxc_resolver` version/options as part of the oracle contract. Define three
+  source-preserving mutations: assignability, bad call argument, and missing member. Record the clean
+  baseline, mutation identities, and an allowlist mapping every accepted mismatch or unsupported
+  identity to a live backlog/divergence owner.
 - **Threshold gate.** The initial contract is zero actionable false positives, zero unresolved
   modules, zero skipped files/forms, zero unsupported forms in the chosen witness, and zero missed
   seeded diagnostics. If no honest candidate meets those numbers, stop after publishing the evidence
@@ -72,7 +74,7 @@ resolver milestone.
 - **Acceptance / witness.** One behavior-neutral spec commit precedes all implementation. The
   descriptor is reproducible from an empty cache, the pinned `tsc` baseline is clean, every mutation
   produces its expected `TS` identity, expected typokat/project identities are fully specified, and
-  the disabled black-box contract fails at old HEAD only because project discovery/NodeNext behavior
+  the disabled black-box contract fails at old HEAD only because project discovery/Bundler behavior
   is absent.
 - **Touch points.** New `tooling/project-preview/` descriptor, baseline, mutation manifest, runner
   contract, and README; disabled `tests/cases/b72_real_project_preview/` synthetic controls;
@@ -85,47 +87,55 @@ resolver milestone.
   selected.
 - **Verify first.** From WU0's pinned syntax and fixture config, enumerate path normalization, config
   lookup, glob ordering, duplicate roots, excluded roots, empty matches, malformed config, and
-  explicit `extends` cases. Compare the selected root set with the pinned TypeScript oracle and
-  confirm the existing explicit-file invocation remains byte-for-byte compatible.
-- **Scope.** Add a narrow project/config discovery component outside the checker core. A directory
-  resolves its local `tsconfig.json`; an explicit config path uses that file. Consume only the WU0-
-  pinned subset of `files`, `include`, and `exclude`; normalize and sort roots deterministically;
-  classify every configured source as selected or explicitly unsupported; and hand owned
-  `FileInput`s to the existing serial `check_project` path. Render the selected config/root set and
-  project-level unsupported notices separately from type diagnostics and AST incomplete records.
-  Preserve the current explicit `.ts` file-list mode and four-way exit contract.
+  `extends`/reference cases. Compare the selected root set and resolved config with the pinned
+  TypeScript Bundler oracle and confirm the existing explicit-file invocation remains byte-for-byte
+  compatible.
+- **Scope.** Add a narrow project/config orchestration component outside the checker core. Use
+  `oxc_resolver` to find and resolve the directory or explicit `tsconfig.json`, including config
+  inheritance/reference behavior it supports; do not implement a second config resolver. Typokat
+  enumerates the WU0-pinned `files`/`include`/`exclude` root set where the crate does not expose a
+  complete set, normalizes and sorts it deterministically, classifies every configured source as
+  selected or explicitly unsupported, and hands owned `FileInput`s to the existing serial
+  `check_project` path. Render the selected config/root set and project-level unsupported notices
+  separately from type diagnostics and AST incomplete records. Preserve the current explicit `.ts`
+  file-list mode and four-way exit contract.
 - **Stop gate.** If faithful parsing of the witness config requires a general compiler-option model,
   changes to checker scopes/type identity, or silent fallback for an unsupported field, stop and ask.
 - **Acceptance / witness.** Focused unit and black-box tests prove directory/config discovery,
-  deterministic include/exclude expansion, duplicate suppression, explicit `extends` rejection,
-  missing/malformed config reporting, unchanged file-list behavior, and exact root/config summary
-  snapshots. All roots in the synthetic project are accounted for once.
+  deterministic include/exclude expansion, duplicate suppression, pinned inheritance/reference
+  behavior, missing/malformed config reporting, unchanged file-list behavior, and exact root/config
+  summary snapshots. All roots in the synthetic project are accounted for once; unsupported config
+  fields/profiles cannot fall back silently.
 - **Touch points.** `src/main.rs`, a narrow project/config discovery module, `src/lib.rs`, focused
   unit tests, `tests/incomplete_outcome.rs`, and WU0's synthetic controls.
 
-### WU2 — witness-bounded NodeNext resolution and project accounting (effort L)
+### WU2 — witness-bounded Bundler resolution and project accounting (effort L)
 
 - **Problem.** The serial resolver cannot map a runtime-style `./foo.js` specifier to a supplied
   `foo.ts`/`foo.d.ts`, silently ignores non-relative imports, and exposes no project summary of
   checked/skipped files or unresolved modules.
 - **Verify first.** Inventory every import/export form in the selected witness and build focused
   controls for `.js` to `.ts`, `.js` to `.d.ts`, extensionless imports, missing targets, ambiguous
-  candidates, non-relative specifiers, and stable dependency order. Cross-check each resolution
-  against the WU0-pinned NodeNext oracle.
-- **Scope.** Extend only the serial resolver seam required by the witness: local relative
-  `./foo.js` resolves to `foo.ts` or `foo.d.ts` under an explicit deterministic precedence rule;
-  retain the existing local `.ts` behavior; and classify every other encountered specifier as
-  resolved, unresolved, or explicitly unsupported. Support only import/export forms admitted by
-  WU0. Aggregate deterministic project results by normalized relative path: roots selected, files
-  checked/skipped, unresolved modules, project unsupported notices, AST incomplete identities, and
-  diagnostics by code/file/line. Do not collapse any channel to aggregate counts.
-- **Acceptance / witness.** Enabled synthetic fixtures prove every local NodeNext specifier resolves,
-  missing/unsupported imports cannot disappear cleanly, all files share the existing serial type
-  universe, repeated project runs are byte-identical, and the summary matches the pinned schema. The
-  selected real witness has zero unresolved modules, skipped/unsupported files or forms, and
-  unclassified diagnostics.
-- **Touch points.** `src/driver.rs`, project result/summary structures, `src/main.rs`,
-  `tests/cases/b72_real_project_preview/`, `tests/conformance.rs`, and black-box CLI snapshots.
+  candidates, non-relative/package specifiers, `paths`, package conditions, and stable dependency
+  order. Cross-check each admitted resolution against the WU0-pinned TypeScript Bundler oracle.
+  Include dependency-gap sentinels for manually supplied tsconfig path mapping and simplified
+  `typesVersions` selection.
+- **Scope.** Configure the pinned `oxc_resolver::resolve_dts` API as the only physical resolver for
+  the witness. Retain the existing local `.ts` semantic behavior, classify every encountered
+  specifier as resolved, unresolved, or explicitly unsupported, and do not add fallback path probes.
+  Typokat loads resolved files, constructs stable dependency order, and supports only the
+  import/export semantics admitted by WU0. Aggregate deterministic project results by normalized
+  relative path: roots selected, files checked/skipped, resolved/unresolved modules, project
+  unsupported notices, AST incomplete identities, and diagnostics by code/file/line. Do not collapse
+  any channel to aggregate counts.
+- **Acceptance / witness.** Enabled synthetic fixtures prove every admitted Bundler specifier
+  resolves identically to pinned `tsc`, missing/unsupported imports and known crate gaps cannot
+  disappear cleanly, all files share the existing serial type universe, repeated project runs are
+  byte-identical, and the summary matches the pinned schema. The selected real witness has zero
+  unresolved modules, skipped/unsupported files or forms, and unclassified diagnostics.
+- **Touch points.** Dependency/configuration, `src/driver.rs`, project result/summary structures,
+  `src/main.rs`, `tests/cases/b72_real_project_preview/`, `tests/conformance.rs`, and black-box CLI
+  snapshots.
 
 ### WU3 — reproducible clean/mutation ratchet and CI gate (effort L)
 
@@ -156,12 +166,13 @@ resolver milestone.
   reviews the uncommitted implementation without relying on its rationale. Reproduce the witness
   from an empty cache and rerun its exact pinned `tsc` oracle.
 - **Scope.** Adversarially probe omitted/duplicate/glob-ordered roots, config path traversal,
-  unsupported `extends`/options, `.js`/`.ts`/`.d.ts` ambiguity, missing and non-relative imports,
-  type-only/value import boundaries, dependency cycles, prelude shadowing, parse diagnostics,
-  diagnostic-plus-incomplete precedence, path/timestamp/cache nondeterminism, mutation isolation,
-  allowlist wildcarding, and same-count identity swaps. Cross-check fresh semantic probes against
-  `tsc --strict`. Any FAIL receives a focused witness and returns to the implementation agent; the
-  same independent reviewer rechecks the remediation.
+  inheritance/references/options, `.js`/`.ts`/`.d.ts` ambiguity, missing and package imports,
+  `paths`, package conditions, the known `typesVersions` limitation, type-only/value import
+  boundaries, dependency cycles, prelude shadowing, parse diagnostics, diagnostic-plus-incomplete
+  precedence, path/timestamp/cache nondeterminism, mutation isolation, allowlist wildcarding, and
+  same-count identity swaps. Cross-check fresh resolver probes against pinned `tsc` in Bundler mode
+  and semantic probes against `tsc --strict`. Any FAIL receives a focused witness and returns to the
+  implementation agent; the same independent reviewer rechecks the remediation.
 - **Acceptance / witness.** Explicit PASS with commands, probes, and identity totals; zero omitted
   configured file, false-clean import, missed seeded error, unowned mismatch, mutable input, or
   unexplained false positive. No relation/type-store/CFG invariant changes and no broad resolver or
@@ -177,9 +188,10 @@ resolver milestone.
   fresh official-suite `run --check`. Audit every reference to backlog `72`, the active sprint, and
   the old unknown-project limitation.
 - **Scope.** Document the exact public project CLI, summary channels, exit behavior, pinned witness,
-  reproducibility command, thresholds, and narrow limitations. Mark `D-real-project-preview`
-  complete, delete backlog `72`, preserve `14`/`15`/`16` ownership, stamp the sprint outcome, archive
-  it, and update the docs indexes. Record clean/mutation identity totals and any owned safe-direction
+  reproducibility command, Bundler-only profile, `oxc_resolver` version/options, thresholds, and
+  narrow limitations. Mark `D-real-project-preview` complete, delete backlog `72`, preserve
+  `14`/`15`/`16` ownership, stamp the sprint outcome, archive it, and update the docs indexes. Record
+  clean/mutation identity totals and any owned safe-direction or explicitly unsupported resolver
   mismatch in the outcome.
 - **Acceptance / witness.** `cargo fmt --check`; `cargo test`; `cargo clippy --all-targets -- -D
   warnings`; `cargo build --release`; project-preview runner tests and fresh-cache ratchet; official-
@@ -194,14 +206,17 @@ resolver milestone.
 
 - Full `lib.d.ts`, lib discovery/loading, or a broader ambient prelude — backlog
   [`14`](../backlog/14-libdts-loading.md).
-- General NodeNext/package/`node_modules`/`@types` resolution, package conditions/layouts,
-  `tsconfig` resolver options, CommonJS, and broad import/export forms — backlog
+- General Bundler package/`node_modules`/`@types` coverage, package conditions/layouts,
+  declaration packages, project enumeration, and broad import/export semantics — backlog
   [`15`](../backlog/15-modules-imports.md).
+- NodeNext, Node16, classic Node, CommonJS-specific, and other alternate resolution profiles —
+  explicitly deferred by [`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md),
+  not approximated through Bundler.
 - Cross-file parallel type identity or incrementality — backlogs
   [`16`](../backlog/16-parallelism-type-universe.md) and
   [`17`](../backlog/17-incrementality.md).
-- The later deptective full-stack witness. It remains gated on `14` + `15` and is not evidence for
-  this bounded preview.
+- The later full-stack witness. Deptective remains only a candidate: it is gated on `14` + `15`,
+  must use a meaning-preserving Bundler witness config, and is not evidence for this bounded preview.
 - Fixing unrelated checker semantics discovered while screening candidates. Reject/rescope the
   candidate or link the mismatch to an existing backlog; do not add a witness-only shim, permissive
   fallback, `any`, cast, or diagnostic suppression.
@@ -215,11 +230,15 @@ resolver milestone.
 - WU0 selects the witness before behavior changes and freezes every user-visible CLI/summary detail
   in the spec commit. The candidate must fit the shipped model; the implementation does not grow the
   model to fit the candidate.
+- Bundler is the sole 1.0 resolver profile. `oxc_resolver` is the physical-resolution/config
+  authority; typokat owns source-root enumeration, module graph and semantics, `.d.ts` checking,
+  accounting, diagnostics, and determinism. Resolver gaps become upstream work or explicit
+  unsupported identities, never local fallback probes.
 - Start at zero for every trust threshold. A proposal to accept an unsupported form, unresolved
   module, skipped file, missed mutation, or actionable false positive changes the preview promise
   and requires approval before implementation continues.
-- Reject `tsconfig` `extends` explicitly in this slice. Supporting inheritance belongs with the
-  broader config/resolver work in `15`; silently ignoring it is forbidden.
+- Use the crate's resolved tsconfig model for inheritance/references. Any field or root-enumeration
+  behavior not admitted by WU0 is explicitly unsupported; silently ignoring it is forbidden.
 - Reuse `driver::check_project` and its one serial `Interner`. Project discovery and summaries are
   orchestration around that boundary, not a second checker path or a new type universe.
 - Keep project notices, AST incomplete records, parse errors, and `TK` diagnostics as distinct
@@ -269,3 +288,8 @@ official-suite unit tests; fresh official-suite fetch and `run --check`.
   semantics, producing diagnostics and incomplete records at HEAD. Other screened candidates
   (`Lulzx/tinypdf`, `vercel/async-sema`) require broad Web/Node surfaces. No implementation or
   prelude expansion started; continuing requires explicit approval to change the witness contract.
+- 2026-07-13 — Resolver policy graduated to
+  [`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md): the 1.0 witness now uses
+  Bundler resolution through `oxc_resolver`; NodeNext/alternate profiles are deferred, and typokat
+  retains module semantics and complete project accounting. The prior candidate-screening result
+  remains valid; no witness or implementation has been selected by this documentation change.

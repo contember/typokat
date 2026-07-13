@@ -418,7 +418,10 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   single serial `Interner`, so cross-file `TypeId` identity is ordinary run-local
   identity. This proves module semantics before the parallel type-universe problem
   is solved. It is implemented as `driver::check_project` and is the CLI path for
-  `typokat check <files...>`.
+  `typokat check <files...>`. The planned 1.0 expansion preserves this semantic/type-universe
+  boundary while delegating physical Bundler resolution to `oxc_resolver`; project enumeration,
+  graph construction, import/export semantics, `.d.ts` checking, diagnostics, and determinism stay
+  in typokat ([ADR-0007](../decisions/0007-bundler-resolution-via-oxc-resolver.md)).
 - **Stage 1 — shared *read-only* prelude.** `lib.d.ts` + intrinsics form a large,
   immutable, universally-needed base; re-seeding them into N per-file interners is
   absurd. Freeze a base `Store` once and share it `&`-immutably across workers —
@@ -534,9 +537,11 @@ design targets the former.
    type-level speedup arrives — *in the tree-walker*. A bytecode VM (§7.1) is a **deferred,
    profiling-gated refactor**, not part of this phase (ADR-0001).
 5. **Phase 4 — Real-project scale.** Full `lib.d.ts` as a shared read-only prelude (parallelism
-   Stage 1), then modules/imports as an explicit staged rollout: first a correctness-first
-   whole-repo slice, then the cross-file type-identity strategy (stable structural hash or a shared
-   growing interner) needed for parallel Stage 2.
+   Stage 1), then modules/imports as an explicit staged rollout: first the shipped
+   correctness-first whole-repo slice; then the 1.0 Bundler profile with physical resolution
+   delegated to `oxc_resolver` and module semantics retained locally; then the cross-file
+   type-identity strategy (stable structural hash or a shared growing interner) needed for parallel
+   Stage 2. NodeNext and alternate host profiles are outside the required 1.0 ladder (ADR-0007).
 6. **Phase 5 — Incrementality (IDE).** Salsa-style layer over the binder with durability
    (lib/deps = HIGH, workspace = LOW). This is where the stable structural hash becomes mandatory
    if it has not already landed for cross-file exports. A per-file bytecode cache is a complement

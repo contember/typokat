@@ -15,8 +15,11 @@ typokat models TypeScript **types**. In scope: the semantic/type errors a strict
 `tsc --noEmit --strict` reports about an already-parsed `.ts` file or, for the M29
 slice, a local-relative `.ts` project with named imports/exports. Out of scope by
 design (per [`CLAUDE.md`](../../CLAUDE.md)): **parsing** (oxc owns it), **emit**,
-**JS runtime semantics**, full package/tsconfig **module resolution**, and
-**compiler/CLI configuration**. Everything below is a consequence of that one line.
+**JS runtime semantics**, reimplementing host/filesystem **module resolution**, and
+**compiler/CLI configuration diagnostics**. The planned 1.0 project profile is Bundler:
+`oxc_resolver` owns physical resolution while typokat owns module semantics and checking
+([ADR-0007](../decisions/0007-bundler-resolution-via-oxc-resolver.md)). Everything below follows
+that boundary.
 
 ## Error codes by range
 
@@ -204,12 +207,14 @@ separates today's supported slice, planned resolver capability, and diagnostics 
 **`2xxx` module-resolution codes — partly in scope since M29.** The **local-relative `.ts`
 slice** (M29, backlog `15` slice 1) resolves imports, so it **emits** `TK2307` *Cannot find
 module…* and `TK2305` *Module has no exported member…* for that slice — both are live codes in
-`src/diagnostics/mod.rs` and the README diagnostics list. What stays **out of scope** is
-**currently unsupported but planned** is package/`node_modules`/tsconfig project resolution
-(preview slice `72`, full breadth `15`). Resolver diagnostics for supported forms are in scope as
-those slices land; `TK2792`, `TK2459`, unknown-option validation, and
-`isolatedModules`/emit-target-gated diagnostics stay OOS unless deliberately promoted. The
-divergence ledger's Modules section is the authoritative current boundary.
+`src/diagnostics/mod.rs` and the README diagnostics list. Package/`node_modules`/tsconfig project
+resolution is **currently unsupported but planned** for the Bundler-only preview/full slices
+(`72`/`15`) through `oxc_resolver`. Resolver and import/export diagnostics for admitted Bundler
+forms are in scope as those slices land. Alternate profiles (including NodeNext/Node16), `TK2792`,
+`TK2459`, unknown-option validation, and `isolatedModules`/emit-target-gated diagnostics stay OOS
+unless deliberately promoted. An unsupported profile or dependency gap is a separate explicit
+project outcome, not a clean fallback. The divergence ledger's Modules section is the authoritative
+current boundary.
 
 ## Why this is sound to bound this way
 

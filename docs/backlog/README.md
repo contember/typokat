@@ -138,7 +138,8 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
 - **XL** · [`72`](72-real-project-preview-readiness.md) — public project CLI, pinned strict project, mutation pack, and differential CI ratchet.
 - **XL** · [`14`](14-libdts-loading.md) — full `lib.d.ts` and shared-prelude parallelism Stage 1 · blocked by `43`.
-- **XL** · [`15`](15-modules-imports.md) — NodeNext/package/tsconfig resolver breadth; the local-relative slice shipped as M29.
+- **XL** · [`15`](15-modules-imports.md) — Bundler resolution via `oxc_resolver` plus typokat-owned
+  module semantics; the local-relative slice shipped as M29.
 - **XL** · [`16`](16-parallelism-type-universe.md) — deterministic parallel cross-file type identity · blocked by `14`, `15`.
 - **XL** · [`17`](17-incrementality.md) — semantic batch cache followed by a Salsa-style IDE query layer · blocked by `16`.
 
@@ -155,8 +156,12 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
    declaration merging is now the sole Track A blocker of `14`. Interleave B items and C's parity
    tail as warm-ups. The `13` profiling gate closed DEFER/no-VM under ADR-0001.
 3. **Climb the full-project/scale ladder** (`14` → `15` → `16` → `17`), finishing the B/C
-   remainder along the way. `14` + `15` must graduate the pinned deptective full-stack witness;
-   the small `72` preview is not evidence for full resolver/lib fidelity.
+   remainder along the way. `14` + `15` must graduate a pinned Bundler-compatible full-stack
+   witness (deptective only if it qualifies); the small `72` preview is not evidence for full
+   resolver/lib fidelity. Per
+   [`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md), `15` integrates and
+   differentially validates `oxc_resolver` for the 1.0 Bundler profile; NodeNext/alternate profiles
+   are deferred and physical lookup is not reimplemented locally.
 
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.

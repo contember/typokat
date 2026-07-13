@@ -8,10 +8,12 @@ parses, binds, and type-checks it, then reports `tsc`-style diagnostics: structu
 typing, control-flow narrowing, generics with inference, full classes, conditional/mapped/template
 types, and the everyday "real-world" constructs.
 
-It is a **checker, not a compiler** — emit and JS runtime semantics are out of scope by design, and
-module resolution is a deliberately narrow slice (local relative `.ts` modules). The one goal is to
-preserve the **type model** faithfully; when in doubt it *over-reports* (the safe direction). Full
-design: [`docs/reference/architecture.md`](./docs/reference/architecture.md).
+It is a **checker, not a compiler** — emit and JS runtime semantics are out of scope by design.
+Current M29 module coverage is deliberately narrow (local relative `.ts` modules); the planned sole
+1.0 profile is Bundler, with physical resolution delegated to `oxc_resolver` and alternate host
+profiles deferred. The one goal is to preserve the **type model** faithfully; when in doubt it
+*over-reports* (the safe direction). Full design:
+[`docs/reference/architecture.md`](./docs/reference/architecture.md).
 
 <p>
   <img alt="Rust" src="https://img.shields.io/badge/built%20with-Rust-000?logo=rust">

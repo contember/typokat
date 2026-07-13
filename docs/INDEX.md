@@ -35,6 +35,11 @@ decisions → reference → archive.
 - **Semantic duplication/layering sprint active 2026-07-13** — class-member reserved surfaces,
   neutral test/parameter/prelude seams, call/construct selector parity, lazy conditional-infer work,
   and measurement-only mapped/constraint follow-up with explicit cache/reuse stop gates.
+- **Bundler resolution is the 1.0 profile** —
+  [`ADR-0007`](decisions/0007-bundler-resolution-via-oxc-resolver.md) delegates physical
+  package/filesystem/tsconfig resolution to `oxc_resolver`; typokat retains project enumeration,
+  module-graph and import/export semantics, `.d.ts` checking, diagnostics, and determinism.
+  NodeNext and other host profiles are deferred rather than approximated.
 - **Pre-lib hardening shipped 2026-07-13** (archived:
   [`archive/sprint-2026-07-12-pre-lib-hardening.md`](archive/sprint-2026-07-12-pre-lib-hardening.md)) —
   aliased construction (`22`), evaluator cycles (`56`), callable-object `ReturnType` inference

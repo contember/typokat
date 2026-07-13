@@ -28,9 +28,10 @@ still silently-permissive would poison every downstream check. A deliberately sm
 Parse and load the standard `lib.d.ts` declarations into the type universe as a shared read-only
 prelude. This is also where parallelism **Stage 1** lands — the shared read-only prelude across
 per-file workers (architecture §8.2). Acceptance: fixtures using `console`, array methods, and
-`Promise` check correctly against tsc. As the full-stack ambient witness, the pinned
-`contember/deptective` revision recorded by backlog `72` must no longer produce missing-global or
-standard-library-member noise; backlog `15` owns resolving the same project's modules.
+`Promise` check correctly against tsc. The Bundler-compatible full-stack ambient witness selected
+with backlogs `72`/`15` must no longer produce missing-global or standard-library-member noise;
+`contember/deptective` remains a candidate only if it qualifies under that resolver profile.
+Backlog `15` owns resolving the same witness's modules.
 
 If the minimal prelude slice (`38`) exists by the time this item starts, replace it rather than
 forking a second ambient-loading path. The full library loader is the canonical mechanism.

@@ -574,7 +574,7 @@ title = "Public CLI produces an honest differential result on a pinned strict TS
 state = "incomplete"
 blocks_release = "true"
 owner = "./72-real-project-preview-readiness.md"
-witness = "pinned small real-project clean baseline + seeded faults + identity ratchet; later deptective full-stack witness"
+witness = "pinned small real-project clean baseline + seeded faults + identity ratchet; later Bundler-compatible full-stack witness"
 links = ["../archive/sprint-2026-07-11-minimal-ambient-prelude.md", "./14-libdts-loading.md", "./15-modules-imports.md"]
 deps = []
 
@@ -614,12 +614,12 @@ deps = ["./43-namespaces-declaration-merging.md"]
 [[criterion]]
 id = "D-module-resolver-breadth"
 track = "D"
-title = "Module-resolver breadth (packages / tsconfig / .d.ts) — serial; slice 1 shipped as M29"
+title = "Bundler module resolution via oxc_resolver + module semantics — serial; slice 1 shipped as M29"
 state = "incomplete"
 blocks_release = "true"
 owner = "./15-modules-imports.md"
-witness = "multi-file fixtures with package/tsconfig-resolved imports check correctly vs tsc (serial universe)"
-links = []
+witness = "multi-file Bundler fixtures resolve through pinned oxc_resolver and check vs tsc 6.0.3 in one serial universe; unsupported dependency/profile gaps are explicit"
+links = ["../decisions/0007-bundler-resolution-via-oxc-resolver.md"]
 deps = []
 
 [[criterion]]

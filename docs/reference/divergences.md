@@ -509,6 +509,14 @@ resolved to provided `.ts` files; named imports, `import type`, exported declara
   (Backlog `14`, `15`, `38`, `43`, `52`.)
   <!-- div: id=modules/out-of-scope-resolution dir=over scope=design-oos owner=../backlog/15-modules-imports.md witness=../../tests/cases/m29_modules -->
 
+The 1.0 plan narrows that deferred resolver surface to `moduleResolution: "bundler"` and delegates
+physical resolution to `oxc_resolver` ([ADR-0007](../decisions/0007-bundler-resolution-via-oxc-resolver.md)).
+Typokat retains source-root accounting, module graph/import/export semantics, `.d.ts` checking,
+diagnostics, and determinism. Until backlog `15` lands, this is policy rather than implemented
+coverage. NodeNext/alternate profiles and known dependency gaps such as simplified `typesVersions`
+selection must remain explicit unsupported outcomes; they may not disappear behind the M29 local
+resolver or an error-type fallback.
+
 ## Intersection types (M31)
 
 Implemented (M31): an interned, canonicalized member-set node — the dual of union. Target
