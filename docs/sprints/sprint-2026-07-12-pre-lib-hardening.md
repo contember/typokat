@@ -270,3 +270,11 @@ the original Terra implementer and repeats the relevant independent gate before 
   and explicit documentation of the pre-existing union-callability gap (backlog `19`). Both final
   independent reviews passed. Evidence: `cargo fmt --check`; `cargo test` (326 passed, including
   enabled B70 conformance); `cargo clippy --all-targets -- -D warnings`; and `git diff --check`.
+- 2026-07-13 — WU5 closed **DEFER / no VM** under ADR-0001. At `a1bcc59`, the committed protocol
+  generated and preflight-validated 100k-line `flow` and `typelevel` corpora, then collected ten
+  fresh-process timings and three peak-RSS samples per tool/corpus. `samply` was attempted three
+  times for each corpus at 1000 Hz/25 iterations, but all six attempts failed before target start
+  because `kernel.perf_event_paranoid=4`; no privilege change was made. With evaluator-dispatch
+  self-time unavailable, the strict GO predicate cannot be proved, so the durable result is DEFER.
+  Raw measurements, commands, hashes, host/tool versions, and limitations are in
+  [`../archive/backlog-13-profiling-gate.md`](../archive/backlog-13-profiling-gate.md).

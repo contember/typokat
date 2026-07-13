@@ -593,11 +593,11 @@ deps = []
 id = "D-profiling-gate"
 track = "D"
 title = "Post-evaluator profiling gate decided either way with recorded numbers"
-state = "incomplete"
+state = "complete"
 blocks_release = "true"
-owner = "./13-bytecode-vm.md"
-witness = "tooling/bench numbers + a recorded go/defer decision (ADR-0001 governs the deferral)"
-links = ["../../tooling/bench/README.md"]
+owner = "shipped"
+witness = "2026-07-13 protocol at a1bcc59: 10-run flow/typelevel 100k timing + three RSS samples; six samply attempts blocked by perf_event_paranoid=4; strict ADR-0001 DEFER/no-VM outcome"
+links = ["../archive/backlog-13-profiling-gate.md", "../../tooling/bench/README.md", "../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md", "../sprints/sprint-2026-07-12-pre-lib-hardening.md"]
 deps = []
 
 [[criterion]]

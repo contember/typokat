@@ -26,8 +26,11 @@ including the static generic binder path, sprint-2026-07-12), and `22` (parenthe
 non-generic class-value construction facts, sprint-2026-07-12), and `56` (cycle-aware
 evaluator memoization + `TK2589`, sprint-2026-07-12), and `77` (callable-object
 `ReturnType` extraction, sprint-2026-07-12), and `70` (explicit receiver slots,
-contextual `ThisType<T>`, and receiver utilities, sprint-2026-07-12). The earlier shipped
-items are in [`../archive/`](../archive/README.md); the current pre-lib sprint remains active.
+contextual `ThisType<T>`, and receiver utilities, sprint-2026-07-12), and `13` (the ADR-0001
+profiling gate, strict DEFER/no-VM, WU5 of
+[`sprint-2026-07-12-pre-lib-hardening.md`](../sprints/sprint-2026-07-12-pre-lib-hardening.md),
+closed 2026-07-13). The earlier shipped items are in
+[`../archive/`](../archive/README.md); the current pre-lib sprint remains active.
 Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). How each item
@@ -58,7 +61,7 @@ the way there — its syntax gates flip OOS→IN as features land — not a nume
 
 ## Roadmap at a glance
 
-The active backlog has **36 items**: **28 checker-1.0 release blockers** and **8 non-blocking,
+The active backlog has **35 items**: **27 checker-1.0 release blockers** and **8 non-blocking,
 safe-direction parity items**. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml); the grouping below is the human roadmap view.
 
@@ -67,7 +70,7 @@ safe-direction parity items**. The release classification comes from
 | **A — model completeness** | 4 | L–XL | Eliminate silently-permissive model gaps; `43` directly unblocks full `lib.d.ts`. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
 | **C — soundness/parity tail** | 15 | S–L | Seven release-blocking known gaps plus eight safe-direction parity improvements. |
-| **D — scale + IDE** | 6 | XL | Preview, full standard library, resolver breadth, parallel identity, and incrementality. |
+| **D — scale + IDE** | 5 | XL | Preview, full standard library, resolver breadth, parallel identity, and incrementality. |
 
 Effort is a **relative planning estimate**, not a time promise:
 
@@ -134,7 +137,6 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 **D. Scale + IDE — the §12 phase ladder.**
 
 - **XL** · [`72`](72-real-project-preview-readiness.md) — public project CLI, pinned strict project, mutation pack, and differential CI ratchet.
-- **S gate / XL if triggered** · [`13`](13-bytecode-vm.md) — profile the evaluator; build a VM only if dispatch is the measured bottleneck.
 - **XL** · [`14`](14-libdts-loading.md) — full `lib.d.ts` and shared-prelude parallelism Stage 1 · blocked by `43`.
 - **XL** · [`15`](15-modules-imports.md) — NodeNext/package/tsconfig resolver breadth; the local-relative slice shipped as M29.
 - **XL** · [`16`](16-parallelism-type-universe.md) — deterministic parallel cross-file type identity · blocked by `14`, `15`.
@@ -151,7 +153,7 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 2. **Run the remaining model/lib prerequisite `43`.** Generic methods, calls, and construct
    signatures shipped with `41`; explicit `this`/`ThisType<T>` shipped with `70`; namespace and
    declaration merging is now the sole Track A blocker of `14`. Interleave B items and C's parity
-   tail as warm-ups. `13` (profiling gate) is cheap now that `tooling/bench/` exists.
+   tail as warm-ups. The `13` profiling gate closed DEFER/no-VM under ADR-0001.
 3. **Climb the full-project/scale ladder** (`14` → `15` → `16` → `17`), finishing the B/C
    remainder along the way. `14` + `15` must graduate the pinned deptective full-stack witness;
    the small `72` preview is not evidence for full resolver/lib fidelity.

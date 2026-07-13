@@ -26,17 +26,18 @@ decisions → reference → archive.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
 - [`sprint-2026-07-12-pre-lib-hardening.md`](sprints/sprint-2026-07-12-pre-lib-hardening.md) —
-  active; WU4 shipped `70`; four independently reviewed release blockers (`22`, `56`, `77`, `13`)
-  remain before the dedicated namespace/declaration-merging sprint.
+  active; WU1–WU5 shipped/decided `22`, `56`, `77`, `70`, and `13`; only WU6 final verification
+  and sprint closure remain.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Pre-lib hardening sprint active** — isolated spec/implementation/review loops for
-  aliased construction (`22`), evaluator cycles (`56`), callable-object `ReturnType`
-  inference (`77`), explicit `this`/`ThisType<T>` (`70`, shipped), and the profiling decision
-  (`13`). Namespace/declaration merging (`43`) is the sole remaining direct `lib.d.ts` prerequisite.
+- **Pre-lib hardening sprint active** — WU1–WU5 shipped/decided aliased construction (`22`),
+  evaluator cycles (`56`), callable-object `ReturnType` inference (`77`), explicit
+  `this`/`ThisType<T>` (`70`), and the profiling decision (`13`, DEFER/no-VM). Only WU6 final
+  verification and sprint closure remain; namespace/declaration merging (`43`) is the sole direct
+  `lib.d.ts` prerequisite.
 - **Generic methods (`41`) shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-generic-methods.md`](archive/sprint-2026-07-12-generic-methods.md)) —
   persistent generic method/call/construct binders now survive substitution and relate under a
@@ -96,5 +97,5 @@ decisions → reference → archive.
   the full dev-method loop (sprint archived — `53` CFG assignment loss, `55` template memo
   poisoning, `57` Tuple↔Array inference, `58` project scope-key collision, `61` class field
   initializers, all five reviews PASS). The follow-up quick-wins sprint then closed `64` `34`
-  `33` `54` `59`; the dedicated inference-policy sprint then closed `65`. The remaining C
-  silent-FN tail is now `56` `60` `62` `32` `21` `22` `66` `77`.
+  `33` `54` `59`; the dedicated inference-policy sprint then closed `65`. The current C
+  known-gap set is `60` `62` `32` `21` `66` `71` `78`.
