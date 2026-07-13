@@ -12,6 +12,216 @@ fn omit_this_parameter(interner: &mut Interner, argument: TypeId) -> TypeId {
 }
 
 #[test]
+fn inference_constraint_evaluation_preserves_function_metadata_while_evaluating_children() {
+    let mut interner = Interner::with_intrinsics();
+    let uppercase = interner.well_known().uppercase;
+    let parameter = TypeParamId(90_130);
+    let upper = |interner: &mut Interner, parameter: TypeParamId, text: &str| {
+        let literal = interner.intern_literal(LiteralValue::String(text.into()));
+        interner.intern_instantiation(uppercase, vec![(parameter, literal)])
+    };
+    let constraint = upper(&mut interner, parameter, "constraint");
+    let default = upper(&mut interner, parameter, "default");
+    let receiver = upper(&mut interner, parameter, "receiver");
+    let optional = upper(&mut interner, parameter, "optional");
+    let defaulted = upper(&mut interner, parameter, "defaulted");
+    let rest_element = upper(&mut interner, parameter, "rest");
+    let rest = interner.intern_array(rest_element);
+    let ret = upper(&mut interner, parameter, "return");
+    let second_default = upper(&mut interner, parameter, "second");
+    let first = TypeParamId(90_131);
+    let second = TypeParamId(90_132);
+    let source = interner.intern_function(FunctionType {
+        type_params: vec![
+            GenericTypeParam {
+                id: first,
+                constraint: Some(constraint),
+                default: Some(default),
+            },
+            GenericTypeParam {
+                id: second,
+                constraint: None,
+                default: Some(second_default),
+            },
+        ],
+        receiver: Some(receiver),
+        params: vec![
+            ParameterType::optional("optional", optional),
+            ParameterType::defaulted("defaulted", defaulted),
+            ParameterType::rest("tail", rest),
+        ],
+        ret,
+    });
+    let mut next = 90_133;
+
+    let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
+
+    assert!(!evaluation.exhausted);
+    assert!(!evaluation.cycle_detected);
+    assert_ne!(evaluation.result, source);
+    let constraint = interner.intern_literal(LiteralValue::String("CONSTRAINT".into()));
+    let default = interner.intern_literal(LiteralValue::String("DEFAULT".into()));
+    let second_default = interner.intern_literal(LiteralValue::String("SECOND".into()));
+    let receiver = interner.intern_literal(LiteralValue::String("RECEIVER".into()));
+    let optional = interner.intern_literal(LiteralValue::String("OPTIONAL".into()));
+    let defaulted = interner.intern_literal(LiteralValue::String("DEFAULTED".into()));
+    let rest_element = interner.intern_literal(LiteralValue::String("REST".into()));
+    let rest = interner.intern_array(rest_element);
+    let ret = interner.intern_literal(LiteralValue::String("RETURN".into()));
+    let function = interner
+        .store()
+        .function_type(evaluation.result)
+        .unwrap()
+        .clone();
+
+    assert_eq!(
+        function.type_params,
+        vec![
+            GenericTypeParam {
+                id: first,
+                constraint: Some(constraint),
+                default: Some(default),
+            },
+            GenericTypeParam {
+                id: second,
+                constraint: None,
+                default: Some(second_default),
+            },
+        ]
+    );
+    assert_eq!(function.receiver, Some(receiver));
+    assert_eq!(
+        function.params[0],
+        ParameterType::optional("optional", optional)
+    );
+    assert_eq!(
+        function.params[1],
+        ParameterType::defaulted("defaulted", defaulted)
+    );
+    assert_eq!(function.params[2], ParameterType::rest("tail", rest));
+    assert_eq!(function.ret, ret);
+
+    let unchanged = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: TypeParamId(90_134),
+            constraint: Some(receiver),
+            default: Some(default),
+        }],
+        receiver: Some(receiver),
+        params: vec![ParameterType::optional("optional", optional)],
+        ret,
+    });
+    let unchanged_evaluation = evaluate_inference_constraint(&mut interner, &mut next, unchanged);
+    assert_eq!(unchanged_evaluation.result, unchanged);
+    assert!(!unchanged_evaluation.exhausted);
+    assert!(!unchanged_evaluation.cycle_detected);
+}
+
+fn assert_recursive_function_binder_cycle_preserves_identity(in_constraint: bool) {
+    let mut interner = Interner::with_intrinsics();
+    let uppercase = interner.well_known().uppercase;
+    let recursive = interner.reserve_object();
+    let receiver_literal = interner.intern_literal(LiteralValue::String("receiver".into()));
+    let receiver =
+        interner.intern_instantiation(uppercase, vec![(TypeParamId(90_140), receiver_literal)]);
+    let (constraint, default) = if in_constraint {
+        (Some(recursive), None)
+    } else {
+        (None, Some(recursive))
+    };
+    let function = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: TypeParamId(90_141),
+            constraint,
+            default,
+        }],
+        receiver: Some(receiver),
+        params: vec![ParameterType::required(
+            "value",
+            interner.well_known().number,
+        )],
+        ret: interner.well_known().void,
+    });
+    interner.fill_object(
+        recursive,
+        ObjectType {
+            properties: vec![prop("back", function)],
+            ..Default::default()
+        },
+    );
+    let sibling_literal = interner.intern_literal(LiteralValue::String("sibling".into()));
+    let sibling =
+        interner.intern_instantiation(uppercase, vec![(TypeParamId(90_142), sibling_literal)]);
+    let source = interner.intern_object(ObjectType {
+        properties: vec![prop("function", function), prop("sibling", sibling)],
+        ..Default::default()
+    });
+    let mut next = 90_143;
+
+    let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
+
+    assert!(!evaluation.exhausted);
+    assert!(!evaluation.cycle_detected);
+    assert_ne!(evaluation.result, source);
+    let expected_sibling = interner.intern_literal(LiteralValue::String("SIBLING".into()));
+    let result = interner.store().object_type(evaluation.result).unwrap();
+    assert_eq!(result.property("function").unwrap().ty, function);
+    assert_eq!(result.property("sibling").unwrap().ty, expected_sibling);
+    assert_eq!(
+        interner
+            .store()
+            .object_type(recursive)
+            .unwrap()
+            .property("back")
+            .unwrap()
+            .ty,
+        function
+    );
+}
+
+#[test]
+fn inference_constraint_evaluation_preserves_constraint_cycle_identity() {
+    assert_recursive_function_binder_cycle_preserves_identity(true);
+}
+
+#[test]
+fn inference_constraint_evaluation_preserves_default_cycle_identity() {
+    assert_recursive_function_binder_cycle_preserves_identity(false);
+}
+
+#[test]
+fn inference_constraint_evaluation_discards_partial_function_on_pending_cycle() {
+    let mut interner = Interner::with_intrinsics();
+    let uppercase = interner.well_known().uppercase;
+    let literal = interner.intern_literal(LiteralValue::String("constraint".into()));
+    let changed_constraint =
+        interner.intern_instantiation(uppercase, vec![(TypeParamId(90_150), literal)]);
+    let (template, param, _) = maybe_loop_template(&mut interner);
+    let string = interner.well_known().string;
+    let pending_cycle = instantiate_one(&mut interner, template, param, string);
+    let source = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: TypeParamId(90_151),
+            constraint: Some(changed_constraint),
+            default: Some(pending_cycle),
+        }],
+        receiver: None,
+        params: Vec::new(),
+        ret: interner.well_known().void,
+    });
+    let mut next = 90_152;
+
+    let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
+
+    assert_eq!(
+        evaluation.result, source,
+        "a pending cycle after a changed child must not expose a partial function"
+    );
+    assert!(evaluation.exhausted);
+    assert!(evaluation.cycle_detected);
+}
+
+#[test]
 fn infer_rewrite_preserves_generic_metadata_and_signature_shape() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();

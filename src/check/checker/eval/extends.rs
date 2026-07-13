@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::repr::GenericTypeParam;
 
 pub(in crate::check) struct InferenceConstraintEvaluation {
     pub(in crate::check) result: TypeId,
@@ -31,6 +32,8 @@ struct InferenceConstraintEvaluator<'a> {
     next_type_param: &'a mut u32,
     memo: &'a mut FxHashMap<TypeId, TypeId>,
     in_progress: FxHashSet<TypeId>,
+    active_stack: Vec<TypeId>,
+    cycle_tainted: FxHashSet<TypeId>,
     exhausted: bool,
     cycle_detected: bool,
 }
@@ -46,13 +49,19 @@ impl<'a> InferenceConstraintEvaluator<'a> {
             next_type_param,
             memo,
             in_progress: FxHashSet::default(),
+            active_stack: Vec::new(),
+            cycle_tainted: FxHashSet::default(),
             exhausted: false,
             cycle_detected: false,
         }
     }
 
     fn evaluate(&mut self, ty: TypeId) -> TypeId {
-        if self.exhausted || self.in_progress.contains(&ty) {
+        if self.exhausted {
+            return ty;
+        }
+        if self.in_progress.contains(&ty) {
+            self.note_structural_cycle(ty);
             return ty;
         }
         match self.interner.store().tag(ty) {
@@ -73,6 +82,32 @@ impl<'a> InferenceConstraintEvaluator<'a> {
             | TypeTag::TypeParam
             | TypeTag::Infer
             | TypeTag::MappedValue => ty,
+        }
+    }
+
+    fn enter_structural(&mut self, ty: TypeId) {
+        let inserted = self.in_progress.insert(ty);
+        debug_assert!(inserted);
+        self.active_stack.push(ty);
+    }
+
+    fn leave_structural(&mut self, ty: TypeId) -> bool {
+        let popped = self.active_stack.pop();
+        debug_assert_eq!(popped, Some(ty));
+        let removed = self.in_progress.remove(&ty);
+        debug_assert!(removed);
+        self.cycle_tainted.remove(&ty)
+    }
+
+    fn note_structural_cycle(&mut self, ty: TypeId) {
+        let start = self.active_stack.iter().position(|&active| active == ty);
+        debug_assert!(
+            start.is_some(),
+            "every in-progress structural type is on the active stack"
+        );
+        if let Some(start) = start {
+            self.cycle_tainted
+                .extend(self.active_stack[start..].iter().copied());
         }
     }
 
@@ -107,7 +142,7 @@ impl<'a> InferenceConstraintEvaluator<'a> {
         let Some(object) = self.interner.store().object_type(ty).cloned() else {
             return ty;
         };
-        self.in_progress.insert(ty);
+        self.enter_structural(ty);
         let mut changed = false;
         let properties: Vec<PropertyType> = object
             .properties
@@ -146,9 +181,11 @@ impl<'a> InferenceConstraintEvaluator<'a> {
                 new_ty
             })
             .collect();
-        self.in_progress.remove(&ty);
+        let tainted = self.leave_structural(ty);
 
-        if changed {
+        if self.exhausted || tainted {
+            ty
+        } else if changed {
             self.interner.intern_object(ObjectType {
                 properties,
                 string_index,
@@ -165,8 +202,29 @@ impl<'a> InferenceConstraintEvaluator<'a> {
         let Some(function) = self.interner.store().function_type(ty).cloned() else {
             return ty;
         };
-        self.in_progress.insert(ty);
+        self.enter_structural(ty);
         let mut changed = false;
+        let type_params: Vec<GenericTypeParam> = function
+            .type_params
+            .into_iter()
+            .map(|type_param| {
+                let constraint = type_param.constraint.map(|constraint| {
+                    let new_constraint = self.evaluate(constraint);
+                    changed |= new_constraint != constraint;
+                    new_constraint
+                });
+                let default = type_param.default.map(|default| {
+                    let new_default = self.evaluate(default);
+                    changed |= new_default != default;
+                    new_default
+                });
+                GenericTypeParam {
+                    constraint,
+                    default,
+                    ..type_param
+                }
+            })
+            .collect();
         let receiver = function.receiver.map(|receiver| {
             let new_receiver = self.evaluate(receiver);
             changed |= new_receiver != receiver;
@@ -186,11 +244,13 @@ impl<'a> InferenceConstraintEvaluator<'a> {
             .collect();
         let ret = self.evaluate(function.ret);
         changed |= ret != function.ret;
-        self.in_progress.remove(&ty);
+        let tainted = self.leave_structural(ty);
 
-        if changed {
+        if self.exhausted || tainted {
+            ty
+        } else if changed {
             self.interner.intern_function(FunctionType {
-                type_params: Vec::new(),
+                type_params,
                 receiver,
                 params,
                 ret,
@@ -204,7 +264,7 @@ impl<'a> InferenceConstraintEvaluator<'a> {
         let Some(members) = self.interner.store().union_members(ty).map(|m| m.to_vec()) else {
             return ty;
         };
-        self.in_progress.insert(ty);
+        self.enter_structural(ty);
         let mut changed = false;
         let members: Vec<TypeId> = members
             .into_iter()
@@ -214,9 +274,11 @@ impl<'a> InferenceConstraintEvaluator<'a> {
                 new_ty
             })
             .collect();
-        self.in_progress.remove(&ty);
+        let tainted = self.leave_structural(ty);
 
-        if changed {
+        if self.exhausted || tainted {
+            ty
+        } else if changed {
             self.interner.union(members)
         } else {
             ty
@@ -232,7 +294,7 @@ impl<'a> InferenceConstraintEvaluator<'a> {
         else {
             return ty;
         };
-        self.in_progress.insert(ty);
+        self.enter_structural(ty);
         let mut changed = false;
         let members: Vec<TypeId> = members
             .into_iter()
@@ -242,9 +304,11 @@ impl<'a> InferenceConstraintEvaluator<'a> {
                 new_ty
             })
             .collect();
-        self.in_progress.remove(&ty);
+        let tainted = self.leave_structural(ty);
 
-        if changed {
+        if self.exhausted || tainted {
+            ty
+        } else if changed {
             self.interner.intersection(members)
         } else {
             ty
@@ -278,7 +342,7 @@ impl<'a> InferenceConstraintEvaluator<'a> {
         let Some(tuple) = self.interner.store().tuple_type(ty).cloned() else {
             return ty;
         };
-        self.in_progress.insert(ty);
+        self.enter_structural(ty);
         let mut changed = false;
         let elements: Vec<TypeId> = tuple
             .elements
@@ -294,9 +358,11 @@ impl<'a> InferenceConstraintEvaluator<'a> {
             changed |= new_ty != rest.ty;
             TupleRestType { ty: new_ty, ..rest }
         });
-        self.in_progress.remove(&ty);
+        let tainted = self.leave_structural(ty);
 
-        if changed {
+        if self.exhausted || tainted {
+            ty
+        } else if changed {
             self.interner
                 .intern_tuple_type(TupleType { elements, rest })
         } else {
