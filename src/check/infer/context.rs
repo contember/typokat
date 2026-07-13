@@ -232,22 +232,41 @@ impl InferenceContext {
         let Some(target_pairs) = property_pairs(interner.store(), target) else {
             return;
         };
+        // `property_pairs` preserves the stable name order established by both object
+        // interning paths. Reuse a same-name match so duplicate target names retain
+        // the prior first-source-member behavior.
+        let mut source_cursor = 0;
+        let mut previous_target_name: Option<&str> = None;
+        let mut previous_source_ty: Option<TypeId> = None;
         for (name, target_ty) in &target_pairs {
             #[cfg(test)]
             super::helpers::measure_inference(|measure| measure.object_target_properties += 1);
-            #[cfg(test)]
-            let source_property = source_pairs.iter().find(|(source_name, _)| {
-                super::helpers::measure_inference(|measure| {
-                    measure.object_source_property_comparisons += 1
-                });
-                source_name == name
-            });
-            #[cfg(not(test))]
-            let source_property = source_pairs
-                .iter()
-                .find(|(source_name, _)| source_name == name);
-            if let Some((_, source_ty)) = source_property {
-                self.infer(interner, *source_ty, *target_ty, candidates);
+            let source_ty = if previous_target_name == Some(name.as_str()) {
+                previous_source_ty
+            } else {
+                let found = loop {
+                    let Some((source_name, source_ty)) = source_pairs.get(source_cursor) else {
+                        break None;
+                    };
+                    #[cfg(test)]
+                    super::helpers::measure_inference(|measure| {
+                        measure.object_source_property_comparisons += 1
+                    });
+                    match source_name.cmp(name) {
+                        std::cmp::Ordering::Less => source_cursor += 1,
+                        std::cmp::Ordering::Equal => {
+                            source_cursor += 1;
+                            break Some(*source_ty);
+                        }
+                        std::cmp::Ordering::Greater => break None,
+                    }
+                };
+                previous_target_name = Some(name);
+                previous_source_ty = found;
+                found
+            };
+            if let Some(source_ty) = source_ty {
+                self.infer(interner, source_ty, *target_ty, candidates);
             }
         }
     }

@@ -340,3 +340,46 @@ One Terra writer owns the active worktree and makes one work unit's source chang
   `[92, 60, 59, 60, 60]ms` (median 60ms, range 59–92ms). Compared with WU4a's 7ms
   and 65ms medians, the control has no regression (0% at 10k and a 7.7% improvement
   at 100k), satisfying the ≤2% control condition.
+
+- **WU5b ordered inference-object matching (2026-07-13, working tree based at
+  `0222182`).** `InferenceContext::infer_objects` retains the existing two
+  `property_pairs` snapshots, including their name cloning and test-only snapshot
+  counters, and changes only matching over those ordered vectors to a monotonic
+  source cursor. It continues to visit target pairs in canonical order; a source-only
+  or target-only name contributes no candidate; and a retained same-name match gives
+  malformed duplicate target names the same first-source-member behavior as the
+  prior linear `find`. `property_pairs` receives the stable name order enforced by
+  both `Interner::intern_object` and `Interner::fill_object`. No relation product
+  code, relation cache/cycle behavior, call path, evaluator, candidate policy, or
+  snapshot allocation path changed.
+
+  The comparison counter now counts actual source-name comparisons. The exact
+  equal-shape formula changes from `count × width × (width + 1) / 2` to
+  `count × width`, so the two width-3 pairs change from `12` to `6` comparisons.
+  Direct tests cover source extras before/between/after target names, a missing
+  target name that contributes no candidate while later names still contribute,
+  stable internal duplicate source/target names, candidate order in target order,
+  and the observable call-site fixing result for duplicate names.
+
+  Five fresh release-process repetitions used
+  `for run in 1 2 3 4 5; do cargo test --release
+  measure_inference_hotpaths_release -- --ignored --nocapture; done` on Linux
+  6.17.0-40-generic, x86_64, rustc 1.95.0. Inference emitted identical counters on
+  every run: snapshot vectors `20,000/200,000`, entries `160,000/1,600,000`, name
+  bytes `1,760,000/17,600,000`, target properties `80,000/800,000`, and source-name
+  comparisons `80,000/800,000` at 10k/100k. Against WU4a's `360,000/3,600,000`
+  comparisons, this is a `77.8%` reduction at both scales, clearing the ≥20%
+  operation threshold. Raw elapsed samples were 10k `[5, 6, 6, 5, 6]ms` (median
+  6ms, range 5–6ms) and 100k `[57, 60, 61, 62, 57]ms` (median 60ms, range 57–62ms),
+  versus WU4a medians of 7ms and 65ms. Timings remain instrumented and
+  environment-dependent.
+
+  The relation control used the same five-process loop with
+  `measure_relation_hotpaths_release`. Its emitted work counters were exactly the
+  WU5a values in every run: stack keys/empty-context keys `10,000/100,000`, target
+  properties `80,000/800,000`, and source-name comparisons `80,000/800,000`—a 0%
+  control regression. Its raw elapsed samples were 10k `[3, 3, 3, 2, 2]ms` (median
+  3ms, range 2–3ms) and 100k `[37, 41, 35, 36, 32]ms` (median 36ms, range 32–41ms).
+  These overlap WU5a's 2–4ms and 31–36ms ranges, but their coarse millisecond
+  medians are not a meaningful ≤2% timing discriminator; the unchanged direct
+  operation counter is the control conclusion.

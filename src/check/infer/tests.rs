@@ -62,8 +62,134 @@ fn measure_inference_counts_actual_snapshots_and_property_scans() {
             object_snapshot_entries: 12,
             object_snapshot_name_bytes: 132,
             object_target_properties: 6,
-            object_source_property_comparisons: 12,
+            object_source_property_comparisons: 6,
         }
+    );
+}
+
+#[test]
+fn ordered_object_inference_cursor_preserves_candidates_and_duplicate_parity() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t_id = TypeParamId(90_402);
+    let t = interner.intern_type_param(t_id, "T");
+
+    // The input orders are deliberately scrambled; interning establishes the stable
+    // name order used by the cursor. Source-only names occur before, between, and
+    // after the target names.
+    let extras_source = interner.intern_object(ObjectType {
+        properties: vec![
+            prop("e", wk.boolean),
+            prop("b", wk.number),
+            prop("c", wk.boolean),
+            prop("a", wk.boolean),
+            prop("d", wk.string),
+        ],
+        ..Default::default()
+    });
+    let extras_target = interner.intern_object(ObjectType {
+        properties: vec![prop("d", t), prop("b", t)],
+        ..Default::default()
+    });
+
+    let missing_source = interner.intern_object(ObjectType {
+        properties: vec![prop("b", wk.number), prop("d", wk.string)],
+        ..Default::default()
+    });
+    let missing_target = interner.intern_object(ObjectType {
+        properties: vec![prop("d", t), prop("a", t), prop("b", t)],
+        ..Default::default()
+    });
+
+    // Reserved objects admit the internal duplicate-name shape. Stable sorting and
+    // first-match behavior mean both duplicate target members use the first source.
+    let duplicate_source = interner.reserve_object();
+    interner.fill_object(
+        duplicate_source,
+        ObjectType {
+            properties: vec![prop("d", wk.number), prop("d", wk.string)],
+            ..Default::default()
+        },
+    );
+    let duplicate_target = interner.reserve_object();
+    interner.fill_object(
+        duplicate_target,
+        ObjectType {
+            properties: vec![prop("d", t), prop("d", t)],
+            ..Default::default()
+        },
+    );
+
+    super::helpers::reset_inference_measure();
+    let mut candidates = Candidates::default();
+    infer_from_types_for_conditional(&mut interner, extras_source, extras_target, &mut candidates);
+    assert_eq!(
+        candidates.get(&t_id).map(|values| values.as_slice()),
+        Some(&[wk.number, wk.string][..]),
+        "target canonical order determines candidate contribution order",
+    );
+    assert_eq!(
+        super::helpers::inference_measure().object_target_properties,
+        2
+    );
+    assert_eq!(
+        super::helpers::inference_measure().object_source_property_comparisons,
+        4
+    );
+
+    super::helpers::reset_inference_measure();
+    let mut candidates = Candidates::default();
+    infer_from_types_for_conditional(
+        &mut interner,
+        missing_source,
+        missing_target,
+        &mut candidates,
+    );
+    assert_eq!(
+        candidates.get(&t_id).map(|values| values.as_slice()),
+        Some(&[wk.number, wk.string][..]),
+        "a missing target property contributes no candidate while later matches do",
+    );
+    assert_eq!(
+        super::helpers::inference_measure().object_target_properties,
+        3
+    );
+    assert_eq!(
+        super::helpers::inference_measure().object_source_property_comparisons,
+        3
+    );
+
+    super::helpers::reset_inference_measure();
+    let mut candidates = Candidates::default();
+    infer_from_types_for_conditional(
+        &mut interner,
+        duplicate_source,
+        duplicate_target,
+        &mut candidates,
+    );
+    assert_eq!(
+        candidates.get(&t_id).map(|values| values.as_slice()),
+        Some(&[wk.number, wk.number][..]),
+        "duplicate target names retain the prior first-source-member semantics",
+    );
+    assert_eq!(
+        super::helpers::inference_measure().object_source_property_comparisons,
+        1
+    );
+
+    let mut next_type_param = 90_403;
+    let fixed = infer_type_arguments(
+        &mut interner,
+        &mut next_type_param,
+        &[t_id],
+        &[duplicate_target],
+        &[duplicate_source],
+        &[],
+    );
+    assert_eq!(
+        fixed.get(&t_id).copied(),
+        Some(wk.number),
+        "duplicate candidates keep the existing first-source fixing result",
     );
 }
 
@@ -97,7 +223,7 @@ fn measure_inference_hotpaths_release() {
         assert_eq!(measure.object_target_properties, (count * WIDTH) as u64);
         assert_eq!(
             measure.object_source_property_comparisons,
-            (count * WIDTH * (WIDTH + 1) / 2) as u64
+            (count * WIDTH) as u64
         );
         println!(
             "WU4 inference count={count} width={WIDTH} elapsed_ms={} counters={measure:?}",
