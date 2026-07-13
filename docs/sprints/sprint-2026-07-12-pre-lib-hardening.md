@@ -261,3 +261,12 @@ the original Terra implementer and repeats the relevant independent gate before 
 - 2026-07-12 — WU4 checkpoint 2 verify-first amended the corpus: clean receiver controls
   no longer call `number.toFixed()` (which requires full `lib.d.ts`); direct typed
   assignments prove the receiver, and the string `ThisType` case now expects `TK2322`.
+- 2026-07-13 — WU4 closed. Spec amendment `0ed8688` strengthened the enabled B70 acceptance
+  corpus. The implementation adds an identity-bearing, substitution-aware receiver slot through
+  free/method/object-call/overload lowering, relation/cache traversal, generic call inference,
+  diagnostics, contextual `ThisType<T>`, and trusted `OmitThisParameter` evaluation. Review round
+  one found the generic `OmitThisParameter` guard must use effective constraints (never defaults);
+  the follow-up representation review required a receiver-only recursive generic relation witness
+  and explicit documentation of the pre-existing union-callability gap (backlog `19`). Both final
+  independent reviews passed. Evidence: `cargo fmt --check`; `cargo test` (326 passed, including
+  enabled B70 conformance); `cargo clippy --all-targets -- -D warnings`; and `git diff --check`.

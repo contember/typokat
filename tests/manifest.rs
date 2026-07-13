@@ -1007,16 +1007,19 @@ fn scope_inventory_rejects_unmarked_duplicate_and_wrong_tier_families() {
 // deps <-> blocked-by parity witnesses (table-driven).
 //
 // The `open-one` criterion owns backlog `14`, whose real `blocked-by` frontmatter
-// is `[43, 70]`; a matching `deps` array makes the base pass. Each mutation
+// is `[43]`; a matching `deps` array makes the base pass. Each mutation
 // then drifts one side and must be rejected unless a `deps_exception` justifies it.
 // ---------------------------------------------------------------------------
 
 fn deps_parity_base() -> String {
     valid_base()
-        .replace("owner = \"./43-namespaces-declaration-merging.md\"", "owner = \"./14-libdts-loading.md\"")
+        .replace(
+            "owner = \"./43-namespaces-declaration-merging.md\"",
+            "owner = \"./14-libdts-loading.md\"",
+        )
         .replace(
             "deps = []\n",
-            "deps = [\"./43-namespaces-declaration-merging.md\", \"./70-this-parameter-typing.md\"]\n",
+            "deps = [\"./43-namespaces-declaration-merging.md\"]\n",
         )
 }
 
@@ -1038,11 +1041,11 @@ fn rejects_deps_parity_drift() {
 
     let cases: Vec<(&str, String, &str)> = vec![
         (
-            // Claim 70 as the only dep while the owner's blocked-by lists 43/70 — 43 goes missing.
-            "14/70 drift (deps drop 43)",
+            // Drop the owner's only dependency.
+            "14 drift (deps drop 43)",
             deps_parity_base().replace(
-                "deps = [\"./43-namespaces-declaration-merging.md\", \"./70-this-parameter-typing.md\"]",
-                "deps = [\"./70-this-parameter-typing.md\"]",
+                "deps = [\"./43-namespaces-declaration-merging.md\"]",
+                "deps = []",
             ),
             "disagree with owner",
         ),
@@ -1050,8 +1053,8 @@ fn rejects_deps_parity_drift() {
             // Extra dep the owner's blocked-by does not list.
             "deps names an unlisted dependency",
             deps_parity_base().replace(
-                "\"./70-this-parameter-typing.md\"]",
-                "\"./70-this-parameter-typing.md\", \"./15-modules-imports.md\"]",
+                "deps = [\"./43-namespaces-declaration-merging.md\"]",
+                "deps = [\"./43-namespaces-declaration-merging.md\", \"./15-modules-imports.md\"]",
             ),
             "disagree with owner",
         ),
@@ -1060,7 +1063,7 @@ fn rejects_deps_parity_drift() {
             "deps on an owner with empty blocked-by",
             valid_base().replace(
                 "owner = \"./43-namespaces-declaration-merging.md\"\nwitness = \"spec-first corpus\"\nlinks = [\"../reference/divergences.md\"]\ndeps = []",
-                "owner = \"./43-namespaces-declaration-merging.md\"\nwitness = \"spec-first corpus\"\nlinks = [\"../reference/divergences.md\"]\ndeps = [\"./70-this-parameter-typing.md\"]",
+                "owner = \"./43-namespaces-declaration-merging.md\"\nwitness = \"spec-first corpus\"\nlinks = [\"../reference/divergences.md\"]\ndeps = [\"./15-modules-imports.md\"]",
             ),
             "disagree with owner",
         ),
@@ -1086,11 +1089,10 @@ fn rejects_deps_parity_drift() {
 #[test]
 fn deps_exception_permits_a_declared_slice() {
     // A drift with an explicit rationale is allowed (a deliberate dependency slice).
-    let text = deps_parity_base()
-        .replace(
-            "deps = [\"./43-namespaces-declaration-merging.md\", \"./70-this-parameter-typing.md\"]",
-            "deps = [\"./70-this-parameter-typing.md\"]\ndeps_exception = \"slice depends only on the this-parameter prerequisite\"",
-        );
+    let text = deps_parity_base().replace(
+        "deps = [\"./43-namespaces-declaration-merging.md\"]",
+        "deps = []\ndeps_exception = \"slice defers the namespace prerequisite\"",
+    );
     assert!(
         validate_deps_parity(&text, &backlog_dir()).is_ok(),
         "an explicit deps_exception must permit a declared slice"

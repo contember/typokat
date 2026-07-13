@@ -72,6 +72,7 @@ impl Interner {
     pub fn intern_function(&mut self, function: FunctionType) -> TypeId {
         let key = StructuralKey::Function {
             type_params: &function.type_params,
+            receiver: function.receiver,
             params: &function.params,
             ret: function.ret,
         };
@@ -79,6 +80,7 @@ impl Interner {
         if let Some(existing) = self.lookup(hash, |store, id| {
             store.function_type(id).is_some_and(|existing| {
                 existing.type_params == function.type_params
+                    && existing.receiver == function.receiver
                     && existing.ret == function.ret
                     && function_params_eq(&existing.params, &function.params)
             })

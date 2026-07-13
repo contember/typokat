@@ -577,6 +577,11 @@ impl<'a> ConditionalEvaluator<'a> {
                 };
                 let mut changed = false;
                 let mut new = function.clone();
+                new.receiver = function.receiver.map(|receiver| {
+                    let receiver = self.replace_mapped_value_rec(receiver, ctx);
+                    changed |= Some(receiver) != function.receiver;
+                    receiver
+                });
                 for param in &mut new.params {
                     let nt = self.replace_mapped_value_rec(param.ty, ctx);
                     changed |= nt != param.ty;

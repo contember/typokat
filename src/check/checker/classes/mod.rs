@@ -238,6 +238,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let ctor = match own_members.ctor_params {
             Some(params) => self.interner.intern_function(FunctionType {
                 type_params: Vec::new(),
+                receiver: None,
                 params,
                 ret: void_ty,
             }),
@@ -245,6 +246,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 Some(base_info) => base_info.ctor,
                 None => self.interner.intern_function(FunctionType {
                     type_params: Vec::new(),
+                    receiver: None,
                     params: Vec::new(),
                     ret: void_ty,
                 }),
@@ -271,6 +273,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .map(|params| {
                     self.interner.intern_function(FunctionType {
                         type_params: Vec::new(),
+                        receiver: None,
                         params,
                         ret: reserved,
                     })
@@ -285,6 +288,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .unwrap_or_default();
             vec![self.interner.intern_function(FunctionType {
                 type_params: Vec::new(),
+                receiver: None,
                 params,
                 ret: reserved,
             })]
@@ -495,6 +499,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                                     self.lower_signature_parameters(scope, &method.value.params);
                                 let signature = self.interner.intern_function(FunctionType {
                                     type_params: Vec::new(),
+                                    receiver: None,
                                     params,
                                     ret: self.interner.well_known().void,
                                 });
@@ -645,6 +650,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         if let Some(params) = &ctor_params {
             let implementation = self.interner.intern_function(FunctionType {
                 type_params: Vec::new(),
+                receiver: None,
                 params: params.clone(),
                 ret: self.interner.well_known().void,
             });
@@ -817,6 +823,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.lower_generic_signature_function_type(
             scope,
             func.type_parameters.as_deref(),
+            func.this_param.as_deref(),
             &func.params,
             func.return_type.as_deref(),
         )

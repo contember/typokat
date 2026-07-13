@@ -208,7 +208,7 @@ members, ambient declarations, or close the blocked real-project preview.
 - Namespaces, qualified names, and declaration merging — backlog
   [`43`](../backlog/43-namespaces-declaration-merging.md).
 - Explicit `this` parameters, receiver compatibility, and contextual `ThisType<T>` — backlog
-  [`70`](../backlog/70-this-parameter-typing.md).
+  `70` (subsequently shipped by WU4).
 - Optional methods/possibly-undefined calls — backlog
   [`49`](../backlog/49-possibly-undefined-family.md).
 - Packages, directory/re-export breadth, or other module resolution — backlog

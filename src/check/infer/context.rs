@@ -485,6 +485,11 @@ impl InferenceContext {
         let Some(target_fn) = interner.store().function_type(target).cloned() else {
             return;
         };
+        if let (Some(source_receiver), Some(target_receiver)) =
+            (source_fn.receiver, target_fn.receiver)
+        {
+            self.infer(interner, source_receiver, target_receiver, candidates);
+        }
         if let Some(rest_ty) = direct_infer_rest(&target_fn) {
             let captured = source_parameter_tuple(interner, &source_fn);
             self.infer(interner, captured, rest_ty, candidates);

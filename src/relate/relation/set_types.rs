@@ -92,7 +92,15 @@ impl<'a> Relater<'a> {
         let Some(members) = self.store.intersection_members(tgt) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
-        let members: Vec<TypeId> = members.to_vec();
+        let members: Vec<TypeId> = members
+            .iter()
+            .copied()
+            .filter(|member| {
+                self.well_known
+                    .this_type_operand(self.store, *member)
+                    .is_none()
+            })
+            .collect();
 
         for member in members {
             if let Relation::No(child) = self.relate(src, member, kind, assumed) {
@@ -125,7 +133,15 @@ impl<'a> Relater<'a> {
         let Some(members) = self.store.intersection_members(src) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
-        let members: Vec<TypeId> = members.to_vec();
+        let members: Vec<TypeId> = members
+            .iter()
+            .copied()
+            .filter(|member| {
+                self.well_known
+                    .this_type_operand(self.store, *member)
+                    .is_none()
+            })
+            .collect();
         // The merged-source recursion's own assume-true cycle guard, seeded empty and
         // scoped to THIS query — see `relate_source_members_to`.
         let mut in_flight: MergedInFlightSet = FxHashSet::default();

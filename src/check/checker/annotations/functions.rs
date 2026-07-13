@@ -51,6 +51,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 pass.with_indirection(|p| p.lower_annotation(scope, &return_type.type_annotation))?;
             Some(pass.interner.intern_function(FunctionType {
                 type_params,
+                receiver: None,
                 params,
                 ret,
             }))

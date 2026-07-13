@@ -261,6 +261,7 @@ fn push_node_children(
         }
         TypeTag::Function => {
             if let Some(f) = store.function_type(ty) {
+                stack.extend(f.receiver);
                 stack.extend(f.params.iter().map(|p| p.ty));
                 stack.push(f.ret);
             }

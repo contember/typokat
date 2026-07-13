@@ -89,6 +89,7 @@ impl DeclTypes {
 /// are checked. The reservation owns the stable generic ids and lowered signature;
 /// body checking later fills only an unannotated return type.
 pub(in crate::check::checker) struct FunctionSurface {
+    pub(in crate::check::checker) receiver: Option<TypeId>,
     pub(in crate::check::checker) params: Vec<crate::types::repr::ParameterType>,
     pub(in crate::check::checker) generic_params: Vec<crate::types::repr::GenericTypeParam>,
     pub(in crate::check::checker) type_param_frame: FxHashMap<String, TypeId>,

@@ -70,6 +70,8 @@ pub enum DiagnosticCode {
     /// Constructor of class is protected (constructed outside the class and its
     /// subclasses) — backlog 20.
     TK2674,
+    /// The call receiver is not assignable to an explicit `this` parameter.
+    TK2684,
     /// Cannot assign to a read-only property — M14.
     TK2540,
     /// Wrong number of call arguments (arity).
@@ -113,6 +115,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2654 => "TK2654",
             DiagnosticCode::TK2673 => "TK2673",
             DiagnosticCode::TK2674 => "TK2674",
+            DiagnosticCode::TK2684 => "TK2684",
             DiagnosticCode::TK2540 => "TK2540",
             DiagnosticCode::TK2554 => "TK2554",
             DiagnosticCode::TK2555 => "TK2555",
@@ -261,6 +264,19 @@ impl Diagnostic {
             severity: Severity::Error,
             message: format!(
                 "Property '{name}' is protected and only accessible within class and its subclasses."
+            ),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2684` explicit-`this` receiver error.
+    pub fn this_context_not_assignable(span: Span, source: &str, target: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2684,
+            severity: Severity::Error,
+            message: format!(
+                "The 'this' context of type '{source}' is not assignable to method's 'this' of type '{target}'."
             ),
             span,
             elaboration: Vec::new(),

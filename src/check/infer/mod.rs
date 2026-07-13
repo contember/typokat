@@ -36,8 +36,19 @@ struct CallSiteCandidate {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum CallSiteSource {
-    Argument { index: usize, occurrence: usize },
-    DirectRest { start: usize, occurrence: usize },
+    Argument {
+        index: usize,
+        occurrence: usize,
+    },
+    DirectRest {
+        start: usize,
+        occurrence: usize,
+    },
+    /// The explicit `this` receiver is a semantic inference input, never a
+    /// synthetic positional argument.
+    Receiver {
+        occurrence: usize,
+    },
 }
 
 struct CandidateContribution {
@@ -138,6 +149,7 @@ pub fn infer_type_arguments_from_params(
         params,
         args,
         fresh_args,
+        None,
     )
 }
 
@@ -153,8 +165,9 @@ pub fn infer_signature_type_arguments_from_params(
     params: &[ParameterType],
     args: &[TypeId],
     fresh_args: &[bool],
+    receiver: Option<(TypeId, TypeId)>,
 ) -> FxHashMap<TypeParamId, TypeId> {
-    let candidates = collect_call_site_candidates(interner, params, args, fresh_args);
+    let candidates = collect_call_site_candidates(interner, params, args, fresh_args, receiver);
     let exempt = fresh_exempt_params(&candidates);
     let constraints: FxHashMap<TypeParamId, Option<TypeId>> = type_params
         .iter()
@@ -169,6 +182,7 @@ fn collect_call_site_candidates(
     params: &[ParameterType],
     args: &[TypeId],
     fresh_args: &[bool],
+    receiver: Option<(TypeId, TypeId)>,
 ) -> CallSiteCandidates {
     let mut candidates: CallSiteCandidates = FxHashMap::default();
     let targets = inference_argument_targets(interner, params, args);
@@ -205,6 +219,16 @@ fn collect_call_site_candidates(
                 is_fresh,
             );
         }
+    }
+    if let Some((source, target)) = receiver {
+        let mut local: Candidates = FxHashMap::default();
+        infer_from_types_raw(interner, source, target, &mut local);
+        record_call_site_candidates(
+            &mut candidates,
+            local,
+            |occurrence| CallSiteSource::Receiver { occurrence },
+            false,
+        );
     }
     candidates
 }

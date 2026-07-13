@@ -117,12 +117,17 @@ pub enum IntrinsicKind {
     Lowercase,
     Capitalize,
     Uncapitalize,
+    /// Backlog 70 contextual-`this` marker. It is only meaningful as the base
+    /// of an instantiation inside a contextual intersection.
+    ThisType,
+    /// Backlog 70 trusted prelude specialization for `OmitThisParameter`.
+    OmitThisParameter,
 }
 
 impl IntrinsicKind {
     /// The full set in canonical interning order. Adding a kind here is the only
     /// place that defines the well-known id assignment.
-    pub const ALL: [IntrinsicKind; 14] = [
+    pub const ALL: [IntrinsicKind; 16] = [
         IntrinsicKind::Error,
         IntrinsicKind::Any,
         IntrinsicKind::Unknown,
@@ -137,6 +142,8 @@ impl IntrinsicKind {
         IntrinsicKind::Lowercase,
         IntrinsicKind::Capitalize,
         IntrinsicKind::Uncapitalize,
+        IntrinsicKind::ThisType,
+        IntrinsicKind::OmitThisParameter,
     ];
 
     /// Display name used by the type renderer (`tests/cases/README.md` →
@@ -160,6 +167,8 @@ impl IntrinsicKind {
             IntrinsicKind::Lowercase => "Lowercase",
             IntrinsicKind::Capitalize => "Capitalize",
             IntrinsicKind::Uncapitalize => "Uncapitalize",
+            IntrinsicKind::ThisType => "ThisType",
+            IntrinsicKind::OmitThisParameter => "OmitThisParameter",
         }
     }
 }
@@ -482,6 +491,9 @@ pub struct FunctionType {
     /// [`TypeParamType`] nodes for display only; ids, constraints, and defaults
     /// participate in the function's structural identity.
     pub type_params: Vec<GenericTypeParam>,
+    /// An explicit `this: T` receiver. It is not a positional call argument and
+    /// therefore does not contribute to arity or rest-parameter shape.
+    pub receiver: Option<TypeId>,
     pub params: Vec<ParameterType>,
     pub ret: TypeId,
 }

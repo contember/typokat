@@ -1,5 +1,7 @@
 use super::*;
-use crate::types::repr::{ClassId, LiteralValue, ObjectType, PropertyType, Visibility};
+use crate::types::repr::{
+    ClassId, FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, Visibility,
+};
 use crate::types::Interner;
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
@@ -149,6 +151,51 @@ fn optional_target_absent_ok_optional_source_to_required_fails() {
         }
         Relation::Yes => panic!("an optional source must NOT satisfy a required target"),
     }
+}
+
+/// Explicit receivers are non-positional but contravariant when both sides
+/// declare one; a receiverless signature remains compatible in either direction.
+#[test]
+fn function_receivers_are_contravariant_and_optional() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let wide = interner.intern_object(ObjectType {
+        properties: vec![prop("tag", wk.string)],
+        ..Default::default()
+    });
+    let narrow_tag = interner.intern_literal(LiteralValue::String("narrow".to_string()));
+    let narrow = interner.intern_object(ObjectType {
+        properties: vec![prop("tag", narrow_tag)],
+        ..Default::default()
+    });
+    let with_wide = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: Some(wide),
+        params: vec![ParameterType::required("value", wk.number)],
+        ret: wk.void,
+    });
+    let with_narrow = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: Some(narrow),
+        params: vec![ParameterType::required("value", wk.number)],
+        ret: wk.void,
+    });
+    let without_receiver = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("value", wk.number)],
+        ret: wk.void,
+    });
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+    assert!(rel.is_assignable(with_wide, with_narrow).is_yes());
+    assert!(matches!(
+        rel.is_assignable(with_narrow, with_wide),
+        Relation::No(_)
+    ));
+    assert!(rel.is_assignable(with_wide, without_receiver).is_yes());
+    assert!(rel.is_assignable(without_receiver, with_wide).is_yes());
 }
 
 /// M13 — nominal class typing via a `private`/`protected` member. A
@@ -518,47 +565,55 @@ fn function_variance_arity_and_void_return() {
     // Reference: `(x: number) => number`.
     let num_to_num = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![param("x", wk.number)],
         ret: wk.number,
     });
     // `(x: unknown) => number`.
     let unknown_to_num = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![param("x", wk.unknown)],
         ret: wk.number,
     });
     // `(x: string) => number`.
     let str_to_num = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![param("x", wk.string)],
         ret: wk.number,
     });
     // `() => number` (FEWER params than `num_to_num`).
     let nullary_to_num = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![],
         ret: wk.number,
     });
     // `(x: number) => string` (incompatible return).
     let num_to_str = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![param("x", wk.number)],
         ret: wk.string,
     });
     // `(x: number, y: number) => number` (MORE params than `num_to_num`).
     let two_to_num = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![param("x", wk.number), param("y", wk.number)],
         ret: wk.number,
     });
     // `() => void` and `() => number` for the void-return rule.
     let nullary_to_void = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![],
         ret: wk.void,
     });
     let nullary_to_num_only = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![],
         ret: wk.number,
     });
@@ -655,6 +710,7 @@ fn generic_function_binders_alpha_align_and_specialize_one_way() {
                 constraint,
                 default: None,
             }],
+            receiver: None,
             params: vec![ParameterType::required("value", param_ty)],
             ret: param_ty,
         })
@@ -672,6 +728,7 @@ fn generic_function_binders_alpha_align_and_specialize_one_way() {
             constraint: None,
             default: None,
         }],
+        receiver: None,
         params: vec![ParameterType::required("value", source_param_ty)],
         ret: source_param_ty,
     });
@@ -681,6 +738,7 @@ fn generic_function_binders_alpha_align_and_specialize_one_way() {
             constraint: None,
             default: None,
         }],
+        receiver: None,
         params: vec![ParameterType::required("value", target_param_ty)],
         ret: target_param_ty,
     });
@@ -688,6 +746,7 @@ fn generic_function_binders_alpha_align_and_specialize_one_way() {
     let string_bound = generic_identity(&mut interner, TypeParamId(10_004), "U", Some(wk.string));
     let specific_string = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::required("value", wk.string)],
         ret: wk.string,
     });
@@ -736,6 +795,7 @@ fn construct_signature_extra_source_binders_follow_return_occurrence_rules() {
     ) -> TypeId {
         let signature = interner.intern_function(FunctionType {
             type_params,
+            receiver: None,
             params: vec![ParameterType::required("value", parameter)],
             ret,
         });
@@ -872,6 +932,7 @@ fn recursive_construct_signature_extra_source_return_binder_is_order_independent
                     default: None,
                 },
             ],
+            receiver: None,
             params: vec![ParameterType::required("value", source_shared)],
             ret: source_extra,
         });
@@ -881,6 +942,7 @@ fn recursive_construct_signature_extra_source_return_binder_is_order_independent
                 constraint: None,
                 default: None,
             }],
+            receiver: None,
             params: vec![ParameterType::required("value", target_shared)],
             ret: target_shared,
         });
@@ -925,26 +987,43 @@ fn recursive_construct_signature_extra_source_return_binder_is_order_independent
     assert_eq!(first_order, second_order);
 }
 
-/// B41 — recursive generic signatures retain the existing cycle rule while the
+/// B70 — recursive generic receivers retain the existing cycle rule while the
 /// binder-local child verdicts stay isolated from cache/query ordering.
+///
+/// The generic binder occurs only in the receiver. Positional parameters and
+/// returns are fixed, so the failing verdict below can only come from receiver
+/// comparison.
 #[test]
 fn recursive_generic_signature_relations_are_order_independent() {
     use crate::types::repr::{FunctionType, GenericTypeParam, ParameterType, TypeParamId};
 
-    fn generic_identity(
+    fn generic_receiver(
         interner: &mut Interner,
         id: TypeParamId,
-        constraint: Option<TypeId>,
+        recursive_self: TypeId,
+        tag: TypeId,
     ) -> TypeId {
         let param_ty = interner.intern_type_param(id, "T");
+        let receiver = interner.intern_object(ObjectType {
+            properties: vec![
+                prop("next", recursive_self),
+                prop("tag", tag),
+                prop("value", param_ty),
+            ],
+            ..Default::default()
+        });
         interner.intern_function(FunctionType {
             type_params: vec![GenericTypeParam {
                 id,
-                constraint,
+                constraint: None,
                 default: None,
             }],
-            params: vec![ParameterType::required("value", param_ty)],
-            ret: param_ty,
+            receiver: Some(receiver),
+            params: vec![ParameterType::required(
+                "value",
+                interner.well_known().number,
+            )],
+            ret: interner.well_known().string,
         })
     }
 
@@ -956,10 +1035,10 @@ fn recursive_generic_signature_relations_are_order_independent() {
             interner.reserve_object(),
             interner.reserve_object(),
         );
-        let left_map = generic_identity(interner, TypeParamId(10_101), None);
-        let right_map = generic_identity(interner, TypeParamId(10_102), None);
-        let number_map = generic_identity(interner, TypeParamId(10_103), Some(wk.number));
-        let string_map = generic_identity(interner, TypeParamId(10_104), Some(wk.string));
+        let left_map = generic_receiver(interner, TypeParamId(10_101), left, wk.unknown);
+        let right_map = generic_receiver(interner, TypeParamId(10_102), right, wk.unknown);
+        let number_map = generic_receiver(interner, TypeParamId(10_103), number, wk.number);
+        let string_map = generic_receiver(interner, TypeParamId(10_104), string, wk.string);
         for (object, map) in [
             (left, left_map),
             (right, right_map),
@@ -1043,11 +1122,13 @@ fn recursive_generic_pair(
         RecursiveGenericShape::Direct => {
             let left_map = interner.intern_function(FunctionType {
                 type_params: vec![generic_param(left_outer_id, left_outer_constraint)],
+                receiver: None,
                 params: vec![ParameterType::required("value", left)],
                 ret: left,
             });
             let right_map = interner.intern_function(FunctionType {
                 type_params: vec![generic_param(right_outer_id, right_outer_constraint)],
+                receiver: None,
                 params: vec![ParameterType::required("value", right)],
                 ret: right,
             });
@@ -1058,11 +1139,13 @@ fn recursive_generic_pair(
             let right_payload = payload(interner, right, right_outer);
             let left_map = interner.intern_function(FunctionType {
                 type_params: vec![generic_param(left_outer_id, left_outer_constraint)],
+                receiver: None,
                 params: vec![ParameterType::required("value", left_payload)],
                 ret: left_payload,
             });
             let right_map = interner.intern_function(FunctionType {
                 type_params: vec![generic_param(right_outer_id, right_outer_constraint)],
+                receiver: None,
                 params: vec![ParameterType::required("value", right_payload)],
                 ret: right_payload,
             });
@@ -1079,21 +1162,25 @@ fn recursive_generic_pair(
             let right_output = payload(interner, right, right_callback);
             let left_callback = interner.intern_function(FunctionType {
                 type_params: vec![generic_param(left_callback_id, None)],
+                receiver: None,
                 params: vec![ParameterType::required("value", left_input)],
                 ret: left_output,
             });
             let right_callback = interner.intern_function(FunctionType {
                 type_params: vec![generic_param(right_callback_id, None)],
+                receiver: None,
                 params: vec![ParameterType::required("value", right_input)],
                 ret: right_output,
             });
             let left_map = interner.intern_function(FunctionType {
                 type_params: vec![generic_param(left_outer_id, left_outer_constraint)],
+                receiver: None,
                 params: vec![ParameterType::required("callback", left_callback)],
                 ret: left_input,
             });
             let right_map = interner.intern_function(FunctionType {
                 type_params: vec![generic_param(right_outer_id, right_outer_constraint)],
+                receiver: None,
                 params: vec![ParameterType::required("callback", right_callback)],
                 ret: right_input,
             });
@@ -1333,21 +1420,25 @@ fn function_optional_and_rest_shape_assignability() {
 
     let required = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![req("a", wk.number), req("b", wk.string)],
         ret: wk.void,
     });
     let optional = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![req("a", wk.number), ParameterType::optional("b", wk.string)],
         ret: wk.void,
     });
     let rest = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![req("a", wk.number), ParameterType::rest("b", string_arr)],
         ret: wk.void,
     });
     let number_rest = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![req("a", wk.number), ParameterType::rest("b", number_arr)],
         ret: wk.void,
     });

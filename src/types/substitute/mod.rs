@@ -114,6 +114,7 @@ pub fn instantiate_function(
     let Some(function) = interner.store().function_type(ty) else {
         return ty;
     };
+    let receiver = function.receiver;
     let params = function.params.clone();
     let ret = function.ret;
     let mut substitution = Substitution::new(map);
@@ -125,8 +126,10 @@ pub fn instantiate_function(
         })
         .collect();
     let ret = substitution.apply(interner, ret);
+    let receiver = receiver.map(|receiver| substitution.apply(interner, receiver));
     interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver,
         params,
         ret,
     })

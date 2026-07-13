@@ -17,18 +17,53 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(self.interner.union(lowered))
     }
 
-    /// Lower `A & B & …` to a canonical interned intersection. Any unlowerable
-    /// member aborts the whole annotation; dropping it would mis-state the type.
+    /// Lower `A & B & …` to a canonical interned intersection. A contextual
+    /// `ThisType<T>` marker retains only the first syntactic occurrence before
+    /// canonical interning erases member order; later markers are intentionally
+    /// transparent in the bounded B70 model.
     pub(super) fn lower_intersection_annotation(
         &mut self,
         scope: ScopeId,
         members: &[TSType<'_>],
     ) -> Option<TypeId> {
-        let mut lowered: Vec<TypeId> = Vec::with_capacity(members.len());
+        let mut structural: Vec<TypeId> = Vec::with_capacity(members.len());
+        let mut this_type = None;
         for member in members {
-            lowered.push(self.lower_annotation(scope, member)?);
+            let lowered_member = self.lower_annotation(scope, member)?;
+            self.extract_contextual_this_members(lowered_member, &mut structural, &mut this_type);
         }
-        Some(self.interner.intersection(lowered))
+        if let Some(this_type) = this_type {
+            structural.push(this_type);
+        }
+        Some(self.interner.intersection(structural))
+    }
+
+    /// Flatten only contextual-intersection operands before canonical interning so
+    /// the first syntactic `ThisType` survives aliases and nested intersections.
+    fn extract_contextual_this_members(
+        &self,
+        ty: TypeId,
+        structural: &mut Vec<TypeId>,
+        this_type: &mut Option<TypeId>,
+    ) {
+        if self
+            .interner
+            .well_known()
+            .this_type_operand(self.interner.store(), ty)
+            .is_some()
+        {
+            if this_type.is_none() {
+                *this_type = Some(ty);
+            }
+            return;
+        }
+        if let Some(members) = self.interner.store().intersection_members(ty) {
+            for &member in members {
+                self.extract_contextual_this_members(member, structural, this_type);
+            }
+            return;
+        }
+        structural.push(ty);
     }
 
     /// Lower `[A, B, …]` to an ordered interned tuple; `[]` is the empty tuple.
@@ -206,6 +241,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         type_parameter_decl: Option<&TSTypeParameterDeclaration<'_>>,
+        this_param: Option<&TSThisParameter<'_>>,
         params: &FormalParameters<'_>,
         return_type: &TSType<'_>,
     ) -> Option<TypeId> {
@@ -213,10 +249,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let frame = self.build_type_param_frame(type_parameter_decl, &ids);
         self.with_type_params(frame, |pass| {
             let type_params = pass.lower_signature_type_params(scope, type_parameter_decl, &ids);
+            let receiver = pass.lower_this_parameter(scope, this_param)?;
             let params = pass.lower_strict_signature_parameters(scope, params, true)?;
             let ret = pass.with_indirection(|p| p.lower_annotation(scope, return_type))?;
             Some(pass.interner.intern_function(FunctionType {
                 type_params,
+                receiver,
                 params,
                 ret,
             }))

@@ -16,7 +16,7 @@ use oxc_ast::ast::{
     Expression, FormalParameters, TSCallSignatureDeclaration, TSConditionalType,
     TSConstructSignatureDeclaration, TSConstructorType, TSInferType, TSLiteral, TSMappedType,
     TSMappedTypeModifierOperator, TSMethodSignature, TSMethodSignatureKind, TSSignature,
-    TSTemplateLiteralType, TSTupleElement, TSType, TSTypeAnnotation, TSTypeName,
+    TSTemplateLiteralType, TSThisParameter, TSTupleElement, TSType, TSTypeAnnotation, TSTypeName,
     TSTypeOperatorOperator, UnaryOperator,
 };
 use oxc_span::GetSpan;
@@ -81,6 +81,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 return self.lower_generic_function_annotation(
                     scope,
                     func.type_parameters.as_deref(),
+                    func.this_param.as_deref(),
                     &func.params,
                     &func.return_type.type_annotation,
                 );

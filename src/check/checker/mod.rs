@@ -149,7 +149,7 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
     } = prelude_pass;
     next_type_param = prelude_next_type_param;
 
-    // Seed string intrinsic aliases after their constraints have been recorded normally.
+    // Seed trusted intrinsic aliases after their constraints have been recorded normally.
     {
         let wk = interner.well_known();
         for (name, marker) in [
@@ -157,6 +157,8 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
             ("Lowercase", wk.lowercase),
             ("Capitalize", wk.capitalize),
             ("Uncapitalize", wk.uncapitalize),
+            ("ThisType", wk.this_type),
+            ("OmitThisParameter", wk.omit_this_parameter),
         ] {
             if let Some(decl_id) = type_decl_id(&binder, binder.prelude_module, name) {
                 if let Some(slot) = type_resolved.get_mut(decl_id.index()) {
@@ -360,7 +362,7 @@ pub fn check_project_programs<'ast>(
     } = prelude_pass;
     next_type_param = prelude_next_type_param;
 
-    seed_string_intrinsics(interner, &binder, &mut type_resolved);
+    seed_prelude_intrinsics(interner, &binder, &mut type_resolved);
 
     let mut type_decls: Vec<TypeDecl<'ast>> = prelude_params
         .into_iter()
@@ -681,7 +683,7 @@ fn seed_resolved_type<'ast>(
     }
 }
 
-fn seed_string_intrinsics(
+fn seed_prelude_intrinsics(
     interner: &Interner,
     binder: &Binder,
     type_resolved: &mut [Option<TypeId>],
@@ -692,6 +694,8 @@ fn seed_string_intrinsics(
         ("Lowercase", wk.lowercase),
         ("Capitalize", wk.capitalize),
         ("Uncapitalize", wk.uncapitalize),
+        ("ThisType", wk.this_type),
+        ("OmitThisParameter", wk.omit_this_parameter),
     ] {
         if let Some(decl_id) = type_decl_id(binder, binder.prelude_module, name) {
             if let Some(slot) = type_resolved.get_mut(decl_id.index()) {

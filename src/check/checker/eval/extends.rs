@@ -167,6 +167,11 @@ impl<'a> InferenceConstraintEvaluator<'a> {
         };
         self.in_progress.insert(ty);
         let mut changed = false;
+        let receiver = function.receiver.map(|receiver| {
+            let new_receiver = self.evaluate(receiver);
+            changed |= new_receiver != receiver;
+            new_receiver
+        });
         let params: Vec<ParameterType> = function
             .params
             .into_iter()
@@ -186,6 +191,7 @@ impl<'a> InferenceConstraintEvaluator<'a> {
         if changed {
             self.interner.intern_function(FunctionType {
                 type_params: Vec::new(),
+                receiver,
                 params,
                 ret,
             })
@@ -460,6 +466,7 @@ impl<'a> ConditionalEvaluator<'a> {
             TypeTag::Function => match store.function_type(ty) {
                 Some(f) => {
                     let mut out: Vec<TypeId> = f.params.iter().map(|p| p.ty).collect();
+                    out.extend(f.receiver);
                     out.push(f.ret);
                     out
                 }

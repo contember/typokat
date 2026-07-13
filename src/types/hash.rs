@@ -26,10 +26,11 @@ pub enum StructuralKey<'a> {
         call_signatures: &'a [TypeId],
         construct_signatures: &'a [TypeId],
     },
-    /// A function type, keyed over its ordered generic binders, its **positional**
-    /// parameter list (never sorted), and return type.
+    /// A function type, keyed over its ordered generic binders, optional non-positional
+    /// receiver, positional parameter list (never sorted), and return type.
     Function {
         type_params: &'a [GenericTypeParam],
+        receiver: Option<TypeId>,
         params: &'a [ParameterType],
         ret: TypeId,
     },
@@ -166,6 +167,7 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
         }
         StructuralKey::Function {
             type_params,
+            receiver,
             params,
             ret,
         } => {
@@ -176,6 +178,7 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
                 param.constraint.map(|ty| ty.0).hash(&mut h);
                 param.default.map(|ty| ty.0).hash(&mut h);
             }
+            receiver.map(|ty| ty.0).hash(&mut h);
             // Arity first so a shorter parameter list cannot collide with a
             // prefix of a longer one under the streaming hasher.
             params.len().hash(&mut h);

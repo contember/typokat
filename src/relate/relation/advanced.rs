@@ -52,6 +52,7 @@ impl<'a> Relater<'a> {
                 }
                 TypeTag::Function => {
                     if let Some(f) = self.store.function_type(t) {
+                        stack.extend(f.receiver);
                         stack.extend(f.params.iter().map(|p| p.ty));
                         stack.push(f.ret);
                     }
@@ -310,4 +311,27 @@ fn template_subsumes(store: &Store, src: TypeId, tgt: TypeId) -> bool {
         return src_prefix.starts_with(tgt_prefix) && src_suffix.ends_with(tgt_suffix);
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::repr::{FunctionType, ParameterType};
+    use crate::types::Interner;
+
+    #[test]
+    fn deferred_conditional_infer_walks_function_receivers() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let receiver_infer = interner.intern_infer(0);
+        let function = interner.intern_function(FunctionType {
+            type_params: Vec::new(),
+            receiver: Some(receiver_infer),
+            params: vec![ParameterType::required("value", wk.number)],
+            ret: wk.void,
+        });
+        let relater = Relater::new(interner.store(), wk);
+
+        assert!(relater.contains_infer(function));
+    }
 }

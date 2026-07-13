@@ -31,14 +31,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         );
     }
 
-    /// Lower a method signature with a fresh nested method frame. Explicit `this`
-    /// parameters and optional methods remain deferred.
+    /// Lower a method signature with a fresh nested method frame. Optional methods
+    /// remain deferred.
     pub(in crate::check::checker) fn lower_method_signature_property(
         &mut self,
         scope: ScopeId,
         sig: &TSMethodSignature<'_>,
     ) -> Option<PropertyType> {
-        if sig.kind != TSMethodSignatureKind::Method || sig.this_param.is_some() || sig.optional {
+        if sig.kind != TSMethodSignatureKind::Method || sig.optional {
             return None;
         }
 
@@ -46,6 +46,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let ty = self.lower_generic_strict_signature_function_type(
             scope,
             sig.type_parameters.as_deref(),
+            sig.this_param.as_deref(),
             &sig.params,
             sig.return_type.as_deref(),
         )?;
@@ -67,14 +68,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             if sig.key.static_name().as_deref() != Some(name) {
                 continue;
             }
-            if sig.kind != TSMethodSignatureKind::Method || sig.this_param.is_some() || sig.optional
-            {
+            if sig.kind != TSMethodSignatureKind::Method || sig.optional {
                 unsupported = true;
                 continue;
             }
             let signature = self.lower_generic_strict_signature_function_type(
                 scope,
                 sig.type_parameters.as_deref(),
+                sig.this_param.as_deref(),
                 &sig.params,
                 sig.return_type.as_deref(),
             )?;
@@ -96,19 +97,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         Some(PropertyType::public(name.to_string(), overload_ty))
     }
 
-    /// Lower a call signature with represented optional/default/rest shape. Explicit
-    /// `this` parameters remain out of subset.
+    /// Lower a call signature with represented optional/default/rest shape.
     pub(in crate::check::checker) fn lower_call_signature(
         &mut self,
         scope: ScopeId,
         sig: &TSCallSignatureDeclaration<'_>,
     ) -> Option<TypeId> {
-        if sig.this_param.is_some() {
-            return None;
-        }
         self.lower_generic_strict_signature_function_type(
             scope,
             sig.type_parameters.as_deref(),
+            sig.this_param.as_deref(),
             &sig.params,
             sig.return_type.as_deref(),
         )
@@ -135,6 +133,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         type_parameter_decl: Option<&TSTypeParameterDeclaration<'_>>,
+        this_param: Option<&TSThisParameter<'_>>,
         params: &FormalParameters<'_>,
         return_type: Option<&TSTypeAnnotation<'_>>,
     ) -> Option<TypeId> {
@@ -142,6 +141,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let frame = self.build_type_param_frame(type_parameter_decl, &ids);
         self.with_type_params(frame, |pass| {
             let type_params = pass.lower_signature_type_params(scope, type_parameter_decl, &ids);
+            let receiver = pass.lower_this_parameter(scope, this_param)?;
             let params = pass.lower_signature_parameters(scope, params);
             let ret = match return_type {
                 Some(ann) => pass.lower_annotation(scope, &ann.type_annotation)?,
@@ -149,6 +149,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             };
             Some(pass.interner.intern_function(FunctionType {
                 type_params,
+                receiver,
                 params,
                 ret,
             }))
@@ -159,6 +160,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         type_parameter_decl: Option<&TSTypeParameterDeclaration<'_>>,
+        this_param: Option<&TSThisParameter<'_>>,
         params: &FormalParameters<'_>,
         return_type: Option<&TSTypeAnnotation<'_>>,
     ) -> Option<TypeId> {
@@ -166,6 +168,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let frame = self.build_type_param_frame(type_parameter_decl, &ids);
         self.with_type_params(frame, |pass| {
             let type_params = pass.lower_signature_type_params(scope, type_parameter_decl, &ids);
+            let receiver = pass.lower_this_parameter(scope, this_param)?;
             let params = pass.lower_strict_signature_parameters(scope, params, false)?;
             let ret = match return_type {
                 Some(ann) => pass.lower_annotation(scope, &ann.type_annotation)?,
@@ -173,6 +176,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             };
             Some(pass.interner.intern_function(FunctionType {
                 type_params,
+                receiver,
                 params,
                 ret,
             }))
@@ -215,6 +219,21 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             lowered.push(ParameterType::rest(name, ty));
         }
         lowered
+    }
+
+    /// Lower the non-positional explicit receiver of a function-like signature.
+    pub(in crate::check::checker) fn lower_this_parameter(
+        &mut self,
+        scope: ScopeId,
+        this_param: Option<&TSThisParameter<'_>>,
+    ) -> Option<Option<TypeId>> {
+        let Some(this_param) = this_param else {
+            return Some(None);
+        };
+        let annotation = this_param.type_annotation.as_ref()?;
+        Some(Some(
+            self.lower_annotation(scope, &annotation.type_annotation)?,
+        ))
     }
 
     pub(in crate::check::checker) fn overloaded_method_names(

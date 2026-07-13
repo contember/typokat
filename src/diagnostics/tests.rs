@@ -144,11 +144,13 @@ fn parameter_chain_names_parameter_and_nests_leaf() {
 
     let str_to_num = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::required("x", wk.string)],
         ret: wk.number,
     });
     let num_to_num = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::required("x", wk.number)],
         ret: wk.number,
     });
@@ -262,6 +264,7 @@ fn array_type_renders_with_parenthesized_element() {
     // A function element IS parenthesized.
     let func = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::required("x", wk.number)],
         ret: wk.string,
     });
@@ -281,6 +284,7 @@ fn function_signature_shape_renders_optional_and_rest_params() {
     let string_array = interner.intern_array(wk.string);
     let func = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![
             ParameterType::required("x", wk.number),
             ParameterType::optional("y", wk.boolean),
@@ -296,6 +300,23 @@ fn function_signature_shape_renders_optional_and_rest_params() {
 }
 
 #[test]
+fn function_signature_renders_receiver_before_positional_params() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let func = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: Some(wk.string),
+        params: vec![ParameterType::required("value", wk.number)],
+        ret: wk.void,
+    });
+
+    assert_eq!(
+        render_type(interner.store(), func, false),
+        "(this: string, value: number) => void"
+    );
+}
+
+#[test]
 fn generic_function_signature_renders_persistent_binders() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
@@ -306,6 +327,7 @@ fn generic_function_signature_renders_persistent_binders() {
             constraint: Some(wk.number),
             default: Some(wk.string),
         }],
+        receiver: None,
         params: vec![ParameterType::required("value", t)],
         ret: t,
     });

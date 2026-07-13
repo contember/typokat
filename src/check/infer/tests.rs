@@ -217,12 +217,14 @@ fn infers_through_function_parameter() {
     // Parameter type `(x: T) => T`.
     let target = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::required("x", t)],
         ret: t,
     });
     // Argument type `(x: number) => number`.
     let source = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::required("x", wk.number)],
         ret: wk.number,
     });
@@ -243,6 +245,38 @@ fn infers_through_function_parameter() {
     );
 }
 
+/// A function receiver is a structural child for inference but never a positional
+/// call argument.
+#[test]
+fn infers_through_function_receiver() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(0), "T");
+    let target = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: Some(t),
+        params: vec![ParameterType::required("value", wk.unknown)],
+        ret: wk.unknown,
+    });
+    let source = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: Some(wk.number),
+        params: vec![ParameterType::required("value", wk.unknown)],
+        ret: wk.unknown,
+    });
+    let mut next_type_param = 1;
+
+    let map = infer_type_arguments(
+        &mut interner,
+        &mut next_type_param,
+        &[TypeParamId(0)],
+        &[target],
+        &[source],
+        &[],
+    );
+    assert_eq!(map.get(&TypeParamId(0)).copied(), Some(wk.number));
+}
+
 #[test]
 fn conditional_infer_callable_object_uses_last_call_signature() {
     let mut interner = Interner::with_intrinsics();
@@ -250,16 +284,19 @@ fn conditional_infer_callable_object_uses_last_call_signature() {
     let r = interner.intern_type_param(TypeParamId(0), "R");
     let target = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: Vec::new(),
         ret: r,
     });
     let first = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::required("value", wk.string)],
         ret: wk.number,
     });
     let last = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::required("value", wk.number)],
         ret: wk.string,
     });
@@ -378,6 +415,7 @@ fn call_site_candidates_remember_argument_sources() {
         ],
         &[one, s],
         &[true, false],
+        None,
     );
 
     let cands = candidates
@@ -418,6 +456,7 @@ fn call_site_tuple_expansion_keeps_distinct_occurrences() {
         &[ParameterType::required("items", t_array)],
         &[tuple],
         &[false],
+        None,
     );
 
     let cands = candidates
@@ -618,6 +657,7 @@ fn call_site_rest_array_candidates_keep_argument_sources() {
         &[ParameterType::rest("args", t_array)],
         &[one, two],
         &[false, false],
+        None,
     );
 
     let cands = candidates
@@ -758,6 +798,7 @@ fn conditional_function_rest_infer_captures_parameter_tuple() {
     let a = interner.intern_type_param(TypeParamId(0), "A");
     let source = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![
             ParameterType::required("x", wk.string),
             ParameterType::required("y", wk.number),
@@ -766,6 +807,7 @@ fn conditional_function_rest_infer_captures_parameter_tuple() {
     });
     let target = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::rest("args", a)],
         ret: wk.unknown,
     });

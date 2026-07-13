@@ -500,9 +500,12 @@ impl<'a> Relater<'a> {
         parameter: TypeParamId,
     ) -> bool {
         function
-            .params
-            .iter()
-            .any(|slot| self.type_contains_type_param(slot.ty, parameter))
+            .receiver
+            .is_some_and(|receiver| self.type_contains_type_param(receiver, parameter))
+            || function
+                .params
+                .iter()
+                .any(|slot| self.type_contains_type_param(slot.ty, parameter))
     }
 
     fn function_shape_contains_type_param(
@@ -542,6 +545,7 @@ impl<'a> Relater<'a> {
                 }
                 TypeTag::Function => {
                     if let Some(nested) = self.store.function_type(current) {
+                        pending.extend(nested.receiver);
                         pending.extend(nested.params.iter().map(|slot| slot.ty));
                         pending.push(nested.ret);
                         pending.extend(
@@ -812,6 +816,16 @@ impl<'a> Relater<'a> {
         implementation: &FunctionType,
         implementation_return_to_overload: bool,
     ) -> bool {
+        if let (Some(overload_receiver), Some(implementation_receiver)) =
+            (overload.receiver, implementation.receiver)
+        {
+            if !self
+                .is_assignable(overload_receiver, implementation_receiver)
+                .is_yes()
+            {
+                return false;
+            }
+        }
         if implementation.required_param_count() > overload.required_param_count() {
             return false;
         }
@@ -849,6 +863,14 @@ impl<'a> Relater<'a> {
         kind: RelationKind,
         assumed: &mut AssumedSet,
     ) -> Relation {
+        if let (Some(src_receiver), Some(tgt_receiver)) = (src_fn.receiver, tgt_fn.receiver) {
+            if matches!(
+                self.relate(tgt_receiver, src_receiver, kind, assumed),
+                Relation::No(_)
+            ) {
+                return Relation::No(ReasonChain::leaf(src, tgt));
+            }
+        }
         let Some(src_params) = self.function_param_shape(src_fn) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };

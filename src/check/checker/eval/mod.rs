@@ -110,6 +110,9 @@ enum Task {
     /// transforms, a union distributes per member, anything else stays a (rebuilt)
     /// symbolic instantiation.
     ApplyStringIntrinsic(TypeId),
+    /// B70: apply the trusted `OmitThisParameter<T>` specialization after its
+    /// argument has been evaluated.
+    ApplyOmitThisParameter(TypeId),
     /// M28: pop pre-evaluated check/extends operands and decide the branch; see
     /// [`ConditionalEvaluator::operand_undecidable`] for the conservative `No` gate.
     DecideConditional(TypeId),
@@ -258,6 +261,9 @@ impl<'a> ConditionalEvaluator<'a> {
                 }
                 Task::ApplyStringIntrinsic(id) => {
                     self.apply_string_intrinsic(id, &mut values, error);
+                }
+                Task::ApplyOmitThisParameter(id) => {
+                    self.apply_omit_this_parameter(id, &mut values, error);
                 }
                 Task::DecideConditional(id) => {
                     self.decide_conditional(id, &mut tasks, &mut values, error);
@@ -438,6 +444,7 @@ impl<'a> ConditionalEvaluator<'a> {
                 }
                 TypeTag::Function => {
                     if let Some(f) = store.function_type(t) {
+                        stack.extend(f.receiver);
                         stack.extend(f.params.iter().map(|p| p.ty));
                         stack.push(f.ret);
                     }

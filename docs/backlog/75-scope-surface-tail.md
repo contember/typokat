@@ -28,8 +28,8 @@ The currently unowned tail includes:
   tuple elements, and generic/deferred `T[K]` outside mapped templates;
 - exception/catch flow, async/generator expression semantics, bigint/symbol/object/unique and
   literal-type forms, private expressions, and class static blocks, auto-accessors, and index
-  signatures; polymorphic `this` type annotations/qualified `this` type names (distinct from
-  backlog `70`'s explicit receiver slot and contextual `ThisType<T>` marker);
+  signatures; polymorphic `this` type annotations/qualified `this` type names (distinct from the
+  shipped explicit receiver slot and contextual `ThisType<T>` marker);
 - silent/deferred parity families already recorded in `divergences.md` but lacking a stable owner:
   fresh-literal constraint-side excess checks, unequal-raw-arity and generic-base override checks,
   visibility/kind heritage checks (`TS2415`/`TS2425`/`TS2426`), private-base construction
@@ -47,7 +47,8 @@ implemented or explicitly re-scoped.
 Template-expression traversal, elisions, object/call spreads, tagged templates, and iteration
 targets are not duplicated here: their concrete silent-skip owner is [`71`](./71-expression-inference-fn-tail.md),
 and the shipped surface inventory enforces their accounting. Iterability belongs to `71`; optional
-methods/accessors belong to `49`; enums/namespaces/`this` parameters belong to `42`/`43`/`70`.
+methods/accessors belong to `49`; enums and namespaces belong to `42`/`43`; explicit `this`
+parameters are shipped.
 
 ## Approach / acceptance
 
@@ -70,7 +71,8 @@ The one-time divergence census this item demanded is done and machine-enforced: 
 direction, scope disposition, owner, witness; `tests/divergences.rs` rejects unmarked rows,
 duplicates, dead links, and every ownerless under-report), and manifest `deps` are cross-checked
 against owner `blocked-by` frontmatter with an explicit `deps_exception` mechanism
-(`tests/manifest.rs`) — the `14`/`70` drift class is now a failing test. Manifest criterion
+(`tests/manifest.rs`) — dependency drift between a criterion and its owner's `blocked-by` list is
+now a failing test. Manifest criterion
 `C-deferred-divergence-census` is complete. **What remains here is the semantic tail itself**:
 implementing or explicitly re-scoping the families listed above, each already owned and
 witnessed in the structured ledger.

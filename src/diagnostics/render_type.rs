@@ -363,7 +363,7 @@ fn render_function_parts(
     func: &crate::types::repr::FunctionType,
     rendering: &mut Vec<TypeId>,
 ) -> (Vec<String>, String) {
-    let params: Vec<String> = func
+    let mut params: Vec<String> = func
         .params
         .iter()
         .map(|p| {
@@ -375,6 +375,15 @@ fn render_function_parts(
             )
         })
         .collect();
+    if let Some(receiver) = func.receiver {
+        params.insert(
+            0,
+            format!(
+                "this: {}",
+                render_type_inner(store, receiver, false, rendering)
+            ),
+        );
+    }
     let ret = render_type_inner(store, func.ret, false, rendering);
     (params, ret)
 }

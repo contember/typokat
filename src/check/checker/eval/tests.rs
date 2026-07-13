@@ -1,9 +1,188 @@
 use super::*;
-use crate::check::checker::eval::keyof::keyof_of_object;
-use crate::types::repr::{ObjectType, PropertyType};
+use crate::check::checker::eval::keyof::{contains_deferred_keyof, keyof_of_object};
+use crate::types::repr::{FunctionType, GenericTypeParam, ObjectType, ParameterType, PropertyType};
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
+}
+
+fn omit_this_parameter(interner: &mut Interner, argument: TypeId) -> TypeId {
+    let marker = interner.well_known().omit_this_parameter;
+    interner.intern_instantiation(marker, vec![(TypeParamId(90_100), argument)])
+}
+
+#[test]
+fn omit_this_parameter_preserves_optional_rest_and_default_shape() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let boolean_array = interner.intern_array(wk.boolean);
+    let source = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: Some(wk.string),
+        params: vec![
+            ParameterType::defaulted("defaulted", wk.number),
+            ParameterType::rest("tail", boolean_array),
+        ],
+        ret: wk.void,
+    });
+    let result = omit_this_parameter(&mut interner, source);
+    let mut next = 1;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+    let transformed = evaluator.evaluate(result);
+    let function = interner.store().function_type(transformed).unwrap();
+
+    assert_eq!(function.receiver, None);
+    assert!(function.params[0].optional);
+    assert!(function.params[0].has_default);
+    assert!(function.params[1].rest);
+}
+
+#[test]
+fn omit_this_parameter_uses_last_overload_and_preserves_no_receiver_identity() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let first = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: Some(wk.string),
+        params: vec![ParameterType::required("first", wk.string)],
+        ret: wk.number,
+    });
+    let last = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: Some(wk.number),
+        params: vec![ParameterType::optional("last", wk.number)],
+        ret: wk.string,
+    });
+    let overload = interner.intern_object(ObjectType {
+        call_signatures: vec![first, last],
+        ..Default::default()
+    });
+    let receiverless = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("value", wk.number)],
+        ret: wk.number,
+    });
+    let transformed = omit_this_parameter(&mut interner, overload);
+    let preserved = omit_this_parameter(&mut interner, receiverless);
+    let mut next = 1;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    let transformed = evaluator.evaluate(transformed);
+    assert_eq!(evaluator.evaluate(preserved), receiverless);
+    let function = interner.store().function_type(transformed).unwrap();
+    assert_eq!(function.receiver, None);
+    assert_eq!(function.ret, wk.string);
+    assert!(function.params[0].optional);
+}
+
+#[test]
+fn omit_this_parameter_erases_generic_binders_and_keeps_open_guard_deferred() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(90_101), "T");
+    let generic = interner.intern_function(FunctionType {
+        type_params: vec![crate::types::repr::GenericTypeParam {
+            id: TypeParamId(90_101),
+            constraint: Some(wk.number),
+            default: Some(wk.string),
+        }],
+        receiver: Some(t),
+        params: vec![ParameterType::required("value", t)],
+        ret: t,
+    });
+    let open = interner.intern_type_param(TypeParamId(90_102), "U");
+    let transformed = omit_this_parameter(&mut interner, generic);
+    let deferred = omit_this_parameter(&mut interner, open);
+    let mut next = 1;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    let transformed = evaluator.evaluate(transformed);
+    assert_eq!(evaluator.evaluate(deferred), deferred);
+    drop(evaluator);
+    let function = interner.store().function_type(transformed).unwrap();
+    assert!(function.type_params.is_empty());
+    assert_eq!(function.receiver, None);
+    assert_eq!(function.params[0].ty, wk.number);
+    assert_eq!(function.ret, wk.number);
+}
+
+#[test]
+fn omit_this_parameter_keeps_generic_receiver_when_unknown_satisfies_effective_receiver() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(90_103), "T");
+    let generic = interner.intern_function(FunctionType {
+        type_params: vec![crate::types::repr::GenericTypeParam {
+            id: TypeParamId(90_103),
+            constraint: None,
+            default: Some(wk.number),
+        }],
+        receiver: Some(t),
+        params: vec![ParameterType::required("value", t)],
+        ret: t,
+    });
+    let marker = omit_this_parameter(&mut interner, generic);
+    let mut next = 1;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    assert_eq!(evaluator.evaluate(marker), generic);
+}
+
+#[test]
+fn omit_this_parameter_keeps_mixed_receiver_union_for_unknown_guard() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let generic_param = TypeParamId(91_001);
+    let generic_receiver = interner.intern_type_param(generic_param, "T");
+    let with_unknown_receiver = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: generic_param,
+            constraint: None,
+            default: None,
+        }],
+        receiver: Some(generic_receiver),
+        params: vec![ParameterType::required("value", wk.number)],
+        ret: wk.void,
+    });
+    let with_concrete_receiver = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: Some(wk.string),
+        params: vec![ParameterType::required("value", wk.boolean)],
+        ret: wk.void,
+    });
+    let union = interner.union(vec![with_unknown_receiver, with_concrete_receiver]);
+    let marker = omit_this_parameter(&mut interner, union);
+    let mut next = 1;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    assert_eq!(evaluator.evaluate(marker), union);
+}
+
+#[test]
+fn deferred_keyof_walks_function_receivers() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let receiver = interner.intern_type_param(TypeParamId(90_001), "T");
+    let function = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: Some(receiver),
+        params: vec![ParameterType::required("value", wk.number)],
+        ret: wk.void,
+    });
+    let deferred = interner.intern_keyof(function);
+
+    assert!(contains_deferred_keyof(interner.store(), deferred));
 }
 
 fn instantiate_one(

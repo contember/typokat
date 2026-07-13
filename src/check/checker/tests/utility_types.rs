@@ -39,6 +39,60 @@ fn prelude_checks_clean() {
     );
 }
 
+/// `ThisType<T>` is structurally transparent in its contextual intersection, but
+/// its first source-order marker supplies `this` to object-literal methods even
+/// through a transparent alias instantiation.
+#[test]
+fn this_type_context_uses_first_marker_through_alias() {
+    let src = "\
+type Marker<T> = ThisType<T>;
+type Context = { n: number; check(): void } & Marker<{ n: string }> & ThisType<{ n: number }>;
+const value: Context = {
+  n: 1,
+  check() {
+    const wrong: number = this.n;
+  },
+};
+";
+    assert_eq!(diags(src), vec![(6, "TK2322".to_string())]);
+}
+
+/// Nested intersections must retain the first source-order marker even when it
+/// is introduced by a transparent generic alias.
+#[test]
+fn this_type_context_first_marker_wins_across_nested_alias_intersections() {
+    let src = "\
+type A = { n: string };
+type B = { n: number };
+type AliasContainingThisType<T> = { check(): void } & ThisType<T>;
+type FirstB = ThisType<B> & AliasContainingThisType<A> & { n: number };
+const firstB: FirstB = { n: 1, check() { const wrong: string = this.n; } };
+type FirstA = AliasContainingThisType<A> & ThisType<B> & { n: number };
+const firstA: FirstA = { n: 1, check() { const wrong: number = this.n; } };
+";
+    assert_eq!(
+        diags(src),
+        vec![(5, "TK2322".to_string()), (7, "TK2322".to_string())]
+    );
+}
+
+#[test]
+fn generic_member_receivers_contribute_to_inference_without_becoming_arguments() {
+    let src = "\
+declare const generic: <T>(this: T) => T;
+const holder = { generic };
+const inferred: { generic: <T>(this: T) => T } = holder.generic();
+declare const pair: <T>(this: T, value: T) => T;
+const pairHolder = { pair, own: 1 };
+const conflict = pairHolder.pair({ foreign: \"x\" });
+type Overloaded = { <T>(this: T, value: number): T; (this: { tag: string }, value: string): string };
+declare const overloaded: Overloaded;
+const overloadHolder = { overloaded };
+const inferredOverload: { overloaded: Overloaded } = overloadHolder.overloaded(1);
+";
+    assert_eq!(diags(src), vec![(6, "TK2684".to_string())]);
+}
+
 /// A user declaration **shadows** the prelude alias of the same name (tsc-like):
 /// `Partial` here is the user's `number`-alias, so a string initializer is a plain
 /// TK2322 against `number` — and there is exactly ONE diagnostic (no duplicate-name

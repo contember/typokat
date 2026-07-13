@@ -302,7 +302,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // (`IBox<string>`, `TA<number>`). The bad argument still instantiates below.
         self.check_type_argument_constraints(&params, &arg_infos, &map);
 
-        // Conditional, mapped, and string-intrinsic templates instantiate lazily.
+        // Conditional, mapped, and trusted intrinsic templates instantiate lazily.
         // Eager substitution would loop on recursive conditionals/mapped aliases or
         // erase intrinsic identity; non-recursive mapped aliases remain equivalent via
         // evaluator-side expansion.
@@ -314,6 +314,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .interner
                 .well_known()
                 .is_string_intrinsic_marker(template)
+            || template == self.interner.well_known().this_type
+            || template == self.interner.well_known().omit_this_parameter
         {
             let args: Vec<(TypeParamId, TypeId)> = params
                 .iter()

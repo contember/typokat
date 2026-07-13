@@ -30,6 +30,23 @@ impl<'a> ConditionalEvaluator<'a> {
         // by the prelude-declared marker identity: evaluate the argument through the
         // shared work-stack, then transform ([`Task::ApplyStringIntrinsic`]).
         let wk = self.interner.well_known();
+        // Backlog 70: `ThisType<T>` is a context-only intrinsic marker. Preserve its
+        // exact instantiation and operand for contextual object-literal extraction.
+        if inst.base == wk.this_type {
+            values.push(ty);
+            return;
+        }
+        if inst.base == wk.omit_this_parameter {
+            let Some(&(_, arg)) = inst.args.first() else {
+                values.push(ty);
+                return;
+            };
+            self.in_flight.insert(ty);
+            tasks.push(Task::SetMemo(ty));
+            tasks.push(Task::ApplyOmitThisParameter(ty));
+            tasks.push(Task::Eval(arg));
+            return;
+        }
         if wk.is_string_intrinsic_marker(inst.base) {
             let Some(&(_, arg)) = inst.args.first() else {
                 // A marker with no argument (ill-formed `Uppercase` bare reference
@@ -78,6 +95,148 @@ impl<'a> ConditionalEvaluator<'a> {
         for &cond in per_conditionals.iter().rev() {
             tasks.push(Task::Eval(cond));
         }
+    }
+
+    /// Evaluate the standard `unknown extends ThisParameterType<T> ? T : …`
+    /// guard for the trusted prelude marker. Only fully represented callable
+    /// shapes are transformed; open/deferred inputs remain symbolic.
+    pub(super) fn apply_omit_this_parameter(
+        &mut self,
+        id: TypeId,
+        values: &mut Vec<TypeId>,
+        error: TypeId,
+    ) {
+        let argument = values.pop().unwrap_or(error);
+        let Some(inst) = self.interner.store().instantiation_type(id).cloned() else {
+            values.push(argument);
+            return;
+        };
+        let Some(&(param, _)) = inst.args.first() else {
+            values.push(argument);
+            return;
+        };
+        match self.interner.store().tag(argument) {
+            TypeTag::TypeParam
+            | TypeTag::Conditional
+            | TypeTag::Instantiation
+            | TypeTag::Mapped
+            | TypeTag::Template
+            | TypeTag::Keyof => {
+                values.push(
+                    self.interner
+                        .intern_instantiation(inst.base, vec![(param, argument)]),
+                );
+            }
+            TypeTag::Union => {
+                let members = self
+                    .interner
+                    .store()
+                    .union_members(argument)
+                    .map(|members| members.to_vec())
+                    .unwrap_or_default();
+                let mut functions = Vec::with_capacity(members.len());
+                for member in members {
+                    let Some(function) = self.omit_this_parameter_signature(member) else {
+                        values.push(argument);
+                        return;
+                    };
+                    let Some(receiver) = function.receiver else {
+                        values.push(argument);
+                        return;
+                    };
+                    let effective_receiver = self.effective_receiver(&function, receiver);
+                    if self.unknown_extends(effective_receiver) {
+                        values.push(argument);
+                        return;
+                    }
+                    functions.push(function);
+                }
+                let transformed = functions
+                    .into_iter()
+                    .map(|function| self.erase_this_parameter(function))
+                    .collect();
+                values.push(self.interner.union(transformed));
+            }
+            _ => {
+                let Some(function) = self.omit_this_parameter_signature(argument) else {
+                    values.push(argument);
+                    return;
+                };
+                let Some(receiver) = function.receiver else {
+                    values.push(argument);
+                    return;
+                };
+                let effective_receiver = self.effective_receiver(&function, receiver);
+                if self.unknown_extends(effective_receiver) {
+                    values.push(argument);
+                    return;
+                }
+                values.push(self.erase_this_parameter(function));
+            }
+        }
+    }
+
+    /// `ThisParameterType<T>` uses an overload's last represented signature.
+    fn omit_this_parameter_signature(&self, ty: TypeId) -> Option<FunctionType> {
+        match self.interner.store().tag(ty) {
+            TypeTag::Function => self.interner.store().function_type(ty).cloned(),
+            TypeTag::Object => self
+                .interner
+                .store()
+                .object_type(ty)
+                .and_then(|object| object.call_signatures.last())
+                .and_then(|&signature| self.interner.store().function_type(signature))
+                .cloned(),
+            _ => None,
+        }
+    }
+
+    fn unknown_extends(&self, receiver: TypeId) -> bool {
+        Relater::new(self.interner.store(), self.interner.well_known())
+            .is_assignable(self.interner.well_known().unknown, receiver)
+            .is_yes()
+    }
+
+    /// The guard observes generic receivers after their binders are replaced by
+    /// constraints or `unknown`; defaults never participate in this decision.
+    fn effective_receiver(&mut self, function: &FunctionType, receiver: TypeId) -> TypeId {
+        let substitutions = self.erasure_substitutions(function);
+        substitute(self.interner, receiver, &substitutions)
+    }
+
+    /// Strip a represented receiver while preserving every positional parameter's
+    /// optional/rest/default call shape. Generic signatures erase their binders to
+    /// constraints (or `unknown`), intentionally ignoring defaults like lib.d.ts.
+    fn erase_this_parameter(&mut self, function: FunctionType) -> TypeId {
+        let substitutions = self.erasure_substitutions(&function);
+        let params = function
+            .params
+            .into_iter()
+            .map(|mut parameter| {
+                parameter.ty = substitute(self.interner, parameter.ty, &substitutions);
+                parameter
+            })
+            .collect();
+        let ret = substitute(self.interner, function.ret, &substitutions);
+        self.interner.intern_function(FunctionType {
+            type_params: Vec::new(),
+            receiver: None,
+            params,
+            ret,
+        })
+    }
+
+    fn erasure_substitutions(&mut self, function: &FunctionType) -> FxHashMap<TypeParamId, TypeId> {
+        let mut substitutions = FxHashMap::default();
+        let unknown = self.interner.well_known().unknown;
+        for type_param in &function.type_params {
+            let value = type_param
+                .constraint
+                .map(|constraint| substitute(self.interner, constraint, &substitutions))
+                .unwrap_or(unknown);
+            substitutions.insert(type_param.id, value);
+        }
+        substitutions
     }
 
     /// The check argument of a distributive-conditional instantiation (M28): the value
@@ -331,6 +490,11 @@ impl<'a> ConditionalEvaluator<'a> {
                 };
                 let mut changed = false;
                 let mut new = function.clone();
+                new.receiver = function.receiver.map(|receiver| {
+                    let receiver = self.substitute_infers(receiver, fresh);
+                    changed |= Some(receiver) != function.receiver;
+                    receiver
+                });
                 for param in &mut new.params {
                     let nt = self.substitute_infers(param.ty, fresh);
                     changed |= nt != param.ty;

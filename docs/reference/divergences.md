@@ -312,8 +312,9 @@ primitives) also stays DEFERRED — never a permissive `{}`.
 ## Utility types (M28)
 
 Implemented (M28): the standard aliases (Partial, Required, Readonly, Record, Pick, Omit, Exclude,
-Extract, NonNullable, ReturnType) are BUILT-INS via a prelude compilation unit (`src/prelude.ts`),
-each the ordinary mapped/conditional definition evaluated by the M25–M27 machinery. The same
+Extract, NonNullable, ReturnType, ThisParameterType, and OmitThisParameter) are BUILT-INS via a prelude compilation unit (`src/prelude.ts`). `OmitThisParameter`
+uses a trusted intrinsic specialization to preserve represented function parameter shape; the other
+aliases use the ordinary mapped/conditional machinery. The same
 canonical unit also supplies the deliberately bounded `console` (`log`/`warn`/`error`) and numeric
 `Math` ambient values; it does not claim general `lib.d.ts` fidelity. A user redeclaration shadows
 the matching prelude slot. `keyof <pending computation>` is a **deferred keyof** node
@@ -323,14 +324,11 @@ literals (distributing over unions; Rust char-wise case mapping — agrees with 
 including multi-char expansions like `ß` → `"SS"`).
 
 - **Out of scope:** `Parameters`/`ConstructorParameters`,
-  `InstanceType`, `Awaited`, `NoInfer`, and the `intrinsic` keyword outside the four (a
+  `InstanceType`, `Awaited`, `NoInfer`, and the `intrinsic` keyword outside the four string aliases
+  and `ThisType`/`OmitThisParameter` (a
   user `= intrinsic` alias silently degrades to the error type).
   <!-- div: id=utility/unsupported-aliases dir=over scope=design-oos owner=design-oos witness=../../tests/cases/m28_utility_types -->
   <!-- div: id=utility/intrinsic-degradation dir=under scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/m28_utility_types -->
-- **Deferred receiver utilities/context:** explicit `this` signature slots,
-  `ThisType<T>`, `ThisParameterType<T>`, and `OmitThisParameter<T>` are owned by backlog `70`;
-  dropping the receiver currently makes calls and relation silently permissive.
-  <!-- div: id=utility/this-receiver-family dir=under scope=b-this-parameters owner=../backlog/70-this-parameter-typing.md witness=../../tests/cases/b70_this_parameter_typing/function_receivers.ts -->
 - **Documented divergences:**
   - The prelude `ReturnType` uses a strict/sound `(...args: never[]) => infer R` match, so it handles
     non-nullary and rest functions without introducing the lib's permissive `any[]` constraint.
@@ -341,6 +339,19 @@ including multi-char expansions like `ß` → `"SS"`).
     INTO it — rejecting values tsc's string-mapping algebra accepts (over-report; witnessed by the
     official suite's `stringMapping*` files).
     <!-- div: id=utility/symbolic-intrinsic-conservative dir=over scope=b-type-level-tail owner=design-oos witness=../../tooling/official-suite/scoreboard.txt -->
+  - A standalone `ThisType<T>` marker is deliberately not structurally equivalent to `{}`:
+    only a `ThisType<T>` member of a contextual intersection is transparent and supplies the
+    object-literal method receiver. Standalone uses can therefore over-report versus tsc.
+    <!-- div: id=utility/standalone-this-type-marker dir=over scope=b-this-parameters owner=design-oos witness=../../tests/cases/b70_this_parameter_typing/this_type_context.ts -->
+  - For a preserved generic receiver signature, a bad bare `OmitThisParameter` call reports
+    `TK2684` from receiver checking where tsc reports `TS2345` from its argument candidate.
+    Both reject the call; this is diagnostic priority only.
+    <!-- div: id=utility/omit-this-parameter-generic-bare-call-code dir=cosmetic scope=b-this-parameters owner=design-oos witness=../../tests/cases/b70_this_parameter_typing/this_utilities.ts -->
+  - `OmitThisParameter` correctly retains a union when a generic member's effective receiver is
+    `unknown`, but invoking that union is silent: callable-signature selection does not yet model
+    unions, so typokat misses tsc's `TS2349`. The callability diagnostic and union support belong
+    to backlog `19`.
+    <!-- div: id=calls/union-callability-after-omit-this-parameter dir=under scope=a-noncallable owner=../backlog/19-call-of-non-callable-diagnostic.md witness=../../tests/cases/b70_this_parameter_typing/this_utilities.ts -->
   - tsc's `TS2820` did-you-mean variant of 2322 is not produced.
     <!-- div: id=utility/ts2820-not-produced dir=cosmetic scope=s-assignability owner=design-oos witness=../../tests/cases/m28_utility_types -->
   - A constraint check is **skipped** only when the substituted CONSTRAINT still carries a deferred

@@ -212,9 +212,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return self.infer_super_call(scope, call, call_span);
         }
 
-        // Always infer the callee expression for its side effects (resolving its name /
-        // emitting TK2304, descending into a callee expression).
-        let inferred_callee = self.infer_expr(scope, &call.callee);
+        // A member call receives the member object as its explicit receiver; infer it
+        // once and reuse that result for the property lookup so nested expressions and
+        // diagnostics retain their ordinary single evaluation.
+        let mut callee = &call.callee;
+        while let Expression::ParenthesizedExpression(paren) = callee {
+            callee = &paren.expression;
+        }
+        let (inferred_callee, call_receiver) = match callee {
+            Expression::StaticMemberExpression(member) => {
+                let inferred_receiver = self.infer_expr(scope, &member.object);
+                let inferred_callee = inferred_receiver
+                    .and_then(|(receiver, _)| self.infer_member_access_from_base(receiver, member));
+                (inferred_callee, inferred_receiver)
+            }
+            _ => (self.infer_expr(scope, &call.callee), None),
+        };
 
         // Infer arguments up front and build `arg_fresh` in the same loop so M24
         // clamp provenance stays index-aligned with skipped out-of-subset args.
@@ -237,6 +250,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let Some((callee_ty, _)) = inferred_callee else {
             return Some((wk.error, call_span));
         };
+        let callee_ty = self.evaluate_type(callee_ty, call_span);
         let signatures = self.callable_signatures(callee_ty);
         if signatures.is_empty() {
             return Some((wk.error, call_span));
@@ -252,9 +266,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 exprs: &arg_exprs,
             },
             call_span,
+            call_receiver.map(|(receiver, _)| receiver),
         ) else {
             return Some((wk.error, call_span));
         };
+        self.check_call_receiver(candidate.receiver, call_receiver, call_span);
         self.check_call_arguments(scope, &candidate.params, &arg_types, &arg_exprs, call_span);
         let ret = self.evaluate_type(candidate.ret, call_span);
 
@@ -284,13 +300,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         signatures: &[TypeId],
         args: PreparedCallArgs<'_, '_>,
         call_span: Span,
+        receiver: Option<TypeId>,
     ) -> Option<CallCandidate> {
         let overload = signatures.len() > 1;
         if !overload {
             let signature = signatures.first().copied()?;
-            return match self
-                .instantiate_call_candidate(scope, call, signature, args, call_span, true)
-            {
+            return match self.instantiate_signature_candidate(SignatureCandidateRequest {
+                scope,
+                signature_ty: signature,
+                type_arguments: call.type_arguments.as_deref(),
+                args,
+                call_span,
+                call_receiver: receiver,
+                commit_constraints: true,
+            }) {
                 Ok(candidate) => Some(candidate),
                 Err(CandidateBuildFailure::Constraint(_))
                 | Err(CandidateBuildFailure::Unavailable) => None,
@@ -302,9 +325,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let mut first_constraint_failure: Option<Vec<Diagnostic>> = None;
 
         for signature in signatures {
-            let candidate = match self
-                .instantiate_call_candidate(scope, call, *signature, args, call_span, false)
-            {
+            let candidate = match self.instantiate_signature_candidate(SignatureCandidateRequest {
+                scope,
+                signature_ty: *signature,
+                type_arguments: call.type_arguments.as_deref(),
+                args,
+                call_span,
+                call_receiver: receiver,
+                commit_constraints: false,
+            }) {
                 Ok(candidate) => candidate,
                 Err(CandidateBuildFailure::Constraint(diagnostics)) => {
                     if first_constraint_failure.is_none() {
@@ -321,18 +350,26 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             match self.try_call_candidate(
                 scope,
                 &candidate.params,
+                (candidate.receiver, receiver),
                 args.types,
                 args.exprs,
                 call_span,
             ) {
                 CandidateTrial::Match => {
-                    let committed = match self
-                        .instantiate_call_candidate(scope, call, *signature, args, call_span, true)
-                    {
-                        Ok(candidate) => candidate,
-                        Err(CandidateBuildFailure::Constraint(_))
-                        | Err(CandidateBuildFailure::Unavailable) => return None,
-                    };
+                    let committed =
+                        match self.instantiate_signature_candidate(SignatureCandidateRequest {
+                            scope,
+                            signature_ty: *signature,
+                            type_arguments: call.type_arguments.as_deref(),
+                            args,
+                            call_span,
+                            call_receiver: receiver,
+                            commit_constraints: true,
+                        }) {
+                            Ok(candidate) => candidate,
+                            Err(CandidateBuildFailure::Constraint(_))
+                            | Err(CandidateBuildFailure::Unavailable) => return None,
+                        };
                     return Some(committed);
                 }
                 CandidateTrial::Arity(arity) => arity_failures.push(arity),
@@ -351,37 +388,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         None
     }
 
-    fn instantiate_call_candidate(
-        &mut self,
-        scope: ScopeId,
-        call: &CallExpression<'_>,
-        signature_ty: TypeId,
-        args: PreparedCallArgs<'_, '_>,
-        call_span: Span,
-        commit_constraints: bool,
-    ) -> Result<CallCandidate, CandidateBuildFailure> {
-        self.instantiate_signature_candidate(
-            scope,
-            signature_ty,
-            call.type_arguments.as_deref(),
-            args,
-            call_span,
-            commit_constraints,
-        )
-    }
-
     /// Build one callable or constructable signature candidate from its persistent
     /// generic descriptors. Both `f<T>(...)` and `new C<T>(...)` share this path so
     /// outer-substituted constraints/defaults cannot fall back to stale store state.
     fn instantiate_signature_candidate(
         &mut self,
-        scope: ScopeId,
-        signature_ty: TypeId,
-        type_arguments: Option<&TSTypeParameterInstantiation<'_>>,
-        args: PreparedCallArgs<'_, '_>,
-        call_span: Span,
-        commit_constraints: bool,
+        request: SignatureCandidateRequest<'_, '_>,
     ) -> Result<CallCandidate, CandidateBuildFailure> {
+        let SignatureCandidateRequest {
+            scope,
+            signature_ty,
+            type_arguments,
+            args,
+            call_span,
+            call_receiver,
+            commit_constraints,
+        } = request;
         let generic_params = self
             .interner
             .store()
@@ -472,6 +494,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                             &params,
                             &raw_args,
                             &args.fresh[..start],
+                            call_receiver.zip(
+                                self.interner
+                                    .store()
+                                    .function_type(signature_ty)
+                                    .and_then(|function| function.receiver),
+                            ),
                         );
                         let unknown = self.interner.well_known().unknown;
                         let contextual_map: FxHashMap<TypeParamId, TypeId> = preliminary
@@ -506,6 +534,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         &params,
                         &inference_args,
                         args.fresh,
+                        call_receiver.zip(
+                            self.interner
+                                .store()
+                                .function_type(signature_ty)
+                                .and_then(|function| function.receiver),
+                        ),
                     )
                 }
             };
@@ -519,8 +553,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .ok_or(CandidateBuildFailure::Unavailable)?;
         let params = func.params.clone();
         let ret = func.ret;
+        let receiver = func.receiver;
         let params = self.evaluate_parameters(params, call_span);
-        Ok(CallCandidate { params, ret })
+        let receiver = receiver.map(|receiver| self.evaluate_type(receiver, call_span));
+        Ok(CallCandidate {
+            receiver,
+            params,
+            ret,
+        })
     }
 
     /// Fill omitted function binders in declaration order. Explicit arguments are
@@ -565,10 +605,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         params: &[ParameterType],
+        receivers: (Option<TypeId>, Option<TypeId>),
         arg_types: &[(TypeId, Span)],
         arg_exprs: &[&Expression<'_>],
         _call_span: Span,
     ) -> CandidateTrial {
+        if !self.call_receiver_is_compatible(receivers.0, receivers.1) {
+            return CandidateTrial::Mismatch;
+        }
         let arity = self.call_arity(params);
         if !self.call_arity_accepts(&arity, arg_types.len()) {
             return CandidateTrial::Arity(arity);
@@ -727,6 +771,54 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
+    /// Check an explicit non-positional receiver after overload selection. Bare
+    /// calls have `undefined` as their receiver; member calls provide their object.
+    fn check_call_receiver(
+        &mut self,
+        target_receiver: Option<TypeId>,
+        call_receiver: Option<(TypeId, Span)>,
+        call_span: Span,
+    ) {
+        let Some(target_receiver) = target_receiver else {
+            return;
+        };
+        let (source_receiver, span) =
+            call_receiver.unwrap_or((self.interner.well_known().undefined, call_span));
+        let wk = self.interner.well_known();
+        let failure = {
+            let store = self.interner.store();
+            let mut relater = Relater::new(store, wk);
+            matches!(
+                relater.is_assignable(source_receiver, target_receiver),
+                Relation::No(_)
+            )
+        };
+        if failure {
+            let store = self.interner.store();
+            self.diagnostics
+                .push(Diagnostic::this_context_not_assignable(
+                    span,
+                    &render_type(store, source_receiver, false),
+                    &render_type(store, target_receiver, false),
+                ));
+        }
+    }
+
+    fn call_receiver_is_compatible(
+        &self,
+        target_receiver: Option<TypeId>,
+        call_receiver: Option<TypeId>,
+    ) -> bool {
+        let Some(target_receiver) = target_receiver else {
+            return true;
+        };
+        let source_receiver = call_receiver.unwrap_or(self.interner.well_known().undefined);
+        let mut relater = Relater::new(self.interner.store(), self.interner.well_known());
+        relater
+            .is_assignable(source_receiver, target_receiver)
+            .is_yes()
+    }
+
     fn evaluate_parameters(
         &mut self,
         params: Vec<ParameterType>,
@@ -782,6 +874,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn call_arity(&self, params: &[ParameterType]) -> CallArity {
         let function = FunctionType {
             type_params: Vec::new(),
+            receiver: None,
             params: params.to_vec(),
             ret: self.interner.well_known().void,
         };
@@ -1144,14 +1237,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let overload = signatures.len() > 1;
         if !overload {
             let signature = signatures.first().copied()?;
-            return match self.instantiate_signature_candidate(
+            return match self.instantiate_signature_candidate(SignatureCandidateRequest {
                 scope,
-                signature,
+                signature_ty: signature,
                 type_arguments,
                 args,
-                span,
-                true,
-            ) {
+                call_span: span,
+                call_receiver: None,
+                commit_constraints: true,
+            }) {
                 Ok(candidate) => Some(candidate),
                 Err(CandidateBuildFailure::Constraint(_))
                 | Err(CandidateBuildFailure::Unavailable) => None,
@@ -1163,14 +1257,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let mut first_constraint_failure: Option<Vec<Diagnostic>> = None;
 
         for signature in signatures {
-            let candidate = match self.instantiate_signature_candidate(
+            let candidate = match self.instantiate_signature_candidate(SignatureCandidateRequest {
                 scope,
-                *signature,
+                signature_ty: *signature,
                 type_arguments,
                 args,
-                span,
-                false,
-            ) {
+                call_span: span,
+                call_receiver: None,
+                commit_constraints: false,
+            }) {
                 Ok(candidate) => candidate,
                 Err(CandidateBuildFailure::Constraint(diagnostics)) => {
                     if first_constraint_failure.is_none() {
@@ -1184,20 +1279,29 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     continue;
                 }
             };
-            match self.try_call_candidate(scope, &candidate.params, args.types, args.exprs, span) {
+            match self.try_call_candidate(
+                scope,
+                &candidate.params,
+                (None, None),
+                args.types,
+                args.exprs,
+                span,
+            ) {
                 CandidateTrial::Match => {
-                    let committed = match self.instantiate_signature_candidate(
-                        scope,
-                        *signature,
-                        type_arguments,
-                        args,
-                        span,
-                        true,
-                    ) {
-                        Ok(candidate) => candidate,
-                        Err(CandidateBuildFailure::Constraint(_))
-                        | Err(CandidateBuildFailure::Unavailable) => return None,
-                    };
+                    let committed =
+                        match self.instantiate_signature_candidate(SignatureCandidateRequest {
+                            scope,
+                            signature_ty: *signature,
+                            type_arguments,
+                            args,
+                            call_span: span,
+                            call_receiver: None,
+                            commit_constraints: true,
+                        }) {
+                            Ok(candidate) => candidate,
+                            Err(CandidateBuildFailure::Constraint(_))
+                            | Err(CandidateBuildFailure::Unavailable) => return None,
+                        };
                     return Some(committed);
                 }
                 CandidateTrial::Arity(arity) => arity_failures.push(arity),
@@ -1294,7 +1398,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             alloc_type_param_ids(func.type_parameters.as_deref(), &mut self.next_type_param);
         let type_param_frame =
             self.build_type_param_frame(func.type_parameters.as_deref(), &type_params);
-        let (generic_params, params, declared_return) =
+        let (generic_params, receiver, params, declared_return) =
             self.with_type_params(type_param_frame.clone(), |pass| {
                 let generic_params = pass.lower_signature_type_params(
                     enclosing,
@@ -1306,6 +1410,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     .fn_scopes
                     .get(&(pass.current_module, func.span.start))
                     .copied();
+                let receiver = func.this_param.as_ref().map(|this_param| {
+                    this_param
+                        .type_annotation
+                        .as_ref()
+                        .and_then(|annotation| {
+                            pass.lower_annotation(enclosing, &annotation.type_annotation)
+                        })
+                        .unwrap_or(pass.interner.well_known().error)
+                });
                 let params = pass.lower_parameters(enclosing, fn_scope, &func.params, false);
                 // Type references in the signature resolve from the enclosing scope,
                 // while declared type parameters resolve through the pushed frame.
@@ -1313,7 +1426,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     .return_type
                     .as_ref()
                     .and_then(|ann| pass.lower_annotation(enclosing, &ann.type_annotation));
-                (generic_params, params, declared_return)
+                (generic_params, receiver, params, declared_return)
             });
         let ret = declared_return.unwrap_or_else(|| {
             let well_known = self.interner.well_known();
@@ -1327,12 +1440,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         });
         let function_ty = self.interner.intern_function(FunctionType {
             type_params: generic_params.clone(),
+            receiver,
             params: params.clone(),
             ret,
         });
         let diagnostics = self.diagnostics.split_off(diagnostics_start);
         let incomplete = self.incomplete.split_off(incomplete_start);
         FunctionSurface {
+            receiver,
             params,
             generic_params,
             type_param_frame,
@@ -1373,6 +1488,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         surface: &FunctionSurface,
     ) -> TypeId {
         let params = surface.params.clone();
+        let receiver = surface.receiver;
         let generic_params = surface.generic_params.clone();
         self.with_type_params(surface.type_param_frame.clone(), |pass| {
             let fn_scope = pass
@@ -1382,13 +1498,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .copied();
             let body_scope = fn_scope.unwrap_or(enclosing);
             pass.check_reserved_parameter_initializers(body_scope, &func.params, &surface.params);
+            let saved_this = pass.current_this;
+            if let Some(receiver) = receiver {
+                pass.current_this = Some(receiver);
+            }
             let inferred_return = func
                 .body
                 .as_ref()
                 .map(|body| pass.check_function_body(body_scope, body, surface.declared_return));
+            pass.current_this = saved_this;
             let ret = resolve_return_type(pass.interner, surface.declared_return, inferred_return);
             pass.interner.intern_function(FunctionType {
                 type_params: generic_params,
+                receiver,
                 params,
                 ret,
             })
@@ -1610,6 +1732,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let ret = resolve_return_type(self.interner, declared_ret, inferred_ret);
         self.interner.intern_function(FunctionType {
             type_params: Vec::new(),
+            receiver: None,
             params,
             ret,
         })
@@ -1742,6 +1865,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 }
 
 struct CallCandidate {
+    receiver: Option<TypeId>,
     params: Vec<ParameterType>,
     ret: TypeId,
 }
@@ -1751,6 +1875,16 @@ struct PreparedCallArgs<'a, 'ast> {
     types: &'a [(TypeId, Span)],
     fresh: &'a [bool],
     exprs: &'a [&'a Expression<'ast>],
+}
+
+struct SignatureCandidateRequest<'a, 'ast> {
+    scope: ScopeId,
+    signature_ty: TypeId,
+    type_arguments: Option<&'a TSTypeParameterInstantiation<'ast>>,
+    args: PreparedCallArgs<'a, 'ast>,
+    call_span: Span,
+    call_receiver: Option<TypeId>,
+    commit_constraints: bool,
 }
 
 enum CandidateTrial {
@@ -1892,5 +2026,7 @@ pub(in crate::check::checker) fn intrinsic_id(wk: WellKnown, kind: IntrinsicKind
         IntrinsicKind::Lowercase => wk.lowercase,
         IntrinsicKind::Capitalize => wk.capitalize,
         IntrinsicKind::Uncapitalize => wk.uncapitalize,
+        IntrinsicKind::ThisType => wk.this_type,
+        IntrinsicKind::OmitThisParameter => wk.omit_this_parameter,
     }
 }

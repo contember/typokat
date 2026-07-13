@@ -22,5 +22,5 @@ blocks_release = "true"
 owner = "./14-libdts-loading.md"
 witness = "spec-first corpus"
 # DRIFT: the owner (14) is blocked-by [./15-...]; this criterion claims a dependency on
-# 70, which does not appear in 14's `blocked-by`. No `deps_exception` field justifies it.
+# 70, which does not appear in 14's `blocked-by` (now only 43). No `deps_exception` field justifies it.
 deps = ["./70-this-parameters.md"]

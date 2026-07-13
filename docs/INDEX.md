@@ -26,8 +26,8 @@ decisions → reference → archive.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
 - [`sprint-2026-07-12-pre-lib-hardening.md`](sprints/sprint-2026-07-12-pre-lib-hardening.md) —
-  active; five independently reviewed release blockers (`22`, `56`, `77`, `70`, `13`)
-  before the dedicated namespace/declaration-merging sprint.
+  active; WU4 shipped `70`; four independently reviewed release blockers (`22`, `56`, `77`, `13`)
+  remain before the dedicated namespace/declaration-merging sprint.
 
 ## What's hot
 
@@ -35,13 +35,13 @@ decisions → reference → archive.
      If everything is "hot", nothing is. -->
 - **Pre-lib hardening sprint active** — isolated spec/implementation/review loops for
   aliased construction (`22`), evaluator cycles (`56`), callable-object `ReturnType`
-  inference (`77`), explicit `this`/`ThisType<T>` (`70`), and the profiling decision
-  (`13`). Namespace/declaration merging (`43`) is explicitly the next dedicated sprint.
+  inference (`77`), explicit `this`/`ThisType<T>` (`70`, shipped), and the profiling decision
+  (`13`). Namespace/declaration merging (`43`) is the sole remaining direct `lib.d.ts` prerequisite.
 - **Generic methods (`41`) shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-generic-methods.md`](archive/sprint-2026-07-12-generic-methods.md)) —
   persistent generic method/call/construct binders now survive substitution and relate under a
-  cache-safe local alignment. The remaining model/lib blockers are `43` namespaces/merging and
-  `70` explicit `this`/`ThisType<T>`.
+  cache-safe local alignment. The remaining direct model/lib blocker is `43` namespaces/merging;
+  explicit `this`/`ThisType<T>` shipped with `70`.
 - **Real-project preview (`72`) paused at WU0** — no screened public project met the multi-file,
   minimal-graph, zero-threshold contract; no implementation or prelude expansion started.
 - **Surface-accounting tail shipped 2026-07-12** (archived:
@@ -68,7 +68,7 @@ decisions → reference → archive.
   [`archive/sprint-2026-07-11-declaration-hoisting-parity.md`](archive/sprint-2026-07-11-declaration-hoisting-parity.md)) —
   forward ordinary/generic/overload calls now see stable callable surfaces; `var`
   binds to its function/module owner while initializer and flow timing stay lexical/source ordered.
-  `72` was subsequently screened and paused; the next recommended model/lib work is `43`/`70`.
+  `72` was subsequently screened and paused; the next recommended model/lib work is `43`.
 - **2026-07-10 completeness-accounting sprint shipped** (archived:
   [`archive/sprint-2026-07-10-completeness-accounting.md`](archive/sprint-2026-07-10-completeness-accounting.md)) —
   machine-validated OXC surface inventory with compile-time drift tripwires, a first-class
@@ -85,11 +85,11 @@ decisions → reference → archive.
   [`backlog/completion-1.0.toml`](backlog/completion-1.0.toml) validated by
   `tests/manifest.rs`, with the pinned TS 6.0.3 lib audit
   ([`backlog/lib-audit-6.0.3.md`](backlog/lib-audit-6.0.3.md)) naming the es5
-  blockers: `43` namespaces/merging and `70` this-parameter typing. Backlog `38` is GO
+  blocker: `43` namespaces/merging; `70` this-parameter typing subsequently shipped. Backlog `38` is GO
   (ADR-0003). The post-sprint MVP audit added executable
   scope/unsupported censuses (`73`/`75`) and the first honest pinned-project preview gate
   (`72`). **Now:** `72` remains paused at its witness gate; track A
-  (`43`/`70` next) continues toward full `lib.d.ts`.
+  (`43` next) continues toward full `lib.d.ts`.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
   invariants CLEAN and filed `53`–`65`; the five HIGH silent-FN families then shipped through

@@ -43,9 +43,10 @@ fn substitution_recurses_into_object_function_union() {
         properties: vec![prop("value", t)],
         ..Default::default()
     });
-    // (x: T) => T
+    // (this: T, x: T) => T
     let fn_t = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: Some(t),
         params: vec![ParameterType::required("x", t)],
         ret: t,
     });
@@ -62,6 +63,7 @@ fn substitution_recurses_into_object_function_union() {
     });
     let fn_num = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: Some(wk.number),
         params: vec![ParameterType::required("x", wk.number)],
         ret: wk.number,
     });
@@ -84,6 +86,7 @@ fn substitution_preserves_function_signature_shape() {
 
     let shaped = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![
             ParameterType::required("a", t),
             ParameterType::optional("b", u),
@@ -100,6 +103,7 @@ fn substitution_preserves_function_signature_shape() {
     let number_array = interner.intern_array(wk.number);
     let expected = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![
             ParameterType::required("a", wk.number),
             ParameterType::optional("b", wk.string),
@@ -120,6 +124,7 @@ fn outer_substitution_preserves_inner_generic_binder() {
     let inner = interner.intern_type_param(TypeParamId(81), "U");
     let callback = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::required("value", outer)],
         ret: inner,
     });
@@ -129,6 +134,7 @@ fn outer_substitution_preserves_inner_generic_binder() {
             constraint: Some(outer),
             default: Some(outer),
         }],
+        receiver: None,
         params: vec![ParameterType::required("transform", callback)],
         ret: inner,
     });
@@ -144,6 +150,7 @@ fn outer_substitution_preserves_inner_generic_binder() {
 
     let expected_callback = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::required("value", wk.number)],
         ret: inner,
     });
@@ -153,6 +160,7 @@ fn outer_substitution_preserves_inner_generic_binder() {
             constraint: Some(wk.number),
             default: Some(wk.number),
         }],
+        receiver: None,
         params: vec![ParameterType::required("transform", expected_callback)],
         ret: inner,
     });

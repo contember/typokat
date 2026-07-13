@@ -1,7 +1,7 @@
 ---
 id: 14
 title: Full lib.d.ts loading (the standard library)
-blocked-by: [./43-namespaces-declaration-merging.md, ./70-this-parameter-typing.md]
+blocked-by: [./43-namespaces-declaration-merging.md]
 ---
 
 # 14 — full `lib.d.ts` loading
@@ -15,9 +15,9 @@ ambient/prelude slice (`38`) is allowed before this item when it buys useful rea
 Without `lib.d.ts`, `console`, array methods, `Promise`, etc. are absent, so most real code can't be
 checked. The lib's own source text uses nearly the whole type model, including the `RegExp` value
 surface that owns regexp literals, which is why this item is
-blocked by the remaining model-completeness track: namespaces + declaration merging (`43`) and
-`this`-parameter typing / `ThisType<T>` (`70`). Generic method, call, and construct signatures
-shipped with B41; member projection and loading the declarations that expose those
+blocked by the remaining model-completeness prerequisite: namespaces + declaration merging (`43`).
+Generic method, call, and construct signatures shipped with B41; explicit receiver parameters and
+contextual `ThisType<T>` shipped with B70; member projection and loading the declarations that expose those
 signatures remain this item's responsibility.
 Loading the lib with any of those
 still silently-permissive would poison every downstream check. A deliberately small prelude slice

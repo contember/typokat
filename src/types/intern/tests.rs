@@ -187,12 +187,14 @@ fn function_interning_dedups_by_signature() {
     // `(x: number) => string`
     let f1 = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![param("x", wk.number)],
         ret: wk.string,
     });
     // The exact same signature interns to the same id.
     let f1_again = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![param("x", wk.number)],
         ret: wk.string,
     });
@@ -201,9 +203,18 @@ fn function_interning_dedups_by_signature() {
         "identical function signatures must share an id"
     );
 
+    let f_receiver = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: Some(wk.number),
+        params: vec![param("x", wk.number)],
+        ret: wk.string,
+    });
+    assert_ne!(f1, f_receiver, "receiver type is part of function identity");
+
     // A different return type is a distinct function type.
     let f_ret = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![param("x", wk.number)],
         ret: wk.number,
     });
@@ -212,6 +223,7 @@ fn function_interning_dedups_by_signature() {
     // A different parameter type is a distinct function type.
     let f_param = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![param("x", wk.string)],
         ret: wk.string,
     });
@@ -220,6 +232,7 @@ fn function_interning_dedups_by_signature() {
     // Different arity is distinct.
     let f_arity = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![param("x", wk.number), param("y", wk.string)],
         ret: wk.string,
     });
@@ -230,11 +243,13 @@ fn function_interning_dedups_by_signature() {
     // parameter types but in a different order — they must NOT dedup.
     let ab = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![param("a", wk.number), param("b", wk.string)],
         ret: wk.void,
     });
     let ba = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![param("a", wk.string), param("b", wk.number)],
         ret: wk.void,
     });
@@ -253,6 +268,7 @@ fn function_interning_includes_generic_binders() {
             constraint,
             default,
         }],
+        receiver: None,
         params: vec![param("value", t)],
         ret: t,
     };
@@ -279,26 +295,31 @@ fn function_interning_includes_signature_shape() {
 
     let required = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::required("x", wk.number)],
         ret: wk.void,
     });
     let optional = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::optional("x", wk.number)],
         ret: wk.void,
     });
     let optional_again = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::optional("x", wk.number)],
         ret: wk.void,
     });
     let defaulted = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::defaulted("x", wk.number)],
         ret: wk.void,
     });
     let rest = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![ParameterType::rest("x", string_array)],
         ret: wk.void,
     });
@@ -310,6 +331,7 @@ fn function_interning_includes_signature_shape() {
 
     let mixed = interner.intern_function(FunctionType {
         type_params: Vec::new(),
+        receiver: None,
         params: vec![
             ParameterType::required("a", wk.number),
             ParameterType::optional("b", wk.boolean),

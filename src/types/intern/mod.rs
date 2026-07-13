@@ -39,6 +39,11 @@ pub struct WellKnown {
     pub lowercase: TypeId,
     pub capitalize: TypeId,
     pub uncapitalize: TypeId,
+    /// Backlog 70 contextual-`this` marker base. Its operand lives in a lazy
+    /// instantiation so no context-only side table is needed.
+    pub this_type: TypeId,
+    /// Trusted `OmitThisParameter<T>` evaluator marker.
+    pub omit_this_parameter: TypeId,
 }
 
 impl WellKnown {
@@ -48,6 +53,13 @@ impl WellKnown {
             || id == self.lowercase
             || id == self.capitalize
             || id == self.uncapitalize
+    }
+
+    /// The operand of an exact `ThisType<T>` marker instantiation.
+    pub fn this_type_operand(&self, store: &Store, id: TypeId) -> Option<TypeId> {
+        let instantiation = store.instantiation_type(id)?;
+        (instantiation.base == self.this_type && instantiation.args.len() == 1)
+            .then(|| instantiation.args[0].1)
     }
 }
 
@@ -84,6 +96,8 @@ impl Interner {
                 lowercase: TypeId(0),
                 capitalize: TypeId(0),
                 uncapitalize: TypeId(0),
+                this_type: TypeId(0),
+                omit_this_parameter: TypeId(0),
             },
         };
 
@@ -116,6 +130,8 @@ impl Interner {
             lowercase: id_of(IntrinsicKind::Lowercase),
             capitalize: id_of(IntrinsicKind::Capitalize),
             uncapitalize: id_of(IntrinsicKind::Uncapitalize),
+            this_type: id_of(IntrinsicKind::ThisType),
+            omit_this_parameter: id_of(IntrinsicKind::OmitThisParameter),
         };
 
         interner

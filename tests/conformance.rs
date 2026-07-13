@@ -107,8 +107,8 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // architecture stop gate (backlog 63d).
     ("b67_utility_alias_constraint", true),
     // Backlog 70 — explicit receiver slots, receiver call diagnostics, lib.es5
-    // receiver utilities, and contextual ThisType. WU0 disabled; WU4 enables.
-    ("b70_this_parameter_typing", false),
+    // receiver utilities, and contextual ThisType.
+    ("b70_this_parameter_typing", true),
     // Backlog 77 — conditional infer must extract the last represented object
     // call-signature return. WU0 commits disabled; WU3 enables.
     ("b77_returntype_call_signatures", true),

@@ -100,6 +100,7 @@ impl<'a> Substitution<'a> {
             return ty;
         };
         let type_params = function.type_params.clone();
+        let receiver = function.receiver;
         let params = function.params.clone();
         let ret = function.ret;
 
@@ -131,6 +132,11 @@ impl<'a> Substitution<'a> {
                 param
             })
             .collect();
+        let receiver = receiver.map(|receiver| {
+            let new_receiver = self.apply(interner, receiver);
+            changed |= new_receiver != receiver;
+            new_receiver
+        });
         let new_ret = self.apply(interner, ret);
         changed |= new_ret != ret;
         for id in newly_blocked {
@@ -141,6 +147,7 @@ impl<'a> Substitution<'a> {
         if changed {
             interner.intern_function(FunctionType {
                 type_params,
+                receiver,
                 params: lowered,
                 ret: new_ret,
             })

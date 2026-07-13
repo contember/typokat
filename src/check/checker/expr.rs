@@ -657,6 +657,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         context: Option<TypeId>,
     ) -> Option<(TypeId, Span)> {
         let context = context.map(|ctx| contextual_literal_target(self.interner.store(), ctx));
+        let contextual_this = context.and_then(|ctx| self.contextual_this_type(ctx));
         // M31: peel an intersection context to its merged apparent object so fresh
         // literals shape against the merged member set, including nested cases.
         let context = context.map(|ctx| self.intersection_apparent_object(ctx).unwrap_or(ctx));
@@ -667,7 +668,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             (Expression::ObjectExpression(obj), Some(ctx))
                 if self.interner.store().object_type(ctx).is_some() =>
             {
-                let id = self.infer_object_literal_with_context(scope, obj, ctx);
+                let id = self.infer_object_literal_with_context(scope, obj, ctx, contextual_this);
                 Some((id, Span::from_oxc(obj.span)))
             }
             (Expression::ArrayExpression(array), Some(ctx))
@@ -766,7 +767,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         obj: &ObjectExpression<'_>,
         context: TypeId,
+        contextual_this: Option<TypeId>,
     ) -> TypeId {
+        let saved_this = self.current_this;
+        if let Some(contextual_this) = contextual_this {
+            self.current_this = Some(contextual_this);
+        }
         let mut properties: Vec<PropertyType> = Vec::with_capacity(obj.properties.len());
         for member in &obj.properties {
             let ObjectPropertyKind::ObjectProperty(prop) = member else {
@@ -793,10 +799,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             properties.push(PropertyType::public(name.into_owned(), ty));
         }
 
+        self.current_this = saved_this;
         self.interner.intern_object(ObjectType {
             properties,
             ..Default::default()
         })
+    }
+
+    /// Find the one retained `ThisType<T>` marker in a contextual intersection.
+    /// Source lowering normalizes marker precedence before canonical intersection
+    /// interning, so the member order here is immaterial.
+    fn contextual_this_type(&self, context: TypeId) -> Option<TypeId> {
+        let store = self.interner.store();
+        let members = store.intersection_members(context)?;
+        members
+            .iter()
+            .find_map(|&member| self.interner.well_known().this_type_operand(store, member))
     }
 
     fn object_literal_property_context(&self, context: TypeId, name: &str) -> Option<TypeId> {
@@ -1113,8 +1131,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         member: &StaticMemberExpression<'_>,
     ) -> Option<(TypeId, Span)> {
-        let wk = self.interner.well_known();
         let (base_ty, _) = self.infer_expr(scope, &member.object)?;
+        self.infer_member_access_from_base(base_ty, member)
+    }
+
+    /// Resolve a member after its object has already been inferred. Calls use this
+    /// path to preserve the object type as the explicit receiver source.
+    pub(in crate::check::checker) fn infer_member_access_from_base(
+        &mut self,
+        base_ty: TypeId,
+        member: &StaticMemberExpression<'_>,
+    ) -> Option<(TypeId, Span)> {
+        let wk = self.interner.well_known();
         let prop_name = member.property.name.as_str();
         let prop_span = Span::from_oxc(member.property.span);
 

@@ -25,8 +25,10 @@ sprint-2026-07-11), and `41` + `23` (persistent generic method/call/construct si
 including the static generic binder path, sprint-2026-07-12), and `22` (parenthesized and
 non-generic class-value construction facts, sprint-2026-07-12), and `56` (cycle-aware
 evaluator memoization + `TK2589`, sprint-2026-07-12), and `77` (callable-object
-`ReturnType` extraction, sprint-2026-07-12) — see
-[`../archive/`](../archive/README.md). Architecture §12 governs
+`ReturnType` extraction, sprint-2026-07-12), and `70` (explicit receiver slots,
+contextual `ThisType<T>`, and receiver utilities, sprint-2026-07-12). The earlier shipped
+items are in [`../archive/`](../archive/README.md); the current pre-lib sprint remains active.
+Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). How each item
 is built: [`../reference/dev-method.md`](../reference/dev-method.md).
@@ -50,19 +52,19 @@ in [`divergences.md`](../reference/divergences.md)), **D** scale + IDE (the §12
 
 The pinned TS 6.0.3 `lib.d.ts` surface audit — what actually blocks `14` — is
 [`lib-audit-6.0.3.md`](lib-audit-6.0.3.md) (generic method/call/construct signatures shipped with
-`41`; `43` namespaces/declaration merging and the audit-discovered `70` `this`-parameter typing
-still block the es5 core; `42`/`44` are not used by es5 core). The official-suite scoreboard is the ratchet on
+`41`, and receiver typing shipped with `70`; only `43` namespaces/declaration merging still blocks
+the es5 core; `42`/`44` are not used by es5 core). The official-suite scoreboard is the ratchet on
 the way there — its syntax gates flip OOS→IN as features land — not a numeric pass/fail gate.
 
 ## Roadmap at a glance
 
-The active backlog has **37 items**: **29 checker-1.0 release blockers** and **8 non-blocking,
+The active backlog has **36 items**: **28 checker-1.0 release blockers** and **8 non-blocking,
 safe-direction parity items**. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml); the grouping below is the human roadmap view.
 
 | Track | Active items | Typical effort | Role |
 |---|---:|---|---|
-| **A — model completeness** | 5 | L–XL | Eliminate silently-permissive model gaps; `43`/`70` directly unblock full `lib.d.ts`. |
+| **A — model completeness** | 4 | L–XL | Eliminate silently-permissive model gaps; `43` directly unblocks full `lib.d.ts`. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
 | **C — soundness/parity tail** | 15 | S–L | Seven release-blocking known gaps plus eight safe-direction parity improvements. |
 | **D — scale + IDE** | 6 | XL | Preview, full standard library, resolver breadth, parallel identity, and incrementality. |
@@ -81,14 +83,13 @@ checker 1.0. The FP/tsc-parity subsection is the only non-blocking group.
 ## Items
 
 **A. Model completeness — the `lib.d.ts` critical path plus exact declaration types.** Every item
-kills a silently-permissive or deliberately approximate model family. `43` and `70` are the direct
-blockers of `14`; `42`, `44`, and `76` still block checker 1.0 but are not needed by the
+kills a silently-permissive or deliberately approximate model family. `43` is the direct blocker
+of `14`; `42`, `44`, and `76` still block checker 1.0 but are not needed by the
 `lib.es5.d.ts` core.
 
 - **L** · [`42`](42-enums-type-side.md) — enum type/value sides, nominal member types, and narrowing.
 - **XL** · [`43`](43-namespaces-declaration-merging.md) — namespace binding, qualified names, and declaration merging.
 - **L** · [`44`](44-satisfies-as-const.md) — `satisfies` checking plus readonly literal/tuple semantics for `as const`.
-- **L** · [`70`](70-this-parameter-typing.md) — `this` signature slots and contextual `ThisType<T>`; direct `lib.d.ts` blocker.
 - **XL** · [`76`](76-lazy-value-type-resolution.md) — demand-driven declaration/value types and inferred-return cycles · blocked by `46`, `48`.
 
 **B. Checker completeness — Tier A/B diagnostic surface.** Independent of A; good sprint
@@ -134,7 +135,7 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
 - **XL** · [`72`](72-real-project-preview-readiness.md) — public project CLI, pinned strict project, mutation pack, and differential CI ratchet.
 - **S gate / XL if triggered** · [`13`](13-bytecode-vm.md) — profile the evaluator; build a VM only if dispatch is the measured bottleneck.
-- **XL** · [`14`](14-libdts-loading.md) — full `lib.d.ts` and shared-prelude parallelism Stage 1 · blocked by `43`, `70`.
+- **XL** · [`14`](14-libdts-loading.md) — full `lib.d.ts` and shared-prelude parallelism Stage 1 · blocked by `43`.
 - **XL** · [`15`](15-modules-imports.md) — NodeNext/package/tsconfig resolver breadth; the local-relative slice shipped as M29.
 - **XL** · [`16`](16-parallelism-type-universe.md) — deterministic parallel cross-file type identity · blocked by `14`, `15`.
 - **XL** · [`17`](17-incrementality.md) — semantic batch cache followed by a Salsa-style IDE query layer · blocked by `16`.
@@ -147,10 +148,10 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
    The five HIGH review findings (`53` `55` `57` `58` `61`) shipped in
    sprint-2026-07-07-soundness-fn-fixes; the remaining silent-FN C group (`60`, `62`, `32`,
    `21`, `66`, `71`, `78`) remains available as independently valuable dropped-error work.
-2. **Run the remaining model/lib prerequisites `43` and `70`.** Generic methods, calls, and
-   construct signatures shipped with `41`; namespaces/declaration merging and explicit
-   `this`/`ThisType<T>` are now the next Track A blockers of `14`. Interleave B items and C's
-   parity tail as warm-ups. `13` (profiling gate) is cheap now that `tooling/bench/` exists.
+2. **Run the remaining model/lib prerequisite `43`.** Generic methods, calls, and construct
+   signatures shipped with `41`; explicit `this`/`ThisType<T>` shipped with `70`; namespace and
+   declaration merging is now the sole Track A blocker of `14`. Interleave B items and C's parity
+   tail as warm-ups. `13` (profiling gate) is cheap now that `tooling/bench/` exists.
 3. **Climb the full-project/scale ladder** (`14` → `15` → `16` → `17`), finishing the B/C
    remainder along the way. `14` + `15` must graduate the pinned deptective full-stack witness;
    the small `72` preview is not evidence for full resolver/lib fidelity.

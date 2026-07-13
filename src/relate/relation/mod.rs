@@ -839,6 +839,8 @@ impl<'a> Relater<'a> {
             IntrinsicKind::Lowercase => wk.lowercase,
             IntrinsicKind::Capitalize => wk.capitalize,
             IntrinsicKind::Uncapitalize => wk.uncapitalize,
+            IntrinsicKind::ThisType => wk.this_type,
+            IntrinsicKind::OmitThisParameter => wk.omit_this_parameter,
         }
     }
 }

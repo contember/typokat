@@ -3,8 +3,8 @@
 The pinned-standard-library construct audit required by the 1.0 manifest
 ([`completion-1.0.toml`](completion-1.0.toml), `[meta].lib_audit_artifact`). It records,
 reproducibly, **which TypeScript constructs the standard-library surface uses** and
-classifies each against typokat's shipped milestones (M0–M33 plus B41 generic signatures) and the
-remaining track-A backlog (`42`–`44`, plus the audit-discovered `70`). It is an **audit only** — no `lib.d.ts`
+classifies each against typokat's shipped milestones (M0–M33, B41 generic signatures, and B70
+receiver typing) and the remaining track-A backlog (`42`–`44`). It is an **audit only** — no `lib.d.ts`
 loading is implemented here (backlog `14`); the audit is what tells us what `14` is
 blocked on.
 
@@ -43,24 +43,20 @@ family that must land before the lib can be loaded soundly (owner cited).
 | **Generic methods (method-level `<T>`/`<U>`)** | `^\s+\w+<[A-Z][^>]*>\(` | pervasive | **✓ shipped (B41)** — persistent generic method/call/construct signatures; member projection and lib loading remain `14` |
 | **Declaration merging** (interface+`var` same name; repeated `interface` blocks) | `comm -12` vars∩ifaces; `uniq -d` ifaces | 28 pairs + `Date`/`Number`/`String` | **✗ blocks 14 → `43`** — every constructor (`Array`, `String`, `Object`, `Math`, `JSON`, …) is an `interface X` + `declare var X: XConstructor` merge |
 | **`namespace`** (type side) | `declare namespace ` | 1 (`Intl`) | **✗ blocks 14 → `43`** |
-| **`this`-parameter typing + `ThisType<T>`** | `\(this:`; `ThisType\|ThisParameterType\|OmitThisParameter` | 16 + 7 | **✗ blocks 14 → `70`** (audit-discovered; see below) — `Function.apply/call/bind`, `ObjectConstructor.defineProperty` |
+| **`this`-parameter typing + `ThisType<T>`** | `\(this:`; `ThisType\|ThisParameterType\|OmitThisParameter` | 16 + 7 | **✓ shipped (B70)** — explicit receiver slots, `ThisType<T>`, and `ThisParameterType`/`OmitThisParameter`; member projection/loading remain `14` |
 | `enum` | `\benum\b` | **0** | ✓ not used by es5 core (needed for full model completeness → `42`, not for `14`) |
 | `satisfies` / `as const` | `\bsatisfies\b`, `as const` | **0** | ✓ not used by es5 core (full model completeness → `44`, not for `14`) |
 | Symbol / computed keys (`[Symbol.x]`) | `\[Symbol\.` | **0** in es5 | out of es5 (arrives with `es2015.iterable`; Tier B) |
 
 ## Headline — what actually blocks item `14`
 
-Two families in the es5 core are still silently permissive in typokat and gate a **sound**
+One family in the es5 core is still silently permissive in typokat and gates a **sound**
 `lib.d.ts` load:
 
 1. **`43` namespaces + declaration merging** — the entire constructor surface is
    `interface X` merged with `declare var X: XConstructor` (28 pairs), plus multi-block
    `interface Date`/`Number`/`String` merges and `declare namespace Intl`. Multi-slot symbols
    give value/type separation but not the *merge* (the var's type must see the merged interface).
-2. **`70` `this`-parameter typing + `ThisType<T>`** — **audit-discovered, not previously on
-   track A.** `Function.prototype.apply/call/bind` and `ObjectConstructor.defineProperty` type
-   `this` explicitly; unmodeled, they degrade silently. Filed as track-A backlog `70`.
-
 Generic method, call, and construct signatures are now represented persistently (B41), but the
 library still cannot expose `Array.map`, `Function.bind`, or other members until `14` provides
 member projection and declaration loading. `42` (enums) and `44` (`satisfies`/`as const`) are confirmed **absent from es5 core** (0 uses),

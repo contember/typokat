@@ -89,11 +89,11 @@ deps = []
 id = "A-this-parameter-typing"
 track = "A"
 title = "this-parameter typing + ThisType<T>"
-state = "incomplete"
+state = "complete"
 blocks_release = "true"
-owner = "./70-this-parameter-typing.md"
-witness = "disabled acceptance spec: b70_this_parameter_typing; lib audit: Function.apply/call/bind and ObjectConstructor.defineProperty type this explicitly"
-links = ["../../tests/cases/b70_this_parameter_typing/function_receivers.ts", "./14-libdts-loading.md", "./lib-audit-6.0.3.md"]
+owner = "shipped"
+witness = "spec amendment 0ed8688; cargo test conformance (b70_this_parameter_typing enabled); two independent final reviews PASS/PASS for receiver identity, relation/cache, inference, contextual ThisType, and OmitThisParameter"
+links = ["../../tests/cases/b70_this_parameter_typing", "../sprints/sprint-2026-07-12-pre-lib-hardening.md", "./14-libdts-loading.md", "./lib-audit-6.0.3.md"]
 deps = []
 scope = ["b-this-parameters"]
 
@@ -609,7 +609,7 @@ blocks_release = "true"
 owner = "./14-libdts-loading.md"
 witness = "fixtures using console/array methods/Promise check vs tsc; lib audit records the blocking families"
 links = ["./lib-audit-6.0.3.md"]
-deps = ["./43-namespaces-declaration-merging.md", "./70-this-parameter-typing.md"]
+deps = ["./43-namespaces-declaration-merging.md"]
 
 [[criterion]]
 id = "D-module-resolver-breadth"
