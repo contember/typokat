@@ -25,3 +25,11 @@ const relationTwo: (this: WideReceiver, value: number) => void = acceptsNarrow; 
 declare const receiverless: (value: number) => void;
 const receiverMayBeDropped: (value: number) => void = acceptsWide;
 const receiverMayBeAdded: (this: WideReceiver, value: number) => void = receiverless;
+
+declare const receiverMember: { method(this: { n: number }): void };
+(receiverMember.method)(); // error[TK2684]
+((receiverMember).method)(); // error[TK2684]
+
+declare const compatibleReceiverMember: { n: number; method(this: { n: number }): void };
+(compatibleReceiverMember.method)();
+((compatibleReceiverMember).method)();
