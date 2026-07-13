@@ -226,6 +226,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     .and_then(|(receiver, _)| self.infer_member_access_from_base(receiver, member));
                 (inferred_callee, inferred_receiver)
             }
+            Expression::ComputedMemberExpression(member) => {
+                let inferred_receiver = self.infer_expr(scope, &member.object);
+                let inferred_callee = inferred_receiver.and_then(|(receiver, _)| {
+                    self.infer_element_access_from_base(scope, receiver, member)
+                });
+                (inferred_callee, inferred_receiver)
+            }
             _ => (self.infer_expr(scope, &call.callee), None),
         };
 

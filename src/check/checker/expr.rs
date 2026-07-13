@@ -912,8 +912,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         member: &ComputedMemberExpression<'_>,
     ) -> Option<(TypeId, Span)> {
-        let wk = self.interner.well_known();
         let (base_ty, _) = self.infer_expr(scope, &member.object)?;
+        self.infer_element_access_from_base(scope, base_ty, member)
+    }
+
+    /// Infer `a[i]` after its base has already been evaluated by a call expression.
+    pub(in crate::check::checker) fn infer_element_access_from_base(
+        &mut self,
+        scope: ScopeId,
+        base_ty: TypeId,
+        member: &ComputedMemberExpression<'_>,
+    ) -> Option<(TypeId, Span)> {
+        let wk = self.interner.well_known();
         let span = Span::from_oxc(member.span);
 
         // Walk the index expression for its side effects (reference resolution, nested

@@ -93,6 +93,36 @@ const inferredOverload: { overloaded: Overloaded } = overloadHolder.overloaded(1
     assert_eq!(diags(src), vec![(6, "TK2684".to_string())]);
 }
 
+/// Computed member calls preserve the same receiver for `this` checks and generic
+/// receiver inference as direct member calls, including parenthesized forms.
+#[test]
+fn computed_member_calls_preserve_receiver_context() {
+    let src = "\
+interface Good { n: number; method(this: { n: number }): void; }
+declare const good: Good;
+good[\"method\"]();
+(good[\"method\"])();
+((good)[\"method\"])();
+interface Bad { method(this: { n: number }): void; }
+declare const bad: Bad;
+bad[\"method\"]();
+(bad[\"method\"])();
+((bad)[\"method\"])();
+interface Generic { tag: \"holder\"; method<T>(this: T): T; }
+declare const generic: Generic;
+const computed: Generic = generic[\"method\"]();
+const parenthesized: Generic = (generic[\"method\"])();
+";
+    assert_eq!(
+        diags(src),
+        vec![
+            (8, "TK2684".to_string()),
+            (9, "TK2684".to_string()),
+            (10, "TK2684".to_string()),
+        ]
+    );
+}
+
 /// A user declaration **shadows** the prelude alias of the same name (tsc-like):
 /// `Partial` here is the user's `number`-alias, so a string initializer is a plain
 /// TK2322 against `number` — and there is exactly ONE diagnostic (no duplicate-name
