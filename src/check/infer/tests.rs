@@ -3,9 +3,107 @@ use crate::types::repr::{
     FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TupleRestType, TupleType,
     TypeParamId,
 };
+use std::time::Instant;
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
+}
+
+fn measured_inference_pairs(
+    interner: &mut Interner,
+    count: usize,
+    width: usize,
+    target_param: TypeId,
+) -> Vec<(TypeId, TypeId)> {
+    let number = interner.well_known().number;
+    (0..count)
+        .map(|group| {
+            let source = interner.reserve_object();
+            let target = interner.reserve_object();
+            let source_properties: Vec<_> = (0..width)
+                .map(|index| prop(&format!("g{group:06}_p{index:02}"), number))
+                .collect();
+            let target_properties: Vec<_> = (0..width)
+                .map(|index| prop(&format!("g{group:06}_p{index:02}"), target_param))
+                .collect();
+            interner.fill_object(
+                source,
+                ObjectType {
+                    properties: source_properties,
+                    ..Default::default()
+                },
+            );
+            interner.fill_object(
+                target,
+                ObjectType {
+                    properties: target_properties,
+                    ..Default::default()
+                },
+            );
+            (source, target)
+        })
+        .collect()
+}
+
+#[test]
+fn measure_inference_counts_actual_snapshots_and_property_scans() {
+    let mut interner = Interner::with_intrinsics();
+    let target_param = interner.intern_type_param(TypeParamId(90_400), "T");
+    let pairs = measured_inference_pairs(&mut interner, 2, 3, target_param);
+    super::helpers::reset_inference_measure();
+    for (source, target) in pairs {
+        let mut candidates = Candidates::default();
+        infer_from_types_for_conditional(&mut interner, source, target, &mut candidates);
+    }
+    assert_eq!(
+        super::helpers::inference_measure(),
+        super::helpers::InferenceMeasure {
+            object_snapshot_vectors: 4,
+            object_snapshot_entries: 12,
+            object_snapshot_name_bytes: 132,
+            object_target_properties: 6,
+            object_source_property_comparisons: 12,
+        }
+    );
+}
+
+#[test]
+#[ignore = "WU4 release measurement; run explicitly with --ignored --nocapture"]
+fn measure_inference_hotpaths_release() {
+    const WIDTH: usize = 8;
+    const NAME_BYTES: usize = 11;
+    for count in [10_000, 100_000] {
+        let mut interner = Interner::with_intrinsics();
+        let target_param = interner.intern_type_param(TypeParamId(90_401), "T");
+        let pairs = measured_inference_pairs(&mut interner, count, WIDTH, target_param);
+        super::helpers::reset_inference_measure();
+        let started = Instant::now();
+        for (source, target) in pairs {
+            let mut candidates = Candidates::default();
+            infer_from_types_for_conditional(&mut interner, source, target, &mut candidates);
+            assert_eq!(
+                candidates.get(&TypeParamId(90_401)).map(Vec::len),
+                Some(WIDTH)
+            );
+        }
+        let elapsed = started.elapsed();
+        let measure = super::helpers::inference_measure();
+        assert_eq!(measure.object_snapshot_vectors, (count * 2) as u64);
+        assert_eq!(measure.object_snapshot_entries, (count * WIDTH * 2) as u64);
+        assert_eq!(
+            measure.object_snapshot_name_bytes,
+            (count * WIDTH * 2 * NAME_BYTES) as u64
+        );
+        assert_eq!(measure.object_target_properties, (count * WIDTH) as u64);
+        assert_eq!(
+            measure.object_source_property_comparisons,
+            (count * WIDTH * (WIDTH + 1) / 2) as u64
+        );
+        println!(
+            "WU4 inference count={count} width={WIDTH} elapsed_ms={} counters={measure:?}",
+            elapsed.as_millis()
+        );
+    }
 }
 
 /// A bare scalar argument matched against a type parameter fixes that parameter

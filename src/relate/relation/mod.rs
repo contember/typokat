@@ -14,6 +14,39 @@ use crate::types::store::{Store, TypeId};
 use crate::types::WellKnown;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct RelationMeasure {
+    pub stack_key_builds: u64,
+    pub empty_context_stack_keys: u64,
+    pub contextual_stack_keys: u64,
+    pub binder_frames_scanned: u64,
+    pub flattened_environment_entries: u64,
+    pub environment_sort_items: u64,
+    pub object_target_properties: u64,
+    pub object_source_property_comparisons: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static RELATION_MEASURE: std::cell::RefCell<RelationMeasure> = std::cell::RefCell::new(RelationMeasure::default());
+}
+
+#[cfg(test)]
+pub(super) fn reset_relation_measure() {
+    RELATION_MEASURE.with(|measure| *measure.borrow_mut() = RelationMeasure::default());
+}
+
+#[cfg(test)]
+pub(super) fn relation_measure() -> RelationMeasure {
+    RELATION_MEASURE.with(|measure| *measure.borrow())
+}
+
+#[cfg(test)]
+fn measure_relation(update: impl FnOnce(&mut RelationMeasure)) {
+    RELATION_MEASURE.with(|measure| update(&mut measure.borrow_mut()));
+}
+
 /// Distinct relation kinds must not share cache entries (architecture §6.1).
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 #[repr(u8)]
@@ -400,6 +433,16 @@ impl<'a> Relater<'a> {
     }
 
     fn stack_relation_key(&self, relation: RelationKey) -> StackRelationKey {
+        #[cfg(test)]
+        measure_relation(|measure| {
+            measure.stack_key_builds += 1;
+            if self.binder_contexts.is_empty() {
+                measure.empty_context_stack_keys += 1;
+            } else {
+                measure.contextual_stack_keys += 1;
+                measure.binder_frames_scanned += self.binder_contexts.len() as u64;
+            }
+        });
         let mut source_to_target = FxHashMap::default();
         let mut target_to_source = FxHashMap::default();
         let mut constraints = FxHashMap::default();
@@ -409,6 +452,15 @@ impl<'a> Relater<'a> {
         // effective meaning of a persistent parameter id, so it deliberately
         // overrides an outer binding with the same id.
         for context in &self.binder_contexts {
+            #[cfg(test)]
+            measure_relation(|measure| {
+                measure.flattened_environment_entries += (context.source_to_target.len()
+                    + context.target_to_source.len()
+                    + context.parameters.len()
+                    + context.constraints.len()
+                    + context.source_instantiations.len())
+                    as u64;
+            });
             source_to_target.extend(
                 context
                     .source_to_target
@@ -449,6 +501,14 @@ impl<'a> Relater<'a> {
         target_to_source.sort_by_key(|(parameter, _)| *parameter);
         constraints.sort_by_key(|(parameter, _)| *parameter);
         source_instantiations.sort_by_key(|(parameter, _)| *parameter);
+
+        #[cfg(test)]
+        measure_relation(|measure| {
+            measure.environment_sort_items += (source_to_target.len()
+                + target_to_source.len()
+                + constraints.len()
+                + source_instantiations.len()) as u64;
+        });
 
         StackRelationKey {
             relation,

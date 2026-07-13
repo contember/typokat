@@ -1,13 +1,52 @@
 use super::*;
 use crate::types::repr::LiteralValue;
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct InferenceMeasure {
+    pub object_snapshot_vectors: u64,
+    pub object_snapshot_entries: u64,
+    pub object_snapshot_name_bytes: u64,
+    pub object_target_properties: u64,
+    pub object_source_property_comparisons: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static INFERENCE_MEASURE: std::cell::RefCell<InferenceMeasure> = std::cell::RefCell::new(InferenceMeasure::default());
+}
+
+#[cfg(test)]
+pub(super) fn reset_inference_measure() {
+    INFERENCE_MEASURE.with(|measure| *measure.borrow_mut() = InferenceMeasure::default());
+}
+
+#[cfg(test)]
+pub(super) fn inference_measure() -> InferenceMeasure {
+    INFERENCE_MEASURE.with(|measure| *measure.borrow())
+}
+
+#[cfg(test)]
+pub(super) fn measure_inference(update: impl FnOnce(&mut InferenceMeasure)) {
+    INFERENCE_MEASURE.with(|measure| update(&mut measure.borrow_mut()));
+}
+
 /// The `(name, type)` pairs of an object type, or `None` if `ty` is not an object.
 pub(super) fn property_pairs(store: &Store, ty: TypeId) -> Option<Vec<(String, TypeId)>> {
     store.object_type(ty).map(|object| {
+        #[cfg(test)]
+        measure_inference(|measure| measure.object_snapshot_vectors += 1);
         object
             .properties
             .iter()
-            .map(|p| (p.name.clone(), p.ty))
+            .map(|p| {
+                #[cfg(test)]
+                measure_inference(|measure| {
+                    measure.object_snapshot_entries += 1;
+                    measure.object_snapshot_name_bytes += p.name.len() as u64;
+                });
+                (p.name.clone(), p.ty)
+            })
             .collect()
     })
 }

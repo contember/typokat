@@ -3,6 +3,7 @@ use crate::types::repr::{
     ClassId, FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, Visibility,
 };
 use crate::types::Interner;
+use std::time::Instant;
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
@@ -34,6 +35,123 @@ fn nominal_prop(
         declaring_class,
         readonly: false,
         is_accessor: false,
+    }
+}
+
+fn measured_relation_pairs(
+    interner: &mut Interner,
+    count: usize,
+    width: usize,
+) -> Vec<(TypeId, TypeId)> {
+    let number = interner.well_known().number;
+    (0..count)
+        .map(|group| {
+            let properties: Vec<_> = (0..width)
+                .map(|index| prop(&format!("g{group:06}_p{index:02}"), number))
+                .collect();
+            let source = interner.reserve_object();
+            interner.fill_object(
+                source,
+                ObjectType {
+                    properties: properties.clone(),
+                    ..Default::default()
+                },
+            );
+            let target = interner.reserve_object();
+            interner.fill_object(
+                target,
+                ObjectType {
+                    properties,
+                    ..Default::default()
+                },
+            );
+            (source, target)
+        })
+        .collect()
+}
+
+#[test]
+fn measure_relation_counts_actual_empty_context_key_and_property_scans() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let pairs = measured_relation_pairs(&mut interner, 2, 3);
+    reset_relation_measure();
+    let mut relater = Relater::new(interner.store(), wk);
+    for (source, target) in pairs {
+        assert!(relater.is_assignable(source, target).is_yes());
+    }
+    assert_eq!(
+        relation_measure(),
+        RelationMeasure {
+            stack_key_builds: 2,
+            empty_context_stack_keys: 2,
+            object_target_properties: 6,
+            object_source_property_comparisons: 12,
+            ..RelationMeasure::default()
+        }
+    );
+}
+
+#[test]
+fn measure_relation_keeps_first_target_failure_order() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source = interner.reserve_object();
+    interner.fill_object(
+        source,
+        ObjectType {
+            properties: vec![prop("a", wk.number), prop("b", wk.number)],
+            ..Default::default()
+        },
+    );
+    let target = interner.reserve_object();
+    interner.fill_object(
+        target,
+        ObjectType {
+            properties: vec![prop("a", wk.string), prop("b", wk.string)],
+            ..Default::default()
+        },
+    );
+    reset_relation_measure();
+    let result = Relater::new(interner.store(), wk).is_assignable(source, target);
+    match result {
+        Relation::No(reason) => match reason.head {
+            Reason::Property { name, .. } => assert_eq!(name, "a"),
+            other => panic!("expected first property mismatch, got {other:?}"),
+        },
+        Relation::Yes => panic!("the mismatched first target property must fail"),
+    }
+    assert_eq!(relation_measure().object_target_properties, 1);
+    assert_eq!(relation_measure().object_source_property_comparisons, 1);
+}
+
+#[test]
+#[ignore = "WU4 release measurement; run explicitly with --ignored --nocapture"]
+fn measure_relation_hotpaths_release() {
+    const WIDTH: usize = 8;
+    for count in [10_000, 100_000] {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let pairs = measured_relation_pairs(&mut interner, count, WIDTH);
+        reset_relation_measure();
+        let started = Instant::now();
+        let mut relater = Relater::new(interner.store(), wk);
+        for (source, target) in pairs {
+            assert!(relater.is_assignable(source, target).is_yes());
+        }
+        let elapsed = started.elapsed();
+        let measure = relation_measure();
+        assert_eq!(measure.stack_key_builds, count as u64);
+        assert_eq!(measure.empty_context_stack_keys, count as u64);
+        assert_eq!(measure.object_target_properties, (count * WIDTH) as u64);
+        assert_eq!(
+            measure.object_source_property_comparisons,
+            (count * WIDTH * (WIDTH + 1) / 2) as u64
+        );
+        println!(
+            "WU4 relation count={count} width={WIDTH} elapsed_ms={} counters={measure:?}",
+            elapsed.as_millis()
+        );
     }
 }
 

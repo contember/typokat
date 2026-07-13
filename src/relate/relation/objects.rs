@@ -90,7 +90,19 @@ impl<'a> Relater<'a> {
         };
 
         for tgt_prop in &tgt_obj.properties {
-            match src_obj.property(&tgt_prop.name) {
+            #[cfg(test)]
+            let source_property = {
+                super::measure_relation(|measure| measure.object_target_properties += 1);
+                src_obj.properties.iter().find(|src_prop| {
+                    super::measure_relation(|measure| {
+                        measure.object_source_property_comparisons += 1
+                    });
+                    src_prop.name == tgt_prop.name
+                })
+            };
+            #[cfg(not(test))]
+            let source_property = src_obj.property(&tgt_prop.name);
+            match source_property {
                 // Width + depth: present in source — its type must relate to the
                 // target property's type (recurse, so nested mismatches nest).
                 Some(src_prop) => {

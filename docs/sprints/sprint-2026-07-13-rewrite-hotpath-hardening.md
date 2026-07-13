@@ -188,3 +188,35 @@ One Terra writer owns the active worktree and makes one work unit's source chang
   evaluation to change receiver/parameter children while a nested generic binder
   remains semantically visible. Its bad call must retain `"ok"` in the reason chain;
   an anonymous rebuilt signature with erased binders is not an acceptable match.
+- **WU4a relation/inference baseline (2026-07-13, revision `89b21c6`).** Test-only,
+  thread-local counters instrument the actual `stack_relation_key` construction,
+  normal `relate_objects` source-property predicate, and `InferenceContext::infer_objects`
+  snapshots/predicate. Direct reserved-object builders construct graphs before the timer;
+  the timed release test performs 10k and 100k distinct empty-context relations with
+  eight ordered properties each. Small exact-formula tests pin target-first scans:
+  two width-3 relations/inferences perform 6 target obligations and 12 source predicates.
+  The release commands were `cargo test --release measure_relation_hotpaths_release --
+  --ignored --nocapture` and `cargo test --release measure_inference_hotpaths_release --
+  --ignored --nocapture`, each run five clean repetitions on Linux 6.17.0-40-generic,
+  x86_64, rustc 1.95.0. These elapsed values are **instrumented and
+  environment-dependent**; the operation counters, not elapsed time, are the selection proof.
+  Relation raw counters were stable at 10k/100k:
+  `stack_key_builds=empty_context_stack_keys=10,000/100,000`, target properties
+  `80,000/800,000`, and source predicates `360,000/3,600,000`. Its five raw elapsed
+  samples were 10k `[3, 3, 3, 5, 3]ms` (median 3ms, range 3–5ms) and 100k
+  `[37, 43, 43, 44, 40]ms` (median 43ms, range 37–44ms). Inference counters were
+  stable at 10k/100k:
+  snapshots `20,000/200,000`, entries `160,000/1,600,000`, cloned-name-byte proxy
+  `1,760,000/17,600,000`, target properties `80,000/800,000`, and source predicates
+  `360,000/3,600,000`. Its five raw elapsed samples were 10k `[7, 5, 7, 7, 7]ms`
+  (median 7ms, range 5–7ms) and 100k `[73, 65, 62, 62, 69]ms` (median 65ms,
+  range 62–73ms). The name-byte proxy is accumulated during the actual existing
+  `property_pairs` clone/map traversal; it performs no separate measurement scan.
+  All measurement shapes are clean; targeted formula tests passed, and the existing
+  full corpus remains the failure-order control. Counters are `cfg(test)` only and
+  create no production path. No WU5 threshold is claimed yet because no before/after
+  optimization exists. Ordered matching is the eligible candidate: an equal-shape
+  cursor walk would reduce this width-8 predicate count from 36 to 8 per pair
+  (77.8%), but must prove the reduction and target-first reason equivalence after a
+  separately reviewed WU5 implementation. The empty-context stack-key fast path is
+  measured but has no allocation claim and has not cleared the gate.

@@ -233,7 +233,20 @@ impl InferenceContext {
             return;
         };
         for (name, target_ty) in &target_pairs {
-            if let Some((_, source_ty)) = source_pairs.iter().find(|(n, _)| n == name) {
+            #[cfg(test)]
+            super::helpers::measure_inference(|measure| measure.object_target_properties += 1);
+            #[cfg(test)]
+            let source_property = source_pairs.iter().find(|(source_name, _)| {
+                super::helpers::measure_inference(|measure| {
+                    measure.object_source_property_comparisons += 1
+                });
+                source_name == name
+            });
+            #[cfg(not(test))]
+            let source_property = source_pairs
+                .iter()
+                .find(|(source_name, _)| source_name == name);
+            if let Some((_, source_ty)) = source_property {
                 self.infer(interner, *source_ty, *target_ty, candidates);
             }
         }
