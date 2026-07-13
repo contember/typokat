@@ -25,11 +25,16 @@ decisions → reference → archive.
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
+- [`sprint-2026-07-13-semantic-duplication-layering.md`](sprints/sprint-2026-07-13-semantic-duplication-layering.md) —
+  active bounded deduplication and measurement-gated repeated-work hardening.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **Semantic duplication/layering sprint active 2026-07-13** — class-member reserved surfaces,
+  neutral test/parameter/prelude seams, call/construct selector parity, lazy conditional-infer work,
+  and measurement-only mapped/constraint follow-up with explicit cache/reuse stop gates.
 - **Pre-lib hardening shipped 2026-07-13** (archived:
   [`archive/sprint-2026-07-12-pre-lib-hardening.md`](archive/sprint-2026-07-12-pre-lib-hardening.md)) —
   aliased construction (`22`), evaluator cycles (`56`), callable-object `ReturnType` inference

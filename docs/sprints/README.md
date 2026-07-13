@@ -22,3 +22,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 <!-- one line per active sprint; empty between sprints -->
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold public-witness gate; no implementation started.
+- [`sprint-2026-07-13-semantic-duplication-layering.md`](sprint-2026-07-13-semantic-duplication-layering.md) —
+  approved bounded deduplication plus measurement-gated repeated-work reductions.
