@@ -1,6 +1,41 @@
 use super::*;
 use crate::types::repr::GenericTypeParam;
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct ConstraintEvalMeasure {
+    pub evaluate_calls: u64,
+    pub pending_calls: u64,
+    pub structural_entries: u64,
+    pub structural_reentries: u64,
+    pub metadata_children: u64,
+    pub signature_children: u64,
+    pub tainted_identity_returns: u64,
+    pub exhausted_identity_returns: u64,
+    pub re_interns: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static CONSTRAINT_EVAL_MEASURE: std::cell::RefCell<ConstraintEvalMeasure> = std::cell::RefCell::new(ConstraintEvalMeasure::default());
+}
+
+#[cfg(test)]
+pub(super) fn reset_constraint_eval_measure() {
+    CONSTRAINT_EVAL_MEASURE
+        .with(|measure| *measure.borrow_mut() = ConstraintEvalMeasure::default());
+}
+
+#[cfg(test)]
+pub(super) fn constraint_eval_measure() -> ConstraintEvalMeasure {
+    CONSTRAINT_EVAL_MEASURE.with(|measure| *measure.borrow())
+}
+
+#[cfg(test)]
+fn measure_constraint_eval(update: impl FnOnce(&mut ConstraintEvalMeasure)) {
+    CONSTRAINT_EVAL_MEASURE.with(|measure| update(&mut measure.borrow_mut()));
+}
+
 pub(in crate::check) struct InferenceConstraintEvaluation {
     pub(in crate::check) result: TypeId,
     pub(in crate::check) exhausted: bool,
@@ -57,10 +92,14 @@ impl<'a> InferenceConstraintEvaluator<'a> {
     }
 
     fn evaluate(&mut self, ty: TypeId) -> TypeId {
+        #[cfg(test)]
+        measure_constraint_eval(|measure| measure.evaluate_calls += 1);
         if self.exhausted {
             return ty;
         }
         if self.in_progress.contains(&ty) {
+            #[cfg(test)]
+            measure_constraint_eval(|measure| measure.structural_reentries += 1);
             self.note_structural_cycle(ty);
             return ty;
         }
@@ -86,6 +125,8 @@ impl<'a> InferenceConstraintEvaluator<'a> {
     }
 
     fn enter_structural(&mut self, ty: TypeId) {
+        #[cfg(test)]
+        measure_constraint_eval(|measure| measure.structural_entries += 1);
         let inserted = self.in_progress.insert(ty);
         debug_assert!(inserted);
         self.active_stack.push(ty);
@@ -112,6 +153,8 @@ impl<'a> InferenceConstraintEvaluator<'a> {
     }
 
     fn evaluate_pending(&mut self, ty: TypeId) -> TypeId {
+        #[cfg(test)]
+        measure_constraint_eval(|measure| measure.pending_calls += 1);
         let result;
         let exhausted;
         let cycle_detected;
@@ -184,8 +227,19 @@ impl<'a> InferenceConstraintEvaluator<'a> {
         let tainted = self.leave_structural(ty);
 
         if self.exhausted || tainted {
+            #[cfg(test)]
+            measure_constraint_eval(|measure| {
+                if self.exhausted {
+                    measure.exhausted_identity_returns += 1;
+                }
+                if tainted {
+                    measure.tainted_identity_returns += 1;
+                }
+            });
             ty
         } else if changed {
+            #[cfg(test)]
+            measure_constraint_eval(|measure| measure.re_interns += 1);
             self.interner.intern_object(ObjectType {
                 properties,
                 string_index,
@@ -208,6 +262,11 @@ impl<'a> InferenceConstraintEvaluator<'a> {
             .type_params
             .into_iter()
             .map(|type_param| {
+                #[cfg(test)]
+                measure_constraint_eval(|measure| {
+                    measure.metadata_children += type_param.constraint.is_some() as u64
+                        + type_param.default.is_some() as u64;
+                });
                 let constraint = type_param.constraint.map(|constraint| {
                     let new_constraint = self.evaluate(constraint);
                     changed |= new_constraint != constraint;
@@ -226,6 +285,8 @@ impl<'a> InferenceConstraintEvaluator<'a> {
             })
             .collect();
         let receiver = function.receiver.map(|receiver| {
+            #[cfg(test)]
+            measure_constraint_eval(|measure| measure.signature_children += 1);
             let new_receiver = self.evaluate(receiver);
             changed |= new_receiver != receiver;
             new_receiver
@@ -234,6 +295,8 @@ impl<'a> InferenceConstraintEvaluator<'a> {
             .params
             .into_iter()
             .map(|param| {
+                #[cfg(test)]
+                measure_constraint_eval(|measure| measure.signature_children += 1);
                 let new_ty = self.evaluate(param.ty);
                 changed |= new_ty != param.ty;
                 ParameterType {
@@ -242,13 +305,26 @@ impl<'a> InferenceConstraintEvaluator<'a> {
                 }
             })
             .collect();
+        #[cfg(test)]
+        measure_constraint_eval(|measure| measure.signature_children += 1);
         let ret = self.evaluate(function.ret);
         changed |= ret != function.ret;
         let tainted = self.leave_structural(ty);
 
         if self.exhausted || tainted {
+            #[cfg(test)]
+            measure_constraint_eval(|measure| {
+                if self.exhausted {
+                    measure.exhausted_identity_returns += 1;
+                }
+                if tainted {
+                    measure.tainted_identity_returns += 1;
+                }
+            });
             ty
         } else if changed {
+            #[cfg(test)]
+            measure_constraint_eval(|measure| measure.re_interns += 1);
             self.interner.intern_function(FunctionType {
                 type_params,
                 receiver,
@@ -277,8 +353,19 @@ impl<'a> InferenceConstraintEvaluator<'a> {
         let tainted = self.leave_structural(ty);
 
         if self.exhausted || tainted {
+            #[cfg(test)]
+            measure_constraint_eval(|measure| {
+                if self.exhausted {
+                    measure.exhausted_identity_returns += 1;
+                }
+                if tainted {
+                    measure.tainted_identity_returns += 1;
+                }
+            });
             ty
         } else if changed {
+            #[cfg(test)]
+            measure_constraint_eval(|measure| measure.re_interns += 1);
             self.interner.union(members)
         } else {
             ty
@@ -307,8 +394,19 @@ impl<'a> InferenceConstraintEvaluator<'a> {
         let tainted = self.leave_structural(ty);
 
         if self.exhausted || tainted {
+            #[cfg(test)]
+            measure_constraint_eval(|measure| {
+                if self.exhausted {
+                    measure.exhausted_identity_returns += 1;
+                }
+                if tainted {
+                    measure.tainted_identity_returns += 1;
+                }
+            });
             ty
         } else if changed {
+            #[cfg(test)]
+            measure_constraint_eval(|measure| measure.re_interns += 1);
             self.interner.intersection(members)
         } else {
             ty
@@ -361,8 +459,19 @@ impl<'a> InferenceConstraintEvaluator<'a> {
         let tainted = self.leave_structural(ty);
 
         if self.exhausted || tainted {
+            #[cfg(test)]
+            measure_constraint_eval(|measure| {
+                if self.exhausted {
+                    measure.exhausted_identity_returns += 1;
+                }
+                if tainted {
+                    measure.tainted_identity_returns += 1;
+                }
+            });
             ty
         } else if changed {
+            #[cfg(test)]
+            measure_constraint_eval(|measure| measure.re_interns += 1);
             self.interner
                 .intern_tuple_type(TupleType { elements, rest })
         } else {

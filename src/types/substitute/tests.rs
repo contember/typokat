@@ -744,3 +744,111 @@ fn self_referential_nominal_object_terminates() {
         "a recursive nominal object with no type param substitutes to itself"
     );
 }
+
+#[test]
+fn measure_substitution_distinguishes_exact_blocked_context_repeats() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let id = TypeParamId(90_200);
+    let t = interner.intern_type_param(id, "T");
+    let shared = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("value", t)],
+        ret: t,
+    });
+    let root = interner.intern_tuple(vec![shared, shared]);
+    let mut map = FxHashMap::default();
+    map.insert(id, wk.number);
+
+    super::reset_substitution_measure();
+    let mut substitution = Substitution::new(&map);
+    assert_ne!(substitution.apply(&mut interner, root), root);
+    let same_context = super::substitution_measure();
+    assert_eq!(same_context.runs, 1);
+    assert_eq!(same_context.apply_visits, 7);
+    assert_eq!(same_context.type_id_repeats, 4);
+    assert_eq!(same_context.exact_context_repeats, 4);
+    assert_eq!(same_context.type_param_map_hits, 4);
+    assert_eq!(same_context.blocked_type_param_hits, 0);
+    assert_eq!(same_context.cycle_reentries, 0);
+
+    let wrapper = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id,
+            constraint: None,
+            default: None,
+        }],
+        receiver: None,
+        params: vec![ParameterType::required("value", shared)],
+        ret: wk.void,
+    });
+    let adversary = interner.intern_tuple(vec![shared, wrapper, shared]);
+    super::reset_substitution_measure();
+    let mut substitution = Substitution::new(&map);
+    let result = substitution.apply(&mut interner, adversary);
+    let measure = super::substitution_measure();
+    assert_ne!(result, adversary);
+    assert_eq!(measure.apply_visits, 12);
+    assert_eq!(measure.type_id_repeats, 7);
+    assert_eq!(measure.exact_context_repeats, 5);
+    assert_eq!(measure.type_param_map_hits, 4);
+    assert_eq!(measure.blocked_type_param_hits, 2);
+    assert_eq!(measure.cycle_reentries, 0);
+    assert!(
+        measure.exact_context_repeats < measure.type_id_repeats,
+        "the shared function is visited under both empty and blocked binder contexts"
+    );
+
+    let recursive = interner.reserve_object();
+    interner.fill_object(
+        recursive,
+        ObjectType {
+            properties: vec![prop("self", recursive)],
+            ..Default::default()
+        },
+    );
+    super::reset_substitution_measure();
+    let mut substitution = Substitution::new(&map);
+    assert_eq!(substitution.apply(&mut interner, recursive), recursive);
+    let cycle = super::substitution_measure();
+    assert_eq!(cycle.apply_visits, 2);
+    assert_eq!(cycle.type_id_repeats, 1);
+    assert_eq!(cycle.exact_context_repeats, 1);
+    assert_eq!(cycle.cycle_reentries, 1);
+}
+
+#[test]
+#[ignore = "WU4 counter-only measurement; exact-context snapshots make timing unavailable"]
+fn measure_substitution_hotpaths_counter_only() {
+    for count in [10_000, 100_000] {
+        let mut samples = Vec::new();
+        for _ in 0..5 {
+            let mut interner = Interner::with_intrinsics();
+            let wk = interner.well_known();
+            let id = TypeParamId(90_210);
+            let t = interner.intern_type_param(id, "T");
+            let shared = interner.intern_function(FunctionType {
+                type_params: Vec::new(),
+                receiver: None,
+                params: vec![ParameterType::required("value", t)],
+                ret: t,
+            });
+            let root = interner.intern_tuple(vec![shared; count]);
+            let mut map = FxHashMap::default();
+            map.insert(id, wk.number);
+            super::reset_substitution_measure();
+            let mut substitution = Substitution::new(&map);
+            assert_ne!(substitution.apply(&mut interner, root), root);
+            let measure = super::substitution_measure();
+            assert_eq!(measure.apply_visits, (count * 3 + 1) as u64);
+            assert_eq!(measure.type_id_repeats, (count * 3 - 2) as u64);
+            assert_eq!(measure.exact_context_repeats, (count * 3 - 2) as u64);
+            assert_eq!(measure.type_param_map_hits, (count * 2) as u64);
+            samples.push(measure);
+        }
+        println!(
+            "substitution count={count} timing=unavailable_exact_context_snapshot counters={samples:?}"
+        );
+    }
+}

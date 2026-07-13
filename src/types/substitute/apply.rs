@@ -13,6 +13,8 @@ impl<'a> Substitution<'a> {
     pub(super) fn apply_object(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
         // Re-entry on an in-flight object id breaks the cycle (see module docs).
         if self.in_progress.contains(&ty) {
+            #[cfg(test)]
+            measure_substitution(|measure| measure.cycle_reentries += 1);
             return ty;
         }
         // Snapshot the property (name, optional, type) tuples before any mutable
@@ -94,6 +96,8 @@ impl<'a> Substitution<'a> {
     /// and defaults still rewrite free outer references.
     pub(super) fn apply_function(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
         if self.in_progress.contains(&ty) {
+            #[cfg(test)]
+            measure_substitution(|measure| measure.cycle_reentries += 1);
             return ty;
         }
         let Some(function) = interner.store().function_type(ty) else {
@@ -162,6 +166,8 @@ impl<'a> Substitution<'a> {
     /// member changed**; otherwise the original id is returned.
     pub(super) fn apply_union(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
         if self.in_progress.contains(&ty) {
+            #[cfg(test)]
+            measure_substitution(|measure| measure.cycle_reentries += 1);
             return ty;
         }
         let Some(members) = interner.store().union_members(ty) else {
@@ -192,6 +198,8 @@ impl<'a> Substitution<'a> {
     /// `Interner::intersection` only when a member changed.
     pub(super) fn apply_intersection(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
         if self.in_progress.contains(&ty) {
+            #[cfg(test)]
+            measure_substitution(|measure| measure.cycle_reentries += 1);
             return ty;
         }
         let Some(members) = interner.store().intersection_members(ty) else {

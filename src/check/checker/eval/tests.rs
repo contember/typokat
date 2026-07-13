@@ -1,6 +1,7 @@
 use super::*;
 use crate::check::checker::eval::keyof::{contains_deferred_keyof, keyof_of_object};
 use crate::types::repr::{FunctionType, GenericTypeParam, ObjectType, ParameterType, PropertyType};
+use std::time::Instant;
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
@@ -158,6 +159,7 @@ fn assert_recursive_function_binder_cycle_preserves_identity(in_constraint: bool
     });
     let mut next = 90_143;
 
+    super::extends::reset_constraint_eval_measure();
     let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
 
     assert!(!evaluation.exhausted);
@@ -177,6 +179,11 @@ fn assert_recursive_function_binder_cycle_preserves_identity(in_constraint: bool
             .ty,
         function
     );
+    let measure = super::extends::constraint_eval_measure();
+    assert_eq!(measure.structural_entries, 3);
+    assert_eq!(measure.structural_reentries, 1);
+    assert_eq!(measure.tainted_identity_returns, 2);
+    assert_eq!(measure.re_interns, 1);
 }
 
 #[test]
@@ -381,6 +388,180 @@ fn infer_rewrite_keeps_recursive_child_but_rewrites_acyclic_sibling() {
             .ty,
         fresh
     );
+}
+
+#[test]
+fn measure_infer_rewrite_counts_shared_dag_and_cycle_sibling() {
+    let mut interner = Interner::with_intrinsics();
+    let outer_infer = interner.intern_infer(0);
+    let shared = interner.intern_object(ObjectType {
+        properties: vec![prop("value", outer_infer)],
+        ..Default::default()
+    });
+    let dag = interner.intern_tuple(vec![shared, shared]);
+    let fresh = interner.well_known().string;
+    let recursive = interner.reserve_object();
+    interner.fill_object(
+        recursive,
+        ObjectType {
+            properties: vec![prop("self", recursive), prop("value", outer_infer)],
+            ..Default::default()
+        },
+    );
+    let mut next = 90_123;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    super::instantiation::reset_infer_rewrite_measure();
+    let rewritten = evaluator.substitute_infers(dag, &[fresh]);
+    assert_ne!(rewritten, dag);
+    assert_eq!(
+        super::instantiation::infer_rewrite_measure(),
+        super::instantiation::InferRewriteMeasure {
+            top_level_runs: 1,
+            visits: 4,
+            memo_hits: 1,
+            memo_inserts: 3,
+            reentries: 0,
+            tainted_identity_returns: 0,
+        }
+    );
+    super::instantiation::reset_infer_rewrite_measure();
+    assert_eq!(evaluator.substitute_infers(recursive, &[fresh]), recursive);
+    assert_eq!(
+        super::instantiation::infer_rewrite_measure(),
+        super::instantiation::InferRewriteMeasure {
+            top_level_runs: 1,
+            visits: 3,
+            memo_hits: 0,
+            memo_inserts: 1,
+            reentries: 1,
+            tainted_identity_returns: 1,
+        }
+    );
+}
+
+#[test]
+fn measure_constraint_evaluator_counts_function_metadata_fanout() {
+    let mut interner = Interner::with_intrinsics();
+    let uppercase = interner.well_known().uppercase;
+    let literal = interner.intern_literal(LiteralValue::String("fanout".into()));
+    let upper = interner.intern_instantiation(uppercase, vec![(TypeParamId(90_160), literal)]);
+    let source = interner.intern_function(FunctionType {
+        type_params: vec![
+            GenericTypeParam {
+                id: TypeParamId(90_161),
+                constraint: Some(upper),
+                default: Some(upper),
+            },
+            GenericTypeParam {
+                id: TypeParamId(90_162),
+                constraint: Some(upper),
+                default: Some(upper),
+            },
+        ],
+        receiver: Some(upper),
+        params: Vec::new(),
+        ret: interner.well_known().void,
+    });
+    let mut next = 90_163;
+
+    super::extends::reset_constraint_eval_measure();
+    let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
+
+    assert_ne!(evaluation.result, source);
+    let measure = super::extends::constraint_eval_measure();
+    assert_eq!(measure.structural_entries, 1);
+    assert_eq!(measure.structural_reentries, 0);
+    assert_eq!(measure.metadata_children, 4);
+    assert_eq!(measure.signature_children, 2);
+    assert_eq!(measure.pending_calls, 5);
+    assert_eq!(measure.tainted_identity_returns, 0);
+    assert_eq!(measure.exhausted_identity_returns, 0);
+    assert_eq!(measure.re_interns, 1);
+}
+
+#[test]
+#[ignore = "WU4 release measurement; run explicitly with --ignored --nocapture"]
+fn measure_infer_rewrite_hotpaths_release() {
+    for count in [10_000, 100_000] {
+        let mut samples = Vec::new();
+        for _ in 0..5 {
+            let mut interner = Interner::with_intrinsics();
+            let infer = interner.intern_infer(0);
+            let shared = interner.intern_object(ObjectType {
+                properties: vec![prop("value", infer)],
+                ..Default::default()
+            });
+            let root = interner.intern_tuple(vec![shared; count]);
+            let fresh = interner.well_known().string;
+            let mut next = 90_170;
+            let mut memo = FxHashMap::default();
+            let mut evaluator =
+                ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+            super::instantiation::reset_infer_rewrite_measure();
+            let started = Instant::now();
+            assert_ne!(evaluator.substitute_infers(root, &[fresh]), root);
+            let elapsed = started.elapsed();
+            let measure = super::instantiation::infer_rewrite_measure();
+            assert_eq!(measure.visits, count as u64 + 2);
+            assert_eq!(measure.memo_hits, count as u64 - 1);
+            assert_eq!(measure.memo_inserts, 3);
+            samples.push(elapsed);
+        }
+        samples.sort_unstable();
+        println!(
+            "infer rewrite count={count} samples={samples:?} median={:?} range={:?}..{:?}",
+            samples[2], samples[0], samples[4]
+        );
+    }
+}
+
+#[test]
+#[ignore = "WU4 release measurement; run explicitly with --ignored --nocapture"]
+fn measure_constraint_evaluator_hotpaths_release() {
+    for count in [10_000, 100_000] {
+        let mut samples = Vec::new();
+        for _ in 0..5 {
+            let mut interner = Interner::with_intrinsics();
+            let uppercase = interner.well_known().uppercase;
+            let literal = interner.intern_literal(LiteralValue::String("fanout".into()));
+            let upper =
+                interner.intern_instantiation(uppercase, vec![(TypeParamId(90_180), literal)]);
+            let type_params = (0..count)
+                .map(|index| GenericTypeParam {
+                    id: TypeParamId(91_000 + index as u32),
+                    constraint: Some(upper),
+                    default: Some(upper),
+                })
+                .collect();
+            let source = interner.intern_function(FunctionType {
+                type_params,
+                receiver: Some(upper),
+                params: Vec::new(),
+                ret: interner.well_known().void,
+            });
+            let mut next = 92_000;
+            super::extends::reset_constraint_eval_measure();
+            let started = Instant::now();
+            let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
+            let elapsed = started.elapsed();
+            assert_ne!(evaluation.result, source);
+            let measure = super::extends::constraint_eval_measure();
+            assert_eq!(measure.metadata_children, (count * 2) as u64);
+            assert_eq!(measure.signature_children, 2);
+            assert_eq!(measure.pending_calls, (count * 2 + 1) as u64);
+            assert_eq!(measure.evaluate_calls, (count * 4 + 4) as u64);
+            assert_eq!(measure.re_interns, 1);
+            samples.push(elapsed);
+        }
+        samples.sort_unstable();
+        println!(
+            "constraint evaluator count={count} samples={samples:?} median={:?} range={:?}..{:?}",
+            samples[2], samples[0], samples[4]
+        );
+    }
 }
 
 #[test]

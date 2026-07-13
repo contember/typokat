@@ -1,5 +1,36 @@
 use super::*;
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct InferRewriteMeasure {
+    pub top_level_runs: u64,
+    pub visits: u64,
+    pub memo_hits: u64,
+    pub memo_inserts: u64,
+    pub reentries: u64,
+    pub tainted_identity_returns: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static INFER_REWRITE_MEASURE: std::cell::RefCell<InferRewriteMeasure> = std::cell::RefCell::new(InferRewriteMeasure::default());
+}
+
+#[cfg(test)]
+pub(super) fn reset_infer_rewrite_measure() {
+    INFER_REWRITE_MEASURE.with(|measure| *measure.borrow_mut() = InferRewriteMeasure::default());
+}
+
+#[cfg(test)]
+pub(super) fn infer_rewrite_measure() -> InferRewriteMeasure {
+    INFER_REWRITE_MEASURE.with(|measure| *measure.borrow())
+}
+
+#[cfg(test)]
+fn measure_infer_rewrite(update: impl FnOnce(&mut InferRewriteMeasure)) {
+    INFER_REWRITE_MEASURE.with(|measure| update(&mut measure.borrow_mut()));
+}
+
 /// Per-top-level context for conditional `infer` binder freshening. The fresh binder
 /// slice is lexical to one conditional, so neither the cycle guard nor completed
 /// results may outlive this rewrite invocation.
@@ -437,6 +468,8 @@ impl<'a> ConditionalEvaluator<'a> {
     /// a nested conditional (which rebinds its own indices — M25 does not model nested
     /// `infer`). Re-interns only when something changed.
     pub(super) fn substitute_infers(&mut self, ty: TypeId, fresh: &[TypeId]) -> TypeId {
+        #[cfg(test)]
+        measure_infer_rewrite(|measure| measure.top_level_runs += 1);
         let mut ctx = InferRewrite {
             fresh,
             in_progress: FxHashSet::default(),
@@ -451,10 +484,16 @@ impl<'a> ConditionalEvaluator<'a> {
     /// Taint the cycle suffix, not its acyclic ancestors: each tainted node retains its
     /// original identity, while independent parent siblings can still be rewritten.
     fn substitute_infers_rec(&mut self, ty: TypeId, ctx: &mut InferRewrite<'_>) -> TypeId {
+        #[cfg(test)]
+        measure_infer_rewrite(|measure| measure.visits += 1);
         if let Some(&done) = ctx.memo.get(&ty) {
+            #[cfg(test)]
+            measure_infer_rewrite(|measure| measure.memo_hits += 1);
             return done;
         }
         if !ctx.in_progress.insert(ty) {
+            #[cfg(test)]
+            measure_infer_rewrite(|measure| measure.reentries += 1);
             let cycle_start = ctx
                 .active
                 .iter()
@@ -470,9 +509,13 @@ impl<'a> ConditionalEvaluator<'a> {
         debug_assert_eq!(popped, Some(ty));
         ctx.in_progress.remove(&ty);
         if ctx.cycle_tainted.remove(&ty) {
+            #[cfg(test)]
+            measure_infer_rewrite(|measure| measure.tainted_identity_returns += 1);
             ty
         } else {
             ctx.memo.insert(ty, result);
+            #[cfg(test)]
+            measure_infer_rewrite(|measure| measure.memo_inserts += 1);
             result
         }
     }

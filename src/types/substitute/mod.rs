@@ -9,6 +9,71 @@ use crate::types::store::TypeId;
 use crate::types::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+#[cfg(test)]
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(super) struct SubstitutionMeasure {
+    pub runs: u64,
+    pub apply_visits: u64,
+    pub type_id_repeats: u64,
+    pub exact_context_repeats: u64,
+    pub type_param_map_hits: u64,
+    pub blocked_type_param_hits: u64,
+    pub cycle_reentries: u64,
+    seen_type_ids: FxHashSet<TypeId>,
+    seen_contexts: FxHashSet<(TypeId, Vec<TypeParamId>)>,
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for SubstitutionMeasure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubstitutionMeasure")
+            .field("runs", &self.runs)
+            .field("apply_visits", &self.apply_visits)
+            .field("type_id_repeats", &self.type_id_repeats)
+            .field("exact_context_repeats", &self.exact_context_repeats)
+            .field("type_param_map_hits", &self.type_param_map_hits)
+            .field("blocked_type_param_hits", &self.blocked_type_param_hits)
+            .field("cycle_reentries", &self.cycle_reentries)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static SUBSTITUTION_MEASURE: std::cell::RefCell<SubstitutionMeasure> = std::cell::RefCell::new(SubstitutionMeasure::default());
+}
+
+#[cfg(test)]
+pub(super) fn reset_substitution_measure() {
+    SUBSTITUTION_MEASURE.with(|measure| *measure.borrow_mut() = SubstitutionMeasure::default());
+}
+
+#[cfg(test)]
+pub(super) fn substitution_measure() -> SubstitutionMeasure {
+    SUBSTITUTION_MEASURE.with(|measure| measure.borrow().clone())
+}
+
+#[cfg(test)]
+fn measure_substitution_visit(ty: TypeId, blocked: &FxHashSet<TypeParamId>) {
+    SUBSTITUTION_MEASURE.with(|measure| {
+        let mut measure = measure.borrow_mut();
+        measure.apply_visits += 1;
+        if !measure.seen_type_ids.insert(ty) {
+            measure.type_id_repeats += 1;
+        }
+        let mut context: Vec<TypeParamId> = blocked.iter().copied().collect();
+        context.sort_unstable();
+        if !measure.seen_contexts.insert((ty, context)) {
+            measure.exact_context_repeats += 1;
+        }
+    });
+}
+
+#[cfg(test)]
+pub(super) fn measure_substitution(update: impl FnOnce(&mut SubstitutionMeasure)) {
+    SUBSTITUTION_MEASURE.with(|measure| update(&mut measure.borrow_mut()));
+}
+
 mod apply;
 #[cfg(test)]
 mod tests;
@@ -28,6 +93,8 @@ pub struct Substitution<'a> {
 impl<'a> Substitution<'a> {
     /// Build a substitution from a `TypeParamId → TypeId` map.
     pub fn new(map: &'a FxHashMap<TypeParamId, TypeId>) -> Self {
+        #[cfg(test)]
+        measure_substitution(|measure| measure.runs += 1);
         Substitution {
             map,
             in_progress: FxHashSet::default(),
@@ -45,17 +112,28 @@ impl<'a> Substitution<'a> {
             return ty;
         }
 
+        #[cfg(test)]
+        measure_substitution_visit(ty, &self.blocked);
+
         match interner.store().tag(ty) {
             // A type parameter: replace it with its argument if mapped; otherwise
             // (a parameter from an *outer* scope, not part of this substitution)
             // leave it untouched.
             TypeTag::TypeParam => {
                 let param_id = interner.store().type_param(ty).map(|p| p.id);
+                #[cfg(test)]
+                if param_id.is_some_and(|id| self.blocked.contains(&id)) {
+                    measure_substitution(|measure| measure.blocked_type_param_hits += 1);
+                }
                 match param_id
                     .filter(|id| !self.blocked.contains(id))
                     .and_then(|id| self.map.get(&id).copied())
                 {
-                    Some(arg) => arg,
+                    Some(arg) => {
+                        #[cfg(test)]
+                        measure_substitution(|measure| measure.type_param_map_hits += 1);
+                        arg
+                    }
                     None => ty,
                 }
             }

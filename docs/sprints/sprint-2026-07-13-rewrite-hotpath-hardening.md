@@ -220,3 +220,67 @@ One Terra writer owns the active worktree and makes one work unit's source chang
   (77.8%), but must prove the reduction and target-first reason equivalence after a
   separately reviewed WU5 implementation. The empty-context stack-key fast path is
   measured but has no allocation claim and has not cleared the gate.
+- **WU4b rewrite/evaluator/substitution baseline (2026-07-13, revision `777e170`).**
+  Test-only thread-local counters are placed on the actual recursive entries and
+  exits: `InferRewrite` records top-level runs, visits, completed-memo hits/inserts,
+  re-entries, and tainted identity returns; `InferenceConstraintEvaluator` records
+  evaluate/pending calls, structural entries/re-entries, actual function metadata
+  and signature children, identity returns, and re-interns; `Substitution` records
+  apply visits, raw repeated `TypeId`s, repeats under the exact sorted blocked-binder
+  context, map/blocked-param hits, and existing guard re-entries. The exact-context
+  key is test-only and is collected during the real `apply` entry, not by a second
+  scan. Production builds do not contain these counters.
+
+  Small direct arena microcorpora pin the paths: an infer shared DAG has
+  `visits=4, memo_hits=1, memo_inserts=3`; its recursive infer sibling has
+  `visits=3, reentries=1, tainted_identity_returns=1, memo_inserts=1`.
+  Function metadata fanout has `metadata_children=4, signature_children=2,
+  pending_calls=5, structural_entries=1, re_interns=1`; its recursive
+  function/object/sibling witness has `structural_entries=3, reentries=1,
+  tainted_identity_returns=2, re_interns=1`. Substitution's same-context DAG has
+  `apply_visits=7, raw_repeats=exact_context_repeats=4, map_hits=4`; the blocked
+  binder adversary has `apply_visits=12, raw_repeats=7,
+  exact_context_repeats=5, map_hits=4, blocked_hits=2`; and the recursive-object
+  control has `apply_visits=2, exact_context_repeats=1, cycle_reentries=1`.
+
+  Release probes construct every graph before `Instant::now()` and run five fresh
+  repetitions at each scale on Linux 6.17.0-40-generic, x86_64, rustc 1.95.0.
+  Commands: `cargo test --release measure_infer_rewrite_hotpaths_release --
+  --ignored --nocapture`, `cargo test --release
+  measure_constraint_evaluator_hotpaths_release -- --ignored --nocapture`, and
+  `cargo test --release measure_substitution_hotpaths_counter_only -- --ignored
+  --nocapture`. Infer-rewrite emitted raw fields were stable: at 10k/100k shared
+  children, respectively, visits `10,002/100,002`, memo hits `9,999/99,999`,
+  inserts `3/3`, and re-entries/tainted returns `0/0`. The listed child-edge totals
+  `10,001/100,001` are derived arithmetic (`visits - top_level_runs`), not emitted
+  counter fields.
+  Its five elapsed samples were 10k `[89.825, 89.865, 90.206, 156.278, 181.765]µs`
+  (median `90.206µs`, range `89.825–181.765µs`) and 100k `[906.369, 962.642,
+  984.022, 1267.644, 1388.216]µs` (median `984.022µs`, range
+  `906.369–1388.216µs`). Constraint evaluation was stable at 10k/100k at
+  emitted fields evaluate calls `40,004/400,004`, pending calls `20,001/200,001`,
+  metadata children `20,000/200,000`, signature children `2/2`, structural entries
+  `1/1`, and re-interns `1/1`; the child-evaluation totals `40,003/400,003` are
+  derived arithmetic (`evaluate_calls - 1` for this single-root corpus), not emitted fields. No
+  probe had an SCC re-entry, tainted identity return, or exhaustion. Its elapsed samples were
+  10k `[1.944009, 2.002517, 4.858936, 4.976132, 5.327228]ms` (median `4.858936ms`,
+  range `1.944009–5.327228ms`) and 100k `[12.138980, 14.445246, 19.114924,
+  22.380797, 26.549633]ms` (median `19.114924ms`, range `12.138980–26.549633ms`).
+  These elapsed samples are instrumented and environment-dependent; the direct
+  counters establish only where work occurs.
+
+  Substitution timing is deliberately **unavailable**: the required exact blocked-
+  binder-context counter sorts and snapshots the current test-only set at each
+  actual `apply` entry, which would materially contaminate a timing result. Five
+  counter-only repetitions were identical: at 10k, `runs=1, apply_visits=30,001,
+  raw_repeats=exact_context_repeats=29,998, map_hits=20,000, blocked_hits=0,
+  cycle_reentries=0`; at 100k the values were `1, 300,001, 299,998, 299,998,
+  200,000, 0, 0` in the same field order. No elapsed samples, median, or range are
+  claimed for this path.
+
+  **Selection conclusion.** This is measurement only. The infer memo is the already
+  scoped WU2 mechanism, not a new WU5 candidate; evaluator fanout has no approved
+  reuse boundary. The substitution adversary proves that a raw `TypeId` repeat is
+  not a sound memo key (`7` raw repeats but only `5` exact-context repeats), so these
+  measurements do not authorize a scoped substitution memo. No WU5 selection or
+  architecture widening follows from WU4b.
