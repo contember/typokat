@@ -12,10 +12,13 @@ and, where noted, would have passed under the pre-fix harness (the bug it closes
 
 import contextlib
 import io
+import json
 import os
 import stat
 import tempfile
 import unittest
+from unittest import mock
+from urllib.error import HTTPError
 
 import tsofficial as ts
 
@@ -152,6 +155,402 @@ class CompletenessTests(unittest.TestCase):
         with temp_scoreboard(base):
             self.assertFalse(compare(cur))
 
+
+# --- Fetch integrity ---------------------------------------------------------
+
+class FetchIntegrityTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def _isolated_paths(self, default_dirs=("conformance/x",)):
+        """Run corpus/report tests without touching the ignored real artifacts."""
+        with tempfile.TemporaryDirectory() as root:
+            saved = ts.CORPUS, ts.REPORT, ts.SCOREBOARD, ts.DEFAULT_DIRS
+            ts.CORPUS = os.path.join(root, "corpus")
+            ts.REPORT = os.path.join(root, "report")
+            ts.SCOREBOARD = os.path.join(root, "scoreboard.txt")
+            ts.DEFAULT_DIRS = list(default_dirs)
+            try:
+                yield root
+            finally:
+                ts.CORPUS, ts.REPORT, ts.SCOREBOARD, ts.DEFAULT_DIRS = saved
+
+    @staticmethod
+    def _args(*, dirs=None, limit=None, check=False, save=False, rebaseline=False,
+              binary=None):
+        return type("Args", (), {
+            "dir": dirs, "limit": limit, "check": check, "save": save,
+            "rebaseline": rebaseline,
+            "bin": binary or "/missing/binary",
+        })()
+
+    def _write_full_manifest(self, paths):
+        os.makedirs(ts.CORPUS, exist_ok=True)
+        for rel in paths:
+            dst = os.path.join(ts.CORPUS, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with open(dst, "w") as f:
+                f.write("const value = 1;\n")
+        with open(os.path.join(ts.CORPUS, "manifest.json"), "w") as f:
+            json.dump({
+                "format": 2, "sha": ts.PINNED_SHA, "repo": ts.REPO,
+                "dirs": ts.DEFAULT_DIRS, "limit": None,
+                "mode": "full-default", "partial": False,
+                "tests": [{"path": rel, "source": f"tests/cases/{rel}",
+                           "baseline_source": "tests/baselines/reference/"
+                           + os.path.basename(rel)[:-3] + ".errors.txt",
+                           "baseline": False} for rel in paths],
+            }, f)
+
+    def _scoreboard_bytes(self):
+        with open(ts.SCOREBOARD, "rb") as f:
+            return f.read()
+
+    def test_default_dirs_use_keyof_for_indexed_access_cases(self):
+        """The pinned tree has indexed-access cases in `keyof`, not a separate
+        `indexedAccessTypes` directory. Keep the curated input set resolvable."""
+        self.assertIn("conformance/types/keyof", ts.DEFAULT_DIRS)
+        self.assertNotIn("conformance/types/indexedAccessTypes", ts.DEFAULT_DIRS)
+
+    def test_directory_api_failure_is_fatal(self):
+        """A configured subtree that cannot be listed must not look like an
+        empty, freshly fetched subtree."""
+        failed = mock.Mock(returncode=1, stdout="", stderr="gh: Not Found\n")
+        with mock.patch.object(ts.subprocess, "run", return_value=failed):
+            with self.assertRaises(ts.FetchFailure) as raised:
+                ts.gh_list_dir("tests/cases/conformance/types/missing")
+        self.assertIn("tests/cases/conformance/types/missing", str(raised.exception))
+
+    def test_malformed_or_empty_directory_success_is_fatal(self):
+        malformed = mock.Mock(returncode=0, stdout="<html>retry later</html>\n", stderr="")
+        with mock.patch.object(ts.subprocess, "run", return_value=malformed):
+            with self.assertRaises(ts.FetchFailure):
+                ts.gh_list_dir("tests/cases/conformance/x", configured_root=True)
+        empty = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(ts.subprocess, "run", return_value=empty):
+            with self.assertRaises(ts.FetchFailure):
+                ts.gh_list_dir("tests/cases/conformance/x", configured_root=True)
+
+    def test_directory_rows_must_be_direct_children_of_the_requested_path(self):
+        for row in (
+                "file\tsibling.ts\ttests/cases/conformance/sibling.ts\n",
+                "file\tnested.ts\ttests/cases/conformance/x/sub/nested.ts\n"):
+            response = mock.Mock(returncode=0, stdout=row, stderr="")
+            with mock.patch.object(ts.subprocess, "run", return_value=response):
+                with self.assertRaises(ts.FetchFailure):
+                    ts.gh_list_dir("tests/cases/conformance/x")
+
+    def test_only_optional_baselines_may_be_missing(self):
+        """A 404 for a listed source is corruption; a missing `.errors.txt`
+        baseline remains the documented clean-test case."""
+        missing = HTTPError("https://example.invalid", 404, "Not Found", None, None)
+        with mock.patch.object(ts.urllib.request, "urlopen", side_effect=missing):
+            with self.assertRaises(ts.FetchFailure):
+                ts.fetch_blob("tests/cases/conformance/types/keyof/case.ts")
+        with mock.patch.object(ts.urllib.request, "urlopen", side_effect=missing):
+            with self.assertRaises(ts.FetchFailure):
+                ts.fetch_blob("tests/cases/conformance/types/keyof/case.ts",
+                              allow_missing=True)
+        with mock.patch.object(ts.urllib.request, "urlopen", side_effect=missing):
+            self.assertIsNone(ts.fetch_blob(
+                "tests/baselines/reference/case.errors.txt", allow_missing=True))
+
+    def test_html_blob_transport_is_fatal(self):
+        response = mock.MagicMock()
+        response.status = 200
+        response.headers.get_content_type.return_value = "text/html"
+        response.__enter__.return_value = response
+        with mock.patch.object(ts.urllib.request, "urlopen", return_value=response):
+            with self.assertRaises(ts.FetchFailure):
+                ts.fetch_blob("tests/cases/conformance/x/case.ts")
+
+    def test_failed_fetch_keeps_published_corpus_and_removes_staging(self):
+        """A source failure after a prior staged source cannot contaminate the
+        previous corpus or make a partial manifest look published."""
+        with self._isolated_paths() as root:
+            os.makedirs(ts.CORPUS)
+            with open(os.path.join(ts.CORPUS, "manifest.json"), "w") as f:
+                f.write('{"old": true}\n')
+            with open(os.path.join(ts.CORPUS, "old.ts"), "w") as f:
+                f.write("old\n")
+            paths = ["tests/cases/conformance/x/one.ts",
+                     "tests/cases/conformance/x/two.ts"]
+
+            def fetch(path, **_kwargs):
+                if path.endswith("two.ts"):
+                    raise ts.FetchFailure("second source failed")
+                return "const one = 1;\n" if path.endswith("one.ts") else None
+
+            with mock.patch.object(ts, "collect_ts_paths", return_value=paths), \
+                 mock.patch.object(ts, "fetch_blob", side_effect=fetch):
+                with self.assertRaises(ts.FetchFailure):
+                    ts.cmd_fetch(self._args())
+
+            self.assertTrue(os.path.exists(os.path.join(ts.CORPUS, "old.ts")))
+            with open(os.path.join(ts.CORPUS, "manifest.json")) as f:
+                self.assertEqual(f.read(), '{"old": true}\n')
+            self.assertFalse(any(name.startswith(".corpus-fetch-")
+                                 for name in os.listdir(root)))
+
+    def test_successful_fetch_replaces_corpus_with_complete_manifest(self):
+        with self._isolated_paths():
+            os.makedirs(ts.CORPUS)
+            with open(os.path.join(ts.CORPUS, "old.ts"), "w") as f:
+                f.write("old\n")
+            path = "tests/cases/conformance/x/fresh.ts"
+
+            def fetch(blob, **_kwargs):
+                return "const fresh = 1;\n" if blob == path else None
+
+            with mock.patch.object(ts, "collect_ts_paths", return_value=[path]), \
+                 mock.patch.object(ts, "fetch_blob", side_effect=fetch):
+                ts.cmd_fetch(self._args())
+
+            with open(os.path.join(ts.CORPUS, "manifest.json")) as f:
+                manifest = json.load(f)
+            self.assertEqual(manifest["mode"], "full-default")
+            self.assertFalse(manifest["partial"])
+            self.assertIsNone(manifest["limit"])
+            self.assertEqual(manifest["tests"], [{
+                "path": "conformance/x/fresh.ts", "source": path,
+                "baseline_source": "tests/baselines/reference/fresh.errors.txt",
+                "baseline": False,
+            }])
+            self.assertFalse(os.path.exists(os.path.join(ts.CORPUS, "old.ts")))
+
+    def test_check_rejects_extra_or_partial_manifest_before_discovery(self):
+        with self._isolated_paths():
+            self._write_full_manifest(["conformance/x/a.ts"])
+            with open(os.path.join(ts.CORPUS, "conformance/x/stale.ts"), "w") as f:
+                f.write("const stale = 1;\n")
+            with self.assertRaises(ts.FetchFailure):
+                ts.validate_check_manifest()
+
+    def test_manifest_rejects_orphan_baseline_and_unexpected_file(self):
+        with self._isolated_paths():
+            self._write_full_manifest(["conformance/x/a.ts"])
+            with open(os.path.join(ts.CORPUS, "conformance/x/orphan.errors.txt"), "w") as f:
+                f.write("orphan\n")
+            with self.assertRaises(ts.FetchFailure):
+                ts.load_manifest()
+            os.unlink(os.path.join(ts.CORPUS, "conformance/x/orphan.errors.txt"))
+            with open(os.path.join(ts.CORPUS, "unexpected.json"), "w") as f:
+                f.write("{}\n")
+            with self.assertRaises(ts.FetchFailure):
+                ts.load_manifest()
+
+    def test_collect_rejects_remote_path_escapes_before_fetching(self):
+        rows = [("file", "escape.ts", "tests/cases/conformance/x/../escape.ts")]
+        with mock.patch.object(ts, "gh_list_dir", return_value=rows):
+            with self.assertRaises(ts.FetchFailure):
+                ts.collect_ts_paths(["conformance/x"])
+        rows = [("file", "escape.ts", "tests/cases\\conformance\\x\\escape.ts")]
+        with mock.patch.object(ts, "gh_list_dir", return_value=rows):
+            with self.assertRaises(ts.FetchFailure):
+                ts.collect_ts_paths(["conformance/x"])
+
+    def test_publish_rename_failure_restores_old_corpus_and_cleans_staging(self):
+        with self._isolated_paths() as root:
+            os.makedirs(ts.CORPUS)
+            with open(os.path.join(ts.CORPUS, "old.ts"), "w") as f:
+                f.write("old\n")
+            path = "tests/cases/conformance/x/fresh.ts"
+            real_replace = os.replace
+
+            def fail_publish_stage(src, dst):
+                if os.path.basename(src).startswith(".corpus-fetch-") and dst == ts.CORPUS:
+                    raise OSError("publish rename failed")
+                return real_replace(src, dst)
+
+            with mock.patch.object(ts, "collect_ts_paths", return_value=[path]), \
+                 mock.patch.object(ts, "fetch_blob", return_value="const fresh = 1;\n"), \
+                 mock.patch.object(ts.os, "replace", side_effect=fail_publish_stage):
+                with self.assertRaises(OSError):
+                    ts.cmd_fetch(self._args())
+
+            with open(os.path.join(ts.CORPUS, "old.ts")) as f:
+                self.assertEqual(f.read(), "old\n")
+            self.assertFalse(any(name.startswith((".corpus-fetch-", ".corpus-previous-"))
+                                 for name in os.listdir(root)))
+
+    def test_backup_cleanup_failure_keeps_new_corpus_and_warns(self):
+        with self._isolated_paths() as root:
+            os.makedirs(ts.CORPUS)
+            with open(os.path.join(ts.CORPUS, "old.ts"), "w") as f:
+                f.write("old\n")
+            path = "tests/cases/conformance/x/fresh.ts"
+            real_rmtree = ts.shutil.rmtree
+
+            def fail_only_backup(target, *args, **kwargs):
+                if os.path.basename(target).startswith(".corpus-previous-"):
+                    raise OSError("backup busy")
+                return real_rmtree(target, *args, **kwargs)
+
+            stderr = io.StringIO()
+            with mock.patch.object(ts, "collect_ts_paths", return_value=[path]), \
+                 mock.patch.object(ts, "fetch_blob", return_value="const fresh = 1;\n"), \
+                 mock.patch.object(ts.shutil, "rmtree", side_effect=fail_only_backup), \
+                 contextlib.redirect_stderr(stderr):
+                ts.cmd_fetch(self._args())
+
+            self.assertTrue(os.path.exists(os.path.join(ts.CORPUS, "manifest.json")))
+            self.assertFalse(os.path.exists(os.path.join(ts.CORPUS, "old.ts")))
+            backups = [name for name in os.listdir(root)
+                       if name.startswith(".corpus-previous-")]
+            self.assertEqual(len(backups), 1)
+            self.assertIn(backups[0], stderr.getvalue())
+            self.assertIn("retry cleanup", stderr.getvalue())
+
+    def test_check_and_save_reject_stale_scoreboard_header_without_writing(self):
+        with self._isolated_paths():
+            self._write_full_manifest(["conformance/x/a.ts"])
+            ts.write_scoreboard([rec("conformance/x/a.ts")])
+            with open(ts.SCOREBOARD) as f:
+                stale = f.read().replace(ts.PINNED_SHA, "0" * 40, 1)
+            with open(ts.SCOREBOARD, "w") as f:
+                f.write(stale)
+            before = self._scoreboard_bytes()
+            binary = fake_binary("exit 0\n")
+            try:
+                for check, save in ((True, False), (False, True)):
+                    with self.assertRaises(SystemExit):
+                        ts.cmd_run(self._args(check=check, save=save, binary=binary))
+                    self.assertEqual(self._scoreboard_bytes(), before)
+            finally:
+                os.unlink(binary)
+
+    def test_check_rejects_missing_or_malformed_scoreboard_header(self):
+        with self._isolated_paths():
+            self._write_full_manifest(["conformance/x/a.ts"])
+            ts.write_scoreboard([rec("conformance/x/a.ts")])
+            binary = fake_binary("exit 0\n")
+            try:
+                for header in ("# scoreboard\n", "# TS @ not-a-sha\n"):
+                    with open(ts.SCOREBOARD) as f:
+                        body = f.read()
+                    body = body.replace(f"# TS @ {ts.PINNED_SHA}\n", header, 1)
+                    with open(ts.SCOREBOARD, "w") as f:
+                        f.write(body)
+                    before = self._scoreboard_bytes()
+                    with self.assertRaises(SystemExit):
+                        ts.cmd_run(self._args(check=True, binary=binary))
+                    self.assertEqual(self._scoreboard_bytes(), before)
+                    ts.write_scoreboard([rec("conformance/x/a.ts")])
+            finally:
+                os.unlink(binary)
+
+    def test_partial_or_limited_save_rejects_without_writing_scoreboard(self):
+        with self._isolated_paths():
+            self._write_full_manifest(["conformance/x/a.ts"])
+            ts.write_scoreboard([rec("conformance/x/a.ts")])
+            before = self._scoreboard_bytes()
+            with open(os.path.join(ts.CORPUS, "manifest.json")) as f:
+                manifest = json.load(f)
+            manifest.update(mode="partial", partial=True, limit=1)
+            with open(os.path.join(ts.CORPUS, "manifest.json"), "w") as f:
+                json.dump(manifest, f)
+            binary = fake_binary("exit 0\n")
+            try:
+                with self.assertRaises(SystemExit):
+                    ts.cmd_run(self._args(save=True, binary=binary))
+                self.assertEqual(self._scoreboard_bytes(), before)
+            finally:
+                os.unlink(binary)
+
+            self._write_full_manifest(["conformance/x/a.ts"])
+            binary = fake_binary("exit 0\n")
+            try:
+                with self.assertRaises(SystemExit):
+                    ts.cmd_run(self._args(save=True, limit=1, binary=binary))
+                self.assertEqual(self._scoreboard_bytes(), before)
+            finally:
+                os.unlink(binary)
+
+    def test_rebaseline_replaces_stale_or_missing_scoreboard_from_full_corpus(self):
+        with self._isolated_paths():
+            self._write_full_manifest(["conformance/x/a.ts"])
+            with open(ts.SCOREBOARD, "w") as f:
+                f.write("# TS @ " + "0" * 40 + "\nIN\t0 0 0 0\t|\tstale.ts\n")
+            binary = fake_binary("exit 0\n")
+            try:
+                ts.cmd_run(self._args(save=True, rebaseline=True, binary=binary))
+            finally:
+                os.unlink(binary)
+            board = ts.read_scoreboard()
+            self.assertEqual(set(board), {"conformance/x/a.ts"})
+            with open(ts.SCOREBOARD) as f:
+                self.assertIn(f"# TS @ {ts.PINNED_SHA}\n", f.read())
+
+            os.unlink(ts.SCOREBOARD)
+            binary = fake_binary("exit 0\n")
+            try:
+                ts.cmd_run(self._args(save=True, rebaseline=True, binary=binary))
+            finally:
+                os.unlink(binary)
+            self.assertTrue(os.path.exists(ts.SCOREBOARD))
+
+    def test_rebaseline_requires_save_and_rejects_check_combination(self):
+        with self._isolated_paths():
+            self._write_full_manifest(["conformance/x/a.ts"])
+            binary = fake_binary("exit 0\n")
+            try:
+                for check, save in ((False, False), (True, False), (True, True)):
+                    with self.assertRaises(SystemExit):
+                        ts.cmd_run(self._args(check=check, save=save, rebaseline=True,
+                                              binary=binary))
+            finally:
+                os.unlink(binary)
+
+    def test_rebaseline_still_rejects_partial_manifest(self):
+        with self._isolated_paths():
+            self._write_full_manifest(["conformance/x/a.ts"])
+            ts.write_scoreboard([rec("conformance/x/a.ts")])
+            before = self._scoreboard_bytes()
+            with open(os.path.join(ts.CORPUS, "manifest.json")) as f:
+                manifest = json.load(f)
+            manifest.update(mode="partial", partial=True, limit=1)
+            with open(os.path.join(ts.CORPUS, "manifest.json"), "w") as f:
+                json.dump(manifest, f)
+            binary = fake_binary("exit 0\n")
+            try:
+                with self.assertRaises(SystemExit):
+                    ts.cmd_run(self._args(save=True, rebaseline=True, binary=binary))
+            finally:
+                os.unlink(binary)
+            self.assertEqual(self._scoreboard_bytes(), before)
+
+    def test_successful_check_writes_zero_regression_pass_report(self):
+        with self._isolated_paths():
+            self._write_full_manifest(["conformance/x/a.ts"])
+            ts.write_scoreboard([rec("conformance/x/a.ts")])
+            binary = fake_binary("exit 0\n")
+            try:
+                ts.cmd_run(self._args(check=True, binary=binary))
+            finally:
+                os.unlink(binary)
+            with open(os.path.join(ts.REPORT, "latest.json")) as f:
+                report = json.load(f)
+            self.assertEqual(report["ratchet"], {
+                "checked": True, "verdict": "pass", "exit_code": 0,
+                "regressions": 0, "progress": 0,
+                "missing_from_corpus": 0, "missing_from_scoreboard": 0,
+            })
+
+    def test_failed_ratchet_report_carries_post_comparison_verdict(self):
+        with self._isolated_paths():
+            self._write_full_manifest(["conformance/x/a.ts"])
+            ts.write_scoreboard([rec("conformance/x/a.ts", matched=1, expected=1,
+                                     matched_detail=[(1, 2322)])])
+            binary = fake_binary("exit 0\n")
+            try:
+                with self.assertRaises(SystemExit) as exited:
+                    ts.cmd_run(self._args(check=True, binary=binary))
+            finally:
+                os.unlink(binary)
+            self.assertEqual(exited.exception.code, 1)
+            with open(os.path.join(ts.REPORT, "latest.json")) as f:
+                report = json.load(f)
+            self.assertEqual(report["ratchet"]["verdict"], "fail")
+            self.assertEqual(report["ratchet"]["exit_code"], 1)
+            self.assertEqual(report["ratchet"]["regressions"], 1)
 
 # --- Finding 3: process / exit-code handling ---------------------------------
 

@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -60,7 +61,6 @@ DEFAULT_DIRS = [
     "conformance/types/union",
     "conformance/types/intersection",
     "conformance/types/keyof",
-    "conformance/types/indexedAccessTypes",
     "conformance/types/tuple",
     "conformance/controlFlow",
     "conformance/expressions/typeGuards",
@@ -361,107 +361,320 @@ def diff(expected, actual):
 
 # --- corpus on disk ----------------------------------------------------------
 
-def corpus_tests():
-    """Yield (relpath, ts_path, baseline_path_or_None) for every fetched test."""
-    for root, _dirs, files in os.walk(CORPUS):
-        for fn in sorted(files):
-            if fn.endswith(".ts") and not fn.endswith(".d.ts"):
-                ts = os.path.join(root, fn)
-                base = ts[:-3] + ".errors.txt"
-                rel = os.path.relpath(ts, CORPUS)
-                yield rel, ts, (base if os.path.exists(base) else None)
+def manifest_tests(manifest):
+    """Return manifest-ordered `(rel, ts, baseline-or-None)` corpus entries."""
+    out = []
+    for entry in manifest["tests"]:
+        rel = entry["path"]
+        ts = os.path.join(CORPUS, rel)
+        base = ts[:-3] + ".errors.txt"
+        out.append((rel, ts, base if entry["baseline"] else None))
+    return out
 
 
 # --- fetch -------------------------------------------------------------------
 
-def gh_list_dir(path):
+class FetchFailure(RuntimeError):
+    """The pinned corpus could not be reproduced exactly."""
+
+
+def _validate_posix_path(path, root, label):
+    """Return a safe, normalized repo path rooted at ``root``."""
+    if not isinstance(path, str) or not path or "\\" in path or path.startswith("/"):
+        raise FetchFailure(f"invalid {label} path: {path!r}")
+    parts = path.split("/")
+    root_parts = root.split("/")
+    if (any(part in ("", ".", "..") for part in parts)
+            or parts[:len(root_parts)] != root_parts):
+        raise FetchFailure(f"invalid {label} path: {path!r}")
+    return "/".join(parts)
+
+
+def validate_case_path(path):
+    return _validate_posix_path(path, "tests/cases", "test source")
+
+
+def validate_baseline_path(path):
+    return _validate_posix_path(path, "tests/baselines/reference", "baseline")
+
+
+def validate_case_relpath(rel):
+    if not isinstance(rel, str) or not rel or "\\" in rel or rel.startswith("/"):
+        raise FetchFailure(f"invalid corpus test path: {rel!r}")
+    parts = rel.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise FetchFailure(f"invalid corpus test path: {rel!r}")
+    return "/".join(parts)
+
+
+def stage_path(stage, rel):
+    """Map a validated corpus-relative path into the staging tree safely."""
+    rel = validate_case_relpath(rel)
+    root = os.path.realpath(stage)
+    candidate = os.path.realpath(os.path.join(root, *rel.split("/")))
+    try:
+        contained = os.path.commonpath((root, candidate)) == root
+    except ValueError:
+        contained = False
+    if not contained:
+        raise FetchFailure(f"corpus staging path escapes its root: {rel!r}")
+    return candidate
+
+
+def gh_list_dir(path, *, configured_root=False):
     """List a repo dir at the pinned SHA via gh (authenticated, reliable).
     Returns list of (type, name, path)."""
+    path = validate_case_path(path)
     r = subprocess.run(
         ["gh", "api", f"repos/{REPO}/contents/{path}?ref={PINNED_SHA}",
          "--jq", r'.[] | [.type, .name, .path] | @tsv'],
         capture_output=True, text=True)
     if r.returncode != 0:
-        sys.stderr.write(f"  ! skip {path}: {r.stderr.strip().splitlines()[-1:] }\n")
-        return []
+        detail = r.stderr.strip().splitlines()[-1] if r.stderr.strip() else "no stderr"
+        raise FetchFailure(f"cannot list pinned directory {path}: {detail}")
     rows = []
     for line in r.stdout.splitlines():
         parts = line.split("\t")
-        if len(parts) == 3:
-            rows.append(tuple(parts))
+        if len(parts) != 3 or parts[0] not in ("dir", "file") or not all(parts):
+            raise FetchFailure(f"malformed pinned directory response for {path}: {line!r}")
+        typ, name, full = parts
+        if name in (".", "..") or "/" in name or "\\" in name:
+            raise FetchFailure(f"malformed pinned directory response for {path}: {line!r}")
+        full = validate_case_path(full)
+        if full != f"{path}/{name}":
+            raise FetchFailure(f"malformed pinned directory response for {path}: {line!r}")
+        rows.append((typ, name, full))
+    if configured_root and not rows:
+        raise FetchFailure(f"configured pinned directory is empty: {path}")
     return rows
 
 
 def collect_ts_paths(dirs):
     """BFS the configured dirs, returning all .ts file repo-paths."""
     found = []
-    stack = [f"tests/cases/{d}" for d in dirs]
+    stack = [(validate_case_path(f"tests/cases/{d}"), True) for d in dirs]
     while stack:
-        path = stack.pop()
-        for typ, name, full in gh_list_dir(path):
+        path, configured_root = stack.pop()
+        for typ, name, full in gh_list_dir(path, configured_root=configured_root):
+            full = validate_case_path(full)
             if typ == "dir":
-                stack.append(full)
+                stack.append((full, False))
             elif typ == "file" and name.endswith(".ts"):
                 found.append(full)
-    return found
+    return sorted(set(found))
 
 
 def raw_url(path):
     return f"https://raw.githubusercontent.com/{REPO}/{PINNED_SHA}/{path}"
 
 
-def fetch_blob(path):
+def fetch_blob(path, *, allow_missing=False):
+    """Fetch one pinned blob.
+
+    A listed test source must exist. A missing `.errors.txt` is intentional for
+    expected-clean tests and is the sole allowed per-file 404.
+    """
+    if path.startswith("tests/cases/"):
+        path = validate_case_path(path)
+    elif path.startswith("tests/baselines/reference/"):
+        path = validate_baseline_path(path)
+    else:
+        raise FetchFailure(f"invalid pinned blob path: {path!r}")
     try:
         with urllib.request.urlopen(raw_url(path), timeout=30) as r:
-            return r.read().decode("utf-8", "replace")
+            status = getattr(r, "status", 200)
+            if status != 200:
+                raise FetchFailure(f"unexpected pinned blob status {status}: {path}")
+            content_type = r.headers.get_content_type() if getattr(r, "headers", None) else None
+            if content_type in ("application/json", "text/html"):
+                raise FetchFailure(f"unexpected pinned blob transport {content_type}: {path}")
+            try:
+                text = r.read().decode("utf-8")
+            except UnicodeDecodeError as e:
+                raise FetchFailure(f"non-text pinned blob transport: {path}") from e
+            if text.lstrip().lower().startswith(("<!doctype html", "<html")):
+                raise FetchFailure(f"HTML returned for pinned blob: {path}")
+            return text
     except urllib.error.HTTPError as e:
-        if e.code == 404:
+        optional_baseline = (path.startswith("tests/baselines/reference/")
+                             and path.endswith(".errors.txt"))
+        if e.code == 404 and allow_missing and optional_baseline:
             return None
-        raise
+        if e.code == 404:
+            raise FetchFailure(f"listed pinned blob is missing: {path}") from e
+        raise FetchFailure(f"cannot fetch pinned blob {path}: HTTP {e.code}") from e
 
 
 def cmd_fetch(args):
     dirs = args.dir or DEFAULT_DIRS
-    os.makedirs(CORPUS, exist_ok=True)
     print(f"Listing {len(dirs)} dir(s) at {REPO}@{PINNED_SHA[:9]} ...")
     ts_paths = collect_ts_paths(dirs)
     if args.limit:
         ts_paths = ts_paths[:args.limit]
+    if not ts_paths:
+        raise FetchFailure("configured fetch selected no TypeScript tests")
     print(f"Found {len(ts_paths)} test files; fetching tests + baselines ...")
 
-    manifest = {"sha": PINNED_SHA, "repo": REPO, "dirs": dirs, "tests": []}
+    partial = bool(args.dir or args.limit)
+    manifest = {
+        "format": 2, "sha": PINNED_SHA, "repo": REPO, "dirs": dirs,
+        "limit": args.limit, "mode": "partial" if partial else "full-default",
+        "partial": partial, "tests": [],
+    }
+    stage = tempfile.mkdtemp(prefix=".corpus-fetch-", dir=os.path.dirname(CORPUS))
 
     def fetch_one(ts_repo_path):
         # ts_repo_path like tests/cases/conformance/.../foo.ts
-        rel = os.path.relpath(ts_repo_path, "tests/cases")
-        dst_ts = os.path.join(CORPUS, rel)
+        ts_repo_path = validate_case_path(ts_repo_path)
+        rel = validate_case_relpath(ts_repo_path.removeprefix("tests/cases/"))
+        dst_ts = stage_path(stage, rel)
         os.makedirs(os.path.dirname(dst_ts), exist_ok=True)
         src = fetch_blob(ts_repo_path)
-        if src is None:
-            return None
         with open(dst_ts, "w") as f:
             f.write(src)
         base_name = os.path.basename(ts_repo_path)[:-3] + ".errors.txt"
-        base = fetch_blob(f"tests/baselines/reference/{base_name}")
+        baseline_source = validate_baseline_path(f"tests/baselines/reference/{base_name}")
+        base = fetch_blob(baseline_source, allow_missing=True)
         if base is not None:
             with open(dst_ts[:-3] + ".errors.txt", "w") as f:
                 f.write(base)
-        return (rel, base is not None)
+        return {"path": rel, "source": ts_repo_path,
+                "baseline_source": baseline_source, "baseline": base is not None}
 
-    done = 0
-    with ThreadPoolExecutor(max_workers=12) as ex:
-        for res in ex.map(fetch_one, ts_paths):
-            if res:
-                rel, has_base = res
-                manifest["tests"].append({"path": rel, "baseline": has_base})
-                done += 1
+    try:
+        with ThreadPoolExecutor(max_workers=12) as ex:
+            for done, entry in enumerate(ex.map(fetch_one, ts_paths), start=1):
+                manifest["tests"].append(entry)
                 if done % 25 == 0:
                     print(f"  ... {done}/{len(ts_paths)}")
-    with open(os.path.join(CORPUS, "manifest.json"), "w") as f:
-        json.dump(manifest, f, indent=2)
+        manifest["tests"].sort(key=lambda entry: entry["path"])
+        with open(os.path.join(stage, "manifest.json"), "w") as f:
+            json.dump(manifest, f, indent=2)
+        publish_corpus(stage)
+    except Exception:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
     n_base = sum(1 for t in manifest["tests"] if t["baseline"])
-    print(f"Done: {done} tests in ./corpus ({n_base} with an errors baseline, "
-          f"{done - n_base} expected-clean).")
+    print(f"Done: {len(manifest['tests'])} tests in ./corpus ({n_base} with an errors baseline, "
+          f"{len(manifest['tests']) - n_base} expected-clean).")
+
+
+def publish_corpus(stage):
+    """Replace the published corpus only after a complete staged fetch succeeds."""
+    backup = None
+    try:
+        if os.path.exists(CORPUS):
+            backup = tempfile.mkdtemp(prefix=".corpus-previous-", dir=os.path.dirname(CORPUS))
+            os.rmdir(backup)
+            os.replace(CORPUS, backup)
+        os.replace(stage, CORPUS)
+    except Exception:
+        if backup and os.path.exists(backup) and not os.path.exists(CORPUS):
+            os.replace(backup, CORPUS)
+        raise
+    else:
+        if backup:
+            try:
+                shutil.rmtree(backup)
+            except OSError as e:
+                sys.stderr.write(
+                    f"WARNING: published new corpus, but could not remove previous corpus "
+                    f"backup {backup}: {e}. The new corpus is live; retry cleanup manually.\n")
+
+
+def load_manifest():
+    """Load and structurally validate the published corpus manifest."""
+    path = os.path.join(CORPUS, "manifest.json")
+    try:
+        with open(path) as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        raise FetchFailure("invalid or missing corpus manifest — run `tsofficial.py fetch`") from e
+    required = {"format", "sha", "repo", "dirs", "limit", "mode", "partial", "tests"}
+    if not isinstance(manifest, dict) or required - manifest.keys() or manifest["format"] != 2:
+        raise FetchFailure("corpus manifest has an unsupported format")
+    tests = manifest["tests"]
+    if not isinstance(tests, list) or not tests:
+        raise FetchFailure("corpus manifest has no tests")
+    paths = []
+    expected_files = {"manifest.json"}
+    for entry in tests:
+        if (not isinstance(entry, dict)
+                or set(entry) != {"path", "source", "baseline_source", "baseline"}
+                or not isinstance(entry["path"], str) or not isinstance(entry["source"], str)
+                or not isinstance(entry["baseline_source"], str)
+                or not isinstance(entry["baseline"], bool)
+                or validate_case_relpath(entry["path"]) != entry["path"]
+                or validate_case_path(entry["source"]) != entry["source"]
+                or entry["source"] != f"tests/cases/{entry['path']}"):
+            raise FetchFailure("corpus manifest has an invalid test entry")
+        expected_baseline = validate_baseline_path(
+            "tests/baselines/reference/" + os.path.basename(entry["path"])[:-3] + ".errors.txt")
+        if entry["baseline_source"] != expected_baseline:
+            raise FetchFailure("corpus manifest has an invalid baseline entry")
+        paths.append(entry["path"])
+        expected_files.add(entry["path"])
+        if entry["baseline"]:
+            expected_files.add(entry["path"][:-3] + ".errors.txt")
+    if len(paths) != len(set(paths)):
+        raise FetchFailure("corpus manifest has duplicate test paths")
+    filesystem_paths = {
+        os.path.relpath(os.path.join(root, fn), CORPUS).replace(os.sep, "/")
+        for root, _dirs, files in os.walk(CORPUS) for fn in files
+    }
+    if filesystem_paths != expected_files:
+        raise FetchFailure("corpus filesystem does not exactly match manifest files")
+    for entry in tests:
+        ts_path = os.path.join(CORPUS, entry["path"])
+        baseline = ts_path[:-3] + ".errors.txt"
+        if entry["baseline"] != os.path.exists(baseline):
+            raise FetchFailure(f"baseline presence disagrees with manifest: {entry['path']}")
+    return manifest
+
+
+SCOREBOARD_SHA_RE = re.compile(r"^# TS @ ([0-9a-f]{40})$")
+
+
+def validate_scoreboard_metadata():
+    """Reject a missing, malformed, or stale ratchet input before a run writes."""
+    try:
+        with open(SCOREBOARD) as f:
+            headers = [line.rstrip("\n") for line in f if line.startswith("# TS @")]
+    except OSError as e:
+        raise FetchFailure("missing scoreboard.txt for ratchet operation") from e
+    if len(headers) != 1:
+        raise FetchFailure("scoreboard.txt has missing or malformed TS SHA metadata")
+    match = SCOREBOARD_SHA_RE.fullmatch(headers[0])
+    if not match:
+        raise FetchFailure("scoreboard.txt has missing or malformed TS SHA metadata")
+    if match.group(1) != PINNED_SHA:
+        raise FetchFailure("scoreboard.txt TS SHA does not match the pinned corpus")
+
+
+def validate_full_default_manifest():
+    """Require a complete format-2 default corpus before any scoreboard write."""
+    manifest = load_manifest()
+    if (manifest["sha"] != PINNED_SHA or manifest["repo"] != REPO
+            or manifest["dirs"] != DEFAULT_DIRS or manifest["limit"] is not None
+            or manifest["mode"] != "full-default" or manifest["partial"]):
+        raise FetchFailure("--check/--save require a fresh full default corpus manifest")
+    return manifest
+
+
+def validate_ratchet_manifest():
+    """Require full default corpus and matching scoreboard before check or save."""
+    manifest = validate_full_default_manifest()
+    validate_scoreboard_metadata()
+    board = read_scoreboard()
+    corpus_paths = {entry["path"] for entry in manifest["tests"]}
+    if set(board) != corpus_paths:
+        raise FetchFailure("--check/--save corpus manifest and scoreboard.txt are incomplete or stale")
+    return manifest
+
+
+def validate_check_manifest():
+    """Backward-compatible name for callers that run the check ratchet."""
+    return validate_ratchet_manifest()
 
 
 # --- run ---------------------------------------------------------------------
@@ -470,12 +683,27 @@ def cmd_run(args):
     binary = args.bin
     if not os.path.exists(binary):
         sys.exit(f"binary not found: {binary} (build it or pass --bin)")
+    rebaseline = getattr(args, "rebaseline", False)
+    if rebaseline and not args.save:
+        sys.exit("--rebaseline is only valid together with --save")
+    if args.save and args.check:
+        sys.exit("--save and --check cannot be combined")
 
-    if args.limit and args.check:
-        sys.exit("--check requires the full corpus (it enforces scoreboard "
+    if args.limit and (args.check or args.save):
+        sys.exit("--check/--save require the full corpus (they enforce scoreboard "
                  "completeness in both directions); drop --limit.")
 
-    tests = list(corpus_tests())
+    try:
+        if rebaseline:
+            manifest = validate_full_default_manifest()
+        elif args.check or args.save:
+            manifest = validate_ratchet_manifest()
+        else:
+            manifest = load_manifest()
+    except FetchFailure as e:
+        sys.exit(f"corpus integrity failure: {e}")
+
+    tests = manifest_tests(manifest)
     if args.limit:
         tests = tests[:args.limit]
     if not tests:
@@ -551,14 +779,26 @@ def cmd_run(args):
                    fn_detail=d["fn_detail"], fp_detail=d["fp_detail"])
         results.append(rec)
 
-    print_dashboard(binary, results)
+    report = print_dashboard(binary, results)
 
     if args.save:
         path = write_scoreboard(results)
         print(f"  saved baseline → {path}")
+        report["ratchet"] = {"checked": False, "verdict": "saved", "exit_code": 0,
+                             "regressions": 0, "progress": 0,
+                             "missing_from_corpus": 0, "missing_from_scoreboard": 0}
     if args.check:
-        if not compare_scoreboard(results):
+        passed, summary = compare_scoreboard(results, with_summary=True)
+        report["ratchet"] = {"checked": True, "verdict": "pass" if passed else "fail",
+                             "exit_code": 0 if passed else 1, **summary}
+        write_report(report)
+        if not passed:
             sys.exit(1)
+    else:
+        report.setdefault("ratchet", {"checked": False, "verdict": "unchecked", "exit_code": 0,
+                                        "regressions": 0, "progress": 0,
+                                        "missing_from_corpus": 0, "missing_from_scoreboard": 0})
+        write_report(report)
 
 
 def print_dashboard(binary, results):
@@ -620,12 +860,16 @@ def print_dashboard(binary, results):
             print(f"    {r['fn']:3}  {r['rel']}  (lines {lines})")
         print()
 
-    os.makedirs(REPORT, exist_ok=True)
-    report = {
+    return {
         "when": now, "sha": PINNED_SHA, "binary": binary,
         "corpus": n, "in_scope": n_in, "buckets": dict(buckets),
         "files": inscope,
     }
+
+
+def write_report(report):
+    """Persist only a post-verdict dashboard/report."""
+    os.makedirs(REPORT, exist_ok=True)
     with open(os.path.join(REPORT, "latest.json"), "w") as f:
         json.dump(report, f, indent=2)
     print(f"  wrote {os.path.join(REPORT, 'latest.json')}")
@@ -821,7 +1065,7 @@ def read_scoreboard():
     return out
 
 
-def compare_scoreboard(results):
+def compare_scoreboard(results, *, with_summary=False):
     """Diff the current run against the committed baseline by stable diagnostic
     identity. Returns True iff there are no regressions.
 
@@ -834,7 +1078,9 @@ def compare_scoreboard(results):
         from the scoreboard (completeness is enforced in both directions)."""
     if not os.path.exists(SCOREBOARD):
         print("\n  no committed scoreboard.txt yet — run `run --save` to create one.")
-        return True
+        summary = {"regressions": 0, "progress": 0, "missing_from_corpus": 0,
+                   "missing_from_scoreboard": 0}
+        return (True, summary) if with_summary else True
     base = read_scoreboard()
     cur = {r["rel"]: r for r in results}
     regress, progress = [], []
@@ -904,7 +1150,11 @@ def compare_scoreboard(results):
         print(f"    ✓ progress {rel}  ({msg})")
     if len(progress) > 15:
         print(f"    … +{len(progress) - 15} more improved")
-    return len(regress) == 0
+    passed = len(regress) == 0
+    summary = {"regressions": len(regress), "progress": len(progress),
+               "missing_from_corpus": len(missing_from_corpus),
+               "missing_from_scoreboard": len(missing_from_board)}
+    return (passed, summary) if with_summary else passed
 
 
 # --- main --------------------------------------------------------------------
@@ -928,6 +1178,8 @@ def main():
     pr.add_argument("--limit", type=int, help="cap number of tests")
     pr.add_argument("--save", action="store_true",
                     help="write/update the committed scoreboard.txt baseline")
+    pr.add_argument("--rebaseline", action="store_true",
+                    help="with --save, intentionally replace a stale/missing scoreboard")
     pr.add_argument("--check", action="store_true",
                     help="compare against scoreboard.txt; exit 1 on any regression")
     pr.set_defaults(func=cmd_run)

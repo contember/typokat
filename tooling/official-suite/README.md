@@ -38,6 +38,18 @@ python3 tsofficial.py run --check    # exit 1 if anything regressed vs scoreboar
 python3 tsofficial.py run --save     # accept current results as the new baseline
 ```
 
+`fetch --dir` and `fetch --limit` deliberately create a **partial** corpus for
+exploration. You may use plain `run` with one, but never `run --check` or `run
+--save`: both ratchet operations require a freshly fetched, full default corpus
+and a scoreboard whose TS SHA matches `PINNED_SHA`.
+
+When deliberately replacing the pinned corpus/baseline, use the explicit
+`python3 tsofficial.py run --save --rebaseline` after a successful full default
+fetch and review. This is the only operation that may replace a missing or
+stale scoreboard SHA/set; it still validates the complete format-2 corpus and
+filesystem first. Treat it as an intentional baseline migration, not a fix for
+a failed ordinary `--save`.
+
 `fetch` needs `gh` (authenticated) for directory listing and pulls file blobs from
 `raw.githubusercontent.com`. `run` only needs Python 3 and the binary.
 
@@ -122,8 +134,14 @@ headline aggregates and remain exactly consistent with the identities.
 
 Workflow:
 
-- `run --save` writes/updates it. Commit it when the change is intended (the git
-  history of this file *is* the score-over-time record).
+- `run --save` writes/updates it. It requires the same full default corpus and
+  matching TS-SHA header as `--check`; partial `--dir`/`--limit` fetches are
+  exploration-only. Commit it when the change is intended (the git history of
+  this file *is* the score-over-time record).
+- `run --save --rebaseline` is the deliberate escape hatch for a reviewed
+  pinned-SHA migration: it replaces a missing or stale scoreboard with results
+  from a validated full default format-2 corpus. It cannot be combined with
+  `--check` and should not be used to bypass ordinary ratchet failures.
 - `run --check` re-runs and diffs against it by **diagnostic identity**: prints
   **REGRESS** for any previously in-scope file that drops a matched identity, gains
   a false-positive identity, or falls out of scope, and **progress** for
