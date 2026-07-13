@@ -89,19 +89,39 @@ impl<'a> Relater<'a> {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
 
+        // Both `intern_object` and `fill_object` sort properties by name. Advance the
+        // source cursor monotonically while retaining a same-name match so malformed
+        // duplicate target names still observe the first matching source property.
+        let mut source_cursor = 0;
+        let mut previous_target_name: Option<&str> = None;
+        let mut previous_source_property: Option<&PropertyType> = None;
         for tgt_prop in &tgt_obj.properties {
             #[cfg(test)]
-            let source_property = {
-                super::measure_relation(|measure| measure.object_target_properties += 1);
-                src_obj.properties.iter().find(|src_prop| {
+            super::measure_relation(|measure| measure.object_target_properties += 1);
+            let source_property = if previous_target_name == Some(tgt_prop.name.as_str()) {
+                previous_source_property
+            } else {
+                let found = loop {
+                    let Some(src_prop) = src_obj.properties.get(source_cursor) else {
+                        break None;
+                    };
+                    #[cfg(test)]
                     super::measure_relation(|measure| {
                         measure.object_source_property_comparisons += 1
                     });
-                    src_prop.name == tgt_prop.name
-                })
+                    match src_prop.name.cmp(&tgt_prop.name) {
+                        std::cmp::Ordering::Less => source_cursor += 1,
+                        std::cmp::Ordering::Equal => {
+                            source_cursor += 1;
+                            break Some(src_prop);
+                        }
+                        std::cmp::Ordering::Greater => break None,
+                    }
+                };
+                previous_target_name = Some(tgt_prop.name.as_str());
+                previous_source_property = found;
+                found
             };
-            #[cfg(not(test))]
-            let source_property = src_obj.property(&tgt_prop.name);
             match source_property {
                 // Width + depth: present in source — its type must relate to the
                 // target property's type (recurse, so nested mismatches nest).

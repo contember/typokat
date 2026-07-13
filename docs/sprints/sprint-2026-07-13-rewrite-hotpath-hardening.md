@@ -302,3 +302,41 @@ One Terra writer owns the active worktree and makes one work unit's source chang
   Elapsed timing is deliberately unavailable because this end-to-end corpus includes
   parsing/binding and test-only counters; only operation counts select future work.
   No WU5 threshold or candidate-local reuse is claimed.
+
+- **WU5a ordered normal-object matching (2026-07-13, working tree based at
+  `36d8c7b`).** `Relater::relate_objects` now walks the canonical source and target
+  property orders with one monotonic source cursor. The source cursor skips names
+  before a target member, stops without consuming a name after it, and advances after
+  a match. It still iterates target properties and returns their first failure. The
+  canonical-order precondition is enforced by both `Interner::intern_object` and
+  `Interner::fill_object`, which sort properties by name. A same-name retained match
+  preserves the prior first-source-member behavior for malformed duplicate target
+  names. No cache, cycle, stack-key, merged-intersection, inference, or shared-helper
+  path changed.
+
+  The test-only comparison counter now counts each actual source-name comparison.
+  The exact equal-shape formula changes from `count × width × (width + 1) / 2` to
+  `count × width`; the width-3 two-pair test therefore changes from `12` to `6`.
+  Adversarial coverage verifies source extras before/between/after target names;
+  early, middle, and late missing targets; early and late type mismatches; and the
+  existing optional-presence and nominal-origin rejections through the cursor path.
+
+  Five fresh release-process repetitions used
+  `for run in 1 2 3 4 5; do cargo test --release
+  measure_relation_hotpaths_release -- --ignored --nocapture; done` on Linux
+  6.17.0-40-generic, x86_64, rustc 1.95.0. The relation counters were identical in
+  every run: stack keys/empty-context keys `10,000/100,000`, target properties
+  `80,000/800,000`, and source-name comparisons `80,000/800,000` at 10k/100k.
+  Against WU4a's `360,000/3,600,000` comparisons, that is a `77.8%` reduction at
+  both scales, clearing the ≥20% operation threshold. Raw elapsed samples were 10k
+  `[2, 2, 2, 4, 3]ms` (median 2ms, range 2–4ms) and 100k `[32, 36, 33, 31, 34]ms`
+  (median 33ms, range 31–36ms), versus WU4a medians of 3ms and 43ms. These timings
+  remain instrumented and environment-dependent.
+
+  The unchanged-inference control used the same five-process loop with
+  `measure_inference_hotpaths_release`. Its counters remained exactly WU4a's values
+  (`360,000/3,600,000` source predicates and all snapshot fields unchanged); raw
+  elapsed samples were 10k `[12, 7, 6, 7, 6]ms` (median 7ms, range 6–12ms) and 100k
+  `[92, 60, 59, 60, 60]ms` (median 60ms, range 59–92ms). Compared with WU4a's 7ms
+  and 65ms medians, the control has no regression (0% at 10k and a 7.7% improvement
+  at 100k), satisfying the ≤2% control condition.

@@ -86,7 +86,7 @@ fn measure_relation_counts_actual_empty_context_key_and_property_scans() {
             stack_key_builds: 2,
             empty_context_stack_keys: 2,
             object_target_properties: 6,
-            object_source_property_comparisons: 12,
+            object_source_property_comparisons: 6,
             ..RelationMeasure::default()
         }
     );
@@ -126,6 +126,187 @@ fn measure_relation_keeps_first_target_failure_order() {
 }
 
 #[test]
+fn ordered_object_cursor_preserves_width_and_first_failure_semantics() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let num_or_undef = interner.union(vec![wk.number, wk.undefined]);
+
+    // Source-only names before, between, and after target names remain width-only.
+    let extras = interner.intern_object(ObjectType {
+        properties: vec![
+            prop("a", wk.number),
+            prop("b", wk.number),
+            prop("c", wk.number),
+            prop("d", wk.number),
+            prop("e", wk.number),
+        ],
+        ..Default::default()
+    });
+    let sparse_target = interner.intern_object(ObjectType {
+        properties: vec![prop("b", wk.number), prop("d", wk.number)],
+        ..Default::default()
+    });
+
+    let early_missing_source = interner.intern_object(ObjectType {
+        properties: vec![prop("b", wk.number), prop("d", wk.number)],
+        ..Default::default()
+    });
+    let early_missing_target = interner.intern_object(ObjectType {
+        properties: vec![
+            prop("a", wk.number),
+            prop("b", wk.number),
+            prop("d", wk.number),
+        ],
+        ..Default::default()
+    });
+    let late_missing_source = interner.intern_object(ObjectType {
+        properties: vec![prop("a", wk.number), prop("b", wk.number)],
+        ..Default::default()
+    });
+    let late_missing_target = interner.intern_object(ObjectType {
+        properties: vec![
+            prop("a", wk.number),
+            prop("b", wk.number),
+            prop("c", wk.number),
+        ],
+        ..Default::default()
+    });
+
+    let missing_source = interner.intern_object(ObjectType {
+        properties: vec![
+            prop("a", wk.number),
+            prop("b", wk.number),
+            prop("d", wk.number),
+            prop("e", wk.number),
+        ],
+        ..Default::default()
+    });
+    let missing_target = interner.intern_object(ObjectType {
+        properties: vec![
+            prop("b", wk.number),
+            prop("c", wk.number),
+            prop("d", wk.number),
+        ],
+        ..Default::default()
+    });
+
+    let mismatch_source = interner.intern_object(ObjectType {
+        properties: vec![
+            prop("a", wk.number),
+            prop("b", wk.number),
+            prop("c", wk.number),
+            prop("d", wk.string),
+            prop("e", wk.number),
+        ],
+        ..Default::default()
+    });
+    let mismatch_target = interner.intern_object(ObjectType {
+        properties: vec![prop("b", wk.number), prop("d", wk.number)],
+        ..Default::default()
+    });
+    let early_mismatch_source = interner.intern_object(ObjectType {
+        properties: vec![prop("a", wk.string), prop("b", wk.number)],
+        ..Default::default()
+    });
+    let early_mismatch_target = interner.intern_object(ObjectType {
+        properties: vec![prop("a", wk.number), prop("b", wk.number)],
+        ..Default::default()
+    });
+
+    let optional_source = interner.intern_object(ObjectType {
+        properties: vec![optional_prop("b", num_or_undef)],
+        ..Default::default()
+    });
+    let required_target = interner.intern_object(ObjectType {
+        properties: vec![prop("b", wk.number)],
+        ..Default::default()
+    });
+    let public_source = interner.intern_object(ObjectType {
+        properties: vec![prop("b", wk.number)],
+        ..Default::default()
+    });
+    let private_target = interner.intern_object(ObjectType {
+        properties: vec![nominal_prop(
+            "b",
+            wk.number,
+            Visibility::Private,
+            Some(ClassId(0)),
+        )],
+        ..Default::default()
+    });
+
+    reset_relation_measure();
+    let mut relater = Relater::new(interner.store(), wk);
+    assert!(relater.is_assignable(extras, sparse_target).is_yes());
+    assert_eq!(relation_measure().object_target_properties, 2);
+    assert_eq!(relation_measure().object_source_property_comparisons, 4);
+
+    reset_relation_measure();
+    match relater.is_assignable(early_missing_source, early_missing_target) {
+        Relation::No(reason) => match reason.head {
+            Reason::MissingProperty { name, .. } => assert_eq!(name, "a"),
+            other => panic!("expected the first missing target property, got {other:?}"),
+        },
+        Relation::Yes => panic!("the first target property must be missing"),
+    }
+    assert_eq!(relation_measure().object_target_properties, 1);
+    assert_eq!(relation_measure().object_source_property_comparisons, 1);
+
+    reset_relation_measure();
+    match relater.is_assignable(late_missing_source, late_missing_target) {
+        Relation::No(reason) => match reason.head {
+            Reason::MissingProperty { name, .. } => assert_eq!(name, "c"),
+            other => panic!("expected the last missing target property, got {other:?}"),
+        },
+        Relation::Yes => panic!("the final target property must be missing"),
+    }
+    assert_eq!(relation_measure().object_target_properties, 3);
+    assert_eq!(relation_measure().object_source_property_comparisons, 2);
+
+    reset_relation_measure();
+    match relater.is_assignable(missing_source, missing_target) {
+        Relation::No(reason) => match reason.head {
+            Reason::MissingProperty { name, .. } => assert_eq!(name, "c"),
+            other => panic!("expected the first missing target property, got {other:?}"),
+        },
+        Relation::Yes => panic!("the middle target property must be missing"),
+    }
+    assert_eq!(relation_measure().object_target_properties, 2);
+    assert_eq!(relation_measure().object_source_property_comparisons, 3);
+
+    reset_relation_measure();
+    match relater.is_assignable(early_mismatch_source, early_mismatch_target) {
+        Relation::No(reason) => match reason.head {
+            Reason::Property { name, .. } => assert_eq!(name, "a"),
+            other => panic!("expected the first target mismatch, got {other:?}"),
+        },
+        Relation::Yes => panic!("the first target property must mismatch"),
+    }
+    assert_eq!(relation_measure().object_target_properties, 1);
+    assert_eq!(relation_measure().object_source_property_comparisons, 1);
+
+    reset_relation_measure();
+    match relater.is_assignable(mismatch_source, mismatch_target) {
+        Relation::No(reason) => match reason.head {
+            Reason::Property { name, .. } => assert_eq!(name, "d"),
+            other => panic!("expected the later target mismatch, got {other:?}"),
+        },
+        Relation::Yes => panic!("the later target property must mismatch"),
+    }
+    assert_eq!(relation_measure().object_target_properties, 2);
+    assert_eq!(relation_measure().object_source_property_comparisons, 4);
+
+    assert!(matches!(
+        relater.is_assignable(optional_source, required_target),
+        Relation::No(_)
+    ));
+    assert!(matches!(
+        relater.is_assignable(public_source, private_target),
+        Relation::No(_)
+    ));
+}
+
+#[test]
 #[ignore = "WU4 release measurement; run explicitly with --ignored --nocapture"]
 fn measure_relation_hotpaths_release() {
     const WIDTH: usize = 8;
@@ -146,7 +327,7 @@ fn measure_relation_hotpaths_release() {
         assert_eq!(measure.object_target_properties, (count * WIDTH) as u64);
         assert_eq!(
             measure.object_source_property_comparisons,
-            (count * WIDTH * (WIDTH + 1) / 2) as u64
+            (count * WIDTH) as u64
         );
         println!(
             "WU4 relation count={count} width={WIDTH} elapsed_ms={} counters={measure:?}",
