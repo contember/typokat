@@ -341,6 +341,15 @@ orthogonal to bytecode** (ADR-0001). Build them into the evaluator as items `09`
    position — exactly the bug tsc is finicky about). Achievable over the tree with an explicit
    work-stack; cleanest if/when the bytecode refactor (§7.1) materialises.
 
+`InferRewrite` and `InferenceConstraintEvaluator` use private heap task/value
+stacks for every structural child they traverse, including function type-parameter
+constraints and defaults. They are intentionally separate rather than a generic
+visitor: infer rewriting owns lexical fresh binders, a per-run completed memo, and
+SCC-suffix identity taint; constraint evaluation delegates pending types and
+conservatively restores a structural input after global exhaustion. Direct arena
+tests exercise 10k+ deep acyclic metadata paths without depending on parser nesting
+or the driver's enlarged worker stack.
+
 ### 7.3 Specialized arithmetic (intrinsics — also tree-walker work)
 
 Arithmetic, which type-level TS "hacks" via tuple lengths and template strings (extremely

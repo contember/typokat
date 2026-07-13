@@ -20,6 +20,12 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
   `is_accessor`, index signatures — is folded into the structural hash + `object_props_eq`, but the
   **relation engine ignores `readonly`/`is_accessor`** for assignability (they only gate access /
   assignment targets). `substitute` must carry **all** `PropertyType` fields through.
+- **WU7 auxiliary structural walks** (`src/check/checker/eval/`): `InferRewrite` and
+  `InferenceConstraintEvaluator` use explicit heap task/value stacks for every child they
+  traverse, including function type-parameter constraints/defaults. Keep their policies distinct:
+  the former preserves per-run fresh-binder scope, completed-memo rules, and SCC-suffix identity
+  taint; the latter preserves pending-type evaluation and conservative original-identity return
+  after exhaustion. A shared generic walker must not obscure these cleanup and identity boundaries.
 - **Nominal classes**: a `private`/`protected` member makes a type nominal — the relation requires
   same-name + same `declaring_class` + same visibility. Generic class *instances* are structural.
 - **Type-parameter constraints**: circular chains through bare type parameters, unions, or

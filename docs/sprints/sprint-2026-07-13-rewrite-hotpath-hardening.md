@@ -173,6 +173,55 @@ caller tests where direct entry coverage is useful, `tests/cases/sr_rewrite_hotp
 the conformance registry, and architecture/invariant docs. No relation, call
 selection, inference candidate, or general substitution changes.
 
+**Implementation status.** WU7a (`db0a788`) and WU7b (`092ba3d`) are complete
+and independently reviewed PASS. `InferRewrite` and
+`InferenceConstraintEvaluator` now each use a private explicit heap task/value
+stack over their complete structural walks. The direct arena witnesses include a
+10,000-deep infer-metadata chain and a 10,005-deep alternating
+constraint/default/receiver/parameter/return spine. Their deliberately different
+policies remain local: infer rewriting keeps its fresh-binder scope, per-run
+completed memo, and SCC-suffix identity taint; constraint evaluation delegates
+pending types and returns the original structural result after global exhaustion.
+The WU7 syntax corpus is enabled and its completed verification is retained in the
+run log. WU8 reopens the sprint for the remaining mapped-value structural walk; its
+spec remains disabled until the implementation lands.
+
+### WU8 — mapped-value rewrite work stack (spec first, separate commit)
+
+**Problem.** `MappedRewrite::replace_mapped_value_rec` is the remaining unbounded
+host-recursive structural walk reachable from mapped-type evaluation. It is entered
+for every concrete mapped property value after `assemble_mapped` selects its source
+property. Its existing `in_progress` guard terminates cyclic graphs but cannot bound
+a deep acyclic value-template graph.
+
+**Scope.** Replace only `MappedRewrite`'s recursion with a private local heap
+task/value stack in `mapped.rs`. Preserve the current traversal set and order:
+nested mapped nodes rewrite key/modifiers sources but not their rebound value
+template; functions rewrite generic constraints/defaults, receiver, parameters, and
+return in source order; instantiations rewrite argument values but not bases.
+Preserve the per-call completed memo and the current re-entry rule exactly: an
+in-progress revisit returns the original `TypeId`, then normal completion removes
+the id and memoizes its result, including a result containing a provisional back
+edge. Do not add SCC taint, an evaluator memo write, a budget, or a shared
+visitor/task utility.
+
+**Acceptance.** Commit the disabled source corpus first. Direct arena evaluation
+then proves a 10k+ acyclic object/property value-template spine replaces its terminal
+`MappedValue` without native recursion. A direct cyclic placeholder witness preserves
+the current partial-clone semantics: the rewritten root changes, its back edge stays
+the original recursive `TypeId`, and repeated fresh evaluations remain stable. Existing
+recursive-mapped, nested-mapped binder-boundary, identity, and M26 corpus behavior
+remain unchanged. A second source witness and direct arena test prove `MappedValue`
+rewrites in generic function constraints/defaults as well as receiver/parameters/
+return; this is a behavior correction, so the disabled spec is intentionally RED at
+current typokat. Cross-check the source corpus with strict `tsc 6.0.3`; run focused
+debug/release tests, full gates, and an independent adversarial review before closure.
+
+**Touchpoints.** `src/check/checker/eval/mapped.rs`, narrow evaluator tests,
+`tests/cases/sr_rewrite_hotpath_wu8/`, the conformance registry, this sprint, and
+the current architecture/invariant wording. No `src/types/substitute/`, keyof,
+template, relation, or evaluator-wide task changes.
+
 ## Sequencing and ownership
 
 One Terra writer owns the active worktree and makes one work unit's source changes at a time. The writer never self-approves an implementation WU: a distinct reviewer performs the adversarial review after each WU and before its commit. This prevents concurrent edits from obscuring cache/diagnostic causality.
@@ -185,8 +234,9 @@ One Terra writer owns the active worktree and makes one work unit's source chang
 | 4 | WU4 | May collect measurement after WU0, but no optimization decision until its reviewed baseline exists. |
 | 5 | WU5 | One evidence-backed candidate at a time, each independently reversible. |
 | 6 | WU6 | Independent comprehensive review and initial full verification. |
-| 7 | WU7 | Accepted CORR-1 follow-up: spec first, two local heap task machines, independent review. |
-| 8 | WU6 closure | Re-run full verification/ratchet, record outcome, and archive. |
+| 7 | WU7 | Spec, two local heap task machines, final verification, and independent reviews PASS. |
+| 8 | WU8 | Disabled mapped-value corpus first, then one local task machine and independent review. |
+| 9 | closure | Re-run full verification/ratchet, record outcome, and archive only after WU8 lands. |
 
 ## Decisions / open questions
 
@@ -198,6 +248,10 @@ One Terra writer owns the active worktree and makes one work unit's source chang
 6. The user accepted CORR-1 for immediate implementation. WU7 uses two private task
    machines; their memo, opacity, pending-evaluation, and exhaustion policies are too
    different for a sound shared visitor abstraction.
+7. WU8 uses a third, separate private machine. `MappedRewrite`'s per-call memo and
+   partial-cycle result are deliberately unlike WU7's SCC-tainted infer rewrite and
+   exhaustion-aware constraint evaluator. Strict `tsc` probes establish that WU8
+   must rewrite generic-function constraints/defaults as well as signature children.
 
 ## Run log
 
@@ -432,3 +486,33 @@ One Terra writer owns the active worktree and makes one work unit's source chang
   task/value stacks modeled on the primary conditional evaluator. The disabled
   `sr_rewrite_hotpath_wu7/` syntax corpus pins both source routes; direct arena tests
   will carry the 10k+ depth proof without relying on the CLI's 256MiB worker stack.
+- **WU7a/WU7b implementation and review (2026-07-13).** `db0a788` made
+  `InferRewrite` iterative and `092ba3d` did the same for
+  `InferenceConstraintEvaluator`. Both use private task/value stacks rather than a
+  shared visitor: the rewrite retains fresh-binder/memo/SCC-taint semantics, while
+  constraint evaluation retains pending-type delegation and conservative
+  exhaustion rollback. The enabled shallow source corpus covers both routes;
+  direct arena tests cover a 10,000-deep metadata chain and a 10,005-deep
+  alternating signature-child spine. Independent adversarial reviews of WU7a and
+  WU7b were PASS. At that point the final gates and official-suite ratchet were
+  outstanding; the following verification completed them.
+- **WU7 final verification (2026-07-13).** `cargo fmt --check`, the full debug suite,
+  focused release infer-rewrite/inference-constraint suites, clippy, and release
+  build all passed. The pinned official-suite ratchet at `050880ce5` reported
+  0 regressions, 0 progress, and 0 missing entries. Two final independent Terra
+  reviews over `0d8e7d0..092ba3d` were PASS with no findings; the exact 10k/100k
+  WU4b metric probes also passed. No follow-up backlog work was identified.
+- **WU8 architecture audit (2026-07-13).** `MappedRewrite` is the only remaining
+  unbounded structural recursion under `src/check/checker/eval/`. It is source-
+  reachable through concrete mapped aliases, but a huge source alias spine would
+  also exercise host-recursive generic substitution before reaching it. WU8 therefore
+  pairs a shallow source-route witness with a direct 10k+ arena evaluation witness.
+  Its in-progress re-entry returns the original node and still permits an ancestor
+  to memoize a partial clone; WU7's SCC-taint policy must not be reused.
+- **WU8 metadata arbitration (2026-07-13).** Strict `tsc` and current typokat probes
+  establish that `MappedValue` lowers into generic function constraints/defaults.
+  WU8 therefore rewrites both metadata slots in addition to receiver, parameters,
+  and return. The disabled metadata fixture is intentionally RED at current typokat:
+  strict `tsc 6.0.3 --strict` reports only `TS2345` (bad argument) and `TS2322`
+  (bad assignment), while typokat also reports a false-positive `TK2322` on the
+  clean generic-signature assignment because its source constraint remains `T[K]`.

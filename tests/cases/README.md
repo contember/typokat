@@ -371,12 +371,24 @@ nested generic constraint/default rewriting, and rejected-overload depth parity.
 WU1-WU3 jointly satisfied every fixture and enabled the directory; the overload probe
 continues to guard its `tsc 6.0.3 --strict` parity while the call and evaluator paths change.
 
-`sr_rewrite_hotpath_wu7/` is the disabled acceptance corpus for the final
-deep-acyclic traversal follow-up. Its shallow, topologically ordered alias chains
-prove that generic constraint/default metadata reaches both auxiliary structural
-walkers without relying on parser nesting. Implementation-time direct arena tests
-carry the 10k+ host-stack regression because a textual fixture would conflate the
-walker with parser/lowering depth and the CLI's enlarged worker stack.
+`sr_rewrite_hotpath_wu7/` is the enabled acceptance corpus for the deep-acyclic
+traversal follow-up. Its shallow, topologically ordered alias chains prove that
+generic constraint/default metadata reaches both auxiliary structural walkers
+without relying on parser nesting. `InferRewrite` and
+`InferenceConstraintEvaluator` each now use a private heap task/value stack while
+retaining their distinct fresh-binder/memo/SCC-taint and pending/exhaustion
+policies. Direct arena tests carry the 10k+ host-stack regression because a
+textual fixture would conflate the walker with parser/lowering depth and the CLI's
+enlarged worker stack.
+
+`sr_rewrite_hotpath_wu8/` is the disabled acceptance corpus for the remaining
+mapped-value rewrite walk. Its shallow, topologically ordered object aliases route
+`T[K]` through a concrete mapped type without relying on parser nesting or generic
+function metadata. Its second fixture pins `T[K]` in generic function constraints
+and defaults, which current typokat over-reports while strict `tsc 6.0.3` is clean.
+Direct arena tests will carry the 10k+ acyclic spine because large source alias
+chains also exercise generic substitution before the mapped rewrite starts. The
+corpus stays disabled until WU8 lands.
 
 ## Surface-accounting corpus (sprint 2026-07-10)
 

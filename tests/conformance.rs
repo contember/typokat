@@ -147,9 +147,13 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Enabled after WU1-WU3 landed their owning fixes; overload_trial_depth.ts
     // continues to pin tsc parity with the architecture probes.
     ("sr_rewrite_hotpath_wu0", true),
-    // WU7 — auxiliary structural walkers must use heap work stacks for deep
-    // acyclic generic metadata. Spec commit disabled; implementation enables.
+    // WU7 — deep acyclic generic metadata reaches both auxiliary structural
+    // walkers. Enabled after their separate heap task/value stacks landed; their
+    // distinct rewrite and constraint-evaluation policies remain covered directly.
     ("sr_rewrite_hotpath_wu7", true),
+    // WU8 — mapped-value replacement still has a host-recursive structural walk.
+    // Disabled spec; the local work-stack implementation enables this corpus.
+    ("sr_rewrite_hotpath_wu8", false),
     // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
     // (backlog 73). ENABLED by WU3 (expression child slots), WU4 (statement
     // containers), and WU5 (annotation / signature / class-member accounting): the
