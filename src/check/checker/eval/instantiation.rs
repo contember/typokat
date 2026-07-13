@@ -1,5 +1,16 @@
 use super::*;
 
+/// Per-top-level context for conditional `infer` binder freshening. The fresh binder
+/// slice is lexical to one conditional, so neither the cycle guard nor completed
+/// results may outlive this rewrite invocation.
+struct InferRewrite<'a> {
+    fresh: &'a [TypeId],
+    in_progress: FxHashSet<TypeId>,
+    active: Vec<TypeId>,
+    cycle_tainted: FxHashSet<TypeId>,
+    memo: FxHashMap<TypeId, TypeId>,
+}
+
 impl<'a> ConditionalEvaluator<'a> {
     /// Schedule the evaluation of a lazy instantiation `substitute(base, args)`. When
     /// `base` is a **distributive** conditional and the check argument distributes
@@ -426,9 +437,50 @@ impl<'a> ConditionalEvaluator<'a> {
     /// a nested conditional (which rebinds its own indices — M25 does not model nested
     /// `infer`). Re-interns only when something changed.
     pub(super) fn substitute_infers(&mut self, ty: TypeId, fresh: &[TypeId]) -> TypeId {
+        let mut ctx = InferRewrite {
+            fresh,
+            in_progress: FxHashSet::default(),
+            active: Vec::new(),
+            cycle_tainted: FxHashSet::default(),
+            memo: FxHashMap::default(),
+        };
+        self.substitute_infers_rec(ty, &mut ctx)
+    }
+
+    /// A cyclic structural edge is returned unchanged only for the active re-entry.
+    /// Taint the cycle suffix, not its acyclic ancestors: each tainted node retains its
+    /// original identity, while independent parent siblings can still be rewritten.
+    fn substitute_infers_rec(&mut self, ty: TypeId, ctx: &mut InferRewrite<'_>) -> TypeId {
+        if let Some(&done) = ctx.memo.get(&ty) {
+            return done;
+        }
+        if !ctx.in_progress.insert(ty) {
+            let cycle_start = ctx
+                .active
+                .iter()
+                .position(|&active| active == ty)
+                .expect("in-progress infer rewrite must be on the active stack");
+            ctx.cycle_tainted
+                .extend(ctx.active[cycle_start..].iter().copied());
+            return ty;
+        }
+        ctx.active.push(ty);
+        let result = self.substitute_infers_body(ty, ctx);
+        let popped = ctx.active.pop();
+        debug_assert_eq!(popped, Some(ty));
+        ctx.in_progress.remove(&ty);
+        if ctx.cycle_tainted.remove(&ty) {
+            ty
+        } else {
+            ctx.memo.insert(ty, result);
+            result
+        }
+    }
+
+    fn substitute_infers_body(&mut self, ty: TypeId, ctx: &mut InferRewrite<'_>) -> TypeId {
         match self.interner.store().tag(ty) {
             TypeTag::Infer => match self.interner.store().infer_index(ty) {
-                Some(i) => fresh.get(i as usize).copied().unwrap_or(ty),
+                Some(i) => ctx.fresh.get(i as usize).copied().unwrap_or(ty),
                 None => ty,
             },
             // A nested conditional rebinds its own infer indices; a mapped type / mapped
@@ -446,17 +498,17 @@ impl<'a> ConditionalEvaluator<'a> {
                 let mut changed = false;
                 let mut new = object.clone();
                 for prop in &mut new.properties {
-                    let nt = self.substitute_infers(prop.ty, fresh);
+                    let nt = self.substitute_infers_rec(prop.ty, ctx);
                     changed |= nt != prop.ty;
                     prop.ty = nt;
                 }
                 new.string_index = object.string_index.map(|v| {
-                    let nv = self.substitute_infers(v, fresh);
+                    let nv = self.substitute_infers_rec(v, ctx);
                     changed |= nv != v;
                     nv
                 });
                 new.number_index = object.number_index.map(|v| {
-                    let nv = self.substitute_infers(v, fresh);
+                    let nv = self.substitute_infers_rec(v, ctx);
                     changed |= nv != v;
                     nv
                 });
@@ -464,7 +516,7 @@ impl<'a> ConditionalEvaluator<'a> {
                     .call_signatures
                     .iter()
                     .map(|&s| {
-                        let ns = self.substitute_infers(s, fresh);
+                        let ns = self.substitute_infers_rec(s, ctx);
                         changed |= ns != s;
                         ns
                     })
@@ -473,7 +525,7 @@ impl<'a> ConditionalEvaluator<'a> {
                     .construct_signatures
                     .iter()
                     .map(|&s| {
-                        let ns = self.substitute_infers(s, fresh);
+                        let ns = self.substitute_infers_rec(s, ctx);
                         changed |= ns != s;
                         ns
                     })
@@ -490,17 +542,31 @@ impl<'a> ConditionalEvaluator<'a> {
                 };
                 let mut changed = false;
                 let mut new = function.clone();
+                // Function-local binders retain their ids and order, but their
+                // constraints/defaults are lexical children of the outer infer scope.
+                for type_param in &mut new.type_params {
+                    let constraint = type_param
+                        .constraint
+                        .map(|constraint| self.substitute_infers_rec(constraint, ctx));
+                    changed |= constraint != type_param.constraint;
+                    type_param.constraint = constraint;
+                    let default = type_param
+                        .default
+                        .map(|default| self.substitute_infers_rec(default, ctx));
+                    changed |= default != type_param.default;
+                    type_param.default = default;
+                }
                 new.receiver = function.receiver.map(|receiver| {
-                    let receiver = self.substitute_infers(receiver, fresh);
+                    let receiver = self.substitute_infers_rec(receiver, ctx);
                     changed |= Some(receiver) != function.receiver;
                     receiver
                 });
                 for param in &mut new.params {
-                    let nt = self.substitute_infers(param.ty, fresh);
+                    let nt = self.substitute_infers_rec(param.ty, ctx);
                     changed |= nt != param.ty;
                     param.ty = nt;
                 }
-                let nr = self.substitute_infers(function.ret, fresh);
+                let nr = self.substitute_infers_rec(function.ret, ctx);
                 changed |= nr != function.ret;
                 new.ret = nr;
                 if changed {
@@ -518,7 +584,7 @@ impl<'a> ConditionalEvaluator<'a> {
                 let subst: Vec<TypeId> = members
                     .iter()
                     .map(|&m| {
-                        let nm = self.substitute_infers(m, fresh);
+                        let nm = self.substitute_infers_rec(m, ctx);
                         changed |= nm != m;
                         nm
                     })
@@ -539,7 +605,7 @@ impl<'a> ConditionalEvaluator<'a> {
                 let subst: Vec<TypeId> = members
                     .iter()
                     .map(|&m| {
-                        let nm = self.substitute_infers(m, fresh);
+                        let nm = self.substitute_infers_rec(m, ctx);
                         changed |= nm != m;
                         nm
                     })
@@ -554,7 +620,7 @@ impl<'a> ConditionalEvaluator<'a> {
                 let Some(element) = self.interner.store().array_type(ty).map(|a| a.element) else {
                     return ty;
                 };
-                let ne = self.substitute_infers(element, fresh);
+                let ne = self.substitute_infers_rec(element, ctx);
                 if ne != element {
                     self.interner.intern_array(ne)
                 } else {
@@ -570,13 +636,13 @@ impl<'a> ConditionalEvaluator<'a> {
                     .elements
                     .iter()
                     .map(|&e| {
-                        let ne = self.substitute_infers(e, fresh);
+                        let ne = self.substitute_infers_rec(e, ctx);
                         changed |= ne != e;
                         ne
                     })
                     .collect();
                 let rest = tuple.rest.map(|rest| {
-                    let nt = self.substitute_infers(rest.ty, fresh);
+                    let nt = self.substitute_infers_rec(rest.ty, ctx);
                     changed |= nt != rest.ty;
                     TupleRestType { ty: nt, ..rest }
                 });
@@ -591,7 +657,7 @@ impl<'a> ConditionalEvaluator<'a> {
                 let Some(operand) = self.interner.store().readonly_operand(ty) else {
                     return ty;
                 };
-                let no = self.substitute_infers(operand, fresh);
+                let no = self.substitute_infers_rec(operand, ctx);
                 if no != operand {
                     self.interner.intern_readonly(no)
                 } else {
@@ -607,7 +673,7 @@ impl<'a> ConditionalEvaluator<'a> {
                     .args
                     .iter()
                     .map(|&(p, v)| {
-                        let nv = self.substitute_infers(v, fresh);
+                        let nv = self.substitute_infers_rec(v, ctx);
                         changed |= nv != v;
                         (p, nv)
                     })
@@ -629,7 +695,7 @@ impl<'a> ConditionalEvaluator<'a> {
                     .holes
                     .iter()
                     .map(|&hole| {
-                        let nh = self.substitute_infers(hole, fresh);
+                        let nh = self.substitute_infers_rec(hole, ctx);
                         changed |= nh != hole;
                         nh
                     })
@@ -649,7 +715,7 @@ impl<'a> ConditionalEvaluator<'a> {
                 let Some(operand) = self.interner.store().keyof_operand(ty) else {
                     return ty;
                 };
-                let no = self.substitute_infers(operand, fresh);
+                let no = self.substitute_infers_rec(operand, ctx);
                 if no != operand {
                     self.interner.intern_keyof(no)
                 } else {

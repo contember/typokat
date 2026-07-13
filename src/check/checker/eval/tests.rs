@@ -12,6 +12,168 @@ fn omit_this_parameter(interner: &mut Interner, argument: TypeId) -> TypeId {
 }
 
 #[test]
+fn infer_rewrite_preserves_generic_metadata_and_signature_shape() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let outer_infer = interner.intern_infer(0);
+    let u_id = TypeParamId(90_110);
+    let u = interner.intern_type_param(u_id, "U");
+    let u_array = interner.intern_array(u);
+    let source = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: u_id,
+            constraint: Some(outer_infer),
+            default: Some(outer_infer),
+        }],
+        receiver: Some(outer_infer),
+        params: vec![
+            ParameterType::optional("value", u),
+            ParameterType::rest("tail", u_array),
+        ],
+        ret: u,
+    });
+    let mut next = 90_111;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    let rewritten = evaluator.substitute_infers(source, &[wk.string]);
+    drop(evaluator);
+
+    let function = interner.store().function_type(rewritten).unwrap();
+    assert_eq!(function.type_params.len(), 1);
+    assert_eq!(function.type_params[0].id, u_id);
+    assert_eq!(function.type_params[0].constraint, Some(wk.string));
+    assert_eq!(function.type_params[0].default, Some(wk.string));
+    assert_eq!(function.receiver, Some(wk.string));
+    assert_eq!(function.params[0].ty, u);
+    assert!(function.params[0].optional);
+    assert_eq!(function.params[1].ty, u_array);
+    assert!(function.params[1].rest);
+    assert_eq!(function.ret, u);
+}
+
+#[test]
+fn infer_rewrite_terminates_on_recursive_shape_without_changing_identity() {
+    let mut interner = Interner::with_intrinsics();
+    let recursive = interner.reserve_object();
+    interner.fill_object(
+        recursive,
+        ObjectType {
+            properties: vec![prop("self", recursive)],
+            ..Default::default()
+        },
+    );
+    let mut next = 90_120;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    assert_eq!(evaluator.substitute_infers(recursive, &[]), recursive);
+    assert_eq!(evaluator.substitute_infers(recursive, &[]), recursive);
+}
+
+#[test]
+fn infer_rewrite_keeps_recursive_infer_graph_identity_in_both_traversal_orders() {
+    let mut interner = Interner::with_intrinsics();
+    let outer_infer = interner.intern_infer(0);
+    let infer_before_back_edge = interner.reserve_object();
+    interner.fill_object(
+        infer_before_back_edge,
+        ObjectType {
+            properties: vec![
+                prop("a_value", outer_infer),
+                prop("z_self", infer_before_back_edge),
+            ],
+            ..Default::default()
+        },
+    );
+    let back_edge_before_infer = interner.reserve_object();
+    interner.fill_object(
+        back_edge_before_infer,
+        ObjectType {
+            properties: vec![
+                prop("a_self", back_edge_before_infer),
+                prop("z_value", outer_infer),
+            ],
+            ..Default::default()
+        },
+    );
+    let fresh = interner.well_known().string;
+    let mut next = 90_121;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    assert_eq!(
+        evaluator.substitute_infers(infer_before_back_edge, &[fresh]),
+        infer_before_back_edge,
+        "an infer visited before a recursive back-edge must not expose a partial clone"
+    );
+    assert_eq!(
+        evaluator.substitute_infers(back_edge_before_infer, &[fresh]),
+        back_edge_before_infer,
+        "a recursive back-edge visited before an infer must not expose a partial clone"
+    );
+}
+
+#[test]
+fn infer_rewrite_keeps_recursive_child_but_rewrites_acyclic_sibling() {
+    let mut interner = Interner::with_intrinsics();
+    let recursive = interner.reserve_object();
+    interner.fill_object(
+        recursive,
+        ObjectType {
+            properties: vec![prop("self", recursive)],
+            ..Default::default()
+        },
+    );
+    let outer_infer = interner.intern_infer(0);
+    let shared_acyclic = interner.intern_object(ObjectType {
+        properties: vec![prop("value", outer_infer)],
+        ..Default::default()
+    });
+    let source = interner.intern_object(ObjectType {
+        properties: vec![
+            prop("first", shared_acyclic),
+            prop("recursive", recursive),
+            prop("second", shared_acyclic),
+        ],
+        ..Default::default()
+    });
+    let fresh = interner.well_known().string;
+    let mut next = 90_122;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    let first = evaluator.substitute_infers(source, &[fresh]);
+    let second = evaluator.substitute_infers(source, &[fresh]);
+    drop(evaluator);
+
+    assert_ne!(first, source, "the acyclic sibling must be freshened");
+    assert_eq!(
+        first, second,
+        "completed acyclic output keeps interned identity"
+    );
+    let rewritten = interner.store().object_type(first).unwrap();
+    assert_eq!(rewritten.property("recursive").unwrap().ty, recursive);
+    let first_child = rewritten.property("first").unwrap().ty;
+    assert_ne!(first_child, shared_acyclic);
+    assert_eq!(first_child, rewritten.property("second").unwrap().ty);
+    assert_eq!(
+        interner
+            .store()
+            .object_type(first_child)
+            .unwrap()
+            .property("value")
+            .unwrap()
+            .ty,
+        fresh
+    );
+}
+
+#[test]
 fn omit_this_parameter_preserves_optional_rest_and_default_shape() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
