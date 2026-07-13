@@ -178,3 +178,9 @@ One Terra writer owns the active worktree and makes one work unit's source chang
 - **Corpus ownership.** `tests/cases/sr_rewrite_hotpath_wu0/` remains disabled until
   WU1-WU3 jointly pass it. No deliberate divergence or separately deferred roadmap
   item was found, so WU0 adds neither a divergence-ledger row nor a backlog file.
+- **WU2 review regression.** Direct re-entry initially produced a partial recursive
+  clone; a global rollback avoided that clone but discarded an independent outer
+  infer sibling in a source-reachable type. `recursive_infer_sibling.ts` pins the
+  required boundary: the recursive child retains identity while the acyclic
+  `value: U` sibling still freshens. Cycle handling must be path-local, not a
+  top-level rollback.
