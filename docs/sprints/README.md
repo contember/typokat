@@ -20,8 +20,7 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+- [`sprint-2026-07-12-pre-lib-hardening.md`](sprint-2026-07-12-pre-lib-hardening.md) —
+  WU6 final official-suite fetch/ratchet and closure pending reliable user-authorized transport.
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold public-witness gate; no implementation started.
-- [`sprint-2026-07-12-pre-lib-hardening.md`](sprint-2026-07-12-pre-lib-hardening.md) —
-  active; WU1–WU5 shipped/decided `22`, `56`, `77`, `70`, and `13`; only WU6 final verification
-  and sprint closure remain.

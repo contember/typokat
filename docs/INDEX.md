@@ -23,21 +23,22 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-07-12-pre-lib-hardening.md`](sprints/sprint-2026-07-12-pre-lib-hardening.md) —
+  WU6's external official-suite fetch/ratchet gate and closure remain pending reliable,
+  user-authorized transport; semantic work and local verification are complete.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
-- [`sprint-2026-07-12-pre-lib-hardening.md`](sprints/sprint-2026-07-12-pre-lib-hardening.md) —
-  active; WU1–WU5 shipped/decided `22`, `56`, `77`, `70`, and `13`; only WU6 final verification
-  and sprint closure remain.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Pre-lib hardening sprint active** — WU1–WU5 shipped/decided aliased construction (`22`),
-  evaluator cycles (`56`), callable-object `ReturnType` inference (`77`), explicit
-  `this`/`ThisType<T>` (`70`), and the profiling decision (`13`, DEFER/no-VM). Only WU6 final
-  verification and sprint closure remain; namespace/declaration merging (`43`) is the sole direct
-  `lib.d.ts` prerequisite.
+- **Pre-lib hardening is active at WU6**
+  ([`sprints/sprint-2026-07-12-pre-lib-hardening.md`](sprints/sprint-2026-07-12-pre-lib-hardening.md)) —
+  aliased construction (`22`), evaluator cycles (`56`), callable-object `ReturnType` inference
+  (`77`), explicit `this`/`ThisType<T>` (`70`), and the `13` DEFER/no-VM decision are complete.
+  Local gates passed, while the final full official-suite fetch/ratchet is blocked on intermittent
+  GitHub HTML/non-JSON responses; closure awaits user-authorized reliable transport.
 - **Generic methods (`41`) shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-generic-methods.md`](archive/sprint-2026-07-12-generic-methods.md)) —
   persistent generic method/call/construct binders now survive substitution and relate under a

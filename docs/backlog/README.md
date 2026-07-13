@@ -30,7 +30,8 @@ contextual `ThisType<T>`, and receiver utilities, sprint-2026-07-12), and `13` (
 profiling gate, strict DEFER/no-VM, WU5 of
 [`sprint-2026-07-12-pre-lib-hardening.md`](../sprints/sprint-2026-07-12-pre-lib-hardening.md),
 closed 2026-07-13). The earlier shipped items are in
-[`../archive/`](../archive/README.md); the current pre-lib sprint remains active.
+[`../archive/`](../archive/README.md); only that sprint's WU6 external official-suite gate and
+closure remain active.
 Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). How each item

@@ -277,4 +277,9 @@ the original Terra implementer and repeats the relevant independent gate before 
   because `kernel.perf_event_paranoid=4`; no privilege change was made. With evaluator-dispatch
   self-time unavailable, the strict GO predicate cannot be proved, so the durable result is DEFER.
   Raw measurements, commands, hashes, host/tool versions, and limitations are in
-  [`../archive/backlog-13-profiling-gate.md`](../archive/backlog-13-profiling-gate.md).
+  [`backlog-13-profiling-gate.md`](../archive/backlog-13-profiling-gate.md).
+- 2026-07-13 — WU6 local Rust, benchmark, and official-suite harness gates passed. A fresh official
+  fetch exposed corpus-integrity holes; harness hardening landed in `7d6617a` with independent
+  offline reviews PASS/PASS. A full format-2 fetch remains externally blocked by intermittent
+  GitHub HTML/non-JSON directory responses, so the final official ratchet and sprint closure remain
+  pending user-authorized transport recovery or a reliable API.
