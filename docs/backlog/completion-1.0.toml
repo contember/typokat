@@ -93,7 +93,7 @@ state = "complete"
 blocks_release = "true"
 owner = "shipped"
 witness = "spec amendment 0ed8688; cargo test conformance (b70_this_parameter_typing enabled); two independent final reviews PASS/PASS for receiver identity, relation/cache, inference, contextual ThisType, and OmitThisParameter"
-links = ["../../tests/cases/b70_this_parameter_typing", "../sprints/sprint-2026-07-12-pre-lib-hardening.md", "./14-libdts-loading.md", "./lib-audit-6.0.3.md"]
+links = ["../../tests/cases/b70_this_parameter_typing", "../archive/sprint-2026-07-12-pre-lib-hardening.md", "./14-libdts-loading.md", "./lib-audit-6.0.3.md"]
 deps = []
 scope = ["b-this-parameters"]
 
@@ -304,7 +304,7 @@ state = "complete"
 blocks_release = "false"
 owner = "shipped"
 witness = "cargo test conformance (b56_instantiation_cycles enabled) + evaluator memo-order unit tests + independent adversarial review PASS"
-links = ["../../tests/cases/b56_instantiation_cycles/cycles_and_reuse.ts", "../sprints/sprint-2026-07-12-pre-lib-hardening.md"]
+links = ["../../tests/cases/b56_instantiation_cycles/cycles_and_reuse.ts", "../archive/sprint-2026-07-12-pre-lib-hardening.md"]
 deps = []
 
 [[criterion]]
@@ -371,7 +371,7 @@ state = "complete"
 blocks_release = "false"
 owner = "shipped"
 witness = "cargo test conformance (b77_returntype_call_signatures enabled) + last-signature inference unit test + independent adversarial review PASS"
-links = ["../../tests/cases/b77_returntype_call_signatures/single_call_signature.ts", "../sprints/sprint-2026-07-12-pre-lib-hardening.md"]
+links = ["../../tests/cases/b77_returntype_call_signatures/single_call_signature.ts", "../archive/sprint-2026-07-12-pre-lib-hardening.md"]
 deps = []
 
 [[criterion]]
@@ -393,7 +393,7 @@ state = "complete"
 blocks_release = "false"
 owner = "shipped"
 witness = "cargo test conformance (b22_new_callee_forms enabled) + independent review PASS after generic-parentheses remediation"
-links = ["../../tests/cases/b22_new_callee_forms/abstract_and_visibility.ts", "../sprints/sprint-2026-07-12-pre-lib-hardening.md"]
+links = ["../../tests/cases/b22_new_callee_forms/abstract_and_visibility.ts", "../archive/sprint-2026-07-12-pre-lib-hardening.md"]
 deps = []
 
 [[criterion]]
@@ -597,7 +597,7 @@ state = "complete"
 blocks_release = "true"
 owner = "shipped"
 witness = "2026-07-13 protocol at a1bcc59: 10-run flow/typelevel 100k timing + three RSS samples; six samply attempts blocked by perf_event_paranoid=4; strict ADR-0001 DEFER/no-VM outcome"
-links = ["../archive/backlog-13-profiling-gate.md", "../../tooling/bench/README.md", "../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md", "../sprints/sprint-2026-07-12-pre-lib-hardening.md"]
+links = ["../archive/backlog-13-profiling-gate.md", "../../tooling/bench/README.md", "../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md", "../archive/sprint-2026-07-12-pre-lib-hardening.md"]
 deps = []
 
 [[criterion]]

@@ -23,9 +23,6 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-07-12-pre-lib-hardening.md`](sprints/sprint-2026-07-12-pre-lib-hardening.md) —
-  WU6's external official-suite fetch/ratchet gate and closure remain pending reliable,
-  user-authorized transport; semantic work and local verification are complete.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
 
@@ -33,12 +30,12 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Pre-lib hardening is active at WU6**
-  ([`sprints/sprint-2026-07-12-pre-lib-hardening.md`](sprints/sprint-2026-07-12-pre-lib-hardening.md)) —
+- **Pre-lib hardening shipped 2026-07-13** (archived:
+  [`archive/sprint-2026-07-12-pre-lib-hardening.md`](archive/sprint-2026-07-12-pre-lib-hardening.md)) —
   aliased construction (`22`), evaluator cycles (`56`), callable-object `ReturnType` inference
   (`77`), explicit `this`/`ThisType<T>` (`70`), and the `13` DEFER/no-VM decision are complete.
-  Local gates passed, while the final full official-suite fetch/ratchet is blocked on intermittent
-  GitHub HTML/non-JSON responses; closure awaits user-authorized reliable transport.
+  The final official-suite ratchet now uses one shallow exact-revision fetch into a marked
+  full-blob Git cache; the 874-test corpus check passed with zero regressions.
 - **Generic methods (`41`) shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-generic-methods.md`](archive/sprint-2026-07-12-generic-methods.md)) —
   persistent generic method/call/construct binders now survive substitution and relate under a

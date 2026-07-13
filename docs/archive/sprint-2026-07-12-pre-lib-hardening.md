@@ -1,5 +1,19 @@
 # Sprint — pre-lib model and soundness hardening (2026-07-12)
 
+> **OUTCOME — shipped 2026-07-13.** Backlogs `22`, `56`, `77`, and `70` are closed;
+> `13` remains the deliberate ADR-0001 DEFER/no-VM decision. **Commit map:** plan `96b6198`;
+> WU0 `94a5b9a`/`e576e74`/`7db797e`/`e38afb5`/`81d1cc0`/`576885b`; WU1
+> `351e0da`/`8db4c22`/`e72749d`; WU2 `6c3c4f7`; WU3 `38acd79`; WU4
+> `597913a`/`9b9d976`/`0ed8688`/`a1bcc59`; WU5 `45ac183`; WU6 corpus-integrity
+> hardening `7d6617a`, lifecycle correction `8f52bd8`, and pinned Git transport `51887d4`.
+> Manifest v3 records 17 configured roots, 874 tests, 531 baselines, and persistent ref
+> `refs/typokat/pinned/050880ce59e30b356b686bd3144efe24f875ebc8`, verified to resolve to that
+> exact commit. Its post-fetch report has 368 in-scope / 506 out-of-scope tests, 324 matched
+> diagnostics out of 1,352 expected, and zero regressions, progress, or missing corpus/scoreboard
+> entries. All 62 harness tests, `cargo fmt --check`, manifest/surface/divergence tests, and
+> `cargo build --release` passed. This closure commit archives the sprint and redirects its
+> lifecycle/index links; backlog `43` remains the next direct `lib.d.ts` prerequisite.
+
 **Goal.** Close backlogs `22`, `56`, `77`, `70`, and the `13` profiling gate so the
 next sprint can focus on namespaces/declaration merging (`43`) with one remaining
 direct `lib.d.ts` prerequisite and three known silent-false-negative families removed.
@@ -38,8 +52,8 @@ closable; the batch does not authorize a VM or namespace/type-container redesign
   XL binder/type-container/merge milestone rather than an honest parallel filler —
   `src/binder/symbol.rs:47-51`.
 - ✔ The separate real-project preview sprint remains paused at its zero-threshold public
-  witness gate; multiple active sprints are permitted and this sprint does not modify its
-  contract — `docs/sprints/sprint-2026-07-12-real-project-preview.md`.
+  witness gate; this sprint does not modify its contract —
+  `docs/sprints/sprint-2026-07-12-real-project-preview.md`.
 
 ## Work units
 
@@ -162,7 +176,7 @@ closable; the batch does not authorize a VM or namespace/type-container redesign
 - **Problem.** Parallel agent throughput can hide cross-item coupling unless every
   semantic diff retains an independent review boundary and final combined audit.
 - **Verify first.** For each item, a reviewer different from its Terra implementer starts
-  from the committed spec and exact uncommitted implementation diff, reruns fresh tsc
+  from the committed spec and exact implementation diff, reruns fresh tsc
   probes, and hunts false negatives, false positives, cache/order dependence, and
   diagnostic identity drift.
 - **Scope.** Remediate every FAIL through the original implementation agent, re-review
@@ -278,8 +292,10 @@ the original Terra implementer and repeats the relevant independent gate before 
   self-time unavailable, the strict GO predicate cannot be proved, so the durable result is DEFER.
   Raw measurements, commands, hashes, host/tool versions, and limitations are in
   [`backlog-13-profiling-gate.md`](../archive/backlog-13-profiling-gate.md).
-- 2026-07-13 — WU6 local Rust, benchmark, and official-suite harness gates passed. A fresh official
-  fetch exposed corpus-integrity holes; harness hardening landed in `7d6617a` with independent
-  offline reviews PASS/PASS. A full format-2 fetch remains externally blocked by intermittent
-  GitHub HTML/non-JSON directory responses, so the final official ratchet and sprint closure remain
-  pending user-authorized transport recovery or a reliable API.
+- 2026-07-13 — WU6 closed. Local Rust and benchmark gates passed; a fresh official fetch exposed
+  corpus-integrity holes, hardened in `7d6617a` with independent offline reviews PASS/PASS.
+  The closure transport replaces the unreliable API/raw path with a marked `full-blob-v1` bare
+  Git cache and manifest v3. One non-interactive, shallow, exact-revision fetch populated 874
+  tests (531 baseline); all 62 harness unit tests and `cargo build --release` passed, and
+  `tsofficial.py run --check` reported zero regressions, progress, missing corpus, and missing
+  scoreboard entries (324 matched diagnostics across 1,352 checked expectations).
