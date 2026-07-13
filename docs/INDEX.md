@@ -23,6 +23,8 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-07-13-rewrite-hotpath-hardening.md`](sprints/sprint-2026-07-13-rewrite-hotpath-hardening.md) —
+  active; WU0 specifies receiver, infer-rewrite, binder-preservation, and overload-isolation probes.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
 
@@ -36,6 +38,9 @@ decisions → reference → archive.
   (`77`), explicit `this`/`ThisType<T>` (`70`), and the `13` DEFER/no-VM decision are complete.
   The final official-suite ratchet now uses one shallow exact-revision fetch into a marked
   full-blob Git cache; the 874-test corpus check passed with zero regressions.
+- **Rewrite/hotpath hardening is active at WU0** —
+  [`sprint-2026-07-13-rewrite-hotpath-hardening.md`](sprints/sprint-2026-07-13-rewrite-hotpath-hardening.md)
+  starts with correctness probes and measurement; it permits only bounded, evidence-backed changes.
 - **Generic methods (`41`) shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-generic-methods.md`](archive/sprint-2026-07-12-generic-methods.md)) —
   persistent generic method/call/construct binders now survive substitution and relate under a
