@@ -284,3 +284,21 @@ One Terra writer owns the active worktree and makes one work unit's source chang
   not a sound memo key (`7` raw repeats but only `5` exact-context repeats), so these
   measurements do not authorize a scoped substitution memo. No WU5 selection or
   architecture widening follows from WU4b.
+
+- **WU4c call/construct baseline (2026-07-13, revision `23c7e38`).** Test-only
+  thread-local counters instrument raw argument walks, speculative/committed candidate
+  builds, trial outcomes, generic preliminary/full inference, contextual arrow and
+  fresh-literal rewalks, speculative diagnostic rollback deltas, and trial/selected
+  receiver relations. The `cfg(test)` phase parameter is erased from production builds;
+  no contextual result, candidate, diagnostic, or relation fact is reused. Small C=1
+  tests pin two-overload callback and fresh-literal paths (each has builds `2+1`, trials
+  `2`, and rewalks `[3,2,1,0,0]` for
+  candidate-inference/trial/committed-check/class-ctor/other), an explicit-constraint
+  rollback, receiver checking, and the structural construct-signature mirror. The ignored
+  scaled callback corpus uses nine generic overloads, so each clean
+  call has exactly 20 callback rewalks: 500/5,000 calls emit 10,000/100,000. Run
+  `cargo test measure_call_pipeline_scaled_callback_corpus -- --ignored`; command and
+  counters are deterministic on Linux 6.17.0-40-generic, x86_64, rustc 1.95.0.
+  Elapsed timing is deliberately unavailable because this end-to-end corpus includes
+  parsing/binding and test-only counters; only operation counts select future work.
+  No WU5 threshold or candidate-local reuse is claimed.

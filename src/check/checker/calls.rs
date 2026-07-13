@@ -24,6 +24,149 @@ use oxc_ast::ast::{
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum ContextualMeasurePhase {
+    #[default]
+    CandidateInference,
+    CandidateTrial,
+    CommittedCheck,
+    ClassCtor,
+    Other,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct CallMeasure {
+    pub raw_call_argument_walks: u64,
+    pub raw_construct_argument_walks: u64,
+    pub speculative_candidate_builds: u64,
+    pub committed_candidate_builds: u64,
+    pub candidate_trials: u64,
+    pub candidate_matches: u64,
+    pub candidate_mismatches: u64,
+    pub candidate_arity_failures: u64,
+    pub generic_preliminary_inference_runs: u64,
+    pub generic_full_inference_runs: u64,
+    pub callback_rewalks: [u64; 5],
+    pub fresh_literal_rewalks: [u64; 5],
+    pub speculative_diagnostic_rollback_events: u64,
+    pub speculative_diagnostics_removed: u64,
+    pub trial_receiver_relation_queries: u64,
+    pub selected_receiver_relation_queries: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static CALL_MEASURE: std::cell::RefCell<CallMeasure> = std::cell::RefCell::new(CallMeasure::default());
+}
+
+#[cfg(test)]
+pub(super) fn reset_call_measure() {
+    CALL_MEASURE.with(|measure| *measure.borrow_mut() = CallMeasure::default());
+}
+
+#[cfg(test)]
+pub(super) fn call_measure() -> CallMeasure {
+    CALL_MEASURE.with(|measure| *measure.borrow())
+}
+
+#[cfg(test)]
+pub(super) fn measure_contextual_rewalk(phase: ContextualMeasurePhase, callback: bool) {
+    CALL_MEASURE.with(|measure| {
+        let measure = &mut *measure.borrow_mut();
+        let slot = phase as usize;
+        if callback {
+            measure.callback_rewalks[slot] += 1;
+        } else {
+            measure.fresh_literal_rewalks[slot] += 1;
+        }
+    });
+}
+
+#[cfg(test)]
+thread_local! {
+    static CONTEXTUAL_MEASURE_PHASE: std::cell::Cell<ContextualMeasurePhase> = const { std::cell::Cell::new(ContextualMeasurePhase::Other) };
+}
+
+#[cfg(test)]
+struct ContextualMeasurePhaseGuard<'a> {
+    current: &'a std::cell::Cell<ContextualMeasurePhase>,
+    previous: ContextualMeasurePhase,
+}
+
+#[cfg(test)]
+impl Drop for ContextualMeasurePhaseGuard<'_> {
+    fn drop(&mut self) {
+        self.current.set(self.previous);
+    }
+}
+
+#[cfg(test)]
+pub(super) fn with_contextual_measure_phase<R>(
+    phase: ContextualMeasurePhase,
+    body: impl FnOnce() -> R,
+) -> R {
+    CONTEXTUAL_MEASURE_PHASE.with(|current| {
+        let _restore = ContextualMeasurePhaseGuard {
+            previous: current.replace(phase),
+            current,
+        };
+        body()
+    })
+}
+
+#[cfg(test)]
+pub(super) fn contextual_measure_phase() -> ContextualMeasurePhase {
+    CONTEXTUAL_MEASURE_PHASE.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(super) fn measure_contextual_rollback(removed: usize) {
+    CALL_MEASURE.with(|measure| {
+        let measure = &mut *measure.borrow_mut();
+        measure.speculative_diagnostic_rollback_events += 1;
+        measure.speculative_diagnostics_removed += removed as u64;
+    });
+}
+
+#[cfg(test)]
+fn measure_call(update: impl FnOnce(&mut CallMeasure)) {
+    CALL_MEASURE.with(|measure| update(&mut measure.borrow_mut()));
+}
+
+macro_rules! contextual_source_after_walked {
+    ($pass:expr, $scope:expr, $expr:expr, $context:expr, $raw:expr, $arrow:expr, $retain:expr, $phase:expr) => {{
+        #[cfg(test)]
+        {
+            with_contextual_measure_phase($phase, || {
+                $pass.infer_contextual_source_after_walked(
+                    $scope, $expr, $context, $raw, $arrow, $retain,
+                )
+            })
+        }
+        #[cfg(not(test))]
+        {
+            $pass.infer_contextual_source_after_walked(
+                $scope, $expr, $context, $raw, $arrow, $retain,
+            )
+        }
+    }};
+}
+
+macro_rules! contextual_inference_args {
+    ($pass:expr, $scope:expr, $params:expr, $types:expr, $exprs:expr, $phase:expr) => {{
+        #[cfg(test)]
+        {
+            $pass.contextual_inference_args($scope, $params, $types, $exprs, $phase)
+        }
+        #[cfg(not(test))]
+        {
+            $pass.contextual_inference_args($scope, $params, $types, $exprs)
+        }
+    }};
+}
+
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Record the incomplete surface for a skipped spread call/`new` argument
     /// (`f(...xs)` / `new C(...xs)`, owner 71) — the argument collectors share this so
@@ -150,6 +293,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         params: &[ParameterType],
         arg_types: &[(TypeId, Span)],
         arg_exprs: &[&Expression<'_>],
+        #[cfg(test)] phase: ContextualMeasurePhase,
     ) -> Vec<TypeId> {
         let targets = self.call_argument_targets(params, arg_types.len());
         arg_types
@@ -163,13 +307,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 if self.should_keep_raw_array_inference_source(arg_expr, *arg_ty, target) {
                     return *arg_ty;
                 }
-                self.infer_contextual_source_after_walked(
+                contextual_source_after_walked!(
+                    self,
                     scope,
                     arg_expr,
                     target,
                     (*arg_ty, *arg_span),
                     true,
                     false,
+                    phase
                 )
                 .0
             })
@@ -243,6 +389,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(call.arguments.len());
         for arg in &call.arguments {
             if let Some(arg_expr) = arg.as_expression() {
+                #[cfg(test)]
+                measure_call(|measure| measure.raw_call_argument_walks += 1);
                 if let Some(inferred) = self.infer_expr(scope, arg_expr) {
                     arg_types.push(inferred);
                     arg_fresh.push(is_fresh_literal(arg_expr));
@@ -411,6 +559,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             call_receiver,
             commit_constraints,
         } = request;
+        #[cfg(test)]
+        measure_call(|measure| {
+            if commit_constraints {
+                measure.committed_candidate_builds += 1;
+            } else {
+                measure.speculative_candidate_builds += 1;
+            }
+        });
         let generic_params = self
             .interner
             .store()
@@ -466,6 +622,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                             &map,
                         );
                         if self.diagnostics.len() != diagnostics_len {
+                            #[cfg(test)]
+                            measure_call(|measure| {
+                                measure.speculative_diagnostic_rollback_events += 1;
+                                measure.speculative_diagnostics_removed +=
+                                    (self.diagnostics.len() - diagnostics_len) as u64;
+                            });
                             let diagnostics = self.diagnostics[diagnostics_len..].to_vec();
                             self.diagnostics.truncate(diagnostics_len);
                             return Err(CandidateBuildFailure::Constraint(diagnostics));
@@ -490,6 +652,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         .iter()
                         .position(|expr| matches!(expr, Expression::ArrowFunctionExpression(_)));
                     let contextual_params = if let Some(start) = contextual_start {
+                        #[cfg(test)]
+                        measure_call(|measure| measure.generic_preliminary_inference_runs += 1);
                         let raw_args: Vec<TypeId> = args.types[..start]
                             .iter()
                             .map(|(argument, _)| *argument)
@@ -528,12 +692,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     } else {
                         params.clone()
                     };
-                    let inference_args = self.contextual_inference_args(
+                    let inference_args = contextual_inference_args!(
+                        self,
                         scope,
                         &contextual_params,
                         args.types,
                         args.exprs,
+                        ContextualMeasurePhase::CandidateInference
                     );
+                    #[cfg(test)]
+                    measure_call(|measure| measure.generic_full_inference_runs += 1);
                     infer::infer_signature_type_arguments_from_params(
                         self.interner,
                         &mut self.next_type_param,
@@ -617,11 +785,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         arg_exprs: &[&Expression<'_>],
         _call_span: Span,
     ) -> CandidateTrial {
+        #[cfg(test)]
+        measure_call(|measure| measure.candidate_trials += 1);
         if !self.call_receiver_is_compatible(receivers.0, receivers.1) {
+            #[cfg(test)]
+            measure_call(|measure| measure.candidate_mismatches += 1);
             return CandidateTrial::Mismatch;
         }
         let arity = self.call_arity(params);
         if !self.call_arity_accepts(&arity, arg_types.len()) {
+            #[cfg(test)]
+            measure_call(|measure| measure.candidate_arity_failures += 1);
             return CandidateTrial::Arity(arity);
         }
 
@@ -633,13 +807,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let Some(param_ty) = param_ty else {
                 continue;
             };
-            let (src, _src_span) = self.infer_contextual_source_after_walked(
+            let (src, _src_span) = contextual_source_after_walked!(
+                self,
                 scope,
                 arg_expr,
                 param_ty,
                 (*arg_ty, *arg_span),
                 true,
                 false,
+                ContextualMeasurePhase::CandidateTrial
             );
             let diagnostics_len = self.diagnostics.len();
             check_excess_properties(
@@ -649,15 +825,25 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 &mut self.diagnostics,
             );
             if self.diagnostics.len() != diagnostics_len {
+                #[cfg(test)]
+                measure_call(|measure| {
+                    measure.speculative_diagnostic_rollback_events += 1;
+                    measure.speculative_diagnostics_removed +=
+                        (self.diagnostics.len() - diagnostics_len) as u64;
+                });
                 self.diagnostics.truncate(diagnostics_len);
                 return CandidateTrial::Mismatch;
             }
             let store = self.interner.store();
             let mut relater = Relater::new(store, wk);
             if let Relation::No(_) = relater.is_assignable(src, param_ty) {
+                #[cfg(test)]
+                measure_call(|measure| measure.candidate_mismatches += 1);
                 return CandidateTrial::Mismatch;
             }
         }
+        #[cfg(test)]
+        measure_call(|measure| measure.candidate_matches += 1);
         CandidateTrial::Match
     }
 
@@ -749,13 +935,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let Some(param_ty) = param_ty else {
                 continue;
             };
-            let (src, src_span) = self.infer_contextual_source_after_walked(
+            let (src, src_span) = contextual_source_after_walked!(
+                self,
                 scope,
                 arg_expr,
                 param_ty,
                 (*arg_ty, *arg_span),
                 true,
                 true,
+                ContextualMeasurePhase::CommittedCheck
             );
             check_excess_properties(
                 self.interner.store(),
@@ -789,6 +977,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let Some(target_receiver) = target_receiver else {
             return;
         };
+        #[cfg(test)]
+        measure_call(|measure| measure.selected_receiver_relation_queries += 1);
         let (source_receiver, span) =
             call_receiver.unwrap_or((self.interner.well_known().undefined, call_span));
         let wk = self.interner.well_known();
@@ -819,6 +1009,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let Some(target_receiver) = target_receiver else {
             return true;
         };
+        #[cfg(test)]
+        measure_call(|measure| measure.trial_receiver_relation_queries += 1);
         let source_receiver = call_receiver.unwrap_or(self.interner.well_known().undefined);
         let mut relater = Relater::new(self.interner.store(), self.interner.well_known());
         relater
@@ -1078,6 +1270,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(new_expr.arguments.len());
         for arg in &new_expr.arguments {
             if let Some(arg_expr) = arg.as_expression() {
+                #[cfg(test)]
+                measure_call(|measure| measure.raw_construct_argument_walks += 1);
                 if let Some(inferred) = self.infer_expr(scope, arg_expr) {
                     arg_types.push(inferred);
                     arg_fresh.push(is_fresh_literal(arg_expr));
@@ -1371,7 +1565,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         Some(func) => func.params.clone(),
                         None => Vec::new(),
                     };
-                let args = self.contextual_inference_args(scope, &params, arg_types, arg_exprs);
+                let args = contextual_inference_args!(
+                    self,
+                    scope,
+                    &params,
+                    arg_types,
+                    arg_exprs,
+                    ContextualMeasurePhase::ClassCtor
+                );
                 infer::infer_type_arguments_from_params(
                     self.interner,
                     &mut self.next_type_param,

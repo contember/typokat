@@ -703,6 +703,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         retain_contextual_arrow_checks: bool,
     ) -> (TypeId, Span) {
         if let (true, Expression::ArrowFunctionExpression(arrow)) = (use_contextual_arrow, expr) {
+            #[cfg(test)]
+            super::calls::measure_contextual_rewalk(super::calls::contextual_measure_phase(), true);
             let diagnostics_len = self.diagnostics.len();
             let obligation_len = self.obligations.len();
             let override_len = self.override_checks.len();
@@ -710,6 +712,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let contextual =
                 self.infer_contextual_arrow_with_return_context(scope, arrow, context, false);
             if !retain_contextual_arrow_checks {
+                #[cfg(test)]
+                super::calls::measure_contextual_rollback(self.diagnostics.len() - diagnostics_len);
                 self.diagnostics.truncate(diagnostics_len);
                 self.obligations.truncate(obligation_len);
                 self.override_checks.truncate(override_len);
@@ -727,8 +731,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let diagnostic_len = self.diagnostics.len();
         let obligation_len = self.obligations.len();
         let override_len = self.override_checks.len();
+        #[cfg(test)]
+        super::calls::measure_contextual_rewalk(super::calls::contextual_measure_phase(), false);
         let contextual = self.infer_initializer(scope, expr, Some(context));
         if !retain_contextual_arrow_checks {
+            #[cfg(test)]
+            super::calls::measure_contextual_rollback(self.diagnostics.len() - diagnostic_len);
             self.diagnostics.truncate(diagnostic_len);
             self.obligations.truncate(obligation_len);
             self.override_checks.truncate(override_len);
