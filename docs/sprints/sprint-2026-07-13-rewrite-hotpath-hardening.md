@@ -164,4 +164,17 @@ One Terra writer owns the active worktree and makes one work unit's source chang
 
 ## Run log
 
-_No execution yet. WU0 begins with fixture authoring; no source implementation is authorized before that separate spec commit._
+- **WU0 fixture design (2026-07-13).** Strict `tsc 6.0.3` accepts direct and
+  parenthesized computed-member calls when the receiver satisfies `this`, rejects
+  the corresponding bad receiver with `TS2684`, accepts infer substitution through
+  nested generic constraints/defaults, and reports `TS2322` for the recursive-shape
+  witness. Current typokat loses the computed receiver (including generic result
+  inference), leaves nested generic metadata pointing at the stale infer binder,
+  and stack-overflows on the recursive infer rewrite.
+- **Architecture-stop probe.** A rejected generic receiver overload whose receiver
+  constraint recursively instantiates reports depth error `2589` in both strict
+  `tsc 6.0.3` and current typokat. No trial-only diagnostic leak or changed final
+  selection was observed, so the sprint may proceed without transaction design.
+- **Corpus ownership.** `tests/cases/sr_rewrite_hotpath_wu0/` remains disabled until
+  WU1-WU3 jointly pass it. No deliberate divergence or separately deferred roadmap
+  item was found, so WU0 adds neither a divergence-ledger row nor a backlog file.

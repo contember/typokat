@@ -362,6 +362,16 @@ Construction notes:
   disabled until its backlog item ships. See the deferred-check note in
   [`divergences.md`](../../docs/reference/divergences.md).
 
+## Rewrite-hotpath hardening corpus (sprint 2026-07-13)
+
+`sr_rewrite_hotpath_wu0/` is the disabled WU0 acceptance corpus for
+[`sprint-2026-07-13-rewrite-hotpath-hardening.md`](../../docs/sprints/sprint-2026-07-13-rewrite-hotpath-hardening.md).
+It pins computed-member receiver propagation, terminating recursive infer rewrites,
+nested generic constraint/default rewriting, and rejected-overload depth parity.
+The directory flips to `true` only after WU1-WU3 jointly satisfy every fixture;
+the overload probe already matches `tsc 6.0.3 --strict` and guards that parity while
+the call and evaluator paths change.
+
 ## Surface-accounting corpus (sprint 2026-07-10)
 
 `b73_surface_accounting/` is the WU0 acceptance spec for the completeness-accounting

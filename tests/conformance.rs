@@ -143,6 +143,10 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Deferred ledger — known under-reports from backlogs 18, 60, 62, 66, and
     // 76. Backlogs 56 and 77 moved to isolated corpora above.
     ("sr_deferred_ledger", false),
+    // Rewrite/hotpath-hardening sprint (2026-07-13) WU0 acceptance corpus.
+    // Disabled until WU1-WU3 land their owning fixes; overload_trial_depth.ts
+    // already pins current tsc parity but travels with the architecture probes.
+    ("sr_rewrite_hotpath_wu0", false),
     // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
     // (backlog 73). ENABLED by WU3 (expression child slots), WU4 (statement
     // containers), and WU5 (annotation / signature / class-member accounting): the
