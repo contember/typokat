@@ -184,3 +184,7 @@ One Terra writer owns the active worktree and makes one work unit's source chang
   required boundary: the recursive child retains identity while the acyclic
   `value: U` sibling still freshens. Cycle handling must be path-local, not a
   top-level rollback.
+- **WU3 public witness.** `constraint_function_metadata.ts` forces constraint
+  evaluation to change receiver/parameter children while a nested generic binder
+  remains semantically visible. Its bad call must retain `"ok"` in the reason chain;
+  an anonymous rebuilt signature with erased binders is not an acceptable match.
