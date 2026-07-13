@@ -141,6 +141,38 @@ Record environment, corpus scale, baseline, raw counters, and run-to-run varianc
 
 **Touchpoints.** Tests, official-suite scoreboard only if the ratchet changes it intentionally, docs outcome/indexes, and archive move. No unrelated source edits.
 
+### WU7 — heap-backed auxiliary structural walks (accepted review follow-up)
+
+**Problem.** Comprehensive review found that the new function metadata edges in
+`InferRewrite` and `InferenceConstraintEvaluator` remain host-recursive on deep
+acyclic `TypeId` graphs. Cycle guards stop repeated identities, but neither they nor
+the conditional-evaluator budget bounds a unique chain assembled from shallow,
+topologically ordered aliases. Receiver/parameter/return children already carried
+the same pre-existing risk, so a metadata-only depth guard would leave the root
+cause intact.
+
+**Scope.** Convert both complete auxiliary structural walks to private explicit
+heap task/value stacks. Preserve each walker's existing child order, postorder
+rebuilds, opaque tags, unchanged identity, generic metadata, SCC suffix taint,
+memo/exhaustion policy, and test-only metrics. Keep the machines separate:
+`InferRewrite` owns lexical fresh binders and a per-run completed memo;
+`InferenceConstraintEvaluator` executes pending types and rolls structural results
+back on global exhaustion. Do not introduce a universal visitor, new cache, or
+metadata-only shim.
+
+**Acceptance.** Commit the disabled syntax corpus first. Direct arena tests then
+prove at least 10k unique structural nodes for generic constraints/defaults and the
+pre-existing receiver/parameter/return arms without native recursion, while existing
+DAG memo, self/mutual cycle, cycle+sibling, pending exhaustion, metadata, diagnostic,
+and measurement-count tests retain their exact behavior. Enable the WU7 corpus,
+cross-check it with strict `tsc 6.0.3`, run debug and release focused tests, full
+tests/clippy/release, independent adversarial review, and the official-suite ratchet.
+
+**Touchpoints.** `src/check/checker/eval/{instantiation,extends,tests}.rs`, narrow
+caller tests where direct entry coverage is useful, `tests/cases/sr_rewrite_hotpath_wu7/`,
+the conformance registry, and architecture/invariant docs. No relation, call
+selection, inference candidate, or general substitution changes.
+
 ## Sequencing and ownership
 
 One Terra writer owns the active worktree and makes one work unit's source changes at a time. The writer never self-approves an implementation WU: a distinct reviewer performs the adversarial review after each WU and before its commit. This prevents concurrent edits from obscuring cache/diagnostic causality.
@@ -152,7 +184,9 @@ One Terra writer owns the active worktree and makes one work unit's source chang
 | 3 | WU2, then WU3 | Sequential evaluator rewrite work to keep generic-metadata causality reviewable. |
 | 4 | WU4 | May collect measurement after WU0, but no optimization decision until its reviewed baseline exists. |
 | 5 | WU5 | One evidence-backed candidate at a time, each independently reversible. |
-| 6 | WU6 | Independent final review, full verification, ratchet, outcome, archive. |
+| 6 | WU6 | Independent comprehensive review and initial full verification. |
+| 7 | WU7 | Accepted CORR-1 follow-up: spec first, two local heap task machines, independent review. |
+| 8 | WU6 closure | Re-run full verification/ratchet, record outcome, and archive. |
 
 ## Decisions / open questions
 
@@ -161,6 +195,9 @@ One Terra writer owns the active worktree and makes one work unit's source chang
 3. The empty-context relation fast path is the only cache-adjacent change pre-authorized for measurement; contextual stack snapshots remain the reference implementation.
 4. The ordered property change must preserve the target's canonical traversal and first failure. Faster lookup with altered reason ordering is rejected.
 5. The owner will propose, rather than create, a minimal backlog item if measurement or the overload probe reveals a larger architectural requirement.
+6. The user accepted CORR-1 for immediate implementation. WU7 uses two private task
+   machines; their memo, opacity, pending-evaluation, and exhaustion policies are too
+   different for a sound shared visitor abstraction.
 
 ## Run log
 
@@ -390,3 +427,8 @@ One Terra writer owns the active worktree and makes one work unit's source chang
   Three low findings are remediated here: C=1 preliminary-inference assertions,
   current-facing corpus/sprint lifecycle text, and an explicit counter-versus-timing
   control policy. No `CORR-1` implementation or backlog item is created in this sprint.
+- **WU7 approval and design (2026-07-13).** The user chose immediate implementation
+  over deferral. Three Terra design passes converged on separate local postorder
+  task/value stacks modeled on the primary conditional evaluator. The disabled
+  `sr_rewrite_hotpath_wu7/` syntax corpus pins both source routes; direct arena tests
+  will carry the 10k+ depth proof without relying on the CLI's 256MiB worker stack.

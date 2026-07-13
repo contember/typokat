@@ -371,6 +371,13 @@ nested generic constraint/default rewriting, and rejected-overload depth parity.
 WU1-WU3 jointly satisfied every fixture and enabled the directory; the overload probe
 continues to guard its `tsc 6.0.3 --strict` parity while the call and evaluator paths change.
 
+`sr_rewrite_hotpath_wu7/` is the disabled acceptance corpus for the final
+deep-acyclic traversal follow-up. Its shallow, topologically ordered alias chains
+prove that generic constraint/default metadata reaches both auxiliary structural
+walkers without relying on parser nesting. Implementation-time direct arena tests
+carry the 10k+ host-stack regression because a textual fixture would conflate the
+walker with parser/lowering depth and the CLI's enlarged worker stack.
+
 ## Surface-accounting corpus (sprint 2026-07-10)
 
 `b73_surface_accounting/` is the WU0 acceptance spec for the completeness-accounting

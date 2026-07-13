@@ -147,6 +147,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Enabled after WU1-WU3 landed their owning fixes; overload_trial_depth.ts
     // continues to pin tsc parity with the architecture probes.
     ("sr_rewrite_hotpath_wu0", true),
+    // WU7 — auxiliary structural walkers must use heap work stacks for deep
+    // acyclic generic metadata. Spec commit disabled; implementation enables.
+    ("sr_rewrite_hotpath_wu7", false),
     // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
     // (backlog 73). ENABLED by WU3 (expression child slots), WU4 (statement
     // containers), and WU5 (annotation / signature / class-member accounting): the
