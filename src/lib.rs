@@ -5,7 +5,6 @@
 
 pub mod binder;
 pub mod check;
-#[allow(dead_code)] // Dormant ADR-0006 domain; consumers switch in WU1b-WU1d.
 mod class_semantics;
 pub mod diagnostics;
 pub mod driver;

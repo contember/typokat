@@ -5,11 +5,10 @@
 
 mod advanced;
 mod collections;
-pub(crate) mod legacy_guard;
 mod objects;
 mod set_types;
 
-use crate::class_semantics::{Exhaustion, PublishedClasses};
+use crate::class_semantics::Exhaustion;
 use crate::relate::cache::{RelationCache, RelationKey};
 use crate::types::repr::{GenericTypeParam, IntrinsicKind, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
@@ -187,9 +186,8 @@ pub enum Relation {
     No(ReasonChain),
 }
 
-/// ADR-0006 relation result. Unlike legacy [`Relation`], projection/evaluation
-/// exhaustion remains an explicit third semantic outcome and has no boolean helper.
-#[allow(dead_code)] // Dormant until WU1c installs the planned relation protocol.
+/// Projection/evaluation exhaustion remains an explicit third semantic outcome
+/// and has no boolean helper.
 #[derive(Clone, Debug)]
 pub(crate) enum RelationOutcome {
     Yes,
@@ -237,41 +235,15 @@ fn normalization_demand(
     normalization.and_then(|normalization| normalization.relation_demand(store, ty))
 }
 
-/// Identical-only relation rule for an unevaluated deferred indexed access. Other
-/// pairs remain for WU1c's projection planner and relation transaction.
-#[allow(dead_code)] // Dormant until WU1c installs the planned relation protocol.
-pub(crate) fn relate_unevaluated_deferred(
-    published: &PublishedClasses,
-    store: &Store,
-    src: TypeId,
-    tgt: TypeId,
-) -> Option<RelationOutcome> {
-    if let Some(reason) = legacy_guard::publication_exhaustion(store, &[src, tgt], published) {
-        return Some(RelationOutcome::Exhausted(reason));
-    }
-    let deferred = store.tag(src) == TypeTag::DeferredIndexedAccess
-        || store.tag(tgt) == TypeTag::DeferredIndexedAccess;
-    deferred.then(|| {
-        if src == tgt {
-            RelationOutcome::Yes
-        } else {
-            RelationOutcome::No(ReasonChain::leaf(src, tgt))
-        }
-    })
-}
-
 impl Relation {
     pub fn is_yes(&self) -> bool {
         matches!(self, Relation::Yes)
     }
 }
 
-/// Run one legacy relation query that is known not to contain query-owned
-/// semantic nodes. Class projection and deferred evaluation must enter through
-/// the semantic query coordinator instead.
 /// The relation engine. Borrows the store immutably (relation checking never
 /// mutates the arena) and owns the cache + cycle stack.
-pub struct Relater<'a> {
+pub(crate) struct Relater<'a> {
     store: &'a Store,
     well_known: WellKnown,
     cache: RelationCache,
@@ -393,7 +365,8 @@ impl BinderRelationContext {
 }
 
 impl<'a> Relater<'a> {
-    pub fn new(store: &'a Store, well_known: WellKnown) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(store: &'a Store, well_known: WellKnown) -> Self {
         Relater {
             store,
             well_known,
@@ -479,8 +452,8 @@ impl<'a> Relater<'a> {
 
     /// Is `src` assignable to `tgt`? Entry point used by the checker for
     /// annotation-vs-initializer checks (`TK2322`).
-    pub fn is_assignable(&mut self, src: TypeId, tgt: TypeId) -> Relation {
-        legacy_guard::reject_legacy_semantic_types(self.store, &[src, tgt]);
+    #[cfg(test)]
+    pub(crate) fn is_assignable(&mut self, src: TypeId, tgt: TypeId) -> Relation {
         // The outermost frame has no enclosing assumptions; `assumed` collects any
         // assume-true dependencies its subtree consumes (see `relate`). Whatever
         // survives here would be an assumption about a key with no enclosing
@@ -527,8 +500,6 @@ impl<'a> Relater<'a> {
             };
             (src, tgt)
         } else {
-            legacy_guard::reject_legacy_semantic_type(self.store, src);
-            legacy_guard::reject_legacy_semantic_type(self.store, tgt);
             (src, tgt)
         };
         // Identity fast path: `T` relates to `T` under every relation.

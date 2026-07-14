@@ -126,12 +126,6 @@ impl Store {
         self.tag.is_empty()
     }
 
-    /// O(1) gate for the dormant ADR-0006 legacy preflight. Current class consumers
-    /// emit neither node, so ordinary evaluator/relation queries avoid a second walk.
-    pub(crate) fn has_dormant_semantic_types(&self) -> bool {
-        !self.class_instances.is_empty() || !self.deferred_indexed_accesses.is_empty()
-    }
-
     #[inline]
     pub fn tag(&self, id: TypeId) -> TypeTag {
         self.tag[id.index()]

@@ -8,6 +8,7 @@ use rustc_hash::FxHashMap;
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ClassConstructionState {
     Pending,
+    #[allow(dead_code)] // Kept for the ADR-0006 publication-state contract.
     Building,
     Built,
     Published,
@@ -235,21 +236,6 @@ impl PublishedClasses {
             poison: FxHashMap::default(),
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn forged_states(
-        states: impl IntoIterator<Item = (ClassId, ClassConstructionState)>,
-    ) -> Self {
-        PublishedClasses {
-            states: FxHashMap::from_iter(states),
-            surfaces: FxHashMap::default(),
-            poison: FxHashMap::default(),
-        }
-    }
-}
-
-pub(crate) fn is_prepublication(reason: &Exhaustion) -> bool {
-    matches!(reason, Exhaustion::ClassNotPublished { .. })
 }
 
 #[cfg(test)]

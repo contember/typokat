@@ -174,13 +174,13 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
     /// Plan, normalize, and relate one top-level assignability operation.
     pub(crate) fn is_assignable(&mut self, src: TypeId, tgt: TypeId) -> RelationOutcome {
-        // Identity does not demand a projection spine, but publication/poison is
-        // still checked first so same-pair class poison can never false-clean.
+        if let Some(reason) =
+            publication_exhaustion(self.interner.store(), &[src, tgt], self.published)
+        {
+            return RelationOutcome::Exhausted(reason);
+        }
         if src == tgt {
-            return match publication_exhaustion(self.interner.store(), &[src], self.published) {
-                Some(reason) => RelationOutcome::Exhausted(reason),
-                None => RelationOutcome::Yes,
-            };
+            return RelationOutcome::Yes;
         }
         if let Some(outcome) = self.same_class_covariant_argument_mismatch(src, tgt) {
             return outcome;
@@ -342,6 +342,13 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         overload: TypeId,
         implementation: TypeId,
     ) -> RelationOutcome {
+        if let Some(reason) = publication_exhaustion(
+            self.interner.store(),
+            &[overload, implementation],
+            self.published,
+        ) {
+            return RelationOutcome::Exhausted(reason);
+        }
         let mut planner = ProjectionPlanner::new(
             self.interner,
             self.published,

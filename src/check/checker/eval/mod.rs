@@ -20,7 +20,6 @@ use crate::types::store::TypeId;
 use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-#[allow(dead_code)] // Dormant until WU1c routes planned evaluation through it.
 pub(in crate::check) mod demand;
 mod extends;
 mod instantiation;

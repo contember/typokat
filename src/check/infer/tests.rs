@@ -9,6 +9,67 @@ fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
 }
 
+fn infer_type_arguments(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    type_params: &[TypeParamId],
+    params: &[TypeId],
+    args: &[TypeId],
+    fresh_args: &[bool],
+) -> FxHashMap<TypeParamId, TypeId> {
+    let params: Vec<_> = params
+        .iter()
+        .enumerate()
+        .map(|(index, &ty)| ParameterType::required(format!("p{index}"), ty))
+        .collect();
+    infer_type_arguments_from_params(
+        interner,
+        next_type_param,
+        type_params,
+        &params,
+        args,
+        fresh_args,
+    )
+}
+
+fn infer_type_arguments_from_params(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    type_params: &[TypeParamId],
+    params: &[ParameterType],
+    args: &[TypeId],
+    fresh_args: &[bool],
+) -> FxHashMap<TypeParamId, TypeId> {
+    let type_params: Vec<_> = type_params
+        .iter()
+        .map(|&id| GenericTypeParam {
+            id,
+            constraint: interner.store().type_param_constraint(id),
+            default: None,
+        })
+        .collect();
+    let published = PublishedClasses::empty();
+    let mut queries = SemanticQueryState::default();
+    match infer_signature_type_arguments_from_params(
+        interner,
+        next_type_param,
+        &published,
+        &mut queries,
+        SignatureInferenceRequest {
+            type_params: &type_params,
+            params,
+            args,
+            fresh_args,
+            receiver: None,
+        },
+    ) {
+        DemandOutcome::Ready(result) => result.arguments,
+        DemandOutcome::Exhausted(exhaustion) => {
+            panic!("intrinsic-only inference unexpectedly exhausted: {exhaustion:?}")
+        }
+    }
+}
+
 fn measured_inference_pairs(
     interner: &mut Interner,
     count: usize,

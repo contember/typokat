@@ -787,24 +787,6 @@ impl<'a> Relater<'a> {
         true
     }
 
-    /// Whether an overload declaration is compatible with its implementation.
-    /// This has intentionally different parameter variance from ordinary function
-    /// assignment: the implementation must accept each overload argument and
-    /// return something the overload promises.
-    pub fn overload_implementation_compatible(
-        &mut self,
-        overload_ty: TypeId,
-        implementation_ty: TypeId,
-    ) -> bool {
-        super::legacy_guard::reject_legacy_semantic_types(
-            self.store,
-            &[overload_ty, implementation_ty],
-        );
-        self.allow_relation_demand = false;
-        self.query_exhaustion = None;
-        self.overload_implementation_compatible_inner(overload_ty, implementation_ty)
-    }
-
     pub(crate) fn overload_implementation_compatible_attempt(
         &mut self,
         overload_ty: TypeId,
