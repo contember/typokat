@@ -61,16 +61,18 @@ the way there — its syntax gates flip OOS→IN as features land — not a nume
 
 ## Roadmap at a glance
 
-The active backlog has **35 items**: **27 checker-1.0 release blockers** and **8 non-blocking,
-safe-direction parity items**. The release classification comes from
+The active backlog has **38 items**: **27 checker-1.0 release blockers** and **11 non-blocking**
+(8 safe-direction parity items plus 3 consumer-surface items). The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml); the grouping below is the human roadmap view.
+Consumer-surface items are deliberately absent from the manifest — they gate *consumers* of the
+checker, not the checker.
 
 | Track | Active items | Typical effort | Role |
 |---|---:|---|---|
 | **A — model completeness** | 4 | L–XL | Eliminate silently-permissive model gaps; `43` directly unblocks full `lib.d.ts`. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
 | **C — soundness/parity tail** | 15 | S–L | Seven release-blocking known gaps plus eight safe-direction parity improvements. |
-| **D — scale + IDE** | 5 | XL | Preview, full standard library, resolver breadth, parallel identity, and incrementality. |
+| **D — scale + IDE** | 8 | M–XL | Preview, full standard library, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
 
 Effort is a **relative planning estimate**, not a time promise:
 
@@ -81,7 +83,8 @@ Effort is a **relative planning estimate**, not a time promise:
 
 Re-check the estimate against HEAD when scheduling the item; the mandatory spec → implementation →
 independent-review loop still applies at every size. Unless noted otherwise, every item below blocks
-checker 1.0. The FP/tsc-parity subsection is the only non-blocking group.
+checker 1.0. The FP/tsc-parity subsection and D's consumer-surface subsection are the two
+non-blocking groups.
 
 ## Items
 
@@ -143,6 +146,19 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - **XL** · [`16`](16-parallelism-type-universe.md) — deterministic parallel cross-file type identity · blocked by `14`, `15`.
 - **XL** · [`17`](17-incrementality.md) — semantic batch cache followed by a Salsa-style IDE query layer · blocked by `16`.
 
+Consumer surface (non-blocking — these gate consumers of the checker, not checker 1.0; absent from
+`completion-1.0.toml` by design):
+
+- **L** · [`79`](79-resolution-query-surface.md) — span → declaration provenance: the resolution
+  map, `DeclId` → declaration site, an interface-member decl side table (**outside** the type hash),
+  and `.d.ts.map` re-anchoring.
+- **M** · [`80`](80-pavouk-resolution-oracle.md) — differential *resolution* oracle against
+  pavouk/ts-morph: ~138k real resolution assertions over the Contember monorepo as a scale ratchet ·
+  blocked by `79`; coverage tracks `15`, `14`.
+- **M** · [`81`](81-resolve-only-driver-mode.md) — resolve-only driver (no relation engine, no
+  diagnostics) · blocked by `79`. **Low priority**: an optimization, not a capability;
+  profiling-gated, drop it if the relation engine does not dominate.
+
 ## Recommended order
 
 1. **Keep `72` paused at its WU0 witness gate.** The accounting sprints (2026-07-10 and
@@ -162,6 +178,12 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
    [`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md), `15` integrates and
    differentially validates `oxc_resolver` for the 1.0 Bundler profile; NodeNext/alternate profiles
    are deferred and physical lookup is not reimplemented locally.
+4. **Land `79` + `80` alongside that climb, not after it.** With `72` paused at its witness gate we
+   are short of real-world evidence, and the resolution oracle is a cheaper way to buy it: pavouk
+   already holds ~138k compiler-accurate resolution assertions over a real monorepo, so `80` turns
+   `14`/`15` from "shipped" into a *measured* coverage derivative — including the ~16.5k member-call
+   edges that are the whole reason a checker exists here. Expect the first run to be mostly
+   `incomplete`; that baseline is the point. `81` stays last and may be dropped on the profile.
 
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.
