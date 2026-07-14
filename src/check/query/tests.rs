@@ -1,8 +1,8 @@
 use super::*;
 use crate::class_semantics::{ClassConstructionState, PublishedClassPoison, PublishedClassSurface};
 use crate::types::repr::{
-    ClassId, ConditionalType, LiteralValue, MappedType, ModifierOp, ObjectType, PropertyType,
-    TypeParamId,
+    ClassId, ConditionalType, FunctionType, LiteralValue, MappedType, ModifierOp, ObjectType,
+    ParameterType, PropertyType, TypeParamId,
 };
 
 fn published(
@@ -332,6 +332,287 @@ fn outer_demand_does_not_descend_through_ordinary_wrappers() {
         .demand(root);
         assert_eq!(outcome, DemandOutcome::Ready(root));
     }
+    assert_eq!(state.durable_lengths(), (0, 0, 0));
+}
+
+#[test]
+fn prepublication_state_precedes_same_pair_identity_and_writes_nothing() {
+    let mut interner = Interner::with_intrinsics();
+    let class = ClassId(80_104);
+    let application = interner.intern_class_instance(class, Vec::new());
+
+    for expected_state in [
+        ClassConstructionState::Pending,
+        ClassConstructionState::Building,
+        ClassConstructionState::Built,
+    ] {
+        let published = PublishedClasses::forged(class, expected_state);
+        let mut state = SemanticQueryState::default();
+        let mut next_type_param = 0;
+        let outcome = SemanticQueryCoordinator::new(
+            &mut interner,
+            &published,
+            &mut state,
+            &mut next_type_param,
+        )
+        .is_assignable(application, application);
+
+        assert!(matches!(
+            outcome,
+            RelationOutcome::Exhausted(Exhaustion::ClassNotPublished {
+                class: found,
+                state: found_state,
+            }) if found == class && found_state == expected_state
+        ));
+        assert_eq!(state.durable_lengths(), (0, 0, 0));
+    }
+}
+
+#[test]
+fn nested_class_boundary_precedes_child_identity_and_writes_nothing() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let class = ClassId(80_105);
+    let application = interner.intern_class_instance(class, Vec::new());
+    let source = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("extra", wk.number),
+            PropertyType::public("value", application),
+        ],
+        ..Default::default()
+    });
+    let target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", application)],
+        ..Default::default()
+    });
+    assert_ne!(source, target);
+
+    for expected_state in [
+        ClassConstructionState::Pending,
+        ClassConstructionState::Building,
+        ClassConstructionState::Built,
+    ] {
+        let published = PublishedClasses::forged(class, expected_state);
+        let mut state = SemanticQueryState::default();
+        let mut next_type_param = 0;
+        let outcome = SemanticQueryCoordinator::new(
+            &mut interner,
+            &published,
+            &mut state,
+            &mut next_type_param,
+        )
+        .is_assignable(source, target);
+
+        assert!(matches!(
+            outcome,
+            RelationOutcome::Exhausted(Exhaustion::ClassNotPublished {
+                class: found,
+                state: found_state,
+            }) if found == class && found_state == expected_state
+        ));
+        assert_eq!(state.durable_lengths(), (0, 0, 0));
+    }
+
+    let published = PublishedClasses::from_publication(
+        FxHashMap::from_iter([(class, ClassConstructionState::Poisoned)]),
+        FxHashMap::default(),
+        FxHashMap::from_iter([(class, PublishedClassPoison::Initializer)]),
+    )
+    .expect("poisoned test publication is complete");
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    let outcome =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(source, target);
+
+    assert!(matches!(
+        outcome,
+        RelationOutcome::Exhausted(Exhaustion::ClassInitializerPoison { class: found })
+            if found == class
+    ));
+    assert_eq!(state.durable_lengths(), (0, 0, 0));
+}
+
+#[test]
+fn nested_equal_composite_cannot_hide_an_unpublished_or_poisoned_class() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let class = ClassId(80_106);
+    let application = interner.intern_class_instance(class, Vec::new());
+    let wrappers = [
+        ("array", interner.intern_array(application)),
+        (
+            "object",
+            interner.intern_object(ObjectType {
+                properties: vec![PropertyType::public("nested", application)],
+                ..Default::default()
+            }),
+        ),
+        (
+            "function",
+            interner.intern_function(FunctionType {
+                type_params: Vec::new(),
+                receiver: None,
+                params: Vec::new(),
+                ret: application,
+            }),
+        ),
+        ("tuple", interner.intern_tuple(vec![application])),
+    ];
+
+    for (wrapper_name, wrapper) in wrappers {
+        let source = interner.intern_object(ObjectType {
+            properties: vec![
+                PropertyType::public("extra", wk.number),
+                PropertyType::public("value", wrapper),
+            ],
+            ..Default::default()
+        });
+        let target = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("value", wrapper)],
+            ..Default::default()
+        });
+        assert_ne!(source, target);
+
+        for expected_state in [
+            ClassConstructionState::Pending,
+            ClassConstructionState::Building,
+            ClassConstructionState::Built,
+        ] {
+            let published = PublishedClasses::forged(class, expected_state);
+            let mut state = SemanticQueryState::default();
+            let mut next_type_param = 0;
+            let outcome = SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(source, target);
+
+            assert!(
+                matches!(
+                    outcome,
+                    RelationOutcome::Exhausted(Exhaustion::ClassNotPublished {
+                        class: found,
+                        state: found_state,
+                    }) if found == class && found_state == expected_state
+                ),
+                "equal {wrapper_name} wrapper hid {expected_state:?}",
+            );
+            assert_eq!(state.durable_lengths(), (0, 0, 0));
+        }
+
+        let published = PublishedClasses::from_publication(
+            FxHashMap::from_iter([(class, ClassConstructionState::Poisoned)]),
+            FxHashMap::default(),
+            FxHashMap::from_iter([(class, PublishedClassPoison::Initializer)]),
+        )
+        .expect("poisoned test publication is complete");
+        let mut state = SemanticQueryState::default();
+        let mut next_type_param = 0;
+        let outcome = SemanticQueryCoordinator::new(
+            &mut interner,
+            &published,
+            &mut state,
+            &mut next_type_param,
+        )
+        .is_assignable(source, target);
+
+        assert!(
+            matches!(
+                outcome,
+                RelationOutcome::Exhausted(Exhaustion::ClassInitializerPoison { class: found })
+                    if found == class
+            ),
+            "equal {wrapper_name} wrapper hid initializer poison",
+        );
+        assert_eq!(state.durable_lengths(), (0, 0, 0));
+    }
+}
+
+#[test]
+fn identical_deferred_relation_remains_lazy_and_writes_nothing() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let deferred = interner.intern_deferred_indexed_access(wk.number, wk.string);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    reset_query_demand_measure();
+    let outcome =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(deferred, deferred);
+
+    assert!(matches!(outcome, RelationOutcome::Yes));
+    assert_eq!(state.durable_lengths(), (0, 0, 0));
+    assert_eq!(query_demand_measure(), QueryDemandMeasure::default());
+}
+
+#[test]
+fn overload_entry_rejects_equal_composite_class_boundaries_without_writes() {
+    let mut interner = Interner::with_intrinsics();
+    let class = ClassId(80_110);
+    let application = interner.intern_class_instance(class, Vec::new());
+    let wrapper = interner.intern_array(application);
+    let overload = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("overload", wrapper)],
+        ret: wrapper,
+    });
+    let implementation = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("implementation", wrapper)],
+        ret: wrapper,
+    });
+    assert_ne!(overload, implementation);
+
+    for expected_state in [
+        ClassConstructionState::Pending,
+        ClassConstructionState::Building,
+        ClassConstructionState::Built,
+    ] {
+        let published = PublishedClasses::forged(class, expected_state);
+        let mut state = SemanticQueryState::default();
+        let mut next_type_param = 0;
+        let outcome = SemanticQueryCoordinator::new(
+            &mut interner,
+            &published,
+            &mut state,
+            &mut next_type_param,
+        )
+        .overload_implementation_compatible(overload, implementation);
+
+        assert!(matches!(
+            outcome,
+            RelationOutcome::Exhausted(Exhaustion::ClassNotPublished {
+                class: found,
+                state: found_state,
+            }) if found == class && found_state == expected_state
+        ));
+        assert_eq!(state.durable_lengths(), (0, 0, 0));
+    }
+
+    let published = PublishedClasses::from_publication(
+        FxHashMap::from_iter([(class, ClassConstructionState::Poisoned)]),
+        FxHashMap::default(),
+        FxHashMap::from_iter([(class, PublishedClassPoison::Initializer)]),
+    )
+    .expect("poisoned test publication is complete");
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    let outcome =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .overload_implementation_compatible(overload, implementation);
+
+    assert!(matches!(
+        outcome,
+        RelationOutcome::Exhausted(Exhaustion::ClassInitializerPoison { class: found })
+            if found == class
+    ));
     assert_eq!(state.durable_lengths(), (0, 0, 0));
 }
 
