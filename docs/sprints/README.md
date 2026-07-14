@@ -22,6 +22,3 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 <!-- one line per active sprint; empty between sprints -->
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold public-witness gate; no implementation started.
-- [`sprint-2026-07-13-semantic-duplication-layering.md`](sprint-2026-07-13-semantic-duplication-layering.md) —
-  active bounded deduplication; WU1b-d is one atomic class-surface production cutover under
-  [`ADR-0008`](../decisions/0008-class-surface-lowering-and-lexical-event-ownership.md).

@@ -188,7 +188,7 @@ so it doesn't get silently folded into either neighbor.
 
 ### 5.2 Current checker shape
 
-The implementation keeps type construction and relation queries separated because the interner
+The implementation keeps type construction and semantic queries separated because the interner
 requires `&mut Interner` while the relation engine borrows the store immutably:
 
 1. **Prelude unit.** `src/prelude.ts` is parsed, bound, reserved, and checked first in the same type
@@ -196,23 +196,49 @@ requires `&mut Interner` while the relation engine borrows the store immutably:
    the prelude's `DeclId → TypeId` value entries; string intrinsic aliases are then seeded to
    well-known marker types. Ordinary slot-aware parent lookup keeps user value/type declarations
    able to shadow their corresponding prelude slots independently.
-2. **Declaration fill.** Type declarations are reserve-then-fill. Interfaces, classes, conditional
-   aliases, mapped aliases, and recursive object-literal aliases reserve stable ids before their
-   bodies lower, so self and sibling references store ids rather than expanding inline. Generic
-   declarations lower as templates with named type-parameter ids embedded; references with type
-   arguments instantiate by substitution, except conditional/mapped/intrinsic templates which stay
-   lazy until evaluation is demanded.
+2. **Reservation and class publication.** The checker reserves class, alias, and interface
+   identities, persistent binders, raw syntax slots, and lexical event tickets compilation-wide
+   before lowering a class surface. `ClassSurfaceLowerer` has only narrow construction
+   capabilities: it can resolve syntax and intern complete immutable nodes, but cannot evaluate,
+   project, relate, infer calls, or select overloads. Classes form a declaration graph whose SCC
+   condensation publishes dependency-first; a non-heritage recursive SCC appears atomically, while
+   heritage/initializer/surface failures publish a typed poison cause instead of a partial surface.
+   Every class application—including a non-generic empty application—is an immutable
+   `ClassInstance { class, args }` with a complete real argument vector. Alias and interface
+   templates retain their ordinary reserve/fill rules; conditional/mapped/intrinsic templates stay
+   lazy until a post-publication query demands them.
 3. **Flow graph.** A pre-pass builds flow nodes for module and function bodies before checking, so
    loop back edges are complete when identifier reads ask for narrowed types.
-4. **Statement walk.** The checker lowers annotations, infers expressions, checks bodies, records
-   assignability and override obligations, and emits immediate name/arity/access diagnostics.
-5. **Relation phase.** Obligations run through one relater instance, so assignability diagnostics and
-   class override diagnostics share the same immutable store view and relation cache discipline.
+4. **Statement walk and event replay.** The checker lowers annotations, infers expressions, checks
+   bodies, and records obligations. Class callable rows retain their complete binders,
+   constraints/defaults, receiver, parameter/return types, overload position, and parameter-property
+   ownership from the single surface-lowering pass; body checking reuses them rather than lowering
+   public signatures again. All diagnostics and incomplete records have one checker-wide
+   `EventStore` owner allocated in lexical order. Final replay sorts by
+   `(original_module_ordinal, source_start, event_ordinal, record_ordinal)`; SCC, completion, query,
+   and cache order are unobservable. Speculative overload candidates write only to local
+   `CandidateEffects`, and selection commits exactly one winning/final-failure set. There is no
+   record deduplication, span deletion, truncation, or post-hoc suppression.
+5. **Semantic query phase.** `SemanticQueryCoordinator` is the sole production boundary for
+   class-reachable demand, evaluation, inference, and relation. Each operation uses fresh
+   query-local projection/evaluation overlays and pending writes; `Relater` runs read-only behind the
+   coordinator, after applying already-planned overlay mappings and before any durable promotion.
+   Publication/poison preflight runs before identity for both assignability and overload-
+   compatibility entrypoints. A deferred node absent from the overlay keeps its conservative
+   identical-only relation rule; it is not demand-evaluated merely to reach identity. Demand returns
+   `Ready | Exhausted`; relation returns `Yes | No(ReasonChain) | Exhausted`. Poison, a 128-distinct-
+   application projection budget, evaluation cycles, and evaluation budget failures remain typed
+   exhaustion. Only a completed untainted query promotes evaluator, projection, and relation-cache
+   writes together. Raw production `Relater` construction or assignability calls are not available.
 
-Named type declarations are intentionally id-based. Interfaces and class instances reserve object ids;
-transparent aliases memoize their resolved target; object-literal aliases seed a reserved object only
-for the non-generic recursive shape. Type parameters are named unique ids, while `infer` binders use
-the scoped de Bruijn representation described in ADR-0002.
+Named type declarations are intentionally id-based. Interfaces reserve object ids; class
+applications use immutable `ClassInstance` ids and demand one-layer structural projections only
+after their declaration SCC publishes. A projection substitutes the application arguments into the
+open instance template but leaves nested class applications unprojected until demanded. Transparent
+aliases memoize their resolved target; object-literal aliases seed a reserved object only for the
+non-generic recursive shape. `ClassInstance` is distinct from the lazy alias-oriented
+`Instantiation` node. Type parameters are named unique ids, while `infer` binders use the scoped de
+Bruijn representation described in ADR-0002.
 
 Generic binders are persistent fields of every generic `FunctionType`: free functions and class,
 interface/object method, call, and construct signatures share ordered descriptors carrying a unique
@@ -221,15 +247,20 @@ while rewriting their free outer references; call instantiation consumes the sel
 descriptors through the existing inference/constraint path. Generic-to-generic relation aligns the
 descriptors locally and bypasses the durable cache below that binder context, so only the completed
 outer relation remains cacheable. This is the B41 representation recorded in ADR-0005.
-It does not synthesize instance members or load library declarations; generic/deferred indexed
-access (`T[K]`), optional methods, and explicit `this` parameters remain separately owned tails.
+It does not load library declarations; generic/deferred indexed access (`T[K]`) and optional methods
+remain separately owned tails. Explicit `this` parameters and contextual `ThisType<T>` are part of
+the persistent signature model.
 
-Classes bind both spaces: the type slot is the instance type, and the value slot is the static side /
-constructor lookup key. Instance and static members are composed base-first with own declarations
-overriding by name. Private/protected members carry `visibility` plus `declaring_class` identity for
-access control and nominal relation checks; `readonly` and accessor metadata gate assignments but do
-not affect assignability. Constructor signatures, abstract-member state, override-kind state, and
-constructor accessibility live beside `ClassInfo` when they are not part of the copyable `new` path.
+Classes bind both spaces: the type slot names immutable instance applications, and the value slot is
+the static side / constructor lookup key. Complete instance, constructor, static, parameter, and
+callable metadata freezes atomically at SCC publication. Instance and static members are composed
+base-first with own declarations overriding by name, but only from completely published bases;
+heritage poison propagates dependency-first and ordinary non-heritage references do not inherit it.
+Private/protected members carry `visibility` plus `declaring_class` identity for access control and
+nominal relation checks; `readonly` and accessor metadata gate assignments but do not affect
+assignability. Constructor signatures, abstract-member state, override-kind state, and constructor
+accessibility live beside the published class surface when they are not part of the copyable `new`
+path.
 
 ---
 
@@ -253,6 +284,11 @@ With stable `TypeId`s, the cache key is three `u32`s — extremely cheap:
 - This cache may be the single largest perf element of the whole checker; good
   hash-consing makes it brutally effective because structurally equal types collapse to
   one key.
+- The durable relation cache lives in pass-local `SemanticQueryState` and is reachable only through
+  `SemanticQueryCoordinator`. The coordinator gives `Relater` an immutable store plus one query's
+  normalization overlay and a pending-cache transaction. Production callers cannot construct a raw
+  `Relater` or bypass coordinator-owned projection/evaluation; those direct entrypoints are
+  test-only.
 
 ### 6.2 Cache lifetime vs narrowing (the trap)
 
@@ -270,6 +306,17 @@ Mutually recursive types (`interface A { x: B }`, `interface B { x: A }`) make
 you re-enter a relation already on the stack, assume it holds and continue, resolving the
 fixpoint at the end. Without this, recursive types loop forever. This is the sharpest edge
 of the engine and must be in the core design.
+
+Every operand applies any query-local evaluation/projection overlay mapping **before** identity,
+durable cache lookup, or active-cycle handling. Absence from the overlay is meaningful: the deferred
+node remains unchanged under its existing identical-only rule and is not eagerly evaluated before
+identity. The cache and cycle key uses the resulting normalized `TypeId` pair plus relation kind,
+never a class declaration-only key. Publication/poison preflight precedes same-id success at both
+assignability and overload-compatibility entrypoints. A `Yes` that consumed an in-flight ancestor
+assumption is provisional and cannot enter the durable cache. Likewise, poison,
+planning/evaluation exhaustion, or any exhausted frontier taints the transaction: it promotes no
+evaluator, projection, or relation-cache writes. `Exhausted` remains distinct from `No`, even when
+the final diagnostic boundary conservatively over-reports a mismatch.
 
 ### 6.4 Reporting mode (error messages run *through* here)
 

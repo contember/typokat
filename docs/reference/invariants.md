@@ -7,19 +7,37 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
 
 ## 1. Invariants you must NOT break
 
-- **Relation engine** (`src/relate/relation/mod.rs`): the 3×`u32` `(TypeId,TypeId,RelationKind)` bool
-  cache, the **assume-true-until-disproven cycle stack** for recursive types, and `Relation::No(ReasonChain)`
-  (never a bare `bool`). **Cache-soundness fix (architecture §6.3):** a verdict that depended on an
-  in-flight *ancestor* assumption must NOT be committed to the durable cache (only a `false`, or a
-  non-provisional `true`). A regression here causes order-dependent dropped errors — the sharpest
-  bug found in the whole project. If a depth/budget limit is ever added to `relate`, verdicts computed
-  under an exhausted budget must not be committed to any cache either (same bug class as the b55
-  evaluator-memo fix).
+- **Semantic query and relation boundary** (`src/check/query/`, `src/relate/relation/mod.rs`):
+  production assignability enters only through `SemanticQueryCoordinator`; raw `Relater`
+  construction/`is_assignable` is test-only. Each query uses fresh projection/evaluation overlays,
+  and `Relater` applies present overlay mappings **before** identity, the 3×`u32`
+  `(TypeId,TypeId,RelationKind)` cache, or the **assume-true-until-disproven cycle stack**.
+  An absent mapping leaves a deferred node under its conservative identical-only rule; it must not
+  be demand-evaluated merely to precede identity. Publication/poison preflight runs before same-id
+  success for assignability and overload compatibility.
+  Relation returns `Yes | No(ReasonChain) | Exhausted`, never a bare `bool`; demand returns
+  `Ready | Exhausted`. A verdict that depended on an in-flight *ancestor* assumption is provisional
+  and must not be committed. Poison, an exhausted planner/evaluator budget or cycle, or any other
+  taint promotes **none** of the pending evaluator, projection, or relation-cache writes. A
+  regression here causes order-dependent dropped errors — the sharpest bug class in the project.
 - **Type store** (`src/types/`): every type is a hash-consed `TypeId`; structural equality is `==`.
   Property metadata that is part of *identity* — `visibility`, `declaring_class`, `readonly`,
   `is_accessor`, index signatures — is folded into the structural hash + `object_props_eq`, but the
   **relation engine ignores `readonly`/`is_accessor`** for assignability (they only gate access /
   assignment targets). `substitute` must carry **all** `PropertyType` fields through.
+- **Immutable class publication and lexical effects** (`src/class_semantics.rs`,
+  `src/check/checker/classes/`, `src/check/checker/events.rs`): every class application is an
+  immutable `ClassInstance` with a syntactically valid, semantically available, complete ordered
+  vector of real argument `TypeId`s; never fabricate error/`unknown`/`never` or a partial vector.
+  Class declaration SCCs publish complete instance/constructor/static/binder/callable surfaces
+  atomically behind the construction capability; heritage, initializer, and surface poison expose
+  typed exhaustion before identity/cache/member/`new`/call/inference, never a partial surface.
+  Retained callable rows—including binders, constraints/defaults, receiver, parameters, return,
+  overload state, and parameter-property ownership—are lowered once and reused by body checking.
+  Every diagnostic/incomplete record has one checker-wide `EventStore` owner and replays by
+  `(original_module_ordinal, source_start, event_ordinal, record_ordinal)`, independent of build,
+  completion, query, and cache order. Candidate effects remain local until exactly one selected set
+  commits; there is no diagnostic deduplication, span deletion, truncation, or post-hoc suppression.
 - **Private iterative evaluator walkers** (`src/check/checker/eval/`): `InferRewrite` and
   `MappedRewrite` use explicit heap task/value stacks for
   every child they traverse, including function type-parameter constraints/defaults. Keep their

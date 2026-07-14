@@ -66,6 +66,7 @@ EOF spans.
 | `TK2305` | Module has no exported member |
 | `TK2307` | Cannot find module |
 | `TK2313` | Type parameter has a circular constraint (`<T extends T>`) |
+| `TK2314` | Generic type requires a different number of type arguments |
 | `TK2322` | Type X is not assignable to type Y (annotation/reassignment/return/property) |
 | `TK2339` | Property does not exist on type |
 | `TK2341` | Property is private (accessed outside its declaring class) |
@@ -88,6 +89,7 @@ EOF spans.
 | `TK2673` | Constructor of class is private (direct `new` outside the declaring class) |
 | `TK2674` | Constructor of class is protected (direct `new` outside the declaring class/subclasses) |
 | `TK2684` | The `this` context of a call is not assignable to the method's explicit receiver type |
+| `TK2707` | Generic type requires between a minimum and maximum number of type arguments |
 | `TK2741` | Property is missing in type but required |
 | `TK2744` | Type parameter defaults can only reference previously declared type parameters |
 | `TK2769` | No overload matches this call |
@@ -395,7 +397,7 @@ chains also exercise generic substitution before the mapped rewrite starts.
 ## Semantic duplication corpus (sprint 2026-07-13)
 
 `sr_semantic_duplication/` is the enabled acceptance corpus for
-[`sprint-2026-07-13-semantic-duplication-layering.md`](../../docs/sprints/sprint-2026-07-13-semantic-duplication-layering.md).
+[`sprint-2026-07-13-semantic-duplication-layering.md`](../../docs/archive/sprint-2026-07-13-semantic-duplication-layering.md).
 Its class-member fixture pins one-time reserved signature ownership: generic method
 constraints/defaults and call-site instantiation; four static signature `TK2302`s plus
 one body-local `TK2302`; one unresolved parameter/return/default diagnostic each;

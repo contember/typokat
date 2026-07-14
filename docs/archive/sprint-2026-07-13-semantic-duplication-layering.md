@@ -1,5 +1,34 @@
 # Sprint — semantic duplication and layering (2026-07-13)
 
+> **OUTCOME — shipped 2026-07-14.** WU0–WU8 closed the architectural duplication that could
+> change semantic ownership, while sharing only behavior-neutral mechanics. Class references are
+> complete immutable `ClassInstance` applications; class declaration SCCs publish complete surfaces
+> or typed poison atomically; retained callable rows feed publication and body checking; the
+> checker-wide `EventStore` replays one-owned records in lexical four-key order; and every
+> class-reachable demand/evaluation/inference/relation passes through the sole
+> `SemanticQueryCoordinator`
+> with query-local overlays and typed `Ready`/`Yes`/`No`/`Exhausted` outcomes. Test TOML parsing,
+> parameter shaping, trusted-prelude bootstrap, and call/construct selector control flow now share
+> neutral seams without reusing speculative candidate effects. WU6's lazy conditional-`infer`
+> candidate was rejected because its operation reduction changed observable `TypeId` allocation and
+> diagnostic identity/order/cardinality; no production optimization shipped. WU7 measured mapped
+> and constraint demand at 10k/100k, selected no optimization, and created no backlog item.
+> Independent whole-sprint and cleanup reviews passed. Final format, clippy, release build, full
+> test/integration gates (478 passed, 6 ignored release measurements), and the official-suite ratchet
+> passed. Its committed `b6aa825` baseline is 874 corpus / 339 IN / 535 OOS with SHA-256
+> `0668cb3d6e83b5868a32935499797649945f0c5fd9d7d0d97b9cb926fd24c789`; the final fresh run at
+> `fb02ba6` was 340 IN / 534 OOS, 0 regressions, 69 progress, 0 missing from the corpus, and 0
+> missing from the scoreboard. Progress is permitted; the committed baseline remained unchanged.
+>
+> **Commit map:** plan `dcc4548`; WU0 characterization `8b08d84`; WU0A recursive-class spec
+> `9174138`; architecture decision `2040eae`; dormant WU1a boundary `a386ebc`; cutover spec
+> `889cc19`; cutover decision `d5c73eb`; WU1b-d atomic cutover `a7923b6`; scoreboard ratchet
+> `b6aa825`; WU2 parser policy/spec `195edce` + extraction `42eb12b`; WU3 `a5f83e7`; WU4
+> `7b2a0f9`; WU5 `6aad67c`; WU6 characterization `40296c2`; WU7 measurement `6f68487`; rejected
+> WU6 probe cleanup `7db89de`; final semantic-query regression spec `8996b3b`
+> (`test: close semantic query publication gaps`); semantic-boundary enforcement `fb02ba6`
+> (`refactor: enforce semantic query boundaries`).
+
 **Goal.** Remove approved duplication at narrow semantic seams and eliminate only measured repeated
 execution, without merging policy-bearing checker machines or changing observable TypeScript
 semantics.
@@ -11,7 +40,7 @@ behavioral equivalence; execution optimizations need separate operation-count or
 **Prerequisite satisfied.** The rewrite/hotpath sprint's WU7 and WU8 are complete and archived; its
 three evaluator walkers are now independently hardened and are a boundary this sprint preserves,
 not an active blocker —
-[`../archive/sprint-2026-07-13-rewrite-hotpath-hardening.md`](../archive/sprint-2026-07-13-rewrite-hotpath-hardening.md).
+[`sprint-2026-07-13-rewrite-hotpath-hardening.md`](sprint-2026-07-13-rewrite-hotpath-hardening.md).
 
 ## Refs re-verified at HEAD (2026-07-14, `889cc19`)
 
@@ -682,3 +711,138 @@ unknown effect above.
   allowlisting, complete-vector and source-authored-`never` rules, one-record recovery ownership,
   candidate-local effect commit, and ship-time registry/docs gates. Planned divergence rows remain
   absent until the atomic production cutover implements their behavior.
+- 2026-07-14 — WU1b-d shipped atomically in `a7923b6` after the reviewed `889cc19` fixture gate and
+  ADR-0008. Compilation-wide class/alias/interface reservation now feeds a class-only dependency
+  graph; class SCCs publish complete immutable surfaces or typed poison; retained callable rows are
+  reused for body checking; and the checker-wide `EventStore` owns lexical four-key replay. The
+  production consumer graph enters projection, evaluation, inference, candidate selection, and
+  relation through `SemanticQueryCoordinator`. The enabled class corpus and opposite input/
+  dependency-order project passed; no dual class representation or event path remained. Independent
+  adversarial review: **PASS** after its findings were remediated in the same cutover.
+- 2026-07-14 — `b6aa825` committed the audited official-suite baseline at 874 corpus / 339 IN /
+  535 OOS. Its unchanged SHA-256 is
+  `0668cb3d6e83b5868a32935499797649945f0c5fd9d7d0d97b9cb926fd24c789`. This is a regression
+  ratchet, not an equality target: later explained progress is allowed without rewriting the
+  scoreboard.
+- 2026-07-14 — WU2 pinned the two test-manifest parser policies in `195edce` and extracted their
+  shared TOML subset mechanics in `42eb12b`. WU3 moved neutral parameter-shape derivation behind one
+  helper in `a5f83e7`; strict/permissive/contextual/body owners retain their distinct diagnostics,
+  publication, binding, and initializer effects. WU4 centralized trusted-prelude bootstrap in
+  `7b2a0f9` without merging single-file/project scheduling. Focused and independent reviews: **PASS**.
+- 2026-07-14 — WU5 (`6aad67c`) shares call/construct candidate-loop control flow while preserving
+  the WU0 ledger contract: speculative build, ordered trials, first-constraint retention, arity
+  aggregation, selected committed rebuild, and final-failure ownership still execute separately.
+  Candidate values, inference maps, contextual results, diagnostics, and relation results are not
+  reused. Independent review: **PASS**.
+- 2026-07-14 — WU6 characterization `40296c2` evaluated lazily skipping the conditional-`infer`
+  false-branch true rewrite. It reduced rewrite operations but failed the equivalence/stop gate:
+  changed allocation order produced different invariant-sensitive `TypeId`s and changed diagnostic
+  identity, order, and cardinality. **Decision: reject the production optimization.** Accepted eager
+  result allocation plus memo/cycle/budget behavior remains pinned by nonignored tests. Commit
+  `7db89de` removed the rejected ignored/future-red probes and their unused helpers (159 test-only
+  lines); no mapped memo or conditional-rewrite backlog item was created.
+
+### WU7 measurement evidence
+
+The measurement diff was run from `40296c2` plus the then-uncommitted WU7 changes; that exact diff
+was later committed as `6f6848772279f1dcf643bff4c51ec3a3e37f6883`. Environment: rustc 1.95.0
+(`59807616e 2026-04-14`), `x86_64-unknown-linux-gnu`, LLVM 22.1.2; Linux
+6.17.0-40-generic x86_64; AMD Ryzen 7 PRO 8840HS, 16 CPUs.
+
+The mapped probe used an explicit four-process loop followed by a separate fifth process—the odd
+4+1 split is preserved here exactly as run:
+
+```sh
+for run in 2 3 4 5; do cargo test --release measure_mapped_property_fanout_at_10k_and_100k_release -- --ignored --nocapture | rg '^mapped fanout'; done
+cargo test --release measure_mapped_property_fanout_at_10k_and_100k_release -- --ignored --nocapture | rg '^mapped fanout'
+```
+
+Raw mapped elapsed samples, in milliseconds and output order `[10k repeated, 10k distinct,
+100k repeated, 100k distinct]`:
+
+| Process | 10k repeated | 10k distinct | 100k repeated | 100k distinct |
+|---:|---:|---:|---:|---:|
+| R1 | 6.681131 | 11.265305 | 60.725528 | 152.214033 |
+| R2 | 6.311401 | 12.047304 | 59.597153 | 145.410988 |
+| R3 | 6.270957 | 11.980281 | 60.136836 | 142.619613 |
+| R4 | 6.487104 | 11.193814 | 63.656992 | 134.877839 |
+| R5 | 7.022951 | 12.873604 | 59.468297 | 155.516022 |
+
+The operation-count assertions were deterministic in every process:
+
+| Context | Root calls | Child visits | Memo hits | Memo inserts | Reinterns | Assemblies | Property contexts | Repeated contexts | Scheduled evaluations |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| repeated | N | 3N | N | 3N | 2N | 1 | N | N−1 | N |
+| distinct | N | 3N | N | 3N | 2N | 1 | N | 0 | N |
+
+Both rows also had zero reentries, zero reentry-identity returns, and zero structural-identity
+returns. Timing summary over the five fresh processes:
+
+| Context | N | Median ms | Range ms |
+|---|---:|---:|---:|
+| repeated | 10,000 | 6.487104 | 6.270957–7.022951 |
+| distinct | 10,000 | 11.980281 | 11.193814–12.873604 |
+| repeated | 100,000 | 60.136836 | 59.468297–63.656992 |
+| distinct | 100,000 | 145.410988 | 134.877839–155.516022 |
+
+The constraint probe used five fresh processes in one loop:
+
+```sh
+for run in 1 2 3 4 5; do cargo test --release measure_constraint_demand_at_10k_and_100k_release -- --ignored --nocapture | rg '^constraint demand'; done
+```
+
+Raw constraint elapsed samples, in milliseconds and output order `[10k shared, 10k cycle, 10k
+exhaustion, 100k shared, 100k cycle, 100k exhaustion]`:
+
+| Process | 10k shared | 10k cycle | 10k exhaustion | 100k shared | 100k cycle | 100k exhaustion |
+|---:|---:|---:|---:|---:|---:|---:|
+| R1 | 1.722358 | 1.684539 | 12.572071 | 15.767108 | 14.719531 | 21.249675 |
+| R2 | 1.554710 | 1.348331 | 12.246090 | 15.379105 | 14.376129 | 21.974558 |
+| R3 | 1.740362 | 1.371042 | 13.953922 | 17.326898 | 14.080225 | 21.366951 |
+| R4 | 1.870090 | 1.437484 | 11.986773 | 15.572661 | 14.121250 | 21.331014 |
+| R5 | 1.786647 | 1.462050 | 12.777227 | 15.607464 | 14.258442 | 22.723436 |
+
+Each corpus had one root call, one planner-root visit, zero durable-evaluation hits, and zero
+evaluation-cycle exhaustions. The remaining deterministic counters were:
+
+| Corpus | Planner visits | Overlay hits | Visited hits | Reentries | Pending / expansions | Identity / changed | Eval memo / durable inserts | Frontier / budget exhaustion |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| shared pending | N+7 | N−1 | 1 | 0 | 2 / 2 | 0 / 2 | 2 / 2 | 0 / 0 |
+| structural cycle | N+6 | 0 | N | 1 | 1 / 1 | 0 / 1 | 1 / 1 | 0 / 0 |
+| evaluation exhaustion | N+14 | 0 | N+3 | 1 | 4 / 4 | 1 / 2 | 3 / 0 | 1 / 1 |
+
+Timing summary over the five fresh processes:
+
+| Corpus | N | Median ms | Range ms |
+|---|---:|---:|---:|
+| shared pending | 10,000 | 1.740362 | 1.554710–1.870090 |
+| structural cycle | 10,000 | 1.437484 | 1.348331–1.684539 |
+| evaluation exhaustion | 10,000 | 12.572071 | 11.986773–13.953922 |
+| shared pending | 100,000 | 15.607464 | 15.379105–17.326898 |
+| structural cycle | 100,000 | 14.258442 | 14.080225–14.719531 |
+| evaluation exhaustion | 100,000 | 21.366951 | 21.249675–22.723436 |
+
+The mapped counts expose complete-context repetition already owned by the per-property local memo;
+the constraint counts show query-local overlays collapsing shared demand and exhausted evaluation
+committing zero durable writes. WU7 therefore remained measurement-only: no optimization was
+selected and no mapped-memo backlog item was created.
+
+- 2026-07-14 — WU8 whole-sprint adversarial review: **PASS**. The final cleanup added direct
+  semantic-query publication/taint regressions in `8996b3b` (`test: close semantic query
+  publication gaps`), then removed the dormant legacy relation guard/corpus and production raw-
+  `Relater` bridge in `fb02ba6` (`refactor: enforce semantic query boundaries`). Query-owned
+  controls retain the accepted success/memo/cycle/budget coverage; no semantic owner was deleted.
+  The independent cleanup re-review confirmed assignability and overload-compatibility publication
+  preflight, zero-write direct/equal composite boundaries, unchanged identical-only deferred
+  identity, and no remaining production raw relation bypass. Focused gates: query 19 passed;
+  inference 32 passed / 2 ignored measurements; relation 39 passed / 1 ignored measurement; format,
+  diff-check, and clippy passed.
+- 2026-07-14 — Final gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+  `cargo build --release`, full `cargo test` (478 passed, 6 ignored release measurements plus all
+  integration/conformance suites), focused release walker/query/relation/inference suites, and the
+  official-suite regression ratchet all passed. Enabled corpus census: 77 directories, 320 `.ts`
+  files, 1,129 `error[TK…]` markers, and 111 incomplete markers. The final fresh official-suite run
+  at `fb02ba6` reported 340 IN / 534 OOS, 0 regressions, 69 progress, 0 missing from the corpus, and
+  0 missing from the scoreboard against the unchanged `b6aa825` baseline (874 corpus / 339 IN /
+  535 OOS; SHA-256
+  `0668cb3d6e83b5868a32935499797649945f0c5fd9d7d0d97b9cb926fd24c789`).
