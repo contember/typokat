@@ -20,3 +20,4 @@ a commit message suffices.
 - [`0005`](0005-persist-generic-signature-binders.md) — persist generic signature binders in function types — accepted (2026-07-12)
 - [`0006`](0006-immutable-class-instances-and-scc-publication.md) — immutable class applications with SCC publication, bounded normalization, and typed exhaustion — accepted (2026-07-13)
 - [`0007`](0007-bundler-resolution-via-oxc-resolver.md) — Bundler is the 1.0 resolution profile, delegated to `oxc_resolver` — accepted (2026-07-13)
+- [`0008`](0008-class-surface-lowering-and-lexical-event-ownership.md) — class surface lowering and lexical event ownership cut over atomically — accepted (2026-07-14)

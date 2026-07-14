@@ -32,14 +32,17 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Semantic duplication/layering sprint active 2026-07-13** — class-member reserved surfaces,
-  neutral test/parameter/prelude seams, call/construct selector parity, lazy conditional-infer work,
-  and measurement-only mapped/constraint follow-up with explicit cache/reuse stop gates. Before
-  staged WU1a-WU1d, [`ADR-0006`](decisions/0006-immutable-class-instances-and-scc-publication.md)
-  requires immutable class applications and deferred indexed access, declaration-SCC publication,
-  heritage-only poison propagation, bounded query-local projection/evaluation overlays before
-  read-only relation, typed exhaustion, transactional cache writes, and ordered diagnostic events;
-  mutable function rows are rejected.
+- **Semantic duplication/layering sprint active 2026-07-13** — WU1a's immutable class application
+  representation is complete; reviewed fixture commit `889cc19` specifies the remaining class
+  surface behavior. [`ADR-0008`](decisions/0008-class-surface-lowering-and-lexical-event-ownership.md)
+  requires WU1b-d to land as one serialized atomic production cutover containing compilation-wide
+  reservation, capability-isolated lowering, lexical `EventStore` ownership, SCC publication,
+  bounded typed projection, every consumer, and legacy deletion. The immutable `ClassInstance`/
+  deferred-indexed representation from
+  [`ADR-0006`](decisions/0006-immutable-class-instances-and-scc-publication.md) remains binding.
+  Neutral test/parameter/prelude
+  seams, call/construct selector parity, lazy conditional-infer work, and measurement-only mapped/
+  constraint follow-up retain their explicit cache/reuse stop gates.
 - **Bundler resolution is the 1.0 profile** —
   [`ADR-0007`](decisions/0007-bundler-resolution-via-oxc-resolver.md) delegates physical
   package/filesystem/tsconfig resolution to `oxc_resolver`; typokat retains project enumeration,

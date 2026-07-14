@@ -13,7 +13,7 @@ three evaluator walkers are now independently hardened and are a boundary this s
 not an active blocker —
 [`../archive/sprint-2026-07-13-rewrite-hotpath-hardening.md`](../archive/sprint-2026-07-13-rewrite-hotpath-hardening.md).
 
-## Refs re-verified at HEAD (2026-07-13, `24881c7`)
+## Refs re-verified at HEAD (2026-07-14, `889cc19`)
 
 `✔` = confirmed live · `⚠` = drift/nuance caught.
 
@@ -59,6 +59,13 @@ not an active blocker —
   `docs/reference/invariants.md:23-33`.
 - ✔ The mandatory build loop remains spec → delegated implementation → different independent
   adversarial reviewer → leader verification/commit — `docs/reference/dev-method.md:20-50`.
+- ✔ WU1a's immutable `ClassInstance`/`DeferredIndexedAccess` representation and construction
+  capability boundary are implemented, independently re-reviewed, and still dormant for existing
+  class consumers; its completed gates are recorded in the run log below.
+- ✔ Fixture commit `889cc19` adds the reviewed flat and opposite-order project acceptance spec for
+  initializer poison, defaults/application vectors, lexical events, scheduling, and projection
+  exhaustion. [ADR-0008](../decisions/0008-class-surface-lowering-and-lexical-event-ownership.md)
+  makes the remaining WU1b-d production work one atomic cutover.
 
 ## Semantic operation matrix
 
@@ -150,7 +157,7 @@ the listed policy/effects stay with their caller.
 - **Touch points.** `tests/cases/sr_semantic_duplication/`, `tests/cases/README.md`,
   `docs/decisions/`, docs indexes, and this sprint only. No production source or Rust tests.
 
-### WU1 — immutable class-application rollout (effort XL; staged umbrella)
+### WU1 — immutable class-application rollout (effort XL; WU1a plus atomic WU1b-d cutover)
 
 - **Problem.** Class fill builds callable member signatures, but the body pass calls
   `infer_function` and lowers them again; static methods then filter duplicate `TK2302` records. The
@@ -166,15 +173,22 @@ the listed policy/effects stay with their caller.
   relation-cache key, or cache/memo write from a provisional, unpublished, binder-aligned or
   projection/evaluation-exhausted query. No durable evaluator result may be the only way read-only
   relation sees a normalized operand, and no generic boolean helper may fold `Exhausted` into `No`.
-  Stop and re-review if any stage cannot preserve static barriers, generic method binder identity,
+  Stop and re-review if the cutover cannot preserve static barriers, generic method binder identity,
   overload implementation hiding, constructor parameter-property ownership, private/protected
   origin, heritage-poison boundaries, or ordered diagnostics.
-- **Stage rule.** WU1a-WU1d are separate spec-first implementation/review units. Each begins with
-  focused direct gates, lands atomically, and receives an independent false-negative/cache review
-  before the next stage. The disabled conformance directory is enabled only by WU1d; an earlier
-  stage must use direct Rust tests without weakening or partially enabling the acceptance fixture.
+- **Cutover rule.** WU1a is complete as the reviewed dormant representation boundary. Fixture
+  commit `889cc19` and
+  [ADR-0008](../decisions/0008-class-surface-lowering-and-lexical-event-ownership.md) are the spec for
+  the remaining work. WU1b-d is one atomic production cutover: internal checkpoints may be reviewed,
+  but none lands independently. The checker-wide `EventStore`, all consumers, legacy deletion, and
+  both corpus registrations are part of the same cutover. No dormant/dual/flag/legacy bridge.
+- **Serialized ownership.** One production worker exclusively owns the WU1b-d Rust and direct-test
+  diff from reservation through corpus registration. At each internal checkpoint the worker pauses
+  for read-only review without handing overlapping files to another implementer. One independent
+  adversarial reviewer then reviews the complete candidate; fixes return to the same worker; the
+  leader verifies and commits the whole cutover. WU2-WU7 workers may proceed only on disjoint files.
 
-#### WU1a — immutable representations and construction capabilities (effort L)
+#### WU1a — immutable representations and construction capabilities (completed)
 
 - **Scope.** Add the distinct hash-consed `ClassInstance` tag/payload/side table and the immutable
   `DeferredIndexedAccess { object, index }` form. Cover structural hash/equality, substitution,
@@ -190,19 +204,30 @@ the listed policy/effects stay with their caller.
   exhaustion-folding helper. Every public evaluation, projection and relation entrypoint must reject
   a pre-publication application; test tripwire counts and durable cache/memo writes remain exactly
   zero.
-- **Review / touch points.** Independently audit all type-tag matches and walkers for an accidental
-  alias fallback or missing child. Touch only the type representation/interner/substitution/display,
-  the narrow evaluator form, capability definitions and direct tests.
+- **Completed witness.** The representation, walker, capability, nested pre-publication rejection,
+  and zero-write gates pass. The review-fix round passed the full Rust suite and clippy; independent
+  targeted re-review closed all findings. Existing consumers remain deliberately unmigrated until
+  the atomic WU1b-d cutover.
 
-#### WU1b — declaration graph, SCC publication, heritage, and events (effort XL)
+#### WU1b-d — class surface and consumer production cutover (effort XL; one commit)
 
-- **Scope.** Move mutability into the checker-owned finite declaration graph. Build surfaces in
-  no-evaluation/no-relation mode; attach typed pending obligations/events; extract every identity
-  edge named by ADR-0006; process the SCC condensation DAG dependency-first; publish non-heritage
-  SCCs atomically; reject/poison heritage cycles; propagate poison only through derived heritage
-  edges; compose acyclic published bases before derived publication; and freeze class type-parameter
-  constraints/default side columns at publication. Add the total diagnostic-event key and retain
-  each method/constructor callable surface for later body reuse.
+This is one implementation/review/rollback unit. The following checkpoints organize the worker's
+diff and reviews; they are not mergeable states.
+
+##### Internal checkpoint 1 — reservation, lowering, lexical ownership, and publication
+
+- **Scope.** Reserve compilation-wide class, alias, and interface templates before lowering, with
+  stable original module ordinals distinct from dependency slots. Introduce the capability-isolated
+  `ClassSurfaceLowerer`, `TypeSyntaxLowerer`, `SurfaceInitializerInferer`, `SurfaceTypeFactory`, and
+  `SurfaceEffects`; none may reach `Pass`, evaluator, planner, relater, overload, or inference
+  machinery. Preallocate class/member/callable binders and event tickets lexically. Add the
+  checker-wide `EventStore` ordered by `(original_module_ordinal, source_start, event_ordinal,
+  record_ordinal)` and candidate-local `CandidateEffects`; no deduplication, deletion, or truncation.
+  Retain complete callable contents for body reuse. Reserve alias/interface templates for identity
+  traversal, but keep SCC nodes class-only. Build the finite class graph, process SCCs dependency-
+  first, publish non-heritage SCCs atomically, own/propagate heritage poison per edge, compose acyclic
+  bases, and freeze every class-owned binder and descriptor atomically. Support cross-module edges
+  and opposite input/dependency order; cyclic module imports remain out of scope.
 - **Direct gates.** One edge-extraction table must exercise every identity child, including nested
   static, constructor overload/parameter-property, `ClassInstance` argument/target and deferred
   indexed-access operands. Prove both mutual declaration orders publish the same complete SCC;
@@ -212,15 +237,33 @@ the listed policy/effects stay with their caller.
   an otherwise identical ordinary property/signature reference must publish and must not propagate
   poison. A frozen type-parameter descriptor rejects later mutation. Construction tripwires remain
   zero. Synthetic shuffled completion must replay events by
-  `(module_ordinal, source_start, event_ordinal, record_ordinal)`.
-- **Review / touch points.** Independently inspect the complete graph-child list, condensation order,
-  poison propagation, state transitions, pending obligation ownership and one-time surface lowering.
-  Touch class construction/declaration scheduling, event storage/replay and direct tests; do not add
-  relation normalization yet.
+  `(original_module_ordinal, source_start, event_ordinal, record_ordinal)`. Direct tests also pin
+  the exhaustive explicit oxc-expression initializer classifier and the exact ADR-0008 allowlist:
+  all static initializers unsupported; recursive dense arrays/plain static-key data objects;
+  parenthesized expressions; direct negative numeric literals; ordinary `as`/angle-bracket
+  assertions; backward successful `this` field reads; backward non-generic single-signature zero-
+  argument `this` calls; and typed-simple-parameter recursive expression arrows. Pin one full-span
+  initializer origin per unsupported field, first lexical origin as the internal cause, all-origin/
+  body-child visitation, same-line multiset ordering, and class poison before identity/cache/`new`/
+  call/overload/inference.
+- **Checkpoint review.** Inspect reservation completeness, original ordinal preservation, capability
+  isolation, lexical ticket ownership, complete graph children, condensation order, poison
+  propagation, atomic binder freeze, default declaration descriptors, and exactly-once callable
+  lowering. Findings are fixed in the same uncommitted cutover.
 
-#### WU1c — bounded demand projection and read-only relation protocol (effort XL)
+##### Internal checkpoint 2 — complete applications and bounded semantic queries
 
-- **Scope.** Add pass-local application-to-projection memoization and the explicit
+- **Scope.** Enforce syntactically valid, semantically available, complete real argument vectors
+  only. Source-authored `never` is real; synthesized error/`unknown`/`never` recovery is forbidden.
+  Source class defaults are all
+  `Unsupported(EventTicket)` for this cutover, including simple defaults; declaration and needed-use
+  records retain their distinct owners. Each default declaration owns one record; each source
+  application owns at most one use record linked to its first declaration-order unsupported default.
+  Implement exact `TK2314`/`TK2707`/`TK2558` precedence, including `TK2558` at
+  `TSTypeParameterInstantiation.span`; visit every nested explicit argument, reject unavailable
+  children without a partial instance, and emit the owned constructor-inference incomplete instead
+  of `C<unknown>`. Add pass-local
+  application-to-projection memoization and the explicit
   `ProjectionPlanner -> ProjectionPlan -> Relater` protocol from ADR-0006. Each public query gets a
   fresh 128-distinct-application budget; the planner interns missing one-layer projections before
   relation and records demanded conditional/mapped/`keyof`/alias/deferred-indexed evaluations in a
@@ -243,18 +286,21 @@ the listed policy/effects stay with their caller.
   discovered exhaustion. Conditional-extends exhaustion preserves the exact original deferred
   conditional `TypeId`, selects neither branch and writes no conditional memo. Cycle-stack probes
   must show concrete normalized pairs, never a declaration `ClassId`.
-- **Review / touch points.** Independently audit ownership and borrow boundaries, budget accounting,
-  memo visibility, taint propagation and every cache promotion. Touch only projection planning,
-  class-aware relation normalization, required evaluator transaction seams and direct tests.
+- **Checkpoint review.** Audit full-vector-only interning, default declaration-to-use linkage,
+  arity/child precedence, self/open-frame rules, ownership and borrow boundaries, exact 128/129
+  accounting, memo visibility, sibling/candidate taint propagation, and every cache promotion.
+  Findings are fixed in the same uncommitted cutover.
 
-#### WU1d — consumer integration, callable reuse, and corpus enablement (effort XL)
+##### Internal checkpoint 3 — consumer coordination, deletion, and corpus enablement
 
 - **Scope.** Route annotation/member/index/`new`/call, inheritance, contextual typing,
   destructuring, `keyof`, static access and constructor consumers through the published projection
-  API. Reuse the retained binder frame, receiver, parameters, declared return and overload records
-  for body checking without rebuilding the public callable type. Preserve separate field/accessor
-  behavior and ordinary function hoisting. Enable the disabled semantic-duplication corpus only in
-  this final stage.
+  coordinator. Reuse the retained binder frame, receiver, parameters, declared return and overload
+  records for body checking without rebuilding the public callable type. Preserve separate field/accessor
+  behavior and ordinary function hoisting. Delete the mutable reserved class-object path,
+  class-as-alias fallback, duplicate signature lowering, span suppression, bypass consumer entries,
+  and every partial/error/`unknown`/synthesized-`never` application recovery. Register both semantic-
+  duplication corpus tables only in this complete candidate cutover.
 - **Direct gates.** Exercise contextual callbacks, `const { value }` destructuring, `keyof` over a
   class instance, static access and class-type-parameter barriers, constructor overload/access/
   parameter-property paths, acyclic inheritance composition, cyclic-heritage rejection and both
@@ -269,10 +315,70 @@ the listed policy/effects stay with their caller.
   source-event vector required by ADR-0006; five static `TK2302` events remain distinct and lexical.
   Both WU0/WU0A fixtures then pass, including all 58 recursive-application markers, and ordinary
   structural/nominal behavior remains unchanged.
-- **Review / touch points.** A different adversarial reviewer hunts dropped errors, duplicate
-  diagnostics and order dependence across every fixture demand path, inspects projection/cache
-  counters, and cross-checks fresh probes with strict tsc. Touch class consumers/body reuse and the
-  conformance enablement; do not redesign unrelated evaluator, relation or function-hoisting paths.
+- **Checkpoint review.** Confirm every consumer crosses the coordinator boundary, body checking
+  reuses retained callable contents, every legacy route is deleted, and old/new tripwire counts are
+  zero. Findings are fixed before whole-cutover review.
+
+##### Whole-cutover acceptance, hard stops, and rollback
+
+- **Fixture gates.** Enable and pass every flat fixture in
+  `tests/cases/sr_semantic_duplication/` and both required table registrations for
+  `tests/cases/sr_semantic_duplication_project/`, starting from reviewed fixture commit `889cc19`.
+  Cross-check fresh public probes against `tsc 6.0.3 --strict`.
+- **Initializer gates.** Exhaustive explicit oxc `Expression` arms; only the reviewed pure allowlist
+  returns inferred; all other arms return unsupported; new variants fail compile/coverage. Public
+  fixtures stay representative. The direct table pins all-static unsupported, recursive dense
+  arrays/plain static-key data objects, exact unary/assertion forms, backward constrained `this`
+  read/call, and typed-simple-parameter expression arrows. Pin exact origin id/context/full span/
+  cardinality, first lexical internal cause, every origin and body child record, poison-before-
+  consumer order, no replay/invented `TK`, heritage cycle/derived ownership, and zero fabricated
+  operands or durable writes.
+- **Application gates.** Pin `Absent | Ready(TypeId) | Unsupported(EventTicket)` descriptors while
+  every source default remains unsupported; one record per source default; one use record per source
+  application linked to the first declaration-order unsupported default; exact ids, contexts, spans,
+  and linkage; exact arity diagnostics and primary precedence, including `TK2558` at
+  `TSTypeParameterInstantiation.span`; all nested child records; syntactically valid, semantically
+  available explicit complete vectors; source-authored `never`; non-generic empty vectors; bare
+  generic self/open-frame behavior; unavailable inference; and no error/`unknown`/synthesized-
+  `never`/partial `ClassInstance` interning.
+- **Event/binder gates.** Pin lexical preallocation, retained full callable contents and body reuse,
+  atomic freeze of all class-owned binders, checker-wide four-key replay under shuffled completion,
+  candidate-local effects committing exactly the selected winner or selected final-failure owner,
+  speculative discard on exhaustion, one origin/application/budget owner fill, zero later-demand
+  replay, preserved independent nested/body owners, and zero deduplication/span deletion/truncation.
+- **Graph/query gates.** Pin compilation-wide class/alias/interface-template reservation with
+  class-only SCC nodes and alias/interface identity traversal to class targets; interface-extends-
+  class; cross-module edges and opposite input/dependency order; cyclic module imports explicitly out
+  of scope; original input ordinal versus dependency slot; dependency-first SCC publication;
+  heritage poison; one-layer projection; exact 128/129 budget; typed `Yes | No | Exhausted`;
+  candidate exhaustion before later winner; decisive mismatch/winner before frontier; budget owner
+  filled once by the coordinator; and zero later replay or durable writes from a tainted query.
+- **Consumer/deletion gates.** Pin annotation/member/index/static/`keyof`/inheritance/contextual/
+  destructuring/`new`/call/construct/overload/inference/assignment/argument/return routing through the
+  coordinator; delete every legacy entry and verify its tripwire count is zero.
+- **Ship-time registry/docs gates.** In the same atomic production commit, add `TK2314` and `TK2707`
+  to `DiagnosticCode`, renderer coverage, and direct diagnostic tests; update
+  `tests/cases/README.md` and `docs/reference/scope.md`; register
+  `class/property-definition/initializer-inference`,
+  `annotation-lower/type-reference/class-default-argument`,
+  `expr-infer/new-expression/class-default-argument`,
+  `expr-infer/new-expression/class-type-argument-inference`, and
+  `relation/class-projection-budget` in `tests/surface/inventory.toml`; and add the reviewed
+  initializer/default/inference/projection divergence entries to
+  `docs/reference/divergences.md`. None of those divergence entries lands before the production
+  behavior.
+- **Hard stop.** Stop and re-review if construction needs `Pass`/evaluator/planner/relater access; a
+  fake error/`unknown`/`never` recovery operand or partial application is needed; a binder must
+  publish before its SCC;
+  exhaustion is folded into ordinary success/failure internally; event correctness needs deletion,
+  deduplication, or truncation; or old and new production semantics must coexist.
+- **Rollback.** The only rollback is the entire uncommitted WU1b-d production diff to the reviewed
+  WU1a state. No legacy runtime flag or bridge is retained.
+- **Review.** One adversarial reviewer independent of implementation hunts false negatives, event
+  cardinality/order drift, capability leaks, partial publication, budget/order dependence, and
+  durable writes across the complete cutover. The leader then runs focused tests,
+  `cargo fmt --check`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, release build, and
+  the pinned official-suite ratchet before one atomic commit.
 
 ### WU2 — extract the test-only TOML subset helper (effort S)
 
@@ -444,6 +550,11 @@ the listed policy/effects stay with their caller.
    evaluation overlay before read-only relation, typed `Yes | No | Exhausted` outcomes,
    transactional normalized relation keys and ordered diagnostic events. Mutable function rows are
    forbidden.
+8. [ADR-0008](../decisions/0008-class-surface-lowering-and-lexical-event-ownership.md) makes WU1b-d
+   one atomic production cutover with compilation-wide reservation, capability-isolated lowering,
+   lexical event ownership, complete-vector-only class applications, a checker-wide `EventStore`,
+   one query coordinator, legacy deletion, and whole-diff rollback. Internal checkpoints do not
+   authorize independent landings.
 
 ## Sequencing
 
@@ -451,21 +562,21 @@ the listed policy/effects stay with their caller.
 |---:|---|---|
 | 1 | WU0 | Behavior-neutral spec commit and reviewed effect ledger before production edits. |
 | 2 | WU0A | Architecture/spec commit and independent cache/termination review before class production edits. |
-| 3 | WU1a | Establish immutable representations and enforce construction capabilities before graph work. |
-| 4 | WU1b | Publish complete declaration SCCs and event ownership before any projection/relation consumer. |
-| 5 | WU1c | Land bounded projection planning and cache transactions before class consumers switch over. |
-| 6 | WU1d | Integrate consumers/reuse, pass both class corpora, then enable the directory. |
-| 7 | WU2 and WU3 | May run independently after WU0; one writer per disjoint file set. |
-| 8 | WU4 | After WU1d so the bootstrap helper consumes settled class-surface behavior. |
-| 9 | WU5 | After WU0 ledger; selector sharing only, with candidate reuse forbidden. |
-| 10 | WU6 | Gated optimization lands and receives independent review before shared evaluator files move again. |
-| 11 | WU7 | Measurement-only follow-up starts from committed WU6; no overlapping `extends.rs`/test edits. |
-| 12 | WU8 | Independent whole-diff review, full gates, ratchet, outcome and archive. |
+| 3 | WU1a | **Complete:** immutable representations and construction capabilities landed dormant and passed re-review. |
+| 4 | WU1b-d spec | **Complete:** fixture commit `889cc19` plus ADR-0008 define the closed cutover contract. |
+| 5 | WU1b-d cutover | One serialized worker; internal checkpoints only; whole-cutover review, gates, rollback, and one production commit. |
+| 6 | WU2 and WU3 | May run independently after WU0 only with disjoint files and no WU1 ownership overlap. |
+| 7 | WU4 | After the WU1b-d cutover so the bootstrap helper consumes settled class-surface behavior. |
+| 8 | WU5 | After WU0 ledger; selector sharing only, with candidate reuse forbidden. |
+| 9 | WU6 | Gated optimization lands and receives independent review before shared evaluator files move again. |
+| 10 | WU7 | Measurement-only follow-up starts from committed WU6; no overlapping `extends.rs`/test edits. |
+| 11 | WU8 | Independent whole-diff review, full gates, ratchet, outcome and archive. |
 
-Each production WU, including each WU1 stage, is an atomic implementation commit after its own
-focused spec/test commit. These remain separate from WU0's characterization spec and WU0A's
-architecture/spec commit. The leader verifies and commits; implementation and adversarial review
-use different agents. No failing performance candidate is folded into a neighboring cleanup commit.
+Each production WU is atomic after its spec gate, but WU1b-d is deliberately one production WU and
+one commit rather than three. Its checkpoints are review pauses inside one worker-owned diff. WU0,
+WU0A, WU1a, and fixture commit `889cc19` remain separate completed gates. The leader verifies and
+commits; implementation and adversarial review use different agents. No failing performance
+candidate is folded into a neighboring cleanup commit.
 
 ## Run log
 
@@ -556,7 +667,19 @@ unknown effect above.
   hashing/substitution/walking/rendering,
   construction/publication capabilities, typed evaluation/projection/relation exhaustion, and
   legacy-entry preflight plus per-frame tripwires that reject either new tag before durable writes.
-  Existing class consumers remain unmigrated for WU1b-WU1d; direct nested rejection and forged
+  Existing class consumers remain unmigrated for WU1b-d; direct nested rejection and forged
   pre-publication-state tests are covered. The review-fix round passes `cargo test` (398 passed,
   6 ignored, plus all integration tests) and `cargo clippy --all-targets -- -D warnings`. Targeted
   independent re-review: **PASS** — all six findings are closed.
+- 2026-07-14 — Reviewed fixture commit `889cc19` completes the WU1b-d public acceptance spec: it
+  adds representative initializer boundaries, poison/default/application contracts, scheduling,
+  typed projection exhaustion, and an opposite input/dependency-order project. Marker parsers and
+  strict `tsc 6.0.3` cross-checks pass at the spec boundary.
+- 2026-07-14 — →
+  [ADR-0008](../decisions/0008-class-surface-lowering-and-lexical-event-ownership.md). WU1b-d is one
+  serialized atomic cutover with internal checkpoints; the `EventStore`, every consumer, legacy
+  deletion, and corpus registration cannot land independently.
+- 2026-07-14 — Independent docs/spec review tightened class-only SCC ownership, exact initializer
+  allowlisting, complete-vector and source-authored-`never` rules, one-record recovery ownership,
+  candidate-local effect commit, and ship-time registry/docs gates. Planned divergence rows remain
+  absent until the atomic production cutover implements their behavior.
