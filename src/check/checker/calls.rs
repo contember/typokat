@@ -27,8 +27,9 @@ use crate::types::repr::{
 use crate::types::store::TypeId;
 use crate::types::{instantiate_function, substitute, Interner, WellKnown};
 use oxc_ast::ast::{
-    ArrowFunctionExpression, BindingPattern, CallExpression, Expression, FormalParameters,
-    Function, FunctionBody, NewExpression, TSTypeParameterInstantiation,
+    ArrowFunctionExpression, BindingPattern, CallExpression, Expression, FormalParameter,
+    FormalParameterRest, FormalParameters, Function, FunctionBody, NewExpression,
+    TSTypeParameterInstantiation,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -2553,20 +2554,32 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         context: &[ParameterType],
     ) -> Vec<ParameterType> {
         let error_ty = self.interner.well_known().error;
-        let mut lowered =
-            Vec::with_capacity(params.items.len() + usize::from(params.rest.is_some()));
-        for (index, param) in params.items.iter().enumerate() {
-            let name = parameter_name(&param.pattern).unwrap_or_default();
-            let annotation_ty = param
-                .type_annotation
-                .as_ref()
-                .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation));
-            let ty = annotation_ty.unwrap_or_else(|| {
-                self.contextual_parameter_target(context, index, params.items.len())
-                    .unwrap_or(error_ty)
-            });
+        let mut lowered = Vec::with_capacity(parameter_count(params));
+        for syntax in parameter_syntaxes(params) {
+            let name = syntax.name().unwrap_or_default();
+            let ty = match syntax {
+                ParameterSyntax::Fixed { index, parameter } => parameter
+                    .type_annotation
+                    .as_ref()
+                    .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation))
+                    .unwrap_or_else(|| {
+                        self.contextual_parameter_target(context, index, params.items.len())
+                            .unwrap_or(error_ty)
+                    }),
+                ParameterSyntax::Rest { parameter } => parameter
+                    .type_annotation
+                    .as_ref()
+                    .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation))
+                    .unwrap_or_else(|| {
+                        context
+                            .iter()
+                            .find(|parameter| parameter.rest)
+                            .map(|parameter| parameter.ty)
+                            .unwrap_or(error_ty)
+                    }),
+            };
             if let Some(scope) = fn_scope {
-                if let Some(decl_id) = parameter_name(&param.pattern)
+                if let Some(decl_id) = parameter_name(syntax.pattern())
                     .and_then(|name| self.binder.resolve_value(scope, &name))
                     .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
                     .and_then(|symbol| symbol.value)
@@ -2574,36 +2587,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     self.decl_types.set(decl_id, ty);
                 }
             }
-            lowered.push(parameter_from_shape(
-                name,
-                ty,
-                param.optional,
-                param.initializer.is_some(),
-            ));
-        }
-        if let Some(rest) = &params.rest {
-            let name = parameter_name(&rest.rest.argument).unwrap_or_default();
-            let annotation_ty = rest
-                .type_annotation
-                .as_ref()
-                .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation));
-            let ty = annotation_ty.unwrap_or_else(|| {
-                context
-                    .iter()
-                    .find(|parameter| parameter.rest)
-                    .map(|parameter| parameter.ty)
-                    .unwrap_or(error_ty)
-            });
-            if let Some(scope) = fn_scope {
-                if let Some(decl_id) = parameter_name(&rest.rest.argument)
-                    .and_then(|name| self.binder.resolve_value(scope, &name))
-                    .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
-                    .and_then(|symbol| symbol.value)
-                {
-                    self.decl_types.set(decl_id, ty);
-                }
-            }
-            lowered.push(ParameterType::rest(name, ty));
+            lowered.push(syntax.with_type(name, ty));
         }
         lowered
     }
@@ -2685,52 +2669,68 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         check_initializers: bool,
     ) -> Vec<ParameterType> {
         let error_ty = self.interner.well_known().error;
-        let mut lowered: Vec<ParameterType> =
-            Vec::with_capacity(params.items.len() + usize::from(params.rest.is_some()));
+        let mut lowered = Vec::with_capacity(parameter_count(params));
         let parameter_scope = fn_scope.unwrap_or(enclosing);
-        for param in &params.items {
-            let name = parameter_name(&param.pattern).unwrap_or_default();
-            // Annotated type, or the error type for an un-annotated parameter. Type
-            // references in the annotation resolve from the enclosing scope.
-            let annotation_ty = param
-                .type_annotation
-                .as_ref()
-                .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation));
-            let ty = if param.type_annotation.is_some() {
-                annotation_ty.unwrap_or(error_ty)
-            } else {
-                error_ty
-            };
+        for syntax in parameter_syntaxes(params) {
+            let name = syntax.name().unwrap_or_default();
+            let ty = match syntax {
+                ParameterSyntax::Fixed { parameter, .. } => {
+                    // Annotated type, or the error type for an un-annotated parameter. Type
+                    // references in the annotation resolve from the enclosing scope.
+                    let annotation_ty = parameter
+                        .type_annotation
+                        .as_ref()
+                        .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation));
+                    let ty = if parameter.type_annotation.is_some() {
+                        annotation_ty.unwrap_or(error_ty)
+                    } else {
+                        error_ty
+                    };
 
-            // F4: object destructuring parameters run M13 access checks against the
-            // annotation type only; binding destructured names is deferred. The
-            // annotation resolves in the enclosing class context.
-            if let BindingPattern::ObjectPattern(object) = &param.pattern {
-                if param.type_annotation.is_some() {
-                    match self.demand_apparent_type(ty) {
-                        DemandOutcome::Ready(source) => {
-                            self.check_object_pattern_access(object, source);
+                    // F4: object destructuring parameters run M13 access checks against the
+                    // annotation type only; binding destructured names is deferred. The
+                    // annotation resolves in the enclosing class context.
+                    if let BindingPattern::ObjectPattern(object) = &parameter.pattern {
+                        if parameter.type_annotation.is_some() {
+                            match self.demand_apparent_type(ty) {
+                                DemandOutcome::Ready(source) => {
+                                    self.check_object_pattern_access(object, source);
+                                }
+                                DemandOutcome::Exhausted(exhaustion) => {
+                                    self.own_type_demand(
+                                        DemandOutcome::Exhausted(exhaustion),
+                                        Span::from_oxc(object.span),
+                                    );
+                                }
+                            }
                         }
-                        DemandOutcome::Exhausted(exhaustion) => {
-                            self.own_type_demand(
-                                DemandOutcome::Exhausted(exhaustion),
-                                Span::from_oxc(object.span),
+                    }
+
+                    if check_initializers {
+                        if let (Some(init), Some(annotation_ty)) =
+                            (&parameter.initializer, annotation_ty)
+                        {
+                            self.check_annotated_initializer(
+                                parameter_scope,
+                                Some(annotation_ty),
+                                init,
                             );
                         }
                     }
+                    ty
                 }
-            }
-
-            if check_initializers {
-                if let (Some(init), Some(annotation_ty)) = (&param.initializer, annotation_ty) {
-                    self.check_annotated_initializer(parameter_scope, Some(annotation_ty), init);
-                }
-            }
+                ParameterSyntax::Rest { parameter } => match parameter.type_annotation.as_ref() {
+                    Some(ann) => self
+                        .lower_annotation(enclosing, &ann.type_annotation)
+                        .unwrap_or(error_ty),
+                    None => error_ty,
+                },
+            };
 
             // Bind the parameter's type into the function scope so the body resolves
             // it (the binder declared the parameter symbol + DeclId).
             if let Some(scope) = fn_scope {
-                if let Some(decl_id) = parameter_name(&param.pattern)
+                if let Some(decl_id) = parameter_name(syntax.pattern())
                     .and_then(|n| self.binder.resolve_value(scope, &n))
                     .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
                     .and_then(|s| s.value)
@@ -2739,31 +2739,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
             }
 
-            lowered.push(parameter_from_shape(
-                name,
-                ty,
-                param.optional,
-                param.initializer.is_some(),
-            ));
-        }
-        if let Some(rest) = &params.rest {
-            let name = parameter_name(&rest.rest.argument).unwrap_or_default();
-            let ty = match rest.type_annotation.as_ref() {
-                Some(ann) => self
-                    .lower_annotation(enclosing, &ann.type_annotation)
-                    .unwrap_or(error_ty),
-                None => error_ty,
-            };
-            if let Some(scope) = fn_scope {
-                if let Some(decl_id) = parameter_name(&rest.rest.argument)
-                    .and_then(|n| self.binder.resolve_value(scope, &n))
-                    .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
-                    .and_then(|s| s.value)
-                {
-                    self.decl_types.set(decl_id, ty);
-                }
-            }
-            lowered.push(ParameterType::rest(name, ty));
+            lowered.push(syntax.with_type(name, ty));
         }
         lowered
     }
@@ -3033,6 +3009,66 @@ pub(in crate::check::checker) fn parameter_name(pattern: &BindingPattern<'_>) ->
         BindingPattern::BindingIdentifier(ident) => Some(ident.name.to_string()),
         _ => None,
     }
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::check::checker) enum ParameterSyntax<'params, 'ast> {
+    Fixed {
+        index: usize,
+        parameter: &'params FormalParameter<'ast>,
+    },
+    Rest {
+        parameter: &'params FormalParameterRest<'ast>,
+    },
+}
+
+impl<'params, 'ast> ParameterSyntax<'params, 'ast> {
+    pub(in crate::check::checker) fn pattern(self) -> &'params BindingPattern<'ast> {
+        match self {
+            ParameterSyntax::Fixed { parameter, .. } => &parameter.pattern,
+            ParameterSyntax::Rest { parameter } => &parameter.rest.argument,
+        }
+    }
+
+    pub(in crate::check::checker) fn name(self) -> Option<String> {
+        parameter_name(self.pattern())
+    }
+
+    pub(in crate::check::checker) fn with_type(
+        self,
+        name: impl Into<String>,
+        ty: TypeId,
+    ) -> ParameterType {
+        match self {
+            ParameterSyntax::Fixed { parameter, .. } => parameter_from_shape(
+                name,
+                ty,
+                parameter.optional,
+                parameter.initializer.is_some(),
+            ),
+            ParameterSyntax::Rest { .. } => ParameterType::rest(name, ty),
+        }
+    }
+}
+
+pub(in crate::check::checker) fn parameter_syntaxes<'params, 'ast>(
+    params: &'params FormalParameters<'ast>,
+) -> impl Iterator<Item = ParameterSyntax<'params, 'ast>> + 'params {
+    params
+        .items
+        .iter()
+        .enumerate()
+        .map(|(index, parameter)| ParameterSyntax::Fixed { index, parameter })
+        .chain(
+            params
+                .rest
+                .iter()
+                .map(|parameter| ParameterSyntax::Rest { parameter }),
+        )
+}
+
+pub(in crate::check::checker) fn parameter_count(params: &FormalParameters<'_>) -> usize {
+    params.items.len() + usize::from(params.rest.is_some())
 }
 
 fn parameter_from_shape(

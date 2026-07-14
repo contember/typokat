@@ -1,3 +1,4 @@
+use super::super::calls::{parameter_count, parameter_syntaxes, ParameterSyntax};
 use super::super::decls::alloc_type_param_ids;
 use super::*;
 use oxc_ast::ast::TSTypeParameterDeclaration;
@@ -199,32 +200,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         params: &FormalParameters<'_>,
         with_indirection: bool,
     ) -> Option<Vec<ParameterType>> {
-        let mut lowered: Vec<ParameterType> =
-            Vec::with_capacity(params.items.len() + usize::from(params.rest.is_some()));
-        for param in &params.items {
-            let name = parameter_name(&param.pattern)?;
-            let annotation = param.type_annotation.as_ref()?;
+        let mut lowered = Vec::with_capacity(parameter_count(params));
+        for syntax in parameter_syntaxes(params) {
+            let name = parameter_name(syntax.pattern())?;
+            let annotation = match syntax {
+                ParameterSyntax::Fixed { parameter, .. } => parameter.type_annotation.as_ref()?,
+                ParameterSyntax::Rest { parameter } => parameter.type_annotation.as_ref()?,
+            };
             let ty = if with_indirection {
                 self.with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation))?
             } else {
                 self.lower_annotation(scope, &annotation.type_annotation)?
             };
-            lowered.push(parameter_from_shape(
-                name,
-                ty,
-                param.optional,
-                param.initializer.is_some(),
-            ));
-        }
-        if let Some(rest) = &params.rest {
-            let name = parameter_name(&rest.rest.argument)?;
-            let annotation = rest.type_annotation.as_ref()?;
-            let ty = if with_indirection {
-                self.with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation))?
-            } else {
-                self.lower_annotation(scope, &annotation.type_annotation)?
-            };
-            lowered.push(ParameterType::rest(name, ty));
+            lowered.push(syntax.with_type(name, ty));
         }
         Some(lowered)
     }
@@ -244,20 +232,5 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 Some(ty) => self.annotation_type_refs_are_locally_resolvable(scope, ty),
             },
         }
-    }
-}
-
-pub(super) fn parameter_from_shape(
-    name: impl Into<String>,
-    ty: TypeId,
-    optional: bool,
-    has_default: bool,
-) -> ParameterType {
-    if has_default {
-        ParameterType::defaulted(name, ty)
-    } else if optional {
-        ParameterType::optional(name, ty)
-    } else {
-        ParameterType::required(name, ty)
     }
 }
