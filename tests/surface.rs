@@ -27,26 +27,14 @@ use std::path::{Path, PathBuf};
 
 use typokat::surface::{FAMILY_ROLES, SURFACE_ROLES};
 
+#[path = "support/toml_subset.rs"]
+mod toml_subset;
+
+use toml_subset::{parse_value, Table, Value};
+
 // ---------------------------------------------------------------------------
-// Parser (shared shape with tests/manifest.rs)
+// Parser
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq)]
-enum Value {
-    Str(String),
-    Arr(Vec<String>),
-}
-
-impl Value {
-    fn as_str(&self) -> Option<&str> {
-        match self {
-            Value::Str(s) => Some(s.as_str()),
-            Value::Arr(_) => None,
-        }
-    }
-}
-
-type Table = BTreeMap<String, Value>;
 
 struct Manifest {
     meta: Vec<Table>,
@@ -136,36 +124,6 @@ fn parse(text: &str) -> Result<Manifest, Vec<String>> {
     } else {
         Err(errors)
     }
-}
-
-fn parse_value(rhs: &str) -> Result<Value, String> {
-    if let Some(inner) = rhs.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-        let inner = inner.trim();
-        if inner.is_empty() {
-            return Ok(Value::Arr(Vec::new()));
-        }
-        let mut out = Vec::new();
-        for part in inner.split(',') {
-            let p = part.trim();
-            let s = p
-                .strip_prefix('"')
-                .and_then(|s| s.strip_suffix('"'))
-                .ok_or_else(|| format!("array element {p:?} must be a quoted string"))?;
-            if s.contains('"') {
-                return Err(format!("array element {p:?} has an embedded quote"));
-            }
-            out.push(s.to_string());
-        }
-        return Ok(Value::Arr(out));
-    }
-    let s = rhs
-        .strip_prefix('"')
-        .and_then(|s| s.strip_suffix('"'))
-        .ok_or_else(|| "value must be a quoted string or array".to_string())?;
-    if s.contains('"') {
-        return Err("string has an embedded quote".to_string());
-    }
-    Ok(Value::Str(s.to_string()))
 }
 
 #[test]
