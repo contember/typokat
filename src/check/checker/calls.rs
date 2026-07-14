@@ -617,6 +617,29 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         call_span: Span,
         receiver: Option<TypeId>,
     ) -> DemandOutcome<Option<CallCandidate>> {
+        self.select_candidate(CandidateSelectionRequest {
+            scope,
+            signatures,
+            type_arguments: call.type_arguments.as_deref(),
+            args,
+            span: call_span,
+            receiver: CandidateReceiver::Call(receiver),
+        })
+    }
+
+    /// Ordered overload selection shared by call and construct wrappers.
+    fn select_candidate(
+        &mut self,
+        request: CandidateSelectionRequest<'_, '_, '_, '_>,
+    ) -> DemandOutcome<Option<CallCandidate>> {
+        let CandidateSelectionRequest {
+            scope,
+            signatures,
+            type_arguments,
+            args,
+            span,
+            receiver,
+        } = request;
         let overload = signatures.len() > 1;
         if !overload {
             let Some(signature) = signatures.first().copied() else {
@@ -625,9 +648,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return match self.instantiate_signature_candidate(SignatureCandidateRequest {
                 scope,
                 signature_ty: signature,
-                type_arguments: call.type_arguments.as_deref(),
+                type_arguments,
                 args,
-                call_receiver: receiver,
+                call_receiver: receiver.inference_source(),
                 commit_constraints: true,
             }) {
                 Ok(candidate) => DemandOutcome::Ready(Some(candidate)),
@@ -649,9 +672,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 pass.instantiate_signature_candidate(SignatureCandidateRequest {
                     scope,
                     signature_ty: *signature,
-                    type_arguments: call.type_arguments.as_deref(),
+                    type_arguments,
                     args,
-                    call_receiver: receiver,
+                    call_receiver: receiver.inference_source(),
                     commit_constraints: false,
                 })
             });
@@ -691,10 +714,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 pass.try_call_candidate(
                     scope,
                     &candidate.params,
-                    (candidate.receiver, receiver),
+                    receiver.trial_receivers(&candidate),
                     args.types,
                     args.exprs,
-                    call_span,
+                    span,
                 )
             });
             match trial {
@@ -703,9 +726,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         pass.instantiate_signature_candidate(SignatureCandidateRequest {
                             scope,
                             signature_ty: *signature,
-                            type_arguments: call.type_arguments.as_deref(),
+                            type_arguments,
                             args,
-                            call_receiver: receiver,
+                            call_receiver: receiver.inference_source(),
                             commit_constraints: true,
                         })
                     });
@@ -740,12 +763,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         if let Some(effects) = first_constraint_failure {
             self.merge_candidate_effects(effects);
         } else if !arity_failures.is_empty() && !saw_non_arity_failure {
-            self.emit_overload_arity_failure(&arity_failures, args.types.len(), call_span);
+            self.emit_overload_arity_failure(&arity_failures, args.types.len(), span);
         } else {
             if let Some(effects) = first_other_failure {
                 self.merge_candidate_effects(effects);
             }
-            self.emit_diagnostic(Diagnostic::no_overload_matches(call_span));
+            self.emit_diagnostic(Diagnostic::no_overload_matches(span));
         }
         DemandOutcome::Ready(None)
     }
@@ -1869,137 +1892,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         args: PreparedCallArgs<'_, '_>,
         span: Span,
     ) -> DemandOutcome<Option<CallCandidate>> {
-        let overload = signatures.len() > 1;
-        if !overload {
-            let Some(signature) = signatures.first().copied() else {
-                return DemandOutcome::Ready(None);
-            };
-            return match self.instantiate_signature_candidate(SignatureCandidateRequest {
-                scope,
-                signature_ty: signature,
-                type_arguments,
-                args,
-                call_receiver: None,
-                commit_constraints: true,
-            }) {
-                Ok(candidate) => DemandOutcome::Ready(Some(candidate)),
-                Err(CandidateBuildFailure::Constraint)
-                | Err(CandidateBuildFailure::Unavailable) => DemandOutcome::Ready(None),
-                Err(CandidateBuildFailure::Exhausted(exhaustion)) => {
-                    DemandOutcome::Exhausted(exhaustion)
-                }
-            };
-        }
-
-        let mut arity_failures: Vec<CallArity> = Vec::new();
-        let mut saw_non_arity_failure = false;
-        let mut first_constraint_failure: Option<CheckerEffects> = None;
-        let mut first_other_failure: Option<CheckerEffects> = None;
-
-        for signature in signatures {
-            let (built, effects) = self.capture_speculative_candidate_effects(|pass| {
-                pass.instantiate_signature_candidate(SignatureCandidateRequest {
-                    scope,
-                    signature_ty: *signature,
-                    type_arguments,
-                    args,
-                    call_receiver: None,
-                    commit_constraints: false,
-                })
-            });
-            let candidate = match built {
-                Ok(candidate) => {
-                    effects.records.discard();
-                    if let Some(exhaustion) = candidate.inference_exhaustion.clone() {
-                        return DemandOutcome::Exhausted(exhaustion);
-                    }
-                    candidate
-                }
-                Err(CandidateBuildFailure::Constraint) => {
-                    #[cfg(test)]
-                    measure_call(|measure| {
-                        measure.speculative_diagnostics_removed +=
-                            u64::try_from(effects.records.len()).expect("effect count fits u64");
-                    });
-                    if first_constraint_failure.is_none() {
-                        first_constraint_failure = Some(effects);
-                    }
-                    saw_non_arity_failure = true;
-                    continue;
-                }
-                Err(CandidateBuildFailure::Unavailable) => {
-                    if first_other_failure.is_none() {
-                        first_other_failure = Some(effects);
-                    }
-                    saw_non_arity_failure = true;
-                    continue;
-                }
-                Err(CandidateBuildFailure::Exhausted(exhaustion)) => {
-                    effects.records.discard();
-                    return DemandOutcome::Exhausted(exhaustion);
-                }
-            };
-            let trial = self.with_speculative_candidate_queries(|pass| {
-                pass.try_call_candidate(
-                    scope,
-                    &candidate.params,
-                    (None, None),
-                    args.types,
-                    args.exprs,
-                    span,
-                )
-            });
-            match trial {
-                CandidateTrial::Match => {
-                    let (committed, effects) = self.capture_candidate_effects(|pass| {
-                        pass.instantiate_signature_candidate(SignatureCandidateRequest {
-                            scope,
-                            signature_ty: *signature,
-                            type_arguments,
-                            args,
-                            call_receiver: None,
-                            commit_constraints: true,
-                        })
-                    });
-                    return match committed {
-                        Ok(candidate) => {
-                            if let Some(exhaustion) = candidate.inference_exhaustion.clone() {
-                                effects.records.discard();
-                                return DemandOutcome::Exhausted(exhaustion);
-                            }
-                            self.merge_candidate_effects(effects);
-                            DemandOutcome::Ready(Some(candidate))
-                        }
-                        Err(CandidateBuildFailure::Constraint)
-                        | Err(CandidateBuildFailure::Unavailable) => {
-                            self.merge_candidate_effects(effects);
-                            DemandOutcome::Ready(None)
-                        }
-                        Err(CandidateBuildFailure::Exhausted(exhaustion)) => {
-                            effects.records.discard();
-                            DemandOutcome::Exhausted(exhaustion)
-                        }
-                    };
-                }
-                CandidateTrial::Arity(arity) => arity_failures.push(arity),
-                CandidateTrial::Mismatch => saw_non_arity_failure = true,
-                CandidateTrial::Exhausted(exhaustion) => {
-                    return DemandOutcome::Exhausted(exhaustion)
-                }
-            }
-        }
-
-        if let Some(effects) = first_constraint_failure {
-            self.merge_candidate_effects(effects);
-        } else if !arity_failures.is_empty() && !saw_non_arity_failure {
-            self.emit_overload_arity_failure(&arity_failures, args.types.len(), span);
-        } else {
-            if let Some(effects) = first_other_failure {
-                self.merge_candidate_effects(effects);
-            }
-            self.emit_diagnostic(Diagnostic::no_overload_matches(span));
-        }
-        DemandOutcome::Ready(None)
+        self.select_candidate(CandidateSelectionRequest {
+            scope,
+            signatures,
+            type_arguments,
+            args,
+            span,
+            receiver: CandidateReceiver::Construct,
+        })
     }
 
     /// M16 generic-class substitution for `new`: explicit type args or M10
@@ -2878,10 +2778,41 @@ struct CallCandidate {
 }
 
 #[derive(Copy, Clone)]
+enum CandidateReceiver {
+    Call(Option<TypeId>),
+    Construct,
+}
+
+impl CandidateReceiver {
+    fn inference_source(self) -> Option<TypeId> {
+        match self {
+            Self::Call(receiver) => receiver,
+            Self::Construct => None,
+        }
+    }
+
+    fn trial_receivers(self, candidate: &CallCandidate) -> (Option<TypeId>, Option<TypeId>) {
+        match self {
+            Self::Call(receiver) => (candidate.receiver, receiver),
+            Self::Construct => (None, None),
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
 struct PreparedCallArgs<'a, 'ast> {
     types: &'a [(TypeId, Span)],
     fresh: &'a [bool],
     exprs: &'a [&'a Expression<'ast>],
+}
+
+struct CandidateSelectionRequest<'signatures, 'type_arguments, 'args, 'ast> {
+    scope: ScopeId,
+    signatures: &'signatures [TypeId],
+    type_arguments: Option<&'type_arguments TSTypeParameterInstantiation<'ast>>,
+    args: PreparedCallArgs<'args, 'ast>,
+    span: Span,
+    receiver: CandidateReceiver,
 }
 
 struct SignatureCandidateRequest<'a, 'ast> {
