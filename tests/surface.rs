@@ -51,17 +51,20 @@ type Table = BTreeMap<String, Value>;
 struct Manifest {
     meta: Vec<Table>,
     surfaces: Vec<Table>,
+    incompletes: Vec<Table>,
 }
 
 fn parse(text: &str) -> Result<Manifest, Vec<String>> {
     let mut errors = Vec::new();
     let mut meta: Vec<Table> = Vec::new();
     let mut surfaces: Vec<Table> = Vec::new();
+    let mut incompletes: Vec<Table> = Vec::new();
 
     enum Cur {
         None,
         Meta,
         Surface,
+        Incomplete,
     }
     let mut cur = Cur::None;
 
@@ -79,6 +82,11 @@ fn parse(text: &str) -> Result<Manifest, Vec<String>> {
         if line == "[[surface]]" {
             surfaces.push(Table::new());
             cur = Cur::Surface;
+            continue;
+        }
+        if line == "[[incomplete]]" {
+            incompletes.push(Table::new());
+            cur = Cur::Incomplete;
             continue;
         }
         if line.starts_with('[') {
@@ -104,6 +112,7 @@ fn parse(text: &str) -> Result<Manifest, Vec<String>> {
         let table = match cur {
             Cur::Meta => meta.last_mut(),
             Cur::Surface => surfaces.last_mut(),
+            Cur::Incomplete => incompletes.last_mut(),
             Cur::None => {
                 errors.push(format!(
                     "line {line_no}: key {key:?} before any section header"
@@ -119,7 +128,11 @@ fn parse(text: &str) -> Result<Manifest, Vec<String>> {
     }
 
     if errors.is_empty() {
-        Ok(Manifest { meta, surfaces })
+        Ok(Manifest {
+            meta,
+            surfaces,
+            incompletes,
+        })
     } else {
         Err(errors)
     }
@@ -172,6 +185,7 @@ const SURFACE_KEYS: &[&str] = &[
     "witness",
     "requires_slots",
 ];
+const INCOMPLETE_KEYS: &[&str] = &["id", "context", "owner", "witness"];
 
 /// Schema + intra-manifest validation. Applied to the committed inventory and to
 /// every fixture. `expected_oxc` is the `Cargo.lock` pin (the version witness).
@@ -326,11 +340,108 @@ fn validate_schema(text: &str, dir: &Path, expected_oxc: &str) -> Result<Manifes
         }
     }
 
+    for (idx, c) in manifest.incompletes.iter().enumerate() {
+        let label = c
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("incomplete {s:?}"))
+            .unwrap_or_else(|| format!("incomplete #{}", idx + 1));
+
+        check_known_keys(c, INCOMPLETE_KEYS, &label, &mut errors);
+        for field in INCOMPLETE_KEYS {
+            require_nonempty_str(c, field, &label, &mut errors);
+        }
+
+        let id = c.get("id").and_then(Value::as_str).unwrap_or("");
+        if !id.is_empty() {
+            if !is_stable_slash_id(id) {
+                errors.push(format!(
+                    "{label}: id must contain at least two lowercase kebab-case slash segments"
+                ));
+            }
+            if let Some(prev) = seen_ids.insert(id.to_string(), manifest.surfaces.len() + idx) {
+                errors.push(format!(
+                    "duplicate inventory id {id:?} (also #{})",
+                    prev + 1
+                ));
+            }
+        }
+
+        if let Some(context) = c.get("context").and_then(Value::as_str) {
+            if context.trim() != context {
+                errors.push(format!("{label}: context must be the exact trimmed text"));
+            }
+        }
+        let owner = c.get("owner").and_then(Value::as_str).unwrap_or("");
+        if !owner.is_empty() && owner != "shipped" {
+            errors.push(format!(
+                "{label}: registered incomplete outcome requires owner=\"shipped\", got {owner:?}"
+            ));
+        }
+        if let Some(witness) = c.get("witness").and_then(Value::as_str) {
+            if !(witness.starts_with("../") || witness.starts_with("./")) {
+                errors.push(format!(
+                    "{label}: witness must be a committed relative fixture path"
+                ));
+            } else {
+                let path = dir.join(witness);
+                if !path.exists() {
+                    errors.push(format!(
+                        "{label}: witness path {witness:?} does not exist ({})",
+                        path.display()
+                    ));
+                } else if let (Some(id), Some(context)) = (
+                    c.get("id").and_then(Value::as_str),
+                    c.get("context").and_then(Value::as_str),
+                ) {
+                    let marker = format!("incomplete[{id}]: {context}");
+                    match std::fs::read_to_string(&path) {
+                        Ok(text) if text.contains(&marker) => {}
+                        Ok(_) => errors.push(format!(
+                            "{label}: witness must contain the exact marker {marker:?}"
+                        )),
+                        Err(error) => errors.push(format!(
+                            "{label}: cannot read witness {}: {error}",
+                            path.display()
+                        )),
+                    }
+                    if let Some(directory) = witness
+                        .strip_prefix("../cases/")
+                        .and_then(|rest| rest.split('/').next())
+                    {
+                        let registration = format!("(\"{directory}\", true)");
+                        let conformance = dir.parent().map(|tests| tests.join("conformance.rs"));
+                        match conformance.and_then(|path| std::fs::read_to_string(path).ok()) {
+                            Some(text) if text.contains(&registration) => {}
+                            _ => errors.push(format!(
+                                "{label}: witness directory {directory:?} is not enabled in tests/conformance.rs"
+                            )),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if errors.is_empty() {
         Ok(manifest)
     } else {
         Err(errors)
     }
+}
+
+fn is_stable_slash_id(id: &str) -> bool {
+    let segments: Vec<&str> = id.split('/').collect();
+    segments.len() >= 2
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && !segment.starts_with('-')
+                && !segment.ends_with('-')
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
 }
 
 /// Inventory-only completeness: every census role classified, and every
@@ -595,6 +706,11 @@ fn valid_base(oxc: &str) -> String {
             "disposition = \"design-oos\"\n",
             "owner = \"by-design\"\n",
             "witness = \"strict-mode syntax error, no type model\"\n",
+            "[[incomplete]]\n",
+            "id = \"relation/class-projection-budget\"\n",
+            "context = \"class projection budget exhausted\"\n",
+            "owner = \"shipped\"\n",
+            "witness = \"../cases/sr_semantic_duplication/class_projection_exhaustion.ts\"\n",
         ),
         oxc = oxc
     )
@@ -741,6 +857,66 @@ fn rejects_mutated_inventories() {
             "bad witness path",
             base.replace("witness = \"../cases/m2_objects\"", "witness = \"../cases/nope-not-here\""),
             "does not exist",
+        ),
+        (
+            "malformed incomplete identity",
+            base.replace(
+                "id = \"relation/class-projection-budget\"",
+                "id = \"relation/Class Projection Budget\"",
+            ),
+            "lowercase kebab-case slash segments",
+        ),
+        (
+            "empty incomplete context",
+            base.replace(
+                "context = \"class projection budget exhausted\"",
+                "context = \"\"",
+            ),
+            "context",
+        ),
+        (
+            "inexact incomplete context",
+            base.replace(
+                "context = \"class projection budget exhausted\"",
+                "context = \"projection stopped\"",
+            ),
+            "exact marker",
+        ),
+        (
+            "unshipped incomplete owner",
+            base.replace(
+                concat!(
+                    "context = \"class projection budget exhausted\"\n",
+                    "owner = \"shipped\""
+                ),
+                concat!(
+                    "context = \"class projection budget exhausted\"\n",
+                    "owner = \"by-design\""
+                ),
+            ),
+            "requires owner=\"shipped\"",
+        ),
+        (
+            "disabled incomplete witness",
+            base.replace(
+                "../cases/sr_semantic_duplication/class_projection_exhaustion.ts",
+                "../cases/sr_deferred_ledger/b66_protected_override.ts",
+            ),
+            "is not enabled",
+        ),
+        (
+            "duplicate incomplete identity",
+            format!(
+                "{base}{}",
+                concat!(
+                    "[[incomplete]]\n",
+                    "id = \"relation/class-projection-budget\"\n",
+                    "context = \"duplicate\"\n",
+                    "owner = \"shipped\"\n",
+                    "witness = \"../cases/sr_semantic_duplication/class_projection_exhaustion.ts\"\n",
+                )
+            ),
+            "duplicate inventory id",
         ),
     ];
 

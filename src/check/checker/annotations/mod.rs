@@ -51,8 +51,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.annotation_depth += 1;
         if self.annotation_depth > MAX_ANNOTATION_DEPTH {
             self.annotation_depth -= 1;
-            self.diagnostics
-                .push(Diagnostic::excessively_deep(Span::from_oxc(ts_type.span())));
+            self.emit_diagnostic(Diagnostic::excessively_deep(Span::from_oxc(ts_type.span())));
             return Some(self.interner.well_known().error);
         }
         let result = self.lower_annotation_inner(scope, ts_type);
@@ -121,6 +120,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     scope,
                     &reference.type_name,
                     reference.type_arguments.as_deref(),
+                    Span::from_oxc(reference.span),
                 );
             }
             // M20: `keyof T` is computed eagerly on a concrete object type

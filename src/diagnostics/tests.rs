@@ -705,3 +705,29 @@ fn array_nested_element_nests_each_level() {
         ]
     );
 }
+#[test]
+fn generic_type_arity_diagnostics_render_exact_messages_and_spans() {
+    let exact_span = Span::new(4, 18);
+    let exact =
+        Diagnostic::generic_type_requires_arguments(exact_span, "ExactApplication<A, B>", 2);
+    assert_eq!(exact.code, DiagnosticCode::TK2314);
+    assert_eq!(exact.span, exact_span);
+    assert_eq!(
+        exact.rendered_text(),
+        "error[TK2314]: Generic type 'ExactApplication<A, B>' requires 2 type argument(s)"
+    );
+
+    let ranged_span = Span::new(20, 38);
+    let ranged = Diagnostic::generic_type_requires_argument_range(
+        ranged_span,
+        "RangedApplication<A, B>",
+        1,
+        2,
+    );
+    assert_eq!(ranged.code, DiagnosticCode::TK2707);
+    assert_eq!(ranged.span, ranged_span);
+    assert_eq!(
+        ranged.rendered_text(),
+        "error[TK2707]: Generic type 'RangedApplication<A, B>' requires between 1 and 2 type arguments"
+    );
+}

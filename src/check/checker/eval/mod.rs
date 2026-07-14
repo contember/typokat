@@ -6,12 +6,15 @@
 
 use super::context::Pass;
 use crate::check::infer::infer_from_types_for_conditional;
+use crate::check::query::SemanticQueryCoordinator;
+use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::Diagnostic;
-use crate::relate::Relater;
+use crate::relate::cache::RelationCache;
+use crate::relate::{Relater, RelationNormalization, RelationOutcome};
 use crate::span::Span;
 use crate::types::repr::{
     ConditionalType, FunctionType, LiteralValue, MappedType, ModifierOp, ObjectType, PropertyType,
-    TemplateType, TupleRestType, TupleType, TypeParamId, TypeTag,
+    TemplateType, TupleRestType, TupleType, TypeParamId, TypeTag, Visibility,
 };
 use crate::types::store::TypeId;
 use crate::types::{substitute, Interner};
@@ -22,13 +25,11 @@ pub(in crate::check) mod demand;
 mod extends;
 mod instantiation;
 mod keyof;
-pub(in crate::check::checker) mod legacy_guard;
 mod mapped;
 mod template;
 #[cfg(test)]
 mod tests;
 
-pub(in crate::check) use extends::evaluate_inference_constraint;
 pub(in crate::check::checker) use keyof::keyof_of_type;
 pub(in crate::check) use keyof::{contains_deferred_argument, contains_deferred_keyof};
 
@@ -37,37 +38,51 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// conditionals, lazy instantiations, and unions of those resolve; deferred
     /// conditionals and other types are unchanged. Exhaustion reports `TK2589` at
     /// the demand span, a documented tsc span divergence.
-    pub(in crate::check::checker) fn evaluate_type(&mut self, ty: TypeId, span: Span) -> TypeId {
-        legacy_guard::reject_legacy_semantic_types(self.interner.store(), &[ty]);
-        if !matches!(
-            self.interner.store().tag(ty),
-            TypeTag::Conditional
-                | TypeTag::Instantiation
-                | TypeTag::Union
-                | TypeTag::Mapped
-                | TypeTag::Template
-                | TypeTag::Keyof
-        ) {
-            return ty;
+    pub(in crate::check::checker) fn evaluate_type(&mut self, ty: TypeId) -> DemandOutcome<TypeId> {
+        SemanticQueryCoordinator::new(
+            self.interner,
+            &self.published_classes,
+            &mut self.semantic_queries,
+            &mut self.next_type_param,
+        )
+        .demand(ty)
+    }
+
+    pub(in crate::check::checker) fn own_type_demand(
+        &mut self,
+        outcome: DemandOutcome<TypeId>,
+        span: Span,
+    ) -> Option<TypeId> {
+        match outcome {
+            DemandOutcome::Ready(result) => Some(result),
+            DemandOutcome::Exhausted(
+                Exhaustion::EvaluationBudget | Exhaustion::EvaluationCycle { .. },
+            ) => {
+                self.emit_diagnostic(Diagnostic::excessively_deep(span));
+                None
+            }
+            DemandOutcome::Exhausted(Exhaustion::ClassProjectionBudget) => {
+                self.record_incomplete(
+                    "relation/class-projection-budget",
+                    span,
+                    "class projection budget exhausted",
+                );
+                None
+            }
+            DemandOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
+            | DemandOutcome::Exhausted(Exhaustion::ClassHeritagePoison { .. })
+            | DemandOutcome::Exhausted(Exhaustion::ClassInitializerPoison { .. })
+            | DemandOutcome::Exhausted(Exhaustion::ClassSurfacePoison { .. })
+            | DemandOutcome::Exhausted(Exhaustion::ClassApplicationArguments(
+                crate::class_semantics::ClassApplicationArguments::WrongArity { .. }
+                | crate::class_semantics::ClassApplicationArguments::UnavailableExplicitArgument {
+                    ..
+                }
+                | crate::class_semantics::ClassApplicationArguments::UnsupportedDefault { .. }
+                | crate::class_semantics::ClassApplicationArguments::InferenceIncomplete { .. }
+                | crate::class_semantics::ClassApplicationArguments::TargetPoisoned { .. },
+            )) => None,
         }
-        let result;
-        let exhausted;
-        let cycle_detected;
-        {
-            let mut ev = ConditionalEvaluator::new(
-                &mut *self.interner,
-                &mut self.next_type_param,
-                &mut self.cond_memo,
-                DEFAULT_STEP_BUDGET,
-            );
-            result = ev.evaluate(ty);
-            exhausted = ev.exhausted;
-            cycle_detected = ev.cycle_detected;
-        }
-        if exhausted || cycle_detected {
-            self.diagnostics.push(Diagnostic::excessively_deep(span));
-        }
-        result
     }
 }
 
@@ -176,7 +191,7 @@ pub struct ConditionalEvaluator<'a> {
     /// `O(depth²)`.
     concrete: FxHashMap<TypeId, bool>,
     /// The ids currently in flight (scheduled but not yet memoized). Re-entering one is a
-    /// genuine cycle → the error type.
+    /// genuine cycle → typed exhaustion at the coordinator boundary.
     in_flight: FxHashSet<TypeId>,
     /// Active memo frames whose result depends on an in-flight re-entry. Each is removed
     /// by its matching [`Task::SetMemo`] without writing a durable result.
@@ -188,6 +203,7 @@ pub struct ConditionalEvaluator<'a> {
     /// Set for the current root when an in-flight evaluator node re-enters. This is
     /// distinct from budget exhaustion: only tainted ancestors skip durable memoization.
     pub cycle_detected: bool,
+    planned_exhaustion: Option<Exhaustion>,
 }
 
 impl<'a> ConditionalEvaluator<'a> {
@@ -208,6 +224,7 @@ impl<'a> ConditionalEvaluator<'a> {
             steps: 0,
             exhausted: false,
             cycle_detected: false,
+            planned_exhaustion: None,
         }
     }
 
@@ -219,15 +236,23 @@ impl<'a> ConditionalEvaluator<'a> {
         self.cycle_tainted.extend(self.in_flight.iter().copied());
     }
 
-    fn guard_eval_frame(&self, ty: TypeId) {
-        legacy_guard::reject_legacy_semantic_type(self.interner.store(), ty);
+    /// Coordinator-only evaluation over an immutable query-local normalization overlay.
+    /// Every scheduled identity crosses the overlay before evaluator dispatch; relation
+    /// inside a conditional uses the same overlay and preserves a typed frontier.
+    pub(crate) fn evaluate_planned(
+        &mut self,
+        root: TypeId,
+        normalization: &dyn RelationNormalization,
+    ) -> DemandOutcome<TypeId> {
+        self.evaluate_inner(root, normalization)
     }
 
-    /// Evaluate `root`, resolving every concrete conditional / lazy instantiation it
-    /// directly denotes (and, for a union, its members) to a result type. A deferred
-    /// conditional (free check), or any non-conditional type, is returned unchanged.
-    pub fn evaluate(&mut self, root: TypeId) -> TypeId {
-        legacy_guard::reject_legacy_semantic_types(self.interner.store(), &[root]);
+    fn evaluate_inner(
+        &mut self,
+        root: TypeId,
+        normalization: &dyn RelationNormalization,
+    ) -> DemandOutcome<TypeId> {
+        self.planned_exhaustion = None;
         self.cycle_detected = false;
         let mut tasks: Vec<Task> = vec![Task::Eval(root)];
         let mut values: Vec<TypeId> = Vec::new();
@@ -236,7 +261,9 @@ impl<'a> ConditionalEvaluator<'a> {
         while let Some(task) = tasks.pop() {
             match task {
                 Task::SetMemo(id) => {
-                    let value = values.pop().unwrap_or(error);
+                    let value = values
+                        .pop()
+                        .expect("completed evaluator child must produce one value");
                     // Never durably memoize a result reached under budget exhaustion or
                     // through an in-flight cycle — both are provisional (§1 invariant).
                     let cycle_tainted = self.cycle_tainted.remove(&id);
@@ -272,36 +299,59 @@ impl<'a> ConditionalEvaluator<'a> {
                     self.apply_string_intrinsic(id, &mut values, error);
                 }
                 Task::ApplyOmitThisParameter(id) => {
-                    self.apply_omit_this_parameter(id, &mut values, error);
+                    self.apply_omit_this_parameter(id, &mut values, error, normalization);
                 }
                 Task::DecideConditional(id) => {
-                    self.decide_conditional(id, &mut tasks, &mut values, error);
+                    self.decide_conditional(id, &mut tasks, &mut values, normalization);
                 }
                 Task::Eval(ty) => {
-                    self.guard_eval_frame(ty);
+                    let ty = match normalization.normalize(ty) {
+                        Ok(ty) => ty,
+                        Err(exhaustion) => {
+                            self.planned_exhaustion = Some(exhaustion);
+                            break;
+                        }
+                    };
                     if let Some(&cached) = self.memo.get(&ty) {
                         values.push(cached);
                         continue;
                     }
                     match self.interner.store().tag(ty) {
                         TypeTag::Conditional => {
-                            self.eval_conditional(ty, &mut tasks, &mut values, error)
+                            self.eval_conditional(ty, &mut tasks, &mut values, normalization)
                         }
                         TypeTag::Instantiation => {
-                            self.eval_instantiation(ty, &mut tasks, &mut values, error)
+                            self.eval_instantiation(ty, &mut tasks, &mut values)
                         }
                         TypeTag::Union => self.eval_union(ty, &mut tasks, &mut values),
-                        TypeTag::Mapped => self.eval_mapped(ty, &mut tasks, &mut values, error),
-                        TypeTag::Template => self.eval_template(ty, &mut tasks, &mut values, error),
-                        TypeTag::Keyof => self.eval_keyof(ty, &mut tasks, &mut values, error),
+                        TypeTag::Mapped => self.eval_mapped(ty, &mut tasks, &mut values),
+                        TypeTag::Template => self.eval_template(ty, &mut tasks, &mut values),
+                        TypeTag::Keyof => self.eval_keyof(ty, &mut tasks, &mut values),
                         // Any other type is already a value.
                         _ => values.push(ty),
                     }
                 }
             }
+            if self.planned_exhaustion.is_some() {
+                self.in_flight.clear();
+                self.cycle_tainted.clear();
+                break;
+            }
+            if self.exhausted || self.cycle_detected {
+                self.in_flight.clear();
+                self.cycle_tainted.clear();
+                return DemandOutcome::Ready(root);
+            }
         }
 
-        values.pop().unwrap_or(error)
+        match self.planned_exhaustion.take() {
+            Some(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+            None => DemandOutcome::Ready(
+                values
+                    .pop()
+                    .expect("completed evaluator root must produce one value"),
+            ),
+        }
     }
 
     /// Schedule the evaluation of a conditional `ty`. A deferred (free check) conditional
@@ -312,7 +362,7 @@ impl<'a> ConditionalEvaluator<'a> {
         ty: TypeId,
         tasks: &mut Vec<Task>,
         values: &mut Vec<TypeId>,
-        error: TypeId,
+        normalization: &dyn RelationNormalization,
     ) {
         let Some(cond) = self.interner.store().conditional_type(ty).copied() else {
             values.push(ty);
@@ -334,17 +384,14 @@ impl<'a> ConditionalEvaluator<'a> {
         // reaches the durable memo. Budget exhaustion is a separate provisional state.
         if self.in_flight.contains(&ty) {
             self.note_cycle();
-            values.push(error);
             return;
         }
         if self.exhausted {
-            values.push(error);
             return;
         }
         self.steps += 1;
         if self.steps > self.budget {
             self.exhausted = true;
-            values.push(error);
             return;
         }
         self.in_flight.insert(ty);
@@ -357,18 +404,26 @@ impl<'a> ConditionalEvaluator<'a> {
             tasks.push(Task::Eval(cond.extends_ty));
             return;
         }
-        // The deep undecidable gate below remains the canonical no-false safeguard.
-        let (matched, true_final) = self.run_extends_test(&cond);
+        // Nested deferred computations deliberately stay symbolic even when the
+        // query overlay could decide them. This preserves the conservative M28
+        // boundary for composite operands in both relation outcomes.
+        if self.operand_undecidable(cond.check) || self.operand_undecidable(cond.extends_ty) {
+            tasks.push(Task::SetMemo(ty));
+            values.push(ty);
+            return;
+        }
+        let (matched, true_final) = match self.run_extends_test_with(&cond, normalization) {
+            DemandOutcome::Ready(result) => result,
+            DemandOutcome::Exhausted(exhaustion) => {
+                self.planned_exhaustion = Some(exhaustion);
+                return;
+            }
+        };
         // The result memoizes under this id once it resolves (tail step — a chain of
         // conditionals is a loop here).
         tasks.push(Task::SetMemo(ty));
         if matched {
             tasks.push(Task::Eval(true_final));
-        } else if self.operand_undecidable(cond.check) || self.operand_undecidable(cond.extends_ty)
-        {
-            // Cannot prove the relation either way — stay deferred (SetMemo commits
-            // ty → ty, idempotent).
-            values.push(ty);
         } else {
             tasks.push(Task::Eval(cond.false_branch));
         }
@@ -383,12 +438,16 @@ impl<'a> ConditionalEvaluator<'a> {
         ty: TypeId,
         tasks: &mut Vec<Task>,
         values: &mut Vec<TypeId>,
-        error: TypeId,
+        normalization: &dyn RelationNormalization,
     ) {
         // Push order in `eval_conditional` was [.., Eval(check), Eval(extends)], so the
         // check evaluated LAST and sits on top.
-        let check = values.pop().unwrap_or(error);
-        let extends_ty = values.pop().unwrap_or(error);
+        let check = values
+            .pop()
+            .expect("conditional check task must produce one value");
+        let extends_ty = values
+            .pop()
+            .expect("conditional extends task must produce one value");
         let Some(cond) = self.interner.store().conditional_type(ty).copied() else {
             values.push(ty);
             return;
@@ -398,16 +457,19 @@ impl<'a> ConditionalEvaluator<'a> {
             extends_ty,
             ..cond
         };
-        let (matched, true_final) = self.run_extends_test(&evaluated);
-        if matched {
-            tasks.push(Task::Eval(true_final));
+        if self.operand_undecidable(check) || self.operand_undecidable(extends_ty) {
+            values.push(ty);
             return;
         }
-        if self.operand_undecidable(check) || self.operand_undecidable(extends_ty) {
-            // Cannot prove the relation either way — never force the false branch.
-            // The node stays its own deferred value (SetMemo commits ty → ty,
-            // idempotent, mirroring the deferred mapped/keyof discipline).
-            values.push(ty);
+        let (matched, true_final) = match self.run_extends_test_with(&evaluated, normalization) {
+            DemandOutcome::Ready(result) => result,
+            DemandOutcome::Exhausted(exhaustion) => {
+                self.planned_exhaustion = Some(exhaustion);
+                return;
+            }
+        };
+        if matched {
+            tasks.push(Task::Eval(true_final));
             return;
         }
         tasks.push(Task::Eval(cond.false_branch));

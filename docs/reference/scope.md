@@ -102,6 +102,13 @@ already emitted.
 <!-- scope-family: s-duplicate-declarations -->
 - `TK2451` Cannot redeclare block-scoped variable '{0}'.
 
+Class surfaces are reserved once and published atomically by declaration SCC. Supported
+unannotated field initializer shapes contribute their inferred type during construction;
+unsupported shapes record `incomplete[class/property-definition/initializer-inference]` and poison
+the class before any projection or relation can consume a partial surface. Heritage cycles and
+acyclic inheritance from a poisoned base remain typed incomplete outcomes owned by their `extends`
+sites.
+
 ### Tier A — strict type model & flow
 
 The strict-mode and flow-sensitive layer: nullability, definite assignment,
@@ -143,6 +150,14 @@ operators, returns, generic constraints, implicit `any`.
   class/interface/object method, call, and construct signatures lower, infer, instantiate, and
   relate under their own binder frames. Generic/deferred indexed access (`T[K]`) remains part of
   the Tier B type-level tail.
+  Generic class references enforce exact or defaulted arity (`TK2314`/`TK2707`). Source-authored
+  class type-parameter defaults remain explicit unsupported descriptors: an application that needs
+  one reports an incomplete outcome instead of fabricating a type argument. Constructor inference
+  constructs a class application only after obtaining a complete real type-argument vector.
+  Recursive generic class applications project one layer at a time through a query-local
+  coordinator. A query admits at most 128 distinct class applications; crossing that frontier
+  reports `incomplete[relation/class-projection-budget]` and conservatively rejects at the public
+  assignment, argument, or return boundary.
 
 **implicit any (`noImplicitAny`)**
 <!-- scope-family: a-implicit-any-declarations -->

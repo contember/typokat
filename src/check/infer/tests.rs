@@ -293,8 +293,21 @@ fn conditional_mode_keeps_literals_and_descends_union_targets() {
 
     // The CALL-site collection mode on the same union shape stays M10-conservative
     // (non-union source vs union target infers nothing — no m10 behavior change).
+    struct IdentityNormalization;
+    impl RelationNormalization for IdentityNormalization {
+        fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
+            Ok(ty)
+        }
+    }
     let mut candidates = Candidates::default();
-    infer_from_types_raw(&mut interner, num_arr, union_target, &mut candidates);
+    let outcome = infer_from_types_for_query(
+        &mut interner,
+        num_arr,
+        union_target,
+        &mut candidates,
+        &IdentityNormalization,
+    );
+    assert!(matches!(outcome, DemandOutcome::Ready(())));
     assert!(
         candidates.is_empty(),
         "call-site mode must not descend into union targets (M10 unchanged)"

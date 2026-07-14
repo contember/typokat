@@ -100,6 +100,30 @@ fn substitution_recurses_into_object_function_union() {
     assert_eq!(substitute(&mut interner, t_or_null, &map), num_or_null);
 }
 
+#[test]
+fn substitution_rewrites_accessor_write_type() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let t = interner.intern_type_param(TypeParamId(70), "T");
+
+    let mut property = prop("value", wk.number);
+    property.write_ty = Some(t);
+    let template = interner.intern_object(ObjectType {
+        properties: vec![property],
+        ..Default::default()
+    });
+
+    let mut expected_property = prop("value", wk.number);
+    expected_property.write_ty = Some(wk.string);
+    let expected = interner.intern_object(ObjectType {
+        properties: vec![expected_property],
+        ..Default::default()
+    });
+    let map = FxHashMap::from_iter([(TypeParamId(70), wk.string)]);
+
+    assert_eq!(substitute(&mut interner, template, &map), expected);
+}
+
 /// M32/WU2: substitution rewrites every function parameter child while preserving
 /// required/optional/default/rest shape.
 #[test]

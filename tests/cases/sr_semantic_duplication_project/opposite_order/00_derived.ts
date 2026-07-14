@@ -4,8 +4,8 @@
 
 import { OrderedPoisonedBase } from "./99_base";
 
-export class OrderedDerived extends OrderedPoisonedBase {} // incomplete[class/class-heritage/poisoned-base]
-export class OrderedDerivedAgain extends OrderedDerived {} // incomplete[class/class-heritage/poisoned-base]
+export class OrderedDerived extends OrderedPoisonedBase {} // incomplete[class/class-heritage/poisoned-base]: class heritage base surface is poisoned
+export class OrderedDerivedAgain extends OrderedDerived {} // incomplete[class/class-heritage/poisoned-base]: class heritage base surface is poisoned
 
 const earlierDerivedDiagnostic: string = 1; // error[TK2322]: Type 'number' is not assignable to type 'string'
 const laterDerivedDiagnostic: number = "later"; // error[TK2322]: Type 'string' is not assignable to type 'number'

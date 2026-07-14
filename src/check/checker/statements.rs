@@ -1,19 +1,20 @@
 //! Statement checking.
 
 use super::assignment::binding_decl_id;
-use super::assignment::check_excess_properties;
 use super::assignment::declared_from_init;
 use super::calls::widen;
 use super::context::*;
 use super::decls::value_decl_id;
+use super::lexical_events::LexicalOwnerPhase;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::{DeclId, SymbolId};
+use crate::check::query::SemanticQueryCoordinator;
+use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
-use crate::relate::{Reason, ReasonChain, Relater, Relation};
+use crate::relate::{Reason, RelationOutcome};
 use crate::span::Span;
 use crate::types::repr::ObjectType;
 use crate::types::store::{Store, TypeId};
-use crate::types::WellKnown;
 use oxc_ast::ast::{
     BindingPattern, BlockStatement, Declaration, Expression, ForInStatement, ForOfStatement,
     ForStatement, ForStatementInit, ForStatementLeft, Function, Statement, TryStatement,
@@ -107,9 +108,32 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         inferred: &mut Option<TypeId>,
     ) {
         match stmt {
+            Statement::FunctionDeclaration(func) => {
+                self.check_function_declaration(scope, func);
+                return;
+            }
+            Statement::ClassDeclaration(class) => {
+                self.check_class(scope, class);
+                return;
+            }
+            _ => {}
+        }
+        self.with_lexical_effects(stmt.span().start, LexicalOwnerPhase::Immediate, |pass| {
+            pass.check_stmt_immediate(scope, stmt, declared_ret, inferred)
+        });
+    }
+
+    fn check_stmt_immediate(
+        &mut self,
+        scope: ScopeId,
+        stmt: &Statement<'_>,
+        declared_ret: Option<TypeId>,
+        inferred: &mut Option<TypeId>,
+    ) {
+        match stmt {
             Statement::VariableDeclaration(decl) => {
                 for declarator in &decl.declarations {
-                    self.check_declarator(scope, decl.kind, declarator);
+                    self.check_owned_declarator(scope, decl.kind, declarator);
                 }
             }
             Statement::FunctionDeclaration(func) => {
@@ -288,7 +312,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         match decl {
             Declaration::VariableDeclaration(var) => {
                 for declarator in &var.declarations {
-                    self.check_declarator(scope, var.kind, declarator);
+                    self.check_owned_declarator(scope, var.kind, declarator);
                 }
             }
             Declaration::FunctionDeclaration(func) => {
@@ -350,8 +374,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 let Some((src, src_span)) = self.infer_initializer(scope, arg, Some(tgt)) else {
                     return;
                 };
-                check_excess_properties(self.interner.store(), arg, tgt, &mut self.diagnostics);
-                self.obligations.push(AssignObligation {
+                match self.check_excess_properties_for_target(arg, tgt) {
+                    DemandOutcome::Ready(diagnostics) => {
+                        for diagnostic in diagnostics {
+                            self.emit_diagnostic(diagnostic);
+                        }
+                    }
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        self.own_type_demand(DemandOutcome::Exhausted(exhaustion), src_span);
+                        return;
+                    }
+                }
+                self.schedule_obligation(AssignObligation {
                     src,
                     tgt,
                     src_span,
@@ -426,7 +460,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             match init {
                 ForStatementInit::VariableDeclaration(decl) => {
                     for declarator in &decl.declarations {
-                        self.check_declarator(head, decl.kind, declarator);
+                        self.check_owned_declarator(head, decl.kind, declarator);
                     }
                 }
                 other => {
@@ -568,13 +602,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Both sides present: the initializer must be assignable to the annotation (primary
         // span = the initializer), and a fresh object literal gets an excess-property check.
         if let (Some(ann), Some((init_ty, init_span))) = (annotation, initializer) {
-            self.obligations.push(AssignObligation {
+            self.schedule_obligation(AssignObligation {
                 src: init_ty,
                 tgt: ann,
                 src_span: init_span,
                 kind: ObligationKind::Assignment,
             });
-            check_excess_properties(self.interner.store(), init, ann, &mut self.diagnostics);
+            match self.check_excess_properties_for_target(init, ann) {
+                DemandOutcome::Ready(diagnostics) => {
+                    for diagnostic in diagnostics {
+                        self.emit_diagnostic(diagnostic);
+                    }
+                }
+                DemandOutcome::Exhausted(exhaustion) => {
+                    self.own_type_demand(DemandOutcome::Exhausted(exhaustion), init_span);
+                }
+            }
         }
 
         initializer
@@ -615,7 +658,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // initializer type; binding the destructured names' types is deferred.
         if let BindingPattern::ObjectPattern(object) = &declarator.id {
             if let Some((source, _)) = &initializer {
-                self.check_object_pattern_access(object, *source);
+                match self.demand_apparent_type(*source) {
+                    DemandOutcome::Ready(source) => {
+                        self.check_object_pattern_access(object, source);
+                    }
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        self.own_type_demand(
+                            DemandOutcome::Exhausted(exhaustion),
+                            Span::from_oxc(object.span),
+                        );
+                    }
+                }
             }
         }
 
@@ -629,6 +682,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         if let (Some(decl_id), Some(ty)) = (decl_id, declared) {
             self.publish_variable_decl_type(scope, kind, &declarator.id, decl_id, ty);
         }
+    }
+
+    fn check_owned_declarator(
+        &mut self,
+        scope: ScopeId,
+        kind: VariableDeclarationKind,
+        declarator: &VariableDeclarator<'_>,
+    ) {
+        self.with_lexical_effects(declarator.span.start, LexicalOwnerPhase::Deferred, |pass| {
+            pass.check_declarator(scope, kind, declarator)
+        });
     }
 
     /// Preserve class-only `new` facts through exactly one `const Alias = Class`
@@ -653,7 +717,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let Some(class_decl) = value_decl_id(self.binder, scope, source.name.as_str()) else {
             return;
         };
-        if self.class_ctors.contains_key(&class_decl) {
+        let published = self.lexical_events.classes().iter().any(|reservation| {
+            reservation.binding.as_ref().is_some_and(|binding| {
+                binding.value_decl == class_decl
+                    && matches!(
+                        self.published_classes.published_class(binding.class_id),
+                        crate::class_semantics::DemandOutcome::Ready(_)
+                    )
+            })
+        });
+        if published {
             self.class_value_aliases.insert(alias_decl, class_decl);
         }
     }
@@ -761,11 +834,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             if self.var_annotation_surfaces.contains_key(&surface_key) {
                 continue;
             }
-            let diagnostics_start = self.diagnostics.len();
-            let incomplete_start = self.incomplete.len();
-            let annotation = self.lower_annotation(scope, &type_annotation.type_annotation);
-            let diagnostics = self.diagnostics.split_off(diagnostics_start);
-            let incomplete = self.incomplete.split_off(incomplete_start);
+            let annotation = self.with_lexical_effects(
+                declarator.span.start,
+                LexicalOwnerPhase::Immediate,
+                |pass| pass.lower_annotation(scope, &type_annotation.type_annotation),
+            );
             if let Some(annotation) = annotation {
                 self.reserve_variable_annotation_type(
                     scope,
@@ -775,19 +848,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     annotation,
                 );
             }
-            self.var_annotation_surfaces.insert(
-                surface_key,
-                VarAnnotationSurface {
-                    annotation,
-                    diagnostics,
-                    incomplete,
-                },
-            );
+            self.var_annotation_surfaces
+                .insert(surface_key, VarAnnotationSurface { annotation });
         }
     }
 
-    /// Replay an explicit `var` annotation's staged records when source execution
-    /// reaches its declaration, returning the already-lowered annotation.
+    /// Return the already-lowered explicit `var` annotation at source execution.
     fn take_var_annotation_surface(
         &mut self,
         kind: VariableDeclarationKind,
@@ -796,20 +862,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         if !kind.is_var() {
             return None;
         }
-        let mut surface = self
+        let surface = self
             .var_annotation_surfaces
             .remove(&(self.current_module, declarator.span.start))?;
-        self.diagnostics.append(&mut surface.diagnostics);
-        for record in std::mem::take(&mut surface.incomplete) {
-            if self
-                .incomplete
-                .iter()
-                .any(|existing| existing.id == record.id && existing.span == record.span)
-            {
-                continue;
-            }
-            self.incomplete.push(record);
-        }
         Some(surface.annotation)
     }
 
@@ -986,7 +1041,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         func: &Function<'_>,
         surfaces: &mut FxHashMap<u32, FunctionSurface>,
     ) {
-        let surface = self.reserve_function(scope, func);
+        let tickets = self
+            .lexical_events
+            .callable_at(self.current_module_ordinal, func.span.start)
+            .and_then(|site| self.lexical_events.callable(site))
+            .map(|callable| callable.tickets);
+        let surface = match tickets {
+            Some(tickets) => self
+                .with_ticket_effects(tickets.signature, |pass| pass.reserve_function(scope, func)),
+            None => self.reserve_function(scope, func),
+        };
         self.publish_function_type(scope, func, surface.function_ty);
         surfaces.insert(func.span.start, surface);
     }
@@ -1004,7 +1068,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             self.check_function_declaration(scope, func);
             return false;
         };
-        self.replay_function_surface_records(&mut surface);
         let function_ty = self.fill_reserved_function(scope, func, &surface);
         surface.function_ty = function_ty;
         if publish_value {
@@ -1088,13 +1151,26 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// bind its completed function type. This keeps uncommon direct walker paths
     /// behaviorally equivalent without introducing a second declaration model.
     fn check_function_declaration(&mut self, scope: ScopeId, func: &Function<'_>) {
-        let fn_ty = self.infer_function(scope, func);
-        self.publish_function_type(scope, func, fn_ty);
+        let mut surfaces = FxHashMap::default();
+        self.reserve_function_surface(scope, func, &mut surfaces);
+        if !self.fill_reserved_function_body(scope, func, &mut surfaces, true) {
+            return;
+        }
         if func.body.is_none() && !func.declare {
-            self.diagnostics
-                .push(Diagnostic::overload_missing_implementation(Span::from_oxc(
-                    func.span,
-                )));
+            let ticket = surfaces
+                .get(&func.span.start)
+                .and_then(|surface| surface.tickets)
+                .map(|tickets| tickets.deferred);
+            match ticket {
+                Some(ticket) => self.with_ticket_effects(ticket, |pass| {
+                    pass.emit_diagnostic(Diagnostic::overload_missing_implementation(
+                        Span::from_oxc(func.span),
+                    ));
+                }),
+                None => self.emit_diagnostic(Diagnostic::overload_missing_implementation(
+                    Span::from_oxc(func.span),
+                )),
+            }
         }
     }
 
@@ -1108,10 +1184,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return;
         }
         if func.body.is_none() && !func.declare {
-            self.diagnostics
-                .push(Diagnostic::overload_missing_implementation(Span::from_oxc(
-                    func.span,
-                )));
+            let ticket = surfaces
+                .get(&func.span.start)
+                .and_then(|surface| surface.tickets)
+                .map(|tickets| tickets.deferred);
+            match ticket {
+                Some(ticket) => self.with_ticket_effects(ticket, |pass| {
+                    pass.emit_diagnostic(Diagnostic::overload_missing_implementation(
+                        Span::from_oxc(func.span),
+                    ));
+                }),
+                None => self.emit_diagnostic(Diagnostic::overload_missing_implementation(
+                    Span::from_oxc(func.span),
+                )),
+            }
         }
     }
 
@@ -1122,7 +1208,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         name: &str,
         surfaces: &mut FxHashMap<u32, FunctionSurface>,
     ) {
-        let mut signatures: Vec<(TypeId, Span)> = Vec::new();
+        let mut signatures = Vec::new();
         let mut implementation: Option<(TypeId, DeclId)> = None;
         for stmt in statements {
             let Some(func) = function_decl_from_statement(stmt) else {
@@ -1136,7 +1222,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 if func.body.is_some() {
                     implementation = Some((surface.function_ty, decl_id));
                 } else {
-                    signatures.push((surface.function_ty, Span::from_oxc(func.span)));
+                    signatures.push((
+                        surface.function_ty,
+                        Span::from_oxc(func.span),
+                        surface.tickets.map(|tickets| tickets.deferred),
+                    ));
                 }
             }
         }
@@ -1145,21 +1235,29 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             None
         } else {
             Some(self.interner.intern_object(ObjectType {
-                call_signatures: signatures.iter().map(|(ty, _)| *ty).collect(),
+                call_signatures: signatures.iter().map(|(ty, _, _)| *ty).collect(),
                 ..Default::default()
             }))
         };
 
         let Some((implementation_ty, implementation_decl)) = implementation else {
             if let Some(overload_ty) = overload_ty {
-                if let Some((_, span)) = signatures.first() {
+                if let Some((_, span, ticket)) = signatures.first() {
                     if statements
                         .iter()
                         .filter_map(function_decl_from_statement)
                         .any(|func| !func.declare)
                     {
-                        self.diagnostics
-                            .push(Diagnostic::overload_missing_implementation(*span));
+                        match ticket {
+                            Some(ticket) => self.with_ticket_effects(*ticket, |pass| {
+                                pass.emit_diagnostic(Diagnostic::overload_missing_implementation(
+                                    *span,
+                                ));
+                            }),
+                            None => self.emit_diagnostic(
+                                Diagnostic::overload_missing_implementation(*span),
+                            ),
+                        }
                     }
                 }
                 self.expose_overload_value(scope, name, None, overload_ty);
@@ -1210,27 +1308,44 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn check_overload_implementation_compatibility(
         &mut self,
         implementation_ty: TypeId,
-        signatures: &[(TypeId, Span)],
+        signatures: &[(TypeId, Span, Option<super::events::RecordTicket>)],
     ) {
-        for (signature_ty, span) in signatures {
-            let wk = self.interner.well_known();
-            let store = self.interner.store();
-            let mut relater = Relater::new(store, wk);
-            if !overload_implementation_compatible(&mut relater, *signature_ty, implementation_ty) {
-                self.diagnostics
-                    .push(Diagnostic::overload_incompatible(*span));
+        for (signature_ty, span, ticket) in signatures {
+            let check = |pass: &mut Self| {
+                let outcome = SemanticQueryCoordinator::new(
+                    pass.interner,
+                    &pass.published_classes,
+                    &mut pass.semantic_queries,
+                    &mut pass.next_type_param,
+                )
+                .overload_implementation_compatible(*signature_ty, implementation_ty);
+                match outcome {
+                    RelationOutcome::Yes => Some(true),
+                    RelationOutcome::No(_) => Some(false),
+                    RelationOutcome::Exhausted(exhaustion) => {
+                        pass.own_type_demand(DemandOutcome::Exhausted(exhaustion), *span);
+                        None
+                    }
+                }
+            };
+            let compatible = match ticket {
+                Some(ticket) => self.with_ticket_effects(*ticket, check),
+                None => check(self),
+            };
+            let Some(compatible) = compatible else {
+                break;
+            };
+            if !compatible {
+                match ticket {
+                    Some(ticket) => self.with_ticket_effects(*ticket, |pass| {
+                        pass.emit_diagnostic(Diagnostic::overload_incompatible(*span));
+                    }),
+                    None => self.emit_diagnostic(Diagnostic::overload_incompatible(*span)),
+                }
                 break;
             }
         }
     }
-}
-
-pub(in crate::check::checker) fn overload_implementation_compatible(
-    relater: &mut Relater<'_>,
-    overload_ty: TypeId,
-    implementation_ty: TypeId,
-) -> bool {
-    relater.overload_implementation_compatible(overload_ty, implementation_ty)
 }
 
 /// Resolve a variable declarator's symbol from its declaration-owning scope. A
@@ -1305,8 +1420,7 @@ pub(in crate::check::checker) fn emit_obligation_failure(
     store: &Store,
     ob: &AssignObligation,
     head: &Reason,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+) -> Diagnostic {
     // The nested "because…" cascade shown below the headline. Empty for a head the
     // headline already expresses in full (e.g. a scalar `Leaf`).
     let elaboration = render_reason_chain(store, head);
@@ -1315,7 +1429,7 @@ pub(in crate::check::checker) fn emit_obligation_failure(
         ObligationKind::Assignment => match head {
             Reason::MissingProperty { name, tgt, .. } => {
                 let tgt = render_type(store, *tgt, /* widen */ false);
-                diagnostics.push(Diagnostic::property_missing(ob.src_span, name, &tgt));
+                Diagnostic::property_missing(ob.src_span, name, &tgt)
             }
             Reason::Leaf { .. }
             | Reason::Property { .. }
@@ -1342,28 +1456,23 @@ pub(in crate::check::checker) fn emit_obligation_failure(
                 let src = render_type(store, headline_src(ob, head), widen);
                 let tgt = render_type(store, ob.tgt, /* widen */ false);
                 let message = format!("Type '{src}' is not assignable to type '{tgt}'");
-                diagnostics
-                    .push(Diagnostic::not_assignable(ob.src_span, message).with_elaboration(elaboration));
+                Diagnostic::not_assignable(ob.src_span, message).with_elaboration(elaboration)
             }
         },
         ObligationKind::Argument => {
             let widen = !is_literal_target(store, ob.tgt);
             let src = render_type(store, headline_src(ob, head), widen);
             let tgt = render_type(store, ob.tgt, /* widen */ false);
-            diagnostics.push(
-                Diagnostic::argument_not_assignable(ob.src_span, &src, &tgt)
-                    .with_elaboration(elaboration),
-            );
+            Diagnostic::argument_not_assignable(ob.src_span, &src, &tgt)
+                .with_elaboration(elaboration)
         }
         ObligationKind::FreshArgument => match head {
             Reason::MissingProperty { .. } | Reason::TupleLength { .. } => {
                 let widen = !is_literal_target(store, ob.tgt);
                 let src = render_type(store, headline_src(ob, head), widen);
                 let tgt = render_type(store, ob.tgt, /* widen */ false);
-                diagnostics.push(
-                    Diagnostic::argument_not_assignable(ob.src_span, &src, &tgt)
-                        .with_elaboration(elaboration),
-                );
+                Diagnostic::argument_not_assignable(ob.src_span, &src, &tgt)
+                    .with_elaboration(elaboration)
             }
             Reason::Leaf { .. }
             | Reason::Property { .. }
@@ -1379,98 +1488,24 @@ pub(in crate::check::checker) fn emit_obligation_failure(
                 let src = render_type(store, headline_src(ob, head), widen);
                 let tgt = render_type(store, ob.tgt, /* widen */ false);
                 let message = format!("Type '{src}' is not assignable to type '{tgt}'");
-                diagnostics.push(
-                    Diagnostic::not_assignable(ob.src_span, message).with_elaboration(elaboration),
-                );
+                Diagnostic::not_assignable(ob.src_span, message).with_elaboration(elaboration)
             }
         },
     }
 }
 
-/// Emit `TK2416` override failures. The base member kind decides variance: base
-/// methods use tsc's bivariant-parameter/covariant-return rule, while fields,
-/// accessors, and data properties use one strict `own → base` relation query.
-/// Unequal raw-arity base methods stay deferred until this bespoke bivariant path is
-/// reviewed against represented optional/rest signature shape.
-pub(in crate::check::checker) fn emit_override_failures(
+pub(in crate::check::checker) fn emit_exhausted_obligation(
     store: &Store,
-    well_known: WellKnown,
-    relater: &mut Relater,
-    checks: &[OverrideCheck],
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    for check in checks {
-        if let Some(chain) = override_failure_reason(
-            store,
-            well_known,
-            relater,
-            check.own_ty,
-            check.base_ty,
-            check.base_is_method,
-        ) {
-            let elaboration = render_reason_chain(store, chain.head());
-            diagnostics.push(
-                Diagnostic::property_override_incompatible(
-                    check.span,
-                    &check.name,
-                    &check.derived,
-                    &check.base,
-                )
-                .with_elaboration(elaboration),
-            );
-        }
-    }
-}
-
-/// The reason chain for an incompatible override, or `None` when compatible / out of
-/// subset. See [`emit_override_failures`] for the base-method (bivariant-param /
-/// covariant-return) vs. base-field (strict) rule.
-fn override_failure_reason(
-    store: &Store,
-    well_known: WellKnown,
-    relater: &mut Relater,
-    own_ty: TypeId,
-    base_ty: TypeId,
-    base_is_method: bool,
-) -> Option<ReasonChain> {
-    // Base method syntax plus function types triggers tsc's method rule; base
-    // function-typed fields fall through to the strict query below.
-    if let (true, Some(own_fn), Some(base_fn)) = (
-        base_is_method,
-        store.function_type(own_ty),
-        store.function_type(base_ty),
-    ) {
-        // Differing raw arity is still out of subset for the method-bivariance path.
-        if own_fn.params.len() != base_fn.params.len() {
-            return None;
-        }
-        // Parameters: bivariant — compatible if assignable in EITHER direction.
-        for (own_param, base_param) in own_fn.params.iter().zip(base_fn.params.iter()) {
-            if relater.is_assignable(own_param.ty, base_param.ty).is_yes()
-                || relater.is_assignable(base_param.ty, own_param.ty).is_yes()
-            {
-                continue;
-            }
-            // Neither direction holds: report the derived→base (own→base) failure.
-            if let Relation::No(chain) = relater.is_assignable(own_param.ty, base_param.ty) {
-                return Some(chain);
-            }
-        }
-        // Return type: covariant (own → base), with the void-return exception (a void
-        // target return accepts any source return) — mirroring `relate_functions` so a
-        // value-returning method/field over a `void` method stays clean.
-        if base_fn.ret != well_known.void {
-            if let Relation::No(chain) = relater.is_assignable(own_fn.ret, base_fn.ret) {
-                return Some(chain);
-            }
-        }
-        return None;
-    }
-    // Base is a data property / function-typed field / accessor (or a non-function
-    // shape): a single strict own → base assignability query, exactly like `TK2322`.
-    match relater.is_assignable(own_ty, base_ty) {
-        Relation::No(chain) => Some(chain),
-        Relation::Yes => None,
+    ob: &AssignObligation,
+) -> Diagnostic {
+    let src = render_type(store, ob.src, false);
+    let tgt = render_type(store, ob.tgt, false);
+    match ob.kind {
+        ObligationKind::Assignment | ObligationKind::FreshArgument => Diagnostic::not_assignable(
+            ob.src_span,
+            format!("Type '{src}' is not assignable to type '{tgt}'"),
+        ),
+        ObligationKind::Argument => Diagnostic::argument_not_assignable(ob.src_span, &src, &tgt),
     }
 }
 
@@ -1479,6 +1514,7 @@ fn override_failure_reason(
 fn headline_src(ob: &AssignObligation, head: &Reason) -> TypeId {
     match head {
         Reason::UnionSourceMember { member, .. } => *member,
+        Reason::Leaf { src, .. } => *src,
         _ => ob.src,
     }
 }

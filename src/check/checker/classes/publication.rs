@@ -1,0 +1,2263 @@
+//! Direct compilation-wide class-surface lowering and publication.
+
+use super::application::{
+    build_open_class_application, complete_class_arguments, ClassApplicationKind,
+    ClassApplicationRequest, ClassTypeParameter, ClassTypeParameterDefault, ExplicitClassArgument,
+    SourceClassArguments,
+};
+use super::body::{BodyClassView, BodyMemberMetadata};
+use super::construction::{
+    ClassConstruction, ClassSurfaceLowerer, DraftClassTypeParameter, HeritageDependency,
+    ReservedRootKind,
+};
+use super::initializer::{
+    EarlierMethodSurface, InitializerInference, SurfaceInitializerContext,
+    SurfaceInitializerInferer,
+};
+use super::retained::{
+    CallableOverloadRole, RetainedCallableTypeParameter, RetainedClassCallable,
+    RetainedParameterProperty,
+};
+use super::surface_types::SurfaceTypeFactory;
+use super::type_syntax::{
+    LoweredCallableSyntax, SurfaceNameResolution, SurfaceTypeFailure, SurfaceTypeResolver,
+    TypeSyntaxLowerer,
+};
+use super::visibility::{has_public_constructor, lower_visibility};
+use crate::binder::scope::ScopeId;
+use crate::binder::symbol::DeclId;
+use crate::check::checker::context::{OverrideCheck, Pass, TypeDecl};
+use crate::check::checker::decls::type_decl_id;
+use crate::check::checker::events::{CheckerRecord, ModuleOrdinal, RecordTicket};
+use crate::check::checker::lexical_events::{ClassReservation, LexicalReservations};
+use crate::check::query::SemanticQueryCoordinator;
+use crate::class_semantics::{ClassApplicationArguments, DemandOutcome, Exhaustion};
+use crate::diagnostics::{render_type, Diagnostic, IncompleteSurface};
+use crate::relate::RelationOutcome;
+use crate::span::Span as CheckSpan;
+use crate::types::repr::{
+    ClassId, FunctionType, ObjectType, PropertyType, TypeParamId, Visibility,
+};
+use crate::types::store::TypeId;
+use oxc_ast::ast::{
+    BindingPattern, Class, ClassElement, Expression, MethodDefinitionKind, MethodDefinitionType,
+    PropertyDefinitionType, PropertyKey, TSAccessibility, TSType, TSTypeName,
+};
+use oxc_span::{GetSpan, Span};
+use rustc_hash::FxHashMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+fn class_member_name(key: &PropertyKey<'_>) -> Option<String> {
+    match key {
+        PropertyKey::PrivateIdentifier(identifier) => Some(format!("#{}", identifier.name)),
+        _ => key.static_name().map(|name| name.into_owned()),
+    }
+}
+
+fn class_member_visibility(
+    key: &PropertyKey<'_>,
+    accessibility: Option<TSAccessibility>,
+) -> Visibility {
+    if key.is_private_identifier() {
+        Visibility::Private
+    } else {
+        lower_visibility(accessibility)
+    }
+}
+
+struct TicketRecord {
+    owner: RecordTicket,
+    source_start: u32,
+    record: CheckerRecord,
+}
+
+impl TicketRecord {
+    fn diagnostic(owner: RecordTicket, diagnostic: Diagnostic) -> Self {
+        Self {
+            owner,
+            source_start: diagnostic.span.start,
+            record: CheckerRecord::Diagnostic(diagnostic),
+        }
+    }
+
+    fn incomplete(owner: RecordTicket, incomplete: IncompleteSurface) -> Self {
+        Self {
+            owner,
+            source_start: incomplete.span.start,
+            record: CheckerRecord::Incomplete(incomplete),
+        }
+    }
+}
+
+struct Resolver<'a, 'ast> {
+    binder: &'a crate::binder::Binder,
+    scope: ScopeId,
+    declarations: &'a [TypeDecl<'ast>],
+    resolved: &'a [Option<TypeId>],
+    reservations: &'a LexicalReservations,
+    module: ModuleOrdinal,
+    fallback: RecordTicket,
+    error: TypeId,
+}
+
+impl Resolver<'_, '_> {
+    fn class_default_owner(&self, class: ClassId, index: usize) -> RecordTicket {
+        self.reservations
+            .classes()
+            .iter()
+            .find(|reservation| {
+                reservation
+                    .binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.class_id == class)
+            })
+            .and_then(|reservation| {
+                reservation
+                    .defaults
+                    .iter()
+                    .find(|default| default.parameter_index == index)
+            })
+            .map_or(self.fallback, |default| default.owner)
+    }
+
+    fn class_parameters(
+        &self,
+        declaration: &TypeDecl<'_>,
+    ) -> Vec<ClassTypeParameter<RecordTicket>> {
+        let TypeDecl::Class {
+            class_id,
+            params,
+            param_decl,
+            ..
+        } = declaration
+        else {
+            return Vec::new();
+        };
+        params
+            .iter()
+            .enumerate()
+            .map(|(index, id)| ClassTypeParameter {
+                id: *id,
+                default: param_decl
+                    .and_then(|declaration| declaration.params.get(index))
+                    .and_then(|parameter| parameter.default.as_ref())
+                    .map_or(ClassTypeParameterDefault::Absent, |_| {
+                        ClassTypeParameterDefault::Unsupported(
+                            self.class_default_owner(*class_id, index),
+                        )
+                    }),
+            })
+            .collect()
+    }
+}
+
+impl SurfaceTypeResolver<RecordTicket> for Resolver<'_, '_> {
+    fn resolve_name(&mut self, name: &str) -> SurfaceNameResolution<RecordTicket> {
+        let Some(id) = type_decl_id(self.binder, self.scope, name) else {
+            return SurfaceNameResolution::Unavailable(self.fallback);
+        };
+        let Some(declaration) = self.declarations.get(id.index()) else {
+            return SurfaceNameResolution::Unavailable(self.fallback);
+        };
+        match declaration {
+            TypeDecl::Class { class_id, .. } => SurfaceNameResolution::Class {
+                class: *class_id,
+                parameters: self.class_parameters(declaration),
+            },
+            TypeDecl::Interface {
+                reserved, params, ..
+            } => {
+                if params.is_empty() {
+                    SurfaceNameResolution::Direct(*reserved)
+                } else {
+                    SurfaceNameResolution::Alias {
+                        template: *reserved,
+                        parameters: params.clone(),
+                    }
+                }
+            }
+            TypeDecl::Alias { params, .. } | TypeDecl::Resolved { params } => {
+                let Some(template) = self.resolved.get(id.index()).copied().flatten() else {
+                    return SurfaceNameResolution::Poisoned(self.fallback);
+                };
+                if template == self.error {
+                    return SurfaceNameResolution::Poisoned(self.fallback);
+                }
+                if params.is_empty() {
+                    SurfaceNameResolution::Direct(template)
+                } else {
+                    SurfaceNameResolution::Alias {
+                        template,
+                        parameters: params.clone(),
+                    }
+                }
+            }
+        }
+    }
+
+    fn signature_type_parameter(
+        &mut self,
+        callable_source_start: u32,
+        ordinal: usize,
+        _name: &str,
+    ) -> Option<TypeParamId> {
+        self.reservations
+            .callable_at(self.module, callable_source_start)
+            .and_then(|site| self.reservations.callable(site))
+            .and_then(|reservation| reservation.binding.as_ref())
+            .and_then(|binding| binding.type_params.get(ordinal))
+            .copied()
+    }
+
+    fn unsupported_ticket(&mut self, _span: Span) -> RecordTicket {
+        self.fallback
+    }
+}
+
+#[derive(Default)]
+struct InitializerContext {
+    annotations: FxHashMap<u32, TypeId>,
+    fields: FxHashMap<String, TypeId>,
+    methods: FxHashMap<String, EarlierMethodSurface>,
+}
+
+impl SurfaceInitializerContext for InitializerContext {
+    fn lower_annotation(&mut self, annotation: &TSType<'_>) -> DemandOutcome<TypeId> {
+        self.annotations
+            .get(&annotation.span().start)
+            .copied()
+            .map_or_else(
+                || DemandOutcome::Exhausted(crate::class_semantics::Exhaustion::EvaluationBudget),
+                DemandOutcome::Ready,
+            )
+    }
+
+    fn earlier_field(&self, name: &str) -> Option<TypeId> {
+        self.fields.get(name).copied()
+    }
+
+    fn earlier_method(&self, name: &str) -> Option<EarlierMethodSurface> {
+        self.methods.get(name).copied()
+    }
+}
+
+impl<'a, 'ast> Pass<'a, 'ast> {
+    pub(in crate::check::checker) fn publish_class_surfaces(
+        &mut self,
+        _scopes: &[(ModuleOrdinal, ScopeId)],
+    ) {
+        let reservations: Vec<ClassReservation> = self.lexical_events.classes().to_vec();
+        let mut construction = ClassConstruction::default();
+        let mut default_checks = Vec::new();
+        let mut records = Vec::new();
+        let mut heritage_spans = BTreeMap::new();
+
+        {
+            let error = self.interner.well_known().error;
+            let mut factory = SurfaceTypeFactory::new(self.interner);
+            register_reserved_surface_roots(
+                &mut construction,
+                &mut factory,
+                self.binder,
+                &self.type_decls,
+                &self.type_resolved,
+                &self.lexical_events,
+                error,
+            );
+        }
+
+        for reservation in reservations {
+            let Some(binding) = reservation.binding.as_ref() else {
+                continue;
+            };
+            let Some(TypeDecl::Class {
+                scope,
+                class_id,
+                params,
+                param_decl,
+                class,
+            }) = self.type_decls.get(binding.type_decl.index())
+            else {
+                continue;
+            };
+            let scope = *scope;
+            let class_id = *class_id;
+            let params = params.clone();
+            let class = *class;
+            if let Some(arguments) = class.super_type_arguments.as_deref() {
+                records.push(TicketRecord::incomplete(
+                    reservation.tickets.incomplete,
+                    IncompleteSurface::new(
+                        "class/class-heritage/type-arguments",
+                        CheckSpan::from_oxc(arguments.span),
+                        "extends type arguments are not part of class composition",
+                    ),
+                ));
+            }
+            for implements in &class.implements {
+                records.push(TicketRecord::incomplete(
+                    reservation.tickets.incomplete,
+                    IncompleteSurface::new(
+                        "class/implements-clause/self",
+                        CheckSpan::from_oxc(implements.span),
+                        "implements clause is not checked",
+                    ),
+                ));
+            }
+            if let Some(heritage) = class.super_class.as_ref() {
+                heritage_spans.insert(class_id, CheckSpan::from_oxc(heritage.span()));
+            }
+
+            let error = self.interner.well_known().error;
+            let mut resolver = Resolver {
+                binder: self.binder,
+                scope,
+                declarations: &self.type_decls,
+                resolved: &self.type_resolved,
+                reservations: &self.lexical_events,
+                module: reservation.source.module_ordinal,
+                fallback: reservation.tickets.incomplete,
+                error,
+            };
+            let mut factory = SurfaceTypeFactory::new(self.interner);
+            let frame: Vec<(String, TypeId)> = param_decl
+                .iter()
+                .flat_map(|declaration| declaration.params.iter())
+                .zip(params.iter().copied())
+                .map(|(parameter, id)| {
+                    (
+                        parameter.name.name.to_string(),
+                        factory.intern_type_param(id, parameter.name.name.as_str()),
+                    )
+                })
+                .collect();
+
+            let mut publication_surface_poison = Vec::new();
+            let constraints: Vec<Option<TypeId>> = param_decl
+                .iter()
+                .flat_map(|declaration| declaration.params.iter())
+                .map(|parameter| {
+                    let constraint = parameter.constraint.as_ref()?;
+                    let (lowered, child_failures) =
+                        lower_type(&mut factory, &mut resolver, constraint, &frame);
+                    let constraint_ty = lowered.as_ref().ok().copied();
+                    for failure in lowered.err().into_iter().chain(child_failures) {
+                        let (owner, record) = own_surface_failure(
+                            failure,
+                            reservation.tickets.immediate,
+                            reservation.tickets.incomplete,
+                            CheckSpan::from_oxc(constraint.span()),
+                            "annotation-lower/type-parameter-constraint/self",
+                            "class type-parameter constraint could not be lowered",
+                        );
+                        if let Some(record) = record {
+                            records.push(record);
+                        }
+                        publication_surface_poison.push(owner);
+                    }
+                    constraint_ty
+                })
+                .collect();
+            if let Some(declaration) = param_decl {
+                for (index, parameter) in declaration.params.iter().enumerate() {
+                    if let Some(default) = parameter.default.as_ref() {
+                        let owner = reservation
+                            .defaults
+                            .iter()
+                            .find(|reserved| reserved.parameter_index == index)
+                            .map_or(reservation.tickets.incomplete, |reserved| reserved.owner);
+                        records.push(TicketRecord::incomplete(
+                            owner,
+                            IncompleteSurface::new(
+                                "annotation-lower/type-parameter-default/self",
+                                CheckSpan::from_oxc(default.span()),
+                                "type-parameter default not lowered",
+                            ),
+                        ));
+                    }
+                }
+            }
+            for (id, constraint) in params.iter().copied().zip(constraints.iter().copied()) {
+                if let Some(constraint) = constraint {
+                    assert!(
+                        factory.set_type_param_constraint(id, constraint),
+                        "class type-parameter constraint is assigned exactly once"
+                    );
+                }
+            }
+
+            let type_parameters: Vec<DraftClassTypeParameter<RecordTicket>> = params
+                .iter()
+                .enumerate()
+                .map(|(index, id)| {
+                    DraftClassTypeParameter::source(
+                        *id,
+                        constraints.get(index).copied().flatten(),
+                        param_decl
+                            .and_then(|declaration| declaration.params.get(index))
+                            .and_then(|parameter| parameter.default.as_ref())
+                            .map(|_| {
+                                reservation
+                                    .defaults
+                                    .iter()
+                                    .find(|default| default.parameter_index == index)
+                                    .map_or(reservation.tickets.incomplete, |default| default.owner)
+                            }),
+                    )
+                })
+                .collect();
+            let application_parameters = type_parameters
+                .iter()
+                .map(|parameter: &DraftClassTypeParameter<RecordTicket>| *parameter.application())
+                .collect::<Vec<_>>();
+
+            let LoweredClassSurface {
+                instance,
+                static_side,
+                body_view,
+                constructor,
+                initializer_poison,
+                mut surface_poison,
+                callables,
+                records: produced,
+                default_checks: checks,
+            } = lower_class(
+                &mut factory,
+                &mut resolver,
+                ClassLoweringInput {
+                    class_id,
+                    application_parameters: &application_parameters,
+                    class,
+                    frame: &frame,
+                    reservation: &reservation,
+                    reservations: &self.lexical_events,
+                },
+            );
+            records.extend(produced);
+            default_checks.extend(checks);
+            surface_poison.extend(publication_surface_poison);
+            self.class_body_views.insert(class_id, body_view);
+            self.decl_types.set(binding.value_decl, static_side);
+            if let Some(name) = class.id.as_ref() {
+                self.class_names.insert(class_id, name.name.to_string());
+            }
+            let (heritage_result, heritage_children) = lower_heritage_application(
+                &mut factory,
+                &mut resolver,
+                self.binder,
+                scope,
+                &self.type_decls,
+                class,
+                &frame,
+            );
+            let mut heritage_failures = Vec::new();
+            let heritage = match heritage_result {
+                Ok(heritage) => heritage,
+                Err(failure) => {
+                    if class.super_type_arguments.is_some() {
+                        // Generic heritage is record-only accounted above; its child
+                        // failure must not replay a second record for the same source.
+                        let _ = (failure, heritage_children);
+                        None
+                    } else {
+                        let span = class.super_type_arguments.as_deref().map_or_else(
+                            || {
+                                class
+                                    .super_class
+                                    .as_ref()
+                                    .map_or(CheckSpan::from_oxc(class.span), |heritage| {
+                                        CheckSpan::from_oxc(heritage.span())
+                                    })
+                            },
+                            |arguments| CheckSpan::from_oxc(arguments.span),
+                        );
+                        for failure in std::iter::once(failure).chain(heritage_children) {
+                            let (owner, record) = own_surface_failure(
+                                failure,
+                                reservation.tickets.immediate,
+                                reservation.tickets.incomplete,
+                                span,
+                                "class/class-heritage/type-arguments",
+                                "class heritage type arguments could not be lowered",
+                            );
+                            if let Some(record) = record {
+                                records.push(record);
+                            }
+                            heritage_failures.push(owner);
+                        }
+                        None
+                    }
+                }
+            };
+            let mut lowerer = ClassSurfaceLowerer::new(
+                class_id,
+                type_parameters,
+                instance,
+                static_side,
+                constructor,
+            );
+            if let Some((parent, base)) = heritage {
+                lowerer.set_heritage(HeritageDependency {
+                    target: parent,
+                    identity_root: base,
+                    owner: reservation.tickets.deferred,
+                });
+                self.class_parents.insert(class_id, parent);
+            }
+            for owner in heritage_failures {
+                lowerer.unsupported_heritage_surface(owner);
+            }
+            for owner in initializer_poison {
+                lowerer.unsupported_initializer(owner);
+            }
+            for owner in surface_poison {
+                lowerer.unsupported_surface(owner);
+            }
+            for callable in callables {
+                lowerer.retain_callable(callable);
+            }
+            construction
+                .register(lowerer.finish())
+                .expect("one class draft per class declaration");
+        }
+
+        let publication = construction
+            .finish(self.interner)
+            .expect("class publication must preserve reserved identities");
+        self.published_classes = publication.published;
+        self.class_application_parameters = publication.type_parameters;
+        for obligation in publication.obligations {
+            match obligation {
+                super::construction::PendingSurfaceObligation::InitializerOrigin { .. }
+                | super::construction::PendingSurfaceObligation::SurfaceOrigin { .. }
+                | super::construction::PendingSurfaceObligation::Deferred { .. } => {}
+                super::construction::PendingSurfaceObligation::HeritageCycle {
+                    derived,
+                    owner,
+                    ..
+                } => {
+                    let span = heritage_spans
+                        .get(&derived)
+                        .copied()
+                        .expect("heritage-cycle owner must retain its extends span");
+                    records.push(TicketRecord::incomplete(
+                        owner,
+                        IncompleteSurface::new(
+                            "class/class-heritage/cycle",
+                            span,
+                            "class heritage cycle poisons the published surface",
+                        ),
+                    ));
+                }
+                super::construction::PendingSurfaceObligation::PoisonedBase {
+                    derived,
+                    owner,
+                    ..
+                } => {
+                    let span = heritage_spans
+                        .get(&derived)
+                        .copied()
+                        .expect("poisoned-base owner must retain its extends span");
+                    records.push(TicketRecord::incomplete(
+                        owner,
+                        IncompleteSurface::new(
+                            "class/class-heritage/poisoned-base",
+                            span,
+                            "class heritage base surface is poisoned",
+                        ),
+                    ));
+                }
+            }
+        }
+        self.retained_class_callables = publication.retained_callables;
+        self.class_super_constructors = publication.heritage_constructors;
+        self.class_publication_complete = true;
+        for reservation in self.lexical_events.classes() {
+            let Some(binding) = reservation.binding.as_ref() else {
+                continue;
+            };
+            if let DemandOutcome::Ready(surface) =
+                self.published_classes.published_class(binding.class_id)
+            {
+                self.decl_types
+                    .set(binding.value_decl, surface.static_template());
+            }
+        }
+        for (owner, source, target, span) in default_checks {
+            let outcome = SemanticQueryCoordinator::new(
+                self.interner,
+                &self.published_classes,
+                &mut self.semantic_queries,
+                &mut self.next_type_param,
+            )
+            .is_assignable(source, target);
+            let failed = match outcome {
+                RelationOutcome::Yes => false,
+                RelationOutcome::No(_) => true,
+                RelationOutcome::Exhausted(exhaustion) => {
+                    let (id, context) = if exhaustion
+                        == crate::class_semantics::Exhaustion::ClassProjectionBudget
+                    {
+                        (
+                            "relation/class-projection-budget",
+                            "class projection budget exhausted while checking a default constraint",
+                        )
+                    } else {
+                        (
+                            "relation/class-default-constraint-exhausted",
+                            "class default constraint could not be decided conservatively",
+                        )
+                    };
+                    records.push(TicketRecord::incomplete(
+                        owner,
+                        IncompleteSurface::new(id, span, context),
+                    ));
+                    true
+                }
+            };
+            if failed {
+                let source = render_type(self.interner.store(), source, false);
+                let target = render_type(self.interner.store(), target, false);
+                records.push(TicketRecord::diagnostic(
+                    owner,
+                    Diagnostic::constraint_not_satisfied(span, &source, &target),
+                ));
+            }
+        }
+        records.extend(abstract_completeness_records(
+            &self.lexical_events,
+            &self.type_decls,
+            &self.class_parents,
+        ));
+        records.sort_by_key(|record| (record.owner, record.source_start));
+        for record in records {
+            self.enqueue_ticket_record(record.owner, record.record);
+        }
+        self.collect_override_checks();
+    }
+
+    fn collect_override_checks(&mut self) {
+        let class_defs: FxHashMap<ClassId, &Class<'_>> = self
+            .type_decls
+            .iter()
+            .filter_map(|declaration| match declaration {
+                TypeDecl::Class {
+                    class_id, class, ..
+                } => Some((*class_id, *class)),
+                _ => None,
+            })
+            .collect();
+        let reservations = self.lexical_events.classes().to_vec();
+        for reservation in reservations {
+            let Some(binding) = reservation.binding.as_ref() else {
+                continue;
+            };
+            let Some(TypeDecl::Class {
+                scope,
+                class,
+                class_id,
+                ..
+            }) = self.type_decls.get(binding.type_decl.index())
+            else {
+                continue;
+            };
+            let scope = *scope;
+            let class_id = *class_id;
+            let class = *class;
+            let Some(parent) = self.class_parents.get(&class_id).copied() else {
+                continue;
+            };
+            let derived_is_generic = class
+                .type_parameters
+                .as_deref()
+                .is_some_and(|parameters| !parameters.params.is_empty());
+            let base_is_generic = class_defs
+                .get(&parent)
+                .and_then(|base| base.type_parameters.as_deref())
+                .is_some_and(|parameters| !parameters.params.is_empty());
+            if derived_is_generic || base_is_generic {
+                continue;
+            }
+            let (derived_object, base_object) = match (
+                self.published_classes.published_class(class_id),
+                self.published_classes.published_class(parent),
+            ) {
+                (DemandOutcome::Ready(derived), DemandOutcome::Ready(base)) => (
+                    self.interner
+                        .store()
+                        .object_type(derived.instance_template())
+                        .cloned(),
+                    self.interner
+                        .store()
+                        .object_type(base.instance_template())
+                        .cloned(),
+                ),
+                _ => continue,
+            };
+            let (Some(derived_object), Some(base_object)) = (derived_object, base_object) else {
+                continue;
+            };
+            let derived_name = self
+                .class_names
+                .get(&class_id)
+                .cloned()
+                .unwrap_or_else(|| format!("class#{}", class_id.0));
+            let base_name = self
+                .class_names
+                .get(&parent)
+                .cloned()
+                .unwrap_or_else(|| format!("class#{}", parent.0));
+            for (index, element) in class.body.body.iter().enumerate() {
+                let (name, span) = match element {
+                    ClassElement::PropertyDefinition(property)
+                        if !property.r#static && !property.computed =>
+                    {
+                        let Some(name) = class_member_name(&property.key) else {
+                            continue;
+                        };
+                        (name, CheckSpan::from_oxc(property.key.span()))
+                    }
+                    ClassElement::MethodDefinition(method)
+                        if !method.r#static
+                            && !method.computed
+                            && method.kind != MethodDefinitionKind::Constructor =>
+                    {
+                        let Some(name) = class_member_name(&method.key) else {
+                            continue;
+                        };
+                        (name, CheckSpan::from_oxc(method.key.span()))
+                    }
+                    _ => continue,
+                };
+                let (Some(own), Some(base)) =
+                    (derived_object.property(&name), base_object.property(&name))
+                else {
+                    continue;
+                };
+                let error = self.interner.well_known().error;
+                if own.visibility != Visibility::Public
+                    || base.visibility != Visibility::Public
+                    || own.ty == error
+                    || base.ty == error
+                {
+                    continue;
+                }
+                if own.is_accessor != base.is_accessor
+                    && !(class_member_has_explicit_surface(
+                        class_id,
+                        &name,
+                        &class_defs,
+                        &self.class_parents,
+                    ) && class_member_has_explicit_surface(
+                        parent,
+                        &name,
+                        &class_defs,
+                        &self.class_parents,
+                    ))
+                {
+                    continue;
+                }
+                let Some(owner) = reservation
+                    .members
+                    .get(index)
+                    .and_then(|site| self.lexical_events.member(*site))
+                    .map(|member| member.tickets.deferred)
+                else {
+                    continue;
+                };
+                let _ = scope;
+                let base_is_method =
+                    class_member_is_method(parent, &name, &class_defs, &self.class_parents);
+                if base_is_method
+                    && self
+                        .interner
+                        .store()
+                        .function_type(own.ty)
+                        .zip(self.interner.store().function_type(base.ty))
+                        .is_some_and(|(own, base)| own.params.len() != base.params.len())
+                {
+                    continue;
+                }
+                self.with_ticket_effects(owner, |pass| {
+                    pass.schedule_override(OverrideCheck {
+                        own_ty: own.ty,
+                        base_ty: base.ty,
+                        name,
+                        derived: derived_name.clone(),
+                        base: base_name.clone(),
+                        span,
+                        base_is_method,
+                    });
+                });
+            }
+        }
+    }
+}
+
+type DefaultConstraintCheck = (RecordTicket, TypeId, TypeId, CheckSpan);
+
+struct ClassLoweringInput<'a, 'ast> {
+    class_id: ClassId,
+    application_parameters: &'a [ClassTypeParameter<RecordTicket>],
+    class: &'a Class<'ast>,
+    frame: &'a [(String, TypeId)],
+    reservation: &'a ClassReservation,
+    reservations: &'a LexicalReservations,
+}
+
+struct LoweredClassSurface {
+    instance: TypeId,
+    static_side: TypeId,
+    body_view: BodyClassView,
+    constructor: Option<TypeId>,
+    initializer_poison: Vec<RecordTicket>,
+    surface_poison: Vec<RecordTicket>,
+    callables: Vec<RetainedClassCallable<RecordTicket>>,
+    records: Vec<TicketRecord>,
+    default_checks: Vec<DefaultConstraintCheck>,
+}
+
+struct AccessorSurface {
+    getter: Option<TypeId>,
+    setter: Option<TypeId>,
+    visibility: Visibility,
+    is_static: bool,
+}
+
+fn lower_class<'ast>(
+    factory: &mut SurfaceTypeFactory<'_>,
+    resolver: &mut Resolver<'_, '_>,
+    input: ClassLoweringInput<'_, 'ast>,
+) -> LoweredClassSurface {
+    let ClassLoweringInput {
+        class_id,
+        application_parameters,
+        class,
+        frame,
+        reservation,
+        reservations,
+    } = input;
+    let parameter_types = frame.iter().map(|(_, ty)| *ty).collect::<Vec<_>>();
+    let open_application = match build_open_class_application(
+        factory,
+        class_id,
+        application_parameters,
+        &parameter_types,
+    ) {
+        DemandOutcome::Ready(application) => application,
+        DemandOutcome::Exhausted(_) => {
+            unreachable!("class parameter frame is aligned with its reserved binders")
+        }
+    };
+    let mut instance = ObjectType::default();
+    let mut static_side = ObjectType::default();
+    let mut initializer = InitializerContext::default();
+    let mut initializer_poison = Vec::new();
+    let mut surface_poison = Vec::new();
+    let mut constructor = None;
+    let mut retained = Vec::new();
+    let mut records = Vec::new();
+    let mut default_checks = Vec::new();
+    let class_parameter_names: std::collections::BTreeSet<&str> =
+        frame.iter().map(|(name, _)| name.as_str()).collect();
+    let mut accessors: FxHashMap<String, AccessorSurface> = FxHashMap::default();
+    let mut method_counts: BTreeMap<(String, bool), usize> = BTreeMap::new();
+    let mut constructor_count = 0usize;
+    for element in &class.body.body {
+        let ClassElement::MethodDefinition(method) = element else {
+            continue;
+        };
+        if method.computed {
+            continue;
+        }
+        match method.kind {
+            MethodDefinitionKind::Method => {
+                if let Some(name) = class_member_name(&method.key) {
+                    *method_counts.entry((name, method.r#static)).or_default() += 1;
+                }
+            }
+            MethodDefinitionKind::Constructor => constructor_count += 1,
+            MethodDefinitionKind::Get | MethodDefinitionKind::Set => {}
+        }
+    }
+    let mut method_overloads: BTreeMap<(String, bool), (Visibility, Vec<TypeId>)> = BTreeMap::new();
+    let mut constructor_overloads = Vec::new();
+
+    for (index, element) in class.body.body.iter().enumerate() {
+        let member = reservation
+            .members
+            .get(index)
+            .and_then(|id| reservations.member(*id));
+        let incomplete_owner = member.map_or(reservation.tickets.incomplete, |member| {
+            member.tickets.incomplete
+        });
+        let immediate_owner = member.map_or(reservation.tickets.immediate, |member| {
+            member.tickets.immediate
+        });
+        match element {
+            ClassElement::PropertyDefinition(property) if !property.computed => {
+                let Some(name) = class_member_name(&property.key) else {
+                    continue;
+                };
+                if property.r#static {
+                    if let Some(annotation) = property.type_annotation.as_ref() {
+                        let mut diagnostics = Vec::new();
+                        collect_static_class_parameter_diagnostics(
+                            &annotation.type_annotation,
+                            &class_parameter_names,
+                            &mut diagnostics,
+                        );
+                        if !diagnostics.is_empty() {
+                            surface_poison.push(immediate_owner);
+                        }
+                        records.extend(diagnostics.into_iter().map(|diagnostic| {
+                            TicketRecord::diagnostic(immediate_owner, diagnostic)
+                        }));
+                    }
+                }
+                let ty = if let Some(annotation) = property.type_annotation.as_ref() {
+                    let (lowered, child_failures) =
+                        lower_type(factory, resolver, &annotation.type_annotation, frame);
+                    let annotation_ty = lowered.as_ref().ok().copied();
+                    for failure in lowered.err().into_iter().chain(child_failures) {
+                        let (owner, record) = own_surface_failure(
+                            failure,
+                            immediate_owner,
+                            incomplete_owner,
+                            CheckSpan::from_oxc(annotation.type_annotation.span()),
+                            "class/property-definition/type-annotation",
+                            "property type annotation could not be lowered",
+                        );
+                        if let Some(record) = record {
+                            records.push(record);
+                        }
+                        surface_poison.push(owner);
+                    }
+                    annotation_ty
+                } else if let Some(value) = property.value.as_ref() {
+                    seed_initializer_annotations(factory, resolver, value, frame, &mut initializer);
+                    match SurfaceInitializerInferer::new(factory, &mut initializer).infer(
+                        value,
+                        property.readonly,
+                        property.r#static,
+                    ) {
+                        InitializerInference::Inferred(ty) => Some(ty),
+                        InitializerInference::Unsupported => {
+                            records.push(TicketRecord::incomplete(
+                                immediate_owner,
+                                IncompleteSurface::new(
+                                    "class/property-definition/initializer-inference",
+                                    CheckSpan::from_oxc(value.span()),
+                                    "unannotated field initializer cannot be inferred during class surface construction",
+                                ),
+                            ));
+                            initializer_poison.push(immediate_owner);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                let Some(mut ty) = ty else {
+                    continue;
+                };
+                if property.optional {
+                    ty = factory.union(vec![ty, factory.well_known().undefined]);
+                }
+                let lowered = PropertyType {
+                    name: name.clone(),
+                    ty,
+                    write_ty: None,
+                    optional: property.optional,
+                    visibility: class_member_visibility(&property.key, property.accessibility),
+                    declaring_class: Some(class_id),
+                    readonly: property.readonly,
+                    is_accessor: false,
+                };
+                if property.r#static {
+                    static_side.properties.push(lowered);
+                } else {
+                    initializer.fields.insert(name, ty);
+                    instance.properties.push(lowered);
+                }
+            }
+            ClassElement::MethodDefinition(method) => {
+                if method.computed {
+                    records.push(TicketRecord::incomplete(
+                        incomplete_owner,
+                        IncompleteSurface::new(
+                            "class/method-definition/computed-key",
+                            CheckSpan::from_oxc(method.key.span()),
+                            "computed method key is not collected",
+                        ),
+                    ));
+                }
+                let method_key = (method.kind == MethodDefinitionKind::Method)
+                    .then(|| class_member_name(&method.key).map(|name| (name, method.r#static)))
+                    .flatten();
+                let is_method_overload = method_key
+                    .as_ref()
+                    .is_some_and(|key| method_counts.get(key).copied().unwrap_or_default() > 1);
+                let is_constructor_overload =
+                    method.kind == MethodDefinitionKind::Constructor && constructor_count > 1;
+                let overload = if is_method_overload || is_constructor_overload {
+                    if method.value.body.is_some() {
+                        CallableOverloadRole::Implementation {
+                            ordinal: index,
+                            hidden_from_public: true,
+                        }
+                    } else {
+                        CallableOverloadRole::Signature { ordinal: index }
+                    }
+                } else {
+                    CallableOverloadRole::Single
+                };
+                if method.r#static {
+                    let own_parameters: std::collections::BTreeSet<&str> = method
+                        .value
+                        .type_parameters
+                        .as_deref()
+                        .into_iter()
+                        .flat_map(|declaration| declaration.params.iter())
+                        .map(|parameter| parameter.name.name.as_str())
+                        .collect();
+                    let visible_class_parameters = class_parameter_names
+                        .iter()
+                        .copied()
+                        .filter(|name| !own_parameters.contains(name))
+                        .collect();
+                    let mut diagnostics = Vec::new();
+                    for annotation in method
+                        .value
+                        .type_parameters
+                        .as_deref()
+                        .into_iter()
+                        .flat_map(|declaration| declaration.params.iter())
+                        .flat_map(|parameter| {
+                            parameter.constraint.iter().chain(parameter.default.iter())
+                        })
+                        .chain(
+                            method
+                                .value
+                                .params
+                                .items
+                                .iter()
+                                .filter_map(|parameter| parameter.type_annotation.as_ref())
+                                .map(|annotation| &annotation.type_annotation),
+                        )
+                        .chain(
+                            method
+                                .value
+                                .return_type
+                                .as_deref()
+                                .map(|annotation| &annotation.type_annotation),
+                        )
+                    {
+                        collect_static_class_parameter_diagnostics(
+                            annotation,
+                            &visible_class_parameters,
+                            &mut diagnostics,
+                        );
+                    }
+                    if !method.computed && !diagnostics.is_empty() {
+                        surface_poison.push(immediate_owner);
+                    }
+                    records.extend(
+                        diagnostics.into_iter().map(|diagnostic| {
+                            TicketRecord::diagnostic(immediate_owner, diagnostic)
+                        }),
+                    );
+                }
+                let (syntax, failures) = lower_callable(factory, resolver, &method.value, frame);
+                for failure in syntax.failure.iter().cloned().chain(failures) {
+                    match failure {
+                        SurfaceTypeFailure::Unresolved {
+                            owner: _,
+                            span,
+                            name,
+                        } => {
+                            records.push(TicketRecord::diagnostic(
+                                immediate_owner,
+                                Diagnostic::cannot_find_name(CheckSpan::from_oxc(span), &name),
+                            ));
+                            if !method.computed {
+                                surface_poison.push(immediate_owner);
+                            }
+                        }
+                        other => {
+                            let (owner, record) = own_surface_failure(
+                                other,
+                                immediate_owner,
+                                incomplete_owner,
+                                CheckSpan::from_oxc(method.value.span),
+                                "class/method-definition/signature",
+                                "method signature could not be lowered",
+                            );
+                            if let Some(record) = record {
+                                records.push(record);
+                            }
+                            if !method.computed {
+                                surface_poison.push(owner);
+                            }
+                        }
+                    }
+                }
+                let callable = if syntax.failure.is_none() {
+                    Some(
+                        factory.intern_function(FunctionType {
+                            type_params: syntax.type_params.clone(),
+                            receiver: syntax.receiver,
+                            params: syntax
+                                .params
+                                .iter()
+                                .cloned()
+                                .map(|parameter| {
+                                    parameter.expect(
+                                        "successful callable retains every source parameter",
+                                    )
+                                })
+                                .collect(),
+                            ret: syntax
+                                .declared_return
+                                .expect("successful callable retains its return type"),
+                        }),
+                    )
+                } else {
+                    None
+                };
+                if let Some(member) = reservation
+                    .members
+                    .get(index)
+                    .and_then(|id| reservations.member(*id))
+                {
+                    if let Some(site) = member.callable {
+                        if let Some(parameters) = method.value.type_parameters.as_deref() {
+                            for (parameter, generic) in
+                                parameters.params.iter().zip(&syntax.type_params)
+                            {
+                                if let (Some(default), Some(constraint), Some(default_syntax)) = (
+                                    generic.default,
+                                    generic.constraint,
+                                    parameter.default.as_ref(),
+                                ) {
+                                    default_checks.push((
+                                        member.tickets.immediate,
+                                        default,
+                                        constraint,
+                                        CheckSpan::from_oxc(default_syntax.span()),
+                                    ));
+                                }
+                            }
+                        }
+                        for generic in &syntax.type_params {
+                            if let Some(constraint) = generic.constraint {
+                                assert!(
+                                    factory.set_type_param_constraint(generic.id, constraint),
+                                    "callable type-parameter constraint is assigned exactly once"
+                                );
+                            }
+                        }
+                        let type_param_frame = method
+                            .value
+                            .type_parameters
+                            .as_deref()
+                            .into_iter()
+                            .flat_map(|declaration| declaration.params.iter())
+                            .zip(syntax.type_params.iter())
+                            .map(|(parameter, generic)| {
+                                (
+                                    parameter.name.name.to_string(),
+                                    factory.intern_type_param(
+                                        generic.id,
+                                        parameter.name.name.as_str(),
+                                    ),
+                                )
+                            })
+                            .collect();
+                        let type_parameters = method
+                            .value
+                            .type_parameters
+                            .as_deref()
+                            .into_iter()
+                            .flat_map(|declaration| declaration.params.iter())
+                            .zip(syntax.type_params.iter())
+                            .map(|(source, generic)| RetainedCallableTypeParameter {
+                                id: generic.id,
+                                constraint: generic.constraint,
+                                default: match (source.default.as_ref(), generic.default) {
+                                    (_, Some(default)) => ClassTypeParameterDefault::Ready(default),
+                                    (Some(_), None) => ClassTypeParameterDefault::Unsupported(
+                                        member.tickets.incomplete,
+                                    ),
+                                    (None, None) => ClassTypeParameterDefault::Absent,
+                                },
+                            })
+                            .collect();
+                        let parameter_properties = method
+                            .value
+                            .params
+                            .items
+                            .iter()
+                            .zip(syntax.params.iter())
+                            .enumerate()
+                            .filter_map(|(parameter_index, (parameter, lowered))| {
+                                if parameter.accessibility.is_none() && !parameter.readonly {
+                                    return None;
+                                }
+                                let BindingPattern::BindingIdentifier(identifier) =
+                                    &parameter.pattern
+                                else {
+                                    return None;
+                                };
+                                let public_type = lowered.as_ref()?.ty;
+                                Some(RetainedParameterProperty {
+                                    parameter_index,
+                                    property_name: identifier.name.to_string(),
+                                    public_type,
+                                    owner: member.tickets.deferred,
+                                })
+                            })
+                            .collect();
+                        retained.push(RetainedClassCallable {
+                            site,
+                            tickets: reservations
+                                .callable(site)
+                                .expect("class callable must retain its reservation")
+                                .tickets,
+                            type_params: syntax.type_params.clone(),
+                            type_param_frame,
+                            receiver: syntax.receiver,
+                            params: syntax.params.clone(),
+                            declared_return: method
+                                .value
+                                .return_type
+                                .as_ref()
+                                .and(syntax.declared_return),
+                            public_type: callable,
+                            type_parameters,
+                            overload,
+                            parameter_properties,
+                        });
+                    }
+                }
+                if method.computed {
+                    continue;
+                }
+                if method.kind == MethodDefinitionKind::Constructor {
+                    let constructor_surface = callable
+                        .and_then(|callable| factory.store().function_type(callable))
+                        .cloned();
+                    constructor = callable;
+                    if is_constructor_overload && method.value.body.is_none() {
+                        if let Some(callable) = callable {
+                            constructor_overloads.push(callable);
+                        }
+                    }
+                    for (parameter_index, parameter) in method.value.params.items.iter().enumerate()
+                    {
+                        if parameter.accessibility.is_none() && !parameter.readonly {
+                            continue;
+                        }
+                        let BindingPattern::BindingIdentifier(identifier) = &parameter.pattern
+                        else {
+                            continue;
+                        };
+                        let Some(ty) = constructor_surface
+                            .as_ref()
+                            .and_then(|surface| surface.params.get(parameter_index))
+                            .map(|parameter| parameter.ty)
+                        else {
+                            continue;
+                        };
+                        instance.properties.push(PropertyType {
+                            name: identifier.name.to_string(),
+                            ty,
+                            write_ty: None,
+                            optional: parameter.optional,
+                            visibility: lower_visibility(parameter.accessibility),
+                            declaring_class: Some(class_id),
+                            readonly: parameter.readonly,
+                            is_accessor: false,
+                        });
+                    }
+                    continue;
+                }
+                let Some(name) = class_member_name(&method.key) else {
+                    continue;
+                };
+                let Some(callable) = callable else {
+                    continue;
+                };
+                if method.kind == MethodDefinitionKind::Method {
+                    if is_method_overload {
+                        if method.value.body.is_none() {
+                            let key = method_key
+                                .clone()
+                                .expect("overloaded method retains its static name");
+                            method_overloads
+                                .entry(key)
+                                .or_insert_with(|| {
+                                    (
+                                        class_member_visibility(&method.key, method.accessibility),
+                                        Vec::new(),
+                                    )
+                                })
+                                .1
+                                .push(callable);
+                        }
+                        continue;
+                    }
+                    let lowered = PropertyType {
+                        name: name.clone(),
+                        ty: callable,
+                        write_ty: None,
+                        optional: false,
+                        visibility: class_member_visibility(&method.key, method.accessibility),
+                        declaring_class: Some(class_id),
+                        readonly: false,
+                        is_accessor: false,
+                    };
+                    if method.r#static {
+                        static_side.properties.push(lowered);
+                    } else {
+                        initializer.methods.insert(
+                            name,
+                            EarlierMethodSurface {
+                                function: callable,
+                                signatures: 1,
+                            },
+                        );
+                        instance.properties.push(lowered);
+                    }
+                } else if matches!(
+                    method.kind,
+                    MethodDefinitionKind::Get | MethodDefinitionKind::Set
+                ) {
+                    let entry = accessors.entry(name).or_insert(AccessorSurface {
+                        getter: None,
+                        setter: None,
+                        visibility: class_member_visibility(&method.key, method.accessibility),
+                        is_static: method.r#static,
+                    });
+                    if method.kind == MethodDefinitionKind::Get {
+                        entry.getter = factory
+                            .store()
+                            .function_type(callable)
+                            .map(|function| function.ret);
+                        entry.visibility =
+                            class_member_visibility(&method.key, method.accessibility);
+                    } else {
+                        entry.setter = factory
+                            .store()
+                            .function_type(callable)
+                            .and_then(|function| function.params.first())
+                            .map(|parameter| parameter.ty);
+                    }
+                }
+            }
+            ClassElement::PropertyDefinition(property) if property.computed => {
+                records.push(TicketRecord::incomplete(
+                    incomplete_owner,
+                    IncompleteSurface::new(
+                        "class/property-definition/computed-key",
+                        CheckSpan::from_oxc(property.key.span()),
+                        "computed property key is not collected",
+                    ),
+                ));
+            }
+            ClassElement::StaticBlock(block) => {
+                records.push(TicketRecord::incomplete(
+                    incomplete_owner,
+                    IncompleteSurface::new(
+                        "class/static-block/self",
+                        CheckSpan::from_oxc(block.span),
+                        "static block is not checked",
+                    ),
+                ));
+            }
+            ClassElement::AccessorProperty(accessor) => {
+                records.push(TicketRecord::incomplete(
+                    incomplete_owner,
+                    IncompleteSurface::new(
+                        "class/accessor-property/self",
+                        CheckSpan::from_oxc(accessor.span),
+                        "auto-accessor property is not checked",
+                    ),
+                ));
+            }
+            ClassElement::TSIndexSignature(index) => {
+                records.push(TicketRecord::incomplete(
+                    incomplete_owner,
+                    IncompleteSurface::new(
+                        "class/class-index-signature/self",
+                        CheckSpan::from_oxc(index.span),
+                        "class index signature is not collected",
+                    ),
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    for (name, accessor) in accessors {
+        let Some(ty) = accessor.getter else {
+            continue;
+        };
+        let property = PropertyType {
+            name,
+            ty,
+            write_ty: accessor.setter,
+            optional: false,
+            visibility: accessor.visibility,
+            declaring_class: Some(class_id),
+            readonly: accessor.setter.is_none(),
+            is_accessor: true,
+        };
+        if accessor.is_static {
+            static_side.properties.push(property);
+        } else {
+            instance.properties.push(property);
+        }
+    }
+
+    for ((name, is_static), (visibility, signatures)) in method_overloads {
+        if signatures.is_empty() {
+            continue;
+        }
+        let ty = factory.intern_object(ObjectType {
+            call_signatures: signatures,
+            ..Default::default()
+        });
+        let property = PropertyType {
+            name: name.clone(),
+            ty,
+            write_ty: None,
+            optional: false,
+            visibility,
+            declaring_class: Some(class_id),
+            readonly: false,
+            is_accessor: false,
+        };
+        if is_static {
+            static_side.properties.push(property);
+        } else {
+            initializer.methods.insert(
+                name,
+                EarlierMethodSurface {
+                    function: ty,
+                    signatures: factory
+                        .store()
+                        .object_type(ty)
+                        .map_or(0, |object| object.call_signatures.len()),
+                },
+            );
+            instance.properties.push(property);
+        }
+    }
+
+    if !class.r#abstract && has_public_constructor(class) {
+        let public_constructors = if constructor_overloads.is_empty() {
+            constructor.into_iter().collect::<Vec<_>>()
+        } else {
+            constructor_overloads
+        };
+        for constructor in public_constructors {
+            if let Some(function) = factory.store().function_type(constructor).cloned() {
+                static_side
+                    .construct_signatures
+                    .push(factory.intern_function(FunctionType {
+                        type_params: Vec::new(),
+                        receiver: None,
+                        params: function.params,
+                        ret: open_application,
+                    }));
+            }
+        }
+    }
+
+    let mut body_view =
+        BodyClassView::from_objects(&instance, &static_side, class.super_class.is_none());
+    retain_body_member_slots(class_id, class, &mut body_view);
+    let instance = factory.intern_object(instance);
+    let static_side = factory.intern_object(static_side);
+    LoweredClassSurface {
+        instance,
+        static_side,
+        body_view,
+        constructor,
+        initializer_poison,
+        surface_poison,
+        callables: retained,
+        records,
+        default_checks,
+    }
+}
+
+fn retain_body_member_slots(class_id: ClassId, class: &Class<'_>, view: &mut BodyClassView) {
+    for element in &class.body.body {
+        match element {
+            ClassElement::PropertyDefinition(property) if !property.computed => {
+                let Some(name) = class_member_name(&property.key) else {
+                    continue;
+                };
+                let target = if property.r#static {
+                    &mut view.static_side
+                } else {
+                    &mut view.instance
+                };
+                target.retain_declaration(
+                    name,
+                    BodyMemberMetadata::new(
+                        class_member_visibility(&property.key, property.accessibility),
+                        Some(class_id),
+                        property.readonly,
+                        false,
+                    ),
+                    true,
+                );
+            }
+            ClassElement::MethodDefinition(method) if !method.computed => {
+                if method.kind == MethodDefinitionKind::Constructor {
+                    for parameter in &method.value.params.items {
+                        if parameter.accessibility.is_none() && !parameter.readonly {
+                            continue;
+                        }
+                        let BindingPattern::BindingIdentifier(identifier) = &parameter.pattern
+                        else {
+                            continue;
+                        };
+                        view.instance.retain_declaration(
+                            identifier.name.to_string(),
+                            BodyMemberMetadata::new(
+                                lower_visibility(parameter.accessibility),
+                                Some(class_id),
+                                parameter.readonly,
+                                false,
+                            ),
+                            true,
+                        );
+                    }
+                    continue;
+                }
+                let Some(name) = class_member_name(&method.key) else {
+                    continue;
+                };
+                let target = if method.r#static {
+                    &mut view.static_side
+                } else {
+                    &mut view.instance
+                };
+                target.retain_declaration(
+                    name,
+                    BodyMemberMetadata::new(
+                        class_member_visibility(&method.key, method.accessibility),
+                        Some(class_id),
+                        method.kind == MethodDefinitionKind::Get,
+                        matches!(
+                            method.kind,
+                            MethodDefinitionKind::Get | MethodDefinitionKind::Set
+                        ),
+                    ),
+                    method.kind != MethodDefinitionKind::Get || method.value.return_type.is_some(),
+                );
+            }
+            ClassElement::AccessorProperty(accessor) if !accessor.computed => {
+                let Some(name) = class_member_name(&accessor.key) else {
+                    continue;
+                };
+                let target = if accessor.r#static {
+                    &mut view.static_side
+                } else {
+                    &mut view.instance
+                };
+                target.retain_declaration(
+                    name,
+                    BodyMemberMetadata::new(
+                        class_member_visibility(&accessor.key, accessor.accessibility),
+                        Some(class_id),
+                        false,
+                        true,
+                    ),
+                    false,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_static_class_parameter_diagnostics(
+    ty: &TSType<'_>,
+    class_parameters: &std::collections::BTreeSet<&str>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match ty {
+        TSType::TSTypeReference(reference) => {
+            if let TSTypeName::IdentifierReference(identifier) = &reference.type_name {
+                if class_parameters.contains(identifier.name.as_str()) {
+                    diagnostics.push(Diagnostic::static_member_references_class_type_parameter(
+                        CheckSpan::from_oxc(identifier.span),
+                    ));
+                }
+            }
+            if let Some(arguments) = reference.type_arguments.as_deref() {
+                for argument in &arguments.params {
+                    collect_static_class_parameter_diagnostics(
+                        argument,
+                        class_parameters,
+                        diagnostics,
+                    );
+                }
+            }
+        }
+        TSType::TSParenthesizedType(parenthesized) => collect_static_class_parameter_diagnostics(
+            &parenthesized.type_annotation,
+            class_parameters,
+            diagnostics,
+        ),
+        TSType::TSArrayType(array) => collect_static_class_parameter_diagnostics(
+            &array.element_type,
+            class_parameters,
+            diagnostics,
+        ),
+        TSType::TSUnionType(union) => {
+            for member in &union.types {
+                collect_static_class_parameter_diagnostics(member, class_parameters, diagnostics);
+            }
+        }
+        TSType::TSIntersectionType(intersection) => {
+            for member in &intersection.types {
+                collect_static_class_parameter_diagnostics(member, class_parameters, diagnostics);
+            }
+        }
+        _ => {}
+    }
+}
+
+struct AbstractClassInfo<'ast> {
+    class: &'ast Class<'ast>,
+    owner: RecordTicket,
+}
+
+fn abstract_completeness_records<'ast>(
+    reservations: &LexicalReservations,
+    declarations: &[TypeDecl<'ast>],
+    parents: &FxHashMap<ClassId, ClassId>,
+) -> Vec<TicketRecord> {
+    let mut classes = FxHashMap::default();
+    for reservation in reservations.classes() {
+        let Some(binding) = reservation.binding.as_ref() else {
+            continue;
+        };
+        let Some(TypeDecl::Class {
+            class_id, class, ..
+        }) = declarations.get(binding.type_decl.index())
+        else {
+            continue;
+        };
+        classes.insert(
+            *class_id,
+            AbstractClassInfo {
+                class,
+                owner: reservation.tickets.deferred,
+            },
+        );
+    }
+
+    fn pending_for(
+        class_id: ClassId,
+        classes: &FxHashMap<ClassId, AbstractClassInfo<'_>>,
+        parents: &FxHashMap<ClassId, ClassId>,
+        visiting: &mut BTreeSet<ClassId>,
+        memo: &mut FxHashMap<ClassId, Vec<String>>,
+    ) -> Vec<String> {
+        if let Some(pending) = memo.get(&class_id) {
+            return pending.clone();
+        }
+        if !visiting.insert(class_id) {
+            return Vec::new();
+        }
+        let Some(info) = classes.get(&class_id) else {
+            visiting.remove(&class_id);
+            return Vec::new();
+        };
+        let (own_abstract, own_concrete) = own_abstract_members(info.class);
+        let mut pending = own_abstract.clone();
+        if let Some(parent) = parents.get(&class_id).copied() {
+            for member in pending_for(parent, classes, parents, visiting, memo) {
+                if !own_concrete.contains(&member) && !own_abstract.contains(&member) {
+                    pending.push(member);
+                }
+            }
+        }
+        visiting.remove(&class_id);
+        memo.insert(class_id, pending.clone());
+        pending
+    }
+
+    let mut memo = FxHashMap::default();
+    let mut records = Vec::new();
+    let mut ids: Vec<ClassId> = classes.keys().copied().collect();
+    ids.sort();
+    for class_id in ids {
+        let Some(info) = classes.get(&class_id) else {
+            continue;
+        };
+        if info.class.r#abstract {
+            continue;
+        }
+        let pending = pending_for(class_id, &classes, parents, &mut BTreeSet::new(), &mut memo);
+        let Some(name) = info.class.id.as_ref() else {
+            continue;
+        };
+        let Some(base_name) = info.class.super_class.as_ref().and_then(|base| match base {
+            Expression::Identifier(identifier) => Some(identifier.name.as_str()),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let diagnostic = match pending.as_slice() {
+            [] => continue,
+            [member] => Diagnostic::missing_abstract_member(
+                CheckSpan::from_oxc(name.span),
+                name.name.as_str(),
+                member,
+                base_name,
+            ),
+            members => Diagnostic::missing_abstract_members(
+                CheckSpan::from_oxc(name.span),
+                name.name.as_str(),
+                members,
+                base_name,
+            ),
+        };
+        records.push(TicketRecord::diagnostic(info.owner, diagnostic));
+    }
+    records
+}
+
+fn own_abstract_members(class: &Class<'_>) -> (Vec<String>, BTreeSet<String>) {
+    let mut abstract_members = Vec::new();
+    let mut concrete_members = BTreeSet::new();
+    let mut push_abstract = |name: String| {
+        if !abstract_members.contains(&name) {
+            abstract_members.push(name);
+        }
+    };
+    for element in &class.body.body {
+        match element {
+            ClassElement::PropertyDefinition(property) => {
+                if property.computed || property.r#static {
+                    continue;
+                }
+                let Some(name) = property.key.static_name().map(|name| name.into_owned()) else {
+                    continue;
+                };
+                if property.r#type == PropertyDefinitionType::TSAbstractPropertyDefinition {
+                    push_abstract(name);
+                } else {
+                    concrete_members.insert(name);
+                }
+            }
+            ClassElement::MethodDefinition(method) => {
+                if method.computed || method.r#static {
+                    continue;
+                }
+                if method.kind == MethodDefinitionKind::Constructor {
+                    for parameter in &method.value.params.items {
+                        if parameter.accessibility.is_none() && !parameter.readonly {
+                            continue;
+                        }
+                        if let BindingPattern::BindingIdentifier(identifier) = &parameter.pattern {
+                            concrete_members.insert(identifier.name.to_string());
+                        }
+                    }
+                    continue;
+                }
+                let Some(name) = method.key.static_name().map(|name| name.into_owned()) else {
+                    continue;
+                };
+                if method.r#type == MethodDefinitionType::TSAbstractMethodDefinition {
+                    push_abstract(name);
+                } else {
+                    concrete_members.insert(name);
+                }
+            }
+            _ => {}
+        }
+    }
+    (abstract_members, concrete_members)
+}
+
+fn class_member_is_method(
+    mut class_id: ClassId,
+    name: &str,
+    classes: &FxHashMap<ClassId, &Class<'_>>,
+    parents: &FxHashMap<ClassId, ClassId>,
+) -> bool {
+    let mut visited = BTreeSet::new();
+    while visited.insert(class_id) {
+        let Some(class) = classes.get(&class_id) else {
+            return false;
+        };
+        for element in class.body.body.iter().rev() {
+            match element {
+                ClassElement::PropertyDefinition(property)
+                    if !property.computed
+                        && !property.r#static
+                        && property.key.static_name().as_deref() == Some(name) =>
+                {
+                    return false;
+                }
+                ClassElement::MethodDefinition(method)
+                    if !method.computed
+                        && !method.r#static
+                        && method.kind != MethodDefinitionKind::Constructor
+                        && method.key.static_name().as_deref() == Some(name) =>
+                {
+                    return method.kind == MethodDefinitionKind::Method;
+                }
+                _ => {}
+            }
+        }
+        let Some(parent) = parents.get(&class_id).copied() else {
+            return false;
+        };
+        class_id = parent;
+    }
+    false
+}
+
+fn class_member_has_explicit_surface(
+    mut class_id: ClassId,
+    name: &str,
+    classes: &FxHashMap<ClassId, &Class<'_>>,
+    parents: &FxHashMap<ClassId, ClassId>,
+) -> bool {
+    let mut visited = BTreeSet::new();
+    while visited.insert(class_id) {
+        let Some(class) = classes.get(&class_id) else {
+            return false;
+        };
+        for element in class.body.body.iter().rev() {
+            match element {
+                ClassElement::PropertyDefinition(property)
+                    if !property.computed
+                        && !property.r#static
+                        && property.key.static_name().as_deref() == Some(name) =>
+                {
+                    return property.type_annotation.is_some();
+                }
+                ClassElement::MethodDefinition(method)
+                    if !method.computed
+                        && !method.r#static
+                        && method.kind != MethodDefinitionKind::Constructor
+                        && method.key.static_name().as_deref() == Some(name) =>
+                {
+                    return match method.kind {
+                        MethodDefinitionKind::Method | MethodDefinitionKind::Get => {
+                            method.value.return_type.is_some()
+                        }
+                        MethodDefinitionKind::Set => method
+                            .value
+                            .params
+                            .items
+                            .first()
+                            .is_some_and(|parameter| parameter.type_annotation.is_some()),
+                        MethodDefinitionKind::Constructor => false,
+                    };
+                }
+                _ => {}
+            }
+        }
+        let Some(parent) = parents.get(&class_id).copied() else {
+            return false;
+        };
+        class_id = parent;
+    }
+    false
+}
+
+#[allow(clippy::too_many_arguments)]
+fn register_reserved_surface_roots<'ast>(
+    construction: &mut ClassConstruction<RecordTicket>,
+    factory: &mut SurfaceTypeFactory<'_>,
+    binder: &crate::binder::Binder,
+    declarations: &[TypeDecl<'ast>],
+    resolved: &[Option<TypeId>],
+    reservations: &LexicalReservations,
+    error: TypeId,
+) {
+    for (index, declaration) in declarations.iter().enumerate() {
+        match declaration {
+            TypeDecl::Alias { .. } => {
+                let Some(root) = resolved.get(index).copied().flatten() else {
+                    continue;
+                };
+                if root != error {
+                    let _ = construction.roots_mut().register(
+                        root,
+                        ReservedRootKind::Alias,
+                        Vec::new(),
+                    );
+                }
+            }
+            TypeDecl::Interface {
+                scope,
+                reserved,
+                params,
+                param_decl,
+                extends,
+                ..
+            } => {
+                let decl_id = DeclId(
+                    u32::try_from(index).expect("type declaration index fits binder identity"),
+                );
+                let Some(source) = reservations.type_decl_source(decl_id) else {
+                    let _ = construction.roots_mut().register(
+                        *reserved,
+                        ReservedRootKind::Interface,
+                        Vec::new(),
+                    );
+                    continue;
+                };
+                let scope = *scope;
+                let fallback = reservations
+                    .type_decl_owner(decl_id)
+                    .expect("reserved type declaration retains its lexical owner")
+                    .ticket;
+                let mut resolver = Resolver {
+                    binder,
+                    scope,
+                    declarations,
+                    resolved,
+                    reservations,
+                    module: source.module_ordinal,
+                    fallback,
+                    error,
+                };
+                let frame = param_decl
+                    .iter()
+                    .flat_map(|declaration| declaration.params.iter())
+                    .zip(params.iter().copied())
+                    .map(|(parameter, id)| {
+                        (
+                            parameter.name.name.to_string(),
+                            factory.intern_type_param(id, parameter.name.name.as_str()),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let mut children = Vec::new();
+                for heritage in *extends {
+                    let Expression::Identifier(identifier) = &heritage.expression else {
+                        continue;
+                    };
+                    let Some(target_id) = type_decl_id(binder, scope, identifier.name.as_str())
+                    else {
+                        continue;
+                    };
+                    let Some(target) = declarations.get(target_id.index()) else {
+                        continue;
+                    };
+                    let child = match target {
+                        TypeDecl::Class { class_id, .. } => {
+                            let parameters = resolver.class_parameters(target);
+                            let mut explicit = Vec::new();
+                            let mut unavailable = false;
+                            if let Some(arguments) = heritage.type_arguments.as_deref() {
+                                for argument in &arguments.params {
+                                    let (lowered, child_failures) =
+                                        lower_type(factory, &mut resolver, argument, &frame);
+                                    if !child_failures.is_empty() {
+                                        unavailable = true;
+                                    }
+                                    match lowered {
+                                        Ok(argument) => {
+                                            explicit.push(ExplicitClassArgument::Ready(argument));
+                                        }
+                                        Err(_) => unavailable = true,
+                                    }
+                                }
+                            }
+                            if unavailable {
+                                None
+                            } else {
+                                match complete_class_arguments(ClassApplicationRequest {
+                                    class: *class_id,
+                                    parameters: &parameters,
+                                    source_arguments: SourceClassArguments::Explicit(&explicit),
+                                    inferred: &[],
+                                    kind: ClassApplicationKind::TypeReference,
+                                }) {
+                                    DemandOutcome::Ready(arguments) => {
+                                        Some(factory.intern_class_instance(*class_id, arguments))
+                                    }
+                                    DemandOutcome::Exhausted(_) => None,
+                                }
+                            }
+                        }
+                        TypeDecl::Interface { reserved, .. } => Some(*reserved),
+                        TypeDecl::Alias { .. } | TypeDecl::Resolved { .. } => resolved
+                            .get(target_id.index())
+                            .copied()
+                            .flatten()
+                            .filter(|root| *root != error),
+                    };
+                    children.extend(child);
+                }
+                let _ = construction.roots_mut().register(
+                    *reserved,
+                    ReservedRootKind::Interface,
+                    children,
+                );
+            }
+            TypeDecl::Class { .. } | TypeDecl::Resolved { .. } => {}
+        }
+    }
+}
+
+fn lower_type(
+    factory: &mut SurfaceTypeFactory<'_>,
+    resolver: &mut Resolver<'_, '_>,
+    annotation: &TSType<'_>,
+    frame: &[(String, TypeId)],
+) -> (
+    Result<TypeId, SurfaceTypeFailure<RecordTicket>>,
+    Vec<SurfaceTypeFailure<RecordTicket>>,
+) {
+    let mut lowerer = TypeSyntaxLowerer::new(factory, resolver);
+    let result = lowerer.lower_with_type_parameters(annotation, frame.iter().cloned());
+    (result, lowerer.take_child_failures())
+}
+
+fn lower_callable(
+    factory: &mut SurfaceTypeFactory<'_>,
+    resolver: &mut Resolver<'_, '_>,
+    function: &oxc_ast::ast::Function<'_>,
+    frame: &[(String, TypeId)],
+) -> (
+    LoweredCallableSyntax<RecordTicket>,
+    Vec<SurfaceTypeFailure<RecordTicket>>,
+) {
+    let mut lowerer = TypeSyntaxLowerer::new(factory, resolver);
+    let result = lowerer.lower_callable_syntax_with_type_parameters(
+        function.type_parameters.as_deref(),
+        function.this_param.as_deref(),
+        &function.params,
+        function
+            .return_type
+            .as_deref()
+            .map(|annotation| &annotation.type_annotation),
+        function.span,
+        frame.iter().cloned(),
+    );
+    (result, lowerer.take_child_failures())
+}
+
+fn seed_initializer_annotations(
+    factory: &mut SurfaceTypeFactory<'_>,
+    resolver: &mut Resolver<'_, '_>,
+    expression: &Expression<'_>,
+    frame: &[(String, TypeId)],
+    context: &mut InitializerContext,
+) {
+    match expression {
+        Expression::TSAsExpression(assertion) => {
+            if let Ok(ty) = lower_type(factory, resolver, &assertion.type_annotation, frame).0 {
+                context
+                    .annotations
+                    .insert(assertion.type_annotation.span().start, ty);
+            }
+        }
+        Expression::TSTypeAssertion(assertion) => {
+            if let Ok(ty) = lower_type(factory, resolver, &assertion.type_annotation, frame).0 {
+                context
+                    .annotations
+                    .insert(assertion.type_annotation.span().start, ty);
+            }
+        }
+        Expression::ArrowFunctionExpression(arrow) => {
+            for parameter in &arrow.params.items {
+                if let Some(annotation) = parameter.type_annotation.as_ref() {
+                    if let Ok(ty) =
+                        lower_type(factory, resolver, &annotation.type_annotation, frame).0
+                    {
+                        context
+                            .annotations
+                            .insert(annotation.type_annotation.span().start, ty);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn resolve_parent(
+    binder: &crate::binder::Binder,
+    scope: ScopeId,
+    declarations: &[TypeDecl<'_>],
+    class: &Class<'_>,
+) -> Option<ClassId> {
+    let Expression::Identifier(identifier) = class.super_class.as_ref()? else {
+        return None;
+    };
+    let id = type_decl_id(binder, scope, identifier.name.as_str())?;
+    match declarations.get(id.index()) {
+        Some(TypeDecl::Class { class_id, .. }) => Some(*class_id),
+        _ => None,
+    }
+}
+
+type HeritageApplicationResult = (
+    Result<Option<(ClassId, TypeId)>, SurfaceTypeFailure<RecordTicket>>,
+    Vec<SurfaceTypeFailure<RecordTicket>>,
+);
+
+fn lower_heritage_application(
+    factory: &mut SurfaceTypeFactory<'_>,
+    resolver: &mut Resolver<'_, '_>,
+    binder: &crate::binder::Binder,
+    scope: ScopeId,
+    declarations: &[TypeDecl<'_>],
+    class: &Class<'_>,
+    frame: &[(String, TypeId)],
+) -> HeritageApplicationResult {
+    let Some(parent) = resolve_parent(binder, scope, declarations, class) else {
+        return (Ok(None), Vec::new());
+    };
+    let parameters = declarations
+        .iter()
+        .find(|declaration| {
+            matches!(declaration, TypeDecl::Class { class_id, .. } if *class_id == parent)
+        })
+        .map(|declaration| resolver.class_parameters(declaration))
+        .unwrap_or_default();
+    let mut explicit = Vec::new();
+    let mut first_failure = None;
+    let mut child_failures = Vec::new();
+    if let Some(source) = class.super_type_arguments.as_deref() {
+        for argument in &source.params {
+            let (lowered, nested_failures) = lower_type(factory, resolver, argument, frame);
+            match lowered {
+                Ok(argument) => explicit.push(ExplicitClassArgument::Ready(argument)),
+                Err(failure) if first_failure.is_none() => first_failure = Some(failure),
+                Err(failure) => child_failures.push(failure),
+            }
+            for failure in nested_failures {
+                child_failures.push(failure);
+            }
+        }
+    }
+    if let Some(failure) = first_failure {
+        return (Err(failure), child_failures);
+    }
+    let arguments = match complete_class_arguments(ClassApplicationRequest {
+        class: parent,
+        parameters: &parameters,
+        source_arguments: SourceClassArguments::Explicit(&explicit),
+        inferred: &[],
+        kind: ClassApplicationKind::TypeReference,
+    }) {
+        DemandOutcome::Ready(arguments) => arguments,
+        DemandOutcome::Exhausted(reason) => {
+            return (Err(SurfaceTypeFailure::Exhausted(reason)), child_failures);
+        }
+    };
+    (
+        Ok(Some((
+            parent,
+            factory.intern_class_instance(parent, arguments),
+        ))),
+        child_failures,
+    )
+}
+
+fn own_surface_failure(
+    failure: SurfaceTypeFailure<RecordTicket>,
+    diagnostic_owner: RecordTicket,
+    incomplete_owner: RecordTicket,
+    fallback_span: CheckSpan,
+    incomplete_id: &str,
+    incomplete_context: &str,
+) -> (RecordTicket, Option<TicketRecord>) {
+    match failure {
+        SurfaceTypeFailure::Unresolved { span, name, .. } => {
+            let diagnostic = Diagnostic::cannot_find_name(CheckSpan::from_oxc(span), &name);
+            (
+                diagnostic_owner,
+                Some(TicketRecord::diagnostic(diagnostic_owner, diagnostic)),
+            )
+        }
+        SurfaceTypeFailure::WrongArity {
+            span,
+            name,
+            expected_min,
+            expected_max,
+        } => {
+            let diagnostic = if expected_min == expected_max {
+                Diagnostic::generic_type_requires_arguments(
+                    CheckSpan::from_oxc(span),
+                    &name,
+                    expected_max,
+                )
+            } else {
+                Diagnostic::generic_type_requires_argument_range(
+                    CheckSpan::from_oxc(span),
+                    &name,
+                    expected_min,
+                    expected_max,
+                )
+            };
+            (
+                diagnostic_owner,
+                Some(TicketRecord::diagnostic(diagnostic_owner, diagnostic)),
+            )
+        }
+        SurfaceTypeFailure::Unsupported(_) => {
+            let incomplete =
+                IncompleteSurface::new(incomplete_id, fallback_span, incomplete_context);
+            (
+                incomplete_owner,
+                Some(TicketRecord::incomplete(incomplete_owner, incomplete)),
+            )
+        }
+        SurfaceTypeFailure::TypeQuery { span } => (
+            incomplete_owner,
+            Some(TicketRecord::incomplete(
+                incomplete_owner,
+                IncompleteSurface::new(
+                    "annotation-lower/type-query/typeof",
+                    CheckSpan::from_oxc(span),
+                    "typeof type query not lowered",
+                ),
+            )),
+        ),
+        SurfaceTypeFailure::ThisType { span } => (
+            incomplete_owner,
+            Some(TicketRecord::incomplete(
+                incomplete_owner,
+                IncompleteSurface::new(
+                    "annotation-lower/this-type/self",
+                    CheckSpan::from_oxc(span),
+                    "this type annotation not modeled",
+                ),
+            )),
+        ),
+        SurfaceTypeFailure::Poisoned(_) => (incomplete_owner, None),
+        SurfaceTypeFailure::Exhausted(Exhaustion::ClassApplicationArguments(
+            ClassApplicationArguments::UnsupportedDefault { .. },
+        )) => (
+            incomplete_owner,
+            Some(TicketRecord::incomplete(
+                incomplete_owner,
+                IncompleteSurface::new(
+                    "annotation-lower/type-reference/class-default-argument",
+                    fallback_span,
+                    "class type-parameter default unavailable at application",
+                ),
+            )),
+        ),
+        SurfaceTypeFailure::Exhausted(_) => (incomplete_owner, None),
+    }
+}

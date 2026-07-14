@@ -60,10 +60,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let default = param.default.as_ref().and_then(|default| {
                 let lowered = self.lower_annotation(scope, default)?;
                 if self.default_references_later_signature_binder(index, param, ids, lowered) {
-                    self.diagnostics
-                        .push(Diagnostic::type_parameter_default_forward_reference(
-                            Span::from_oxc(default.span()),
-                        ));
+                    self.emit_diagnostic(Diagnostic::type_parameter_default_forward_reference(
+                        Span::from_oxc(default.span()),
+                    ));
                     return None;
                 }
                 Some(lowered)
@@ -177,8 +176,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         }
         for (id, span, name) in circular {
-            self.diagnostics
-                .push(Diagnostic::circular_constraint(span, &name));
+            self.emit_diagnostic(Diagnostic::circular_constraint(span, &name));
             self.interner.remove_type_param_constraint(id);
         }
     }

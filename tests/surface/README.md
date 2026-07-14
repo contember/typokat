@@ -44,7 +44,7 @@ Three examples (all live in [`census.md`](./census.md)):
 3. `annotation-lower/type-query/typeof` — a `typeof X` type-query annotation, as seen by
    annotation lowering.
 
-## Record schema (`[[surface]]`)
+## Record schemas
 
 The manifest is a hand-parsed TOML subset, mirroring
 [`docs/backlog/completion-1.0.toml`](../../docs/backlog/completion-1.0.toml) and the
@@ -72,6 +72,18 @@ quoted string or a bracketed array of quoted strings.
 | `witness` | yes | A fixture path or descriptor proving the disposition (a `tests/cases/**` fixture for `supported`; an incomplete fixture or concise semantic boundary for `unsupported-in`). |
 | `requires_slots` | when `supported` and the node has in-scope children | The child slots this wrapper MUST visit; each must have its own covering `[[surface]]` record. Enforces "a supported wrapper does not silently drop an in-scope child". |
 
+`[[incomplete]]` records register shipped semantic incomplete outcomes that are not AST dispatcher
+slots (for example, the class-projection budget). Their stable `id` has at least two lowercase
+kebab-case slash segments; unlike `[[surface]]`, it is not forced into the three-part dispatcher
+identity shape.
+
+| Field | Required | Meaning |
+|---|---|---|
+| `id` | yes | The exact stable identity emitted in `incomplete[<id>]`; unique across both record kinds. |
+| `context` | yes | The exact nonempty context text emitted with the outcome. |
+| `owner` | yes | `shipped`; this registry records production behavior, not planned work. |
+| `witness` | yes | A committed relative fixture path that must exist, contain the exact id/context marker, and belong to an enabled conformance directory. |
+
 ## What the WU1 validator must reject (the fixtures below)
 
 | Fixture | Category | Expected rejection |
@@ -81,6 +93,10 @@ quoted string or a bracketed array of quoted strings.
 | `fixtures/missing.surface.toml` | missing record | a `supported` wrapper's `requires_slots` names a child slot with no covering record |
 | `fixtures/dependency_drift.toml` | dependency drift | a completion criterion's `deps` disagree with its owner's `blocked-by` frontmatter (the historical `14`/`70` drift) |
 | `fixtures/malformed_divergence.md` | malformed divergence metadata | a `divergences.md`-style row with malformed / missing inline metadata (bad `dir`, missing `owner`/`witness`) |
+
+Table-driven mutation tests in `tests/surface.rs` additionally reject malformed and duplicate
+`[[incomplete]]` identities, empty or inexact contexts, non-shipped owners, and dead or disabled
+witness paths.
 
 Each fixture carries a header comment restating the exact rejection so WU1 can assert against it.
 

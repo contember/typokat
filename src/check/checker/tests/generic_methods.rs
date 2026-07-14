@@ -106,7 +106,7 @@ class StaticBinderSurface<T> {
 }
 
 #[test]
-fn class_diagnostics_preserve_current_raw_vector_order() {
+fn class_diagnostics_replay_in_lexical_event_order() {
     let source = "\
 const earlierNonClass: string = 1;
 class DiagnosticOrderSurface {
@@ -153,13 +153,10 @@ const laterNonClass: number = \"later\";
     let body = body_start..body_start + "2".len();
     let later = later_start..later_start + "\"later\"".len();
     let expected = vec![
-        ("TK2344", 3, default.clone(), "number"),
-        ("TK2304", 4, parameter.clone(), "MissingParameter"),
-        ("TK2304", 5, return_type.clone(), "MissingReturn"),
+        ("TK2322", 1, earlier, "1"),
         ("TK2344", 3, default, "number"),
         ("TK2304", 4, parameter, "MissingParameter"),
         ("TK2304", 5, return_type, "MissingReturn"),
-        ("TK2322", 1, earlier, "1"),
         ("TK2322", 6, body, "2"),
         ("TK2322", 10, later, "\"later\""),
     ];

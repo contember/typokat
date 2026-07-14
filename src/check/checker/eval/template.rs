@@ -19,7 +19,6 @@ impl<'a> ConditionalEvaluator<'a> {
         ty: TypeId,
         tasks: &mut Vec<Task>,
         values: &mut Vec<TypeId>,
-        error: TypeId,
     ) {
         let Some(template) = self.interner.store().template_type(ty).cloned() else {
             values.push(ty);
@@ -31,17 +30,14 @@ impl<'a> ConditionalEvaluator<'a> {
         // kinds and invariants §1).
         if self.in_flight.contains(&ty) {
             self.note_cycle();
-            values.push(error);
             return;
         }
         if self.exhausted {
-            values.push(error);
             return;
         }
         self.steps += 1;
         if self.steps > self.budget {
             self.exhausted = true;
-            values.push(error);
             return;
         }
         self.in_flight.insert(ty);
@@ -64,6 +60,7 @@ impl<'a> ConditionalEvaluator<'a> {
 
         tasks.push(Task::SetMemo(ty));
         let holes = template.holes.clone();
+        let error = self.interner.well_known().error;
         self.finish_template_with_holes(ty, &template, holes, values, error);
     }
 
@@ -145,7 +142,6 @@ impl<'a> ConditionalEvaluator<'a> {
                     self.steps += 1;
                     if self.steps > self.budget {
                         self.exhausted = true;
-                        values.push(error);
                         return;
                     }
                     next.push(format!("{prefix}{part}{sep}"));

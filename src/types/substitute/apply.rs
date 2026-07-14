@@ -44,7 +44,16 @@ impl<'a> Substitution<'a> {
             .map(|p| {
                 let new_ty = self.apply(interner, p.ty);
                 changed |= new_ty != p.ty;
-                PropertyType { ty: new_ty, ..p }
+                let new_write_ty = p.write_ty.map(|write_ty| {
+                    let rewritten = self.apply(interner, write_ty);
+                    changed |= rewritten != write_ty;
+                    rewritten
+                });
+                PropertyType {
+                    ty: new_ty,
+                    write_ty: new_write_ty,
+                    ..p
+                }
             })
             .collect();
         // M19: rewrite each index signature's value type through the same recursion.

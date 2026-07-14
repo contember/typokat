@@ -21,7 +21,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Visibility::Public => return false,
             // Private: reachable only inside the exact declaring class's body.
             Visibility::Private => {
-                if self.current_class == Some(declaring) {
+                if self.has_exact_class_access_context(declaring) {
                     return false;
                 }
                 let name = self.declaring_class_name(declaring);
@@ -29,10 +29,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
             // Protected: reachable inside the declaring class or any subclass of it.
             Visibility::Protected => {
-                let allowed = match self.current_class {
-                    Some(ctx) => self.is_class_or_subclass(ctx, declaring),
-                    None => false,
-                };
+                let allowed = self.has_derived_class_access_context(declaring);
                 if allowed {
                     return false;
                 }
@@ -40,7 +37,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 Diagnostic::constructor_is_protected(new_span, name)
             }
         };
-        self.diagnostics.push(diag);
+        self.emit_diagnostic(diag);
         true
     }
 }
@@ -75,7 +72,7 @@ pub(super) fn has_public_constructor(class: &Class<'_>) -> bool {
 /// with no explicit constructor has the implicit **public** constructor. Callers use
 /// this only when an own constructor exists (`ctor_params.is_some()`); a class with no
 /// own constructor inherits the base's visibility instead of calling this.
-pub(super) fn constructor_visibility(class: &Class<'_>) -> Visibility {
+pub(in crate::check::checker) fn constructor_visibility(class: &Class<'_>) -> Visibility {
     for element in &class.body.body {
         let ClassElement::MethodDefinition(method) = element else {
             continue;

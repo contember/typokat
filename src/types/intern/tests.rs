@@ -182,6 +182,33 @@ fn object_canonicalization_dedups_by_member_set() {
     assert_eq!(outer1, outer2, "nested object identity must propagate");
 }
 
+#[test]
+fn accessor_write_type_is_part_of_object_identity() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    let mut string_writer = prop("value", wk.number);
+    string_writer.write_ty = Some(wk.string);
+    let mut boolean_writer = prop("value", wk.number);
+    boolean_writer.write_ty = Some(wk.boolean);
+
+    let string_object = interner.intern_object(ObjectType {
+        properties: vec![string_writer.clone()],
+        ..Default::default()
+    });
+    let string_object_again = interner.intern_object(ObjectType {
+        properties: vec![string_writer],
+        ..Default::default()
+    });
+    let boolean_object = interner.intern_object(ObjectType {
+        properties: vec![boolean_writer],
+        ..Default::default()
+    });
+
+    assert_eq!(string_object, string_object_again);
+    assert_ne!(string_object, boolean_object);
+}
+
 /// M19: index signatures are part of object identity, distinguished by
 /// presence, index kind, value type, and coexistence with named members.
 #[test]

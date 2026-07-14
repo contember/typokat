@@ -20,15 +20,16 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
   `is_accessor`, index signatures — is folded into the structural hash + `object_props_eq`, but the
   **relation engine ignores `readonly`/`is_accessor`** for assignability (they only gate access /
   assignment targets). `substitute` must carry **all** `PropertyType` fields through.
-- **Private iterative evaluator walkers** (`src/check/checker/eval/`): `InferRewrite`,
-  `InferenceConstraintEvaluator`, and `MappedRewrite` use explicit heap task/value stacks for
+- **Private iterative evaluator walkers** (`src/check/checker/eval/`): `InferRewrite` and
+  `MappedRewrite` use explicit heap task/value stacks for
   every child they traverse, including function type-parameter constraints/defaults. Keep their
   policies distinct: infer rewriting preserves per-run fresh-binder scope, completed-memo rules,
-  and SCC-suffix identity taint; constraint evaluation preserves pending-type evaluation and
-  conservative original-identity return after exhaustion; mapped-value replacement keeps a
+  and SCC-suffix identity taint; mapped-value replacement keeps a
   per-property local memo/in-progress set where re-entry returns the original `TypeId` and a
   completed ancestor may memoize a partial clone. It has no SCC taint, evaluator memo write, or
-  budget. A shared generic walker must not obscure these cleanup and identity boundaries. This
+  budget. Inference constraints cross the semantic query coordinator and preserve typed
+  exhaustion instead of using a private recovery evaluator. A shared generic walker must not
+  obscure these cleanup and identity boundaries. This
   names only the hardened walkers: the bounded `keyof`-intersection and template-union helper
   recursion remains safe because interner flattening removes same-family nesting before traversal.
 - **Nominal classes**: a `private`/`protected` member makes a type nominal — the relation requires

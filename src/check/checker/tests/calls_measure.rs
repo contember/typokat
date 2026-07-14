@@ -129,6 +129,21 @@ fn measure_call_pipeline_receiver_formula() {
 }
 
 #[test]
+fn rejected_class_overload_candidate_discards_query_writes() {
+    let measure = measure(
+        r#"
+        class A { x: number; }
+        declare function choose(value: { x: string }): string;
+        declare function choose(value: A): number;
+        declare const value: A;
+        const selected: number = choose(value);
+    "#,
+    );
+    assert_eq!(measure.speculative_query_forks, 4);
+    assert!(measure.speculative_query_writes_discarded > 0);
+}
+
+#[test]
 fn measure_construct_pipeline_callback_formula() {
     let measure = measure(
         r#"
@@ -212,6 +227,8 @@ fn measure_call_and_construct_constraint_failure_precedence() {
             speculative_diagnostics_removed: 4,
             trial_receiver_relation_queries: 0,
             selected_receiver_relation_queries: 0,
+            speculative_query_forks: 8,
+            speculative_query_writes_discarded: 4,
         }
     );
 }

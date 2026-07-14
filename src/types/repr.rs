@@ -286,7 +286,11 @@ pub enum Visibility {
 #[derive(Clone, Debug)]
 pub struct PropertyType {
     pub name: String,
+    /// The type observed by reads and structural assignability.
     pub ty: TypeId,
+    /// The type accepted by writes when it differs from [`ty`](Self::ty), as for
+    /// paired accessors. Identity-bearing and relation-ignored.
+    pub write_ty: Option<TypeId>,
     pub optional: bool,
     /// The member's access modifier (M13). `Public` for object-literal /
     /// interface members and unannotated class members.
@@ -322,6 +326,7 @@ impl PropertyType {
         PropertyType {
             name: name.into(),
             ty,
+            write_ty: None,
             optional: false,
             visibility: Visibility::Public,
             declaring_class: None,

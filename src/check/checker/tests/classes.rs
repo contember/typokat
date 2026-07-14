@@ -296,3 +296,372 @@ const c = new C();
     // on the RHS (line 4). No crash.
     assert_eq!(diags(src), vec![(4, "TK2322".to_string())]);
 }
+
+#[test]
+fn poisoned_body_view_checks_known_members_without_using_unavailable_operands() {
+    let src = "\
+const seed = 1;
+class C {
+  unavailable = seed;
+  safe!: number;
+  check() {
+this.safe = \"bad\";
+this.unavailable = \"ignored\";
+  }
+}
+declare const c: C;
+const n: number = c.safe;
+";
+    assert_eq!(diags(src), vec![(6, "TK2322".to_string())]);
+}
+
+#[test]
+fn poisoned_body_view_does_not_use_unannotated_accessor_return_as_an_operand() {
+    let src = "\
+const seed = 1;
+class C {
+  poison = seed;
+  safe!: string;
+  get value() { return this.safe; }
+  set value(input) { this.value = this.safe; }
+}
+";
+    assert!(diags(src).is_empty(), "got {:?}", diags(src));
+}
+
+#[test]
+fn poisoned_class_value_calls_visit_children_without_fabricating_diagnostics() {
+    let src = "\
+const seed = 1;
+class C {
+  poison = seed;
+  static known(): void {}
+}
+C.known(1);
+C[\"known\"](1);
+C.known(missingArgument);
+C[missingKey]();
+C.missing();
+";
+    let out = check_source(src);
+    assert_eq!(
+        diags(src),
+        vec![(8, "TK2304".to_string()), (9, "TK2304".to_string())]
+    );
+    assert_eq!(
+        out.incomplete
+            .iter()
+            .map(|incomplete| incomplete.id.as_str())
+            .collect::<Vec<_>>(),
+        ["class/property-definition/initializer-inference"]
+    );
+}
+
+#[test]
+fn nested_class_body_diagnostic_is_visited_exactly_once() {
+    let src = "\
+class Outer {
+  method() {
+    class Inner {
+      method() { missingNested; }
+    }
+  }
+}
+";
+    assert_eq!(diags(src), vec![(4, "TK2304".to_string())]);
+}
+
+#[test]
+fn nested_class_can_access_private_and_protected_members_of_enclosing_class() {
+    let src = "\
+class Outer {
+  private secret!: number;
+  protected value!: number;
+  method() {
+    class Inner {
+      read(outer: Outer): number {
+        const secret: number = outer.secret;
+        const value: number = outer.value;
+        return secret + value;
+      }
+    }
+  }
+}
+";
+    assert!(diags(src).is_empty(), "got {:?}", diags(src));
+}
+
+#[test]
+fn nested_static_class_context_restores_enclosing_and_external_access() {
+    let src = "\
+class Outer {
+  private value!: number;
+  method() {
+    class Inner {
+      static read(outer: Outer): number { return outer.value; }
+    }
+    const own: number = this.value;
+  }
+}
+const outer = new Outer();
+outer.value;
+";
+    assert_eq!(diags(src), vec![(11, "TK2341".to_string())]);
+}
+
+#[test]
+fn nested_private_field_access_retains_one_independent_incomplete() {
+    let src = "\
+class A {
+  static #x: number;
+  method() {
+    class B {
+      read() { A.#x; }
+    }
+  }
+}
+";
+    let out = check_source(src);
+    assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+    assert!(out.diagnostics.is_empty(), "{:?}", diags(src));
+    assert_eq!(
+        out.incomplete
+            .iter()
+            .map(|incomplete| incomplete.id.as_str())
+            .collect::<Vec<_>>(),
+        ["expr-infer/private-field-access/self"]
+    );
+}
+
+#[test]
+fn nested_poisoned_class_uses_body_view_without_fabricated_operands() {
+    let src = "\
+const seed = 1;
+class Outer {
+  method() {
+    class Inner {
+      poison = seed;
+      safe!: number;
+      check() { this.safe = \"bad\"; }
+    }
+  }
+}
+";
+    assert_eq!(diags(src), vec![(7, "TK2322".to_string())]);
+}
+
+#[test]
+fn nested_class_lifecycle_uses_existing_branch_scopes() {
+    let src = "\
+function visit(flag: boolean) {
+  if (flag) {
+    class InBlock {
+      method() { missingBlock; }
+    }
+  }
+  switch (1) {
+    case 1:
+      class InSwitch {
+        method() { missingSwitch; }
+      }
+  }
+  for (let i = 0; i < 1; i += 1) {
+    class InLoop {
+      method() { missingLoop; }
+    }
+  }
+  try {
+    class InTry {
+      method() { missingTry; }
+    }
+  } catch (error) {
+    class InCatch {
+      method() { missingCatch; }
+    }
+  }
+}
+";
+    assert_eq!(
+        diags(src),
+        vec![
+            (4, "TK2304".to_string()),
+            (10, "TK2304".to_string()),
+            (15, "TK2304".to_string()),
+            (20, "TK2304".to_string()),
+            (24, "TK2304".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn deeply_nested_class_keeps_all_enclosing_private_contexts() {
+    let src = "\
+class Outer {
+  private outerSecret!: number;
+  method() {
+    class Middle {
+      private middleSecret!: number;
+      method() {
+        class Inner {
+          read(outer: Outer, middle: Middle): number {
+            return outer.outerSecret + middle.middleSecret;
+          }
+        }
+      }
+    }
+  }
+}
+const outer = new Outer();
+outer.outerSecret;
+";
+    assert_eq!(diags(src), vec![(17, "TK2341".to_string())]);
+}
+
+#[test]
+fn nested_classes_use_the_existing_heritage_and_value_pipeline() {
+    let src = "\
+class Outer {
+  method() {
+    class Base {
+      value!: number;
+    }
+    class Derived extends Base {
+      read(): number { return this.value; }
+    }
+    const derived = new Derived();
+    const value: number = derived.read();
+  }
+}
+";
+    assert!(diags(src).is_empty(), "got {:?}", diags(src));
+}
+
+#[test]
+fn unannotated_class_callable_is_published_and_inherited() {
+    let src = "\
+class Base {
+  method(value, ...rest) {}
+}
+class Derived extends Base {}
+new Derived().method(\"value\", 1, true);
+";
+    let out = check_source(src);
+    assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+    assert!(out.diagnostics.is_empty(), "{:?}", diags(src));
+    assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+}
+
+#[test]
+fn class_type_query_retains_its_canonical_record_and_span_once() {
+    let src = "class C { method(value: typeof Missing): void {} }";
+    let out = check_source(src);
+    assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+    assert!(out.diagnostics.is_empty(), "{:?}", diags(src));
+    assert_eq!(out.incomplete.len(), 1, "{:?}", out.incomplete);
+    let incomplete = &out.incomplete[0];
+    assert_eq!(incomplete.id, "annotation-lower/type-query/typeof");
+    assert_eq!(incomplete.context, "typeof type query not lowered");
+    assert_eq!(
+        &src[incomplete.span.start as usize..incomplete.span.end as usize],
+        "typeof Missing"
+    );
+}
+
+#[test]
+fn class_property_this_type_retains_its_canonical_record_and_span_once() {
+    let src = "class C { value: this[\"value\"]; }";
+    let out = check_source(src);
+    assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+    assert!(out.diagnostics.is_empty(), "{:?}", diags(src));
+    assert_eq!(out.incomplete.len(), 1, "{:?}", out.incomplete);
+    let incomplete = &out.incomplete[0];
+    assert_eq!(incomplete.id, "annotation-lower/this-type/self");
+    assert_eq!(incomplete.context, "this type annotation not modeled");
+    assert_eq!(
+        &src[incomplete.span.start as usize..incomplete.span.end as usize],
+        "this"
+    );
+}
+
+#[test]
+fn computed_method_body_is_checked_without_publishing_its_key() {
+    let src = "\
+class C {
+  #secret = 1;
+  [missingKey](): void {
+    const bad: number = \"bad\";
+    this.#secret;
+  }
+}
+new C().method();
+";
+    let out = check_source(src);
+    assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+    assert_eq!(
+        diags(src),
+        vec![
+            (3, "TK2304".to_string()),
+            (4, "TK2322".to_string()),
+            (8, "TK2339".to_string())
+        ]
+    );
+    let incomplete = out
+        .incomplete
+        .iter()
+        .map(|incomplete| incomplete.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        incomplete,
+        [
+            "class/method-definition/computed-key",
+            "expr-infer/private-field-access/self"
+        ]
+    );
+}
+
+#[test]
+fn computed_method_key_preserves_private_incomplete_without_relation_cascade() {
+    let src = "\
+let getX: (value: A) => number;
+class A {
+  #x = 1;
+  [(getX = (value: A) => value.#x, \"method\")]() {}
+}
+";
+    let out = check_source(src);
+    assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+    assert!(out.diagnostics.is_empty(), "{:?}", diags(src));
+    let incomplete = out
+        .incomplete
+        .iter()
+        .map(|incomplete| incomplete.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        incomplete,
+        [
+            "class/method-definition/computed-key",
+            "expr-infer/private-field-access/self"
+        ]
+    );
+}
+
+#[test]
+fn unavailable_retained_parameter_still_checks_its_default_initializer() {
+    let src = "\
+class C {
+  method(value: Missing = missingDefault): void {}
+}
+";
+    let out = check_source(src);
+    assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+    let mut missing = out
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code.as_str() == "TK2304")
+        .map(|diagnostic| {
+            src[diagnostic.span.start as usize..diagnostic.span.end as usize].to_string()
+        })
+        .collect::<Vec<_>>();
+    missing.sort();
+    assert_eq!(missing, ["Missing", "missingDefault"]);
+}

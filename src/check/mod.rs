@@ -5,6 +5,7 @@
 pub mod checker;
 pub mod flow;
 pub mod infer;
+pub(crate) mod query;
 
 pub use checker::{
     check_program, check_project_programs, CheckResult, ProjectImport, ProjectImportSource,

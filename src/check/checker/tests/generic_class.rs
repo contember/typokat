@@ -225,3 +225,103 @@ const s: T = 1;                 // TK2322 — outside, `T` is the top-level stri
     // TK2322. A leaked parameter would make line 10 clean instead.
     assert_eq!(diags(src), vec![(10, "TK2322".to_string())]);
 }
+
+#[test]
+fn constructor_inference_uses_the_call_candidate_policy() {
+    let src = "\
+interface HasX { x: number; }
+class Box<T extends HasX> {
+  constructor(value: T) {}
+}
+class SameBox<T> {
+  constructor(first: T, second: T) {}
+}
+class TupleBox<T> {
+  constructor(value: [T, T]) {}
+}
+new Box(\"s\");                    // TK2345
+new SameBox(1, \"s\");            // TK2345
+new TupleBox([1, \"s\"]);         // TK2322
+";
+    assert_eq!(
+        diags(src),
+        vec![
+            (11, "TK2345".to_string()),
+            (12, "TK2345".to_string()),
+            (13, "TK2322".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn unresolved_constructor_type_argument_records_inference_exhaustion() {
+    let src = "\
+class Unresolved<T> {}
+const value = new Unresolved();
+";
+    let out = check_source(src);
+    assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+    assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+    assert_eq!(
+        out.incomplete
+            .iter()
+            .map(|record| record.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["expr-infer/new-expression/class-type-argument-inference"]
+    );
+}
+
+#[test]
+fn class_roots_inside_union_consumers_are_projected_before_use() {
+    let src = "\
+class A {
+  kind: \"a\";
+  value: number;
+  onlyA: string;
+}
+class B {
+  kind: \"b\";
+  value: string;
+  onlyB: boolean;
+}
+declare let union: A | B;
+const readBad: boolean = union.value; // TK2322
+const indexBad: boolean = union[\"value\"]; // TK2322
+union.value = true; // TK2322
+if (union.kind === \"a\") {
+  const narrowedBad: number = union.onlyA; // TK2322
+}
+if (\"onlyA\" in union) {
+  const inBad: number = union.onlyA; // TK2322
+} else {
+  const elseBad: string = union.onlyB; // TK2322
+}
+";
+    assert_eq!(
+        diags(src),
+        vec![
+            (12, "TK2322".to_string()),
+            (13, "TK2322".to_string()),
+            (14, "TK2322".to_string()),
+            (16, "TK2322".to_string()),
+            (19, "TK2322".to_string()),
+            (21, "TK2322".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn class_context_shapes_fresh_literals_and_checks_excess_properties() {
+    let src = "\
+class Shape {
+  x: number;
+}
+const ok: Shape = { x: 1 };
+const wrong: Shape = { x: \"s\" }; // TK2322
+const excess: Shape = { x: 1, y: 2 }; // TK2353
+";
+    assert_eq!(
+        diags(src),
+        vec![(5, "TK2322".to_string()), (6, "TK2353".to_string())]
+    );
+}

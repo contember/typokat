@@ -526,6 +526,7 @@ fn nominal_prop(
     PropertyType {
         name: name.to_string(),
         ty,
+        write_ty: None,
         optional: false,
         visibility,
         declaring_class,
@@ -1203,6 +1204,7 @@ fn readonly_does_not_affect_assignability() {
         properties: vec![PropertyType {
             name: "x".to_string(),
             ty: wk.number,
+            write_ty: None,
             optional: false,
             visibility: Visibility::Public,
             declaring_class: None,
@@ -1236,6 +1238,32 @@ fn readonly_does_not_affect_assignability() {
     );
 }
 
+#[test]
+fn accessor_write_type_does_not_affect_assignability() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    let mut string_writer = prop("x", wk.number);
+    string_writer.write_ty = Some(wk.string);
+    let string_object = interner.intern_object(ObjectType {
+        properties: vec![string_writer],
+        ..Default::default()
+    });
+
+    let mut boolean_writer = prop("x", wk.number);
+    boolean_writer.write_ty = Some(wk.boolean);
+    let boolean_object = interner.intern_object(ObjectType {
+        properties: vec![boolean_writer],
+        ..Default::default()
+    });
+
+    assert_ne!(string_object, boolean_object);
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+    assert!(rel.is_assignable(string_object, boolean_object).is_yes());
+    assert!(rel.is_assignable(boolean_object, string_object).is_yes());
+}
+
 /// M15 — `is_accessor` mirrors `readonly`: it is part of a member's structural
 /// identity (so a get-only-accessor property and a same-typed `readonly` data field
 /// are distinct interned ids) but is **ignored** by the relation engine — an accessor
@@ -1252,6 +1280,7 @@ fn is_accessor_does_not_affect_assignability() {
         properties: vec![PropertyType {
             name: "x".to_string(),
             ty: wk.number,
+            write_ty: None,
             optional: false,
             visibility: Visibility::Public,
             declaring_class: None,
@@ -1265,6 +1294,7 @@ fn is_accessor_does_not_affect_assignability() {
         properties: vec![PropertyType {
             name: "x".to_string(),
             ty: wk.number,
+            write_ty: None,
             optional: false,
             visibility: Visibility::Public,
             declaring_class: None,

@@ -14,7 +14,9 @@ mod tests;
 use context::InferenceContext;
 use helpers::widen;
 
-use crate::relate::Relater;
+use crate::check::query::{SemanticQueryCoordinator, SemanticQueryState};
+use crate::class_semantics::{DemandOutcome, Exhaustion, PublishedClasses};
+use crate::relate::{RelationNormalization, RelationOutcome};
 use crate::types::repr::{GenericTypeParam, IntrinsicKind, ParameterType, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
 use crate::types::{substitute, Interner};
@@ -26,6 +28,31 @@ use rustc_hash::{FxHashMap, FxHashSet};
 pub type Candidates = FxHashMap<crate::types::repr::TypeParamId, Vec<TypeId>>;
 
 type CallSiteCandidates = FxHashMap<crate::types::repr::TypeParamId, Vec<CallSiteCandidate>>;
+
+pub(crate) struct SignatureInferenceRequest<'a> {
+    pub(crate) type_params: &'a [GenericTypeParam],
+    pub(crate) params: &'a [ParameterType],
+    pub(crate) args: &'a [TypeId],
+    pub(crate) fresh_args: &'a [bool],
+    pub(crate) receiver: Option<(TypeId, TypeId)>,
+}
+
+struct CandidateCollectionRequest<'a> {
+    params: &'a [ParameterType],
+    args: &'a [TypeId],
+    fresh_args: &'a [bool],
+    receiver: Option<(TypeId, TypeId)>,
+}
+
+pub(crate) struct SignatureInferenceResult<T> {
+    pub(crate) arguments: T,
+    pub(crate) exhaustion: Option<Exhaustion>,
+}
+
+struct CandidateCollectionResult {
+    candidates: CallSiteCandidates,
+    exhaustion: Option<Exhaustion>,
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct CallSiteCandidate {
@@ -78,6 +105,29 @@ pub fn infer_from_types_for_conditional(
 ) {
     let mut ctx = InferenceContext::for_conditional();
     ctx.infer(interner, source, target, candidates);
+}
+
+/// Query-local structural inference. Candidates are committed only when every
+/// demanded normalization succeeds; an exhausted attempt contributes nothing.
+pub(crate) fn infer_from_types_for_query(
+    interner: &mut Interner,
+    source: TypeId,
+    target: TypeId,
+    candidates: &mut Candidates,
+    normalization: &dyn RelationNormalization,
+) -> DemandOutcome<()> {
+    let mut local = Candidates::default();
+    let mut context = InferenceContext::for_query(false, normalization);
+    context.infer(interner, source, target, &mut local);
+    match context.take_exhaustion() {
+        Some(reason) => DemandOutcome::Exhausted(reason),
+        None => {
+            for (parameter, inferred) in local {
+                candidates.entry(parameter).or_default().extend(inferred);
+            }
+            DemandOutcome::Ready(())
+        }
+    }
 }
 
 /// Build the full instantiation map for a generic signature's parameters from a
@@ -142,15 +192,26 @@ pub fn infer_type_arguments_from_params(
             default: None,
         })
         .collect();
-    infer_signature_type_arguments_from_params(
+    let published = PublishedClasses::empty();
+    let mut queries = SemanticQueryState::default();
+    match infer_signature_type_arguments_from_params(
         interner,
         next_type_param,
-        &type_params,
-        params,
-        args,
-        fresh_args,
-        None,
-    )
+        &published,
+        &mut queries,
+        SignatureInferenceRequest {
+            type_params: &type_params,
+            params,
+            args,
+            fresh_args,
+            receiver: None,
+        },
+    ) {
+        DemandOutcome::Ready(result) => result.arguments,
+        DemandOutcome::Exhausted(exhaustion) => {
+            panic!("intrinsic-only inference unexpectedly exhausted: {exhaustion:?}")
+        }
+    }
 }
 
 /// Infer a generic function signature's arguments from the call arguments.
@@ -158,33 +219,157 @@ pub fn infer_type_arguments_from_params(
 /// Function binders own their constraints/defaults, so this intentionally reads
 /// the persistent descriptors rather than the store's declaration-side column.
 /// That keeps an outer-substituted member signature sound at its later call site.
-pub fn infer_signature_type_arguments_from_params(
+pub(crate) fn infer_signature_type_arguments_from_params(
     interner: &mut Interner,
     next_type_param: &mut u32,
-    type_params: &[GenericTypeParam],
-    params: &[ParameterType],
-    args: &[TypeId],
-    fresh_args: &[bool],
-    receiver: Option<(TypeId, TypeId)>,
-) -> FxHashMap<TypeParamId, TypeId> {
-    let candidates = collect_call_site_candidates(interner, params, args, fresh_args, receiver);
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    request: SignatureInferenceRequest<'_>,
+) -> DemandOutcome<SignatureInferenceResult<FxHashMap<TypeParamId, TypeId>>> {
+    let SignatureInferenceRequest {
+        type_params,
+        params,
+        args,
+        fresh_args,
+        receiver,
+    } = request;
+    let mut local_queries = queries.fork();
+    let collection = collect_call_site_candidates_query(
+        interner,
+        next_type_param,
+        published,
+        &mut local_queries,
+        CandidateCollectionRequest {
+            params,
+            args,
+            fresh_args,
+            receiver,
+        },
+    );
+    let candidates = collection.candidates;
     let exempt = fresh_exempt_params(&candidates);
     let constraints: FxHashMap<TypeParamId, Option<TypeId>> = type_params
         .iter()
         .map(|param| (param.id, param.constraint))
         .collect();
-    let fixed = fix_call_site_candidates(interner, candidates, &constraints);
-    fix_signature_params(interner, next_type_param, type_params, fixed, &exempt)
+    let fixed = match fix_call_site_candidates(
+        interner,
+        next_type_param,
+        published,
+        &mut local_queries,
+        candidates,
+        &constraints,
+    ) {
+        DemandOutcome::Ready(fixed) => fixed,
+        DemandOutcome::Exhausted(exhaustion) => {
+            return DemandOutcome::Exhausted(exhaustion);
+        }
+    };
+    let outcome = fix_signature_params(
+        interner,
+        next_type_param,
+        published,
+        &mut local_queries,
+        type_params,
+        fixed,
+        &exempt,
+    );
+    if matches!(outcome, DemandOutcome::Ready(_)) && collection.exhaustion.is_none() {
+        *queries = local_queries;
+    }
+    match outcome {
+        DemandOutcome::Ready(arguments) => DemandOutcome::Ready(SignatureInferenceResult {
+            arguments,
+            exhaustion: collection.exhaustion,
+        }),
+        DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+    }
 }
 
-fn collect_call_site_candidates(
+/// Infer only binders that received a real call-site candidate, in declaration order.
+/// Defaults and missing-binder fallbacks belong to the caller's application layer.
+pub(crate) fn infer_partial_signature_type_arguments_from_params(
     interner: &mut Interner,
-    params: &[ParameterType],
-    args: &[TypeId],
-    fresh_args: &[bool],
-    receiver: Option<(TypeId, TypeId)>,
-) -> CallSiteCandidates {
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    request: SignatureInferenceRequest<'_>,
+) -> DemandOutcome<SignatureInferenceResult<Vec<(TypeParamId, TypeId)>>> {
+    let SignatureInferenceRequest {
+        type_params,
+        params,
+        args,
+        fresh_args,
+        receiver,
+    } = request;
+    let mut local_queries = queries.fork();
+    let collection = collect_call_site_candidates_query(
+        interner,
+        next_type_param,
+        published,
+        &mut local_queries,
+        CandidateCollectionRequest {
+            params,
+            args,
+            fresh_args,
+            receiver,
+        },
+    );
+    let candidates = collection.candidates;
+    let exempt = fresh_exempt_params(&candidates);
+    let constraints: FxHashMap<TypeParamId, Option<TypeId>> = type_params
+        .iter()
+        .map(|param| (param.id, param.constraint))
+        .collect();
+    let fixed = match fix_call_site_candidates(
+        interner,
+        next_type_param,
+        published,
+        &mut local_queries,
+        candidates,
+        &constraints,
+    ) {
+        DemandOutcome::Ready(fixed) => fixed,
+        DemandOutcome::Exhausted(exhaustion) => {
+            return DemandOutcome::Exhausted(exhaustion);
+        }
+    };
+    let outcome = fix_present_signature_params(
+        interner,
+        next_type_param,
+        published,
+        &mut local_queries,
+        type_params,
+        fixed,
+        &exempt,
+    );
+    if matches!(outcome, DemandOutcome::Ready(_)) && collection.exhaustion.is_none() {
+        *queries = local_queries;
+    }
+    match outcome {
+        DemandOutcome::Ready(arguments) => DemandOutcome::Ready(SignatureInferenceResult {
+            arguments,
+            exhaustion: collection.exhaustion,
+        }),
+        DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+    }
+}
+
+fn collect_call_site_candidates_query(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    request: CandidateCollectionRequest<'_>,
+) -> CandidateCollectionResult {
+    let CandidateCollectionRequest {
+        params,
+        args,
+        fresh_args,
+        receiver,
+    } = request;
     let mut candidates: CallSiteCandidates = FxHashMap::default();
+    let mut first_exhaustion = None;
     let targets = inference_argument_targets(interner, params, args);
     for (index, (&arg, param)) in args.iter().zip(&targets).enumerate() {
         let Some(param) = *param else {
@@ -193,7 +378,12 @@ fn collect_call_site_candidates(
         let mut local: Candidates = FxHashMap::default();
         // Keep candidates raw here; primitive-constrained parameters decide literal
         // preservation at fix time.
-        infer_from_types_raw(interner, arg, param, &mut local);
+        let outcome = SemanticQueryCoordinator::new(interner, published, queries, next_type_param)
+            .infer_types(arg, param, &mut local);
+        if let DemandOutcome::Exhausted(exhaustion) = outcome {
+            first_exhaustion.get_or_insert(exhaustion);
+            continue;
+        }
         let is_fresh = fresh_args.get(index).copied().unwrap_or(false);
         record_call_site_candidates(
             &mut candidates,
@@ -206,31 +396,71 @@ fn collect_call_site_candidates(
         if rest_start <= args.len() {
             let tuple = interner.intern_tuple(args[rest_start..].to_vec());
             let mut local: Candidates = FxHashMap::default();
-            infer_from_types_raw(interner, tuple, rest_ty, &mut local);
-            let is_fresh = (rest_start..args.len())
-                .all(|index| fresh_args.get(index).copied().unwrap_or(false));
-            record_call_site_candidates(
-                &mut candidates,
-                local,
-                |occurrence| CallSiteSource::DirectRest {
-                    start: rest_start,
-                    occurrence,
-                },
-                is_fresh,
-            );
+            let outcome =
+                SemanticQueryCoordinator::new(interner, published, queries, next_type_param)
+                    .infer_types(tuple, rest_ty, &mut local);
+            if let DemandOutcome::Exhausted(exhaustion) = outcome {
+                first_exhaustion.get_or_insert(exhaustion);
+            } else {
+                let is_fresh = (rest_start..args.len())
+                    .all(|index| fresh_args.get(index).copied().unwrap_or(false));
+                record_call_site_candidates(
+                    &mut candidates,
+                    local,
+                    |occurrence| CallSiteSource::DirectRest {
+                        start: rest_start,
+                        occurrence,
+                    },
+                    is_fresh,
+                );
+            }
         }
     }
     if let Some((source, target)) = receiver {
         let mut local: Candidates = FxHashMap::default();
-        infer_from_types_raw(interner, source, target, &mut local);
-        record_call_site_candidates(
-            &mut candidates,
-            local,
-            |occurrence| CallSiteSource::Receiver { occurrence },
-            false,
-        );
+        let outcome = SemanticQueryCoordinator::new(interner, published, queries, next_type_param)
+            .infer_types(source, target, &mut local);
+        if let DemandOutcome::Exhausted(exhaustion) = outcome {
+            first_exhaustion.get_or_insert(exhaustion);
+        } else {
+            record_call_site_candidates(
+                &mut candidates,
+                local,
+                |occurrence| CallSiteSource::Receiver { occurrence },
+                false,
+            );
+        }
     }
-    candidates
+    CandidateCollectionResult {
+        candidates,
+        exhaustion: first_exhaustion,
+    }
+}
+
+#[cfg(test)]
+fn collect_call_site_candidates(
+    interner: &mut Interner,
+    params: &[ParameterType],
+    args: &[TypeId],
+    fresh_args: &[bool],
+    receiver: Option<(TypeId, TypeId)>,
+) -> CallSiteCandidates {
+    let published = PublishedClasses::empty();
+    let mut queries = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    collect_call_site_candidates_query(
+        interner,
+        &mut next_type_param,
+        &published,
+        &mut queries,
+        CandidateCollectionRequest {
+            params,
+            args,
+            fresh_args,
+            receiver,
+        },
+    )
+    .candidates
 }
 
 fn record_call_site_candidates(
@@ -362,34 +592,55 @@ fn tuple_inference_target(
 /// that can expose incompatible later arguments to the ordinary relation replay.
 fn fix_call_site_candidates(
     interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
     candidates: CallSiteCandidates,
     constraints: &FxHashMap<TypeParamId, Option<TypeId>>,
-) -> FxHashMap<crate::types::repr::TypeParamId, TypeId> {
+) -> DemandOutcome<FxHashMap<crate::types::repr::TypeParamId, TypeId>> {
     let mut map = FxHashMap::default();
     for (param, cands) in candidates {
         let constraint = constraints.get(&param).copied().flatten();
-        if let Some(fixed) = fix_call_site_candidates_for_param(interner, constraint, &cands) {
+        let fixed = match fix_call_site_candidates_for_param(
+            interner,
+            next_type_param,
+            published,
+            queries,
+            constraint,
+            &cands,
+        ) {
+            DemandOutcome::Ready(fixed) => fixed,
+            DemandOutcome::Exhausted(exhaustion) => {
+                return DemandOutcome::Exhausted(exhaustion);
+            }
+        };
+        if let Some(fixed) = fixed {
             map.insert(param, fixed);
         }
     }
-    map
+    DemandOutcome::Ready(map)
 }
 
 fn fix_call_site_candidates_for_param(
     interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
     constraint: Option<TypeId>,
     cands: &[CallSiteCandidate],
-) -> Option<TypeId> {
+) -> DemandOutcome<Option<TypeId>> {
     let contributions = candidate_contributions(cands);
     let mut iter = contributions.iter();
-    let first = iter.next()?;
+    let Some(first) = iter.next() else {
+        return DemandOutcome::Ready(None);
+    };
     let primitive_constraint = constraint.is_some_and(|ty| is_primitive_ish(interner.store(), ty));
     if contributions.len() == 1 {
-        return Some(fix_candidate_set(
+        return DemandOutcome::Ready(Some(fix_candidate_set(
             interner,
             constraint,
             first.candidates.iter().copied(),
-        ));
+        )));
     }
 
     let mut current = raw_candidate_set(interner, first.candidates.iter().copied());
@@ -406,7 +657,20 @@ fn fix_call_site_candidates_for_param(
             contribution.candidates.iter().copied(),
         );
 
-        if is_assignable_type(interner, next, current) {
+        let next_to_current = match is_assignable_type(
+            interner,
+            next_type_param,
+            published,
+            queries,
+            next,
+            current,
+        ) {
+            DemandOutcome::Ready(assignable) => assignable,
+            DemandOutcome::Exhausted(exhaustion) => {
+                return DemandOutcome::Exhausted(exhaustion);
+            }
+        };
+        if next_to_current {
             if current_fresh
                 && !contribution.fresh
                 && should_prefer_nonfresh_structural(interner.store(), current, next)
@@ -418,7 +682,20 @@ fn fix_call_site_candidates_for_param(
             }
             continue;
         }
-        if is_assignable_type(interner, current, next) {
+        let current_to_next = match is_assignable_type(
+            interner,
+            next_type_param,
+            published,
+            queries,
+            current,
+            next,
+        ) {
+            DemandOutcome::Ready(assignable) => assignable,
+            DemandOutcome::Exhausted(exhaustion) => {
+                return DemandOutcome::Exhausted(exhaustion);
+            }
+        };
+        if current_to_next {
             if !current_fresh
                 && contribution.fresh
                 && should_prefer_nonfresh_structural(interner.store(), next, current)
@@ -463,14 +740,14 @@ fn fix_call_site_candidates_for_param(
             continue;
         }
 
-        return Some(if preserve_current {
+        return DemandOutcome::Ready(Some(if preserve_current {
             current
         } else {
             current_prepared
-        });
+        }));
     }
 
-    Some(current)
+    DemandOutcome::Ready(Some(current))
 }
 
 fn candidate_contributions(cands: &[CallSiteCandidate]) -> Vec<CandidateContribution> {
@@ -508,10 +785,21 @@ fn fix_candidate_set(
     interner.union(prepared)
 }
 
-fn is_assignable_type(interner: &Interner, source: TypeId, target: TypeId) -> bool {
-    let store = interner.store();
-    let mut relater = Relater::new(store, interner.well_known());
-    relater.is_assignable(source, target).is_yes()
+fn is_assignable_type(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    source: TypeId,
+    target: TypeId,
+) -> DemandOutcome<bool> {
+    match SemanticQueryCoordinator::new(interner, published, queries, next_type_param)
+        .is_assignable(source, target)
+    {
+        RelationOutcome::Yes => DemandOutcome::Ready(true),
+        RelationOutcome::No(_) => DemandOutcome::Ready(false),
+        RelationOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+    }
 }
 
 fn should_union_fresh_unrelated(
@@ -676,23 +964,6 @@ fn is_primitive_ish(store: &Store, ty: TypeId) -> bool {
     }
 }
 
-/// Structurally match an argument source against a parameter target, recording raw
-/// candidates later fixed by [`fix_call_site_candidates`]. Call-site mode deliberately has
-/// no union-target descent: ambiguous matches infer nothing, which is sound.
-///
-/// The small sound subset records direct type-parameter hits, shared object
-/// properties, positional function parts, and equal-length union pairings. The
-/// recursion is cycle-guarded.
-fn infer_from_types_raw(
-    interner: &mut Interner,
-    source: TypeId,
-    target: TypeId,
-    candidates: &mut Candidates,
-) {
-    let mut ctx = InferenceContext::for_call_raw();
-    ctx.infer(interner, source, target, candidates);
-}
-
 /// Complete a partially-fixed map to cover **every** declared type parameter,
 /// applying each parameter's **constraint** (M24) and default. Processing parameters
 /// in declared order builds the map incrementally, so a constraint/default that
@@ -719,10 +990,12 @@ fn infer_from_types_raw(
 fn fix_signature_params(
     interner: &mut Interner,
     next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
     type_params: &[GenericTypeParam],
     fixed: FxHashMap<TypeParamId, TypeId>,
     fresh_exempt: &FxHashSet<TypeParamId>,
-) -> FxHashMap<TypeParamId, TypeId> {
+) -> DemandOutcome<FxHashMap<TypeParamId, TypeId>> {
     let wk = interner.well_known();
     // Start from **all** collected candidates — this preserves bindings for parameters
     // NOT in `type_params` (e.g. a derived generic class inheriting its base's
@@ -735,19 +1008,20 @@ fn fix_signature_params(
         // (releases the immutable borrow before the `&mut` substitute). `None` when the
         // parameter is unconstrained.
         let raw_constraint = type_param.constraint;
-        let constraint = raw_constraint.map(|c| {
-            let substituted = substitute(interner, c, &map);
-            let evaluated = crate::check::checker::eval::evaluate_inference_constraint(
-                interner,
-                next_type_param,
-                substituted,
-            );
-            if evaluated.exhausted || evaluated.cycle_detected {
-                substituted
-            } else {
-                evaluated.result
+        let constraint = match raw_constraint {
+            Some(c) => {
+                let substituted = substitute(interner, c, &map);
+                match SemanticQueryCoordinator::new(interner, published, queries, next_type_param)
+                    .demand(substituted)
+                {
+                    DemandOutcome::Ready(evaluated) => Some(evaluated),
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion);
+                    }
+                }
             }
-        });
+            None => None,
+        };
         // M28 gate (mirroring the TK2344 gate in `check_type_argument_constraints`):
         // evaluate first so concrete `keyof` constraints relate by value, then skip
         // only constraints that still carry a deferred `keyof`.
@@ -758,10 +1032,23 @@ fn fix_signature_params(
         let value = match map.get(&param).copied() {
             Some(candidate) => match constraint {
                 Some(c) => {
-                    let satisfies = {
-                        let store = interner.store();
-                        let mut relater = Relater::new(store, wk);
-                        relater.is_assignable(candidate, c).is_yes()
+                    let satisfies = if fresh_exempt.contains(&param) {
+                        true
+                    } else {
+                        match SemanticQueryCoordinator::new(
+                            interner,
+                            published,
+                            queries,
+                            next_type_param,
+                        )
+                        .is_assignable(candidate, c)
+                        {
+                            RelationOutcome::Yes => true,
+                            RelationOutcome::No(_) => false,
+                            RelationOutcome::Exhausted(exhaustion) => {
+                                return DemandOutcome::Exhausted(exhaustion);
+                            }
+                        }
                     };
                     // A violating candidate clamps to the constraint — unless EVERY
                     // candidate for this parameter came from a fresh literal argument
@@ -787,5 +1074,60 @@ fn fix_signature_params(
         };
         map.insert(param, value);
     }
-    map
+    DemandOutcome::Ready(map)
+}
+
+fn fix_present_signature_params(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    type_params: &[GenericTypeParam],
+    mut fixed: FxHashMap<TypeParamId, TypeId>,
+    fresh_exempt: &FxHashSet<TypeParamId>,
+) -> DemandOutcome<Vec<(TypeParamId, TypeId)>> {
+    let mut ordered = Vec::new();
+    for type_param in type_params {
+        let Some(candidate) = fixed.get(&type_param.id).copied() else {
+            continue;
+        };
+        let constraint = match type_param.constraint {
+            Some(constraint) => {
+                let substituted = substitute(interner, constraint, &fixed);
+                let evaluated = match SemanticQueryCoordinator::new(
+                    interner,
+                    published,
+                    queries,
+                    next_type_param,
+                )
+                .demand(substituted)
+                {
+                    DemandOutcome::Ready(evaluated) => evaluated,
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion);
+                    }
+                };
+                (!crate::check::checker::eval::contains_deferred_keyof(interner.store(), evaluated))
+                    .then_some(evaluated)
+            }
+            None => None,
+        };
+        let selected = match constraint {
+            Some(constraint) if !fresh_exempt.contains(&type_param.id) => {
+                match SemanticQueryCoordinator::new(interner, published, queries, next_type_param)
+                    .is_assignable(candidate, constraint)
+                {
+                    RelationOutcome::Yes => candidate,
+                    RelationOutcome::No(_) => constraint,
+                    RelationOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion);
+                    }
+                }
+            }
+            _ => candidate,
+        };
+        fixed.insert(type_param.id, selected);
+        ordered.push((type_param.id, selected));
+    }
+    DemandOutcome::Ready(ordered)
 }

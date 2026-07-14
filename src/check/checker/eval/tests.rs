@@ -1,350 +1,69 @@
 use super::*;
 use crate::check::checker::eval::keyof::{contains_deferred_keyof, keyof_of_object};
-use crate::check::checker::eval::legacy_guard::{
-    evaluation_guard_measure, reset_evaluation_guard_measure, EvaluationGuardMeasure,
-};
 use crate::types::repr::{
-    ConditionalType, FunctionType, GenericTypeParam, MappedType, ModifierOp, ObjectType,
-    ParameterType, PropertyType, TemplateType, TupleRestType, TupleType,
+    ConditionalType, FunctionType, GenericTypeParam, ObjectType, ParameterType, PropertyType,
+    TemplateType,
 };
 use crate::types::ClassId;
 use rustc_hash::FxHashMap;
-use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::time::Instant;
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
 }
 
-fn dormant_role_roots(interner: &mut Interner, dormant: TypeId) -> Vec<(&'static str, TypeId)> {
-    let wk = interner.well_known();
-    let signature = interner.intern_function(FunctionType {
-        type_params: Vec::new(),
-        receiver: None,
-        params: Vec::new(),
-        ret: dormant,
-    });
-    let mut roots = vec![
-        (
-            "object property",
-            interner.intern_object(ObjectType {
-                properties: vec![prop("value", dormant)],
-                ..Default::default()
-            }),
-        ),
-        (
-            "object string index",
-            interner.intern_object(ObjectType {
-                string_index: Some(dormant),
-                ..Default::default()
-            }),
-        ),
-        (
-            "object number index",
-            interner.intern_object(ObjectType {
-                number_index: Some(dormant),
-                ..Default::default()
-            }),
-        ),
-        (
-            "object call signature",
-            interner.intern_object(ObjectType {
-                call_signatures: vec![signature],
-                ..Default::default()
-            }),
-        ),
-        (
-            "object construct signature",
-            interner.intern_object(ObjectType {
-                construct_signatures: vec![signature],
-                ..Default::default()
-            }),
-        ),
-    ];
+struct IdentityNormalization;
 
-    for (name, function) in [
-        (
-            "function type-parameter constraint",
-            FunctionType {
-                type_params: vec![GenericTypeParam {
-                    id: TypeParamId(80_001),
-                    constraint: Some(dormant),
-                    default: None,
-                }],
-                receiver: None,
-                params: Vec::new(),
-                ret: wk.number,
-            },
-        ),
-        (
-            "function type-parameter default",
-            FunctionType {
-                type_params: vec![GenericTypeParam {
-                    id: TypeParamId(80_002),
-                    constraint: None,
-                    default: Some(dormant),
-                }],
-                receiver: None,
-                params: Vec::new(),
-                ret: wk.number,
-            },
-        ),
-        (
-            "function receiver",
-            FunctionType {
-                type_params: Vec::new(),
-                receiver: Some(dormant),
-                params: Vec::new(),
-                ret: wk.number,
-            },
-        ),
-        (
-            "function parameter",
-            FunctionType {
-                type_params: Vec::new(),
-                receiver: None,
-                params: vec![ParameterType::required("value", dormant)],
-                ret: wk.number,
-            },
-        ),
-        (
-            "function return",
-            FunctionType {
-                type_params: Vec::new(),
-                receiver: None,
-                params: Vec::new(),
-                ret: dormant,
-            },
-        ),
-    ] {
-        roots.push((name, interner.intern_function(function)));
+impl RelationNormalization for IdentityNormalization {
+    fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
+        Ok(ty)
     }
-
-    let array = interner.intern_array(dormant);
-    roots.extend([
-        ("union member", interner.union(vec![wk.number, dormant])),
-        (
-            "intersection member",
-            interner.intersection(vec![wk.number, dormant]),
-        ),
-        ("array element", array),
-        ("tuple element", interner.intern_tuple(vec![dormant])),
-        (
-            "tuple rest",
-            interner.intern_tuple_type(TupleType::with_rest(
-                vec![wk.number],
-                TupleRestType::new(1, dormant),
-            )),
-        ),
-        ("readonly operand", interner.intern_readonly(array)),
-    ]);
-
-    for (name, conditional) in [
-        (
-            "conditional check",
-            ConditionalType {
-                check: dormant,
-                extends_ty: wk.number,
-                true_branch: wk.string,
-                false_branch: wk.boolean,
-                infer_count: 0,
-                distributive: false,
-                poisoned: false,
-            },
-        ),
-        (
-            "conditional extends",
-            ConditionalType {
-                check: wk.number,
-                extends_ty: dormant,
-                true_branch: wk.string,
-                false_branch: wk.boolean,
-                infer_count: 0,
-                distributive: false,
-                poisoned: false,
-            },
-        ),
-        (
-            "conditional true branch",
-            ConditionalType {
-                check: wk.number,
-                extends_ty: wk.number,
-                true_branch: dormant,
-                false_branch: wk.boolean,
-                infer_count: 0,
-                distributive: false,
-                poisoned: false,
-            },
-        ),
-        (
-            "conditional false branch",
-            ConditionalType {
-                check: wk.number,
-                extends_ty: wk.number,
-                true_branch: wk.string,
-                false_branch: dormant,
-                infer_count: 0,
-                distributive: false,
-                poisoned: false,
-            },
-        ),
-    ] {
-        roots.push((name, interner.intern_conditional(conditional)));
-    }
-
-    roots.extend([
-        (
-            "instantiation base",
-            interner.intern_instantiation(dormant, Vec::new()),
-        ),
-        (
-            "instantiation argument",
-            interner.intern_instantiation(wk.number, vec![(TypeParamId(80_003), dormant)]),
-        ),
-        (
-            "class-instance argument",
-            interner.intern_class_instance(ClassId(80_004), vec![dormant]),
-        ),
-    ]);
-
-    for (name, mapped) in [
-        (
-            "mapped key source",
-            MappedType {
-                homomorphic: false,
-                key_source: dormant,
-                value_template: wk.number,
-                modifiers_source: None,
-                optional_modifier: ModifierOp::Keep,
-                readonly_modifier: ModifierOp::Keep,
-            },
-        ),
-        (
-            "mapped value template",
-            MappedType {
-                homomorphic: false,
-                key_source: wk.string,
-                value_template: dormant,
-                modifiers_source: None,
-                optional_modifier: ModifierOp::Keep,
-                readonly_modifier: ModifierOp::Keep,
-            },
-        ),
-        (
-            "mapped modifiers source",
-            MappedType {
-                homomorphic: false,
-                key_source: wk.string,
-                value_template: wk.number,
-                modifiers_source: Some(dormant),
-                optional_modifier: ModifierOp::Keep,
-                readonly_modifier: ModifierOp::Keep,
-            },
-        ),
-    ] {
-        roots.push((name, interner.intern_mapped(mapped)));
-    }
-
-    roots.extend([
-        (
-            "template hole",
-            interner.intern_template(TemplateType {
-                texts: vec![String::new(), String::new()],
-                holes: vec![dormant],
-            }),
-        ),
-        ("keyof operand", interner.intern_keyof(dormant)),
-        (
-            "deferred indexed object",
-            interner.intern_deferred_indexed_access(dormant, wk.string),
-        ),
-        (
-            "deferred indexed index",
-            interner.intern_deferred_indexed_access(wk.number, dormant),
-        ),
-    ]);
-
-    let parameter_id = TypeParamId(80_005);
-    let parameter = interner.intern_type_param(parameter_id, "T");
-    interner.set_type_param_constraint(parameter_id, dormant);
-    roots.push(("type-parameter constraint side column", parameter));
-
-    let recursive = interner.reserve_object();
-    interner.fill_object(
-        recursive,
-        ObjectType {
-            properties: vec![prop("self", recursive), prop("value", dormant)],
-            ..Default::default()
-        },
-    );
-    roots.push(("recursive object cycle", recursive));
-    roots
 }
 
-#[test]
-fn legacy_evaluator_preflight_covers_every_semantic_child_role_without_writes() {
-    reset_evaluation_guard_measure();
-    let mut interner = Interner::with_intrinsics();
-    let wk = interner.well_known();
-    let dormant = interner.intern_class_instance(ClassId(80_000), vec![wk.string]);
-    let roots = dormant_role_roots(&mut interner, dormant);
-    let len = interner.store().len();
+struct FrontierNormalization {
+    frontier: TypeId,
+    exhaustion: Exhaustion,
+}
 
-    for reversed in [false, true] {
-        let order: Box<dyn Iterator<Item = &(&str, TypeId)>> = if reversed {
-            Box::new(roots.iter().rev())
+struct MappingNormalization {
+    source: TypeId,
+    result: TypeId,
+}
+
+impl RelationNormalization for MappingNormalization {
+    fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
+        Ok(if ty == self.source { self.result } else { ty })
+    }
+}
+
+impl RelationNormalization for FrontierNormalization {
+    fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
+        if ty == self.frontier {
+            Err(self.exhaustion.clone())
         } else {
-            Box::new(roots.iter())
-        };
-        for (name, root) in order {
-            let mut next = 80_100;
-            let mut memo = FxHashMap::from_iter([(wk.boolean, wk.string)]);
-            let snapshot = memo.clone();
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                let mut evaluator = ConditionalEvaluator::new(
-                    &mut interner,
-                    &mut next,
-                    &mut memo,
-                    DEFAULT_STEP_BUDGET,
-                );
-                evaluator.evaluate(*root)
-            }));
-            assert!(result.is_err(), "missing preflight child role: {name}");
-            assert_eq!(memo, snapshot, "memo write before rejecting {name}");
-            assert_eq!(next, 80_100, "binder allocation before rejecting {name}");
-            assert_eq!(
-                interner.store().len(),
-                len,
-                "interning before rejecting {name}"
-            );
+            Ok(ty)
         }
     }
-    assert_eq!(
-        evaluation_guard_measure().tripwires,
-        u64::try_from(roots.len() * 2).unwrap()
-    );
+}
+
+fn evaluate_ready(evaluator: &mut ConditionalEvaluator<'_>, ty: TypeId) -> TypeId {
+    match evaluator.evaluate_planned(ty, &IdentityNormalization) {
+        DemandOutcome::Ready(result) => result,
+        DemandOutcome::Exhausted(reason) => panic!("identity evaluation exhausted: {reason:?}"),
+    }
+}
+
+fn extends_ready(
+    evaluator: &mut ConditionalEvaluator<'_>,
+    conditional: &ConditionalType,
+) -> (bool, TypeId) {
+    match evaluator.run_extends_test_with(conditional, &IdentityNormalization) {
+        DemandOutcome::Ready(result) => result,
+        DemandOutcome::Exhausted(reason) => panic!("identity relation exhausted: {reason:?}"),
+    }
 }
 
 #[test]
-fn legacy_evaluator_empty_store_gate_skips_the_policy_walk() {
-    reset_evaluation_guard_measure();
-    let mut interner = Interner::with_intrinsics();
-    let mut next = 0;
-    let mut memo = FxHashMap::default();
-    let number = interner.well_known().number;
-    let mut evaluator =
-        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
-
-    assert_eq!(evaluator.evaluate(number), number);
-    assert_eq!(
-        evaluation_guard_measure(),
-        EvaluationGuardMeasure::default()
-    );
-}
-
-#[test]
-fn pass_evaluate_type_directly_rejects_before_pass_state_changes() {
-    reset_evaluation_guard_measure();
+fn pass_evaluate_type_does_not_descend_through_an_ordinary_wrapper() {
     let mut interner = Interner::with_intrinsics();
     let application = interner.intern_class_instance(ClassId(80_006), Vec::new());
     let nested = interner.intern_array(application);
@@ -365,511 +84,16 @@ fn pass_evaluate_type_directly_rejects_before_pass_state_changes() {
         0,
     );
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        pass.evaluate_type(nested, Span::new(0, 0))
-    }));
-    assert!(result.is_err());
-    assert!(pass.cond_memo.is_empty());
-    assert!(pass.diagnostics.is_empty());
+    let result = pass.evaluate_type(nested);
+    assert_eq!(result, DemandOutcome::Ready(nested));
+    assert!(pass.effect_stack.is_empty());
     assert_eq!(pass.next_type_param, 0);
     assert_eq!(pass.interner.store().len(), len);
-}
-
-#[test]
-fn defensive_evaluator_frames_reject_before_memo_identity_or_visit_state() {
-    reset_evaluation_guard_measure();
-    let mut interner = Interner::with_intrinsics();
-    let wk = interner.well_known();
-    let application = interner.intern_class_instance(ClassId(80_007), Vec::new());
-    let mut next = 80_200;
-    let mut memo = FxHashMap::from_iter([(application, wk.string)]);
-    let snapshot = memo.clone();
-    {
-        let evaluator =
-            ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
-        let result = catch_unwind(AssertUnwindSafe(|| evaluator.guard_eval_frame(application)));
-        assert!(result.is_err());
-    }
-    assert_eq!(memo, snapshot);
-    assert_eq!(next, 80_200);
-
-    let mut constraint_memo = FxHashMap::from_iter([(application, wk.number)]);
-    let constraint_snapshot = constraint_memo.clone();
-    {
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            extends::guard_inference_frame_for_test(
-                &mut interner,
-                &mut next,
-                &mut constraint_memo,
-                application,
-            )
-        }));
-        assert!(result.is_err());
-    }
-    assert_eq!(constraint_memo, constraint_snapshot);
-    assert_eq!(next, 80_200);
-}
-
-#[test]
-fn legacy_evaluator_rejects_class_instance_before_dispatch_or_memo() {
-    reset_evaluation_guard_measure();
-    let mut interner = Interner::with_intrinsics();
-    let wk = interner.well_known();
-    let application = interner.intern_class_instance(ClassId(20), vec![wk.number]);
-    assert!(interner.store().instantiation_type(application).is_none());
-    let mut next = 0;
-    let mut memo = FxHashMap::default();
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut evaluator =
-            ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
-        evaluator.evaluate(application)
-    }));
-
-    assert!(result.is_err());
-    assert!(memo.is_empty());
-    assert_eq!(next, 0);
-    assert_eq!(
-        evaluation_guard_measure(),
-        EvaluationGuardMeasure {
-            tripwires: 1,
-            root_walks: 1,
-        }
-    );
-}
-
-#[test]
-fn legacy_evaluator_preflights_nested_dormant_nodes_before_any_memo_write() {
-    reset_evaluation_guard_measure();
-    let mut interner = Interner::with_intrinsics();
-    let wk = interner.well_known();
-    let application = interner.intern_class_instance(ClassId(21), vec![wk.string]);
-    let deferred = interner.intern_deferred_indexed_access(application, wk.string);
-    let nested = interner.intern_object(ObjectType {
-        properties: vec![prop("value", deferred)],
-        ..Default::default()
-    });
-    let mut next = 0;
-    let mut memo = FxHashMap::default();
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut evaluator =
-            ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
-        evaluator.evaluate(nested)
-    }));
-
-    assert!(result.is_err());
-    assert!(memo.is_empty());
-    assert_eq!(interner.store().len(), nested.index() + 1);
-    assert_eq!(evaluation_guard_measure().tripwires, 1);
-}
-
-#[test]
-fn inference_constraint_entrypoint_rejects_nested_dormant_nodes_without_mutation() {
-    reset_evaluation_guard_measure();
-    let mut interner = Interner::with_intrinsics();
-    let wk = interner.well_known();
-    let application = interner.intern_class_instance(ClassId(22), vec![wk.number]);
-    let nested = interner.intern_array(application);
-    let len = interner.store().len();
-    let mut next = 9;
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        evaluate_inference_constraint(&mut interner, &mut next, nested)
-    }));
-
-    assert!(result.is_err());
-    assert_eq!(interner.store().len(), len);
-    assert_eq!(next, 9);
-    assert_eq!(evaluation_guard_measure().tripwires, 1);
 }
 
 fn omit_this_parameter(interner: &mut Interner, argument: TypeId) -> TypeId {
     let marker = interner.well_known().omit_this_parameter;
     interner.intern_instantiation(marker, vec![(TypeParamId(90_100), argument)])
-}
-
-#[test]
-fn inference_constraint_evaluation_preserves_function_metadata_while_evaluating_children() {
-    let mut interner = Interner::with_intrinsics();
-    let uppercase = interner.well_known().uppercase;
-    let parameter = TypeParamId(90_130);
-    let upper = |interner: &mut Interner, parameter: TypeParamId, text: &str| {
-        let literal = interner.intern_literal(LiteralValue::String(text.into()));
-        interner.intern_instantiation(uppercase, vec![(parameter, literal)])
-    };
-    let constraint = upper(&mut interner, parameter, "constraint");
-    let default = upper(&mut interner, parameter, "default");
-    let receiver = upper(&mut interner, parameter, "receiver");
-    let optional = upper(&mut interner, parameter, "optional");
-    let defaulted = upper(&mut interner, parameter, "defaulted");
-    let rest_element = upper(&mut interner, parameter, "rest");
-    let rest = interner.intern_array(rest_element);
-    let ret = upper(&mut interner, parameter, "return");
-    let second_default = upper(&mut interner, parameter, "second");
-    let first = TypeParamId(90_131);
-    let second = TypeParamId(90_132);
-    let source = interner.intern_function(FunctionType {
-        type_params: vec![
-            GenericTypeParam {
-                id: first,
-                constraint: Some(constraint),
-                default: Some(default),
-            },
-            GenericTypeParam {
-                id: second,
-                constraint: None,
-                default: Some(second_default),
-            },
-        ],
-        receiver: Some(receiver),
-        params: vec![
-            ParameterType::optional("optional", optional),
-            ParameterType::defaulted("defaulted", defaulted),
-            ParameterType::rest("tail", rest),
-        ],
-        ret,
-    });
-    let mut next = 90_133;
-
-    let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
-
-    assert!(!evaluation.exhausted);
-    assert!(!evaluation.cycle_detected);
-    assert_ne!(evaluation.result, source);
-    let constraint = interner.intern_literal(LiteralValue::String("CONSTRAINT".into()));
-    let default = interner.intern_literal(LiteralValue::String("DEFAULT".into()));
-    let second_default = interner.intern_literal(LiteralValue::String("SECOND".into()));
-    let receiver = interner.intern_literal(LiteralValue::String("RECEIVER".into()));
-    let optional = interner.intern_literal(LiteralValue::String("OPTIONAL".into()));
-    let defaulted = interner.intern_literal(LiteralValue::String("DEFAULTED".into()));
-    let rest_element = interner.intern_literal(LiteralValue::String("REST".into()));
-    let rest = interner.intern_array(rest_element);
-    let ret = interner.intern_literal(LiteralValue::String("RETURN".into()));
-    let function = interner
-        .store()
-        .function_type(evaluation.result)
-        .unwrap()
-        .clone();
-
-    assert_eq!(
-        function.type_params,
-        vec![
-            GenericTypeParam {
-                id: first,
-                constraint: Some(constraint),
-                default: Some(default),
-            },
-            GenericTypeParam {
-                id: second,
-                constraint: None,
-                default: Some(second_default),
-            },
-        ]
-    );
-    assert_eq!(function.receiver, Some(receiver));
-    assert_eq!(
-        function.params[0],
-        ParameterType::optional("optional", optional)
-    );
-    assert_eq!(
-        function.params[1],
-        ParameterType::defaulted("defaulted", defaulted)
-    );
-    assert_eq!(function.params[2], ParameterType::rest("tail", rest));
-    assert_eq!(function.ret, ret);
-
-    let unchanged = interner.intern_function(FunctionType {
-        type_params: vec![GenericTypeParam {
-            id: TypeParamId(90_134),
-            constraint: Some(receiver),
-            default: Some(default),
-        }],
-        receiver: Some(receiver),
-        params: vec![ParameterType::optional("optional", optional)],
-        ret,
-    });
-    let unchanged_evaluation = evaluate_inference_constraint(&mut interner, &mut next, unchanged);
-    assert_eq!(unchanged_evaluation.result, unchanged);
-    assert!(!unchanged_evaluation.exhausted);
-    assert!(!unchanged_evaluation.cycle_detected);
-}
-
-fn assert_recursive_function_binder_cycle_preserves_identity(in_constraint: bool) {
-    let mut interner = Interner::with_intrinsics();
-    let uppercase = interner.well_known().uppercase;
-    let recursive = interner.reserve_object();
-    let receiver_literal = interner.intern_literal(LiteralValue::String("receiver".into()));
-    let receiver =
-        interner.intern_instantiation(uppercase, vec![(TypeParamId(90_140), receiver_literal)]);
-    let (constraint, default) = if in_constraint {
-        (Some(recursive), None)
-    } else {
-        (None, Some(recursive))
-    };
-    let function = interner.intern_function(FunctionType {
-        type_params: vec![GenericTypeParam {
-            id: TypeParamId(90_141),
-            constraint,
-            default,
-        }],
-        receiver: Some(receiver),
-        params: vec![ParameterType::required(
-            "value",
-            interner.well_known().number,
-        )],
-        ret: interner.well_known().void,
-    });
-    interner.fill_object(
-        recursive,
-        ObjectType {
-            properties: vec![prop("back", function)],
-            ..Default::default()
-        },
-    );
-    let sibling_literal = interner.intern_literal(LiteralValue::String("sibling".into()));
-    let sibling =
-        interner.intern_instantiation(uppercase, vec![(TypeParamId(90_142), sibling_literal)]);
-    let source = interner.intern_object(ObjectType {
-        properties: vec![prop("function", function), prop("sibling", sibling)],
-        ..Default::default()
-    });
-    let mut next = 90_143;
-
-    super::extends::reset_constraint_eval_measure();
-    let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
-
-    assert!(!evaluation.exhausted);
-    assert!(!evaluation.cycle_detected);
-    assert_ne!(evaluation.result, source);
-    let expected_sibling = interner.intern_literal(LiteralValue::String("SIBLING".into()));
-    let result = interner.store().object_type(evaluation.result).unwrap();
-    assert_eq!(result.property("function").unwrap().ty, function);
-    assert_eq!(result.property("sibling").unwrap().ty, expected_sibling);
-    assert_eq!(
-        interner
-            .store()
-            .object_type(recursive)
-            .unwrap()
-            .property("back")
-            .unwrap()
-            .ty,
-        function
-    );
-    let measure = super::extends::constraint_eval_measure();
-    assert_eq!(measure.structural_entries, 3);
-    assert_eq!(measure.structural_reentries, 1);
-    assert_eq!(measure.tainted_identity_returns, 2);
-    assert_eq!(measure.re_interns, 1);
-}
-
-#[test]
-fn inference_constraint_evaluation_preserves_constraint_cycle_identity() {
-    assert_recursive_function_binder_cycle_preserves_identity(true);
-}
-
-#[test]
-fn inference_constraint_evaluation_preserves_default_cycle_identity() {
-    assert_recursive_function_binder_cycle_preserves_identity(false);
-}
-
-#[test]
-fn inference_constraint_evaluation_discards_partial_function_on_pending_cycle() {
-    let mut interner = Interner::with_intrinsics();
-    let uppercase = interner.well_known().uppercase;
-    let literal = interner.intern_literal(LiteralValue::String("constraint".into()));
-    let changed_constraint =
-        interner.intern_instantiation(uppercase, vec![(TypeParamId(90_150), literal)]);
-    let (template, param, _) = maybe_loop_template(&mut interner);
-    let string = interner.well_known().string;
-    let pending_cycle = instantiate_one(&mut interner, template, param, string);
-    let source = interner.intern_function(FunctionType {
-        type_params: vec![GenericTypeParam {
-            id: TypeParamId(90_151),
-            constraint: Some(changed_constraint),
-            default: Some(pending_cycle),
-        }],
-        receiver: None,
-        params: Vec::new(),
-        ret: interner.well_known().void,
-    });
-    let mut next = 90_152;
-
-    let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
-
-    assert_eq!(
-        evaluation.result, source,
-        "a pending cycle after a changed child must not expose a partial function"
-    );
-    assert!(evaluation.exhausted);
-    assert!(evaluation.cycle_detected);
-}
-
-#[test]
-fn inference_constraint_evaluation_handles_a_deep_alternating_function_spine() {
-    const DEPTH: u32 = 10_005;
-
-    let mut interner = Interner::with_intrinsics();
-    let uppercase = interner.well_known().uppercase;
-    let leaf = interner.intern_literal(LiteralValue::String("leaf".into()));
-    let mut source = interner.intern_instantiation(uppercase, vec![(TypeParamId(95_000), leaf)]);
-    let void = interner.well_known().void;
-
-    for index in 0..DEPTH {
-        let type_param = GenericTypeParam {
-            id: TypeParamId(95_100 + index),
-            constraint: (index % 5 == 0).then_some(source),
-            default: (index % 5 == 1).then_some(source),
-        };
-        source = interner.intern_function(FunctionType {
-            type_params: vec![type_param],
-            receiver: (index % 5 == 2).then_some(source),
-            params: if index % 5 == 3 {
-                vec![ParameterType::required("value", source)]
-            } else {
-                Vec::new()
-            },
-            ret: if index % 5 == 4 { source } else { void },
-        });
-    }
-
-    let mut next = 96_000;
-    let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
-
-    assert!(!evaluation.exhausted);
-    assert!(!evaluation.cycle_detected);
-    assert_ne!(evaluation.result, source);
-    let mut current = evaluation.result;
-    for index in (0..DEPTH).rev() {
-        let function = interner.store().function_type(current).unwrap();
-        current = match index % 5 {
-            0 => function.type_params[0].constraint.unwrap(),
-            1 => function.type_params[0].default.unwrap(),
-            2 => function.receiver.unwrap(),
-            3 => function.params[0].ty,
-            4 => function.ret,
-            _ => unreachable!(),
-        };
-    }
-    let expected = interner.intern_literal(LiteralValue::String("LEAF".into()));
-    assert_eq!(current, expected);
-}
-
-#[test]
-fn inference_constraint_evaluation_keeps_a_mutual_scc_while_rewriting_a_sibling() {
-    let mut interner = Interner::with_intrinsics();
-    let uppercase = interner.well_known().uppercase;
-    let first = interner.reserve_object();
-    let second = interner.reserve_object();
-    let function = interner.intern_function(FunctionType {
-        type_params: vec![GenericTypeParam {
-            id: TypeParamId(96_100),
-            constraint: Some(second),
-            default: None,
-        }],
-        receiver: None,
-        params: Vec::new(),
-        ret: interner.well_known().void,
-    });
-    interner.fill_object(
-        first,
-        ObjectType {
-            properties: vec![prop("function", function)],
-            ..Default::default()
-        },
-    );
-    interner.fill_object(
-        second,
-        ObjectType {
-            properties: vec![prop("first", first)],
-            ..Default::default()
-        },
-    );
-    let sibling_literal = interner.intern_literal(LiteralValue::String("sibling".into()));
-    let sibling =
-        interner.intern_instantiation(uppercase, vec![(TypeParamId(96_101), sibling_literal)]);
-    let source = interner.intern_object(ObjectType {
-        properties: vec![prop("first", first), prop("sibling", sibling)],
-        ..Default::default()
-    });
-    let mut next = 96_102;
-
-    let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
-
-    assert!(!evaluation.exhausted);
-    assert!(!evaluation.cycle_detected);
-    let expected_sibling = interner.intern_literal(LiteralValue::String("SIBLING".into()));
-    let result = interner.store().object_type(evaluation.result).unwrap();
-    assert_eq!(result.property("first").unwrap().ty, first);
-    assert_eq!(result.property("sibling").unwrap().ty, expected_sibling);
-}
-
-#[test]
-fn inference_constraint_evaluation_discards_partial_function_when_pending_precedes_change() {
-    let mut interner = Interner::with_intrinsics();
-    let uppercase = interner.well_known().uppercase;
-    let changed_literal = interner.intern_literal(LiteralValue::String("changed".into()));
-    let changed =
-        interner.intern_instantiation(uppercase, vec![(TypeParamId(96_110), changed_literal)]);
-    let (template, param, _) = maybe_loop_template(&mut interner);
-    let string = interner.well_known().string;
-    let pending_cycle = instantiate_one(&mut interner, template, param, string);
-    let source = interner.intern_function(FunctionType {
-        type_params: vec![
-            GenericTypeParam {
-                id: TypeParamId(96_111),
-                constraint: None,
-                default: Some(pending_cycle),
-            },
-            GenericTypeParam {
-                id: TypeParamId(96_112),
-                constraint: Some(changed),
-                default: None,
-            },
-        ],
-        receiver: None,
-        params: Vec::new(),
-        ret: interner.well_known().void,
-    });
-    let mut next = 96_113;
-
-    let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
-
-    assert_eq!(evaluation.result, source);
-    assert!(evaluation.exhausted);
-    assert!(evaluation.cycle_detected);
-}
-
-#[test]
-fn inference_constraint_evaluation_keeps_array_and_readonly_identity_after_exhaustion() {
-    let mut interner = Interner::with_intrinsics();
-    let (template, param, _) = maybe_loop_template(&mut interner);
-    let string = interner.well_known().string;
-    let pending_cycle = instantiate_one(&mut interner, template, param, string);
-    let bridge = interner.reserve_conditional();
-    let bridge_value = interner.intern_array(pending_cycle);
-    interner.fill_conditional(
-        bridge,
-        ConditionalType {
-            check: interner.well_known().number,
-            extends_ty: interner.well_known().number,
-            true_branch: bridge_value,
-            false_branch: interner.well_known().void,
-            infer_count: 0,
-            distributive: false,
-            poisoned: false,
-        },
-    );
-    let array = interner.intern_array(bridge);
-    let readonly = interner.intern_readonly(bridge);
-
-    for source in [array, readonly] {
-        let mut next = 96_120;
-        let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
-        assert_eq!(evaluation.result, source);
-        assert!(evaluation.exhausted);
-        assert!(evaluation.cycle_detected);
-    }
 }
 
 #[test]
@@ -1188,7 +412,7 @@ fn conditional_infer_rewrites_extends_and_true_branch_for_both_outcomes() {
             DEFAULT_STEP_BUDGET,
         );
         super::instantiation::reset_infer_rewrite_measure();
-        let (matched, result) = evaluator.run_extends_test(&false_conditional);
+        let (matched, result) = extends_ready(&mut evaluator, &false_conditional);
         let measure = super::instantiation::infer_rewrite_measure();
         assert!(!evaluator.exhausted);
         assert!(!evaluator.cycle_detected);
@@ -1233,7 +457,7 @@ fn conditional_infer_rewrites_extends_and_true_branch_for_both_outcomes() {
             DEFAULT_STEP_BUDGET,
         );
         super::instantiation::reset_infer_rewrite_measure();
-        let (matched, result) = evaluator.run_extends_test(&true_conditional);
+        let (matched, result) = extends_ready(&mut evaluator, &true_conditional);
         let measure = super::instantiation::infer_rewrite_measure();
         assert!(!evaluator.exhausted);
         assert!(!evaluator.cycle_detected);
@@ -1253,125 +477,42 @@ fn conditional_infer_rewrites_extends_and_true_branch_for_both_outcomes() {
 }
 
 #[test]
-fn measure_constraint_evaluator_counts_function_metadata_fanout() {
+fn planned_relation_does_not_decide_a_nested_deferred_conditional_operand() {
     let mut interner = Interner::with_intrinsics();
-    let uppercase = interner.well_known().uppercase;
-    let literal = interner.intern_literal(LiteralValue::String("fanout".into()));
-    let upper = interner.intern_instantiation(uppercase, vec![(TypeParamId(90_160), literal)]);
-    let source = interner.intern_function(FunctionType {
-        type_params: vec![
-            GenericTypeParam {
-                id: TypeParamId(90_161),
-                constraint: Some(upper),
-                default: Some(upper),
-            },
-            GenericTypeParam {
-                id: TypeParamId(90_162),
-                constraint: Some(upper),
-                default: Some(upper),
-            },
-        ],
-        receiver: Some(upper),
-        params: Vec::new(),
-        ret: interner.well_known().void,
+    let wk = interner.well_known();
+    let abc = interner.intern_literal(LiteralValue::String("abc".into()));
+    let upper_abc = interner.intern_literal(LiteralValue::String("ABC".into()));
+    let nested = interner.intern_instantiation(wk.uppercase, vec![(TypeParamId(0), abc)]);
+    let check = interner.intern_object(ObjectType {
+        properties: vec![prop("value", nested)],
+        ..Default::default()
     });
-    let mut next = 90_163;
+    let extends_ty = interner.intern_object(ObjectType {
+        properties: vec![prop("value", upper_abc)],
+        ..Default::default()
+    });
+    let conditional = interner.intern_conditional(ConditionalType {
+        check,
+        extends_ty,
+        true_branch: wk.string,
+        false_branch: wk.number,
+        infer_count: 0,
+        distributive: false,
+        poisoned: false,
+    });
+    let normalization = MappingNormalization {
+        source: nested,
+        result: upper_abc,
+    };
+    let mut next = 1;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
 
-    super::extends::reset_constraint_eval_measure();
-    let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
-
-    assert_ne!(evaluation.result, source);
-    let measure = super::extends::constraint_eval_measure();
-    assert_eq!(measure.structural_entries, 1);
-    assert_eq!(measure.structural_reentries, 0);
-    assert_eq!(measure.metadata_children, 4);
-    assert_eq!(measure.signature_children, 2);
-    assert_eq!(measure.pending_calls, 5);
-    assert_eq!(measure.tainted_identity_returns, 0);
-    assert_eq!(measure.exhausted_identity_returns, 0);
-    assert_eq!(measure.re_interns, 1);
-}
-
-#[test]
-#[ignore = "WU4 release measurement; run explicitly with --ignored --nocapture"]
-fn measure_infer_rewrite_hotpaths_release() {
-    for count in [10_000, 100_000] {
-        let mut samples = Vec::new();
-        for _ in 0..5 {
-            let mut interner = Interner::with_intrinsics();
-            let infer = interner.intern_infer(0);
-            let shared = interner.intern_object(ObjectType {
-                properties: vec![prop("value", infer)],
-                ..Default::default()
-            });
-            let root = interner.intern_tuple(vec![shared; count]);
-            let fresh = interner.well_known().string;
-            let mut next = 90_170;
-            let mut memo = FxHashMap::default();
-            let mut evaluator =
-                ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
-            super::instantiation::reset_infer_rewrite_measure();
-            let started = Instant::now();
-            assert_ne!(evaluator.substitute_infers(root, &[fresh]), root);
-            let elapsed = started.elapsed();
-            let measure = super::instantiation::infer_rewrite_measure();
-            assert_eq!(measure.visits, count as u64 + 2);
-            assert_eq!(measure.memo_hits, count as u64 - 1);
-            assert_eq!(measure.memo_inserts, 3);
-            samples.push(elapsed);
-        }
-        samples.sort_unstable();
-        println!(
-            "infer rewrite count={count} samples={samples:?} median={:?} range={:?}..{:?}",
-            samples[2], samples[0], samples[4]
-        );
-    }
-}
-
-#[test]
-#[ignore = "WU4 release measurement; run explicitly with --ignored --nocapture"]
-fn measure_constraint_evaluator_hotpaths_release() {
-    for count in [10_000, 100_000] {
-        let mut samples = Vec::new();
-        for _ in 0..5 {
-            let mut interner = Interner::with_intrinsics();
-            let uppercase = interner.well_known().uppercase;
-            let literal = interner.intern_literal(LiteralValue::String("fanout".into()));
-            let upper =
-                interner.intern_instantiation(uppercase, vec![(TypeParamId(90_180), literal)]);
-            let type_params = (0..count)
-                .map(|index| GenericTypeParam {
-                    id: TypeParamId(91_000 + index as u32),
-                    constraint: Some(upper),
-                    default: Some(upper),
-                })
-                .collect();
-            let source = interner.intern_function(FunctionType {
-                type_params,
-                receiver: Some(upper),
-                params: Vec::new(),
-                ret: interner.well_known().void,
-            });
-            let mut next = 92_000;
-            super::extends::reset_constraint_eval_measure();
-            let started = Instant::now();
-            let evaluation = evaluate_inference_constraint(&mut interner, &mut next, source);
-            let elapsed = started.elapsed();
-            assert_ne!(evaluation.result, source);
-            let measure = super::extends::constraint_eval_measure();
-            assert_eq!(measure.metadata_children, (count * 2) as u64);
-            assert_eq!(measure.signature_children, 2);
-            assert_eq!(measure.pending_calls, (count * 2 + 1) as u64);
-            assert_eq!(measure.evaluate_calls, (count * 4 + 4) as u64);
-            assert_eq!(measure.re_interns, 1);
-            samples.push(elapsed);
-        }
-        samples.sort_unstable();
-        println!(
-            "constraint evaluator count={count} samples={samples:?} median={:?} range={:?}..{:?}",
-            samples[2], samples[0], samples[4]
-        );
-    }
+    assert_eq!(
+        evaluator.evaluate_planned(conditional, &normalization),
+        DemandOutcome::Ready(conditional)
+    );
 }
 
 #[test]
@@ -1393,7 +534,7 @@ fn omit_this_parameter_preserves_optional_rest_and_default_shape() {
     let mut memo = FxHashMap::default();
     let mut evaluator =
         ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
-    let transformed = evaluator.evaluate(result);
+    let transformed = evaluate_ready(&mut evaluator, result);
     let function = interner.store().function_type(transformed).unwrap();
 
     assert_eq!(function.receiver, None);
@@ -1435,8 +576,8 @@ fn omit_this_parameter_uses_last_overload_and_preserves_no_receiver_identity() {
     let mut evaluator =
         ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
 
-    let transformed = evaluator.evaluate(transformed);
-    assert_eq!(evaluator.evaluate(preserved), receiverless);
+    let transformed = evaluate_ready(&mut evaluator, transformed);
+    assert_eq!(evaluate_ready(&mut evaluator, preserved), receiverless);
     let function = interner.store().function_type(transformed).unwrap();
     assert_eq!(function.receiver, None);
     assert_eq!(function.ret, wk.string);
@@ -1466,8 +607,8 @@ fn omit_this_parameter_erases_generic_binders_and_keeps_open_guard_deferred() {
     let mut evaluator =
         ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
 
-    let transformed = evaluator.evaluate(transformed);
-    assert_eq!(evaluator.evaluate(deferred), deferred);
+    let transformed = evaluate_ready(&mut evaluator, transformed);
+    assert_eq!(evaluate_ready(&mut evaluator, deferred), deferred);
     drop(evaluator);
     let function = interner.store().function_type(transformed).unwrap();
     assert!(function.type_params.is_empty());
@@ -1497,7 +638,7 @@ fn omit_this_parameter_keeps_generic_receiver_when_unknown_satisfies_effective_r
     let mut evaluator =
         ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
 
-    assert_eq!(evaluator.evaluate(marker), generic);
+    assert_eq!(evaluate_ready(&mut evaluator, marker), generic);
 }
 
 #[test]
@@ -1529,7 +670,35 @@ fn omit_this_parameter_keeps_mixed_receiver_union_for_unknown_guard() {
     let mut evaluator =
         ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
 
-    assert_eq!(evaluator.evaluate(marker), union);
+    assert_eq!(evaluate_ready(&mut evaluator, marker), union);
+}
+
+#[test]
+fn omit_this_parameter_preserves_a_planned_relation_frontier() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let receiver = interner.intern_class_instance(ClassId(91_002), Vec::new());
+    let function = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: Some(receiver),
+        params: Vec::new(),
+        ret: wk.void,
+    });
+    let marker = omit_this_parameter(&mut interner, function);
+    let normalization = FrontierNormalization {
+        frontier: receiver,
+        exhaustion: Exhaustion::ClassProjectionBudget,
+    };
+    let mut next = 1;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    assert_eq!(
+        evaluator.evaluate_planned(marker, &normalization),
+        DemandOutcome::Exhausted(Exhaustion::ClassProjectionBudget)
+    );
+    assert!(memo.is_empty());
 }
 
 #[test]
@@ -1607,11 +776,7 @@ fn instantiation_cycle_taints_ancestors_without_poisoning_terminating_sibling() 
     let mut ev =
         ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
 
-    assert_eq!(
-        ev.evaluate(cycle),
-        wk.any,
-        "the union assembly preserves the existing error-to-any cascade behavior"
-    );
+    assert_eq!(evaluate_ready(&mut ev, cycle), cycle);
     assert!(ev.cycle_detected, "the in-flight re-entry is observable");
     assert!(!ev.exhausted, "a cycle is not a budget exhaustion");
     assert!(
@@ -1624,7 +789,7 @@ fn instantiation_cycle_taints_ancestors_without_poisoning_terminating_sibling() 
         "SetMemo consumes every frame taint"
     );
 
-    assert_eq!(ev.evaluate(terminating), done);
+    assert_eq!(evaluate_ready(&mut ev, terminating), done);
     assert!(
         !ev.cycle_detected,
         "a later independent root must not inherit the prior cycle status"
@@ -1648,21 +813,21 @@ fn terminating_instantiation_stays_memoized_before_a_later_cycle() {
     {
         let mut ev =
             ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
-        assert_eq!(ev.evaluate(terminating), done);
+        assert_eq!(evaluate_ready(&mut ev, terminating), done);
         assert!(!ev.cycle_detected);
         assert_eq!(ev.memo.get(&terminating), Some(&done));
     }
     {
         let mut ev =
             ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
-        assert_eq!(ev.evaluate(cycle), wk.any);
+        assert_eq!(evaluate_ready(&mut ev, cycle), cycle);
         assert!(ev.cycle_detected);
         assert!(!ev.memo.contains_key(&cycle));
     }
     {
         let mut ev =
             ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
-        assert_eq!(ev.evaluate(terminating), done);
+        assert_eq!(evaluate_ready(&mut ev, terminating), done);
         assert!(!ev.cycle_detected);
     }
 }
@@ -1713,7 +878,7 @@ fn mutual_instantiation_cycle_taints_every_active_template() {
     let mut ev =
         ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
 
-    assert_eq!(ev.evaluate(root), wk.any);
+    assert_eq!(evaluate_ready(&mut ev, root), root);
     assert!(ev.cycle_detected);
     assert!(!ev.exhausted);
     assert!(
@@ -1782,7 +947,7 @@ fn deep_recursive_unwrap_does_not_overflow_the_native_stack() {
         &mut memo,
         (DEPTH as u32) + 1000,
     );
-    let result = ev.evaluate(root);
+    let result = evaluate_ready(&mut ev, root);
     assert!(!ev.exhausted, "the raised budget must not be exhausted");
     assert_eq!(
         result, wk.number,
@@ -1835,7 +1000,7 @@ fn shallow_unwrap_resolves_and_memoizes() {
         &mut memo,
         DEFAULT_STEP_BUDGET,
     );
-    assert_eq!(ev.evaluate(root), wk.number);
+    assert_eq!(evaluate_ready(&mut ev, root), wk.number);
     assert!(memo.contains_key(&root), "the root evaluation is memoized");
 }
 
@@ -1870,7 +1035,7 @@ fn poisoned_conditional_never_evaluates() {
         DEFAULT_STEP_BUDGET,
     );
     assert_eq!(
-        ev.evaluate(poisoned),
+        evaluate_ready(&mut ev, poisoned),
         poisoned,
         "a poisoned conditional must be returned as-is, never evaluated"
     );
@@ -1898,7 +1063,7 @@ fn poisoned_conditional_never_evaluates() {
         &mut memo,
         DEFAULT_STEP_BUDGET,
     );
-    let result = ev.evaluate(root);
+    let result = evaluate_ready(&mut ev, root);
     drop(ev);
     let out = interner
         .store()
@@ -1946,8 +1111,33 @@ fn runaway_growth_exhausts_the_budget() {
         &mut memo,
         DEFAULT_STEP_BUDGET,
     );
-    let _ = ev.evaluate(root);
+    assert_eq!(evaluate_ready(&mut ev, root), root);
     assert!(ev.exhausted, "a runaway alias must exhaust the step budget");
+    assert!(
+        ev.memo.is_empty(),
+        "an exhausted root must not build or memoize a value"
+    );
+}
+
+#[test]
+fn zero_budget_returns_the_root_without_building_or_memoizing() {
+    let mut interner = Interner::with_intrinsics();
+    let hole = interner.intern_literal(LiteralValue::String("x".to_string()));
+    let root = interner.intern_template(TemplateType {
+        texts: vec!["before-".to_string(), "-after".to_string()],
+        holes: vec![hole],
+    });
+    let before = interner.store().len();
+    let mut next = 0;
+    let mut memo = FxHashMap::default();
+    {
+        let mut evaluator = ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, 0);
+        assert_eq!(evaluate_ready(&mut evaluator, root), root);
+        assert!(evaluator.exhausted);
+        assert!(evaluator.memo.is_empty());
+    }
+    assert_eq!(interner.store().len(), before);
+    assert!(memo.is_empty());
 }
 
 /// M26 — a homomorphic identity mapped type `{ [K in keyof T]: T[K] }` over a
@@ -1960,7 +1150,7 @@ fn eval(
     ty: TypeId,
 ) -> TypeId {
     let mut ev = ConditionalEvaluator::new(interner, next, memo, DEFAULT_STEP_BUDGET);
-    ev.evaluate(ty)
+    evaluate_ready(&mut ev, ty)
 }
 
 #[test]
@@ -2262,7 +1452,7 @@ fn string_intrinsics_transform_distribute_and_stay_symbolic() {
                  arg: TypeId| {
         let inst = interner.intern_instantiation(base, vec![(s_param, arg)]);
         let mut ev = ConditionalEvaluator::new(interner, next, memo, DEFAULT_STEP_BUDGET);
-        ev.evaluate(inst)
+        evaluate_ready(&mut ev, inst)
     };
 
     // Literal transforms — the four kinds.

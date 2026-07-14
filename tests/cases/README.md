@@ -235,7 +235,8 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b41_generic_methods/` | shipped B41 | generic method/call/construct signatures: persistent binders through outer substitution, calls, relation, overloads, inheritance, and cache order |
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
-| `sr_semantic_duplication/` | semantic-duplication sprint WU0 + class-application architecture gate (disabled) | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
+| `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
+| `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):
 
@@ -375,10 +376,9 @@ continues to guard its `tsc 6.0.3 --strict` parity while the call and evaluator 
 `sr_rewrite_hotpath_wu7/` is the enabled acceptance corpus for the deep-acyclic
 traversal follow-up. Its shallow, topologically ordered alias chains prove that
 generic constraint/default metadata reaches both auxiliary structural walkers
-without relying on parser nesting. `InferRewrite` and
-`InferenceConstraintEvaluator` each now use a private heap task/value stack while
-retaining their distinct fresh-binder/memo/SCC-taint and pending/exhaustion
-policies. Direct arena tests carry the 10k+ host-stack regression because a
+without relying on parser nesting. `InferRewrite` retains its private heap task/value stack and
+fresh-binder/memo/SCC-taint policy; inference constraints now demand normalized types through the
+semantic query coordinator. Direct arena tests carry the 10k+ host-stack regression because a
 textual fixture would conflate the walker with parser/lowering depth and the CLI's
 enlarged worker stack.
 
@@ -394,7 +394,7 @@ chains also exercise generic substitution before the mapped rewrite starts.
 
 ## Semantic duplication corpus (sprint 2026-07-13)
 
-`sr_semantic_duplication/` is the disabled WU0 acceptance corpus for
+`sr_semantic_duplication/` is the enabled acceptance corpus for
 [`sprint-2026-07-13-semantic-duplication-layering.md`](../../docs/sprints/sprint-2026-07-13-semantic-duplication-layering.md).
 Its class-member fixture pins one-time reserved signature ownership: generic method
 constraints/defaults and call-site instantiation; four static signature `TK2302`s plus
@@ -404,8 +404,8 @@ signatures; and constructor parameter-property type reuse plus readonly enforcem
 The final pair deliberately preserves the current externally visible `void` type of an
 unannotated class method. This over-reports when its numeric result is consumed and
 under-reports when the result is assigned to `void`; both are ledgered to backlog `76`.
-WU1 enables the directory only after member bodies consume the reserved surfaces and
-the whole fixture passes with exact diagnostic cardinality.
+The directory stays enabled so member bodies must consume the reserved surfaces with
+exact diagnostic cardinality.
 
 `recursive_class_applications.ts` is the additional pre-WU1 architecture acceptance
 fixture. It requires immutable class applications to survive inside object, array,
@@ -420,9 +420,11 @@ and parameter-property paths share that graph. The final construction block pins
 unresolved parameter-property event, one overload failure, four distinct static-class-
 parameter events, readonly enforcement, default-only method instantiation, callback
 arguments, both conditional branches, and hidden constructor implementations, so
-publication cannot hide or duplicate diagnostics. All 58 markers have verdict/code parity with
-`tsc 6.0.3 --strict`; the directory remains disabled until the architecture WU and WU1
-implementation satisfy both fixtures.
+publication cannot hide or duplicate diagnostics. The remaining fixtures pin supported and
+unsupported initializer construction, poison propagation, class application arity/defaults,
+finite scheduling shapes, projection exhaustion, and overload-selection precedence. The enabled
+`sr_semantic_duplication_project/` companion runs the cross-module opposite-order heritage case as
+one project so dependency discovery cannot change ownership or output order.
 
 ## Surface-accounting corpus (sprint 2026-07-10)
 

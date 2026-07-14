@@ -17,10 +17,9 @@ not an active blocker —
 
 `✔` = confirmed live · `⚠` = drift/nuance caught.
 
-- ✔ The archived rewrite/hotpath outcome records WU7/WU8 complete, independently reviewed, and
-  ratcheted; it explicitly keeps `InferRewrite`, `InferenceConstraintEvaluator`, and
-  `MappedRewrite` as three private machines — `docs/archive/sprint-2026-07-13-rewrite-hotpath-hardening.md:3-15`,
-  `:202-236`.
+- ⚠ The archived rewrite/hotpath outcome kept three private rewrite/evaluation machines. This
+  atomic cutover removes the now-redundant constraint-evaluator entrypoint: call inference demands
+  constraints through the semantic query coordinator instead.
 - ⚠ Class signatures are lowered during `collect_class_own_members`, then member bodies call the
   ordinary function reserve/fill machine and re-lower signatures. Static methods subsequently
   delete duplicate signature-level `TK2302` diagnostics by span while retaining body diagnostics —

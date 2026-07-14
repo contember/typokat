@@ -1,14 +1,16 @@
 //! assignment module (extracted from checker/mod.rs).
 
 use super::calls::intrinsic_id;
+use super::classes::body::BodyMemberLookup;
 use super::context::*;
 use super::expr::contextual_literal_target;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::DeclId;
 use crate::binder::Binder;
+use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::{render_type, Diagnostic};
 use crate::span::Span;
-use crate::types::repr::TypeTag;
+use crate::types::repr::{ClassId, TypeTag, Visibility};
 use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
 use oxc_ast::ast::{
@@ -16,6 +18,14 @@ use oxc_ast::ast::{
     ObjectPropertyKind, StaticMemberExpression, VariableDeclarationKind,
 };
 use oxc_span::GetSpan;
+
+struct MemberAssignmentTarget {
+    ty: TypeId,
+    visibility: Visibility,
+    readonly: bool,
+    is_accessor: bool,
+    declaring_class: Option<ClassId>,
+}
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Check `NAME = expr` against the target's declared type, returning the
@@ -57,7 +67,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let symbol_id = match self.binder.resolve_value(scope, target.name.as_str()) {
             Some(symbol_id) => symbol_id,
             None => {
-                self.diagnostics.push(Diagnostic::cannot_find_name(
+                self.emit_diagnostic(Diagnostic::cannot_find_name(
                     Span::from_oxc(target.span),
                     target.name.as_str(),
                 ));
@@ -90,13 +100,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 false,
                 false,
             );
-            check_excess_properties(
-                self.interner.store(),
-                &assign.right,
-                tgt,
-                &mut self.diagnostics,
-            );
-            self.obligations.push(AssignObligation {
+            match self.check_excess_properties_for_target(&assign.right, tgt) {
+                DemandOutcome::Ready(diagnostics) => {
+                    for diagnostic in diagnostics {
+                        self.emit_diagnostic(diagnostic);
+                    }
+                }
+                DemandOutcome::Exhausted(exhaustion) => {
+                    self.own_type_demand(DemandOutcome::Exhausted(exhaustion), src_span);
+                    return value;
+                }
+            }
+            self.schedule_obligation(AssignObligation {
                 src,
                 tgt,
                 src_span,
@@ -128,60 +143,112 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let rhs = self.infer_expr(scope, &assign.right);
         let value = rhs.map(|(ty, _)| (ty, assign_span));
 
-        // Compound assignment (`+=`, `||=`, …): assignability is unchecked baseline-wide and a
-        // `readonly` member-compound-assignment is out of the M14 subset. Stop after walking.
-        if assign.operator != AssignmentOperator::Assign {
-            return value;
-        }
-
         // Resolve the base type. Absent → nothing to check.
         let Some((base_ty, _)) = base else {
             return value;
         };
 
+        let prop_name = member.property.name.as_str();
+        let property_span = Span::from_oxc(member.property.span);
+        let body_this_found = match self.body_this_member_lookup(&member.object, prop_name) {
+            Some(BodyMemberLookup::Known {
+                ty,
+                write_ty,
+                metadata,
+            }) => Some(MemberAssignmentTarget {
+                ty: write_ty.unwrap_or(ty),
+                visibility: metadata.visibility,
+                readonly: metadata.readonly,
+                is_accessor: metadata.is_accessor,
+                declaring_class: metadata.declaring_class,
+            }),
+            Some(BodyMemberLookup::Unavailable(metadata)) => {
+                self.check_member_access_control(
+                    prop_name,
+                    property_span,
+                    metadata.visibility,
+                    metadata.declaring_class,
+                );
+                return value;
+            }
+            Some(BodyMemberLookup::Missing { .. }) => return value,
+            None => None,
+        };
+
         // Skip when the base is the error/`any` type (an unresolved base, or `any`): there is
         // no concrete property to check against, and the error type suppresses cascades.
-        if base_ty == wk.error || base_ty == wk.any {
+        if (base_ty == wk.error || base_ty == wk.any) && body_this_found.is_none() {
             return value;
         }
 
         // Member writes use the same apparent/merged base type as reads, so
         // constrained parameters and intersections expose their real property type.
-        let base_ty = self.apparent_type(base_ty);
-        let base_ty = self
-            .intersection_apparent_object(base_ty)
-            .unwrap_or(base_ty);
-
+        if let Some(DemandOutcome::Exhausted(exhaustion)) =
+            self.demand_class_value_surface(scope, &member.object)
+        {
+            self.own_type_demand(DemandOutcome::Exhausted(exhaustion), property_span);
+            return None;
+        }
+        let base_ty = if body_this_found.is_some() {
+            base_ty
+        } else {
+            match self.demand_structural_apparent_type(base_ty) {
+                DemandOutcome::Ready(base_ty) => base_ty,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    self.own_type_demand(DemandOutcome::Exhausted(exhaustion), property_span);
+                    return None;
+                }
+            }
+        };
         // Look up the property on the base **object** type. Snapshot the property's
         // type + `readonly` + `is_accessor` + origin before any `&mut` borrow for a
         // diagnostic.
-        let prop_name = member.property.name.as_str();
         let object_found = self
             .interner
             .store()
             .object_type(base_ty)
             .and_then(|obj| obj.property(prop_name))
-            .map(|prop| {
-                (
-                    prop.ty,
-                    prop.readonly,
-                    prop.is_accessor,
-                    prop.declaring_class,
-                )
+            .map(|prop| MemberAssignmentTarget {
+                ty: prop.write_ty.unwrap_or(prop.ty),
+                visibility: prop.visibility,
+                readonly: prop.readonly,
+                is_accessor: prop.is_accessor,
+                declaring_class: prop.declaring_class,
             });
 
         // Union bases have no single object; fall back to the read-side union member
         // model so readonly and type checks are not skipped.
-        let found = match object_found {
+        let found = match body_this_found.or(object_found) {
             Some(found) => Some(found),
-            None => self.union_member_assignment_target(base_ty, prop_name),
+            None => match self.union_member_assignment_target(base_ty, prop_name) {
+                DemandOutcome::Ready(found) => found,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    self.own_type_demand(DemandOutcome::Exhausted(exhaustion), property_span);
+                    return None;
+                }
+            },
         };
 
         // Property not on the type (or missing on some union member) → deferred (no
         // `TK2339` on an assignment target).
-        let Some((prop_ty, readonly, is_accessor, declaring_class)) = found else {
+        let Some(MemberAssignmentTarget {
+            ty: prop_ty,
+            visibility,
+            readonly,
+            is_accessor,
+            declaring_class,
+        }) = found
+        else {
             return value;
         };
+
+        self.check_member_access_control(prop_name, property_span, visibility, declaring_class);
+
+        // Compound assignment operators remain outside the assignability/readonly subset,
+        // but access control applies to their target.
+        if assign.operator != AssignmentOperator::Assign {
+            return value;
+        }
 
         // A property whose type is the error type carries no real obligation.
         if prop_ty == wk.error {
@@ -199,7 +266,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     (Some(ctx), Some(owner)) if ctx == owner
                 );
             if !(base_is_this(&member.object) && in_declaring_ctor) {
-                self.diagnostics.push(Diagnostic::readonly_assignment(
+                self.emit_diagnostic(Diagnostic::readonly_assignment(
                     Span::from_oxc(member.property.span),
                     member.property.name.as_str(),
                 ));
@@ -225,13 +292,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 false,
             );
             if src != wk.error {
-                check_excess_properties(
-                    self.interner.store(),
-                    &assign.right,
-                    prop_ty,
-                    &mut self.diagnostics,
-                );
-                self.obligations.push(AssignObligation {
+                match self.check_excess_properties_for_target(&assign.right, prop_ty) {
+                    DemandOutcome::Ready(diagnostics) => {
+                        for diagnostic in diagnostics {
+                            self.emit_diagnostic(diagnostic);
+                        }
+                    }
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        self.own_type_demand(DemandOutcome::Exhausted(exhaustion), src_span);
+                        return value;
+                    }
+                }
+                self.schedule_obligation(AssignObligation {
                     src,
                     tgt: prop_ty,
                     src_span,
@@ -251,28 +323,92 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         base_ty: TypeId,
         prop_name: &str,
-    ) -> Option<(TypeId, bool, bool, Option<crate::types::repr::ClassId>)> {
+    ) -> DemandOutcome<Option<MemberAssignmentTarget>> {
+        self.with_semantic_query_transaction(|pass| {
+            pass.union_member_assignment_target_inner(base_ty, prop_name)
+        })
+    }
+
+    fn union_member_assignment_target_inner(
+        &mut self,
+        base_ty: TypeId,
+        prop_name: &str,
+    ) -> DemandOutcome<Option<MemberAssignmentTarget>> {
         // Snapshot the member ids: the per-member lookups are immutable, but interning the
         // result union below needs `&mut`, so the borrow must not be held across it.
-        let members: Vec<TypeId> = self.interner.store().union_members(base_ty)?.to_vec();
+        let Some(members) = self.interner.store().union_members(base_ty) else {
+            return DemandOutcome::Ready(None);
+        };
+        let members = members.to_vec();
 
         let mut member_prop_types: Vec<TypeId> = Vec::with_capacity(members.len());
         let mut any_readonly = false;
+        let mut any_accessor = false;
+        let mut access = None;
         for member in members {
             // M24 (audit): a union member that is a constrained type parameter resolves
             // through its apparent type, mirroring the read side.
-            let member = self.apparent_type(member);
-            let prop = self
+            let member = match self.demand_apparent_type(member) {
+                DemandOutcome::Ready(member) => member,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
+            };
+            let Some((ty, visibility, declaring_class, readonly, is_accessor)) = self
                 .interner
                 .store()
                 .object_type(member)
-                .and_then(|o| o.property(prop_name))?;
-            member_prop_types.push(prop.ty);
-            any_readonly |= prop.readonly;
+                .and_then(|object| object.property(prop_name))
+                .map(|property| {
+                    (
+                        property.write_ty.unwrap_or(property.ty),
+                        property.visibility,
+                        property.declaring_class,
+                        property.readonly,
+                        property.is_accessor,
+                    )
+                })
+            else {
+                return DemandOutcome::Ready(None);
+            };
+            member_prop_types.push(ty);
+            any_readonly |= readonly;
+            any_accessor |= is_accessor;
+            if access.is_none() || matches!(visibility, Visibility::Private | Visibility::Protected)
+            {
+                access = Some((visibility, declaring_class));
+            }
         }
 
         let prop_ty = self.interner.union(member_prop_types);
-        Some((prop_ty, any_readonly, false, None))
+        let (visibility, declaring_class) = access.unwrap_or((Visibility::Public, None));
+        DemandOutcome::Ready(Some(MemberAssignmentTarget {
+            ty: prop_ty,
+            visibility,
+            readonly: any_readonly,
+            is_accessor: any_accessor,
+            declaring_class,
+        }))
+    }
+
+    /// Demand a contextual/excess-property target before the immutable literal
+    /// walker consumes it. Composite class constituents promote atomically.
+    pub(in crate::check::checker) fn check_excess_properties_for_target(
+        &mut self,
+        expr: &Expression<'_>,
+        target_ty: TypeId,
+    ) -> DemandOutcome<Vec<Diagnostic>> {
+        let target_ty = match self.demand_structural_apparent_type(target_ty) {
+            DemandOutcome::Ready(target_ty) => target_ty,
+            DemandOutcome::Exhausted(exhaustion) => {
+                return DemandOutcome::Exhausted(exhaustion);
+            }
+        };
+        DemandOutcome::Ready(check_excess_properties(
+            self.interner.store(),
+            expr,
+            target_ty,
+        ))
     }
 }
 
@@ -283,12 +419,22 @@ pub(in crate::check::checker) fn check_excess_properties(
     store: &Store,
     expr: &Expression<'_>,
     target_ty: TypeId,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    collect_excess_properties(store, expr, target_ty, &mut diagnostics);
+    diagnostics
+}
+
+fn collect_excess_properties(
+    store: &Store,
+    expr: &Expression<'_>,
+    target_ty: TypeId,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let target_ty = contextual_literal_target(store, target_ty);
     match expr {
         Expression::ParenthesizedExpression(paren) => {
-            check_excess_properties(store, &paren.expression, target_ty, diagnostics);
+            collect_excess_properties(store, &paren.expression, target_ty, diagnostics);
         }
         Expression::ObjectExpression(literal) => {
             // M31: a fresh literal against an intersection target is excess-checked against
@@ -342,7 +488,7 @@ fn check_object_excess_properties(
                 // Optional members are `T | undefined`; recurse through the object
                 // part instead of bailing on the union container.
                 let recurse_ty = excess_recursion_target(store, target_prop.ty);
-                check_excess_properties(store, &prop.value, recurse_ty, diagnostics);
+                collect_excess_properties(store, &prop.value, recurse_ty, diagnostics);
             }
             None => {
                 // M19: index signatures suppress accepted keys; numeric keys prefer
@@ -358,7 +504,7 @@ fn check_object_excess_properties(
                         // value still gets its own excess check against the index value
                         // type (the helper self-guards: a no-op unless `prop.value` is a
                         // fresh object literal and `value_ty` is an object type).
-                        check_excess_properties(store, &prop.value, value_ty, diagnostics);
+                        collect_excess_properties(store, &prop.value, value_ty, diagnostics);
                     }
                     None => {
                         diagnostics.push(Diagnostic::excess_property(
@@ -465,7 +611,7 @@ fn check_excess_against_members(
 ) {
     match members {
         [] => {}
-        [single] => check_excess_properties(store, expr, *single, diagnostics),
+        [single] => collect_excess_properties(store, expr, *single, diagnostics),
         _ => match expr {
             Expression::ParenthesizedExpression(paren) => {
                 check_excess_against_members(store, &paren.expression, members, diagnostics);
@@ -493,7 +639,7 @@ fn check_array_excess_properties(
                 continue;
             };
             let target = excess_recursion_target(store, target);
-            check_excess_properties(store, expr, target, diagnostics);
+            collect_excess_properties(store, expr, target, diagnostics);
         }
         return;
     }
@@ -506,7 +652,7 @@ fn check_array_excess_properties(
         let Some(expr) = element.as_expression() else {
             continue;
         };
-        check_excess_properties(store, expr, target, diagnostics);
+        collect_excess_properties(store, expr, target, diagnostics);
     }
 }
 

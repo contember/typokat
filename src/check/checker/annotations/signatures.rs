@@ -1,5 +1,4 @@
 use super::super::decls::alloc_type_param_ids;
-use super::functions::parameter_from_shape;
 use super::*;
 use oxc_ast::ast::TSTypeParameterDeclaration;
 
@@ -127,35 +126,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         )
     }
 
-    /// Lower a class/function-like surface whose own type parameters shadow any
-    /// enclosing class or interface frame.
-    pub(in crate::check::checker) fn lower_generic_signature_function_type(
-        &mut self,
-        scope: ScopeId,
-        type_parameter_decl: Option<&TSTypeParameterDeclaration<'_>>,
-        this_param: Option<&TSThisParameter<'_>>,
-        params: &FormalParameters<'_>,
-        return_type: Option<&TSTypeAnnotation<'_>>,
-    ) -> Option<TypeId> {
-        let ids = alloc_type_param_ids(type_parameter_decl, &mut self.next_type_param);
-        let frame = self.build_type_param_frame(type_parameter_decl, &ids);
-        self.with_type_params(frame, |pass| {
-            let type_params = pass.lower_signature_type_params(scope, type_parameter_decl, &ids);
-            let receiver = pass.lower_this_parameter(scope, this_param)?;
-            let params = pass.lower_signature_parameters(scope, params);
-            let ret = match return_type {
-                Some(ann) => pass.lower_annotation(scope, &ann.type_annotation)?,
-                None => pass.interner.well_known().void,
-            };
-            Some(pass.interner.intern_function(FunctionType {
-                type_params,
-                receiver,
-                params,
-                ret,
-            }))
-        })
-    }
-
     pub(in crate::check::checker) fn lower_generic_strict_signature_function_type(
         &mut self,
         scope: ScopeId,
@@ -181,44 +151,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 ret,
             }))
         })
-    }
-
-    /// Lower signature parameters for function-typed properties and class
-    /// method/constructor signatures.
-    pub(in crate::check::checker) fn lower_signature_parameters(
-        &mut self,
-        scope: ScopeId,
-        params: &FormalParameters<'_>,
-    ) -> Vec<ParameterType> {
-        let error_ty = self.interner.well_known().error;
-        let mut lowered: Vec<ParameterType> =
-            Vec::with_capacity(params.items.len() + usize::from(params.rest.is_some()));
-        for param in &params.items {
-            let name = parameter_name(&param.pattern).unwrap_or_default();
-            let ty = match param.type_annotation.as_ref() {
-                Some(ann) => self
-                    .lower_annotation(scope, &ann.type_annotation)
-                    .unwrap_or(error_ty),
-                None => error_ty,
-            };
-            lowered.push(parameter_from_shape(
-                name,
-                ty,
-                param.optional,
-                param.initializer.is_some(),
-            ));
-        }
-        if let Some(rest) = &params.rest {
-            let name = parameter_name(&rest.rest.argument).unwrap_or_default();
-            let ty = match rest.type_annotation.as_ref() {
-                Some(ann) => self
-                    .lower_annotation(scope, &ann.type_annotation)
-                    .unwrap_or(error_ty),
-                None => error_ty,
-            };
-            lowered.push(ParameterType::rest(name, ty));
-        }
-        lowered
     }
 
     /// Lower the non-positional explicit receiver of a function-like signature.

@@ -40,6 +40,26 @@ k = \"z\";
     assert_eq!(diags(src), vec![(4, "TK2322".to_string())]);
 }
 
+/// Class applications defer `keyof` until the query coordinator projects their
+/// public instance surface; private and protected members never become keys.
+#[test]
+fn keyof_class_projects_only_public_members() {
+    let src = "\
+class Model {
+  public visible: number;
+  private secret: string;
+  protected inherited: boolean;
+}
+let key: keyof Model = \"visible\";
+key = \"secret\";
+key = \"inherited\";
+";
+    assert_eq!(
+        diags(src),
+        vec![(7, "TK2322".to_string()), (8, "TK2322".to_string())]
+    );
+}
+
 /// `keyof {}` (no members, no index signature) is **`never`** (the empty union
 /// collapses to `never`). Nothing is assignable to `never`, so binding a string to
 /// it is `TK2322` — and, crucially, the empty case does not crash.

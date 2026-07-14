@@ -184,3 +184,65 @@ this._n = v;
 ";
     assert_eq!(diags(src), vec![(7, "TK2322".to_string())]);
 }
+
+/// A generic instance accessor keeps its getter and setter types separate through
+/// class application.
+#[test]
+fn generic_instance_accessor_has_distinct_read_and_write_types() {
+    let src = "\
+class Box<T> {
+  get value(): number {
+return 1;
+  }
+  set value(next: T) {}
+}
+const box = new Box<string>();
+const read: number = box.value;
+const badRead: string = box.value;
+box.value = \"ok\";
+box.value = 1;
+";
+    assert_eq!(
+        diags(src),
+        vec![(9, "TK2322".to_string()), (11, "TK2322".to_string())]
+    );
+}
+
+/// Static accessors also use the getter result for reads and the setter parameter
+/// for writes.
+#[test]
+fn static_accessor_has_distinct_read_and_write_types() {
+    let src = "\
+class Registry {
+  static get value(): number {
+return 1;
+  }
+  static set value(next: string) {}
+}
+const read: number = Registry.value;
+const badRead: string = Registry.value;
+Registry.value = \"ok\";
+Registry.value = 1;
+";
+    assert_eq!(
+        diags(src),
+        vec![(8, "TK2322".to_string()), (10, "TK2322".to_string())]
+    );
+}
+
+/// An omitted setter annotation retains the approved implicit-`any` write type
+/// without changing the getter's read type.
+#[test]
+fn implicit_any_setter_does_not_change_getter_read_type() {
+    let src = "\
+class Loose {
+  get value(): void {}
+  set value(next) {}
+}
+const loose = new Loose();
+const read: void = loose.value;
+loose.value = \"anything\";
+loose.value = 1;
+";
+    assert_eq!(diags(src), vec![]);
+}

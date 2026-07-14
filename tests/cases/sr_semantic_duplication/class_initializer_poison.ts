@@ -15,6 +15,7 @@ class PoisonedInitializerSurface {
 
   bodyStillChecks(): void {
     const bodyMismatch: string = 1; // error[TK2322]: Type 'number' is not assignable to type 'string'
+    this.safe = "wrong"; // error[TK2322]: Type 'string' is not assignable to type 'number'
   }
 }
 
@@ -47,8 +48,8 @@ class OrdinaryPoisonReference {
 declare const ordinaryPoisonReference: OrdinaryPoisonReference;
 const laterPoisonDemand = ordinaryPoisonReference.property.mutableOrigin;
 
-class PoisonedDerivedOne extends PoisonedInitializerSurface {} // incomplete[class/class-heritage/poisoned-base]
-class PoisonedDerivedTwo extends PoisonedDerivedOne {} // incomplete[class/class-heritage/poisoned-base]
+class PoisonedDerivedOne extends PoisonedInitializerSurface {} // incomplete[class/class-heritage/poisoned-base]: class heritage base surface is poisoned
+class PoisonedDerivedTwo extends PoisonedDerivedOne {} // incomplete[class/class-heritage/poisoned-base]: class heritage base surface is poisoned
 
-class HeritageCycleLeft extends HeritageCycleRight {} // incomplete[class/class-heritage/cycle]
-class HeritageCycleRight extends HeritageCycleLeft {} // incomplete[class/class-heritage/cycle]
+class HeritageCycleLeft extends HeritageCycleRight {} // incomplete[class/class-heritage/cycle]: class heritage cycle poisons the published surface
+class HeritageCycleRight extends HeritageCycleLeft {} // incomplete[class/class-heritage/cycle]: class heritage cycle poisons the published surface

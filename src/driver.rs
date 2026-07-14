@@ -3,6 +3,7 @@
 //! The driver owns the per-run allocator that backs the AST and the type
 //! `Interner`, keeping borrowed parser data inside the parse/check call.
 
+use crate::check::checker::events::{ModuleOrdinal, UnitSlot};
 use crate::check::{
     check_program, check_project_programs, CheckResult, ProjectImport, ProjectImportSource,
     ProjectProgram,
@@ -100,6 +101,7 @@ fn check_source_inner(source: &str) -> CheckOutput {
     let CheckResult {
         diagnostics,
         incomplete,
+        ..
     } = check_program(&mut interner, &parsed.program);
 
     CheckOutput {
@@ -198,7 +200,10 @@ fn check_project_inner(inputs: Vec<FileInput>) -> Vec<FileReport> {
 
     let project_units: Vec<ProjectProgram<'_>> = order
         .iter()
-        .map(|&original| ProjectProgram {
+        .enumerate()
+        .map(|(unit_slot, &original)| ProjectProgram {
+            module_ordinal: ModuleOrdinal::new(original),
+            unit_slot: UnitSlot::new(unit_slot),
             program: &parsed[original].program,
             imports: raw_imports[original]
                 .iter()
@@ -216,6 +221,7 @@ fn check_project_inner(inputs: Vec<FileInput>) -> Vec<FileReport> {
                     },
                     type_only: import.type_only,
                     span: import.span,
+                    owner_start: import.owner_start,
                 })
                 .collect(),
         })
@@ -227,10 +233,14 @@ fn check_project_inner(inputs: Vec<FileInput>) -> Vec<FileReport> {
         (0..inputs.len()).map(|_| Vec::new()).collect();
     let mut incomplete_by_original: Vec<Vec<IncompleteSurface>> =
         (0..inputs.len()).map(|_| Vec::new()).collect();
-    for (ordered, result) in ordered_results.into_iter().enumerate() {
-        let Some(&original) = order.get(ordered) else {
-            continue;
-        };
+    for result in ordered_results {
+        let original = result.module_ordinal.index();
+        debug_assert_eq!(
+            project_units
+                .get(result.unit_slot.index())
+                .map(|unit| unit.module_ordinal),
+            Some(result.module_ordinal)
+        );
         if let Some(slot) = diagnostics_by_original.get_mut(original) {
             *slot = result.diagnostics;
         }
@@ -268,6 +278,7 @@ struct RawImport {
     source: RawImportSource,
     type_only: bool,
     span: Span,
+    owner_start: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -311,6 +322,7 @@ fn scan_imports(
                     source,
                     type_only,
                     span: Span::from_oxc(named.span),
+                    owner_start: import.span.start,
                 });
             }
         }
@@ -684,5 +696,24 @@ mod tests {
             "value + type both resolve: {:?}",
             codes(&reports[1].output)
         );
+    }
+
+    #[test]
+    fn project_results_follow_input_order_not_dependency_order() {
+        let reports = check_project(vec![
+            FileInput {
+                name: "use.ts".into(),
+                source: "import { x } from './dep'; missingUse; const ok: number = x;".into(),
+            },
+            FileInput {
+                name: "dep.ts".into(),
+                source: "export const x = 1; const bad: number = 'bad';".into(),
+            },
+        ]);
+
+        assert_eq!(reports[0].name, "use.ts");
+        assert_eq!(codes(&reports[0].output), ["TK2304"]);
+        assert_eq!(reports[1].name, "dep.ts");
+        assert_eq!(codes(&reports[1].output), ["TK2322"]);
     }
 }

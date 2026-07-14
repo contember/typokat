@@ -8,8 +8,11 @@ use crate::binder::bind_module_with_prelude;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::DeclId;
 use crate::binder::Binder;
-use crate::diagnostics::{Diagnostic, IncompleteSurface};
-use crate::relate::{Relater, Relation};
+use crate::check::query::SemanticQueryCoordinator;
+use crate::check::query::SemanticQueryState;
+use crate::class_semantics::{Exhaustion, PublishedClasses};
+use crate::diagnostics::{render_reason_chain, Diagnostic, IncompleteSurface};
+use crate::relate::RelationOutcome;
 use crate::span::Span;
 use crate::types::repr::TypeParamId;
 use crate::types::store::TypeId;
@@ -30,15 +33,48 @@ mod classes;
 mod context;
 mod decls;
 pub(in crate::check) mod eval;
+pub(crate) mod events;
 mod expr;
 mod flowgraph;
 mod indexed_access;
+pub(crate) mod lexical_events;
 mod narrowing;
 mod statements;
 
-use context::{ClassFillState, DeclTypes, Pass, TypeDecl};
-use decls::{reserve_type_decls, type_decl_id};
-use statements::{emit_obligation_failure, emit_override_failures};
+use context::{
+    AssignObligation, CheckerEffects, ClassFillState, DeclTypes, OverrideCheck, Pass, TypeDecl,
+};
+use decls::{reserve_type_decls, type_decl_id, value_decl_id, walk_type_decls, TopTypeDecl};
+use events::{CandidateEffects, EventStore, ModuleOrdinal, RecordTicket, UnitSlot};
+use lexical_events::{ClassBinding, LexicalOwnerPhase, LexicalReservations};
+use statements::{emit_exhausted_obligation, emit_obligation_failure};
+
+struct PassReporting {
+    module_ordinal: ModuleOrdinal,
+    unit_slot: UnitSlot,
+    event_store: EventStore,
+    lexical_events: LexicalReservations,
+    suppress_effects: bool,
+}
+
+fn reserve_reporting(
+    program: &Program<'_>,
+    module_ordinal: ModuleOrdinal,
+    unit_slot: UnitSlot,
+) -> PassReporting {
+    let mut event_store = EventStore::default();
+    let mut lexical_events = LexicalReservations::default();
+    lexical_events
+        .reserve_program(module_ordinal, unit_slot, program, &mut event_store)
+        .expect("lexical event reservation must reference valid events");
+    PassReporting {
+        module_ordinal,
+        unit_slot,
+        event_store,
+        lexical_events,
+        suppress_effects: true,
+    }
+}
 
 /// Trusted utility aliases and bounded ambient values, checked before user code.
 pub(crate) const PRELUDE_SOURCE: &str = include_str!("../../prelude.ts");
@@ -47,6 +83,8 @@ pub(crate) const PRELUDE_SOURCE: &str = include_str!("../../prelude.ts");
 /// incomplete-surface channel (in-scope AST positions the checker skipped). An empty
 /// `incomplete` is the normal case today — WU3–5 wire the emissions (sprint 2026-07-10).
 pub struct CheckResult {
+    pub(crate) module_ordinal: ModuleOrdinal,
+    pub(crate) unit_slot: UnitSlot,
     pub diagnostics: Vec<Diagnostic>,
     pub incomplete: Vec<IncompleteSurface>,
 }
@@ -69,12 +107,22 @@ fn emit_test_incomplete(pass: &mut Pass<'_, '_>) {
             .filter(|s| !s.is_empty())
             .collect(),
     };
-    for id in ids {
-        pass.record_incomplete(
-            id,
-            Span::new(0, 0),
-            "test-only emission hook (WU2 plumbing)",
-        );
+    let source_start = pass
+        .lexical_events
+        .top_level()
+        .iter()
+        .find(|site| site.source.module_ordinal == pass.current_module_ordinal)
+        .map(|site| site.source.source_start);
+    if let Some(source_start) = source_start {
+        pass.with_lexical_effects(source_start, LexicalOwnerPhase::Incomplete, |pass| {
+            for id in ids {
+                pass.record_incomplete(
+                    id,
+                    Span::new(0, 0),
+                    "test-only emission hook (WU2 plumbing)",
+                );
+            }
+        });
     }
 }
 
@@ -91,6 +139,13 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
     );
 
     let binder = bind_module_with_prelude(&prelude_parsed.program, program);
+    let module_ordinal = ModuleOrdinal::new(0);
+    let unit_slot = UnitSlot::new(0);
+    let mut event_store = EventStore::default();
+    let mut lexical_events = LexicalReservations::default();
+    lexical_events
+        .reserve_program(module_ordinal, unit_slot, program, &mut event_store)
+        .expect("lexical event reservation must reference valid events");
 
     // Reserve type ids before lowering bodies so recursive declarations store ids, not
     // expanded structures.
@@ -113,23 +168,37 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
         &mut prelude_decls,
         &mut type_resolved,
     );
-    let mut prelude_pass = build_pass(
+    let mut prelude_reporting = reserve_reporting(
+        &prelude_parsed.program,
+        ModuleOrdinal::new(0),
+        UnitSlot::new(0),
+    );
+    attach_type_decl_owners(
+        &mut prelude_reporting.lexical_events,
+        ModuleOrdinal::new(0),
+        &binder,
+        binder.prelude_module,
+        &prelude_parsed.program,
+    );
+    let mut prelude_pass = build_pass_with_reporting(
         interner,
         &binder,
         prelude_decls,
         type_resolved,
         DeclTypes::new(binder.decl_count),
         next_type_param,
+        prelude_reporting,
     );
     prelude_pass.current_module = binder.prelude_module;
     prelude_pass.fill_type_decls(binder.prelude_module);
     prelude_pass.build_flow_graph(binder.prelude_module, &prelude_parsed.program.body);
     prelude_pass.check_statements(binder.prelude_module, &prelude_parsed.program.body);
-    // Prelude diagnostics are never surfaced to users; debug builds still assert it is clean.
+    let prelude_records = finish_event_effects(&mut prelude_pass);
     debug_assert!(
-        prelude_pass.diagnostics.is_empty(),
-        "the prelude must check clean: {:?}",
-        prelude_pass.diagnostics
+        prelude_records
+            .values()
+            .all(|(diagnostics, incomplete)| diagnostics.is_empty() && incomplete.is_empty()),
+        "the prelude must check clean"
     );
     // Extract lifetime-free outputs before the prelude AST borrow goes away.
     let prelude_params: Vec<Vec<TypeParamId>> = prelude_pass
@@ -184,17 +253,44 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
         &mut type_decls,
         &mut type_resolved,
     );
-    let mut pass = build_pass(
+    attach_type_decl_owners(
+        &mut lexical_events,
+        module_ordinal,
+        &binder,
+        binder.module,
+        program,
+    );
+    attach_class_bindings(
+        &mut lexical_events,
+        module_ordinal,
+        &binder,
+        binder.module,
+        program,
+        &type_decls,
+    );
+    lexical_events
+        .reserve_callable_type_params(&mut next_type_param)
+        .expect("one callable binder reservation pass");
+    let mut pass = build_pass_with_reporting(
         interner,
         &binder,
         type_decls,
         type_resolved,
         decl_types,
         next_type_param,
+        PassReporting {
+            module_ordinal,
+            unit_slot,
+            event_store,
+            lexical_events,
+            suppress_effects: false,
+        },
     );
 
     // Phase 0: fill named type declarations before walking values.
     pass.fill_type_decls(binder.module);
+    pass.publish_class_surfaces(&[(module_ordinal, binder.module)]);
+    pass.fill_pending_interfaces_range(binder.module, 0, pass.type_decls.len());
 
     // Phase 0.5: build complete flow graphs before narrowed reads are resolved.
     pass.build_flow_graph(binder.module, &program.body);
@@ -204,37 +300,12 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
 
     emit_test_incomplete(&mut pass);
 
-    // Move the working set out before borrowing the store immutably for phase 2.
-    let Pass {
-        interner,
-        obligations,
-        override_checks,
-        mut diagnostics,
-        incomplete,
-        ..
-    } = pass;
-
-    // Phase 2: relate obligations after mutable interning is done.
-    let well_known = interner.well_known();
-    let store = interner.store();
-    let mut relater = Relater::new(store, well_known);
-
-    for ob in &obligations {
-        if let Relation::No(chain) = relater.is_assignable(ob.src, ob.tgt) {
-            emit_obligation_failure(store, ob, chain.head(), &mut diagnostics);
-        }
-    }
-
-    // Override checks share this relater with normal obligations.
-    emit_override_failures(
-        store,
-        well_known,
-        &mut relater,
-        &override_checks,
-        &mut diagnostics,
-    );
+    let mut records = finish_event_effects(&mut pass);
+    let (diagnostics, incomplete) = records.remove(&module_ordinal).unwrap_or_default();
 
     CheckResult {
+        module_ordinal,
+        unit_slot,
         diagnostics,
         incomplete,
     }
@@ -242,6 +313,8 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
 
 /// One parsed project unit handed to the serial M29 project checker.
 pub struct ProjectProgram<'ast> {
+    pub(crate) module_ordinal: ModuleOrdinal,
+    pub(crate) unit_slot: UnitSlot,
     pub program: &'ast Program<'ast>,
     pub imports: Vec<ProjectImport>,
 }
@@ -254,6 +327,8 @@ pub struct ProjectImport {
     pub source: ProjectImportSource,
     pub type_only: bool,
     pub span: Span,
+    /// Owning import-declaration start reserved before project binding.
+    pub owner_start: u32,
 }
 
 pub enum ProjectImportSource {
@@ -286,23 +361,36 @@ pub fn check_project_programs<'ast>(
         prelude_parsed.diagnostics
     );
 
+    let mut event_store = EventStore::default();
+    let mut lexical_events = LexicalReservations::default();
+    for (slot, unit) in units.iter().enumerate() {
+        debug_assert_eq!(unit.unit_slot.index(), slot);
+        lexical_events
+            .reserve_program(
+                unit.module_ordinal,
+                unit.unit_slot,
+                unit.program,
+                &mut event_store,
+            )
+            .expect("lexical event reservation must reference valid events");
+    }
+
     let mut builder = ProjectBinderBuilder::new(&prelude_parsed.program);
     let mut module_scopes = Vec::with_capacity(units.len());
     let mut module_placeholders: Vec<Vec<ImportPlaceholder>> = Vec::with_capacity(units.len());
-    let mut module_diagnostics: Vec<Vec<Diagnostic>> =
-        (0..units.len()).map(|_| Vec::new()).collect();
-    let mut module_incomplete: Vec<Vec<IncompleteSurface>> =
-        (0..units.len()).map(|_| Vec::new()).collect();
+    let mut external_effects: BTreeMap<RecordTicket, CandidateEffects> = BTreeMap::new();
     let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
 
-    for (index, unit) in units.iter().enumerate() {
-        let imports = imported_symbols(unit, &exports, &mut module_diagnostics[index]);
+    for unit in units {
+        let imports = imported_symbols(unit, &exports, &lexical_events, &mut external_effects);
         let (scope, placeholders) = builder.add_module(unit.program, &imports);
         let surface = collect_exports(
             &builder,
             scope,
             unit.program,
-            &mut module_diagnostics[index],
+            unit.module_ordinal,
+            &lexical_events,
+            &mut external_effects,
         );
         module_scopes.push(scope);
         module_placeholders.push(placeholders);
@@ -328,22 +416,37 @@ pub fn check_project_programs<'ast>(
         &mut prelude_decls,
         &mut type_resolved,
     );
-    let mut prelude_pass = build_pass(
+    let mut prelude_reporting = reserve_reporting(
+        &prelude_parsed.program,
+        ModuleOrdinal::new(0),
+        UnitSlot::new(0),
+    );
+    attach_type_decl_owners(
+        &mut prelude_reporting.lexical_events,
+        ModuleOrdinal::new(0),
+        &binder,
+        binder.prelude_module,
+        &prelude_parsed.program,
+    );
+    let mut prelude_pass = build_pass_with_reporting(
         interner,
         &binder,
         prelude_decls,
         type_resolved,
         DeclTypes::new(binder.decl_count),
         next_type_param,
+        prelude_reporting,
     );
     prelude_pass.current_module = binder.prelude_module;
     prelude_pass.fill_type_decls(binder.prelude_module);
     prelude_pass.build_flow_graph(binder.prelude_module, &prelude_parsed.program.body);
     prelude_pass.check_statements(binder.prelude_module, &prelude_parsed.program.body);
+    let prelude_records = finish_event_effects(&mut prelude_pass);
     debug_assert!(
-        prelude_pass.diagnostics.is_empty(),
-        "the prelude must check clean: {:?}",
-        prelude_pass.diagnostics
+        prelude_records
+            .values()
+            .all(|(diagnostics, incomplete)| diagnostics.is_empty() && incomplete.is_empty()),
+        "the prelude must check clean"
     );
     let prelude_params: Vec<Vec<TypeParamId>> = prelude_pass
         .type_decls
@@ -390,8 +493,26 @@ pub fn check_project_programs<'ast>(
             &mut type_decls,
             &mut type_resolved,
         );
+        attach_type_decl_owners(
+            &mut lexical_events,
+            unit.module_ordinal,
+            &binder,
+            scope,
+            unit.program,
+        );
+        attach_class_bindings(
+            &mut lexical_events,
+            unit.module_ordinal,
+            &binder,
+            scope,
+            unit.program,
+            &type_decls,
+        );
         type_decl_ranges.push((start, type_decls.len()));
     }
+    lexical_events
+        .reserve_callable_type_params(&mut next_type_param)
+        .expect("one callable binder reservation pass");
 
     for placeholders in &module_placeholders {
         for placeholder in placeholders {
@@ -400,14 +521,30 @@ pub fn check_project_programs<'ast>(
             }
         }
     }
-    let mut pass = build_pass(
+    let mut pass = build_pass_with_reporting(
         interner,
         &binder,
         type_decls,
         type_resolved,
         decl_types,
         next_type_param,
+        PassReporting {
+            module_ordinal: units
+                .first()
+                .map(|unit| unit.module_ordinal)
+                .unwrap_or(ModuleOrdinal::new(0)),
+            unit_slot: units
+                .first()
+                .map(|unit| unit.unit_slot)
+                .unwrap_or(UnitSlot::new(0)),
+            event_store,
+            lexical_events,
+            suppress_effects: false,
+        },
     );
+    for effects in external_effects.into_values() {
+        pass.enqueue_effects(CheckerEffects::from_records(effects));
+    }
 
     for (index, scope) in module_scopes.iter().copied().enumerate() {
         let (start, end) = type_decl_ranges
@@ -415,28 +552,54 @@ pub fn check_project_programs<'ast>(
             .copied()
             .unwrap_or((0, pass.type_decls.len()));
         pass.current_module = scope;
+        if let Some(unit) = units.get(index) {
+            pass.current_module_ordinal = unit.module_ordinal;
+            pass.current_unit_slot = unit.unit_slot;
+        }
         pass.fill_type_decls_range(scope, start, end);
-        emit_pending_checks(&mut pass);
-        module_diagnostics[index].append(&mut pass.diagnostics);
-        module_incomplete[index].append(&mut pass.incomplete);
     }
 
-    for (index, (scope, unit)) in module_scopes.iter().copied().zip(units).enumerate() {
+    let publication_scopes: Vec<(ModuleOrdinal, ScopeId)> = units
+        .iter()
+        .zip(module_scopes.iter().copied())
+        .map(|(unit, scope)| (unit.module_ordinal, scope))
+        .collect();
+    pass.publish_class_surfaces(&publication_scopes);
+
+    for (index, scope) in module_scopes.iter().copied().enumerate() {
+        let (start, end) = type_decl_ranges
+            .get(index)
+            .copied()
+            .unwrap_or((0, pass.type_decls.len()));
         pass.current_module = scope;
+        if let Some(unit) = units.get(index) {
+            pass.current_module_ordinal = unit.module_ordinal;
+            pass.current_unit_slot = unit.unit_slot;
+        }
+        pass.fill_pending_interfaces_range(scope, start, end);
+    }
+
+    for (scope, unit) in module_scopes.iter().copied().zip(units) {
+        pass.current_module = scope;
+        pass.current_module_ordinal = unit.module_ordinal;
+        pass.current_unit_slot = unit.unit_slot;
         pass.build_flow_graph(scope, &unit.program.body);
         pass.check_statements(scope, &unit.program.body);
-        emit_pending_checks(&mut pass);
         emit_test_incomplete(&mut pass);
-        module_diagnostics[index].append(&mut pass.diagnostics);
-        module_incomplete[index].append(&mut pass.incomplete);
     }
 
-    module_diagnostics
-        .into_iter()
-        .zip(module_incomplete)
-        .map(|(diagnostics, incomplete)| CheckResult {
-            diagnostics,
-            incomplete,
+    let mut records = finish_event_effects(&mut pass);
+    units
+        .iter()
+        .map(|unit| {
+            let (diagnostics, incomplete) =
+                records.remove(&unit.module_ordinal).unwrap_or_default();
+            CheckResult {
+                module_ordinal: unit.module_ordinal,
+                unit_slot: unit.unit_slot,
+                diagnostics,
+                incomplete,
+            }
         })
         .collect()
 }
@@ -444,13 +607,20 @@ pub fn check_project_programs<'ast>(
 fn imported_symbols(
     unit: &ProjectProgram<'_>,
     exports: &[ExportSurface],
-    diagnostics: &mut Vec<Diagnostic>,
+    reservations: &LexicalReservations,
+    effects: &mut BTreeMap<RecordTicket, CandidateEffects>,
 ) -> Vec<ImportedSymbol> {
     let mut imports = Vec::new();
     for import in &unit.imports {
         match &import.source {
             ProjectImportSource::Missing(module) => {
-                diagnostics.push(Diagnostic::cannot_find_module(import.span, module));
+                enqueue_external_diagnostic(
+                    reservations,
+                    effects,
+                    unit.module_ordinal,
+                    import.owner_start,
+                    Diagnostic::cannot_find_module(import.span, module),
+                );
                 imports.push(placeholder_import(&import.local, import.type_only));
             }
             ProjectImportSource::Resolved(module_index) => {
@@ -477,11 +647,17 @@ fn imported_symbols(
                         }
                     }
                     None => {
-                        diagnostics.push(Diagnostic::no_exported_member(
-                            import.span,
-                            &import.module,
-                            &import.imported,
-                        ));
+                        enqueue_external_diagnostic(
+                            reservations,
+                            effects,
+                            unit.module_ordinal,
+                            import.owner_start,
+                            Diagnostic::no_exported_member(
+                                import.span,
+                                &import.module,
+                                &import.imported,
+                            ),
+                        );
                         imports.push(placeholder_import(&import.local, import.type_only));
                     }
                 }
@@ -503,7 +679,9 @@ fn collect_exports(
     builder: &ProjectBinderBuilder,
     scope: ScopeId,
     program: &Program<'_>,
-    diagnostics: &mut Vec<Diagnostic>,
+    module_ordinal: ModuleOrdinal,
+    reservations: &LexicalReservations,
+    effects: &mut BTreeMap<RecordTicket, CandidateEffects>,
 ) -> ExportSurface {
     let mut surface = ExportSurface::new();
     for stmt in &program.body {
@@ -519,15 +697,16 @@ fn collect_exports(
             // `export type { x }` marks the whole statement type-only; mirror the
             // import side (driver.rs) where the outer kind ORs with each specifier.
             let outer_type_only = export.export_kind == ImportOrExportKind::Type;
+            let mut context = ListExportContext {
+                builder,
+                scope,
+                surface: &mut surface,
+                module_ordinal,
+                reservations,
+                effects,
+            };
             for specifier in &export.specifiers {
-                collect_list_export(
-                    builder,
-                    scope,
-                    specifier,
-                    outer_type_only,
-                    &mut surface,
-                    diagnostics,
-                );
+                collect_list_export(&mut context, specifier, outer_type_only, stmt.span().start);
             }
         }
     }
@@ -608,13 +787,20 @@ fn collect_declaration_export(
     }
 }
 
-fn collect_list_export(
-    builder: &ProjectBinderBuilder,
+struct ListExportContext<'a> {
+    builder: &'a ProjectBinderBuilder,
     scope: ScopeId,
+    surface: &'a mut ExportSurface,
+    module_ordinal: ModuleOrdinal,
+    reservations: &'a LexicalReservations,
+    effects: &'a mut BTreeMap<RecordTicket, CandidateEffects>,
+}
+
+fn collect_list_export(
+    context: &mut ListExportContext<'_>,
     specifier: &ExportSpecifier<'_>,
     outer_type_only: bool,
-    surface: &mut ExportSurface,
-    diagnostics: &mut Vec<Diagnostic>,
+    owner_start: u32,
 ) {
     let Some(local) = module_export_name(&specifier.local) else {
         return;
@@ -622,15 +808,20 @@ fn collect_list_export(
     let Some(exported) = module_export_name(&specifier.exported) else {
         return;
     };
-    let (mut value, ty) = builder.local_symbol_slots(scope, local);
-    let local_value_barrier = builder.local_value_lookup_barrier(scope, local);
+    let (mut value, ty) = context.builder.local_symbol_slots(context.scope, local);
+    let local_value_barrier = context
+        .builder
+        .local_value_lookup_barrier(context.scope, local);
     // Existence is judged against the real symbol; a value-only local is still a
     // valid `export type { x }` target (the error surfaces on the importer, below).
     if value.is_none() && ty.is_none() && !local_value_barrier {
-        diagnostics.push(Diagnostic::cannot_find_name(
-            Span::from_oxc(specifier.local.span()),
-            local,
-        ));
+        enqueue_external_diagnostic(
+            context.reservations,
+            context.effects,
+            context.module_ordinal,
+            owner_start,
+            Diagnostic::cannot_find_name(Span::from_oxc(specifier.local.span()), local),
+        );
         return;
     }
     // A type-only specifier (`export type { x }` or `export { type x }`) must not
@@ -641,7 +832,7 @@ fn collect_list_export(
     if type_only {
         value = None;
     }
-    surface.insert(
+    context.surface.insert(
         exported.to_string(),
         ExportedSlots {
             value,
@@ -649,6 +840,22 @@ fn collect_list_export(
             value_erased,
         },
     );
+}
+
+fn enqueue_external_diagnostic(
+    reservations: &LexicalReservations,
+    effects: &mut BTreeMap<RecordTicket, CandidateEffects>,
+    module_ordinal: ModuleOrdinal,
+    owner_start: u32,
+    diagnostic: Diagnostic,
+) {
+    let owner = reservations
+        .owner_at(module_ordinal, owner_start, LexicalOwnerPhase::Immediate)
+        .expect("import/export diagnostic owner must be lexically reserved");
+    effects
+        .entry(owner.ticket)
+        .or_insert_with(|| CandidateEffects::new(owner.ticket))
+        .diagnostic(diagnostic);
 }
 
 fn module_export_name<'ast>(name: &'ast ModuleExportName<'ast>) -> Option<&'ast str> {
@@ -706,28 +913,353 @@ fn seed_prelude_intrinsics(
     }
 }
 
-fn emit_pending_checks(pass: &mut Pass<'_, '_>) {
-    let obligations = std::mem::take(&mut pass.obligations);
-    let override_checks = std::mem::take(&mut pass.override_checks);
-    let well_known = pass.interner.well_known();
-    let store = pass.interner.store();
-    let mut relater = Relater::new(store, well_known);
-
-    for ob in &obligations {
-        if let Relation::No(chain) = relater.is_assignable(ob.src, ob.tgt) {
-            emit_obligation_failure(store, ob, chain.head(), &mut pass.diagnostics);
-        }
-    }
-    emit_override_failures(
-        store,
-        well_known,
-        &mut relater,
-        &override_checks,
-        &mut pass.diagnostics,
+fn attach_type_decl_owners(
+    reservations: &mut LexicalReservations,
+    module_ordinal: ModuleOrdinal,
+    binder: &Binder,
+    scope: ScopeId,
+    program: &Program<'_>,
+) {
+    walk_type_decls(
+        binder,
+        scope,
+        program,
+        &mut |declaration_scope, owner_start, declaration| {
+            let name = match declaration {
+                TopTypeDecl::Interface(declaration) => Some(declaration.id.name.as_str()),
+                TopTypeDecl::Alias(declaration) => Some(declaration.id.name.as_str()),
+                TopTypeDecl::Class(declaration) => {
+                    declaration.id.as_ref().map(|id| id.name.as_str())
+                }
+            };
+            let Some(decl_id) = name.and_then(|name| type_decl_id(binder, declaration_scope, name))
+            else {
+                return;
+            };
+            reservations
+                .attach_type_decl_owner(decl_id, module_ordinal, owner_start)
+                .expect("named type declaration must have a lexical owner");
+        },
     );
 }
 
+fn attach_class_bindings(
+    reservations: &mut LexicalReservations,
+    module_ordinal: ModuleOrdinal,
+    binder: &Binder,
+    scope: ScopeId,
+    program: &Program<'_>,
+    declarations: &[TypeDecl<'_>],
+) {
+    walk_type_decls(
+        binder,
+        scope,
+        program,
+        &mut |declaration_scope, _, declaration| {
+            let TopTypeDecl::Class(class) = declaration else {
+                return;
+            };
+            let Some(name) = class.id.as_ref().map(|id| id.name.as_str()) else {
+                return;
+            };
+            let Some(site) = reservations.class_at(module_ordinal, class.span.start) else {
+                return;
+            };
+            let Some(type_decl) = type_decl_id(binder, declaration_scope, name) else {
+                return;
+            };
+            let Some(value_decl) = value_decl_id(binder, declaration_scope, name) else {
+                return;
+            };
+            let Some(TypeDecl::Class {
+                class_id, params, ..
+            }) = declarations.get(type_decl.index())
+            else {
+                return;
+            };
+            reservations
+                .attach_class_binding(
+                    site,
+                    ClassBinding {
+                        class_id: *class_id,
+                        type_decl,
+                        value_decl,
+                        header_type_params: params.clone(),
+                    },
+                )
+                .expect("one class binding attachment per lexical class site");
+        },
+    );
+}
+
+fn finish_event_effects(
+    pass: &mut Pass<'_, '_>,
+) -> BTreeMap<ModuleOrdinal, (Vec<Diagnostic>, Vec<IncompleteSurface>)> {
+    let pending = std::mem::take(&mut pass.pending_effects);
+    for mut effects in pending {
+        for obligation in std::mem::take(&mut effects.obligations) {
+            let outcome = SemanticQueryCoordinator::new(
+                pass.interner,
+                &pass.published_classes,
+                &mut pass.semantic_queries,
+                &mut pass.next_type_param,
+            )
+            .is_assignable(obligation.src, obligation.tgt);
+            match outcome {
+                RelationOutcome::Yes => {}
+                RelationOutcome::No(chain) => {
+                    effects.records.diagnostic(emit_obligation_failure(
+                        pass.interner.store(),
+                        &obligation,
+                        chain.head(),
+                    ));
+                }
+                RelationOutcome::Exhausted(Exhaustion::ClassProjectionBudget) => {
+                    effects.records.diagnostic(emit_exhausted_obligation(
+                        pass.interner.store(),
+                        &obligation,
+                    ));
+                    effects.records.incomplete(IncompleteSurface::new(
+                        "relation/class-projection-budget",
+                        obligation.src_span,
+                        "class projection budget exhausted",
+                    ));
+                }
+                RelationOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
+                | RelationOutcome::Exhausted(Exhaustion::ClassHeritagePoison { .. })
+                | RelationOutcome::Exhausted(Exhaustion::ClassInitializerPoison { .. })
+                | RelationOutcome::Exhausted(Exhaustion::ClassSurfacePoison { .. })
+                | RelationOutcome::Exhausted(Exhaustion::ClassApplicationArguments(_))
+                | RelationOutcome::Exhausted(Exhaustion::EvaluationBudget)
+                | RelationOutcome::Exhausted(Exhaustion::EvaluationCycle { .. }) => {}
+            }
+        }
+        for check in std::mem::take(&mut effects.override_checks) {
+            if check.base_is_method {
+                let strict = SemanticQueryCoordinator::new(
+                    pass.interner,
+                    &pass.published_classes,
+                    &mut pass.semantic_queries,
+                    &mut pass.next_type_param,
+                )
+                .is_assignable(check.own_ty, check.base_ty);
+                let (compatible, exhaustion) = match strict {
+                    RelationOutcome::Yes => (true, None),
+                    RelationOutcome::No(_) => match SemanticQueryCoordinator::new(
+                        pass.interner,
+                        &pass.published_classes,
+                        &mut pass.semantic_queries,
+                        &mut pass.next_type_param,
+                    )
+                    .overload_implementation_compatible(check.own_ty, check.base_ty)
+                    {
+                        RelationOutcome::Yes => (true, None),
+                        RelationOutcome::No(_) => (false, None),
+                        RelationOutcome::Exhausted(exhaustion) => (false, Some(exhaustion)),
+                    },
+                    RelationOutcome::Exhausted(exhaustion) => (false, Some(exhaustion)),
+                };
+                if matches!(exhaustion, Some(Exhaustion::ClassProjectionBudget)) {
+                    effects.records.incomplete(IncompleteSurface::new(
+                        "relation/class-projection-budget",
+                        check.span,
+                        "class projection budget exhausted",
+                    ));
+                }
+                if !compatible {
+                    effects
+                        .records
+                        .diagnostic(Diagnostic::property_override_incompatible(
+                            check.span,
+                            &check.name,
+                            &check.derived,
+                            &check.base,
+                        ));
+                }
+            } else {
+                let outcome = SemanticQueryCoordinator::new(
+                    pass.interner,
+                    &pass.published_classes,
+                    &mut pass.semantic_queries,
+                    &mut pass.next_type_param,
+                )
+                .is_assignable(check.own_ty, check.base_ty);
+                match outcome {
+                    RelationOutcome::Yes => {}
+                    RelationOutcome::No(chain) => effects.records.diagnostic(
+                        Diagnostic::property_override_incompatible(
+                            check.span,
+                            &check.name,
+                            &check.derived,
+                            &check.base,
+                        )
+                        .with_elaboration(render_reason_chain(pass.interner.store(), chain.head())),
+                    ),
+                    RelationOutcome::Exhausted(exhaustion) => {
+                        if exhaustion == Exhaustion::ClassProjectionBudget {
+                            effects.records.incomplete(IncompleteSurface::new(
+                                "relation/class-projection-budget",
+                                check.span,
+                                "class projection budget exhausted",
+                            ));
+                        }
+                        effects
+                            .records
+                            .diagnostic(Diagnostic::property_override_incompatible(
+                                check.span,
+                                &check.name,
+                                &check.derived,
+                                &check.base,
+                            ));
+                    }
+                }
+            }
+        }
+        pass.event_store
+            .commit(effects.records)
+            .expect("each lexical record owner completes exactly once");
+    }
+
+    let mut by_module: BTreeMap<ModuleOrdinal, (Vec<Diagnostic>, Vec<IncompleteSurface>)> =
+        BTreeMap::new();
+    let records = std::mem::take(&mut pass.event_store)
+        .finish()
+        .expect("all lexically preallocated record owners must be completed");
+    for (key, record) in records {
+        let channels = by_module.entry(key.module_ordinal).or_default();
+        match record {
+            events::CheckerRecord::Diagnostic(diagnostic) => channels.0.push(diagnostic),
+            events::CheckerRecord::Incomplete(incomplete) => channels.1.push(incomplete),
+        }
+    }
+    by_module
+}
+
 impl Pass<'_, '_> {
+    /// Run one lexically owned producer and retain its effects until deferred work
+    /// has resolved. Nested lexical sites keep distinct preallocated owners.
+    pub(in crate::check::checker) fn with_lexical_effects<R>(
+        &mut self,
+        source_start: u32,
+        phase: LexicalOwnerPhase,
+        produce: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let owner = self
+            .lexical_events
+            .owner_at(self.current_module_ordinal, source_start, phase)
+            .expect("lexical owner must be preallocated before semantic execution");
+        self.with_ticket_effects(owner.ticket, produce)
+    }
+
+    /// Run a producer that already owns an exact preallocated ticket.
+    pub(in crate::check::checker) fn with_ticket_effects<R>(
+        &mut self,
+        owner: events::RecordTicket,
+        produce: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let saved_event = self.current_event.replace(owner.event);
+        self.effect_stack.push(CheckerEffects::new(owner));
+        let result = produce(self);
+        let effects = self.effect_stack.pop().expect("lexical effect frame");
+        self.current_event = saved_event;
+        if self.suppress_effects {
+            return result;
+        }
+        if let Some(parent) = self.effect_stack.last_mut() {
+            if parent.records.owner() == effects.records.owner() {
+                parent.merge(effects);
+            } else {
+                parent.nested.push(effects);
+            }
+        } else {
+            self.enqueue_effects(effects);
+        }
+        result
+    }
+
+    /// Coalesce repeated phases for one lexical owner before its exactly-once
+    /// completion, preserving producer order within the owner group.
+    pub(in crate::check::checker) fn enqueue_effects(&mut self, mut effects: CheckerEffects) {
+        let nested = std::mem::take(&mut effects.nested);
+        if let Some(existing) = self
+            .pending_effects
+            .iter_mut()
+            .find(|existing| existing.records.owner() == effects.records.owner())
+        {
+            existing.merge(effects);
+        } else {
+            self.pending_effects.push(effects);
+        }
+        for child in nested {
+            self.enqueue_effects(child);
+        }
+    }
+
+    pub(in crate::check::checker) fn enqueue_ticket_record(
+        &mut self,
+        owner: events::RecordTicket,
+        record: events::CheckerRecord,
+    ) {
+        let mut effects = CheckerEffects::new(owner);
+        effects.records.record(record);
+        self.enqueue_effects(effects);
+    }
+
+    /// Isolate a speculative child under the enclosing lexical ticket.
+    pub(in crate::check::checker) fn capture_candidate_effects<R>(
+        &mut self,
+        produce: impl FnOnce(&mut Self) -> R,
+    ) -> (R, CheckerEffects) {
+        let owner = self
+            .effect_stack
+            .last()
+            .map(|effects| effects.records.owner())
+            .expect("speculation requires an enclosing lexical owner");
+        self.effect_stack.push(CheckerEffects::new(owner));
+        let result = produce(self);
+        let effects = self.effect_stack.pop().expect("candidate effect frame");
+        (result, effects)
+    }
+
+    pub(in crate::check::checker) fn merge_candidate_effects(&mut self, selected: CheckerEffects) {
+        self.effect_stack
+            .last_mut()
+            .expect("selected candidate requires an enclosing lexical owner")
+            .merge(selected);
+    }
+
+    pub(in crate::check::checker) fn emit_diagnostic(&mut self, diagnostic: Diagnostic) {
+        self.effect_stack
+            .last_mut()
+            .expect("diagnostic requires a lexical owner")
+            .records
+            .diagnostic(diagnostic);
+    }
+
+    pub(in crate::check::checker) fn emit_incomplete(&mut self, incomplete: IncompleteSurface) {
+        self.effect_stack
+            .last_mut()
+            .expect("incomplete record requires a lexical owner")
+            .records
+            .incomplete(incomplete);
+    }
+
+    pub(in crate::check::checker) fn schedule_obligation(&mut self, obligation: AssignObligation) {
+        self.effect_stack
+            .last_mut()
+            .expect("obligation requires a lexical owner")
+            .obligations
+            .push(obligation);
+    }
+
+    pub(in crate::check::checker) fn schedule_override(&mut self, check: OverrideCheck) {
+        self.effect_stack
+            .last_mut()
+            .expect("override check requires a lexical owner")
+            .override_checks
+            .push(check);
+    }
+
     /// Record an in-scope AST position the walk skipped (WU2, sprint 2026-07-10). `id`
     /// is the stable `role/surface/slot-or-variant` identity; `span` is the skipped
     /// position. This is the single entry point the checker calls when WU3–5 wire real
@@ -738,25 +1270,14 @@ impl Pass<'_, '_> {
         span: Span,
         context: &str,
     ) {
-        // Canonical "exactly once per site": an id+span is one skipped position even if
-        // the walk revisits it (e.g. a signature return type lowered in both fill and
-        // body-check). The renderer dedups too; keeping the vector unique also makes it
-        // the authority the conformance harness diffs.
-        if self
-            .incomplete
-            .iter()
-            .any(|rec| rec.id == id && rec.span == span)
-        {
-            return;
-        }
-        self.incomplete
-            .push(IncompleteSurface::new(id, span, context));
+        self.emit_incomplete(IncompleteSurface::new(id, span, context));
     }
 }
 
 /// Construct a fresh phase-1 [`Pass`]. Fill states come from the decl kind:
 /// classes/interfaces/template aliases start `Pending`; resolved placeholders and
 /// other declarations start `Done`.
+#[cfg(test)]
 fn build_pass<'a, 'ast>(
     interner: &'a mut Interner,
     binder: &'a Binder,
@@ -765,12 +1286,37 @@ fn build_pass<'a, 'ast>(
     decl_types: DeclTypes,
     next_type_param: u32,
 ) -> Pass<'a, 'ast> {
-    let class_fill: Vec<ClassFillState> = type_decls
-        .iter()
-        .map(|decl| match decl {
-            TypeDecl::Class { .. } => ClassFillState::Pending,
-            _ => ClassFillState::Done,
-        })
+    build_pass_with_reporting(
+        interner,
+        binder,
+        type_decls,
+        type_resolved,
+        decl_types,
+        next_type_param,
+        PassReporting {
+            module_ordinal: ModuleOrdinal::new(0),
+            unit_slot: UnitSlot::new(0),
+            event_store: EventStore::default(),
+            lexical_events: LexicalReservations::default(),
+            suppress_effects: false,
+        },
+    )
+}
+
+fn build_pass_with_reporting<'a, 'ast>(
+    interner: &'a mut Interner,
+    binder: &'a Binder,
+    type_decls: Vec<TypeDecl<'ast>>,
+    type_resolved: Vec<Option<TypeId>>,
+    decl_types: DeclTypes,
+    next_type_param: u32,
+    reporting: PassReporting,
+) -> Pass<'a, 'ast> {
+    let pending_effects = reporting
+        .lexical_events
+        .tickets()
+        .into_iter()
+        .map(CheckerEffects::new)
         .collect();
     let template_fill: Vec<ClassFillState> = type_decls
         .iter()
@@ -790,28 +1336,33 @@ fn build_pass<'a, 'ast>(
         // Overwritten before each module's fill/flow/check phase; the user module is
         // the single-file default (backlog 58).
         current_module: binder.module,
+        current_module_ordinal: reporting.module_ordinal,
+        current_unit_slot: reporting.unit_slot,
+        event_store: reporting.event_store,
+        current_event: None,
+        effect_stack: Vec::new(),
+        pending_effects,
+        lexical_events: reporting.lexical_events,
+        suppress_effects: reporting.suppress_effects,
+        published_classes: PublishedClasses::empty(),
+        semantic_queries: SemanticQueryState::default(),
+        class_application_parameters: BTreeMap::new(),
+        class_publication_complete: false,
+        retained_class_callables: BTreeMap::new(),
+        class_body_views: BTreeMap::new(),
+        class_super_constructors: BTreeMap::new(),
         type_decls,
         type_resolved,
         type_param_scopes: Vec::new(),
         static_class_type_param_barriers: Vec::new(),
         next_type_param,
         class_parents: FxHashMap::default(),
-        class_ctors: FxHashMap::default(),
         class_value_aliases: FxHashMap::default(),
-        class_ctor_overloads: FxHashMap::default(),
-        class_type_params: FxHashMap::default(),
-        class_pending_abstract: FxHashMap::default(),
-        class_member_kinds: FxHashMap::default(),
         class_names: FxHashMap::default(),
-        class_fill,
         template_fill,
         decl_types,
         var_annotation_surfaces: FxHashMap::default(),
         var_value_type_states: FxHashMap::default(),
-        obligations: Vec::new(),
-        override_checks: Vec::new(),
-        diagnostics: Vec::new(),
-        incomplete: Vec::new(),
         // M23 flow-graph state. Slots 0/1 are the UNREACHABLE/START sentinels the
         // whole arena reserves (see `FlowNodeId::{UNREACHABLE,START}`).
         flow_nodes: vec![
@@ -826,7 +1377,6 @@ fn build_pass<'a, 'ast>(
         flow_memo: FxHashMap::default(),
         flow_provisional: FxHashMap::default(),
         flow_loop_depth: 0,
-        cond_memo: FxHashMap::default(),
         cond_frames: Vec::new(),
         building_template: false,
         resolving_conditional_alias: None,
@@ -837,7 +1387,9 @@ fn build_pass<'a, 'ast>(
         annotation_depth: 0,
         mapped_frames: Vec::new(),
         current_this: None,
+        current_body_this_environment: None,
         current_class: None,
+        enclosing_classes: Vec::new(),
         current_super_ctor: None,
         current_in_ctor: false,
     }

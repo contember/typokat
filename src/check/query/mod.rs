@@ -1,0 +1,911 @@
+//! Coordinator-owned semantic queries for immutable class applications.
+//!
+//! Planning owns the mutable interner. Relation sees only the immutable store
+//! plus query-local normalization overlays, and durable writes promote together.
+
+use crate::check::checker::eval::demand::{
+    resolve_deferred_outer_layer, resolve_keyof_outer_layer,
+};
+use crate::check::checker::eval::{ConditionalEvaluator, DEFAULT_STEP_BUDGET};
+use crate::check::infer::{infer_from_types_for_query, Candidates};
+use crate::class_semantics::{DemandOutcome, Exhaustion, PublishedClassSurface, PublishedClasses};
+use crate::relate::cache::RelationCache;
+use crate::relate::{
+    ReasonChain, Relater, RelationAttempt, RelationDemand, RelationNormalization, RelationOutcome,
+};
+use crate::types::repr::{ClassId, TypeTag, Visibility};
+use crate::types::store::{Store, TypeId};
+use crate::types::{substitute, Interner};
+use rustc_hash::{FxHashMap, FxHashSet};
+
+pub(crate) const MAX_CLASS_PROJECTION_EXPANSIONS: usize = 128;
+
+/// Immutable published-class boundary consumed by query planning. Implementors
+/// must return poison/pre-publication exhaustion before exposing any template.
+pub(crate) trait PublishedClassLookup {
+    fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface>;
+}
+
+impl PublishedClassLookup for PublishedClasses {
+    fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface> {
+        PublishedClasses::published_class(self, class)
+    }
+}
+
+/// Pass-local durable semantic-query state. A tainted query changes none of it.
+#[derive(Clone, Default)]
+pub(crate) struct SemanticQueryState {
+    projection_memo: FxHashMap<TypeId, TypeId>,
+    evaluation_memo: FxHashMap<TypeId, TypeId>,
+    relation_cache: RelationCache,
+}
+
+impl SemanticQueryState {
+    /// Start an isolated semantic-query overlay seeded from the durable parent.
+    /// Callers promote it only after the enclosing operation is decisive.
+    pub(crate) fn fork(&self) -> Self {
+        self.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn durable_lengths(&self) -> (usize, usize, usize) {
+        (
+            self.projection_memo.len(),
+            self.evaluation_memo.len(),
+            self.relation_cache.len(),
+        )
+    }
+}
+
+/// The sole mutable entry boundary for class-reachable semantic queries.
+pub(crate) struct SemanticQueryCoordinator<'a, L: PublishedClassLookup + ?Sized> {
+    interner: &'a mut Interner,
+    published: &'a L,
+    state: &'a mut SemanticQueryState,
+    next_type_param: &'a mut u32,
+}
+
+impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
+    pub(crate) fn new(
+        interner: &'a mut Interner,
+        published: &'a L,
+        state: &'a mut SemanticQueryState,
+        next_type_param: &'a mut u32,
+    ) -> Self {
+        SemanticQueryCoordinator {
+            interner,
+            published,
+            state,
+            next_type_param,
+        }
+    }
+
+    /// Demand one normalized outer shape. Successful untainted work promotes
+    /// projection/evaluator memo entries together; exhaustion promotes nothing.
+    pub(crate) fn demand(&mut self, root: TypeId) -> DemandOutcome<TypeId> {
+        let transaction = ProjectionPlanner::new(
+            self.interner,
+            self.published,
+            &self.state.projection_memo,
+            &self.state.evaluation_memo,
+            *self.next_type_param,
+        )
+        .plan_demand(root);
+        *self.next_type_param = transaction.next_type_param;
+        match transaction.plan.normalize(root) {
+            Ok(normalized) if !transaction.planning_tainted => {
+                self.commit_plan(transaction);
+                DemandOutcome::Ready(normalized)
+            }
+            Ok(_) => DemandOutcome::Exhausted(
+                transaction
+                    .first_exhaustion
+                    .clone()
+                    .unwrap_or(Exhaustion::ClassProjectionBudget),
+            ),
+            Err(reason) => DemandOutcome::Exhausted(reason),
+        }
+    }
+
+    /// Normalize a class application's arguments without erasing its nominal root.
+    /// Call/constructor inference needs the class identity until the relation phase.
+    pub(crate) fn normalize_class_application(&mut self, root: TypeId) -> DemandOutcome<TypeId> {
+        let Some(application) = self.interner.store().class_instance_type(root).cloned() else {
+            return self.demand(root);
+        };
+        let mut normalized = Vec::with_capacity(application.args.len());
+        for argument in application.args {
+            match self.demand(argument) {
+                DemandOutcome::Ready(argument) => normalized.push(argument),
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
+            }
+        }
+        DemandOutcome::Ready(
+            self.interner
+                .intern_class_instance(application.class, normalized),
+        )
+    }
+
+    /// Plan, normalize, and relate one top-level assignability operation.
+    pub(crate) fn is_assignable(&mut self, src: TypeId, tgt: TypeId) -> RelationOutcome {
+        // Identity does not demand a projection spine, but publication/poison is
+        // still checked first so same-pair class poison can never false-clean.
+        if src == tgt {
+            return match publication_exhaustion(self.interner.store(), &[src], self.published) {
+                Some(reason) => RelationOutcome::Exhausted(reason),
+                None => RelationOutcome::Yes,
+            };
+        }
+        if let Some(outcome) = self.same_class_covariant_argument_mismatch(src, tgt) {
+            return outcome;
+        }
+        let mut planner = ProjectionPlanner::new(
+            self.interner,
+            self.published,
+            &self.state.projection_memo,
+            &self.state.evaluation_memo,
+            *self.next_type_param,
+        );
+        planner.prepare_relation_roots(&[src, tgt]);
+        let mut relation_cache = std::mem::take(&mut self.state.relation_cache);
+        let mut outcome = loop {
+            let well_known = planner.interner.well_known();
+            let (attempt, returned_cache) = {
+                let mut relater = Relater::planned(
+                    planner.interner.store(),
+                    well_known,
+                    relation_cache,
+                    &planner.plan,
+                );
+                let attempt = relater.is_assignable_attempt(src, tgt);
+                let commit_cache = matches!(
+                    attempt,
+                    RelationAttempt::Decided(RelationOutcome::Yes | RelationOutcome::No(_))
+                ) && !planner.planning_tainted;
+                let cache = relater.finish_planned(commit_cache);
+                (attempt, cache)
+            };
+            relation_cache = returned_cache;
+            match attempt {
+                RelationAttempt::Decided(outcome) => break outcome,
+                RelationAttempt::Needs(demand) => planner.expand_relation_demand(demand),
+            }
+        };
+        let transaction = planner.finish();
+        *self.next_type_param = transaction.next_type_param;
+        if matches!(outcome, RelationOutcome::Yes) && transaction.planning_tainted {
+            outcome = RelationOutcome::Exhausted(
+                transaction
+                    .first_exhaustion
+                    .clone()
+                    .unwrap_or(Exhaustion::ClassProjectionBudget),
+            );
+        }
+        let commit_plan =
+            !transaction.planning_tainted && !matches!(outcome, RelationOutcome::Exhausted(_));
+        self.state.relation_cache = relation_cache;
+        if commit_plan {
+            self.commit_plan(transaction);
+        }
+        outcome
+    }
+
+    /// A directly published public `value: T` is a finite structural witness for
+    /// `C<S> -> C<T>`. Checking it before an unrelated recursive sibling avoids
+    /// spending the projection budget on a mismatch already present at this layer.
+    fn same_class_covariant_argument_mismatch(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+    ) -> Option<RelationOutcome> {
+        let source = self.interner.store().class_instance_type(src)?.clone();
+        let target = self.interner.store().class_instance_type(tgt)?.clone();
+        if source.class != target.class || source.args.len() != target.args.len() {
+            return None;
+        }
+        let surface = match self.published.published_class(source.class) {
+            DemandOutcome::Ready(surface) => surface,
+            DemandOutcome::Exhausted(exhaustion) => {
+                return Some(RelationOutcome::Exhausted(exhaustion))
+            }
+        };
+        let witnessed: FxHashSet<_> = self
+            .interner
+            .store()
+            .object_type(surface.instance_template())
+            .into_iter()
+            .flat_map(|object| &object.properties)
+            .filter(|property| property.visibility == Visibility::Public)
+            .filter_map(|property| {
+                self.interner
+                    .store()
+                    .type_param(property.ty)
+                    .map(|parameter| parameter.id)
+            })
+            .collect();
+        let parameters = surface.type_params().to_vec();
+        for ((parameter, source), target) in
+            parameters.into_iter().zip(source.args).zip(target.args)
+        {
+            if !witnessed.contains(&parameter) || source == target {
+                continue;
+            }
+            match self.is_assignable(source, target) {
+                RelationOutcome::Yes => {}
+                RelationOutcome::No(_) => {
+                    return Some(RelationOutcome::No(ReasonChain::leaf(src, tgt)))
+                }
+                RelationOutcome::Exhausted(exhaustion) => {
+                    return Some(RelationOutcome::Exhausted(exhaustion))
+                }
+            }
+        }
+        None
+    }
+
+    /// Structurally collect inference candidates through the same overlays.
+    /// Exhaustion discards the attempt's local candidates and every pending write.
+    pub(crate) fn infer_types(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+        candidates: &mut Candidates,
+    ) -> DemandOutcome<()> {
+        let transaction = ProjectionPlanner::new(
+            self.interner,
+            self.published,
+            &self.state.projection_memo,
+            &self.state.evaluation_memo,
+            *self.next_type_param,
+        )
+        .plan(&[source, target]);
+        *self.next_type_param = transaction.next_type_param;
+        if transaction.planning_tainted {
+            return DemandOutcome::Exhausted(
+                transaction
+                    .first_exhaustion
+                    .clone()
+                    .unwrap_or(Exhaustion::ClassProjectionBudget),
+            );
+        }
+        let outcome = infer_from_types_for_query(
+            self.interner,
+            source,
+            target,
+            candidates,
+            &transaction.plan,
+        );
+        if matches!(outcome, DemandOutcome::Ready(())) {
+            if transaction.planning_tainted {
+                return DemandOutcome::Exhausted(
+                    transaction
+                        .first_exhaustion
+                        .clone()
+                        .unwrap_or(Exhaustion::ClassProjectionBudget),
+                );
+            }
+            self.commit_plan(transaction);
+        }
+        outcome
+    }
+
+    /// Check one overload signature against its implementation through the same
+    /// projection/evaluation transaction as every other class-reachable relation.
+    pub(crate) fn overload_implementation_compatible(
+        &mut self,
+        overload: TypeId,
+        implementation: TypeId,
+    ) -> RelationOutcome {
+        let mut planner = ProjectionPlanner::new(
+            self.interner,
+            self.published,
+            &self.state.projection_memo,
+            &self.state.evaluation_memo,
+            *self.next_type_param,
+        );
+        planner.prepare_relation_roots(&[overload, implementation]);
+        let mut relation_cache = std::mem::take(&mut self.state.relation_cache);
+        let mut outcome = loop {
+            let well_known = planner.interner.well_known();
+            let (attempt, returned_cache) = {
+                let mut relater = Relater::planned(
+                    planner.interner.store(),
+                    well_known,
+                    relation_cache,
+                    &planner.plan,
+                );
+                let attempt =
+                    relater.overload_implementation_compatible_attempt(overload, implementation);
+                let commit_cache = matches!(
+                    attempt,
+                    RelationAttempt::Decided(RelationOutcome::Yes | RelationOutcome::No(_))
+                ) && !planner.planning_tainted;
+                let cache = relater.finish_planned(commit_cache);
+                (attempt, cache)
+            };
+            relation_cache = returned_cache;
+            match attempt {
+                RelationAttempt::Decided(outcome) => break outcome,
+                RelationAttempt::Needs(demand) => planner.expand_relation_demand(demand),
+            }
+        };
+        let transaction = planner.finish();
+        *self.next_type_param = transaction.next_type_param;
+        if matches!(outcome, RelationOutcome::Yes) && transaction.planning_tainted {
+            outcome = RelationOutcome::Exhausted(
+                transaction
+                    .first_exhaustion
+                    .clone()
+                    .unwrap_or(Exhaustion::ClassProjectionBudget),
+            );
+        }
+        let commit_plan =
+            !transaction.planning_tainted && !matches!(outcome, RelationOutcome::Exhausted(_));
+        self.state.relation_cache = relation_cache;
+        if commit_plan {
+            self.commit_plan(transaction);
+        }
+        outcome
+    }
+
+    fn commit_plan(&mut self, transaction: PlannedQuery) {
+        self.state
+            .projection_memo
+            .extend(transaction.pending_projection_writes);
+        self.state
+            .evaluation_memo
+            .extend(transaction.pending_evaluator_writes);
+        *self.next_type_param = transaction.next_type_param;
+    }
+}
+
+/// Immutable overlays consumed by relation before identity/cache/cycle logic.
+#[derive(Default)]
+pub(crate) struct ProjectionPlan {
+    class_projection_overlay: FxHashMap<TypeId, TypeId>,
+    evaluation_overlay: FxHashMap<TypeId, TypeId>,
+    resolved_evaluations: FxHashSet<TypeId>,
+    frontier: FxHashMap<TypeId, Exhaustion>,
+}
+
+impl RelationNormalization for ProjectionPlan {
+    fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
+        let mut current = ty;
+        let mut seen = FxHashSet::default();
+        loop {
+            if let Some(reason) = self.frontier.get(&current) {
+                return Err(reason.clone());
+            }
+            if !seen.insert(current) {
+                return Ok(current);
+            }
+            let next = self
+                .evaluation_overlay
+                .get(&current)
+                .or_else(|| self.class_projection_overlay.get(&current))
+                .copied();
+            match next {
+                Some(next) if next != current => current = next,
+                _ => return Ok(current),
+            }
+        }
+    }
+
+    fn relation_demand(&self, store: &Store, ty: TypeId) -> Option<RelationDemand> {
+        match store.tag(ty) {
+            TypeTag::ClassInstance => Some(RelationDemand::ClassProjection(ty)),
+            TypeTag::DeferredIndexedAccess
+            | TypeTag::Keyof
+            | TypeTag::Conditional
+            | TypeTag::Instantiation
+            | TypeTag::Mapped
+            | TypeTag::Template
+                if !self.resolved_evaluations.contains(&ty) =>
+            {
+                Some(RelationDemand::Evaluation(ty))
+            }
+            _ => None,
+        }
+    }
+}
+
+struct PlannedQuery {
+    plan: ProjectionPlan,
+    pending_projection_writes: FxHashMap<TypeId, TypeId>,
+    pending_evaluator_writes: FxHashMap<TypeId, TypeId>,
+    next_type_param: u32,
+    planning_tainted: bool,
+    first_exhaustion: Option<Exhaustion>,
+}
+
+struct ProjectionPlanner<'a, L: PublishedClassLookup + ?Sized> {
+    interner: &'a mut Interner,
+    published: &'a L,
+    durable_projection_memo: &'a FxHashMap<TypeId, TypeId>,
+    durable_evaluation_memo: &'a FxHashMap<TypeId, TypeId>,
+    working_evaluation_memo: FxHashMap<TypeId, TypeId>,
+    next_type_param: u32,
+    plan: ProjectionPlan,
+    pending_projection_writes: FxHashMap<TypeId, TypeId>,
+    admitted_applications: FxHashSet<TypeId>,
+    visiting: FxHashSet<TypeId>,
+    visited: FxHashSet<TypeId>,
+    planning_tainted: bool,
+    first_exhaustion: Option<Exhaustion>,
+    demand_outer_only: bool,
+    evaluation_expansions: u32,
+}
+
+impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
+    fn new(
+        interner: &'a mut Interner,
+        published: &'a L,
+        durable_projection_memo: &'a FxHashMap<TypeId, TypeId>,
+        durable_evaluation_memo: &'a FxHashMap<TypeId, TypeId>,
+        next_type_param: u32,
+    ) -> Self {
+        let reusable_evaluations: FxHashMap<TypeId, TypeId> = durable_evaluation_memo
+            .iter()
+            .filter_map(|(&source, &result)| (source != result).then_some((source, result)))
+            .collect();
+        ProjectionPlanner {
+            interner,
+            published,
+            durable_projection_memo,
+            durable_evaluation_memo,
+            working_evaluation_memo: reusable_evaluations.clone(),
+            next_type_param,
+            plan: ProjectionPlan {
+                evaluation_overlay: reusable_evaluations.clone(),
+                resolved_evaluations: reusable_evaluations.keys().copied().collect(),
+                ..ProjectionPlan::default()
+            },
+            pending_projection_writes: FxHashMap::default(),
+            admitted_applications: FxHashSet::default(),
+            visiting: FxHashSet::default(),
+            visited: FxHashSet::default(),
+            planning_tainted: false,
+            first_exhaustion: None,
+            demand_outer_only: false,
+            evaluation_expansions: 0,
+        }
+    }
+
+    fn plan(mut self, roots: &[TypeId]) -> PlannedQuery {
+        for &root in roots {
+            self.visit(root);
+        }
+        self.finish()
+    }
+
+    fn plan_demand(mut self, root: TypeId) -> PlannedQuery {
+        self.demand_outer_only = true;
+        match self.interner.store().tag(root) {
+            TypeTag::ClassInstance => {
+                self.project_class_outer(root);
+            }
+            TypeTag::DeferredIndexedAccess
+            | TypeTag::Keyof
+            | TypeTag::Conditional
+            | TypeTag::Instantiation
+            | TypeTag::Mapped
+            | TypeTag::Template => {
+                self.visit(root);
+            }
+            TypeTag::Intrinsic
+            | TypeTag::Literal
+            | TypeTag::TypeParam
+            | TypeTag::Infer
+            | TypeTag::MappedValue
+            | TypeTag::Object
+            | TypeTag::Union
+            | TypeTag::Intersection
+            | TypeTag::Function
+            | TypeTag::Array
+            | TypeTag::Tuple
+            | TypeTag::Readonly => {}
+        }
+        self.finish()
+    }
+
+    /// Admit only semantic roots. Nested operations are expanded one at a time
+    /// when relation reaches them, so an independent mismatch can win before an
+    /// untouched recursive frontier.
+    fn prepare_relation_roots(&mut self, roots: &[TypeId]) {
+        for &root in roots {
+            match self.interner.store().tag(root) {
+                TypeTag::ClassInstance => {
+                    self.project_class_outer(root);
+                }
+                TypeTag::DeferredIndexedAccess
+                | TypeTag::Keyof
+                | TypeTag::Conditional
+                | TypeTag::Instantiation
+                | TypeTag::Mapped
+                | TypeTag::Template => {
+                    self.visit(root);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn expand_relation_demand(&mut self, demand: RelationDemand) {
+        match demand {
+            RelationDemand::ClassProjection(application) => {
+                self.project_class_outer(application);
+            }
+            RelationDemand::Evaluation(ty) => {
+                self.visit(ty);
+            }
+        }
+    }
+
+    fn finish(self) -> PlannedQuery {
+        let pending_evaluator_writes = self
+            .working_evaluation_memo
+            .iter()
+            .filter_map(|(&key, &value)| {
+                (self.durable_evaluation_memo.get(&key) != Some(&value)).then_some((key, value))
+            })
+            .collect();
+        PlannedQuery {
+            plan: self.plan,
+            pending_projection_writes: self.pending_projection_writes,
+            pending_evaluator_writes,
+            next_type_param: self.next_type_param,
+            planning_tainted: self.planning_tainted,
+            first_exhaustion: self.first_exhaustion,
+        }
+    }
+
+    fn visit(&mut self, ty: TypeId) -> TypeId {
+        if let Ok(normalized) = self.plan.normalize(ty) {
+            if normalized != ty {
+                self.visit_demand_result(normalized);
+                return self.plan.normalize(ty).unwrap_or(normalized);
+            }
+        }
+        if self.visited.contains(&ty) || !self.visiting.insert(ty) {
+            return ty;
+        }
+
+        let result = match self.interner.store().tag(ty) {
+            TypeTag::ClassInstance if self.demand_outer_only => self.project_class_outer(ty),
+            TypeTag::ClassInstance => self.project_class(ty),
+            TypeTag::DeferredIndexedAccess => self.evaluate_deferred_indexed(ty),
+            TypeTag::Keyof => self.evaluate_keyof(ty),
+            TypeTag::Conditional
+            | TypeTag::Instantiation
+            | TypeTag::Union
+            | TypeTag::Mapped
+            | TypeTag::Template => self.evaluate_existing(ty),
+            _ => {
+                let children = query_children(self.interner.store(), ty);
+                for child in children {
+                    self.visit(child);
+                }
+                ty
+            }
+        };
+
+        self.visiting.remove(&ty);
+        self.visited.insert(ty);
+        result
+    }
+
+    fn project_class(&mut self, application: TypeId) -> TypeId {
+        let projection = self.project_class_outer(application);
+        self.visit(projection);
+        projection
+    }
+
+    fn project_class_outer(&mut self, application: TypeId) -> TypeId {
+        if !self.admitted_applications.contains(&application) {
+            if self.admitted_applications.len() >= MAX_CLASS_PROJECTION_EXPANSIONS {
+                self.mark_frontier(application, Exhaustion::ClassProjectionBudget);
+                return application;
+            }
+            self.admitted_applications.insert(application);
+        }
+
+        let Some(instance) = self
+            .interner
+            .store()
+            .class_instance_type(application)
+            .cloned()
+        else {
+            return application;
+        };
+        let surface = match self.published.published_class(instance.class) {
+            DemandOutcome::Ready(surface) => surface,
+            DemandOutcome::Exhausted(reason) => {
+                self.mark_frontier(application, reason);
+                return application;
+            }
+        };
+        assert_eq!(
+            surface.type_params().len(),
+            instance.args.len(),
+            "complete ClassInstance vectors must match the published declaration arity"
+        );
+
+        let projection = self
+            .durable_projection_memo
+            .get(&application)
+            .copied()
+            .unwrap_or_else(|| {
+                let map = surface
+                    .type_params()
+                    .iter()
+                    .copied()
+                    .zip(instance.args.iter().copied())
+                    .collect();
+                let projection = substitute(self.interner, surface.instance_template(), &map);
+                self.pending_projection_writes
+                    .insert(application, projection);
+                projection
+            });
+        if projection != application {
+            self.plan
+                .class_projection_overlay
+                .insert(application, projection);
+        }
+        projection
+    }
+
+    fn evaluate_deferred_indexed(&mut self, ty: TypeId) -> TypeId {
+        let Some(access) = self
+            .interner
+            .store()
+            .deferred_indexed_access_type(ty)
+            .copied()
+        else {
+            return ty;
+        };
+        let mut object = self.visit(access.object);
+        if let Some(constraint) = self
+            .interner
+            .store()
+            .type_param(object)
+            .and_then(|parameter| self.interner.store().type_param_constraint(parameter.id))
+            .filter(|constraint| *constraint != object)
+        {
+            object = self.visit(constraint);
+        }
+        let index = self.visit(access.index);
+        let object = match self.plan.normalize(object) {
+            Ok(object) => object,
+            Err(reason) => {
+                self.mark_frontier(ty, reason);
+                return ty;
+            }
+        };
+        let index = match self.plan.normalize(index) {
+            Ok(index) => index,
+            Err(reason) => {
+                self.mark_frontier(ty, reason);
+                return ty;
+            }
+        };
+        let rebuilt = if object == access.object && index == access.index {
+            ty
+        } else {
+            self.interner.intern_deferred_indexed_access(object, index)
+        };
+        let result = resolve_deferred_outer_layer(self.interner, rebuilt);
+        self.record_evaluation(ty, result);
+        self.visit_demand_result(result);
+        result
+    }
+
+    fn evaluate_keyof(&mut self, ty: TypeId) -> TypeId {
+        let Some(operand) = self.interner.store().keyof_operand(ty) else {
+            return ty;
+        };
+        let operand = self.visit(operand);
+        let operand = match self.plan.normalize(operand) {
+            Ok(operand) => operand,
+            Err(reason) => {
+                self.mark_frontier(ty, reason);
+                return ty;
+            }
+        };
+        let result = resolve_keyof_outer_layer(self.interner, operand);
+        self.record_evaluation(ty, result);
+        self.visit_demand_result(result);
+        result
+    }
+
+    fn evaluate_existing(&mut self, ty: TypeId) -> TypeId {
+        if let Some(&result) = self.durable_evaluation_memo.get(&ty) {
+            self.record_evaluation(ty, result);
+            self.visit_demand_result(result);
+            return result;
+        }
+
+        let children = query_children(self.interner.store(), ty);
+        for child in children {
+            self.visit(child);
+        }
+
+        if self.evaluation_expansions >= DEFAULT_STEP_BUDGET {
+            self.mark_frontier(ty, Exhaustion::EvaluationBudget);
+            return ty;
+        }
+        self.evaluation_expansions += 1;
+
+        let (outcome, exhausted, cycle_detected) = {
+            let mut evaluator = ConditionalEvaluator::new(
+                self.interner,
+                &mut self.next_type_param,
+                &mut self.working_evaluation_memo,
+                DEFAULT_STEP_BUDGET,
+            );
+            let outcome = evaluator.evaluate_planned(ty, &self.plan);
+            (outcome, evaluator.exhausted, evaluator.cycle_detected)
+        };
+        if exhausted {
+            self.mark_frontier(ty, Exhaustion::EvaluationBudget);
+            return ty;
+        }
+        if cycle_detected {
+            self.mark_frontier(ty, Exhaustion::EvaluationCycle { ty });
+            return ty;
+        }
+        let result = match outcome {
+            DemandOutcome::Ready(result) => result,
+            DemandOutcome::Exhausted(reason) => {
+                self.mark_frontier(ty, reason);
+                return ty;
+            }
+        };
+        self.record_evaluation(ty, result);
+        self.visit_demand_result(result);
+        result
+    }
+
+    fn visit_demand_result(&mut self, result: TypeId) {
+        if self.demand_outer_only {
+            match self.interner.store().tag(result) {
+                TypeTag::ClassInstance => {
+                    self.project_class_outer(result);
+                }
+                TypeTag::DeferredIndexedAccess => {
+                    self.visit(result);
+                }
+                _ => {}
+            }
+        } else {
+            self.visit(result);
+        }
+    }
+
+    fn record_evaluation(&mut self, source: TypeId, result: TypeId) {
+        self.plan.resolved_evaluations.insert(source);
+        self.working_evaluation_memo.insert(source, result);
+        if source != result {
+            self.plan.evaluation_overlay.insert(source, result);
+        }
+    }
+
+    fn mark_frontier(&mut self, ty: TypeId, reason: Exhaustion) {
+        self.planning_tainted = true;
+        if self.first_exhaustion.is_none() {
+            self.first_exhaustion = Some(reason.clone());
+        }
+        self.plan.frontier.entry(ty).or_insert(reason);
+    }
+}
+
+fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
+    store: &Store,
+    roots: &[TypeId],
+    published: &L,
+) -> Option<Exhaustion> {
+    let mut stack = roots.to_vec();
+    let mut seen = FxHashSet::default();
+    while let Some(ty) = stack.pop() {
+        if !seen.insert(ty) {
+            continue;
+        }
+        if let Some(instance) = store.class_instance_type(ty) {
+            if let DemandOutcome::Exhausted(reason) = published.published_class(instance.class) {
+                return Some(reason);
+            }
+        }
+        stack.extend(query_children(store, ty));
+    }
+    None
+}
+
+fn query_children(store: &Store, ty: TypeId) -> Vec<TypeId> {
+    match store.tag(ty) {
+        TypeTag::Object => store.object_type(ty).map_or_else(Vec::new, |object| {
+            let mut children = Vec::new();
+            for property in &object.properties {
+                children.push(property.ty);
+                children.extend(property.write_ty);
+            }
+            children.extend(object.string_index);
+            children.extend(object.number_index);
+            children.extend(object.call_signatures.iter().copied());
+            children.extend(object.construct_signatures.iter().copied());
+            children
+        }),
+        TypeTag::Function => store.function_type(ty).map_or_else(Vec::new, |function| {
+            let mut children = Vec::new();
+            children.extend(
+                function
+                    .type_params
+                    .iter()
+                    .flat_map(|parameter| [parameter.constraint, parameter.default])
+                    .flatten(),
+            );
+            children.extend(function.receiver);
+            children.extend(function.params.iter().map(|parameter| parameter.ty));
+            children.push(function.ret);
+            children
+        }),
+        TypeTag::TypeParam => store
+            .type_param(ty)
+            .and_then(|parameter| store.type_param_constraint(parameter.id))
+            .into_iter()
+            .collect(),
+        TypeTag::Union => store
+            .union_members(ty)
+            .map_or_else(Vec::new, |members| members.to_vec()),
+        TypeTag::Intersection => store
+            .intersection_members(ty)
+            .map_or_else(Vec::new, |members| members.to_vec()),
+        TypeTag::Array => store
+            .array_type(ty)
+            .map_or_else(Vec::new, |array| vec![array.element]),
+        TypeTag::Tuple => store.tuple_type(ty).map_or_else(Vec::new, |tuple| {
+            let mut children = tuple.elements.clone();
+            children.extend(tuple.rest.map(|rest| rest.ty));
+            children
+        }),
+        TypeTag::Readonly => store.readonly_operand(ty).into_iter().collect(),
+        TypeTag::Conditional => store
+            .conditional_type(ty)
+            .map_or_else(Vec::new, |conditional| {
+                vec![
+                    conditional.check,
+                    conditional.extends_ty,
+                    conditional.true_branch,
+                    conditional.false_branch,
+                ]
+            }),
+        TypeTag::Instantiation => {
+            store
+                .instantiation_type(ty)
+                .map_or_else(Vec::new, |instantiation| {
+                    let mut children = vec![instantiation.base];
+                    children.extend(instantiation.args.iter().map(|(_, argument)| *argument));
+                    children
+                })
+        }
+        TypeTag::ClassInstance => store
+            .class_instance_type(ty)
+            .map_or_else(Vec::new, |instance| instance.args.clone()),
+        TypeTag::Mapped => store.mapped_type(ty).map_or_else(Vec::new, |mapped| {
+            let mut children = vec![mapped.key_source, mapped.value_template];
+            children.extend(mapped.modifiers_source);
+            children
+        }),
+        TypeTag::Template => store
+            .template_type(ty)
+            .map_or_else(Vec::new, |template| template.holes.clone()),
+        TypeTag::Keyof => store.keyof_operand(ty).into_iter().collect(),
+        TypeTag::DeferredIndexedAccess => store
+            .deferred_indexed_access_type(ty)
+            .map_or_else(Vec::new, |access| vec![access.object, access.index]),
+        TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests;

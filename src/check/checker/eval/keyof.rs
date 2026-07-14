@@ -13,7 +13,6 @@ impl<'a> ConditionalEvaluator<'a> {
         ty: TypeId,
         tasks: &mut Vec<Task>,
         values: &mut Vec<TypeId>,
-        error: TypeId,
     ) {
         let Some(operand) = self.interner.store().keyof_operand(ty) else {
             values.push(ty);
@@ -27,17 +26,14 @@ impl<'a> ConditionalEvaluator<'a> {
         }
         if self.in_flight.contains(&ty) {
             self.note_cycle();
-            values.push(error);
             return;
         }
         if self.exhausted {
-            values.push(error);
             return;
         }
         self.steps += 1;
         if self.steps > self.budget {
             self.exhausted = true;
-            values.push(error);
             return;
         }
         self.in_flight.insert(ty);
@@ -110,7 +106,12 @@ pub(in crate::check::checker) fn keyof_of_object(
     let object = store.object_type(operand)?;
 
     // Snapshot the key components before the mutable interning borrow.
-    let names: Vec<String> = object.properties.iter().map(|p| p.name.clone()).collect();
+    let names: Vec<String> = object
+        .properties
+        .iter()
+        .filter(|property| property.visibility == Visibility::Public)
+        .map(|property| property.name.clone())
+        .collect();
     let has_string_index = object.string_index.is_some();
     let has_number_index = object.number_index.is_some();
 
@@ -144,7 +145,12 @@ fn keyof_of_union(interner: &mut Interner, members: &[TypeId]) -> Option<TypeId>
         let mut infos = Vec::with_capacity(members.len());
         for &member in members {
             let object = store.object_type(member)?;
-            let names: Vec<String> = object.properties.iter().map(|p| p.name.clone()).collect();
+            let names: Vec<String> = object
+                .properties
+                .iter()
+                .filter(|property| property.visibility == Visibility::Public)
+                .map(|property| property.name.clone())
+                .collect();
             let name_set = names.iter().cloned().collect();
             infos.push(UnionKeyInfo {
                 names,

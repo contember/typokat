@@ -1,8 +1,7 @@
 # Semantic-duplication acceptance fixtures
 
-This corpus is intentionally disabled in `tests/conformance.rs` until the class-application rollout
-is complete. The existing marker-parser tests still scan every file, so malformed disabled markers
-fail immediately.
+This corpus is enabled in `tests/conformance.rs` as the class-application rollout gate. The marker
+harness checks every diagnostic and incomplete record with exact per-line cardinality.
 
 Fixture inventory:
 

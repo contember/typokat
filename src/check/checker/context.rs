@@ -6,13 +6,22 @@ use crate::binder::scope::ScopeId;
 use crate::binder::symbol::{DeclId, SymbolId};
 use crate::binder::Binder;
 use crate::check::flow::{FlowNode, FlowNodeId};
-use crate::diagnostics::{Diagnostic, IncompleteSurface};
+use crate::check::query::SemanticQueryState;
+use crate::class_semantics::PublishedClasses;
 use crate::span::Span;
 use crate::types::repr::{ClassId, TypeParamId, Visibility};
 use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_ast::ast::{Class, TSInterfaceHeritage, TSType, TSTypeParameterDeclaration};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::BTreeMap;
+
+use super::classes::body::{BodyClassView, BodyMemberEnvironment};
+use super::classes::construction::DraftClassTypeParameter;
+use super::classes::retained::RetainedClassCallable;
+use super::events::{CandidateEffects, RecordTicket};
+use super::events::{EventId, EventStore, ModuleOrdinal, UnitSlot};
+use super::lexical_events::{CallableTickets, LexicalReservations};
 
 /// Which diagnostic an assignability obligation produces on failure. The
 /// structural verdict is the same relation query; only the code/message mapping
@@ -59,6 +68,42 @@ pub(in crate::check::checker) struct OverrideCheck {
     pub(in crate::check::checker) base_is_method: bool,
 }
 
+/// One lexical owner's ordered records and semantic work. Nested speculative
+/// children remain local until the selected child merges into its parent.
+pub(in crate::check::checker) struct CheckerEffects {
+    pub(in crate::check::checker) records: CandidateEffects,
+    pub(in crate::check::checker) obligations: Vec<AssignObligation>,
+    pub(in crate::check::checker) override_checks: Vec<OverrideCheck>,
+    pub(in crate::check::checker) nested: Vec<CheckerEffects>,
+}
+
+impl CheckerEffects {
+    pub(in crate::check::checker) fn new(owner: RecordTicket) -> Self {
+        Self {
+            records: CandidateEffects::new(owner),
+            obligations: Vec::new(),
+            override_checks: Vec::new(),
+            nested: Vec::new(),
+        }
+    }
+
+    pub(in crate::check::checker) fn from_records(records: CandidateEffects) -> Self {
+        Self {
+            records,
+            obligations: Vec::new(),
+            override_checks: Vec::new(),
+            nested: Vec::new(),
+        }
+    }
+
+    pub(in crate::check::checker) fn merge(&mut self, child: CheckerEffects) {
+        self.records.merge(child.records);
+        self.obligations.extend(child.obligations);
+        self.override_checks.extend(child.override_checks);
+        self.nested.extend(child.nested);
+    }
+}
+
 /// Per-declaration computed types, indexed by `DeclId`. `None` means a
 /// declaration whose type could not be computed (out of subset); a reference to
 /// it resolves to the error type defensively.
@@ -95,17 +140,15 @@ pub(in crate::check::checker) struct FunctionSurface {
     pub(in crate::check::checker) type_param_frame: FxHashMap<String, TypeId>,
     pub(in crate::check::checker) declared_return: Option<TypeId>,
     pub(in crate::check::checker) function_ty: TypeId,
-    /// Records produced by eager signature lowering, replayed at source position.
-    pub(in crate::check::checker) diagnostics: Vec<Diagnostic>,
-    pub(in crate::check::checker) incomplete: Vec<IncompleteSurface>,
+    /// Preallocated declaration owners; expression/arrow surfaces emit into the
+    /// enclosing active lexical effect frame and therefore carry no tickets.
+    pub(in crate::check::checker) tickets: Option<CallableTickets>,
 }
 
 /// An explicit `var` annotation lowered before executable checking. The type makes
 /// the hoisted binding usable, while records wait for the declaration position.
 pub(in crate::check::checker) struct VarAnnotationSurface {
     pub(in crate::check::checker) annotation: Option<TypeId>,
-    pub(in crate::check::checker) diagnostics: Vec<Diagnostic>,
-    pub(in crate::check::checker) incomplete: Vec<IncompleteSurface>,
 }
 
 /// Whether a shared `var` declaration type is only a forward annotation, comes
@@ -123,6 +166,7 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
     /// An interface reserves an object id, then fills own and inherited members into it.
     /// Generic interfaces fill a template that type references instantiate later.
     Interface {
+        scope: ScopeId,
         reserved: TypeId,
         params: Vec<TypeParamId>,
         param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
@@ -133,6 +177,7 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
     /// A transparent alias lowers on demand. Template placeholders keep recursive
     /// conditional, mapped, and object-literal alias shapes from expanding inline.
     Alias {
+        scope: ScopeId,
         annotation: &'ast TSType<'ast>,
         params: Vec<TypeParamId>,
         param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
@@ -148,10 +193,10 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
         /// Alias name span for circular-alias diagnostics.
         name_span: Span,
     },
-    /// A class reserves its instance object id up front; fill builds the instance,
-    /// static side, constructor signature, and class metadata.
+    /// A class reserves only stable nominal/application metadata. Publication builds
+    /// immutable instance/static templates after every surface child is lowered.
     Class {
-        reserved: TypeId,
+        scope: ScopeId,
         class_id: ClassId,
         params: Vec<TypeParamId>,
         param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
@@ -164,16 +209,10 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
 /// A class's copyable `new` metadata, keyed by value-space `DeclId`.
 #[derive(Copy, Clone)]
 pub(in crate::check::checker) struct ClassInfo {
-    /// Constructor parameters as a function type; `new` yields `instance`, not this return.
+    /// Constructor parameters as a function type.
     pub(in crate::check::checker) ctor: TypeId,
-    /// Composed instance type.
-    pub(in crate::check::checker) instance: TypeId,
-    /// Composed static side used when the class name is read as a value.
-    pub(in crate::check::checker) static_side: TypeId,
     /// Stable class identity used by access-control and nominal rules.
     pub(in crate::check::checker) class_id: ClassId,
-    /// Base constructor signature for `super(args)`, if any.
-    pub(in crate::check::checker) super_ctor: Option<TypeId>,
     /// Whether directly constructing this class reports `TK2511`.
     pub(in crate::check::checker) is_abstract: bool,
     /// Constructor visibility for direct `new` accessibility checks.
@@ -204,6 +243,40 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// while bodies are walked per module; lazy cross-module inference would
     /// desynchronize insert and lookup keys.
     pub(in crate::check::checker) current_module: ScopeId,
+    /// Original input order, independent of dependency scheduling.
+    pub(in crate::check::checker) current_module_ordinal: ModuleOrdinal,
+    /// Dependency-ordered execution slot for the current module.
+    pub(in crate::check::checker) current_unit_slot: UnitSlot,
+    /// Checker-wide deterministic record authority.
+    pub(in crate::check::checker) event_store: EventStore,
+    /// Lexical source owner for immediate records produced by the current walk.
+    pub(in crate::check::checker) current_event: Option<EventId>,
+    /// Hierarchical lexical/speculative output owners; only the outer owner commits.
+    pub(in crate::check::checker) effect_stack: Vec<CheckerEffects>,
+    /// Completed lexical owners awaiting deferred relation/override resolution.
+    pub(in crate::check::checker) pending_effects: Vec<CheckerEffects>,
+    /// Prelude declaration lowering uses real lexical frames but discards their effects.
+    pub(in crate::check::checker) suppress_effects: bool,
+    /// Persistent lexical reservations built before class fill and body checking.
+    pub(in crate::check::checker) lexical_events: LexicalReservations,
+    /// Immutable class surfaces visible to every semantic query after publication.
+    pub(in crate::check::checker) published_classes: PublishedClasses,
+    /// Durable coordinator-owned projection, evaluation, and relation state.
+    pub(in crate::check::checker) semantic_queries: SemanticQueryState,
+    /// Frozen class parameter descriptors retained from the atomic publication.
+    pub(in crate::check::checker) class_application_parameters:
+        BTreeMap<ClassId, Vec<DraftClassTypeParameter<RecordTicket>>>,
+    /// Separates the explicit reserve/fill typestate from ordinary semantic demand.
+    pub(in crate::check::checker) class_publication_complete: bool,
+    /// Exact class callables retained by the one surface-lowering pass.
+    pub(in crate::check::checker) retained_class_callables:
+        BTreeMap<ClassId, Vec<RetainedClassCallable<RecordTicket>>>,
+    /// Query-invisible own-member surfaces used only while checking class bodies.
+    /// Poisoned classes stay exhausted through `published_classes`; these drafts keep
+    /// independent body diagnostics from losing `this` and `static this`.
+    pub(in crate::check::checker) class_body_views: BTreeMap<ClassId, BodyClassView>,
+    /// Exact substituted base constructor for each published derived class.
+    pub(in crate::check::checker) class_super_constructors: BTreeMap<ClassId, TypeId>,
     /// Named-type declarations (M5), indexed by type-space `DeclId`. Reserve-then-
     /// fill populates this in phase 0; a `TSTypeReference` resolves through the
     /// binder's type slot to a `DeclId`, then to a `TypeId` via `type_resolved`.
@@ -226,38 +299,13 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// Parent class by stable [`ClassId`], built from resolvable `extends`.
     /// Used by `protected` access and independent of interned type identity.
     pub(in crate::check::checker) class_parents: FxHashMap<ClassId, ClassId>,
-    /// Class `new`-info (M11), keyed by a class's **value-space** `DeclId`. Filled in
-    /// phase 0 (fill) once each class's instance type and constructor signature are
-    /// built; read by `new ClassName(args)` ([`infer_new`]) to check the arguments
-    /// and yield the instance type.
-    pub(in crate::check::checker) class_ctors: FxHashMap<DeclId, ClassInfo>,
     /// One-step `const Alias = Class` origins. `infer_new` uses this only to retain
     /// the direct class's abstract and constructor-accessibility facts.
     pub(in crate::check::checker) class_value_aliases: FxHashMap<DeclId, DeclId>,
-    /// Direct constructor overload signatures for class values, keyed like
-    /// [`class_ctors`](Pass::class_ctors). Empty/absent means the implementation
-    /// constructor signature is the externally callable one.
-    pub(in crate::check::checker) class_ctor_overloads: FxHashMap<DeclId, Vec<TypeId>>,
-    /// Generic class type parameters, keyed like [`class_ctors`](Pass::class_ctors).
-    /// `new` uses these for explicit substitution or constructor-argument inference.
-    /// Kept out of [`ClassInfo`] so that struct stays `Copy`.
-    pub(in crate::check::checker) class_type_params: FxHashMap<DeclId, Vec<TypeParamId>>,
-    /// Pending abstract member names per class, in declaration order.
-    /// Composed down `extends`; non-abstract classes report `TK2515`/`TK2654`.
-    /// Stored outside [`ClassInfo`] so subclasses inherit it without losing `Copy`.
-    pub(in crate::check::checker) class_pending_abstract: FxHashMap<DeclId, Vec<String>>,
-    /// Instance member declaration kinds per class (`true` = method syntax).
-    /// Composed down `extends` with own members winning, so `TK2416` can key
-    /// method bivariance on the base member's last declaration kind.
-    pub(in crate::check::checker) class_member_kinds: FxHashMap<DeclId, FxHashMap<String, bool>>,
     /// Display name by stable [`ClassId`].
     /// Lets constructor-access diagnostics name the declaring class, which may be
     /// an inherited base, while keeping [`ClassInfo`] `Copy`.
     pub(in crate::check::checker) class_names: FxHashMap<ClassId, String>,
-    /// Per-class fill state, parallel to [`type_decls`](Pass::type_decls).
-    /// Enables base-first on-demand fill in any declaration order and breaks
-    /// `extends` cycles via the `Filling` guard.
-    pub(in crate::check::checker) class_fill: Vec<ClassFillState>,
     /// Per-template fill state for interfaces and seeded object-literal aliases.
     /// Mirrors class fill: on-demand, base-first, decl-kind-specific, and guarded
     /// by `Filling` so out-of-scope `extends` cycles terminate.
@@ -270,23 +318,20 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// Publication state for each shared `var` value declaration. This keeps a
     /// forward annotation provisional without overwriting a parameter type.
     pub(in crate::check::checker) var_value_type_states: FxHashMap<DeclId, VarValueTypeState>,
-    pub(in crate::check::checker) obligations: Vec<AssignObligation>,
-    /// Backlog 06 — pending class-member override-compatibility checks (`TK2416`),
-    /// collected in [`fill_class`] and decided in phase 2 (see [`OverrideCheck`]).
-    pub(in crate::check::checker) override_checks: Vec<OverrideCheck>,
-    pub(in crate::check::checker) diagnostics: Vec<Diagnostic>,
-    /// The third structured channel (sprint 2026-07-10, WU2): in-scope AST positions
-    /// the walk skipped. Populated via `record_incomplete`; drained into `CheckResult`
-    /// alongside `diagnostics`. Nothing emits into it yet (WU3–5 wire the emissions).
-    pub(in crate::check::checker) incomplete: Vec<IncompleteSurface>,
     /// Current `this` type while checking class members.
     /// Save/restored at member boundaries so it never leaks; nested functions keep
     /// the enclosing value in this subset.
     pub(in crate::check::checker) current_this: Option<TypeId>,
+    /// Non-query capability for direct `this.member` lookup in a poisoned class body.
+    /// The object itself is never returned as an expression type or semantic operand.
+    pub(in crate::check::checker) current_body_this_environment: Option<BodyMemberEnvironment>,
     /// Current class context for access-control checks.
     /// Save/restored with `current_this`; `private` requires the declaring class and
     /// `protected` allows subclasses. Outside class members it is `None`.
     pub(in crate::check::checker) current_class: Option<ClassId>,
+    /// Lexically enclosing class contexts, outermost to innermost. Nested classes
+    /// get their own `current_class` while retaining outer visibility privileges.
+    pub(in crate::check::checker) enclosing_classes: Vec<ClassId>,
     /// Current base-constructor signature for checking `super(args)`.
     /// Save/restored at class-member boundaries so it never leaks; outside a
     /// derived class member, `super(...)` has no signature and is ignored.
@@ -332,10 +377,6 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// writes (the resolved value may depend on a provisional seed), which is what
     /// keeps a stale pre-loop narrow state from being cached across a back edge.
     pub(in crate::check::checker) flow_loop_depth: u32,
-    /// Conditional-type evaluation memo.
-    /// Durable pass-wide, but results reached under budget exhaustion or in-flight
-    /// cycles are never stored (the provisional discipline from invariants §1).
-    pub(in crate::check::checker) cond_memo: FxHashMap<TypeId, TypeId>,
     /// Conditional-type lowering contexts.
     /// Frames cover the whole node, but `infer` binders are active only in extends/true.
     /// Cross-binder nested-`infer` references poison the intervening nodes; names in no

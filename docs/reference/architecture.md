@@ -341,18 +341,17 @@ orthogonal to bytecode** (ADR-0001). Build them into the evaluator as items `09`
    position — exactly the bug tsc is finicky about). Achievable over the tree with an explicit
    work-stack; cleanest if/when the bytecode refactor (§7.1) materialises.
 
-Three private evaluator walkers use heap task/value stacks for every structural child
+Two private evaluator walkers use heap task/value stacks for every structural child
 they traverse, including function type-parameter constraints and defaults. They stay
 separate rather than becoming a generic visitor because their policies are distinct:
 
 - `InferRewrite` owns lexical fresh binders, a per-run completed memo, and SCC-suffix
   identity taint.
-- `InferenceConstraintEvaluator` delegates pending types and conservatively restores
-  a structural input after global exhaustion.
 - `MappedRewrite` is per assembled mapped-property value; its local memo and
   `in_progress` set return the original `TypeId` on re-entry, allowing a completed
   ancestor to memoize a partial clone. It has neither SCC taint nor evaluator budget
-  semantics.
+  semantics. Inference constraints now demand normalized types through the semantic query
+  coordinator; there is no separate constraint-evaluator entrypoint.
 
 These are bounded hardenings of named structural walks, not a claim that all evaluator
 or repository recursion has disappeared. The remaining local `keyof`-intersection and

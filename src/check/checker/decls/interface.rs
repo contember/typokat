@@ -23,6 +23,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let Some(base_ty) = self.resolve_heritage_type(scope, heritage) else {
                 continue;
             };
+            let demanded = self.evaluate_type(base_ty);
+            let Some(base_ty) =
+                self.own_type_demand(demanded, crate::span::Span::from_oxc(heritage.span))
+            else {
+                continue;
+            };
             let Some(base_obj) = self.interner.store().object_type(base_ty).cloned() else {
                 continue;
             };
@@ -44,6 +50,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return None;
         };
         let decl_id = type_decl_id(self.binder, scope, ident.name.as_str())?;
+        if matches!(
+            self.type_decls.get(decl_id.index()),
+            Some(TypeDecl::Class { .. })
+        ) {
+            return self.resolve_class_type_reference(
+                scope,
+                decl_id,
+                ident.name.as_str(),
+                crate::span::Span::from_oxc(ident.span),
+                heritage.type_arguments.as_deref(),
+            );
+        }
         match heritage.type_arguments.as_deref() {
             Some(args) => self.instantiate_type_reference(scope, decl_id, args),
             None => Some(self.resolve_type_decl(scope, decl_id)),

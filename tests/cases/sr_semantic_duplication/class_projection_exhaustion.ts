@@ -14,13 +14,22 @@ class ExhaustionTarget<T> {
 
 declare const exhaustionSource: ExhaustionSource<string>;
 
-const exhaustedAssignment: ExhaustionTarget<string> = exhaustionSource; // error[TK2322] | incomplete[relation/class-projection-budget]
+const exhaustedAssignment: ExhaustionTarget<string> = exhaustionSource; // error[TK2322] | incomplete[relation/class-projection-budget]: class projection budget exhausted
 
 function acceptsExhaustionTarget(value: ExhaustionTarget<string>): void {}
-acceptsExhaustionTarget(exhaustionSource); // error[TK2345] | incomplete[relation/class-projection-budget]
+acceptsExhaustionTarget(exhaustionSource); // error[TK2345] | incomplete[relation/class-projection-budget]: class projection budget exhausted
 
 function returnsExhaustionTarget(): ExhaustionTarget<string> {
-  return exhaustionSource; // error[TK2322] | incomplete[relation/class-projection-budget]
+  return exhaustionSource; // error[TK2322] | incomplete[relation/class-projection-budget]: class projection budget exhausted
+}
+
+// A deferred override cannot turn exhaustion into a clean compatibility verdict.
+class ExhaustedOverrideBase {
+  recursive!: ExhaustionTarget<string>;
+}
+
+class ExhaustedOverrideDerived extends ExhaustedOverrideBase {
+  declare recursive: ExhaustionSource<string>; // error[TK2416]: Property 'recursive' in type 'ExhaustedOverrideDerived' is not assignable to the same property in base type 'ExhaustedOverrideBase' | incomplete[relation/class-projection-budget]: class projection budget exhausted
 }
 
 // Identity succeeds without expanding the non-regular spine.
@@ -37,7 +46,7 @@ class ExhaustionBeforeMismatchTarget<T> {
 }
 
 declare const exhaustionBeforeMismatch: ExhaustionBeforeMismatchSource<string>;
-const exhaustedBeforeSiblingMismatch: ExhaustionBeforeMismatchTarget<string> = exhaustionBeforeMismatch; // error[TK2322] | incomplete[relation/class-projection-budget]
+const exhaustedBeforeSiblingMismatch: ExhaustionBeforeMismatchTarget<string> = exhaustionBeforeMismatch; // error[TK2322] | incomplete[relation/class-projection-budget]: class projection budget exhausted
 
 class MismatchBeforeExhaustionSource<T> {
   aKind!: "source";
@@ -66,7 +75,7 @@ interface ExhaustedCandidateBeforeWinner {
 }
 
 declare const exhaustedCandidateBeforeWinner: ExhaustedCandidateBeforeWinner;
-const exhaustedCandidate: "impossible" = exhaustedCandidateBeforeWinner(exhaustionSource); // incomplete[relation/class-projection-budget]
+const exhaustedCandidate: "impossible" = exhaustedCandidateBeforeWinner(exhaustionSource); // incomplete[relation/class-projection-budget]: class projection budget exhausted
 
 declare function inferAfterExhaustedCandidate<T>(value: ExhaustionTarget<T>, fallback: T): T;
-const inferredAfterExhaustion: string = inferAfterExhaustedCandidate(exhaustionSource, "fallback"); // error[TK2345] | incomplete[relation/class-projection-budget]
+const inferredAfterExhaustion: string = inferAfterExhaustedCandidate(exhaustionSource, "fallback"); // error[TK2345] | incomplete[relation/class-projection-budget]: class projection budget exhausted

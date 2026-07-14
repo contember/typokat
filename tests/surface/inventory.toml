@@ -1544,3 +1544,49 @@ oxc_variant = "TSSignature::TSPropertySignature"
 disposition = "supported"
 owner = "shipped"
 witness = "../cases/f1_object_interface_methods"
+
+# ------------------------------------------------------------------------------
+# Shipped semantic incomplete outcomes (not AST dispatcher slots)
+# ------------------------------------------------------------------------------
+
+[[incomplete]]
+id = "class/property-definition/initializer-inference"
+context = "unannotated field initializer cannot be inferred during class surface construction"
+owner = "shipped"
+witness = "../cases/sr_semantic_duplication/class_initializer_unsupported.ts"
+
+[[incomplete]]
+id = "annotation-lower/type-reference/class-default-argument"
+context = "class type-parameter default unavailable at application"
+owner = "shipped"
+witness = "../cases/sr_semantic_duplication/class_application_contract.ts"
+
+[[incomplete]]
+id = "expr-infer/new-expression/class-default-argument"
+context = "class type-parameter default unavailable at application"
+owner = "shipped"
+witness = "../cases/sr_semantic_duplication/class_application_contract.ts"
+
+[[incomplete]]
+id = "expr-infer/new-expression/class-type-argument-inference"
+context = "class type arguments cannot be fully inferred"
+owner = "shipped"
+witness = "../cases/sr_semantic_duplication/class_application_contract.ts"
+
+[[incomplete]]
+id = "relation/class-projection-budget"
+context = "class projection budget exhausted"
+owner = "shipped"
+witness = "../cases/sr_semantic_duplication/class_projection_exhaustion.ts"
+
+[[incomplete]]
+id = "class/class-heritage/cycle"
+context = "class heritage cycle poisons the published surface"
+owner = "shipped"
+witness = "../cases/sr_semantic_duplication/class_initializer_poison.ts"
+
+[[incomplete]]
+id = "class/class-heritage/poisoned-base"
+context = "class heritage base surface is poisoned"
+owner = "shipped"
+witness = "../cases/sr_semantic_duplication/class_initializer_poison.ts"

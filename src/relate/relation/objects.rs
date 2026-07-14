@@ -796,6 +796,45 @@ impl<'a> Relater<'a> {
         overload_ty: TypeId,
         implementation_ty: TypeId,
     ) -> bool {
+        super::legacy_guard::reject_legacy_semantic_types(
+            self.store,
+            &[overload_ty, implementation_ty],
+        );
+        self.allow_relation_demand = false;
+        self.query_exhaustion = None;
+        self.overload_implementation_compatible_inner(overload_ty, implementation_ty)
+    }
+
+    pub(crate) fn overload_implementation_compatible_attempt(
+        &mut self,
+        overload_ty: TypeId,
+        implementation_ty: TypeId,
+    ) -> super::RelationAttempt {
+        self.allow_relation_demand = true;
+        self.query_exhaustion = None;
+        self.query_demand = None;
+        self.query_demand_observed = false;
+        let compatible =
+            self.overload_implementation_compatible_inner(overload_ty, implementation_ty);
+        if let Some(exhaustion) = self.query_exhaustion.take() {
+            return super::RelationAttempt::Decided(super::RelationOutcome::Exhausted(exhaustion));
+        }
+        if let Some(demand) = self.query_demand.take() {
+            return super::RelationAttempt::Needs(demand);
+        }
+        if !compatible {
+            return super::RelationAttempt::Decided(super::RelationOutcome::No(
+                super::ReasonChain::leaf(overload_ty, implementation_ty),
+            ));
+        }
+        super::RelationAttempt::Decided(super::RelationOutcome::Yes)
+    }
+
+    fn overload_implementation_compatible_inner(
+        &mut self,
+        overload_ty: TypeId,
+        implementation_ty: TypeId,
+    ) -> bool {
         let Some(overload) = self.store.function_type(overload_ty).cloned() else {
             return false;
         };
@@ -815,7 +854,7 @@ impl<'a> Relater<'a> {
             // is ordinary function assignability in implementation -> overload
             // direction: overload arguments flow into the implementation and its
             // specialized result flows back out to the overload caller.
-            (true, false) => self.is_assignable(implementation_ty, overload_ty).is_yes(),
+            (true, false) => self.nested_assignable(implementation_ty, overload_ty),
             (false, true) => {
                 let context = BinderRelationContext::source_specialization(&overload.type_params);
                 self.with_binder_context(context, |relater| {
@@ -841,8 +880,7 @@ impl<'a> Relater<'a> {
                             .constraint
                             .unwrap_or(relater.well_known.unknown);
                         if !relater
-                            .is_assignable(overload_constraint, implementation_constraint)
-                            .is_yes()
+                            .nested_assignable(overload_constraint, implementation_constraint)
                         {
                             return false;
                         }
@@ -862,10 +900,7 @@ impl<'a> Relater<'a> {
         if let (Some(overload_receiver), Some(implementation_receiver)) =
             (overload.receiver, implementation.receiver)
         {
-            if !self
-                .is_assignable(overload_receiver, implementation_receiver)
-                .is_yes()
-            {
+            if !self.nested_assignable(overload_receiver, implementation_receiver) {
                 return false;
             }
         }
@@ -876,23 +911,22 @@ impl<'a> Relater<'a> {
             overload.params.iter().zip(&implementation.params)
         {
             if overload_param.rest != implementation_param.rest
-                || !self
-                    .is_assignable(overload_param.ty, implementation_param.ty)
-                    .is_yes()
+                || !self.nested_assignable(overload_param.ty, implementation_param.ty)
             {
                 return false;
             }
         }
-        let overload_to_implementation = self
-            .is_assignable(overload.ret, implementation.ret)
-            .is_yes();
+        let overload_to_implementation = self.nested_assignable(overload.ret, implementation.ret);
         if !implementation_return_to_overload {
             return overload_to_implementation;
         }
-        overload_to_implementation
-            || self
-                .is_assignable(implementation.ret, overload.ret)
-                .is_yes()
+        overload_to_implementation || self.nested_assignable(implementation.ret, overload.ret)
+    }
+
+    fn nested_assignable(&mut self, source: TypeId, target: TypeId) -> bool {
+        let mut assumed = rustc_hash::FxHashSet::default();
+        self.relate(source, target, RelationKind::Assignable, &mut assumed)
+            .is_yes()
     }
 
     /// The context-free positional function rule, reused after a generic relation

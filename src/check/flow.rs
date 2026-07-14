@@ -3,7 +3,9 @@
 //! types under guard facts; the checker decides symbol and branch polarity.
 
 use crate::binder::symbol::SymbolId;
-use crate::relate::{Relater, Relation};
+use crate::check::query::{PublishedClassLookup, SemanticQueryCoordinator, SemanticQueryState};
+use crate::class_semantics::DemandOutcome;
+use crate::relate::RelationOutcome;
 use crate::types::repr::{IntrinsicKind, LiteralValue, TypeTag};
 use crate::types::store::TypeId;
 use crate::types::Interner;
@@ -122,6 +124,13 @@ pub enum NarrowOp {
     In { property: String },
 }
 
+struct DiscriminantQueryRequest<'a> {
+    ty: TypeId,
+    property: &'a str,
+    literal: TypeId,
+    positive: bool,
+}
+
 /// Apply a narrowing operation under branch polarity and re-intern the result.
 /// Non-unions are treated as one-member sets, so operations are total and compose.
 pub fn narrow(interner: &mut Interner, ty: TypeId, op: &NarrowOp, positive: bool) -> TypeId {
@@ -136,6 +145,49 @@ pub fn narrow(interner: &mut Interner, ty: TypeId, op: &NarrowOp, positive: bool
         }
         NarrowOp::In { property } => narrow_by_in_operator(interner, ty, property, positive),
     }
+}
+
+/// Production narrowing boundary for class-reachable guards. The whole guard
+/// runs on a child query state; an exhausted constituent promotes no memo/cache
+/// writes and lets the caller retain the pre-guard type conservatively.
+pub(crate) fn narrow_query<L: PublishedClassLookup + ?Sized>(
+    interner: &mut Interner,
+    published: &L,
+    state: &mut SemanticQueryState,
+    next_type_param: &mut u32,
+    ty: TypeId,
+    op: &NarrowOp,
+    positive: bool,
+) -> DemandOutcome<TypeId> {
+    let mut local_state = state.fork();
+    let outcome = match op {
+        NarrowOp::Discriminant { property, literal } => narrow_by_discriminant_query(
+            interner,
+            published,
+            &mut local_state,
+            next_type_param,
+            DiscriminantQueryRequest {
+                ty,
+                property,
+                literal: *literal,
+                positive,
+            },
+        ),
+        NarrowOp::In { property } => narrow_by_in_operator_query(
+            interner,
+            published,
+            &mut local_state,
+            next_type_param,
+            ty,
+            property,
+            positive,
+        ),
+        _ => DemandOutcome::Ready(narrow(interner, ty, op, positive)),
+    };
+    if matches!(outcome, DemandOutcome::Ready(_)) {
+        *state = local_state;
+    }
+    outcome
 }
 
 /// Narrow by `typeof x === <tag>`. Then keeps matching primitive/literal members;
@@ -201,8 +253,8 @@ fn narrow_by_nullish_equality(
 /// Soundness rests on hash-consing: literal types are interned, so two equal
 /// literals share one `TypeId`. The "could equal" test reuses the relation engine
 /// (`literal <: m.prop`), so a discriminant against a base or union type behaves
-/// correctly. A fresh [`Relater`] is built on the interner's store (its own cache,
-/// no shared state) and dropped before the mutable re-intern.
+/// correctly. Each proof uses the guarded legacy relation kernel before the
+/// mutable re-intern.
 pub fn narrow_by_discriminant(
     interner: &mut Interner,
     ty: TypeId,
@@ -223,11 +275,10 @@ pub fn narrow_by_discriminant(
         None => vec![ty],
     };
 
-    // Decide each member with one relater over the immutable store (its borrow must
-    // end before the mutable `union` below).
+    // Decide each member while the store is borrowed immutably, then release it
+    // before the mutable `union` below.
     let kept: Vec<TypeId> = {
         let store = interner.store();
-        let mut relater = Relater::new(store, wk);
         members
             .iter()
             .copied()
@@ -236,7 +287,7 @@ pub fn narrow_by_discriminant(
                     .object_type(member)
                     .and_then(|obj| obj.property(property))
                     .map(|prop| prop.ty);
-                discriminant_keeps(&mut relater, member, prop_ty, literal, wk, positive)
+                discriminant_keeps(store, member, prop_ty, literal, wk, positive)
             })
             .collect()
     };
@@ -248,7 +299,7 @@ pub fn narrow_by_discriminant(
 /// property type `prop_ty` (`None` if the member lacks the property or is not an
 /// object). Pulled out so the (sound) keep rule is unit-testable and stated once.
 fn discriminant_keeps(
-    relater: &mut Relater<'_>,
+    store: &crate::types::store::Store,
     member: TypeId,
     prop_ty: Option<TypeId>,
     literal: TypeId,
@@ -269,12 +320,141 @@ fn discriminant_keeps(
     if positive {
         // then-branch: drop only when `literal` provably cannot be a value of
         // `m.prop` (so `m.prop === literal` is impossible).
-        matches!(relater.is_assignable(literal, prop_ty), Relation::Yes)
+        literal_could_equal_property(store, literal, prop_ty, wk)
     } else {
         // else-branch: drop only when `m.prop` is exactly the literal (so
         // `m.prop === literal` always holds and `!==` excludes the member).
         prop_ty != literal
     }
+}
+
+/// Conservative non-query proof used by flow unit tests and other intrinsic-only
+/// callers. Query-owned shapes remain possible instead of being treated as a
+/// relation failure.
+fn literal_could_equal_property(
+    store: &crate::types::store::Store,
+    literal: TypeId,
+    property: TypeId,
+    wk: crate::types::WellKnown,
+) -> bool {
+    if literal == property || property == wk.any || property == wk.error {
+        return true;
+    }
+    match store.tag(property) {
+        TypeTag::Literal => false,
+        TypeTag::Intrinsic => match store.literal_value(literal) {
+            Some(value) => store.intrinsic_kind(property) == Some(value.base_kind()),
+            None => false,
+        },
+        TypeTag::Union => store.union_members(property).is_none_or(|members| {
+            members
+                .iter()
+                .any(|&member| literal_could_equal_property(store, literal, member, wk))
+        }),
+        TypeTag::Intersection => store.intersection_members(property).is_none_or(|members| {
+            members
+                .iter()
+                .all(|&member| literal_could_equal_property(store, literal, member, wk))
+        }),
+        TypeTag::Readonly => store
+            .readonly_operand(property)
+            .is_none_or(|operand| literal_could_equal_property(store, literal, operand, wk)),
+        TypeTag::Object | TypeTag::Function | TypeTag::Array | TypeTag::Tuple => false,
+        TypeTag::TypeParam
+        | TypeTag::Template
+        | TypeTag::Conditional
+        | TypeTag::Instantiation
+        | TypeTag::ClassInstance
+        | TypeTag::Infer
+        | TypeTag::Mapped
+        | TypeTag::MappedValue
+        | TypeTag::Keyof
+        | TypeTag::DeferredIndexedAccess => true,
+    }
+}
+
+/// Query-aware discriminant decision for class-reachable property types.
+/// Exhaustion remains typed so the caller can abandon the whole narrowing
+/// attempt instead of dropping a union member on an invented mismatch.
+pub(crate) fn discriminant_keeps_query<L: PublishedClassLookup + ?Sized>(
+    coordinator: &mut SemanticQueryCoordinator<'_, L>,
+    member: TypeId,
+    prop_ty: Option<TypeId>,
+    literal: TypeId,
+    wk: crate::types::WellKnown,
+    positive: bool,
+) -> DemandOutcome<bool> {
+    if member == wk.any || member == wk.error {
+        return DemandOutcome::Ready(true);
+    }
+    let Some(prop_ty) = prop_ty else {
+        return DemandOutcome::Ready(true);
+    };
+    if !positive {
+        return DemandOutcome::Ready(prop_ty != literal);
+    }
+    match coordinator.is_assignable(literal, prop_ty) {
+        RelationOutcome::Yes => DemandOutcome::Ready(true),
+        RelationOutcome::No(_) => DemandOutcome::Ready(false),
+        RelationOutcome::Exhausted(reason) => DemandOutcome::Exhausted(reason),
+    }
+}
+
+fn narrow_by_discriminant_query<L: PublishedClassLookup + ?Sized>(
+    interner: &mut Interner,
+    published: &L,
+    state: &mut SemanticQueryState,
+    next_type_param: &mut u32,
+    request: DiscriminantQueryRequest<'_>,
+) -> DemandOutcome<TypeId> {
+    let DiscriminantQueryRequest {
+        ty,
+        property,
+        literal,
+        positive,
+    } = request;
+    let wk = interner.well_known();
+    if ty == wk.any || ty == wk.error {
+        return DemandOutcome::Ready(ty);
+    }
+    let members = interner
+        .store()
+        .union_members(ty)
+        .map_or_else(|| vec![ty], |members| members.to_vec());
+    let mut kept = Vec::with_capacity(members.len());
+    for member in members {
+        let apparent = flow_apparent_type(interner, member);
+        let demanded =
+            match SemanticQueryCoordinator::new(interner, published, state, next_type_param)
+                .demand(apparent)
+            {
+                DemandOutcome::Ready(demanded) => demanded,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
+            };
+        let prop_ty = interner
+            .store()
+            .object_type(demanded)
+            .and_then(|object| object.property(property))
+            .map(|property| property.ty);
+        let decision = discriminant_keeps_query(
+            &mut SemanticQueryCoordinator::new(interner, published, state, next_type_param),
+            demanded,
+            prop_ty,
+            literal,
+            wk,
+            positive,
+        );
+        match decision {
+            DemandOutcome::Ready(true) => kept.push(member),
+            DemandOutcome::Ready(false) => {}
+            DemandOutcome::Exhausted(exhaustion) => {
+                return DemandOutcome::Exhausted(exhaustion);
+            }
+        }
+    }
+    DemandOutcome::Ready(interner.union(kept))
 }
 
 /// Narrow `ty` by the **`in` operator** `"prop" in x` (M8, architecture §5).
@@ -322,6 +502,93 @@ pub fn narrow_by_in_operator(
             !(is_object && has_property)
         }
     })
+}
+
+fn narrow_by_in_operator_query<L: PublishedClassLookup + ?Sized>(
+    interner: &mut Interner,
+    published: &L,
+    state: &mut SemanticQueryState,
+    next_type_param: &mut u32,
+    ty: TypeId,
+    property: &str,
+    positive: bool,
+) -> DemandOutcome<TypeId> {
+    let wk = interner.well_known();
+    if ty == wk.any || ty == wk.error {
+        return DemandOutcome::Ready(ty);
+    }
+    let members = interner
+        .store()
+        .union_members(ty)
+        .map_or_else(|| vec![ty], |members| members.to_vec());
+    let mut kept = Vec::with_capacity(members.len());
+    for member in members {
+        if member == wk.any || member == wk.error {
+            kept.push(member);
+            continue;
+        }
+        let apparent = flow_apparent_type(interner, member);
+        let demanded =
+            match SemanticQueryCoordinator::new(interner, published, state, next_type_param)
+                .demand(apparent)
+            {
+                DemandOutcome::Ready(demanded) => demanded,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
+            };
+        let object = interner.store().object_type(demanded);
+        let keep = match object {
+            Some(object) => {
+                let has_property = object.property(property).is_some();
+                if positive {
+                    has_property
+                } else {
+                    !has_property
+                }
+            }
+            None if is_query_owned_shape(interner, demanded) => true,
+            None => !positive,
+        };
+        if keep {
+            kept.push(member);
+        }
+    }
+    DemandOutcome::Ready(interner.union(kept))
+}
+
+fn flow_apparent_type(interner: &Interner, ty: TypeId) -> TypeId {
+    let store = interner.store();
+    let mut current = ty;
+    let mut seen = rustc_hash::FxHashSet::default();
+    while store.tag(current) == TypeTag::TypeParam {
+        let Some(parameter) = store.type_param(current) else {
+            break;
+        };
+        if !seen.insert(parameter.id) {
+            break;
+        }
+        let Some(constraint) = store.type_param_constraint(parameter.id) else {
+            break;
+        };
+        current = constraint;
+    }
+    current
+}
+
+fn is_query_owned_shape(interner: &Interner, ty: TypeId) -> bool {
+    matches!(
+        interner.store().tag(ty),
+        TypeTag::TypeParam
+            | TypeTag::Conditional
+            | TypeTag::Instantiation
+            | TypeTag::ClassInstance
+            | TypeTag::Infer
+            | TypeTag::Mapped
+            | TypeTag::MappedValue
+            | TypeTag::Keyof
+            | TypeTag::DeferredIndexedAccess
+    )
 }
 
 /// Whether a union member matches a `typeof` tag (its base intrinsic, or a literal

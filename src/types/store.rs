@@ -9,12 +9,18 @@ use crate::types::repr::{
     InstantiationType, IntrinsicKind, LiteralValue, MappedType, ObjectType, TemplateType,
     TupleType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A run-local handle to a type: an index into the SoA arena. Cheap to copy and
 /// compare; structural equality of two interned types is `a == b`.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct TypeId(pub u32);
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TypeParamFreezeError {
+    Duplicate(TypeParamId),
+    AlreadyFrozen(TypeParamId),
+}
 
 impl TypeId {
     #[inline]
@@ -90,6 +96,10 @@ pub struct Store {
     /// (`TypeParam(T) → X` via its constraint). A parameter with no `extends`, or an
     /// unlowerable one, simply has no entry (no constraint — the safe direction).
     type_param_constraints: FxHashMap<TypeParamId, TypeId>,
+
+    /// Declaration binders whose side-column metadata is immutable. Class
+    /// publication freezes the complete SCC batch before any surface is exposed.
+    frozen_type_params: FxHashSet<TypeParamId>,
 
     /// Template display names (M28 round 3), keyed by reserved template id.
     /// Rendering-only: deferred instantiations print as alias names, not raw bodies.
@@ -302,14 +312,47 @@ impl Store {
     /// Record a type parameter's `extends` constraint (M24). Internal — the checker
     /// calls it through `Interner::set_type_param_constraint` once, when the
     /// declaration's parameter list is lowered with the frame active.
-    pub(crate) fn set_type_param_constraint(&mut self, id: TypeParamId, constraint: TypeId) {
+    pub(crate) fn set_type_param_constraint(
+        &mut self,
+        id: TypeParamId,
+        constraint: TypeId,
+    ) -> bool {
+        if self.frozen_type_params.contains(&id) {
+            return false;
+        }
         self.type_param_constraints.insert(id, constraint);
+        true
     }
 
     /// Erase a circular type-parameter constraint so the degenerate cycle never
     /// reaches the relation engine's assume-true stack.
-    pub(crate) fn remove_type_param_constraint(&mut self, id: TypeParamId) {
+    pub(crate) fn remove_type_param_constraint(&mut self, id: TypeParamId) -> bool {
+        if self.frozen_type_params.contains(&id) {
+            return false;
+        }
         self.type_param_constraints.remove(&id);
+        true
+    }
+
+    pub(crate) fn type_param_metadata_is_frozen(&self, id: TypeParamId) -> bool {
+        self.frozen_type_params.contains(&id)
+    }
+
+    /// Freeze a whole declaration batch after prevalidation. A failed batch
+    /// changes nothing, so publication cannot expose a partially frozen SCC.
+    pub(crate) fn freeze_type_param_metadata(
+        &mut self,
+        ids: &[TypeParamId],
+    ) -> Result<(), TypeParamFreezeError> {
+        let mut batch = FxHashSet::default();
+        if let Some(&id) = ids.iter().find(|id| !batch.insert(**id)) {
+            return Err(TypeParamFreezeError::Duplicate(id));
+        }
+        if let Some(&id) = ids.iter().find(|id| self.frozen_type_params.contains(id)) {
+            return Err(TypeParamFreezeError::AlreadyFrozen(id));
+        }
+        self.frozen_type_params.extend(ids.iter().copied());
+        Ok(())
     }
 
     /// The display name of a reserved template row (M28 round 3), or `None` for an

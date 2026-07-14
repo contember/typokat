@@ -2,7 +2,8 @@
 //! (extracted from flowgraph.rs).
 
 use crate::binder::symbol::SymbolId;
-use crate::check::flow::{narrow, FlowNode, FlowNodeId};
+use crate::check::flow::{narrow_query, FlowNode, FlowNodeId};
+use crate::class_semantics::DemandOutcome;
 use crate::types::store::TypeId;
 use rustc_hash::FxHashMap;
 
@@ -163,7 +164,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 } => {
                     if let Some(base) = self.scratch_or_cached(&scratch, antecedent, symbol) {
                         let t = if guard_symbol == symbol {
-                            narrow(self.interner, base, &op, positive)
+                            match narrow_query(
+                                self.interner,
+                                &self.published_classes,
+                                &mut self.semantic_queries,
+                                &mut self.next_type_param,
+                                base,
+                                &op,
+                                positive,
+                            ) {
+                                DemandOutcome::Ready(narrowed) => narrowed,
+                                DemandOutcome::Exhausted(_) => base,
+                            }
                         } else {
                             base
                         };

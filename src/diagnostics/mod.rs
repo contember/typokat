@@ -32,6 +32,8 @@ pub enum DiagnosticCode {
     TK2307,
     /// Type parameter has a circular constraint (`<T extends T>`) — M24.
     TK2313,
+    /// Generic type requires an exact number of type arguments.
+    TK2314,
     /// Type X is not assignable to type Y.
     TK2322,
     /// Property does not exist on type (member access).
@@ -72,6 +74,8 @@ pub enum DiagnosticCode {
     TK2674,
     /// The call receiver is not assignable to an explicit `this` parameter.
     TK2684,
+    /// Generic type requires a bounded range of type arguments.
+    TK2707,
     /// Cannot assign to a read-only property — M14.
     TK2540,
     /// Wrong number of call arguments (arity).
@@ -99,6 +103,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2305 => "TK2305",
             DiagnosticCode::TK2307 => "TK2307",
             DiagnosticCode::TK2313 => "TK2313",
+            DiagnosticCode::TK2314 => "TK2314",
             DiagnosticCode::TK2322 => "TK2322",
             DiagnosticCode::TK2339 => "TK2339",
             DiagnosticCode::TK2341 => "TK2341",
@@ -116,6 +121,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2673 => "TK2673",
             DiagnosticCode::TK2674 => "TK2674",
             DiagnosticCode::TK2684 => "TK2684",
+            DiagnosticCode::TK2707 => "TK2707",
             DiagnosticCode::TK2540 => "TK2540",
             DiagnosticCode::TK2554 => "TK2554",
             DiagnosticCode::TK2555 => "TK2555",
@@ -552,6 +558,35 @@ impl Diagnostic {
             code: DiagnosticCode::TK2558,
             severity: Severity::Error,
             message: format!("Expected {expected} type arguments, but got {got}"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2314` exact generic type-argument count error.
+    pub fn generic_type_requires_arguments(span: Span, display: &str, expected: usize) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2314,
+            severity: Severity::Error,
+            message: format!("Generic type '{display}' requires {expected} type argument(s)"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2707` ranged generic type-argument count error.
+    pub fn generic_type_requires_argument_range(
+        span: Span,
+        display: &str,
+        min: usize,
+        max: usize,
+    ) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2707,
+            severity: Severity::Error,
+            message: format!(
+                "Generic type '{display}' requires between {min} and {max} type arguments"
+            ),
             span,
             elaboration: Vec::new(),
         }

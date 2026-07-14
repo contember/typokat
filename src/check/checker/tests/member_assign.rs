@@ -185,3 +185,45 @@ const c = new C(1);
     // TK2322); `this.y += 1` (9) likewise. The program is clean.
     assert!(diags(src).is_empty(), "got {:?}", diags(src));
 }
+
+/// Access control applies before the normal/compound assignment split. Same-class
+/// private writes and subclass protected writes remain valid.
+#[test]
+fn member_assignment_enforces_private_and_protected_access() {
+    let src = "\
+class Base {
+  private secret: number;
+  protected shared: number;
+  update(other: Base) {
+this.secret = 1;
+other.secret += 1;
+this.shared = 1;
+other.shared += 1;
+  }
+}
+class Derived extends Base {
+  update(other: Derived) {
+this.shared = 1;
+other.shared += 1;
+this.secret = 1;
+this.secret += 1;
+  }
+}
+const base = new Base();
+base.secret = 1;
+base.secret += 1;
+base.shared = 1;
+base.shared += 1;
+";
+    assert_eq!(
+        diags(src),
+        vec![
+            (15, "TK2341".to_string()),
+            (16, "TK2341".to_string()),
+            (20, "TK2341".to_string()),
+            (21, "TK2341".to_string()),
+            (22, "TK2445".to_string()),
+            (23, "TK2445".to_string()),
+        ]
+    );
+}

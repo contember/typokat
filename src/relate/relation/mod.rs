@@ -197,6 +197,46 @@ pub(crate) enum RelationOutcome {
     Exhausted(Exhaustion),
 }
 
+/// One semantic node that the read-only relation engine reached before it could
+/// decide the enclosing query. The mutable query coordinator expands it and
+/// retries with a larger immutable overlay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RelationDemand {
+    ClassProjection(TypeId),
+    Evaluation(TypeId),
+}
+
+/// Internal coordinator protocol. A demand never crosses the checker/reporting
+/// boundary; public consumers still see only yes/no/exhausted.
+#[derive(Clone, Debug)]
+pub(crate) enum RelationAttempt {
+    Decided(RelationOutcome),
+    Needs(RelationDemand),
+}
+
+/// Query-local normalization visible to the read-only relation engine.
+///
+/// Implementations expose immutable projection/evaluation overlays and typed
+/// frontiers. Relation consults this before identity, cache, or cycle handling.
+pub(crate) trait RelationNormalization {
+    fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion>;
+
+    /// Return the next unresolved semantic operation for lazy relation planning.
+    /// Evaluator/inference queries use `normalize` directly and therefore never
+    /// observe this relation-only protocol.
+    fn relation_demand(&self, _store: &Store, _ty: TypeId) -> Option<RelationDemand> {
+        None
+    }
+}
+
+fn normalization_demand(
+    normalization: Option<&dyn RelationNormalization>,
+    store: &Store,
+    ty: TypeId,
+) -> Option<RelationDemand> {
+    normalization.and_then(|normalization| normalization.relation_demand(store, ty))
+}
+
 /// Identical-only relation rule for an unevaluated deferred indexed access. Other
 /// pairs remain for WU1c's projection planner and relation transaction.
 #[allow(dead_code)] // Dormant until WU1c installs the planned relation protocol.
@@ -226,12 +266,23 @@ impl Relation {
     }
 }
 
+/// Run one legacy relation query that is known not to contain query-owned
+/// semantic nodes. Class projection and deferred evaluation must enter through
+/// the semantic query coordinator instead.
 /// The relation engine. Borrows the store immutably (relation checking never
 /// mutates the arena) and owns the cache + cycle stack.
 pub struct Relater<'a> {
     store: &'a Store,
     well_known: WellKnown,
     cache: RelationCache,
+    /// Query-local writes. Planned queries promote this only after the whole
+    /// coordinator transaction completes without taint or exhaustion.
+    pending_cache: RelationCache,
+    normalization: Option<&'a dyn RelationNormalization>,
+    query_exhaustion: Option<Exhaustion>,
+    allow_relation_demand: bool,
+    query_demand: Option<RelationDemand>,
+    query_demand_observed: bool,
     /// Assume-true-until-disproven stack (architecture §6.3): when a query
     /// re-enters a relation already in flight, we assume it holds and continue,
     /// resolving the fixpoint as the stack unwinds. It fires as of M5, where
@@ -347,9 +398,83 @@ impl<'a> Relater<'a> {
             store,
             well_known,
             cache: RelationCache::new(),
+            pending_cache: RelationCache::new(),
+            normalization: None,
+            query_exhaustion: None,
+            allow_relation_demand: false,
+            query_demand: None,
+            query_demand_observed: false,
             stack: FxHashSet::default(),
             binder_contexts: Vec::new(),
         }
+    }
+
+    /// Build the read-only relation phase of one coordinator-owned transaction.
+    /// The supplied durable cache is returned by [`Relater::finish_planned`].
+    pub(crate) fn planned(
+        store: &'a Store,
+        well_known: WellKnown,
+        cache: RelationCache,
+        normalization: &'a dyn RelationNormalization,
+    ) -> Self {
+        Relater {
+            store,
+            well_known,
+            cache,
+            pending_cache: RelationCache::new(),
+            normalization: Some(normalization),
+            query_exhaustion: None,
+            allow_relation_demand: false,
+            query_demand: None,
+            query_demand_observed: false,
+            stack: FxHashSet::default(),
+            binder_contexts: Vec::new(),
+        }
+    }
+
+    /// Run a planned assignability query without collapsing exhaustion into `No`.
+    pub(crate) fn is_assignable_outcome(&mut self, src: TypeId, tgt: TypeId) -> RelationOutcome {
+        self.allow_relation_demand = false;
+        self.query_exhaustion = None;
+        let mut assumed = FxHashSet::default();
+        let relation = self.relate(src, tgt, RelationKind::Assignable, &mut assumed);
+        match self.query_exhaustion.take() {
+            Some(reason) => RelationOutcome::Exhausted(reason),
+            None => match relation {
+                Relation::Yes => RelationOutcome::Yes,
+                Relation::No(reason) => RelationOutcome::No(reason),
+            },
+        }
+    }
+
+    /// Run one lazy coordinator attempt. The first unresolved semantic node stops
+    /// this pass so ordering against a later mismatch remains observable.
+    pub(crate) fn is_assignable_attempt(&mut self, src: TypeId, tgt: TypeId) -> RelationAttempt {
+        self.allow_relation_demand = true;
+        self.query_exhaustion = None;
+        self.query_demand = None;
+        self.query_demand_observed = false;
+        let mut assumed = FxHashSet::default();
+        let relation = self.relate(src, tgt, RelationKind::Assignable, &mut assumed);
+        if let Some(reason) = self.query_exhaustion.take() {
+            return RelationAttempt::Decided(RelationOutcome::Exhausted(reason));
+        }
+        if let Some(demand) = self.query_demand.take() {
+            return RelationAttempt::Needs(demand);
+        }
+        match relation {
+            Relation::No(reason) => RelationAttempt::Decided(RelationOutcome::No(reason)),
+            Relation::Yes => RelationAttempt::Decided(RelationOutcome::Yes),
+        }
+    }
+
+    /// Finish a planned query and return its durable cache. `commit` is false for
+    /// any planner/evaluator taint, even when relation found an earlier `No`.
+    pub(crate) fn finish_planned(mut self, commit: bool) -> RelationCache {
+        if commit && self.query_exhaustion.is_none() && !self.query_demand_observed {
+            self.cache.promote(self.pending_cache);
+        }
+        self.cache
     }
 
     /// Is `src` assignable to `tgt`? Entry point used by the checker for
@@ -383,11 +508,42 @@ impl<'a> Relater<'a> {
         kind: RelationKind,
         assumed: &mut AssumedSet,
     ) -> Relation {
-        legacy_guard::reject_legacy_semantic_type(self.store, src);
-        legacy_guard::reject_legacy_semantic_type(self.store, tgt);
+        let original_src = src;
+        let original_tgt = tgt;
+        let (src, tgt) = if let Some(normalization) = self.normalization {
+            let src = match normalization.normalize(src) {
+                Ok(src) => src,
+                Err(reason) => {
+                    self.query_exhaustion.get_or_insert(reason);
+                    return Relation::No(ReasonChain::leaf(original_src, original_tgt));
+                }
+            };
+            let tgt = match normalization.normalize(tgt) {
+                Ok(tgt) => tgt,
+                Err(reason) => {
+                    self.query_exhaustion.get_or_insert(reason);
+                    return Relation::No(ReasonChain::leaf(original_src, original_tgt));
+                }
+            };
+            (src, tgt)
+        } else {
+            legacy_guard::reject_legacy_semantic_type(self.store, src);
+            legacy_guard::reject_legacy_semantic_type(self.store, tgt);
+            (src, tgt)
+        };
         // Identity fast path: `T` relates to `T` under every relation.
         if src == tgt {
             return Relation::Yes;
+        }
+
+        if self.allow_relation_demand {
+            if let Some(demand) = normalization_demand(self.normalization, self.store, src)
+                .or_else(|| normalization_demand(self.normalization, self.store, tgt))
+            {
+                self.query_demand.get_or_insert(demand);
+                self.query_demand_observed = true;
+                return Relation::No(ReasonChain::leaf(original_src, original_tgt));
+            }
         }
 
         if let Some(result) = self.relate_contextual_type_params(src, tgt, kind, assumed) {
@@ -419,7 +575,9 @@ impl<'a> Relater<'a> {
         // stack-guarded recompute so the checker still sees the precise
         // missing-vs-mismatch reason (the cache stores only the bool verdict —
         // architecture §6.1 — not the reason).
-        let cached = cacheable.then(|| self.cache.get(key)).flatten();
+        let cached = cacheable
+            .then(|| self.pending_cache.get(key).or_else(|| self.cache.get(key)))
+            .flatten();
         if cached == Some(true) {
             return Relation::Yes;
         }
@@ -449,9 +607,17 @@ impl<'a> Relater<'a> {
         // A recompute of an already-cached failure must not re-insert.
         if cacheable && cached.is_none() {
             if !result.is_yes() {
-                self.cache.insert(key, false);
+                if self.normalization.is_some() {
+                    self.pending_cache.insert(key, false);
+                } else {
+                    self.cache.insert(key, false);
+                }
             } else if !provisional {
-                self.cache.insert(key, true);
+                if self.normalization.is_some() {
+                    self.pending_cache.insert(key, true);
+                } else {
+                    self.cache.insert(key, true);
+                }
             }
         }
         result

@@ -217,7 +217,6 @@ impl ProjectBinderBuilder {
 
         let prelude_module = state.graph.push(Scope::new(ScopeKind::Module, None));
         state.current_module = prelude_module;
-        bind_type_declarations(&mut state, prelude_module, &prelude.body);
         bind_statements(&mut state, prelude_module, &prelude.body);
 
         ProjectBinderBuilder {
@@ -249,7 +248,6 @@ impl ProjectBinderBuilder {
                 import.value_barrier,
             ));
         }
-        bind_type_declarations(&mut self.state, module, &program.body);
         bind_statements(&mut self.state, module, &program.body);
         (module, placeholders)
     }
@@ -352,6 +350,7 @@ fn bind_type_declaration(state: &mut BindState, scope: ScopeId, decl: &Declarati
 
 /// Bind a list of statements into `scope`.
 fn bind_statements(state: &mut BindState, scope: ScopeId, statements: &[Statement<'_>]) {
+    bind_type_declarations(state, scope, statements);
     for stmt in statements {
         bind_statement(state, scope, stmt);
     }
@@ -514,12 +513,17 @@ fn bind_switch(state: &mut BindState, scope: ScopeId, switch: &SwitchStatement<'
         .block_scopes
         .insert((state.current_module, switch.span.start), switch_scope);
     for case in &switch.cases {
+        bind_type_declarations(state, switch_scope, &case.consequent);
+    }
+    for case in &switch.cases {
         // Case tests resolve in the switch-local scope (tsc: a test can name an
         // earlier clause's `let`; it reports only the deferred TS2454, not TS2304).
         if let Some(test) = &case.test {
             bind_expression(state, switch_scope, test);
         }
-        bind_statements(state, switch_scope, &case.consequent);
+        for statement in &case.consequent {
+            bind_statement(state, switch_scope, statement);
+        }
     }
 }
 

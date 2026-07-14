@@ -140,7 +140,6 @@ impl<'a> ConditionalEvaluator<'a> {
         ty: TypeId,
         tasks: &mut Vec<Task>,
         values: &mut Vec<TypeId>,
-        error: TypeId,
     ) {
         let Some(inst) = self.interner.store().instantiation_type(ty).cloned() else {
             values.push(ty);
@@ -148,11 +147,9 @@ impl<'a> ConditionalEvaluator<'a> {
         };
         if self.in_flight.contains(&ty) {
             self.note_cycle();
-            values.push(error);
             return;
         }
         if self.exhausted {
-            values.push(error);
             return;
         }
 
@@ -187,7 +184,6 @@ impl<'a> ConditionalEvaluator<'a> {
             self.steps += 1;
             if self.steps > self.budget {
                 self.exhausted = true;
-                values.push(error);
                 return;
             }
             self.in_flight.insert(ty);
@@ -235,6 +231,7 @@ impl<'a> ConditionalEvaluator<'a> {
         id: TypeId,
         values: &mut Vec<TypeId>,
         error: TypeId,
+        normalization: &dyn RelationNormalization,
     ) {
         let argument = values.pop().unwrap_or(error);
         let Some(inst) = self.interner.store().instantiation_type(id).cloned() else {
@@ -275,9 +272,16 @@ impl<'a> ConditionalEvaluator<'a> {
                         return;
                     };
                     let effective_receiver = self.effective_receiver(&function, receiver);
-                    if self.unknown_extends(effective_receiver) {
-                        values.push(argument);
-                        return;
+                    match self.unknown_extends(effective_receiver, normalization) {
+                        DemandOutcome::Ready(true) => {
+                            values.push(argument);
+                            return;
+                        }
+                        DemandOutcome::Ready(false) => {}
+                        DemandOutcome::Exhausted(reason) => {
+                            self.planned_exhaustion = Some(reason);
+                            return;
+                        }
                     }
                     functions.push(function);
                 }
@@ -297,9 +301,16 @@ impl<'a> ConditionalEvaluator<'a> {
                     return;
                 };
                 let effective_receiver = self.effective_receiver(&function, receiver);
-                if self.unknown_extends(effective_receiver) {
-                    values.push(argument);
-                    return;
+                match self.unknown_extends(effective_receiver, normalization) {
+                    DemandOutcome::Ready(true) => {
+                        values.push(argument);
+                        return;
+                    }
+                    DemandOutcome::Ready(false) => {}
+                    DemandOutcome::Exhausted(reason) => {
+                        self.planned_exhaustion = Some(reason);
+                        return;
+                    }
                 }
                 values.push(self.erase_this_parameter(function));
             }
@@ -321,10 +332,22 @@ impl<'a> ConditionalEvaluator<'a> {
         }
     }
 
-    fn unknown_extends(&self, receiver: TypeId) -> bool {
-        Relater::new(self.interner.store(), self.interner.well_known())
-            .is_assignable(self.interner.well_known().unknown, receiver)
-            .is_yes()
+    fn unknown_extends(
+        &self,
+        receiver: TypeId,
+        normalization: &dyn RelationNormalization,
+    ) -> DemandOutcome<bool> {
+        let mut relater = Relater::planned(
+            self.interner.store(),
+            self.interner.well_known(),
+            RelationCache::new(),
+            normalization,
+        );
+        match relater.is_assignable_outcome(self.interner.well_known().unknown, receiver) {
+            RelationOutcome::Yes => DemandOutcome::Ready(true),
+            RelationOutcome::No(_) => DemandOutcome::Ready(false),
+            RelationOutcome::Exhausted(reason) => DemandOutcome::Exhausted(reason),
+        }
     }
 
     /// The guard observes generic receivers after their binders are replaced by
@@ -663,11 +686,11 @@ impl<'a> ConditionalEvaluator<'a> {
                 let Some(object) = self.interner.store().object_type(ty).cloned() else {
                     return identity();
                 };
-                let mut children: Vec<TypeId> = object
-                    .properties
-                    .iter()
-                    .map(|property| property.ty)
-                    .collect();
+                let mut children = Vec::new();
+                for property in &object.properties {
+                    children.push(property.ty);
+                    children.extend(property.write_ty);
+                }
                 children.extend(object.string_index);
                 children.extend(object.number_index);
                 children.extend(object.call_signatures.iter().copied());
@@ -821,6 +844,11 @@ impl<'a> ConditionalEvaluator<'a> {
                     let rewritten = infer_rewrite_child(children, &mut child_index, property.ty);
                     changed |= rewritten != property.ty;
                     new_property.ty = rewritten;
+                    new_property.write_ty = property.write_ty.map(|write_ty| {
+                        let rewritten = infer_rewrite_child(children, &mut child_index, write_ty);
+                        changed |= rewritten != write_ty;
+                        rewritten
+                    });
                 }
                 new.string_index = object.string_index.map(|index_ty| {
                     let rewritten = infer_rewrite_child(children, &mut child_index, index_ty);

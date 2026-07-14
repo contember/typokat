@@ -167,6 +167,9 @@ impl MappedRewriteFrame {
                     push(string_index);
                 }
                 for property in object.properties.iter().rev() {
+                    if let Some(write_ty) = property.write_ty {
+                        push(write_ty);
+                    }
                     push(property.ty);
                 }
             }
@@ -287,7 +290,6 @@ impl<'a> ConditionalEvaluator<'a> {
         ty: TypeId,
         tasks: &mut Vec<Task>,
         values: &mut Vec<TypeId>,
-        error: TypeId,
     ) {
         let Some(mapped) = self.interner.store().mapped_type(ty).copied() else {
             values.push(ty);
@@ -301,17 +303,14 @@ impl<'a> ConditionalEvaluator<'a> {
         }
         if self.in_flight.contains(&ty) {
             self.note_cycle();
-            values.push(error);
             return;
         }
         if self.exhausted {
-            values.push(error);
             return;
         }
         self.steps += 1;
         if self.steps > self.budget {
             self.exhausted = true;
-            values.push(error);
             return;
         }
         self.in_flight.insert(ty);
@@ -953,6 +952,11 @@ impl<'a> ConditionalEvaluator<'a> {
                     let value = children.next(original.ty);
                     changed |= value != original.ty;
                     rewritten.ty = value;
+                    rewritten.write_ty = original.write_ty.map(|write_ty| {
+                        let value = children.next(write_ty);
+                        changed |= value != write_ty;
+                        value
+                    });
                 }
                 new.string_index = object.string_index.map(|source| children.next(source));
                 changed |= new.string_index != object.string_index;

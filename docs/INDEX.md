@@ -56,8 +56,9 @@ decisions → reference → archive.
   full-blob Git cache; the 874-test corpus check passed with zero regressions.
 - **Rewrite/hotpath hardening shipped 2026-07-13** (archived:
   [`archive/sprint-2026-07-13-rewrite-hotpath-hardening.md`](archive/sprint-2026-07-13-rewrite-hotpath-hardening.md)) —
-  `InferRewrite`, `InferenceConstraintEvaluator`, and `MappedRewrite` now use separate
-  iterative walkers with their distinct cycle/memo/exhaustion policies. WU8 also corrects
+  `InferRewrite`, the former constraint evaluator, and `MappedRewrite` shipped as separate
+  iterative walkers with distinct cycle/memo/exhaustion policies. The semantic-query cutover later
+  replaced the private constraint evaluator with coordinator demand. WU8 also corrects
   mapped generic constraint/default metadata; its 10,005-deep public-evaluator witness,
   independent reviews, and zero-regression official-suite ratchet all passed.
 - **Generic methods (`41`) shipped 2026-07-12** (archived:

@@ -1,10 +1,13 @@
 //! expr module (extracted from checker/mod.rs).
 
 use super::calls::widen;
+use super::classes::body::BodyMemberLookup;
 use super::context::*;
+use super::decls::value_decl_id;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::flow::FlowNodeId;
+use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::{render_type, Diagnostic};
 use crate::span::Span;
 use crate::types::repr::{
@@ -108,8 +111,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         span,
                     )),
                     None => {
-                        self.diagnostics
-                            .push(Diagnostic::cannot_find_name(span, ident.name.as_str()));
+                        self.emit_diagnostic(Diagnostic::cannot_find_name(
+                            span,
+                            ident.name.as_str(),
+                        ));
                         Some((well_known.error, span))
                     }
                 }
@@ -339,7 +344,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     .resolve_value(scope, ident.name.as_str())
                     .is_none()
                 {
-                    self.diagnostics.push(Diagnostic::cannot_find_name(
+                    self.emit_diagnostic(Diagnostic::cannot_find_name(
                         Span::from_oxc(ident.span),
                         ident.name.as_str(),
                     ));
@@ -656,11 +661,41 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         init: &Expression<'_>,
         context: Option<TypeId>,
     ) -> Option<(TypeId, Span)> {
-        let context = context.map(|ctx| contextual_literal_target(self.interner.store(), ctx));
-        let contextual_this = context.and_then(|ctx| self.contextual_this_type(ctx));
-        // M31: peel an intersection context to its merged apparent object so fresh
-        // literals shape against the merged member set, including nested cases.
-        let context = context.map(|ctx| self.intersection_apparent_object(ctx).unwrap_or(ctx));
+        let (context, contextual_this) = match context {
+            Some(context) => match self.with_semantic_query_transaction(|pass| {
+                let context = match pass.demand_composite_apparent_type(context) {
+                    DemandOutcome::Ready(context) => {
+                        contextual_literal_target(pass.interner.store(), context)
+                    }
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion);
+                    }
+                };
+                // `ThisType` markers live on the original intersection. Read them
+                // before merging the visible contextual object surface.
+                let contextual_this = pass.contextual_this_type(context);
+                let context = match pass.intersection_apparent_object(context) {
+                    DemandOutcome::Ready(Some(apparent)) => apparent,
+                    DemandOutcome::Ready(None) => context,
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion);
+                    }
+                };
+                DemandOutcome::Ready((context, contextual_this))
+            }) {
+                DemandOutcome::Ready((context, contextual_this)) => {
+                    (Some(context), contextual_this)
+                }
+                DemandOutcome::Exhausted(exhaustion) => {
+                    self.own_type_demand(
+                        DemandOutcome::Exhausted(exhaustion),
+                        Span::from_oxc(init.span()),
+                    );
+                    return None;
+                }
+            },
+            None => (None, None),
+        };
         match (init, context) {
             (Expression::ParenthesizedExpression(paren), ctx) => {
                 self.infer_initializer(scope, &paren.expression, ctx)
@@ -702,25 +737,33 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         use_contextual_arrow: bool,
         retain_contextual_arrow_checks: bool,
     ) -> (TypeId, Span) {
+        let context = match self.demand_composite_apparent_type(context) {
+            DemandOutcome::Ready(context) => context,
+            DemandOutcome::Exhausted(exhaustion) => {
+                self.own_type_demand(DemandOutcome::Exhausted(exhaustion), raw.1);
+                return raw;
+            }
+        };
         if let (true, Expression::ArrowFunctionExpression(arrow)) = (use_contextual_arrow, expr) {
             #[cfg(test)]
             super::calls::measure_contextual_rewalk(super::calls::contextual_measure_phase(), true);
-            let diagnostics_len = self.diagnostics.len();
-            let obligation_len = self.obligations.len();
-            let override_len = self.override_checks.len();
             let decl_types = (!retain_contextual_arrow_checks).then(|| self.decl_types.clone());
-            let contextual =
-                self.infer_contextual_arrow_with_return_context(scope, arrow, context, false);
-            if !retain_contextual_arrow_checks {
+            let contextual = if retain_contextual_arrow_checks {
+                self.infer_contextual_arrow_with_return_context(scope, arrow, context, false)
+            } else {
+                let (contextual, effects) = self.capture_candidate_effects(|pass| {
+                    pass.infer_contextual_arrow_with_return_context(scope, arrow, context, false)
+                });
                 #[cfg(test)]
-                super::calls::measure_contextual_rollback(self.diagnostics.len() - diagnostics_len);
-                self.diagnostics.truncate(diagnostics_len);
-                self.obligations.truncate(obligation_len);
-                self.override_checks.truncate(override_len);
+                let discarded_records = effects.records.len();
+                effects.records.discard();
+                #[cfg(test)]
+                super::calls::measure_contextual_rollback(discarded_records);
                 if let Some(decl_types) = decl_types {
                     self.decl_types = decl_types;
                 }
-            }
+                contextual
+            };
             return contextual.map(|ty| (ty, raw.1)).unwrap_or(raw);
         }
 
@@ -728,19 +771,21 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return raw;
         }
 
-        let diagnostic_len = self.diagnostics.len();
-        let obligation_len = self.obligations.len();
-        let override_len = self.override_checks.len();
         #[cfg(test)]
         super::calls::measure_contextual_rewalk(super::calls::contextual_measure_phase(), false);
-        let contextual = self.infer_initializer(scope, expr, Some(context));
-        if !retain_contextual_arrow_checks {
+        let contextual = if retain_contextual_arrow_checks {
+            self.infer_initializer(scope, expr, Some(context))
+        } else {
+            let (contextual, effects) = self.capture_candidate_effects(|pass| {
+                pass.infer_initializer(scope, expr, Some(context))
+            });
             #[cfg(test)]
-            super::calls::measure_contextual_rollback(self.diagnostics.len() - diagnostic_len);
-            self.diagnostics.truncate(diagnostic_len);
-            self.obligations.truncate(obligation_len);
-            self.override_checks.truncate(override_len);
-        }
+            let discarded_records = effects.records.len();
+            effects.records.discard();
+            #[cfg(test)]
+            super::calls::measure_contextual_rollback(discarded_records);
+            contextual
+        };
         contextual.unwrap_or(raw)
     }
 
@@ -945,12 +990,29 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // M24 (review F2): element access resolves through the base's **apparent type**
         // — `t["x"]` with `T extends { x: number }` and `t[0]` with `T extends number[]`
         // read through the constraint. For a non-parameter base this is the identity.
-        let base_ty = self.apparent_type(base_ty);
+        let base_ty = match self.demand_composite_apparent_type(base_ty) {
+            DemandOutcome::Ready(base_ty) => base_ty,
+            DemandOutcome::Exhausted(exhaustion) => {
+                self.own_type_demand(DemandOutcome::Exhausted(exhaustion), span);
+                return None;
+            }
+        };
         let base_ty = self
             .interner
             .store()
             .readonly_operand(base_ty)
             .unwrap_or(base_ty);
+
+        if self.interner.store().tag(base_ty) == TypeTag::Union {
+            let result = match self.union_element_access(base_ty, &member.expression, key_ty) {
+                DemandOutcome::Ready(result) => result,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    self.own_type_demand(DemandOutcome::Exhausted(exhaustion), span);
+                    return None;
+                }
+            };
+            return Some((result, span));
+        }
 
         // Array base (M17): the result is the element type (any index).
         if let Some(array) = self.interner.store().array_type(base_ty) {
@@ -1022,6 +1084,48 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         wk.error
     }
 
+    /// Resolve an element access across every union constituent. Class and
+    /// constrained-parameter members are demanded before lookup; an unsupported
+    /// constituent yields `unknown`, preserving downstream checking without using
+    /// the error type as a successful operand.
+    fn union_element_access(
+        &mut self,
+        union_ty: TypeId,
+        key_expr: &Expression<'_>,
+        key_ty: Option<TypeId>,
+    ) -> DemandOutcome<TypeId> {
+        let Some(members) = self.interner.store().union_members(union_ty) else {
+            return DemandOutcome::Ready(self.interner.well_known().unknown);
+        };
+        let members = members.to_vec();
+        let mut results = Vec::with_capacity(members.len());
+        for member in members {
+            let member = match self.demand_apparent_type(member) {
+                DemandOutcome::Ready(member) => member,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
+            };
+            let member = self
+                .interner
+                .store()
+                .readonly_operand(member)
+                .unwrap_or(member);
+            let result = if let Some(array) = self.interner.store().array_type(member) {
+                Some(array.element)
+            } else if let Some(tuple) = self.interner.store().tuple_type(member) {
+                literal_index(key_expr).and_then(|index| tuple.elements.get(index).copied())
+            } else if self.interner.store().tag(member) == TypeTag::Object {
+                let result = self.object_element_access(member, key_expr, key_ty);
+                (result != self.interner.well_known().error).then_some(result)
+            } else {
+                None
+            };
+            results.push(result.unwrap_or(self.interner.well_known().unknown));
+        }
+        DemandOutcome::Ready(self.interner.union(results))
+    }
+
     /// Resolve the M24 apparent type of constrained type parameters transitively.
     /// The visited set terminates constraint cycles in the safe over-report direction.
     /// All structural consumers route through this shared resolver.
@@ -1045,30 +1149,133 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         current
     }
 
+    pub(in crate::check::checker) fn demand_apparent_type(
+        &mut self,
+        ty: TypeId,
+    ) -> DemandOutcome<TypeId> {
+        let mut current = ty;
+        let mut seen = FxHashSet::default();
+        loop {
+            if !seen.insert(current) {
+                return DemandOutcome::Ready(current);
+            }
+            current = match self.evaluate_type(current) {
+                DemandOutcome::Ready(demanded) => demanded,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
+            };
+            let apparent = self.apparent_type(current);
+            if apparent == current {
+                return DemandOutcome::Ready(current);
+            }
+            current = apparent;
+        }
+    }
+
+    /// Demand the outer type and every immediate union constituent as one atomic
+    /// semantic query. This is the structural-consumer boundary for class roots
+    /// hidden inside composite types.
+    pub(in crate::check::checker) fn demand_composite_apparent_type(
+        &mut self,
+        ty: TypeId,
+    ) -> DemandOutcome<TypeId> {
+        self.with_semantic_query_transaction(|pass| {
+            let ty = match pass.demand_apparent_type(ty) {
+                DemandOutcome::Ready(ty) => ty,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
+            };
+            let Some(members) = pass.interner.store().union_members(ty) else {
+                return DemandOutcome::Ready(ty);
+            };
+            let members = members.to_vec();
+            let mut apparent = Vec::with_capacity(members.len());
+            for member in members {
+                match pass.demand_apparent_type(member) {
+                    DemandOutcome::Ready(member) => apparent.push(member),
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion);
+                    }
+                }
+            }
+            DemandOutcome::Ready(pass.interner.union(apparent))
+        })
+    }
+
+    /// Demand a composite and merge an intersection's visible object surface in
+    /// the same transaction, so a later exhausted constituent promotes nothing.
+    pub(in crate::check::checker) fn demand_structural_apparent_type(
+        &mut self,
+        ty: TypeId,
+    ) -> DemandOutcome<TypeId> {
+        self.with_semantic_query_transaction(|pass| {
+            let ty = match pass.demand_composite_apparent_type(ty) {
+                DemandOutcome::Ready(ty) => ty,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
+            };
+            match pass.intersection_apparent_object(ty) {
+                DemandOutcome::Ready(Some(apparent)) => DemandOutcome::Ready(apparent),
+                DemandOutcome::Ready(None) => DemandOutcome::Ready(ty),
+                DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+            }
+        })
+    }
+
+    /// Promote semantic-query writes only when the whole consumer completes.
+    pub(in crate::check::checker) fn with_semantic_query_transaction<R>(
+        &mut self,
+        produce: impl FnOnce(&mut Self) -> DemandOutcome<R>,
+    ) -> DemandOutcome<R> {
+        let child = self.semantic_queries.fork();
+        let parent = std::mem::replace(&mut self.semantic_queries, child);
+        let outcome = produce(self);
+        let completed = std::mem::replace(&mut self.semantic_queries, parent);
+        if matches!(outcome, DemandOutcome::Ready(_)) {
+            self.semantic_queries = completed;
+        }
+        outcome
+    }
+
     /// Intern the merged apparent object for an intersection (M31). Properties are
     /// unioned by name, duplicate property/index types are intersected, optional
     /// requires all contributors, and readonly/accessor wins if any contributor has it.
     pub(in crate::check::checker) fn intersection_apparent_object(
         &mut self,
         ty: TypeId,
-    ) -> Option<TypeId> {
+    ) -> DemandOutcome<Option<TypeId>> {
+        self.with_semantic_query_transaction(|pass| pass.intersection_apparent_object_inner(ty))
+    }
+
+    fn intersection_apparent_object_inner(&mut self, ty: TypeId) -> DemandOutcome<Option<TypeId>> {
         if self.interner.store().tag(ty) != TypeTag::Intersection {
-            return None;
+            return DemandOutcome::Ready(None);
         }
-        let members: Vec<TypeId> = self.interner.store().intersection_members(ty)?.to_vec();
+        let Some(members) = self.interner.store().intersection_members(ty) else {
+            return DemandOutcome::Ready(None);
+        };
+        let members: Vec<TypeId> = members.to_vec();
 
         // Snapshot each object member's properties + index signatures (owned) before any
         // mutable interning borrow. A constrained-param member resolves through its
         // apparent type first, mirroring the union member-access handling.
         let mut snapshots: Vec<(Vec<PropertyType>, Option<TypeId>, Option<TypeId>)> = Vec::new();
         for &member in &members {
-            let member = self.apparent_type(member);
+            let member = match self.demand_apparent_type(member) {
+                DemandOutcome::Ready(member) => member,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
+            };
             if let Some(obj) = self.interner.store().object_type(member) {
                 snapshots.push((obj.properties.clone(), obj.string_index, obj.number_index));
             }
         }
         if snapshots.is_empty() {
-            return None;
+            return DemandOutcome::Ready(None);
         }
 
         // Accumulate per property name: the base member (first seen, for its
@@ -1076,6 +1283,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         struct Acc {
             base: PropertyType,
             tys: Vec<TypeId>,
+            write_tys: Vec<TypeId>,
+            has_write_ty: bool,
             all_optional: bool,
             any_readonly: bool,
             any_accessor: bool,
@@ -1087,9 +1296,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         for (member_props, string_index, number_index) in snapshots {
             for prop in member_props {
+                let write_ty = prop.write_ty.unwrap_or(prop.ty);
                 match props.get_mut(&prop.name) {
                     Some(acc) => {
                         acc.tys.push(prop.ty);
+                        acc.write_tys.push(write_ty);
+                        acc.has_write_ty |= prop.write_ty.is_some();
                         acc.all_optional &= prop.optional;
                         acc.any_readonly |= prop.readonly;
                         acc.any_accessor |= prop.is_accessor;
@@ -1103,6 +1315,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                                 any_readonly: prop.readonly,
                                 any_accessor: prop.is_accessor,
                                 tys: vec![prop.ty],
+                                write_tys: vec![write_ty],
+                                has_write_ty: prop.write_ty.is_some(),
                                 base: prop,
                             },
                         );
@@ -1121,8 +1335,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 continue;
             };
             let ty = self.interner.intersection(acc.tys);
+            let write_ty = acc
+                .has_write_ty
+                .then(|| self.interner.intersection(acc.write_tys));
             properties.push(PropertyType {
                 ty,
+                write_ty,
                 optional: acc.all_optional,
                 readonly: acc.any_readonly,
                 is_accessor: acc.any_accessor,
@@ -1134,12 +1352,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let number_index = (!number_index_values.is_empty())
             .then(|| self.interner.intersection(number_index_values));
 
-        Some(self.interner.intern_object(ObjectType {
+        DemandOutcome::Ready(Some(self.interner.intern_object(ObjectType {
             properties,
             string_index,
             number_index,
             ..Default::default()
-        }))
+        })))
     }
 
     /// Infer `obj.prop`. Missing properties emit `TK2339`; union bases require the
@@ -1150,7 +1368,54 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         member: &StaticMemberExpression<'_>,
     ) -> Option<(TypeId, Span)> {
         let (base_ty, _) = self.infer_expr(scope, &member.object)?;
+        if let Some(DemandOutcome::Exhausted(exhaustion)) =
+            self.demand_class_value_surface(scope, &member.object)
+        {
+            self.own_type_demand(
+                DemandOutcome::Exhausted(exhaustion),
+                Span::from_oxc(member.property.span),
+            );
+            return None;
+        }
         self.infer_member_access_from_base(base_ty, member)
+    }
+
+    /// Demand publication for an explicit class value before consuming its static
+    /// object. Static templates are ordinary objects, so poison must enter through
+    /// the class binding rather than being mistaken for a missing property.
+    pub(in crate::check::checker) fn demand_class_value_surface(
+        &self,
+        scope: ScopeId,
+        expression: &Expression<'_>,
+    ) -> Option<DemandOutcome<()>> {
+        let identifier = match expression {
+            Expression::ParenthesizedExpression(parenthesized) => {
+                return self.demand_class_value_surface(scope, &parenthesized.expression);
+            }
+            Expression::Identifier(identifier) => identifier,
+            _ => return None,
+        };
+        let value_decl = value_decl_id(self.binder, scope, identifier.name.as_str())?;
+        let class_decl = self
+            .class_value_aliases
+            .get(&value_decl)
+            .copied()
+            .unwrap_or(value_decl);
+        let binding = self
+            .lexical_events
+            .classes()
+            .iter()
+            .filter_map(|reservation| reservation.binding.as_ref())
+            .find(|binding| binding.value_decl == class_decl)?;
+        if value_decl != class_decl && !binding.header_type_params.is_empty() {
+            return None;
+        }
+        Some(
+            match self.published_classes.published_class(binding.class_id) {
+                DemandOutcome::Ready(_) => DemandOutcome::Ready(()),
+                DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+            },
+        )
     }
 
     /// Resolve a member after its object has already been inferred. Calls use this
@@ -1164,17 +1429,54 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let prop_name = member.property.name.as_str();
         let prop_span = Span::from_oxc(member.property.span);
 
+        if let Some(lookup) = self.body_this_member_lookup(&member.object, prop_name) {
+            match lookup {
+                BodyMemberLookup::Known { ty, metadata, .. } => {
+                    self.check_member_access_control(
+                        prop_name,
+                        prop_span,
+                        metadata.visibility,
+                        metadata.declaring_class,
+                    );
+                    return Some((ty, prop_span));
+                }
+                BodyMemberLookup::Unavailable(metadata) => {
+                    self.check_member_access_control(
+                        prop_name,
+                        prop_span,
+                        metadata.visibility,
+                        metadata.declaring_class,
+                    );
+                    return None;
+                }
+                BodyMemberLookup::Missing { definite: false } => return None,
+                BodyMemberLookup::Missing { definite: true } => {
+                    let target = self
+                        .current_class
+                        .and_then(|class| self.class_names.get(&class))
+                        .cloned()
+                        .unwrap_or_else(|| "class body".to_string());
+                    self.emit_diagnostic(Diagnostic::property_does_not_exist(
+                        prop_span, prop_name, &target,
+                    ));
+                    return Some((wk.error, prop_span));
+                }
+            }
+        }
+
         if base_ty == wk.any || base_ty == wk.error {
             return Some((wk.error, prop_span));
         }
 
         // Resolve members through apparent/merged types, but keep `base_ty` for
         // `TK2339` rendering so missing constrained-parameter members still name `T`.
-        let lookup_ty = self.apparent_type(base_ty);
-        let lookup_ty = self
-            .intersection_apparent_object(lookup_ty)
-            .unwrap_or(lookup_ty);
-
+        let lookup_ty = match self.demand_structural_apparent_type(base_ty) {
+            DemandOutcome::Ready(lookup_ty) => lookup_ty,
+            DemandOutcome::Exhausted(exhaustion) => {
+                self.own_type_demand(DemandOutcome::Exhausted(exhaustion), prop_span);
+                return None;
+            }
+        };
         // Union base (M4): the property must exist on every member; its type is the
         // union of the per-member property types.
         if self.interner.store().tag(lookup_ty) == TypeTag::Union {
@@ -1193,7 +1495,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 return Some((wk.number, prop_span));
             }
             let tgt = render_type(self.interner.store(), lookup_ty, /* widen */ false);
-            self.diagnostics.push(Diagnostic::property_does_not_exist(
+            self.emit_diagnostic(Diagnostic::property_does_not_exist(
                 prop_span, prop_name, &tgt,
             ));
             return Some((wk.error, prop_span));
@@ -1236,7 +1538,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 // `C.instanceMember`; for an instance base, `instance.staticMember` —
                 // both are `TK2339`, since each member lives on the other side.
                 let tgt = render_type(self.interner.store(), base_ty, /* widen */ false);
-                self.diagnostics.push(Diagnostic::property_does_not_exist(
+                self.emit_diagnostic(Diagnostic::property_does_not_exist(
                     prop_span, prop_name, &tgt,
                 ));
                 Some((wk.error, prop_span))
@@ -1264,7 +1566,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         let mut member_prop_types: Vec<TypeId> = Vec::with_capacity(members.len());
         for member in members {
-            let store = self.interner.store();
             if member == wk.any || member == wk.error {
                 member_prop_types.push(wk.error);
                 continue;
@@ -1273,7 +1574,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // through its apparent type too (`(T | U).x` with both constrained to
             // `HasX`), else the lookup would falsely report `TK2339`.
             let member = self.apparent_type(member);
-            match store
+            match self
+                .interner
+                .store()
                 .object_type(member)
                 .and_then(|o| o.property(prop_name))
             {
@@ -1281,7 +1584,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 // Missing on this member: the property does not exist on the union.
                 None => {
                     let tgt = render_type(self.interner.store(), union_ty, /* widen */ false);
-                    self.diagnostics.push(Diagnostic::property_does_not_exist(
+                    self.emit_diagnostic(Diagnostic::property_does_not_exist(
                         prop_span, prop_name, &tgt,
                     ));
                     return wk.error;

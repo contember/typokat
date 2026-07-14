@@ -1,6 +1,15 @@
 use super::*;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::DeclId;
+use crate::check::checker::classes::application::{
+    build_class_application, complete_class_arguments, ClassApplicationKind,
+    ClassApplicationRequest, ClassTypeParameter, ClassTypeParameterDefault, ExplicitClassArgument,
+    SourceClassArguments,
+};
+use crate::check::checker::classes::surface_types::SurfaceTypeFactory;
+use crate::class_semantics::{
+    ClassApplicationArguments, ClassConstructionState, DemandOutcome, Exhaustion,
+};
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
 use crate::types::repr::{TypeParamId, TypeTag};
@@ -15,7 +24,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// Surface alias cycles report `TK2456` at every alias in the cycle and become
     /// error types; legal recursion through members uses seeded reserved ids instead
     /// of re-entering resolution.
-    pub(super) fn resolve_type_decl(&mut self, scope: ScopeId, decl_id: DeclId) -> TypeId {
+    pub(super) fn resolve_type_decl_inner(&mut self, _scope: ScopeId, decl_id: DeclId) -> TypeId {
         let error_ty = self.interner.well_known().error;
 
         // Already resolved (interface reserved id, a seeded object/conditional template,
@@ -53,25 +62,28 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // mutating, so the body is lowered with the parameters in scope. The name +
         // name span feed the M26 `resolving_alias` context (mapped `TK2456`) and the B29
         // cycle stack.
-        let (annotation, param_decl, params, name, name_span) = match self.type_decls.get(index) {
-            Some(TypeDecl::Alias {
-                annotation,
-                param_decl,
-                params,
-                resolving: false,
-                name,
-                name_span,
-                ..
-            }) => (
-                *annotation,
-                *param_decl,
-                params.clone(),
-                name.clone(),
-                *name_span,
-            ),
-            // An interface with no seeded id, or an out-of-range id: defensive.
-            _ => return error_ty,
-        };
+        let (scope, annotation, param_decl, params, name, name_span) =
+            match self.type_decls.get(index) {
+                Some(TypeDecl::Alias {
+                    scope,
+                    annotation,
+                    param_decl,
+                    params,
+                    resolving: false,
+                    name,
+                    name_span,
+                    ..
+                }) => (
+                    *scope,
+                    *annotation,
+                    *param_decl,
+                    params.clone(),
+                    name.clone(),
+                    *name_span,
+                ),
+                // An interface with no seeded id, or an out-of-range id: defensive.
+                _ => return error_ty,
+            };
 
         // Mark in-progress so a transitive self-reference is caught above.
         if let Some(TypeDecl::Alias { resolving, .. }) = self.type_decls.get_mut(index) {
@@ -122,21 +134,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// deduped via `circular_aliases`, and return the error type. Cloning the slice keeps
     /// the diagnostic/set writes off the stack borrow.
     fn report_surface_cycle(&mut self, decl_id: DeclId) -> TypeId {
-        let cycle: Vec<(usize, Span, String)> = self
+        let cycle: Vec<(DeclId, Span, String)> = self
             .resolving_alias_stack
             .iter()
             .position(|(id, ..)| *id == decl_id)
             .map(|pos| {
                 self.resolving_alias_stack[pos..]
                     .iter()
-                    .map(|(id, span, name, _)| (id.index(), *span, name.clone()))
+                    .map(|(id, span, name, _)| (*id, *span, name.clone()))
                     .collect()
             })
             .unwrap_or_default();
-        for (idx, span, name) in cycle {
-            if self.circular_aliases.insert(idx) {
-                self.diagnostics
-                    .push(Diagnostic::circular_type_alias(span, &name));
+        for (id, span, name) in cycle {
+            if self.circular_aliases.insert(id.index()) {
+                self.emit_type_decl_diagnostic(id, Diagnostic::circular_type_alias(span, &name));
             }
         }
         self.interner.well_known().error
@@ -151,6 +162,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         type_name: &TSTypeName<'_>,
         type_arguments: Option<&TSTypeParameterInstantiation<'_>>,
+        reference_span: Span,
     ) -> Option<TypeId> {
         let ident = match type_name {
             TSTypeName::IdentifierReference(ident) => ident,
@@ -193,10 +205,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
 
         if self.static_class_type_param_reference(name) {
-            self.diagnostics
-                .push(Diagnostic::static_member_references_class_type_parameter(
-                    ref_span,
-                ));
+            self.emit_diagnostic(Diagnostic::static_member_references_class_type_parameter(
+                ref_span,
+            ));
             return Some(self.interner.well_known().error);
         }
 
@@ -227,8 +238,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     || self.lookup_type_param(name).is_some();
                 if !found_in_some_space {
                     let span = Span::from_oxc(ident.span);
-                    self.diagnostics
-                        .push(Diagnostic::cannot_find_name(span, name));
+                    self.emit_diagnostic(Diagnostic::cannot_find_name(span, name));
                 }
                 // Still lower any type arguments so an unresolved name INSIDE them is reported
                 // too (tsc flags `Lost<AlsoGone>` on BOTH). Results are discarded — the whole
@@ -243,6 +253,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         };
 
+        if matches!(
+            self.type_decls.get(decl_id.index()),
+            Some(TypeDecl::Class { .. })
+        ) {
+            return self.resolve_class_type_reference(
+                scope,
+                decl_id,
+                name,
+                reference_span,
+                type_arguments,
+            );
+        }
+
         // 2. With type arguments: instantiate the generic declaration by substitution
         //    (M25: a conditional template instantiates lazily), then evaluate at a
         //    value-position demand site.
@@ -252,17 +275,194 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // map<U>(): Box<U> }`) before the reserved template has members. Keep
             // that instance lazy until the class fill completes; eager evaluation
             // would snapshot the empty template and lose both binders.
-            if self.class_is_filling(decl_id) {
-                return Some(instantiated);
-            }
-            return Some(self.maybe_evaluate(instantiated, ref_span));
+            return self.maybe_evaluate(instantiated, ref_span);
         }
 
         // 3. Bare named type (M5 behaviour). M25: a bare reference to a non-generic
         //    conditional alias resolves to its (concrete) conditional template — evaluated
         //    here at a value-position demand site.
         let resolved = self.resolve_type_decl(scope, decl_id);
-        Some(self.maybe_evaluate(resolved, ref_span))
+        self.maybe_evaluate(resolved, ref_span)
+    }
+
+    pub(super) fn resolve_class_type_reference(
+        &mut self,
+        scope: ScopeId,
+        decl_id: DeclId,
+        name: &str,
+        span: Span,
+        arguments: Option<&TSTypeParameterInstantiation<'_>>,
+    ) -> Option<TypeId> {
+        let (class_id, params, defaults, parameter_names) = {
+            let Some(TypeDecl::Class {
+                class_id,
+                params,
+                param_decl,
+                ..
+            }) = self.type_decls.get(decl_id.index())
+            else {
+                return None;
+            };
+            let defaults: Vec<bool> = (0..params.len())
+                .map(|index| {
+                    param_decl
+                        .and_then(|declaration| declaration.params.get(index))
+                        .and_then(|parameter| parameter.default.as_ref())
+                        .is_some()
+                })
+                .collect();
+            let parameter_names = param_decl
+                .iter()
+                .flat_map(|declaration| declaration.params.iter())
+                .map(|parameter| parameter.name.name.to_string())
+                .collect::<Vec<_>>();
+            (*class_id, params.clone(), defaults, parameter_names)
+        };
+        let expected_max = params.len();
+        let expected_min = defaults
+            .iter()
+            .position(|has_default| *has_default)
+            .unwrap_or(expected_max);
+
+        let mut lowered = Vec::new();
+        if let Some(arguments) = arguments {
+            lowered.reserve(arguments.params.len());
+            for argument in &arguments.params {
+                lowered.push(self.lower_annotation(scope, argument));
+            }
+        }
+        let actual = lowered.len();
+        if actual > expected_max || actual < expected_min {
+            let display = if params.is_empty() {
+                name.to_string()
+            } else {
+                let names = parameter_names.join(", ");
+                format!("{name}<{names}>")
+            };
+            let diagnostic = if expected_min == expected_max {
+                Diagnostic::generic_type_requires_arguments(span, &display, expected_max)
+            } else {
+                Diagnostic::generic_type_requires_argument_range(
+                    span,
+                    &display,
+                    expected_min,
+                    expected_max,
+                )
+            };
+            self.emit_diagnostic(diagnostic);
+            return Some(self.interner.well_known().error);
+        }
+        let explicit: Vec<ExplicitClassArgument> = lowered
+            .into_iter()
+            .map(|argument| match argument {
+                Some(argument) if argument != self.interner.well_known().error => {
+                    ExplicitClassArgument::Ready(argument)
+                }
+                Some(_) | None => ExplicitClassArgument::Unavailable,
+            })
+            .collect();
+
+        let Some(descriptors) = self.class_application_parameters.get(&class_id) else {
+            if self.class_publication_complete {
+                self.own_type_demand(
+                    DemandOutcome::Exhausted(Exhaustion::ClassNotPublished {
+                        class: class_id,
+                        state: ClassConstructionState::Published,
+                    }),
+                    span,
+                );
+                return None;
+            }
+            let default_owners = self.lexical_events.classes().iter().find(|reservation| {
+                reservation
+                    .binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.class_id == class_id)
+            });
+            let parameters = params
+                .iter()
+                .copied()
+                .zip(defaults.iter().copied())
+                .enumerate()
+                .map(|(index, (id, has_default))| ClassTypeParameter {
+                    id,
+                    default: if has_default {
+                        let owner = default_owners
+                            .and_then(|reservation| {
+                                reservation
+                                    .defaults
+                                    .iter()
+                                    .find(|default| default.parameter_index == index)
+                            })
+                            .map(|default| default.owner)
+                            .expect("every source class default has a lexical owner");
+                        ClassTypeParameterDefault::Unsupported(owner)
+                    } else {
+                        ClassTypeParameterDefault::Absent
+                    },
+                })
+                .collect::<Vec<_>>();
+            return match complete_class_arguments(ClassApplicationRequest {
+                class: class_id,
+                parameters: &parameters,
+                source_arguments: SourceClassArguments::Explicit(&explicit),
+                inferred: &[],
+                kind: ClassApplicationKind::TypeReference,
+            }) {
+                DemandOutcome::Ready(arguments) => {
+                    Some(self.interner.intern_class_instance(class_id, arguments))
+                }
+                DemandOutcome::Exhausted(Exhaustion::ClassApplicationArguments(
+                    ClassApplicationArguments::UnsupportedDefault { .. },
+                )) => {
+                    self.record_incomplete(
+                        "annotation-lower/type-reference/class-default-argument",
+                        span,
+                        "class type-parameter default unavailable at application",
+                    );
+                    None
+                }
+                DemandOutcome::Exhausted(exhaustion) => {
+                    self.own_type_demand(DemandOutcome::Exhausted(exhaustion), span);
+                    None
+                }
+            };
+        };
+        let parameters = descriptors
+            .iter()
+            .map(|descriptor| *descriptor.application())
+            .collect::<Vec<_>>();
+        let source_arguments = arguments.map_or(SourceClassArguments::Omitted, |_| {
+            SourceClassArguments::Explicit(&explicit)
+        });
+        let outcome = build_class_application(
+            &mut SurfaceTypeFactory::new(self.interner),
+            &self.published_classes,
+            ClassApplicationRequest {
+                class: class_id,
+                parameters: &parameters,
+                source_arguments,
+                inferred: &[],
+                kind: ClassApplicationKind::TypeReference,
+            },
+        );
+        match outcome {
+            DemandOutcome::Ready(application) => Some(application),
+            DemandOutcome::Exhausted(Exhaustion::ClassApplicationArguments(
+                ClassApplicationArguments::UnsupportedDefault { .. },
+            )) => {
+                self.record_incomplete(
+                    "annotation-lower/type-reference/class-default-argument",
+                    span,
+                    "class type-parameter default unavailable at application",
+                );
+                None
+            }
+            DemandOutcome::Exhausted(exhaustion) => {
+                self.own_type_demand(DemandOutcome::Exhausted(exhaustion), span);
+                None
+            }
+        }
     }
 
     /// Instantiate a generic type reference by substituting lowered args into its template.
@@ -302,12 +502,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // (`IBox<string>`, `TA<number>`). The bad argument still instantiates below.
         self.check_type_argument_constraints(&params, &arg_infos, &map);
 
-        // Conditional, mapped, and trusted intrinsic templates instantiate lazily.
-        // Eager substitution would loop on recursive conditionals/mapped aliases or
-        // erase intrinsic identity; non-recursive mapped aliases remain equivalent via
-        // evaluator-side expansion.
+        // Conditional, mapped, trusted intrinsic, and in-flight generic interface
+        // templates instantiate lazily. A self-reference sees the interface's reserved
+        // object before it is filled; eager substitution would collapse the recursive
+        // edge to that empty template and lose its type arguments.
         let template_tag = self.interner.store().tag(template);
-        if self.class_is_filling(decl_id)
+        let filling_interface = matches!(
+            self.type_decls.get(decl_id.index()),
+            Some(TypeDecl::Interface { .. })
+        ) && matches!(
+            self.template_fill.get(decl_id.index()),
+            Some(ClassFillState::Filling)
+        );
+        if filling_interface
             || template_tag == TypeTag::Conditional
             || template_tag == TypeTag::Mapped
             || self
@@ -326,13 +533,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
 
         Some(substitute(self.interner, template, &map))
-    }
-
-    fn class_is_filling(&self, decl_id: DeclId) -> bool {
-        matches!(
-            self.type_decls.get(decl_id.index()),
-            Some(TypeDecl::Class { .. })
-        ) && self.class_fill.get(decl_id.index()) == Some(&ClassFillState::Filling)
     }
 
     /// The ordered type-parameter ids of a type declaration (M9), or an empty list for

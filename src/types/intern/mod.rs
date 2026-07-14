@@ -13,7 +13,7 @@ use crate::types::repr::{
     IntrinsicKind, LiteralValue, ParameterType, PropertyType, TypeFlags, TypeParamId,
     TypeParamType, TypeTag,
 };
-use crate::types::store::{Store, TypeId};
+use crate::types::store::{Store, TypeId, TypeParamFreezeError};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
@@ -147,15 +147,26 @@ impl Interner {
     /// constraint column, keyed by [`TypeParamId`]. The checker calls this while
     /// lowering a generic declaration's parameter list (frame active); the constraint
     /// is a side column, not folded into the interned `TypeParamType` identity.
-    pub fn set_type_param_constraint(&mut self, id: TypeParamId, constraint: TypeId) {
-        self.store.set_type_param_constraint(id, constraint);
+    pub fn set_type_param_constraint(&mut self, id: TypeParamId, constraint: TypeId) -> bool {
+        self.store.set_type_param_constraint(id, constraint)
     }
 
     /// Erase a type parameter's constraint (M24 — the `TK2313` circularity fix). A
     /// circular parameter records **no** constraint; see
     /// `Store::remove_type_param_constraint`.
-    pub fn remove_type_param_constraint(&mut self, id: TypeParamId) {
-        self.store.remove_type_param_constraint(id);
+    pub fn remove_type_param_constraint(&mut self, id: TypeParamId) -> bool {
+        self.store.remove_type_param_constraint(id)
+    }
+
+    pub(crate) fn type_param_metadata_is_frozen(&self, id: TypeParamId) -> bool {
+        self.store.type_param_metadata_is_frozen(id)
+    }
+
+    pub(crate) fn freeze_type_param_metadata(
+        &mut self,
+        ids: &[TypeParamId],
+    ) -> Result<(), TypeParamFreezeError> {
+        self.store.freeze_type_param_metadata(ids)
     }
 
     /// Record a reserved template row's alias display name (M28 round 3) — a
@@ -258,6 +269,7 @@ fn object_props_eq(a: &[PropertyType], b: &[PropertyType]) -> bool {
             x.name == y.name
                 && x.optional == y.optional
                 && x.ty == y.ty
+                && x.write_ty == y.write_ty
                 && x.visibility == y.visibility
                 && x.declaring_class == y.declaring_class
                 && x.readonly == y.readonly

@@ -168,6 +168,7 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
                 prop.name.hash(&mut h);
                 prop.optional.hash(&mut h);
                 prop.ty.0.hash(&mut h);
+                prop.write_ty.map(|ty| ty.0).hash(&mut h);
                 // Property identity fields are hashed here so non-public origins
                 // keep nominal ids and relation-cache keys sound; see `PropertyType`.
                 (prop.visibility as u8).hash(&mut h);

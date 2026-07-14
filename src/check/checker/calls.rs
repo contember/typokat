@@ -1,6 +1,10 @@
 //! calls module (extracted from checker/mod.rs).
 
-use super::assignment::check_excess_properties;
+use super::classes::application::{
+    build_class_application, ClassApplicationKind, ClassApplicationRequest, ExplicitClassArgument,
+    SourceClassArguments,
+};
+use super::classes::surface_types::SurfaceTypeFactory;
 use super::context::*;
 use super::decls::alloc_type_param_ids;
 use super::decls::value_decl_id;
@@ -9,11 +13,16 @@ use super::expr::contextual_literal_target;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::DeclId;
 use crate::check::infer;
+use crate::check::query::SemanticQueryCoordinator;
+use crate::class_semantics::{
+    ClassApplicationArguments, ClassConstructionState, DemandOutcome, Exhaustion,
+};
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
-use crate::relate::{Relater, Relation};
+use crate::relate::RelationOutcome;
 use crate::span::Span;
 use crate::types::repr::{
     FunctionType, GenericTypeParam, IntrinsicKind, ParameterType, TupleType, TypeParamId, TypeTag,
+    Visibility,
 };
 use crate::types::store::TypeId;
 use crate::types::{instantiate_function, substitute, Interner, WellKnown};
@@ -22,7 +31,7 @@ use oxc_ast::ast::{
     Function, FunctionBody, NewExpression, TSTypeParameterInstantiation,
 };
 use oxc_span::GetSpan;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -54,6 +63,8 @@ pub(super) struct CallMeasure {
     pub speculative_diagnostics_removed: u64,
     pub trial_receiver_relation_queries: u64,
     pub selected_receiver_relation_queries: u64,
+    pub speculative_query_forks: u64,
+    pub speculative_query_writes_discarded: u64,
 }
 
 #[cfg(test)]
@@ -167,7 +178,75 @@ macro_rules! contextual_inference_args {
     }};
 }
 
+pub(in crate::check::checker) struct RetainedFunctionBodySurface {
+    pub type_param_frame: FxHashMap<String, TypeId>,
+    pub receiver: Option<TypeId>,
+    pub params: Vec<Option<ParameterType>>,
+    pub declared_return: Option<TypeId>,
+    pub tickets: super::lexical_events::CallableTickets,
+}
+
 impl<'a, 'ast> Pass<'a, 'ast> {
+    /// Run speculative candidate work against a child semantic-query state.
+    /// Diagnostics and obligations travel in `CheckerEffects`; query memo/cache
+    /// writes are discarded independently when the candidate is not decisive.
+    fn capture_speculative_candidate_effects<R>(
+        &mut self,
+        produce: impl FnOnce(&mut Self) -> R,
+    ) -> (R, CheckerEffects) {
+        #[cfg(test)]
+        let parent_lengths = self.semantic_queries.durable_lengths();
+        let child_queries = self.semantic_queries.fork();
+        let parent_queries = std::mem::replace(&mut self.semantic_queries, child_queries);
+        let captured = self.capture_candidate_effects(produce);
+        #[cfg(test)]
+        let child_queries = std::mem::replace(&mut self.semantic_queries, parent_queries);
+        #[cfg(test)]
+        self.measure_discarded_candidate_queries(parent_lengths, &child_queries);
+        #[cfg(not(test))]
+        {
+            self.semantic_queries = parent_queries;
+        }
+        captured
+    }
+
+    /// Isolate trial-only relation/evaluation writes. A selected candidate is
+    /// rebuilt once against the durable parent after the trial succeeds.
+    fn with_speculative_candidate_queries<R>(&mut self, produce: impl FnOnce(&mut Self) -> R) -> R {
+        #[cfg(test)]
+        let parent_lengths = self.semantic_queries.durable_lengths();
+        let child_queries = self.semantic_queries.fork();
+        let parent_queries = std::mem::replace(&mut self.semantic_queries, child_queries);
+        let result = produce(self);
+        #[cfg(test)]
+        let child_queries = std::mem::replace(&mut self.semantic_queries, parent_queries);
+        #[cfg(test)]
+        self.measure_discarded_candidate_queries(parent_lengths, &child_queries);
+        #[cfg(not(test))]
+        {
+            self.semantic_queries = parent_queries;
+        }
+        result
+    }
+
+    #[cfg(test)]
+    fn measure_discarded_candidate_queries(
+        &self,
+        parent_lengths: (usize, usize, usize),
+        child_queries: &crate::check::query::SemanticQueryState,
+    ) {
+        let child_lengths = child_queries.durable_lengths();
+        let discarded = child_lengths.0.saturating_sub(parent_lengths.0)
+            + child_lengths.1.saturating_sub(parent_lengths.1)
+            + child_lengths.2.saturating_sub(parent_lengths.2);
+        measure_call(|measure| {
+            measure.speculative_query_forks += 1;
+            measure.speculative_query_writes_discarded +=
+                u64::try_from(discarded).expect("query write count fits u64");
+        });
+        debug_assert_eq!(self.semantic_queries.durable_lengths(), parent_lengths);
+    }
+
     /// Record the incomplete surface for a skipped spread call/`new` argument
     /// (`f(...xs)` / `new C(...xs)`, owner 71) — the argument collectors share this so
     /// no in-scope argument is silently dropped before arity/assignability checking.
@@ -199,7 +278,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 )
             })
             .collect();
-        self.check_constraint_arguments(&checks, map);
+        let outcome = self.check_constraint_arguments_outcome(&checks, map);
+        if let (DemandOutcome::Exhausted(exhaustion), Some((_, span))) = (outcome, args.first()) {
+            self.own_type_demand(DemandOutcome::Exhausted(exhaustion), *span);
+        }
     }
 
     /// Check explicit function-signature arguments against their persistent
@@ -210,13 +292,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         type_params: &[GenericTypeParam],
         args: &[(TypeId, Span)],
         map: &FxHashMap<TypeParamId, TypeId>,
-    ) {
+    ) -> DemandOutcome<bool> {
         let checks: Vec<(Option<TypeId>, TypeId, Span)> = type_params
             .iter()
             .zip(args)
             .map(|(param, &(arg, span))| (param.constraint, arg, span))
             .collect();
-        self.check_constraint_arguments(&checks, map);
+        self.check_constraint_arguments_outcome(&checks, map)
     }
 
     /// Check already-lowered type arguments against constraint sources. Signature
@@ -226,6 +308,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         args: &[(Option<TypeId>, TypeId, Span)],
         map: &FxHashMap<TypeParamId, TypeId>,
     ) {
+        let outcome = self.check_constraint_arguments_outcome(args, map);
+        if let (DemandOutcome::Exhausted(exhaustion), Some((_, _, span))) = (outcome, args.first())
+        {
+            self.own_type_demand(DemandOutcome::Exhausted(exhaustion), *span);
+        }
+    }
+
+    fn check_constraint_arguments_outcome(
+        &mut self,
+        args: &[(Option<TypeId>, TypeId, Span)],
+        map: &FxHashMap<TypeParamId, TypeId>,
+    ) -> DemandOutcome<bool> {
         // Build the (argument, substituted-constraint, span) checks up front — this needs
         // `&mut Interner` (substitution may intern new types), which cannot overlap the
         // relation engine's immutable store borrow below.
@@ -239,7 +333,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // keyof T` at `Pick<P, "q">` → `keyof P`) — resolve it through the shared
             // evaluator before relating, so the check runs against the VALUE
             // (`"a" | "b"`), driving the fixture's TK2344.
-            let evaluated = self.evaluate_type(substituted, span);
+            let evaluated = match self.evaluate_type(substituted) {
+                DemandOutcome::Ready(evaluated) => evaluated,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
+            };
             // M28: a substituted constraint still carrying deferred `keyof` cannot
             // be decided here; tsc lands that check at concrete instantiation.
             // Keyof only, so conditional/mapped constraints keep prior behavior.
@@ -249,22 +348,33 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // M28: always evaluate the argument before checking. Decidable
             // compositions check precisely; still-deferred results check
             // conservatively (documented over-report for backlog 37 shapes).
-            let evaluated_arg = self.evaluate_type(arg, span);
+            let evaluated_arg = match self.evaluate_type(arg) {
+                DemandOutcome::Ready(evaluated) => evaluated,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
+            };
             checks.push((evaluated_arg, arg, evaluated, span));
         }
         if checks.is_empty() {
-            return;
+            return DemandOutcome::Ready(false);
         }
 
         // Relate each argument to its constraint and render the failures under a single
         // immutable store borrow; push the diagnostics after it ends.
-        let wk = self.interner.well_known();
         let mut failures: Vec<(String, String, Span, Vec<String>)> = Vec::new();
-        {
-            let store = self.interner.store();
-            let mut relater = Relater::new(store, wk);
-            for (evaluated_arg, written_arg, constraint, span) in checks {
-                if let Relation::No(chain) = relater.is_assignable(evaluated_arg, constraint) {
+        for (evaluated_arg, written_arg, constraint, span) in checks {
+            match SemanticQueryCoordinator::new(
+                self.interner,
+                &self.published_classes,
+                &mut self.semantic_queries,
+                &mut self.next_type_param,
+            )
+            .is_assignable(evaluated_arg, constraint)
+            {
+                RelationOutcome::Yes => {}
+                RelationOutcome::No(chain) => {
+                    let store = self.interner.store();
                     // Render the written argument when evaluation remains deferred;
                     // otherwise render the evaluated value, matching tsc-like output.
                     let render_id = if contains_deferred_argument(store, evaluated_arg) {
@@ -277,14 +387,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     let elaboration = render_reason_chain(store, chain.head());
                     failures.push((src, tgt, span, elaboration));
                 }
+                RelationOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
             }
         }
+        let failed = !failures.is_empty();
         for (src, tgt, span, elaboration) in failures {
-            self.diagnostics.push(
+            self.emit_diagnostic(
                 Diagnostic::constraint_not_satisfied(span, &src, &tgt)
                     .with_elaboration(elaboration),
             );
         }
+        DemandOutcome::Ready(failed)
     }
 
     fn contextual_inference_args(
@@ -368,15 +483,39 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let (inferred_callee, call_receiver) = match callee {
             Expression::StaticMemberExpression(member) => {
                 let inferred_receiver = self.infer_expr(scope, &member.object);
-                let inferred_callee = inferred_receiver
-                    .and_then(|(receiver, _)| self.infer_member_access_from_base(receiver, member));
+                let inferred_callee = match self.demand_class_value_surface(scope, &member.object) {
+                    Some(DemandOutcome::Exhausted(exhaustion)) => {
+                        self.own_type_demand(
+                            DemandOutcome::Exhausted(exhaustion),
+                            Span::from_oxc(member.property.span),
+                        );
+                        None
+                    }
+                    Some(DemandOutcome::Ready(())) | None => {
+                        inferred_receiver.and_then(|(receiver, _)| {
+                            self.infer_member_access_from_base(receiver, member)
+                        })
+                    }
+                };
                 (inferred_callee, inferred_receiver)
             }
             Expression::ComputedMemberExpression(member) => {
                 let inferred_receiver = self.infer_expr(scope, &member.object);
-                let inferred_callee = inferred_receiver.and_then(|(receiver, _)| {
-                    self.infer_element_access_from_base(scope, receiver, member)
-                });
+                let inferred_callee = match self.demand_class_value_surface(scope, &member.object) {
+                    Some(DemandOutcome::Exhausted(exhaustion)) => {
+                        self.infer_expr(scope, &member.expression);
+                        self.own_type_demand(
+                            DemandOutcome::Exhausted(exhaustion),
+                            Span::from_oxc(member.span),
+                        );
+                        None
+                    }
+                    Some(DemandOutcome::Ready(())) | None => {
+                        inferred_receiver.and_then(|(receiver, _)| {
+                            self.infer_element_access_from_base(scope, receiver, member)
+                        })
+                    }
+                };
                 (inferred_callee, inferred_receiver)
             }
             _ => (self.infer_expr(scope, &call.callee), None),
@@ -405,13 +544,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let Some((callee_ty, _)) = inferred_callee else {
             return Some((wk.error, call_span));
         };
-        let callee_ty = self.evaluate_type(callee_ty, call_span);
+        let outcome = self.evaluate_type(callee_ty);
+        let callee_ty = self.own_type_demand(outcome, call_span)?;
         let signatures = self.callable_signatures(callee_ty);
         if signatures.is_empty() {
             return Some((wk.error, call_span));
         }
 
-        let Some(candidate) = self.select_call_candidate(
+        let candidate = match self.select_call_candidate(
             scope,
             call,
             &signatures,
@@ -422,19 +562,38 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             },
             call_span,
             call_receiver.map(|(receiver, _)| receiver),
-        ) else {
-            return Some((wk.error, call_span));
+        ) {
+            DemandOutcome::Ready(Some(candidate)) => candidate,
+            DemandOutcome::Ready(None) => return Some((wk.error, call_span)),
+            DemandOutcome::Exhausted(exhaustion) => {
+                self.own_type_demand(DemandOutcome::Exhausted(exhaustion), call_span);
+                return None;
+            }
         };
-        self.check_call_receiver(candidate.receiver, call_receiver, call_span);
+        if let DemandOutcome::Exhausted(exhaustion) =
+            self.check_call_receiver(candidate.receiver, call_receiver, call_span)
+        {
+            self.own_type_demand(DemandOutcome::Exhausted(exhaustion), call_span);
+            return None;
+        }
         self.check_call_arguments(scope, &candidate.params, &arg_types, &arg_exprs, call_span);
-        let ret = self.evaluate_type(candidate.ret, call_span);
+        if candidate.inference_exhaustion.is_some() {
+            return None;
+        }
+        let ret = match self.evaluate_type(candidate.ret) {
+            DemandOutcome::Ready(ret) => ret,
+            DemandOutcome::Exhausted(exhaustion) => {
+                self.own_type_demand(DemandOutcome::Exhausted(exhaustion), call_span);
+                return None;
+            }
+        };
 
         Some((ret, call_span))
     }
 
     /// Callable signatures after apparent-type resolution: a function type or an
     /// object's ordered call-signature list.
-    fn callable_signatures(&self, callee_ty: TypeId) -> Vec<TypeId> {
+    fn callable_signatures(&mut self, callee_ty: TypeId) -> Vec<TypeId> {
         let callee_ty = self.apparent_type(callee_ty);
         match self.interner.store().tag(callee_ty) {
             TypeTag::Function => vec![callee_ty],
@@ -456,91 +615,138 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         args: PreparedCallArgs<'_, '_>,
         call_span: Span,
         receiver: Option<TypeId>,
-    ) -> Option<CallCandidate> {
+    ) -> DemandOutcome<Option<CallCandidate>> {
         let overload = signatures.len() > 1;
         if !overload {
-            let signature = signatures.first().copied()?;
+            let Some(signature) = signatures.first().copied() else {
+                return DemandOutcome::Ready(None);
+            };
             return match self.instantiate_signature_candidate(SignatureCandidateRequest {
                 scope,
                 signature_ty: signature,
                 type_arguments: call.type_arguments.as_deref(),
                 args,
-                call_span,
                 call_receiver: receiver,
                 commit_constraints: true,
             }) {
-                Ok(candidate) => Some(candidate),
-                Err(CandidateBuildFailure::Constraint(_))
-                | Err(CandidateBuildFailure::Unavailable) => None,
+                Ok(candidate) => DemandOutcome::Ready(Some(candidate)),
+                Err(CandidateBuildFailure::Constraint)
+                | Err(CandidateBuildFailure::Unavailable) => DemandOutcome::Ready(None),
+                Err(CandidateBuildFailure::Exhausted(exhaustion)) => {
+                    DemandOutcome::Exhausted(exhaustion)
+                }
             };
         }
 
         let mut arity_failures: Vec<CallArity> = Vec::new();
         let mut saw_non_arity_failure = false;
-        let mut first_constraint_failure: Option<Vec<Diagnostic>> = None;
+        let mut first_constraint_failure: Option<CheckerEffects> = None;
+        let mut first_other_failure: Option<CheckerEffects> = None;
 
         for signature in signatures {
-            let candidate = match self.instantiate_signature_candidate(SignatureCandidateRequest {
-                scope,
-                signature_ty: *signature,
-                type_arguments: call.type_arguments.as_deref(),
-                args,
-                call_span,
-                call_receiver: receiver,
-                commit_constraints: false,
-            }) {
-                Ok(candidate) => candidate,
-                Err(CandidateBuildFailure::Constraint(diagnostics)) => {
+            let (built, effects) = self.capture_speculative_candidate_effects(|pass| {
+                pass.instantiate_signature_candidate(SignatureCandidateRequest {
+                    scope,
+                    signature_ty: *signature,
+                    type_arguments: call.type_arguments.as_deref(),
+                    args,
+                    call_receiver: receiver,
+                    commit_constraints: false,
+                })
+            });
+            let candidate = match built {
+                Ok(candidate) => {
+                    effects.records.discard();
+                    if let Some(exhaustion) = candidate.inference_exhaustion.clone() {
+                        return DemandOutcome::Exhausted(exhaustion);
+                    }
+                    candidate
+                }
+                Err(CandidateBuildFailure::Constraint) => {
+                    #[cfg(test)]
+                    measure_call(|measure| {
+                        measure.speculative_diagnostics_removed +=
+                            u64::try_from(effects.records.len()).expect("effect count fits u64");
+                    });
                     if first_constraint_failure.is_none() {
-                        first_constraint_failure = Some(diagnostics);
+                        first_constraint_failure = Some(effects);
                     }
                     saw_non_arity_failure = true;
                     continue;
                 }
                 Err(CandidateBuildFailure::Unavailable) => {
+                    if first_other_failure.is_none() {
+                        first_other_failure = Some(effects);
+                    }
                     saw_non_arity_failure = true;
                     continue;
                 }
+                Err(CandidateBuildFailure::Exhausted(exhaustion)) => {
+                    effects.records.discard();
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
             };
-            match self.try_call_candidate(
-                scope,
-                &candidate.params,
-                (candidate.receiver, receiver),
-                args.types,
-                args.exprs,
-                call_span,
-            ) {
+            let trial = self.with_speculative_candidate_queries(|pass| {
+                pass.try_call_candidate(
+                    scope,
+                    &candidate.params,
+                    (candidate.receiver, receiver),
+                    args.types,
+                    args.exprs,
+                    call_span,
+                )
+            });
+            match trial {
                 CandidateTrial::Match => {
-                    let committed =
-                        match self.instantiate_signature_candidate(SignatureCandidateRequest {
+                    let (committed, effects) = self.capture_candidate_effects(|pass| {
+                        pass.instantiate_signature_candidate(SignatureCandidateRequest {
                             scope,
                             signature_ty: *signature,
                             type_arguments: call.type_arguments.as_deref(),
                             args,
-                            call_span,
                             call_receiver: receiver,
                             commit_constraints: true,
-                        }) {
-                            Ok(candidate) => candidate,
-                            Err(CandidateBuildFailure::Constraint(_))
-                            | Err(CandidateBuildFailure::Unavailable) => return None,
-                        };
-                    return Some(committed);
+                        })
+                    });
+                    return match committed {
+                        Ok(candidate) => {
+                            if let Some(exhaustion) = candidate.inference_exhaustion.clone() {
+                                effects.records.discard();
+                                return DemandOutcome::Exhausted(exhaustion);
+                            }
+                            self.merge_candidate_effects(effects);
+                            DemandOutcome::Ready(Some(candidate))
+                        }
+                        Err(CandidateBuildFailure::Constraint)
+                        | Err(CandidateBuildFailure::Unavailable) => {
+                            self.merge_candidate_effects(effects);
+                            DemandOutcome::Ready(None)
+                        }
+                        Err(CandidateBuildFailure::Exhausted(exhaustion)) => {
+                            effects.records.discard();
+                            DemandOutcome::Exhausted(exhaustion)
+                        }
+                    };
                 }
                 CandidateTrial::Arity(arity) => arity_failures.push(arity),
                 CandidateTrial::Mismatch => saw_non_arity_failure = true,
+                CandidateTrial::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
             }
         }
 
-        if let Some(diagnostics) = first_constraint_failure {
-            self.diagnostics.extend(diagnostics);
+        if let Some(effects) = first_constraint_failure {
+            self.merge_candidate_effects(effects);
         } else if !arity_failures.is_empty() && !saw_non_arity_failure {
             self.emit_overload_arity_failure(&arity_failures, args.types.len(), call_span);
         } else {
-            self.diagnostics
-                .push(Diagnostic::no_overload_matches(call_span));
+            if let Some(effects) = first_other_failure {
+                self.merge_candidate_effects(effects);
+            }
+            self.emit_diagnostic(Diagnostic::no_overload_matches(call_span));
         }
-        None
+        DemandOutcome::Ready(None)
     }
 
     /// Build one callable or constructable signature candidate from its persistent
@@ -555,10 +761,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             signature_ty,
             type_arguments,
             args,
-            call_span,
             call_receiver,
             commit_constraints,
         } = request;
+        #[cfg(not(test))]
+        let _ = commit_constraints;
         #[cfg(test)]
         measure_call(|measure| {
             if commit_constraints {
@@ -573,6 +780,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .function_type(signature_ty)
             .map(|function| function.type_params.clone())
             .ok_or(CandidateBuildFailure::Unavailable)?;
+        let mut inference_exhaustion = None;
         let instantiated = if generic_params.is_empty() {
             signature_ty
         } else {
@@ -599,38 +807,30 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                             max,
                             arg_infos.len(),
                         );
-                        return Err(
-                            self.candidate_constraint_failure(commit_constraints, diagnostic)
-                        );
+                        return Err(self.candidate_constraint_failure(diagnostic));
                     }
                     let mut map: FxHashMap<TypeParamId, TypeId> = FxHashMap::default();
                     for (param, &(arg, _)) in generic_params.iter().zip(&arg_infos) {
                         map.insert(param.id, arg);
                     }
                     let map = self.complete_signature_type_arguments(&generic_params, map);
-                    if commit_constraints {
-                        self.check_signature_type_argument_constraints(
-                            &generic_params,
-                            &arg_infos,
-                            &map,
-                        );
-                    } else {
-                        let diagnostics_len = self.diagnostics.len();
-                        self.check_signature_type_argument_constraints(
-                            &generic_params,
-                            &arg_infos,
-                            &map,
-                        );
-                        if self.diagnostics.len() != diagnostics_len {
+                    match self.check_signature_type_argument_constraints(
+                        &generic_params,
+                        &arg_infos,
+                        &map,
+                    ) {
+                        DemandOutcome::Ready(false) => {}
+                        DemandOutcome::Ready(true) => {
                             #[cfg(test)]
-                            measure_call(|measure| {
-                                measure.speculative_diagnostic_rollback_events += 1;
-                                measure.speculative_diagnostics_removed +=
-                                    (self.diagnostics.len() - diagnostics_len) as u64;
-                            });
-                            let diagnostics = self.diagnostics[diagnostics_len..].to_vec();
-                            self.diagnostics.truncate(diagnostics_len);
-                            return Err(CandidateBuildFailure::Constraint(diagnostics));
+                            if !commit_constraints {
+                                measure_call(|measure| {
+                                    measure.speculative_diagnostic_rollback_events += 1;
+                                });
+                            }
+                            return Err(CandidateBuildFailure::Constraint);
+                        }
+                        DemandOutcome::Exhausted(exhaustion) => {
+                            return Err(CandidateBuildFailure::Exhausted(exhaustion))
                         }
                     }
                     map
@@ -661,17 +861,30 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         let preliminary = infer::infer_signature_type_arguments_from_params(
                             self.interner,
                             &mut self.next_type_param,
-                            &generic_params,
-                            &params,
-                            &raw_args,
-                            &args.fresh[..start],
-                            call_receiver.zip(
-                                self.interner
-                                    .store()
-                                    .function_type(signature_ty)
-                                    .and_then(|function| function.receiver),
-                            ),
+                            &self.published_classes,
+                            &mut self.semantic_queries,
+                            infer::SignatureInferenceRequest {
+                                type_params: &generic_params,
+                                params: &params,
+                                args: &raw_args,
+                                fresh_args: &args.fresh[..start],
+                                receiver: call_receiver.zip(
+                                    self.interner
+                                        .store()
+                                        .function_type(signature_ty)
+                                        .and_then(|function| function.receiver),
+                                ),
+                            },
                         );
+                        let preliminary = match preliminary {
+                            DemandOutcome::Ready(result) => {
+                                inference_exhaustion = result.exhaustion;
+                                result.arguments
+                            }
+                            DemandOutcome::Exhausted(exhaustion) => {
+                                return Err(CandidateBuildFailure::Exhausted(exhaustion));
+                            }
+                        };
                         let unknown = self.interner.well_known().unknown;
                         let contextual_map: FxHashMap<TypeParamId, TypeId> = preliminary
                             .into_iter()
@@ -702,20 +915,34 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     );
                     #[cfg(test)]
                     measure_call(|measure| measure.generic_full_inference_runs += 1);
-                    infer::infer_signature_type_arguments_from_params(
+                    match infer::infer_signature_type_arguments_from_params(
                         self.interner,
                         &mut self.next_type_param,
-                        &generic_params,
-                        &params,
-                        &inference_args,
-                        args.fresh,
-                        call_receiver.zip(
-                            self.interner
-                                .store()
-                                .function_type(signature_ty)
-                                .and_then(|function| function.receiver),
-                        ),
-                    )
+                        &self.published_classes,
+                        &mut self.semantic_queries,
+                        infer::SignatureInferenceRequest {
+                            type_params: &generic_params,
+                            params: &params,
+                            args: &inference_args,
+                            fresh_args: args.fresh,
+                            receiver: call_receiver.zip(
+                                self.interner
+                                    .store()
+                                    .function_type(signature_ty)
+                                    .and_then(|function| function.receiver),
+                            ),
+                        },
+                    ) {
+                        DemandOutcome::Ready(result) => {
+                            if inference_exhaustion.is_none() {
+                                inference_exhaustion = result.exhaustion;
+                            }
+                            result.arguments
+                        }
+                        DemandOutcome::Exhausted(exhaustion) => {
+                            return Err(CandidateBuildFailure::Exhausted(exhaustion));
+                        }
+                    }
                 }
             };
             instantiate_function(self.interner, signature_ty, &map)
@@ -729,12 +956,26 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let params = func.params.clone();
         let ret = func.ret;
         let receiver = func.receiver;
-        let params = self.evaluate_parameters(params, call_span);
-        let receiver = receiver.map(|receiver| self.evaluate_type(receiver, call_span));
+        let params = match self.evaluate_parameters(params) {
+            DemandOutcome::Ready(params) => params,
+            DemandOutcome::Exhausted(exhaustion) => {
+                return Err(CandidateBuildFailure::Exhausted(exhaustion))
+            }
+        };
+        let receiver = match receiver {
+            Some(receiver) => match self.evaluate_call_boundary_type(receiver) {
+                DemandOutcome::Ready(receiver) => Some(receiver),
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return Err(CandidateBuildFailure::Exhausted(exhaustion))
+                }
+            },
+            None => None,
+        };
         Ok(CallCandidate {
             receiver,
             params,
             ret,
+            inference_exhaustion,
         })
     }
 
@@ -765,15 +1006,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         map
     }
 
-    fn candidate_constraint_failure(
-        &mut self,
-        commit: bool,
-        diagnostic: Diagnostic,
-    ) -> CandidateBuildFailure {
-        if commit {
-            self.diagnostics.push(diagnostic.clone());
-        }
-        CandidateBuildFailure::Constraint(vec![diagnostic])
+    fn candidate_constraint_failure(&mut self, diagnostic: Diagnostic) -> CandidateBuildFailure {
+        self.emit_diagnostic(diagnostic);
+        CandidateBuildFailure::Constraint
     }
 
     fn try_call_candidate(
@@ -787,10 +1022,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> CandidateTrial {
         #[cfg(test)]
         measure_call(|measure| measure.candidate_trials += 1);
-        if !self.call_receiver_is_compatible(receivers.0, receivers.1) {
-            #[cfg(test)]
-            measure_call(|measure| measure.candidate_mismatches += 1);
-            return CandidateTrial::Mismatch;
+        match self.call_receiver_compatibility(receivers.0, receivers.1) {
+            RelationOutcome::Yes => {}
+            RelationOutcome::No(_) => {
+                #[cfg(test)]
+                measure_call(|measure| measure.candidate_mismatches += 1);
+                return CandidateTrial::Mismatch;
+            }
+            RelationOutcome::Exhausted(exhaustion) => return CandidateTrial::Exhausted(exhaustion),
         }
         let arity = self.call_arity(params);
         if !self.call_arity_accepts(&arity, arg_types.len()) {
@@ -800,7 +1039,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
 
         let targets = self.call_argument_targets(params, arg_types.len());
-        let wk = self.interner.well_known();
         for (((arg_ty, arg_span), arg_expr), param_ty) in
             arg_types.iter().zip(arg_exprs).zip(targets)
         {
@@ -817,29 +1055,38 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 false,
                 ContextualMeasurePhase::CandidateTrial
             );
-            let diagnostics_len = self.diagnostics.len();
-            check_excess_properties(
-                self.interner.store(),
-                arg_expr,
-                param_ty,
-                &mut self.diagnostics,
-            );
-            if self.diagnostics.len() != diagnostics_len {
+            let diagnostics = match self.check_excess_properties_for_target(arg_expr, param_ty) {
+                DemandOutcome::Ready(diagnostics) => diagnostics,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return CandidateTrial::Exhausted(exhaustion);
+                }
+            };
+            if !diagnostics.is_empty() {
                 #[cfg(test)]
                 measure_call(|measure| {
                     measure.speculative_diagnostic_rollback_events += 1;
                     measure.speculative_diagnostics_removed +=
-                        (self.diagnostics.len() - diagnostics_len) as u64;
+                        u64::try_from(diagnostics.len()).expect("diagnostic count fits u64");
                 });
-                self.diagnostics.truncate(diagnostics_len);
                 return CandidateTrial::Mismatch;
             }
-            let store = self.interner.store();
-            let mut relater = Relater::new(store, wk);
-            if let Relation::No(_) = relater.is_assignable(src, param_ty) {
-                #[cfg(test)]
-                measure_call(|measure| measure.candidate_mismatches += 1);
-                return CandidateTrial::Mismatch;
+            match SemanticQueryCoordinator::new(
+                self.interner,
+                &self.published_classes,
+                &mut self.semantic_queries,
+                &mut self.next_type_param,
+            )
+            .is_assignable(src, param_ty)
+            {
+                RelationOutcome::Yes => {}
+                RelationOutcome::No(_) => {
+                    #[cfg(test)]
+                    measure_call(|measure| measure.candidate_mismatches += 1);
+                    return CandidateTrial::Mismatch;
+                }
+                RelationOutcome::Exhausted(exhaustion) => {
+                    return CandidateTrial::Exhausted(exhaustion)
+                }
             }
         }
         #[cfg(test)]
@@ -867,7 +1114,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         } else {
             self.wrong_bounded_argument_count(span, min, max.unwrap_or(min), got)
         };
-        self.diagnostics.push(diagnostic);
+        self.emit_diagnostic(diagnostic);
     }
 
     /// Check `super(args)` against the base constructor with the shared call
@@ -905,7 +1152,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // Defensive: the constructor is always interned as a function in `fill_class`.
             None => return Some((wk.error, call_span)),
         };
-        let params = self.evaluate_parameters(params, call_span);
+        let params = match self.evaluate_parameters(params) {
+            DemandOutcome::Ready(params) => params,
+            DemandOutcome::Exhausted(exhaustion) => {
+                self.own_type_demand(DemandOutcome::Exhausted(exhaustion), call_span);
+                return None;
+            }
+        };
 
         // Reuse the shared call-checking path: arity (TK2554) + argument assignability
         // (TK2345). The `super(...)` expression's value type is unused.
@@ -945,13 +1198,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 true,
                 ContextualMeasurePhase::CommittedCheck
             );
-            check_excess_properties(
-                self.interner.store(),
-                arg_expr,
-                param_ty,
-                &mut self.diagnostics,
-            );
-            self.obligations.push(AssignObligation {
+            match self.check_excess_properties_for_target(arg_expr, param_ty) {
+                DemandOutcome::Ready(diagnostics) => {
+                    for diagnostic in diagnostics {
+                        self.emit_diagnostic(diagnostic);
+                    }
+                }
+                DemandOutcome::Exhausted(exhaustion) => {
+                    self.own_type_demand(DemandOutcome::Exhausted(exhaustion), *arg_span);
+                    return;
+                }
+            }
+            self.schedule_obligation(AssignObligation {
                 src,
                 tgt: param_ty,
                 src_span,
@@ -973,63 +1231,84 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         target_receiver: Option<TypeId>,
         call_receiver: Option<(TypeId, Span)>,
         call_span: Span,
-    ) {
+    ) -> DemandOutcome<()> {
         let Some(target_receiver) = target_receiver else {
-            return;
+            return DemandOutcome::Ready(());
         };
         #[cfg(test)]
         measure_call(|measure| measure.selected_receiver_relation_queries += 1);
         let (source_receiver, span) =
             call_receiver.unwrap_or((self.interner.well_known().undefined, call_span));
-        let wk = self.interner.well_known();
-        let failure = {
-            let store = self.interner.store();
-            let mut relater = Relater::new(store, wk);
-            matches!(
-                relater.is_assignable(source_receiver, target_receiver),
-                Relation::No(_)
-            )
-        };
-        if failure {
-            let store = self.interner.store();
-            self.diagnostics
-                .push(Diagnostic::this_context_not_assignable(
+        match SemanticQueryCoordinator::new(
+            self.interner,
+            &self.published_classes,
+            &mut self.semantic_queries,
+            &mut self.next_type_param,
+        )
+        .is_assignable(source_receiver, target_receiver)
+        {
+            RelationOutcome::Yes => DemandOutcome::Ready(()),
+            RelationOutcome::No(_) => {
+                let store = self.interner.store();
+                self.emit_diagnostic(Diagnostic::this_context_not_assignable(
                     span,
                     &render_type(store, source_receiver, false),
                     &render_type(store, target_receiver, false),
                 ));
+                DemandOutcome::Ready(())
+            }
+            RelationOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
         }
     }
 
-    fn call_receiver_is_compatible(
-        &self,
+    fn call_receiver_compatibility(
+        &mut self,
         target_receiver: Option<TypeId>,
         call_receiver: Option<TypeId>,
-    ) -> bool {
+    ) -> RelationOutcome {
         let Some(target_receiver) = target_receiver else {
-            return true;
+            return RelationOutcome::Yes;
         };
         #[cfg(test)]
         measure_call(|measure| measure.trial_receiver_relation_queries += 1);
         let source_receiver = call_receiver.unwrap_or(self.interner.well_known().undefined);
-        let mut relater = Relater::new(self.interner.store(), self.interner.well_known());
-        relater
-            .is_assignable(source_receiver, target_receiver)
-            .is_yes()
+        SemanticQueryCoordinator::new(
+            self.interner,
+            &self.published_classes,
+            &mut self.semantic_queries,
+            &mut self.next_type_param,
+        )
+        .is_assignable(source_receiver, target_receiver)
     }
 
     fn evaluate_parameters(
         &mut self,
         params: Vec<ParameterType>,
-        span: Span,
-    ) -> Vec<ParameterType> {
-        params
-            .into_iter()
-            .map(|mut param| {
-                param.ty = self.evaluate_type(param.ty, span);
-                param
-            })
-            .collect()
+    ) -> DemandOutcome<Vec<ParameterType>> {
+        let mut evaluated = Vec::with_capacity(params.len());
+        for mut parameter in params {
+            parameter.ty = match self.evaluate_call_boundary_type(parameter.ty) {
+                DemandOutcome::Ready(ty) => ty,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
+            };
+            evaluated.push(parameter);
+        }
+        DemandOutcome::Ready(evaluated)
+    }
+
+    fn evaluate_call_boundary_type(&mut self, ty: TypeId) -> DemandOutcome<TypeId> {
+        if self.interner.store().tag(ty) == TypeTag::ClassInstance {
+            return SemanticQueryCoordinator::new(
+                self.interner,
+                &self.published_classes,
+                &mut self.semantic_queries,
+                &mut self.next_type_param,
+            )
+            .normalize_class_application(ty);
+        }
+        self.evaluate_type(ty)
     }
 
     fn check_call_arity(&mut self, params: &[ParameterType], got: usize, span: Span) {
@@ -1045,13 +1324,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     got,
                 )
             };
-            self.diagnostics.push(diagnostic);
+            self.emit_diagnostic(diagnostic);
             return;
         }
         if let Some(max) = arity.max {
             if got > max {
                 let diagnostic = self.wrong_bounded_argument_count(span, arity.min, max, got);
-                self.diagnostics.push(diagnostic);
+                self.emit_diagnostic(diagnostic);
             }
         }
     }
@@ -1254,7 +1533,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Resolve a direct class identifier, parenthesized class callee, or one-step
         // `const Alias = Class` before callee inference. Keep the class declaration
         // id for the generic constructor path below.
-        let class_resolved = self.class_new_target(scope, &new_expr.callee);
+        let class_resolved = match self.class_new_target(scope, &new_expr.callee) {
+            DemandOutcome::Ready(class_resolved) => class_resolved,
+            DemandOutcome::Exhausted(exhaustion) => {
+                self.own_type_demand(DemandOutcome::Exhausted(exhaustion), new_span);
+                return None;
+            }
+        };
 
         // Always infer the callee for its side effects (resolving its name / emitting
         // `TK2304`, descending into a callee expression). For non-class callees the
@@ -1289,7 +1574,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             if let Some((callee_ty, _)) = inferred_callee {
                 let signatures = self.construct_signatures(callee_ty);
                 if !signatures.is_empty() {
-                    if let Some(candidate) = self.select_construct_candidate(
+                    match self.select_construct_candidate(
                         scope,
                         &signatures,
                         new_expr.type_arguments.as_deref(),
@@ -1300,16 +1585,35 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         },
                         new_span,
                     ) {
-                        self.check_call_arguments(
-                            scope,
-                            &candidate.params,
-                            &arg_types,
-                            &arg_exprs,
-                            new_span,
-                        );
-                        return Some((candidate.ret, new_span));
+                        DemandOutcome::Ready(Some(candidate)) => {
+                            self.check_call_arguments(
+                                scope,
+                                &candidate.params,
+                                &arg_types,
+                                &arg_exprs,
+                                new_span,
+                            );
+                            if candidate.inference_exhaustion.is_some() {
+                                return None;
+                            }
+                            let ret = match self.evaluate_type(candidate.ret) {
+                                DemandOutcome::Ready(ret) => ret,
+                                DemandOutcome::Exhausted(exhaustion) => {
+                                    self.own_type_demand(
+                                        DemandOutcome::Exhausted(exhaustion),
+                                        new_span,
+                                    );
+                                    return None;
+                                }
+                            };
+                            return Some((ret, new_span));
+                        }
+                        DemandOutcome::Ready(None) => return Some((wk.error, new_span)),
+                        DemandOutcome::Exhausted(exhaustion) => {
+                            self.own_type_demand(DemandOutcome::Exhausted(exhaustion), new_span);
+                            return None;
+                        }
                     }
-                    return Some((wk.error, new_span));
                 }
             }
             return Some((wk.error, new_span));
@@ -1325,32 +1629,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // argument checks; suppress when constructor accessibility already reported,
         // matching tsc's single accessibility error in that combination.
         if info.is_abstract && !ctor_inaccessible {
-            self.diagnostics
-                .push(Diagnostic::abstract_instantiation(new_span));
-        }
-
-        if let Some(overloads) = self.class_ctor_overloads.get(&decl_id).cloned() {
-            if let Some(candidate) = self.select_construct_candidate(
-                scope,
-                &overloads,
-                new_expr.type_arguments.as_deref(),
-                PreparedCallArgs {
-                    types: &arg_types,
-                    fresh: &arg_fresh,
-                    exprs: &arg_exprs,
-                },
-                new_span,
-            ) {
-                self.check_call_arguments(
-                    scope,
-                    &candidate.params,
-                    &arg_types,
-                    &arg_exprs,
-                    new_span,
-                );
-                return Some((info.instance, new_span));
-            }
-            return Some((wk.error, new_span));
+            self.emit_diagnostic(Diagnostic::abstract_instantiation(new_span));
         }
 
         // M16: instantiate a generic class's constructor + instance before the argument
@@ -1363,7 +1642,41 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             &info,
             new_expr,
             (&arg_types, &arg_fresh, &arg_exprs),
-        );
+        )?;
+
+        // A class constructor overload set publishes only its visible signatures on
+        // the static side. Select those for direct non-generic construction; the
+        // implementation signature remains body-only and must not accept extra calls.
+        let constructor_overloads = self.direct_class_construct_overloads(&info, instance);
+        if constructor_overloads.len() > 1 {
+            match self.select_construct_candidate(
+                scope,
+                &constructor_overloads,
+                None,
+                PreparedCallArgs {
+                    types: &arg_types,
+                    fresh: &arg_fresh,
+                    exprs: &arg_exprs,
+                },
+                new_span,
+            ) {
+                DemandOutcome::Ready(Some(candidate)) => {
+                    self.check_call_arguments(
+                        scope,
+                        &candidate.params,
+                        &arg_types,
+                        &arg_exprs,
+                        new_span,
+                    );
+                    return Some((instance, new_span));
+                }
+                DemandOutcome::Ready(None) => return Some((wk.error, new_span)),
+                DemandOutcome::Exhausted(exhaustion) => {
+                    self.own_type_demand(DemandOutcome::Exhausted(exhaustion), new_span);
+                    return None;
+                }
+            }
+        }
 
         // The (instantiated) constructor signature's parameter types (zero for an implicit
         // constructor).
@@ -1372,7 +1685,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // Defensive: the constructor is always interned as a function in `fill_class`.
             None => Vec::new(),
         };
-        let params = self.evaluate_parameters(params, new_span);
+        let params = match self.evaluate_parameters(params) {
+            DemandOutcome::Ready(params) => params,
+            DemandOutcome::Exhausted(exhaustion) => {
+                self.own_type_demand(DemandOutcome::Exhausted(exhaustion), new_span);
+                return None;
+            }
+        };
 
         // Reuse the M3 call-checking path: arity (TK2554) + argument assignability
         // (TK2345). The `new` expression's type is the (instantiated) instance type.
@@ -1384,39 +1703,153 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// Resolve the intentionally narrow class-value forms that retain class-only
     /// construction facts. Generic aliases remain on the existing structural path.
     fn class_new_target(
-        &self,
+        &mut self,
         scope: ScopeId,
         callee: &Expression<'_>,
-    ) -> Option<(DeclId, ClassInfo)> {
+    ) -> DemandOutcome<Option<(DeclId, ClassInfo)>> {
         let callee = match callee {
             Expression::ParenthesizedExpression(paren) => {
                 return self.class_new_target(scope, &paren.expression)
             }
             Expression::Identifier(ident) => ident,
-            _ => return None,
+            _ => return DemandOutcome::Ready(None),
         };
-        let value_decl = value_decl_id(self.binder, scope, callee.name.as_str())?;
+        let Some(value_decl) = value_decl_id(self.binder, scope, callee.name.as_str()) else {
+            return DemandOutcome::Ready(None);
+        };
         let class_decl = self
             .class_value_aliases
             .get(&value_decl)
             .copied()
             .unwrap_or(value_decl);
-        if value_decl != class_decl
-            && self
-                .class_type_params
-                .get(&class_decl)
-                .is_some_and(|params| !params.is_empty())
-        {
-            return None;
+        let Some(binding) = self
+            .lexical_events
+            .classes()
+            .iter()
+            .filter_map(|reservation| reservation.binding.as_ref())
+            .find(|binding| binding.value_decl == class_decl)
+            .cloned()
+        else {
+            return DemandOutcome::Ready(None);
+        };
+        if value_decl != class_decl && !binding.header_type_params.is_empty() {
+            return DemandOutcome::Ready(None);
         }
-        self.class_ctors
-            .get(&class_decl)
-            .copied()
-            .map(|info| (class_decl, info))
+        let surface = match self.published_classes.published_class(binding.class_id) {
+            DemandOutcome::Ready(surface) => surface,
+            DemandOutcome::Exhausted(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
+        };
+        let Some(ctor) = surface.constructor_template() else {
+            return DemandOutcome::Ready(None);
+        };
+        let (is_abstract, ctor_visibility, ctor_declaring_class) =
+            match self.type_decls.get(binding.type_decl.index()) {
+                Some(TypeDecl::Class { class, .. }) => {
+                    let (visibility, declaring_class) =
+                        self.effective_constructor_access(binding.class_id, class);
+                    (class.r#abstract, visibility, declaring_class)
+                }
+                _ => (false, Visibility::Public, binding.class_id),
+            };
+        DemandOutcome::Ready(Some((
+            class_decl,
+            ClassInfo {
+                ctor,
+                class_id: binding.class_id,
+                is_abstract,
+                ctor_visibility,
+                ctor_declaring_class,
+            },
+        )))
+    }
+
+    fn effective_constructor_access(
+        &self,
+        class_id: crate::types::repr::ClassId,
+        class: &oxc_ast::ast::Class<'_>,
+    ) -> (Visibility, crate::types::repr::ClassId) {
+        if class_declares_constructor(class) {
+            return (
+                super::classes::visibility::constructor_visibility(class),
+                class_id,
+            );
+        }
+        let mut visited = FxHashSet::default();
+        let mut current = class_id;
+        while visited.insert(current) {
+            let Some(parent) = self.class_parents.get(&current).copied() else {
+                break;
+            };
+            let parent_class = self
+                .type_decls
+                .iter()
+                .find_map(|declaration| match declaration {
+                    TypeDecl::Class {
+                        class_id, class, ..
+                    } if *class_id == parent => Some(*class),
+                    _ => None,
+                });
+            let Some(parent_class) = parent_class else {
+                break;
+            };
+            if class_declares_constructor(parent_class) {
+                return (
+                    super::classes::visibility::constructor_visibility(parent_class),
+                    parent,
+                );
+            }
+            current = parent;
+        }
+        (Visibility::Public, class_id)
+    }
+
+    fn direct_class_construct_overloads(
+        &mut self,
+        info: &ClassInfo,
+        instance: TypeId,
+    ) -> Vec<TypeId> {
+        let has_source_overloads = self.type_decls.iter().any(|declaration| match declaration {
+            TypeDecl::Class {
+                class_id, class, ..
+            } if *class_id == info.class_id => class_constructor_declaration_count(class) > 1,
+            _ => false,
+        });
+        if !has_source_overloads {
+            return Vec::new();
+        }
+        let surface = match self.published_classes.published_class(info.class_id) {
+            DemandOutcome::Ready(surface) => surface,
+            DemandOutcome::Exhausted(_) => return Vec::new(),
+        };
+        let signatures = self
+            .interner
+            .store()
+            .object_type(surface.static_template())
+            .map_or_else(Vec::new, |object| object.construct_signatures.clone());
+        let Some(application) = self.interner.store().class_instance_type(instance) else {
+            return signatures;
+        };
+        let arguments = application.args.clone();
+        let parameters = self
+            .class_application_parameters
+            .get(&info.class_id)
+            .map(|parameters| {
+                parameters
+                    .iter()
+                    .map(|parameter| parameter.application().id)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let substitution: FxHashMap<TypeParamId, TypeId> =
+            parameters.into_iter().zip(arguments).collect();
+        signatures
+            .into_iter()
+            .map(|signature| substitute(self.interner, signature, &substitution))
+            .collect()
     }
 
     /// Construct signatures after apparent-type resolution.
-    fn construct_signatures(&self, callee_ty: TypeId) -> Vec<TypeId> {
+    fn construct_signatures(&mut self, callee_ty: TypeId) -> Vec<TypeId> {
         let callee_ty = self.apparent_type(callee_ty);
         if self.interner.store().tag(callee_ty) != TypeTag::Object {
             return Vec::new();
@@ -1434,90 +1867,138 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         type_arguments: Option<&TSTypeParameterInstantiation<'_>>,
         args: PreparedCallArgs<'_, '_>,
         span: Span,
-    ) -> Option<CallCandidate> {
+    ) -> DemandOutcome<Option<CallCandidate>> {
         let overload = signatures.len() > 1;
         if !overload {
-            let signature = signatures.first().copied()?;
+            let Some(signature) = signatures.first().copied() else {
+                return DemandOutcome::Ready(None);
+            };
             return match self.instantiate_signature_candidate(SignatureCandidateRequest {
                 scope,
                 signature_ty: signature,
                 type_arguments,
                 args,
-                call_span: span,
                 call_receiver: None,
                 commit_constraints: true,
             }) {
-                Ok(candidate) => Some(candidate),
-                Err(CandidateBuildFailure::Constraint(_))
-                | Err(CandidateBuildFailure::Unavailable) => None,
+                Ok(candidate) => DemandOutcome::Ready(Some(candidate)),
+                Err(CandidateBuildFailure::Constraint)
+                | Err(CandidateBuildFailure::Unavailable) => DemandOutcome::Ready(None),
+                Err(CandidateBuildFailure::Exhausted(exhaustion)) => {
+                    DemandOutcome::Exhausted(exhaustion)
+                }
             };
         }
 
         let mut arity_failures: Vec<CallArity> = Vec::new();
         let mut saw_non_arity_failure = false;
-        let mut first_constraint_failure: Option<Vec<Diagnostic>> = None;
+        let mut first_constraint_failure: Option<CheckerEffects> = None;
+        let mut first_other_failure: Option<CheckerEffects> = None;
 
         for signature in signatures {
-            let candidate = match self.instantiate_signature_candidate(SignatureCandidateRequest {
-                scope,
-                signature_ty: *signature,
-                type_arguments,
-                args,
-                call_span: span,
-                call_receiver: None,
-                commit_constraints: false,
-            }) {
-                Ok(candidate) => candidate,
-                Err(CandidateBuildFailure::Constraint(diagnostics)) => {
+            let (built, effects) = self.capture_speculative_candidate_effects(|pass| {
+                pass.instantiate_signature_candidate(SignatureCandidateRequest {
+                    scope,
+                    signature_ty: *signature,
+                    type_arguments,
+                    args,
+                    call_receiver: None,
+                    commit_constraints: false,
+                })
+            });
+            let candidate = match built {
+                Ok(candidate) => {
+                    effects.records.discard();
+                    if let Some(exhaustion) = candidate.inference_exhaustion.clone() {
+                        return DemandOutcome::Exhausted(exhaustion);
+                    }
+                    candidate
+                }
+                Err(CandidateBuildFailure::Constraint) => {
+                    #[cfg(test)]
+                    measure_call(|measure| {
+                        measure.speculative_diagnostics_removed +=
+                            u64::try_from(effects.records.len()).expect("effect count fits u64");
+                    });
                     if first_constraint_failure.is_none() {
-                        first_constraint_failure = Some(diagnostics);
+                        first_constraint_failure = Some(effects);
                     }
                     saw_non_arity_failure = true;
                     continue;
                 }
                 Err(CandidateBuildFailure::Unavailable) => {
+                    if first_other_failure.is_none() {
+                        first_other_failure = Some(effects);
+                    }
                     saw_non_arity_failure = true;
                     continue;
                 }
+                Err(CandidateBuildFailure::Exhausted(exhaustion)) => {
+                    effects.records.discard();
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
             };
-            match self.try_call_candidate(
-                scope,
-                &candidate.params,
-                (None, None),
-                args.types,
-                args.exprs,
-                span,
-            ) {
+            let trial = self.with_speculative_candidate_queries(|pass| {
+                pass.try_call_candidate(
+                    scope,
+                    &candidate.params,
+                    (None, None),
+                    args.types,
+                    args.exprs,
+                    span,
+                )
+            });
+            match trial {
                 CandidateTrial::Match => {
-                    let committed =
-                        match self.instantiate_signature_candidate(SignatureCandidateRequest {
+                    let (committed, effects) = self.capture_candidate_effects(|pass| {
+                        pass.instantiate_signature_candidate(SignatureCandidateRequest {
                             scope,
                             signature_ty: *signature,
                             type_arguments,
                             args,
-                            call_span: span,
                             call_receiver: None,
                             commit_constraints: true,
-                        }) {
-                            Ok(candidate) => candidate,
-                            Err(CandidateBuildFailure::Constraint(_))
-                            | Err(CandidateBuildFailure::Unavailable) => return None,
-                        };
-                    return Some(committed);
+                        })
+                    });
+                    return match committed {
+                        Ok(candidate) => {
+                            if let Some(exhaustion) = candidate.inference_exhaustion.clone() {
+                                effects.records.discard();
+                                return DemandOutcome::Exhausted(exhaustion);
+                            }
+                            self.merge_candidate_effects(effects);
+                            DemandOutcome::Ready(Some(candidate))
+                        }
+                        Err(CandidateBuildFailure::Constraint)
+                        | Err(CandidateBuildFailure::Unavailable) => {
+                            self.merge_candidate_effects(effects);
+                            DemandOutcome::Ready(None)
+                        }
+                        Err(CandidateBuildFailure::Exhausted(exhaustion)) => {
+                            effects.records.discard();
+                            DemandOutcome::Exhausted(exhaustion)
+                        }
+                    };
                 }
                 CandidateTrial::Arity(arity) => arity_failures.push(arity),
                 CandidateTrial::Mismatch => saw_non_arity_failure = true,
+                CandidateTrial::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
             }
         }
 
-        if let Some(diagnostics) = first_constraint_failure {
-            self.diagnostics.extend(diagnostics);
+        if let Some(effects) = first_constraint_failure {
+            self.merge_candidate_effects(effects);
         } else if !arity_failures.is_empty() && !saw_non_arity_failure {
             self.emit_overload_arity_failure(&arity_failures, args.types.len(), span);
         } else {
-            self.diagnostics.push(Diagnostic::no_overload_matches(span));
+            if let Some(effects) = first_other_failure {
+                self.merge_candidate_effects(effects);
+            }
+            self.emit_diagnostic(Diagnostic::no_overload_matches(span));
         }
-        None
+        DemandOutcome::Ready(None)
     }
 
     /// M16 generic-class substitution for `new`: explicit type args or M10
@@ -1526,18 +2007,53 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn new_class_substitution(
         &mut self,
         scope: ScopeId,
-        decl_id: DeclId,
+        _decl_id: DeclId,
         info: &ClassInfo,
         new_expr: &NewExpression<'_>,
         args: (&[(TypeId, Span)], &[bool], &[&Expression<'_>]),
-    ) -> (TypeId, TypeId) {
+    ) -> Option<(TypeId, TypeId)> {
         let (arg_types, arg_fresh, arg_exprs) = args;
         // Non-generic class: no parameters to substitute — the M11 identity.
-        let Some(type_params) = self.class_type_params.get(&decl_id).cloned() else {
-            return (info.ctor, info.instance);
+        let Some(type_params) =
+            self.class_application_parameters
+                .get(&info.class_id)
+                .map(|parameters| {
+                    parameters
+                        .iter()
+                        .map(|parameter| parameter.application().id)
+                        .collect::<Vec<_>>()
+                })
+        else {
+            self.own_type_demand(
+                DemandOutcome::Exhausted(Exhaustion::ClassNotPublished {
+                    class: info.class_id,
+                    state: ClassConstructionState::Published,
+                }),
+                Span::from_oxc(new_expr.span),
+            );
+            return None;
         };
 
-        let map: FxHashMap<TypeParamId, TypeId> = match new_expr.type_arguments.as_deref() {
+        let descriptors = self
+            .class_application_parameters
+            .get(&info.class_id)
+            .cloned()
+            .unwrap_or_default();
+        let parameters = descriptors
+            .iter()
+            .map(|parameter| *parameter.application())
+            .collect::<Vec<_>>();
+        let generic_params = descriptors
+            .iter()
+            .map(|parameter| GenericTypeParam {
+                id: parameter.application().id,
+                constraint: parameter.constraint(),
+                default: None,
+            })
+            .collect::<Vec<_>>();
+
+        let mut explicit_arguments = Vec::new();
+        let inferred: Vec<(TypeParamId, TypeId)> = match new_expr.type_arguments.as_deref() {
             // Explicit type arguments: lower each and zip to the class's parameters.
             Some(args) => {
                 let mut map = FxHashMap::default();
@@ -1545,16 +2061,42 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 // argument even when an earlier one is unlowerable (out of subset).
                 let mut checked_params: Vec<TypeParamId> = Vec::with_capacity(args.params.len());
                 let mut arg_infos: Vec<(TypeId, Span)> = Vec::with_capacity(args.params.len());
-                for (&param, arg) in type_params.iter().zip(&args.params) {
-                    if let Some(lowered) = self.lower_annotation(scope, arg) {
+                for (index, arg) in args.params.iter().enumerate() {
+                    let lowered = self.lower_annotation(scope, arg);
+                    explicit_arguments.push(match lowered {
+                        Some(lowered) if lowered != self.interner.well_known().error => {
+                            ExplicitClassArgument::Ready(lowered)
+                        }
+                        Some(_) | None => ExplicitClassArgument::Unavailable,
+                    });
+                    if let (Some(&param), Some(lowered)) = (type_params.get(index), lowered) {
                         map.insert(param, lowered);
                         checked_params.push(param);
                         arg_infos.push((lowered, Span::from_oxc(arg.span())));
                     }
                 }
                 // M24: each explicit type argument must satisfy its parameter's constraint.
-                self.check_type_argument_constraints(&checked_params, &arg_infos, &map);
-                map
+                let checks: Vec<(Option<TypeId>, TypeId, Span)> = checked_params
+                    .iter()
+                    .zip(&arg_infos)
+                    .map(|(&parameter, &(argument, span))| {
+                        (
+                            self.interner.store().type_param_constraint(parameter),
+                            argument,
+                            span,
+                        )
+                    })
+                    .collect();
+                if let DemandOutcome::Exhausted(exhaustion) =
+                    self.check_constraint_arguments_outcome(&checks, &map)
+                {
+                    self.own_type_demand(
+                        DemandOutcome::Exhausted(exhaustion),
+                        Span::from_oxc(new_expr.span),
+                    );
+                    return None;
+                }
+                Vec::new()
             }
             // No type arguments: infer from the constructor argument types. The inference
             // targets are the *uninstantiated* constructor parameter types (they carry the
@@ -1573,23 +2115,119 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     arg_exprs,
                     ContextualMeasurePhase::ClassCtor
                 );
-                infer::infer_type_arguments_from_params(
+                match infer::infer_partial_signature_type_arguments_from_params(
                     self.interner,
                     &mut self.next_type_param,
-                    &type_params,
-                    &params,
-                    &args,
-                    arg_fresh,
-                )
+                    &self.published_classes,
+                    &mut self.semantic_queries,
+                    infer::SignatureInferenceRequest {
+                        type_params: &generic_params,
+                        params: &params,
+                        args: &args,
+                        fresh_args: arg_fresh,
+                        receiver: None,
+                    },
+                ) {
+                    DemandOutcome::Ready(result) => {
+                        if let Some(exhaustion) = result.exhaustion {
+                            self.own_type_demand(
+                                DemandOutcome::Exhausted(exhaustion),
+                                Span::from_oxc(new_expr.span),
+                            );
+                            return None;
+                        }
+                        result.arguments
+                    }
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        self.own_type_demand(
+                            DemandOutcome::Exhausted(exhaustion),
+                            Span::from_oxc(new_expr.span),
+                        );
+                        return None;
+                    }
+                }
             }
         };
-
-        // Apply the substitution to both the constructor signature and the instance type.
-        // An empty map is the identity (`substitute` short-circuits), so this is safe even
-        // when no parameter resolved.
+        let source_arguments = new_expr
+            .type_arguments
+            .as_ref()
+            .map_or(SourceClassArguments::Omitted, |_| {
+                SourceClassArguments::Explicit(&explicit_arguments)
+            });
+        let outcome = build_class_application(
+            &mut SurfaceTypeFactory::new(self.interner),
+            &self.published_classes,
+            ClassApplicationRequest {
+                class: info.class_id,
+                parameters: &parameters,
+                source_arguments,
+                inferred: &inferred,
+                kind: ClassApplicationKind::NewExpression,
+            },
+        );
+        let instance = match outcome {
+            DemandOutcome::Ready(instance) => instance,
+            DemandOutcome::Exhausted(Exhaustion::ClassApplicationArguments(
+                ClassApplicationArguments::WrongArity {
+                    expected_min,
+                    expected_max,
+                    actual,
+                },
+            )) => {
+                let arity_span = new_expr
+                    .type_arguments
+                    .as_deref()
+                    .map(|arguments| Span::from_oxc(arguments.span))
+                    .unwrap_or_else(|| Span::from_oxc(new_expr.span));
+                self.emit_diagnostic(Diagnostic::wrong_type_argument_count(
+                    arity_span,
+                    expected_min,
+                    expected_max,
+                    actual,
+                ));
+                return None;
+            }
+            DemandOutcome::Exhausted(Exhaustion::ClassApplicationArguments(
+                ClassApplicationArguments::UnsupportedDefault { .. },
+            )) => {
+                self.record_incomplete(
+                    "expr-infer/new-expression/class-default-argument",
+                    Span::from_oxc(new_expr.span),
+                    "class type-parameter default unavailable at application",
+                );
+                return None;
+            }
+            DemandOutcome::Exhausted(Exhaustion::ClassApplicationArguments(
+                ClassApplicationArguments::InferenceIncomplete { .. },
+            )) => {
+                self.record_incomplete(
+                    "expr-infer/new-expression/class-type-argument-inference",
+                    Span::from_oxc(new_expr.span),
+                    "class type arguments cannot be fully inferred",
+                );
+                return None;
+            }
+            DemandOutcome::Exhausted(Exhaustion::ClassApplicationArguments(
+                ClassApplicationArguments::UnavailableExplicitArgument { .. }
+                | ClassApplicationArguments::TargetPoisoned { .. },
+            ))
+            | DemandOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
+            | DemandOutcome::Exhausted(Exhaustion::ClassHeritagePoison { .. })
+            | DemandOutcome::Exhausted(Exhaustion::ClassInitializerPoison { .. })
+            | DemandOutcome::Exhausted(Exhaustion::ClassSurfacePoison { .. })
+            | DemandOutcome::Exhausted(Exhaustion::ClassProjectionBudget)
+            | DemandOutcome::Exhausted(Exhaustion::EvaluationBudget)
+            | DemandOutcome::Exhausted(Exhaustion::EvaluationCycle { .. }) => return None,
+        };
+        let application = self
+            .interner
+            .store()
+            .class_instance_type(instance)
+            .cloned()?;
+        let map: FxHashMap<TypeParamId, TypeId> =
+            type_params.into_iter().zip(application.args).collect();
         let ctor = substitute(self.interner, info.ctor, &map);
-        let instance = substitute(self.interner, info.instance, &map);
-        (ctor, instance)
+        Some((ctor, instance))
     }
 
     /// Reserve a function declaration's callable signature before its body is checked.
@@ -1600,10 +2238,23 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         enclosing: ScopeId,
         func: &Function<'_>,
     ) -> FunctionSurface {
-        let diagnostics_start = self.diagnostics.len();
-        let incomplete_start = self.incomplete.len();
-        let type_params =
-            alloc_type_param_ids(func.type_parameters.as_deref(), &mut self.next_type_param);
+        let retained = self
+            .lexical_events
+            .callable_at(self.current_module_ordinal, func.span.start)
+            .and_then(|site| self.lexical_events.callable(site))
+            .map(|callable| (callable.binding.clone(), callable.tickets));
+        let (type_params, tickets) = match retained {
+            Some((binding, tickets)) => (
+                binding
+                    .expect("reserved callable binders must exist before signature lowering")
+                    .type_params,
+                Some(tickets),
+            ),
+            None => (
+                alloc_type_param_ids(func.type_parameters.as_deref(), &mut self.next_type_param),
+                None,
+            ),
+        };
         let type_param_frame =
             self.build_type_param_frame(func.type_parameters.as_deref(), &type_params);
         let (generic_params, receiver, params, declared_return) =
@@ -1652,8 +2303,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             params: params.clone(),
             ret,
         });
-        let diagnostics = self.diagnostics.split_off(diagnostics_start);
-        let incomplete = self.incomplete.split_off(incomplete_start);
         FunctionSurface {
             receiver,
             params,
@@ -1661,28 +2310,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             type_param_frame,
             declared_return,
             function_ty,
-            diagnostics,
-            incomplete,
-        }
-    }
-
-    /// Replay eager signature-lowering records at the declaration's source position.
-    /// Function expressions and methods call this immediately; declarations defer it
-    /// until their source walk reaches the reserved surface.
-    pub(in crate::check::checker) fn replay_function_surface_records(
-        &mut self,
-        surface: &mut FunctionSurface,
-    ) {
-        self.diagnostics.append(&mut surface.diagnostics);
-        for record in std::mem::take(&mut surface.incomplete) {
-            if self
-                .incomplete
-                .iter()
-                .any(|existing| existing.id == record.id && existing.span == record.span)
-            {
-                continue;
-            }
-            self.incomplete.push(record);
+            tickets,
         }
     }
 
@@ -1690,6 +2318,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// type. Reservation has already installed parameters and constraints, so this
     /// pass visits only the body and cannot duplicate signature diagnostics.
     pub(in crate::check::checker) fn fill_reserved_function(
+        &mut self,
+        enclosing: ScopeId,
+        func: &Function<'_>,
+        surface: &FunctionSurface,
+    ) -> TypeId {
+        match surface.tickets {
+            Some(tickets) => self.with_ticket_effects(tickets.body, |pass| {
+                pass.fill_reserved_function_inner(enclosing, func, surface)
+            }),
+            None => self.fill_reserved_function_inner(enclosing, func, surface),
+        }
+    }
+
+    fn fill_reserved_function_inner(
         &mut self,
         enclosing: ScopeId,
         func: &Function<'_>,
@@ -1705,6 +2347,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .get(&(pass.current_module, func.span.start))
                 .copied();
             let body_scope = fn_scope.unwrap_or(enclosing);
+            pass.bind_retained_parameter_types(fn_scope, &func.params, &surface.params);
             pass.check_reserved_parameter_initializers(body_scope, &func.params, &surface.params);
             let saved_this = pass.current_this;
             if let Some(receiver) = receiver {
@@ -1725,6 +2368,48 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         })
     }
 
+    /// Check the executable part of a callable whose public signature could not be
+    /// completed. Successfully lowered binders and parameters remain available to
+    /// the body, but no partial callable type is interned or published.
+    pub(in crate::check::checker) fn check_retained_function_body(
+        &mut self,
+        enclosing: ScopeId,
+        func: &Function<'_>,
+        surface: RetainedFunctionBodySurface,
+    ) {
+        let RetainedFunctionBodySurface {
+            type_param_frame,
+            receiver,
+            params,
+            declared_return,
+            tickets,
+        } = surface;
+        self.with_ticket_effects(tickets.body, |pass| {
+            pass.with_type_params(type_param_frame, |pass| {
+                let fn_scope = pass
+                    .binder
+                    .fn_scopes
+                    .get(&(pass.current_module, func.span.start))
+                    .copied();
+                let body_scope = fn_scope.unwrap_or(enclosing);
+                pass.bind_partial_retained_parameter_types(fn_scope, &func.params, &params);
+                pass.check_partial_retained_parameter_initializers(
+                    body_scope,
+                    &func.params,
+                    &params,
+                );
+                let saved_this = pass.current_this;
+                if let Some(receiver) = receiver {
+                    pass.current_this = Some(receiver);
+                }
+                if let Some(body) = &func.body {
+                    pass.check_function_body(body_scope, body, declared_return);
+                }
+                pass.current_this = saved_this;
+            });
+        });
+    }
+
     /// Infer a function expression or class member type and check its body. Function
     /// declarations use the reserve/fill split above so their callable surfaces can
     /// be published to forward calls before executable statements are checked.
@@ -1733,8 +2418,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         enclosing: ScopeId,
         func: &Function<'_>,
     ) -> TypeId {
-        let mut surface = self.reserve_function(enclosing, func);
-        self.replay_function_surface_records(&mut surface);
+        let tickets = self
+            .lexical_events
+            .callable_at(self.current_module_ordinal, func.span.start)
+            .and_then(|site| self.lexical_events.callable(site))
+            .map(|callable| callable.tickets);
+        let surface = match tickets {
+            Some(tickets) => self.with_ticket_effects(tickets.signature, |pass| {
+                pass.reserve_function(enclosing, func)
+            }),
+            None => self.reserve_function(enclosing, func),
+        };
         self.fill_reserved_function(enclosing, func, &surface)
     }
 
@@ -1746,39 +2440,59 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         enclosing: ScopeId,
         arrow: &ArrowFunctionExpression<'_>,
     ) -> TypeId {
-        let param_ids =
-            alloc_type_param_ids(arrow.type_parameters.as_deref(), &mut self.next_type_param);
-        let frame = self.build_type_param_frame(arrow.type_parameters.as_deref(), &param_ids);
-        self.with_type_params(frame, |pass| {
-            // M24: lower the parameters' `extends` constraints with the frame active.
-            pass.lower_type_param_constraints(
-                enclosing,
-                arrow.type_parameters.as_deref(),
-                &param_ids,
-            );
-            pass.infer_arrow_inner(enclosing, arrow)
-        })
-    }
-
-    /// The body of [`infer_arrow`], run with any type-parameter frame already pushed.
-    fn infer_arrow_inner(
-        &mut self,
-        enclosing: ScopeId,
-        arrow: &ArrowFunctionExpression<'_>,
-    ) -> TypeId {
-        let fn_scope = self
-            .binder
-            .fn_scopes
-            .get(&(self.current_module, arrow.span.start))
-            .copied();
-        let params = self.lower_parameters(enclosing, fn_scope, &arrow.params, true);
-
-        let declared_ret = match arrow.return_type.as_ref() {
-            Some(ann) => self.lower_annotation(enclosing, &ann.type_annotation),
-            None => None,
+        let retained = self
+            .lexical_events
+            .callable_at(self.current_module_ordinal, arrow.span.start)
+            .and_then(|site| self.lexical_events.callable(site))
+            .map(|callable| (callable.binding.clone(), callable.tickets));
+        let (param_ids, tickets) = match retained {
+            Some((binding, tickets)) => (
+                binding
+                    .expect("reserved callable binders must exist before arrow lowering")
+                    .type_params,
+                Some(tickets),
+            ),
+            None => (
+                alloc_type_param_ids(arrow.type_parameters.as_deref(), &mut self.next_type_param),
+                None,
+            ),
         };
-
-        self.finish_arrow_inference(enclosing, arrow, fn_scope, params, declared_ret)
+        let frame = self.build_type_param_frame(arrow.type_parameters.as_deref(), &param_ids);
+        let lower_signature = |pass: &mut Self| {
+            pass.with_type_params(frame.clone(), |pass| {
+                pass.lower_type_param_constraints(
+                    enclosing,
+                    arrow.type_parameters.as_deref(),
+                    &param_ids,
+                );
+                let fn_scope = pass
+                    .binder
+                    .fn_scopes
+                    .get(&(pass.current_module, arrow.span.start))
+                    .copied();
+                let params = pass.lower_parameters(enclosing, fn_scope, &arrow.params, false);
+                let declared_ret = arrow
+                    .return_type
+                    .as_ref()
+                    .and_then(|ann| pass.lower_annotation(enclosing, &ann.type_annotation));
+                (fn_scope, params, declared_ret)
+            })
+        };
+        let (fn_scope, params, declared_ret) = match tickets {
+            Some(tickets) => self.with_ticket_effects(tickets.signature, lower_signature),
+            None => lower_signature(self),
+        };
+        let fill_body = |pass: &mut Self| {
+            pass.with_type_params(frame, |pass| {
+                let body_scope = fn_scope.unwrap_or(enclosing);
+                pass.check_reserved_parameter_initializers(body_scope, &arrow.params, &params);
+                pass.finish_arrow_inference(enclosing, arrow, fn_scope, params, declared_ret)
+            })
+        };
+        match tickets {
+            Some(tickets) => self.with_ticket_effects(tickets.body, fill_body),
+            None => fill_body(self),
+        }
     }
 
     /// Re-infer a non-generic arrow against a function parameter's shape. This is
@@ -1914,22 +2628,35 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 // With a declared return type, the body expression is checked against
                 // it (primary span = the expression), like a `return <expr>`.
                 (Some(ret), Some((src, src_span))) => {
-                    check_excess_properties(
-                        self.interner.store(),
-                        body_expr,
-                        ret,
-                        &mut self.diagnostics,
-                    );
-                    self.obligations.push(AssignObligation {
-                        src,
-                        tgt: ret,
-                        src_span,
-                        kind: ObligationKind::Assignment,
-                    });
+                    let target_ready = match self.check_excess_properties_for_target(body_expr, ret)
+                    {
+                        DemandOutcome::Ready(diagnostics) => {
+                            for diagnostic in diagnostics {
+                                self.emit_diagnostic(diagnostic);
+                            }
+                            true
+                        }
+                        DemandOutcome::Exhausted(exhaustion) => {
+                            self.own_type_demand(DemandOutcome::Exhausted(exhaustion), src_span);
+                            false
+                        }
+                    };
+                    if target_ready {
+                        self.schedule_obligation(AssignObligation {
+                            src,
+                            tgt: ret,
+                            src_span,
+                            kind: ObligationKind::Assignment,
+                        });
+                    }
                     None
                 }
                 // No annotation: infer the return type from the body, widened.
                 (None, Some((value_ty, _))) => Some(widen(self.interner, value_ty)),
+                // An expression body that could not produce a type is not a
+                // value-less body; retain recovery so the missing child cannot
+                // fabricate a `void` return and trigger a cascading relation.
+                (None, None) => Some(self.interner.well_known().error),
                 _ => None,
             }
         } else {
@@ -1980,7 +2707,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // annotation resolves in the enclosing class context.
             if let BindingPattern::ObjectPattern(object) = &param.pattern {
                 if param.type_annotation.is_some() {
-                    self.check_object_pattern_access(object, ty);
+                    match self.demand_apparent_type(ty) {
+                        DemandOutcome::Ready(source) => {
+                            self.check_object_pattern_access(object, source);
+                        }
+                        DemandOutcome::Exhausted(exhaustion) => {
+                            self.own_type_demand(
+                                DemandOutcome::Exhausted(exhaustion),
+                                Span::from_oxc(object.span),
+                            );
+                        }
+                    }
                 }
             }
 
@@ -2049,6 +2786,91 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
+    fn bind_retained_parameter_types(
+        &mut self,
+        fn_scope: Option<ScopeId>,
+        params: &FormalParameters<'_>,
+        lowered: &[ParameterType],
+    ) {
+        let Some(scope) = fn_scope else {
+            return;
+        };
+        for (parameter, lowered) in params.items.iter().zip(lowered) {
+            let Some(decl_id) = parameter_name(&parameter.pattern)
+                .and_then(|name| self.binder.resolve_value(scope, &name))
+                .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
+                .and_then(|symbol| symbol.value)
+            else {
+                continue;
+            };
+            self.decl_types.set(decl_id, lowered.ty);
+        }
+        if let (Some(rest), Some(lowered)) = (params.rest.as_ref(), lowered.get(params.items.len()))
+        {
+            let Some(decl_id) = parameter_name(&rest.rest.argument)
+                .and_then(|name| self.binder.resolve_value(scope, &name))
+                .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
+                .and_then(|symbol| symbol.value)
+            else {
+                return;
+            };
+            self.decl_types.set(decl_id, lowered.ty);
+        }
+    }
+
+    fn bind_partial_retained_parameter_types(
+        &mut self,
+        fn_scope: Option<ScopeId>,
+        params: &FormalParameters<'_>,
+        lowered: &[Option<ParameterType>],
+    ) {
+        let Some(scope) = fn_scope else {
+            return;
+        };
+        for (parameter, lowered) in params.items.iter().zip(lowered) {
+            let Some(lowered) = lowered else {
+                continue;
+            };
+            let Some(decl_id) = parameter_name(&parameter.pattern)
+                .and_then(|name| self.binder.resolve_value(scope, &name))
+                .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
+                .and_then(|symbol| symbol.value)
+            else {
+                continue;
+            };
+            self.decl_types.set(decl_id, lowered.ty);
+        }
+        if let (Some(rest), Some(Some(lowered))) =
+            (params.rest.as_ref(), lowered.get(params.items.len()))
+        {
+            let Some(decl_id) = parameter_name(&rest.rest.argument)
+                .and_then(|name| self.binder.resolve_value(scope, &name))
+                .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
+                .and_then(|symbol| symbol.value)
+            else {
+                return;
+            };
+            self.decl_types.set(decl_id, lowered.ty);
+        }
+    }
+
+    fn check_partial_retained_parameter_initializers(
+        &mut self,
+        scope: ScopeId,
+        params: &FormalParameters<'_>,
+        lowered: &[Option<ParameterType>],
+    ) {
+        for (param, lowered) in params.items.iter().zip(lowered) {
+            if let Some(initializer) = &param.initializer {
+                self.check_annotated_initializer(
+                    scope,
+                    lowered.as_ref().map(|lowered| lowered.ty),
+                    initializer,
+                );
+            }
+        }
+    }
+
     /// Walk a function body, checking returns against a declared type or inferring
     /// the first value return's widened type. Missing-return analysis (`TK2355`)
     /// remains deferred.
@@ -2076,6 +2898,7 @@ struct CallCandidate {
     receiver: Option<TypeId>,
     params: Vec<ParameterType>,
     ret: TypeId,
+    inference_exhaustion: Option<Exhaustion>,
 }
 
 #[derive(Copy, Clone)]
@@ -2090,7 +2913,6 @@ struct SignatureCandidateRequest<'a, 'ast> {
     signature_ty: TypeId,
     type_arguments: Option<&'a TSTypeParameterInstantiation<'ast>>,
     args: PreparedCallArgs<'a, 'ast>,
-    call_span: Span,
     call_receiver: Option<TypeId>,
     commit_constraints: bool,
 }
@@ -2099,10 +2921,12 @@ enum CandidateTrial {
     Match,
     Arity(CallArity),
     Mismatch,
+    Exhausted(Exhaustion),
 }
 
 enum CandidateBuildFailure {
-    Constraint(Vec<Diagnostic>),
+    Constraint,
+    Exhausted(Exhaustion),
     Unavailable,
 }
 
@@ -2181,6 +3005,25 @@ fn is_fresh_literal(expr: &Expression<'_>) -> bool {
         Expression::ParenthesizedExpression(paren) => is_fresh_literal(&paren.expression),
         _ => false,
     }
+}
+
+fn class_declares_constructor(class: &oxc_ast::ast::Class<'_>) -> bool {
+    class_constructor_declaration_count(class) > 0
+}
+
+fn class_constructor_declaration_count(class: &oxc_ast::ast::Class<'_>) -> usize {
+    class
+        .body
+        .body
+        .iter()
+        .filter(|element| {
+            matches!(
+                element,
+                oxc_ast::ast::ClassElement::MethodDefinition(method)
+                    if method.kind == oxc_ast::ast::MethodDefinitionKind::Constructor
+            )
+        })
+        .count()
 }
 
 /// The parameter name of a binding pattern, if it is a plain identifier. `None`

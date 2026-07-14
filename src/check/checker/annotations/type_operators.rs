@@ -29,8 +29,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // surface so m5 recursion through object members stays legal.
         if let Some((decl_id, alias_span, name)) = self.resolving_conditional_alias.clone() {
             if self.check_surface_references(scope, &cond.check_type, decl_id) {
-                self.diagnostics
-                    .push(Diagnostic::circular_type_alias(alias_span, &name));
+                self.emit_diagnostic(Diagnostic::circular_type_alias(alias_span, &name));
                 return Some(error_ty);
             }
         }
@@ -88,7 +87,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             poisoned,
         });
         let span = Span::from_oxc(cond.span);
-        Some(self.maybe_evaluate(id, span))
+        self.maybe_evaluate(id, span)
     }
 
     /// Lower `infer U` into the innermost active conditional frame. Repeated names
@@ -160,7 +159,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         let id = self.interner.intern_template(TemplateType { texts, holes });
         let span = Span::from_oxc(template.span);
-        Some(self.maybe_evaluate(id, span))
+        self.maybe_evaluate(id, span)
     }
 
     /// Whether the conditional check type `check` surface-references the alias `decl_id`
@@ -213,11 +212,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// Evaluate `ty` at a demand site unless a **template** body is being lowered (M25).
     /// A template's conditional must survive as its interned node until instantiated;
     /// a value-position type is resolved eagerly.
-    pub(in crate::check::checker) fn maybe_evaluate(&mut self, ty: TypeId, span: Span) -> TypeId {
+    pub(in crate::check::checker) fn maybe_evaluate(
+        &mut self,
+        ty: TypeId,
+        span: Span,
+    ) -> Option<TypeId> {
         if self.building_template {
-            ty
+            Some(ty)
         } else {
-            self.evaluate_type(ty, span)
+            let outcome = self.evaluate_type(ty);
+            self.own_type_demand(outcome, span)
         }
     }
 
@@ -261,8 +265,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // documented but omitted.
         if let Some((decl_id, alias_span, name)) = self.resolving_alias.clone() {
             if self.check_surface_references(scope, key_surface, decl_id) {
-                self.diagnostics
-                    .push(Diagnostic::circular_type_alias(alias_span, &name));
+                self.emit_diagnostic(Diagnostic::circular_type_alias(alias_span, &name));
                 return Some(self.interner.well_known().error);
             }
         }
@@ -309,7 +312,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             readonly_modifier: modifier_op(mapped.readonly),
         });
         let span = Span::from_oxc(mapped.span);
-        Some(self.maybe_evaluate(id, span))
+        self.maybe_evaluate(id, span)
     }
 
     /// The interned type-parameter id a bare `TSTypeReference` (no type arguments)
@@ -369,7 +372,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
         let wk = self.interner.well_known();
         match self.interner.store().tag(operand) {
-            TypeTag::TypeParam
+            TypeTag::ClassInstance
+            | TypeTag::TypeParam
             | TypeTag::Conditional
             | TypeTag::Instantiation
             | TypeTag::Mapped

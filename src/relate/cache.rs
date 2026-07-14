@@ -29,7 +29,7 @@ impl RelationKey {
 
 /// Maps a decided relation to its boolean verdict; failure reasons are rebuilt by
 /// the engine so the hot cache stays compact.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct RelationCache {
     entries: FxHashMap<RelationKey, bool>,
 }
@@ -47,6 +47,12 @@ impl RelationCache {
     #[inline]
     pub fn insert(&mut self, key: RelationKey, verdict: bool) {
         self.entries.insert(key, verdict);
+    }
+
+    /// Promote a completed query's local decisions into this durable cache.
+    /// Exhausted or otherwise tainted queries drop their local cache instead.
+    pub(crate) fn promote(&mut self, pending: RelationCache) {
+        self.entries.extend(pending.entries);
     }
 
     /// Number of cached relations (used by tests / future cache-pressure tuning).

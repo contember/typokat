@@ -6,7 +6,7 @@ use crate::types::repr::{
 
 /// The per-inference recursion state: the cycle guard for structural matching, plus
 /// the **collection mode** (M25). Built once per entry-point call and dropped after.
-pub(super) struct InferenceContext {
+pub(super) struct InferenceContext<'query> {
     /// `(source, target)` id pairs currently on the recursion stack. Re-entering a
     /// pair short-circuits (it is already contributing candidates further up). See
     /// the module docs.
@@ -16,27 +16,36 @@ pub(super) struct InferenceContext {
     /// array member (same-name contributions union). Call-site inference keeps only the
     /// M10 equal-length pairwise union rule (no behavior change for m10).
     union_target_descent: bool,
+    normalization: Option<&'query dyn crate::relate::RelationNormalization>,
+    exhaustion: Option<crate::class_semantics::Exhaustion>,
 }
 
-impl InferenceContext {
+impl<'query> InferenceContext<'query> {
     /// Conditional-`infer` mode (M25): a union extends target collects from its
     /// members; a template-pattern target captures `infer` holes (M27).
     pub(super) fn for_conditional() -> Self {
         InferenceContext {
             visited: FxHashSet::default(),
             union_target_descent: true,
+            normalization: None,
+            exhaustion: None,
         }
     }
 
-    /// Call-site **raw** mode (M10, refined M24/M27): no union-target descent.
-    /// Candidates are always recorded **un-widened** in both modes — call-site
-    /// widening is the call-site fixer job (per parameter, skipping a
-    /// primitive-constrained one); the conditional evaluator never widens.
-    pub(super) fn for_call_raw() -> Self {
+    pub(super) fn for_query(
+        union_target_descent: bool,
+        normalization: &'query dyn crate::relate::RelationNormalization,
+    ) -> Self {
         InferenceContext {
             visited: FxHashSet::default(),
-            union_target_descent: false,
+            union_target_descent,
+            normalization: Some(normalization),
+            exhaustion: None,
         }
+    }
+
+    pub(super) fn take_exhaustion(&mut self) -> Option<crate::class_semantics::Exhaustion> {
+        self.exhaustion.take()
     }
 
     /// Match `source` against `target`, recording candidates. The dispatch on the
@@ -49,6 +58,28 @@ impl InferenceContext {
         target: TypeId,
         candidates: &mut Candidates,
     ) {
+        if self.exhaustion.is_some() {
+            return;
+        }
+        let (source, target) = if let Some(normalization) = self.normalization {
+            let source = match normalization.normalize(source) {
+                Ok(source) => source,
+                Err(reason) => {
+                    self.exhaustion = Some(reason);
+                    return;
+                }
+            };
+            let target = match normalization.normalize(target) {
+                Ok(target) => target,
+                Err(reason) => {
+                    self.exhaustion = Some(reason);
+                    return;
+                }
+            };
+            (source, target)
+        } else {
+            (source, target)
+        };
         // A target type parameter is the one place a candidate is recorded — always
         // AS-IS (raw). Call-site widening happens at fix time (per
         // parameter); conditional-`infer` extraction never widens (tsc keeps `"x"` —

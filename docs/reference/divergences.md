@@ -199,6 +199,23 @@ Implemented: fields/constructor/methods/`this`/`new`/structural instances (M11);
 completeness (`TK2515`/`TK2654`) (b06); private/protected constructor accessibility (`TK2673`/
 `TK2674`) (b20).
 
+- **Unsupported unannotated class-field initializer inference (over-report).** The atomic class
+  surface pass accepts a deliberately bounded pure-expression subset. Other unannotated
+  initializers record an incomplete outcome and poison the class where tsc can infer their types.
+  <!-- div: id=classes/unannotated-field-initializer-inference dir=over scope=b-semantic-candidate-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/sr_semantic_duplication/class_initializer_unsupported.ts -->
+- **Source class type-parameter defaults (over-report).** A class application that needs a
+  source-authored default records a typed incomplete outcome where tsc substitutes the default.
+  Explicit complete type-argument vectors remain supported.
+  <!-- div: id=classes/source-type-parameter-defaults dir=over scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/sr_semantic_duplication/class_application_contract.ts -->
+- **Unavailable generic-constructor inference (over-report).** When constructor candidates cannot
+  provide every class type argument, typokat records an incomplete outcome instead of constructing
+  a partial or recovery-filled application; tsc accepts the corresponding unresolved inference.
+  <!-- div: id=classes/generic-constructor-inference-unavailable dir=over scope=b-semantic-candidate-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/sr_semantic_duplication/class_application_contract.ts -->
+- **Recursive class-projection frontier (over-report).** typokat conservatively rejects a semantic
+  query after 128 distinct class applications and records its projection-budget outcome; tsc's
+  recursive cutoff accepts some infinitely matching structural pairs.
+  <!-- div: id=classes/recursive-projection-budget dir=over scope=s-assignability owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/sr_semantic_duplication/class_projection_exhaustion.ts -->
+
 - **Unannotated class-method returns are externally `void`.** Class fill publishes an omitted method
   return annotation as `void`; source-order body checking does not replace that public member type.
   Exact demand-driven value types belong to backlog `76`, and the reserved-surface refactor preserves
