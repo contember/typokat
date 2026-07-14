@@ -19,7 +19,7 @@ use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Declaration, ExportSpecifier, ImportOrExportKind, ModuleExportName, Program, Statement,
+    Declaration, ExportSpecifier, ImportOrExportKind, ModuleExportName, Program, Statement, TSType,
 };
 use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType};
@@ -57,7 +57,7 @@ struct PassReporting {
     suppress_effects: bool,
 }
 
-fn reserve_reporting(
+fn reserve_internal_reporting(
     program: &Program<'_>,
     module_ordinal: ModuleOrdinal,
     unit_slot: UnitSlot,
@@ -72,12 +72,180 @@ fn reserve_reporting(
         unit_slot,
         event_store,
         lexical_events,
-        suppress_effects: true,
+        suppress_effects: false,
     }
 }
 
 /// Trusted utility aliases and bounded ambient values, checked before user code.
 pub(crate) const PRELUDE_SOURCE: &str = include_str!("../../prelude.ts");
+
+const TRUSTED_PRELUDE_INTRINSICS: [&str; 6] = [
+    "OmitThisParameter",
+    "Uppercase",
+    "Lowercase",
+    "Capitalize",
+    "Uncapitalize",
+    "ThisType",
+];
+
+fn expected_trusted_prelude_incomplete(
+    binder: &Binder,
+    program: &Program<'_>,
+) -> Option<Vec<IncompleteSurface>> {
+    let mut valid = true;
+    let mut seen = FxHashSet::default();
+    let mut expected = Vec::with_capacity(TRUSTED_PRELUDE_INTRINSICS.len());
+    walk_type_decls(
+        binder,
+        binder.prelude_module,
+        program,
+        &mut |scope, _, declaration| {
+            let TopTypeDecl::Alias(alias) = declaration else {
+                return;
+            };
+            let name = alias.id.name.as_str();
+            if !TRUSTED_PRELUDE_INTRINSICS.contains(&name) {
+                return;
+            }
+            let TSType::TSIntrinsicKeyword(keyword) = &alias.type_annotation else {
+                valid = false;
+                return;
+            };
+            if scope != binder.prelude_module || !seen.insert(name.to_string()) {
+                valid = false;
+                return;
+            }
+            expected.push(IncompleteSurface::new(
+                "annotation-lower/intrinsic-keyword/self",
+                Span::from_oxc(keyword.span),
+                "intrinsic keyword type not modeled",
+            ));
+        },
+    );
+    if valid
+        && TRUSTED_PRELUDE_INTRINSICS
+            .iter()
+            .all(|name| seen.contains(*name))
+    {
+        Some(expected)
+    } else {
+        None
+    }
+}
+
+fn trusted_prelude_records_are_clean(
+    binder: &Binder,
+    program: &Program<'_>,
+    records: &BTreeMap<ModuleOrdinal, (Vec<Diagnostic>, Vec<IncompleteSurface>)>,
+) -> bool {
+    let Some(expected_incomplete) = expected_trusted_prelude_incomplete(binder, program) else {
+        return false;
+    };
+    let Some((diagnostics, incomplete)) = records.get(&ModuleOrdinal::new(0)) else {
+        return false;
+    };
+    records.len() == 1 && diagnostics.is_empty() && incomplete == &expected_incomplete
+}
+
+/// Lifetime-free state handed from the trusted prelude pass to user checking.
+struct TrustedPreludeHandoff {
+    /// Ordered by prelude type-space `DeclId`, preserving the user table prefix.
+    type_decl_params: Vec<Vec<TypeParamId>>,
+    type_resolved: Vec<Option<TypeId>>,
+    decl_types: DeclTypes,
+    next_type_param: u32,
+    next_class_id: u32,
+}
+
+/// Parse, bind, and check the trusted prelude in the caller's run-local type universe.
+fn bootstrap_trusted_prelude(
+    interner: &mut Interner,
+    bind: impl FnOnce(&Program<'_>) -> Binder,
+) -> (Binder, TrustedPreludeHandoff) {
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, PRELUDE_SOURCE, SourceType::ts()).parse();
+    debug_assert!(
+        !parsed.panicked && parsed.diagnostics.is_empty(),
+        "the prelude must parse clean: {:?}",
+        parsed.diagnostics
+    );
+
+    let binder = bind(&parsed.program);
+    let mut next_type_param = 0;
+    let mut next_class_id = 0;
+    let mut type_resolved = vec![None; binder.type_decl_count as usize];
+    let mut type_decls = Vec::new();
+    reserve_type_decls(
+        interner,
+        &binder,
+        binder.prelude_module,
+        &parsed.program,
+        &mut next_type_param,
+        &mut next_class_id,
+        &mut type_decls,
+        &mut type_resolved,
+    );
+
+    let prelude_ordinal = ModuleOrdinal::new(0);
+    let prelude_slot = UnitSlot::new(0);
+    // Capture into an isolated store so cleanliness is checked without leaking records.
+    let mut reporting = reserve_internal_reporting(&parsed.program, prelude_ordinal, prelude_slot);
+    attach_type_decl_owners(
+        &mut reporting.lexical_events,
+        prelude_ordinal,
+        &binder,
+        binder.prelude_module,
+        &parsed.program,
+    );
+    let mut pass = build_pass_with_reporting(
+        interner,
+        &binder,
+        type_decls,
+        type_resolved,
+        DeclTypes::new(binder.decl_count),
+        next_type_param,
+        reporting,
+    );
+    pass.current_module = binder.prelude_module;
+    pass.fill_type_decls(binder.prelude_module);
+    pass.build_flow_graph(binder.prelude_module, &parsed.program.body);
+    pass.check_statements(binder.prelude_module, &parsed.program.body);
+
+    let records = finish_event_effects(&mut pass);
+    debug_assert!(
+        trusted_prelude_records_are_clean(&binder, &parsed.program, &records),
+        "the prelude must check clean: {records:?}"
+    );
+
+    let type_decl_params = pass
+        .type_decls
+        .iter()
+        .map(|decl| match decl {
+            TypeDecl::Interface { params, .. }
+            | TypeDecl::Alias { params, .. }
+            | TypeDecl::Class { params, .. }
+            | TypeDecl::Resolved { params } => params.clone(),
+        })
+        .collect();
+    let Pass {
+        mut type_resolved,
+        decl_types,
+        next_type_param,
+        ..
+    } = pass;
+    seed_prelude_intrinsics(interner, &binder, &mut type_resolved);
+
+    (
+        binder,
+        TrustedPreludeHandoff {
+            type_decl_params,
+            type_resolved,
+            decl_types,
+            next_type_param,
+            next_class_id,
+        },
+    )
+}
 
 /// The structured outcome of checking one module: type diagnostics plus the third
 /// incomplete-surface channel (in-scope AST positions the checker skipped). An empty
@@ -128,17 +296,6 @@ fn emit_test_incomplete(pass: &mut Pass<'_, '_>) {
 
 /// Check a parsed program and return the diagnostics plus incomplete surfaces it produces.
 pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>) -> CheckResult {
-    // Build the prelude in the same type universe; user code keeps only lifetime-free
-    // resolved placeholders for its declarations.
-    let prelude_allocator = Allocator::default();
-    let prelude_parsed = Parser::new(&prelude_allocator, PRELUDE_SOURCE, SourceType::ts()).parse();
-    debug_assert!(
-        !prelude_parsed.panicked && prelude_parsed.diagnostics.is_empty(),
-        "the prelude must parse clean: {:?}",
-        prelude_parsed.diagnostics
-    );
-
-    let binder = bind_module_with_prelude(&prelude_parsed.program, program);
     let module_ordinal = ModuleOrdinal::new(0);
     let unit_slot = UnitSlot::new(0);
     let mut event_store = EventStore::default();
@@ -147,99 +304,21 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
         .reserve_program(module_ordinal, unit_slot, program, &mut event_store)
         .expect("lexical event reservation must reference valid events");
 
-    // Reserve type ids before lowering bodies so recursive declarations store ids, not
-    // expanded structures.
-    let mut next_type_param: u32 = 0;
-    // Stable class ids are allocated in declaration order.
-    let mut next_class_id: u32 = 0;
-    let total_type_decls = binder.type_decl_count as usize;
-    let mut type_resolved: Vec<Option<TypeId>> = vec![None; total_type_decls];
-
-    // Fill prelude declarations in the prelude scope so user shadows cannot capture
-    // their internal references.
-    let mut prelude_decls: Vec<TypeDecl> = Vec::new();
-    reserve_type_decls(
-        interner,
-        &binder,
-        binder.prelude_module,
-        &prelude_parsed.program,
-        &mut next_type_param,
-        &mut next_class_id,
-        &mut prelude_decls,
-        &mut type_resolved,
-    );
-    let mut prelude_reporting = reserve_reporting(
-        &prelude_parsed.program,
-        ModuleOrdinal::new(0),
-        UnitSlot::new(0),
-    );
-    attach_type_decl_owners(
-        &mut prelude_reporting.lexical_events,
-        ModuleOrdinal::new(0),
-        &binder,
-        binder.prelude_module,
-        &prelude_parsed.program,
-    );
-    let mut prelude_pass = build_pass_with_reporting(
-        interner,
-        &binder,
-        prelude_decls,
-        type_resolved,
-        DeclTypes::new(binder.decl_count),
-        next_type_param,
-        prelude_reporting,
-    );
-    prelude_pass.current_module = binder.prelude_module;
-    prelude_pass.fill_type_decls(binder.prelude_module);
-    prelude_pass.build_flow_graph(binder.prelude_module, &prelude_parsed.program.body);
-    prelude_pass.check_statements(binder.prelude_module, &prelude_parsed.program.body);
-    let prelude_records = finish_event_effects(&mut prelude_pass);
-    debug_assert!(
-        prelude_records
-            .values()
-            .all(|(diagnostics, incomplete)| diagnostics.is_empty() && incomplete.is_empty()),
-        "the prelude must check clean"
-    );
-    // Extract lifetime-free outputs before the prelude AST borrow goes away.
-    let prelude_params: Vec<Vec<TypeParamId>> = prelude_pass
-        .type_decls
-        .iter()
-        .map(|decl| match decl {
-            TypeDecl::Interface { params, .. }
-            | TypeDecl::Alias { params, .. }
-            | TypeDecl::Class { params, .. }
-            | TypeDecl::Resolved { params } => params.clone(),
-        })
-        .collect();
-    let Pass {
-        mut type_resolved,
-        decl_types,
-        next_type_param: prelude_next_type_param,
-        ..
-    } = prelude_pass;
-    next_type_param = prelude_next_type_param;
-
-    // Seed trusted intrinsic aliases after their constraints have been recorded normally.
-    {
-        let wk = interner.well_known();
-        for (name, marker) in [
-            ("Uppercase", wk.uppercase),
-            ("Lowercase", wk.lowercase),
-            ("Capitalize", wk.capitalize),
-            ("Uncapitalize", wk.uncapitalize),
-            ("ThisType", wk.this_type),
-            ("OmitThisParameter", wk.omit_this_parameter),
-        ] {
-            if let Some(decl_id) = type_decl_id(&binder, binder.prelude_module, name) {
-                if let Some(slot) = type_resolved.get_mut(decl_id.index()) {
-                    *slot = Some(marker);
-                }
-            }
-        }
-    }
+    let (
+        binder,
+        TrustedPreludeHandoff {
+            type_decl_params,
+            mut type_resolved,
+            decl_types,
+            mut next_type_param,
+            mut next_class_id,
+        },
+    ) = bootstrap_trusted_prelude(interner, |prelude| {
+        bind_module_with_prelude(prelude, program)
+    });
 
     // User declarations append after prelude placeholders, preserving binder DeclId indices.
-    let mut type_decls: Vec<TypeDecl<'ast>> = prelude_params
+    let mut type_decls: Vec<TypeDecl<'ast>> = type_decl_params
         .into_iter()
         .map(|params| TypeDecl::Resolved { params })
         .collect();
@@ -353,14 +432,6 @@ pub fn check_project_programs<'ast>(
     interner: &mut Interner,
     units: &[ProjectProgram<'ast>],
 ) -> Vec<CheckResult> {
-    let prelude_allocator = Allocator::default();
-    let prelude_parsed = Parser::new(&prelude_allocator, PRELUDE_SOURCE, SourceType::ts()).parse();
-    debug_assert!(
-        !prelude_parsed.panicked && prelude_parsed.diagnostics.is_empty(),
-        "the prelude must parse clean: {:?}",
-        prelude_parsed.diagnostics
-    );
-
     let mut event_store = EventStore::default();
     let mut lexical_events = LexicalReservations::default();
     for (slot, unit) in units.iter().enumerate() {
@@ -375,100 +446,41 @@ pub fn check_project_programs<'ast>(
             .expect("lexical event reservation must reference valid events");
     }
 
-    let mut builder = ProjectBinderBuilder::new(&prelude_parsed.program);
     let mut module_scopes = Vec::with_capacity(units.len());
     let mut module_placeholders: Vec<Vec<ImportPlaceholder>> = Vec::with_capacity(units.len());
     let mut external_effects: BTreeMap<RecordTicket, CandidateEffects> = BTreeMap::new();
-    let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
+    let (
+        binder,
+        TrustedPreludeHandoff {
+            type_decl_params,
+            mut type_resolved,
+            mut decl_types,
+            mut next_type_param,
+            mut next_class_id,
+        },
+    ) = bootstrap_trusted_prelude(interner, |prelude| {
+        let mut builder = ProjectBinderBuilder::new(prelude);
+        let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
+        for unit in units {
+            let imports = imported_symbols(unit, &exports, &lexical_events, &mut external_effects);
+            let (scope, placeholders) = builder.add_module(unit.program, &imports);
+            let surface = collect_exports(
+                &builder,
+                scope,
+                unit.program,
+                unit.module_ordinal,
+                &lexical_events,
+                &mut external_effects,
+            );
+            module_scopes.push(scope);
+            module_placeholders.push(placeholders);
+            exports.push(surface);
+        }
+        let binder_module = module_scopes.last().copied().unwrap_or(ScopeId(0));
+        builder.finish(binder_module)
+    });
 
-    for unit in units {
-        let imports = imported_symbols(unit, &exports, &lexical_events, &mut external_effects);
-        let (scope, placeholders) = builder.add_module(unit.program, &imports);
-        let surface = collect_exports(
-            &builder,
-            scope,
-            unit.program,
-            unit.module_ordinal,
-            &lexical_events,
-            &mut external_effects,
-        );
-        module_scopes.push(scope);
-        module_placeholders.push(placeholders);
-        exports.push(surface);
-    }
-
-    let binder_module = module_scopes.last().copied().unwrap_or(ScopeId(0));
-    let binder = builder.finish(binder_module);
-
-    let mut next_type_param: u32 = 0;
-    let mut next_class_id: u32 = 0;
-    let total_type_decls = binder.type_decl_count as usize;
-    let mut type_resolved: Vec<Option<TypeId>> = vec![None; total_type_decls];
-
-    let mut prelude_decls: Vec<TypeDecl> = Vec::new();
-    reserve_type_decls(
-        interner,
-        &binder,
-        binder.prelude_module,
-        &prelude_parsed.program,
-        &mut next_type_param,
-        &mut next_class_id,
-        &mut prelude_decls,
-        &mut type_resolved,
-    );
-    let mut prelude_reporting = reserve_reporting(
-        &prelude_parsed.program,
-        ModuleOrdinal::new(0),
-        UnitSlot::new(0),
-    );
-    attach_type_decl_owners(
-        &mut prelude_reporting.lexical_events,
-        ModuleOrdinal::new(0),
-        &binder,
-        binder.prelude_module,
-        &prelude_parsed.program,
-    );
-    let mut prelude_pass = build_pass_with_reporting(
-        interner,
-        &binder,
-        prelude_decls,
-        type_resolved,
-        DeclTypes::new(binder.decl_count),
-        next_type_param,
-        prelude_reporting,
-    );
-    prelude_pass.current_module = binder.prelude_module;
-    prelude_pass.fill_type_decls(binder.prelude_module);
-    prelude_pass.build_flow_graph(binder.prelude_module, &prelude_parsed.program.body);
-    prelude_pass.check_statements(binder.prelude_module, &prelude_parsed.program.body);
-    let prelude_records = finish_event_effects(&mut prelude_pass);
-    debug_assert!(
-        prelude_records
-            .values()
-            .all(|(diagnostics, incomplete)| diagnostics.is_empty() && incomplete.is_empty()),
-        "the prelude must check clean"
-    );
-    let prelude_params: Vec<Vec<TypeParamId>> = prelude_pass
-        .type_decls
-        .iter()
-        .map(|decl| match decl {
-            TypeDecl::Interface { params, .. }
-            | TypeDecl::Alias { params, .. }
-            | TypeDecl::Class { params, .. }
-            | TypeDecl::Resolved { params } => params.clone(),
-        })
-        .collect();
-    let Pass {
-        mut type_resolved,
-        mut decl_types,
-        next_type_param: prelude_next_type_param,
-        ..
-    } = prelude_pass;
-    next_type_param = prelude_next_type_param;
-
-    seed_prelude_intrinsics(interner, &binder, &mut type_resolved);
-
-    let mut type_decls: Vec<TypeDecl<'ast>> = prelude_params
+    let mut type_decls: Vec<TypeDecl<'ast>> = type_decl_params
         .into_iter()
         .map(|params| TypeDecl::Resolved { params })
         .collect();

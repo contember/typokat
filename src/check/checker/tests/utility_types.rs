@@ -2,8 +2,18 @@
 //! Pins clean prelude checking, user shadowing, and `Pick` modifier-source
 //! preservation. Fixture acceptance lives in `m28_utility_types/`.
 
-use crate::check::checker::PRELUDE_SOURCE;
+use super::super::{
+    expected_trusted_prelude_incomplete, trusted_prelude_records_are_clean, PRELUDE_SOURCE,
+};
+use crate::binder::bind_module_with_prelude;
+use crate::check::checker::events::ModuleOrdinal;
+use crate::diagnostics::Diagnostic;
 use crate::driver::{check_project, check_source, FileInput};
+use crate::span::Span;
+use oxc_allocator::Allocator;
+use oxc_parser::Parser;
+use oxc_span::SourceType;
+use std::collections::BTreeMap;
 
 /// Run the checker and return the sorted `(1-based line, code)` of every
 /// diagnostic, keyed on its primary-span start line (matching the conformance
@@ -69,6 +79,87 @@ fn prelude_checks_clean() {
         diags(PRELUDE_SOURCE).is_empty(),
         "the prelude source must also check clean as ordinary user code"
     );
+}
+
+#[test]
+fn trusted_prelude_cleanliness_allowlist_is_exact() {
+    let prelude_allocator = Allocator::default();
+    let prelude = Parser::new(&prelude_allocator, PRELUDE_SOURCE, SourceType::ts()).parse();
+    let user_allocator = Allocator::default();
+    let user = Parser::new(&user_allocator, "", SourceType::ts()).parse();
+    let binder = bind_module_with_prelude(&prelude.program, &user.program);
+    let expected = expected_trusted_prelude_incomplete(&binder, &prelude.program);
+    assert!(
+        expected.is_some(),
+        "the trusted intrinsic aliases must have intrinsic bodies"
+    );
+    let Some(expected) = expected else {
+        return;
+    };
+    assert_eq!(expected.len(), 6);
+
+    let clean = BTreeMap::from([(ModuleOrdinal::new(0), (Vec::new(), expected.clone()))]);
+    assert!(trusted_prelude_records_are_clean(
+        &binder,
+        &prelude.program,
+        &clean
+    ));
+
+    let mut missing = clean.clone();
+    if let Some((_, incomplete)) = missing.get_mut(&ModuleOrdinal::new(0)) {
+        incomplete.pop();
+    }
+    assert!(!trusted_prelude_records_are_clean(
+        &binder,
+        &prelude.program,
+        &missing
+    ));
+
+    let mut extra = clean.clone();
+    if let Some((_, incomplete)) = extra.get_mut(&ModuleOrdinal::new(0)) {
+        if let Some(record) = incomplete.first().cloned() {
+            incomplete.push(record);
+        }
+    }
+    assert!(!trusted_prelude_records_are_clean(
+        &binder,
+        &prelude.program,
+        &extra
+    ));
+
+    let mut wrong_id = clean.clone();
+    if let Some((_, incomplete)) = wrong_id.get_mut(&ModuleOrdinal::new(0)) {
+        if let Some(record) = incomplete.first_mut() {
+            record.id = "annotation-lower/intrinsic-keyword/other".to_string();
+        }
+    }
+    assert!(!trusted_prelude_records_are_clean(
+        &binder,
+        &prelude.program,
+        &wrong_id
+    ));
+
+    let mut wrong_span = clean.clone();
+    if let Some((_, incomplete)) = wrong_span.get_mut(&ModuleOrdinal::new(0)) {
+        if let Some(record) = incomplete.first_mut() {
+            record.span = Span::new(0, 0);
+        }
+    }
+    assert!(!trusted_prelude_records_are_clean(
+        &binder,
+        &prelude.program,
+        &wrong_span
+    ));
+
+    let mut diagnostic = clean;
+    if let Some((diagnostics, _)) = diagnostic.get_mut(&ModuleOrdinal::new(0)) {
+        diagnostics.push(Diagnostic::cannot_find_name(Span::new(0, 0), "Broken"));
+    }
+    assert!(!trusted_prelude_records_are_clean(
+        &binder,
+        &prelude.program,
+        &diagnostic
+    ));
 }
 
 /// Single-file and one-module project bootstrap must expose identical trusted surfaces.
