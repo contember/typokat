@@ -62,6 +62,55 @@ fn extends_ready(
     }
 }
 
+fn expected_infer_rewrite_measure(
+    top_level_runs: u64,
+    visits: u64,
+    memo_inserts: u64,
+) -> super::instantiation::InferRewriteMeasure {
+    super::instantiation::InferRewriteMeasure {
+        top_level_runs,
+        visits,
+        memo_hits: 0,
+        memo_inserts,
+        reentries: 0,
+        tainted_identity_returns: 0,
+    }
+}
+
+fn assert_evaluator_state(
+    evaluator: &ConditionalEvaluator<'_>,
+    cycle_detected: bool,
+    exhausted: bool,
+) {
+    assert!(evaluator.in_flight.is_empty());
+    assert!(evaluator.cycle_tainted.is_empty());
+    assert_eq!(evaluator.cycle_detected, cycle_detected);
+    assert_eq!(evaluator.exhausted, exhausted);
+}
+
+fn object_infer_conditional(interner: &mut Interner, check: TypeId) -> (ConditionalType, TypeId) {
+    let wk = interner.well_known();
+    let infer = interner.intern_infer(0);
+    let extends_ty = interner.intern_object(ObjectType {
+        properties: vec![prop("value", infer)],
+        ..Default::default()
+    });
+    let true_branch = interner.intern_tuple(vec![infer]);
+    let expected = interner.intern_tuple(vec![wk.string]);
+    (
+        ConditionalType {
+            check,
+            extends_ty,
+            true_branch,
+            false_branch: wk.never,
+            infer_count: 1,
+            distributive: false,
+            poisoned: false,
+        },
+        expected,
+    )
+}
+
 #[test]
 fn pass_evaluate_type_does_not_descend_through_an_ordinary_wrapper() {
     let mut interner = Interner::with_intrinsics();
@@ -474,6 +523,299 @@ fn conditional_infer_rewrites_extends_and_true_branch_for_both_outcomes() {
         vec![wk.string]
     );
     assert_eq!(true_measure, false_measure);
+}
+
+#[test]
+fn conditional_infer_true_outcome_preserves_result_allocation_and_memo() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let check = interner.intern_object(ObjectType {
+        properties: vec![prop("value", wk.string)],
+        ..Default::default()
+    });
+    let (conditional, expected) = object_infer_conditional(&mut interner, check);
+    let conditional = interner.intern_conditional(conditional);
+    let mut next_type_param = 90_152;
+    let start = next_type_param;
+    let mut memo = FxHashMap::default();
+    let mut evaluator = ConditionalEvaluator::new(
+        &mut interner,
+        &mut next_type_param,
+        &mut memo,
+        DEFAULT_STEP_BUDGET,
+    );
+
+    super::instantiation::reset_infer_rewrite_measure();
+    assert_eq!(evaluate_ready(&mut evaluator, conditional), expected);
+
+    assert_eq!(
+        super::instantiation::infer_rewrite_measure(),
+        expected_infer_rewrite_measure(2, 4, 4)
+    );
+    assert_eq!(*evaluator.next_type_param, start + 1);
+    assert_eq!(evaluator.memo.get(&conditional), Some(&expected));
+    assert_evaluator_state(&evaluator, false, false);
+}
+
+#[test]
+fn conditional_infer_true_outcome_preserves_cycle_cleanup() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let param = TypeParamId(90_153);
+    let t = interner.intern_type_param(param, "T");
+    let infer = interner.intern_infer(0);
+    let check = interner.intern_object(ObjectType {
+        properties: vec![prop("value", wk.string)],
+        ..Default::default()
+    });
+    let extends_ty = interner.intern_object(ObjectType {
+        properties: vec![prop("value", infer)],
+        ..Default::default()
+    });
+    let template = interner.reserve_conditional();
+    let recur = interner.intern_instantiation(template, vec![(param, t)]);
+    interner.fill_conditional(
+        template,
+        ConditionalType {
+            check: t,
+            extends_ty,
+            true_branch: recur,
+            false_branch: wk.never,
+            infer_count: 1,
+            distributive: true,
+            poisoned: false,
+        },
+    );
+    let root = interner.intern_instantiation(template, vec![(param, check)]);
+    let mut next_type_param = 90_154;
+    let start = next_type_param;
+    let mut memo = FxHashMap::default();
+    let mut evaluator = ConditionalEvaluator::new(
+        &mut interner,
+        &mut next_type_param,
+        &mut memo,
+        DEFAULT_STEP_BUDGET,
+    );
+
+    super::instantiation::reset_infer_rewrite_measure();
+    assert_eq!(evaluate_ready(&mut evaluator, root), root);
+
+    assert_eq!(
+        super::instantiation::infer_rewrite_measure(),
+        expected_infer_rewrite_measure(2, 5, 5)
+    );
+    assert_eq!(*evaluator.next_type_param, start + 1);
+    assert!(evaluator.memo.is_empty());
+    assert_evaluator_state(&evaluator, true, false);
+}
+
+#[test]
+fn conditional_infer_true_outcome_preserves_budget_exhaustion() {
+    const BUDGET: u32 = 3;
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let param = TypeParamId(90_154);
+    let t = interner.intern_type_param(param, "T");
+    let infer = interner.intern_infer(0);
+    let template = interner.reserve_conditional();
+    let wrapped = interner.intern_object(ObjectType {
+        properties: vec![prop("value", infer)],
+        ..Default::default()
+    });
+    let recur = interner.intern_instantiation(template, vec![(param, wrapped)]);
+    interner.fill_conditional(
+        template,
+        ConditionalType {
+            check: t,
+            extends_ty: infer,
+            true_branch: recur,
+            false_branch: wk.never,
+            infer_count: 1,
+            distributive: true,
+            poisoned: false,
+        },
+    );
+    let root = interner.intern_instantiation(template, vec![(param, wk.number)]);
+    let mut next_type_param = 90_155;
+    let start = next_type_param;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next_type_param, &mut memo, BUDGET);
+
+    super::instantiation::reset_infer_rewrite_measure();
+    assert_eq!(evaluate_ready(&mut evaluator, root), root);
+
+    assert_eq!(
+        super::instantiation::infer_rewrite_measure(),
+        expected_infer_rewrite_measure(
+            2 * u64::from(BUDGET),
+            4 * u64::from(BUDGET),
+            4 * u64::from(BUDGET),
+        )
+    );
+    assert_eq!(*evaluator.next_type_param, start + BUDGET);
+    assert!(evaluator.memo.is_empty());
+    assert_evaluator_state(&evaluator, false, true);
+}
+
+#[test]
+#[ignore = "WU6 acceptance: exhausted extends tests still rewrite true branches eagerly"]
+fn conditional_infer_relation_exhaustion_skips_true_branch_rewrite() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (conditional, _) = object_infer_conditional(&mut interner, wk.number);
+    let conditional = interner.intern_conditional(conditional);
+    let normalization = FrontierNormalization {
+        frontier: wk.number,
+        exhaustion: Exhaustion::ClassProjectionBudget,
+    };
+    let mut next_type_param = 90_156;
+    let start = next_type_param;
+    let mut memo = FxHashMap::default();
+    let mut evaluator = ConditionalEvaluator::new(
+        &mut interner,
+        &mut next_type_param,
+        &mut memo,
+        DEFAULT_STEP_BUDGET,
+    );
+
+    super::instantiation::reset_infer_rewrite_measure();
+    assert_eq!(
+        evaluator.evaluate_planned(conditional, &normalization),
+        DemandOutcome::Exhausted(Exhaustion::ClassProjectionBudget)
+    );
+
+    assert_eq!(
+        super::instantiation::infer_rewrite_measure(),
+        expected_infer_rewrite_measure(1, 2, 2)
+    );
+    assert_eq!(*evaluator.next_type_param, start + 1);
+    assert!(evaluator.memo.is_empty());
+    assert_evaluator_state(&evaluator, false, false);
+}
+
+fn measure_conditional_runs(
+    interner: &mut Interner,
+    conditional: &ConditionalType,
+    iterations: u32,
+    expected_match: bool,
+    expected_result: Option<TypeId>,
+    expected_allocations: u32,
+) -> super::instantiation::InferRewriteMeasure {
+    let mut next_type_param = 100_000;
+    let start = next_type_param;
+    let mut memo = FxHashMap::default();
+    let mut evaluator = ConditionalEvaluator::new(
+        interner,
+        &mut next_type_param,
+        &mut memo,
+        DEFAULT_STEP_BUDGET,
+    );
+
+    // Corpus construction stays outside the counted region.
+    super::instantiation::reset_infer_rewrite_measure();
+    for _ in 0..iterations {
+        let (actual, result) = extends_ready(&mut evaluator, conditional);
+        assert_eq!(actual, expected_match);
+        if let Some(expected) = expected_result {
+            assert_eq!(result, expected);
+        }
+    }
+    let measure = super::instantiation::infer_rewrite_measure();
+
+    assert_eq!(*evaluator.next_type_param, start + expected_allocations);
+    assert!(evaluator.memo.is_empty());
+    assert_evaluator_state(&evaluator, false, false);
+    measure
+}
+
+fn measure_conditional_infer_outcome(
+    iterations: u32,
+    matched: bool,
+) -> super::instantiation::InferRewriteMeasure {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let check = if matched {
+        interner.intern_object(ObjectType {
+            properties: vec![prop("value", wk.string)],
+            ..Default::default()
+        })
+    } else {
+        wk.number
+    };
+    let (conditional, expected) = object_infer_conditional(&mut interner, check);
+    measure_conditional_runs(
+        &mut interner,
+        &conditional,
+        iterations,
+        matched,
+        matched.then_some(expected),
+        iterations,
+    )
+}
+
+fn measure_conditional_without_infer(iterations: u32) -> super::instantiation::InferRewriteMeasure {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let true_branch = interner.intern_tuple(vec![wk.string]);
+    let conditional = ConditionalType {
+        check: wk.string,
+        extends_ty: wk.string,
+        true_branch,
+        false_branch: wk.never,
+        infer_count: 0,
+        distributive: false,
+        poisoned: false,
+    };
+    measure_conditional_runs(
+        &mut interner,
+        &conditional,
+        iterations,
+        true,
+        Some(true_branch),
+        0,
+    )
+}
+
+#[test]
+#[ignore = "WU6 acceptance: false-heavy post-laziness counts are intentionally future-red"]
+fn measure_wu6_false_heavy_rewrite_counts_at_10k_and_100k() {
+    let scales = [10_000, 100_000];
+    let actual: Vec<_> = scales
+        .into_iter()
+        .map(|iterations| measure_conditional_infer_outcome(iterations, false))
+        .collect();
+    let expected: Vec<_> = scales
+        .into_iter()
+        .map(|iterations| {
+            let operations = u64::from(iterations);
+            expected_infer_rewrite_measure(operations, 2 * operations, 2 * operations)
+        })
+        .collect();
+
+    // Eager visits are 4N; the exact lazy target is 2N, a 50% reduction at both scales.
+    assert_eq!(actual, expected);
+    for (measure, iterations) in actual.iter().zip(scales) {
+        let eager_visits = 4 * u64::from(iterations);
+        assert!(measure.visits * 100 <= eager_visits * 80);
+    }
+}
+
+#[test]
+#[ignore = "WU6 operation-count controls: explicit 10k/100k scale probe"]
+fn measure_wu6_true_heavy_and_no_infer_controls_at_10k_and_100k() {
+    for iterations in [10_000, 100_000] {
+        let operations = u64::from(iterations);
+        assert_eq!(
+            measure_conditional_infer_outcome(iterations, true),
+            expected_infer_rewrite_measure(2 * operations, 4 * operations, 4 * operations)
+        );
+        assert_eq!(
+            measure_conditional_without_infer(iterations),
+            super::instantiation::InferRewriteMeasure::default()
+        );
+    }
 }
 
 #[test]
