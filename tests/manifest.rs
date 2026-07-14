@@ -151,6 +151,62 @@ fn parse_value(rhs: &str) -> Result<Value, String> {
     Ok(Value::Str(s.to_string()))
 }
 
+#[test]
+fn parser_characterization_preserves_manifest_cursor_and_errors() {
+    let parsed = parse(concat!(
+        "# comment\n",
+        "[meta]\n",
+        "name = \"alpha\"\n",
+        "empty = []\n",
+        "items = [\"a\", \"b\"]\n",
+        "[[criterion]]\n",
+        "name = \"beta\"\n",
+    ))
+    .expect("strings, arrays, comments, and known tables must parse");
+    assert_eq!(parsed.meta.len(), 1);
+    assert_eq!(parsed.criteria.len(), 1);
+    assert_eq!(
+        parsed.meta[0].get("name"),
+        Some(&Value::Str("alpha".to_string()))
+    );
+    assert_eq!(parsed.meta[0].get("empty"), Some(&Value::Arr(Vec::new())));
+    assert_eq!(
+        parsed.meta[0].get("items"),
+        Some(&Value::Arr(vec!["a".to_string(), "b".to_string()]))
+    );
+    assert_eq!(
+        parsed.criteria[0].get("name"),
+        Some(&Value::Str("beta".to_string()))
+    );
+
+    let invalid = concat!(
+        "orphan = \"value\"\n",
+        "[meta]\n",
+        "key = \"first\"\n",
+        "key = \"second\"\n",
+        "[unknown]\n",
+        "after_unknown = \"kept in meta\"\n",
+        "bad = unquoted\n",
+        "array = [\"ok\", bad]\n",
+        "embedded = \"a\"b\"\n",
+    );
+    let errors = match parse(invalid) {
+        Err(errors) => errors,
+        Ok(_) => panic!("all parser failures must be aggregated"),
+    };
+    assert_eq!(
+        errors,
+        vec![
+            "line 1: key \"orphan\" before any section header",
+            "line 4: duplicate key \"key\" in table",
+            "line 5: unknown section header \"[unknown]\"",
+            "line 7: value must be a quoted string or array in \"bad = unquoted\"",
+            "line 8: array element \"bad\" must be a quoted string in \"array = [\\\"ok\\\", bad]\"",
+            "line 9: string has an embedded quote in \"embedded = \\\"a\\\"b\\\"\"",
+        ]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Validator
 // ---------------------------------------------------------------------------
