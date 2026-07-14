@@ -1131,3 +1131,363 @@ fn fix_present_signature_params(
     }
     DemandOutcome::Ready(ordered)
 }
+
+#[cfg(test)]
+mod wu7_measurements {
+    use super::*;
+    use crate::check::query::{
+        query_demand_measure, reset_query_demand_measure, QueryDemandMeasure,
+    };
+    use crate::types::repr::{
+        ConditionalType, FunctionType, LiteralValue, ObjectType, PropertyType,
+    };
+    use std::time::{Duration, Instant};
+
+    #[derive(Clone, Copy)]
+    enum ConstraintCorpus {
+        ArchivedFunctionFanout,
+        SharedPending,
+        StructuralCycle,
+        EvaluationExhaustion,
+    }
+
+    fn root_conditional(interner: &mut Interner, branch: TypeId) -> TypeId {
+        let wk = interner.well_known();
+        interner.intern_conditional(ConditionalType {
+            check: wk.string,
+            extends_ty: wk.string,
+            true_branch: branch,
+            false_branch: wk.never,
+            infer_count: 0,
+            distributive: false,
+            poisoned: false,
+        })
+    }
+
+    fn runaway_evaluation(interner: &mut Interner) -> TypeId {
+        let wk = interner.well_known();
+        let param = TypeParamId(98_000);
+        let param_ty = interner.intern_type_param(param, "T");
+        let empty = interner.intern_object(ObjectType::default());
+        let template = interner.reserve_conditional();
+        let wrapped = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("value", param_ty)],
+            ..Default::default()
+        });
+        let recur = interner.intern_instantiation(template, vec![(param, wrapped)]);
+        interner.fill_conditional(
+            template,
+            ConditionalType {
+                check: param_ty,
+                extends_ty: empty,
+                true_branch: recur,
+                false_branch: wk.never,
+                infer_count: 0,
+                distributive: true,
+                poisoned: false,
+            },
+        );
+        interner.intern_instantiation(template, vec![(param, empty)])
+    }
+
+    fn measure_constraint_corpus(
+        count: usize,
+        corpus: ConstraintCorpus,
+    ) -> (
+        DemandOutcome<FxHashMap<TypeParamId, TypeId>>,
+        QueryDemandMeasure,
+        Duration,
+    ) {
+        let mut interner = Interner::with_intrinsics();
+        let (constraint, branch) = match corpus {
+            ConstraintCorpus::ArchivedFunctionFanout => {
+                let literal = interner.intern_literal(LiteralValue::String("fanout".into()));
+                let pending = interner.intern_instantiation(
+                    interner.well_known().uppercase,
+                    vec![(TypeParamId(98_001), literal)],
+                );
+                let metadata = (0..count)
+                    .map(|index| GenericTypeParam {
+                        id: TypeParamId(99_000 + u32::try_from(index).unwrap()),
+                        constraint: Some(pending),
+                        default: Some(pending),
+                    })
+                    .collect();
+                let function = interner.intern_function(FunctionType {
+                    type_params: metadata,
+                    receiver: Some(pending),
+                    params: Vec::new(),
+                    ret: interner.well_known().void,
+                });
+                (function, function)
+            }
+            ConstraintCorpus::SharedPending => {
+                let literal = interner.intern_literal(LiteralValue::String("fanout".into()));
+                let pending = interner.intern_instantiation(
+                    interner.well_known().uppercase,
+                    vec![(TypeParamId(98_001), literal)],
+                );
+                let branch = interner.intern_tuple(vec![pending; count]);
+                (root_conditional(&mut interner, branch), branch)
+            }
+            ConstraintCorpus::StructuralCycle => {
+                let recursive = interner.reserve_object();
+                interner.fill_object(
+                    recursive,
+                    ObjectType {
+                        properties: vec![PropertyType::public("self", recursive)],
+                        ..Default::default()
+                    },
+                );
+                let branch = interner.intern_tuple(vec![recursive; count]);
+                (root_conditional(&mut interner, branch), branch)
+            }
+            ConstraintCorpus::EvaluationExhaustion => {
+                let runaway = runaway_evaluation(&mut interner);
+                let branch = interner.intern_tuple(vec![runaway; count]);
+                (root_conditional(&mut interner, branch), branch)
+            }
+        };
+        let parameter = TypeParamId(98_002);
+        let type_params = [GenericTypeParam {
+            id: parameter,
+            constraint: Some(constraint),
+            default: None,
+        }];
+        let fixed = FxHashMap::from_iter([(parameter, branch)]);
+        let published = PublishedClasses::empty();
+        let mut queries = SemanticQueryState::default();
+        let mut next_type_param = 98_003;
+
+        reset_query_demand_measure();
+        let started = Instant::now();
+        let outcome = fix_signature_params(
+            &mut interner,
+            &mut next_type_param,
+            &published,
+            &mut queries,
+            &type_params,
+            fixed,
+            &FxHashSet::default(),
+        );
+        let elapsed = started.elapsed();
+        (outcome, query_demand_measure(), elapsed)
+    }
+
+    #[test]
+    // WU1 removed this structural demand walk; scaling would benchmark substitution instead.
+    fn measure_archived_constraint_function_fanout_is_no_longer_demand_walked() {
+        let (outcome, measure, _) =
+            measure_constraint_corpus(10, ConstraintCorpus::ArchivedFunctionFanout);
+        assert!(matches!(outcome, DemandOutcome::Ready(_)));
+        assert_eq!(
+            measure,
+            QueryDemandMeasure {
+                root_calls: 1,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn measure_constraint_shared_pending_dag_uses_query_overlay() {
+        let (outcome, measure, _) = measure_constraint_corpus(10, ConstraintCorpus::SharedPending);
+        assert!(matches!(outcome, DemandOutcome::Ready(_)));
+        assert_eq!(
+            measure,
+            QueryDemandMeasure {
+                root_calls: 1,
+                planner_root_visits: 1,
+                planner_visits: 17,
+                overlay_hits: 9,
+                visited_hits: 1,
+                reentries: 0,
+                pending_evaluations: 2,
+                durable_evaluation_hits: 0,
+                evaluation_expansions: 2,
+                evaluation_identity_returns: 0,
+                evaluation_changed_returns: 2,
+                evaluation_memo_inserts: 2,
+                durable_evaluation_inserts: 2,
+                exhaustion_frontiers: 0,
+                evaluation_budget_exhaustions: 0,
+                evaluation_cycle_exhaustions: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn measure_constraint_structural_cycle_returns_identity_without_taint() {
+        let (outcome, measure, _) =
+            measure_constraint_corpus(10, ConstraintCorpus::StructuralCycle);
+        assert!(matches!(outcome, DemandOutcome::Ready(_)));
+        assert_eq!(
+            measure,
+            QueryDemandMeasure {
+                root_calls: 1,
+                planner_root_visits: 1,
+                planner_visits: 16,
+                overlay_hits: 0,
+                visited_hits: 10,
+                reentries: 1,
+                pending_evaluations: 1,
+                durable_evaluation_hits: 0,
+                evaluation_expansions: 1,
+                evaluation_identity_returns: 0,
+                evaluation_changed_returns: 1,
+                evaluation_memo_inserts: 1,
+                durable_evaluation_inserts: 1,
+                exhaustion_frontiers: 0,
+                evaluation_budget_exhaustions: 0,
+                evaluation_cycle_exhaustions: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn measure_constraint_identity_demand_hits_the_durable_query_memo() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let identity = interner.intern_conditional(ConditionalType {
+            check: wk.string,
+            extends_ty: wk.string,
+            true_branch: wk.string,
+            false_branch: wk.never,
+            infer_count: 0,
+            distributive: false,
+            poisoned: true,
+        });
+        let first = TypeParamId(98_010);
+        let second = TypeParamId(98_011);
+        let type_params = [first, second].map(|id| GenericTypeParam {
+            id,
+            constraint: Some(identity),
+            default: None,
+        });
+        let fixed = FxHashMap::from_iter([(first, identity), (second, identity)]);
+        let published = PublishedClasses::empty();
+        let mut queries = SemanticQueryState::default();
+        let mut next_type_param = 98_012;
+
+        reset_query_demand_measure();
+        let outcome = fix_signature_params(
+            &mut interner,
+            &mut next_type_param,
+            &published,
+            &mut queries,
+            &type_params,
+            fixed,
+            &FxHashSet::default(),
+        );
+
+        assert!(matches!(outcome, DemandOutcome::Ready(_)));
+        assert_eq!(
+            query_demand_measure(),
+            QueryDemandMeasure {
+                root_calls: 2,
+                planner_root_visits: 2,
+                planner_visits: 6,
+                overlay_hits: 0,
+                visited_hits: 2,
+                reentries: 0,
+                pending_evaluations: 2,
+                durable_evaluation_hits: 1,
+                evaluation_expansions: 1,
+                evaluation_identity_returns: 1,
+                evaluation_changed_returns: 0,
+                evaluation_memo_inserts: 2,
+                durable_evaluation_inserts: 1,
+                exhaustion_frontiers: 0,
+                evaluation_budget_exhaustions: 0,
+                evaluation_cycle_exhaustions: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn measure_constraint_evaluation_exhaustion_discards_durable_writes() {
+        let (outcome, measure, _) =
+            measure_constraint_corpus(10, ConstraintCorpus::EvaluationExhaustion);
+        assert!(matches!(
+            outcome,
+            DemandOutcome::Exhausted(Exhaustion::EvaluationBudget)
+        ));
+        assert_eq!(
+            measure,
+            QueryDemandMeasure {
+                root_calls: 1,
+                planner_root_visits: 1,
+                planner_visits: 24,
+                overlay_hits: 0,
+                visited_hits: 13,
+                reentries: 1,
+                pending_evaluations: 4,
+                durable_evaluation_hits: 0,
+                evaluation_expansions: 4,
+                evaluation_identity_returns: 1,
+                evaluation_changed_returns: 2,
+                evaluation_memo_inserts: 3,
+                durable_evaluation_inserts: 0,
+                exhaustion_frontiers: 1,
+                evaluation_budget_exhaustions: 1,
+                evaluation_cycle_exhaustions: 0,
+            }
+        );
+    }
+
+    #[test]
+    #[ignore = "WU7 release measurement; run explicitly with --ignored --nocapture"]
+    fn measure_constraint_demand_at_10k_and_100k_release() {
+        for count in [10_000, 100_000] {
+            let operations = u64::try_from(count).unwrap();
+            for corpus in [
+                ConstraintCorpus::SharedPending,
+                ConstraintCorpus::StructuralCycle,
+                ConstraintCorpus::EvaluationExhaustion,
+            ] {
+                let (outcome, measure, elapsed) = measure_constraint_corpus(count, corpus);
+                match corpus {
+                    ConstraintCorpus::SharedPending => {
+                        assert!(matches!(outcome, DemandOutcome::Ready(_)));
+                        assert_eq!(measure.planner_visits, operations + 7);
+                        assert_eq!(measure.overlay_hits, operations - 1);
+                        assert_eq!(measure.pending_evaluations, 2);
+                    }
+                    ConstraintCorpus::StructuralCycle => {
+                        assert!(matches!(outcome, DemandOutcome::Ready(_)));
+                        assert_eq!(measure.planner_visits, operations + 6);
+                        assert_eq!(measure.visited_hits, operations);
+                        assert_eq!(measure.reentries, 1);
+                    }
+                    ConstraintCorpus::EvaluationExhaustion => {
+                        assert!(matches!(
+                            outcome,
+                            DemandOutcome::Exhausted(Exhaustion::EvaluationBudget)
+                        ));
+                        assert_eq!(measure.planner_visits, operations + 14);
+                        assert_eq!(measure.visited_hits, operations + 3);
+                        assert_eq!(measure.reentries, 1);
+                        assert_eq!(measure.pending_evaluations, 4);
+                        assert_eq!(measure.evaluation_expansions, 4);
+                        assert_eq!(measure.evaluation_identity_returns, 1);
+                        assert_eq!(measure.evaluation_changed_returns, 2);
+                        assert_eq!(measure.evaluation_memo_inserts, 3);
+                        assert_eq!(measure.exhaustion_frontiers, 1);
+                        assert_eq!(measure.evaluation_budget_exhaustions, 1);
+                        assert_eq!(measure.durable_evaluation_inserts, 0);
+                    }
+                    ConstraintCorpus::ArchivedFunctionFanout => unreachable!(),
+                }
+                let label = match corpus {
+                    ConstraintCorpus::SharedPending => "shared-pending",
+                    ConstraintCorpus::StructuralCycle => "structural-cycle",
+                    ConstraintCorpus::EvaluationExhaustion => "evaluation-exhaustion",
+                    ConstraintCorpus::ArchivedFunctionFanout => unreachable!(),
+                };
+                println!(
+                    "constraint demand count={count} corpus={label} measure={measure:?} elapsed={elapsed:?}"
+                );
+            }
+        }
+    }
+}

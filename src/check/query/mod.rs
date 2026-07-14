@@ -20,6 +20,48 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 pub(crate) const MAX_CLASS_PROJECTION_EXPANSIONS: usize = 128;
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct QueryDemandMeasure {
+    pub root_calls: u64,
+    pub planner_root_visits: u64,
+    pub planner_visits: u64,
+    pub overlay_hits: u64,
+    pub visited_hits: u64,
+    pub reentries: u64,
+    pub pending_evaluations: u64,
+    pub durable_evaluation_hits: u64,
+    pub evaluation_expansions: u64,
+    pub evaluation_identity_returns: u64,
+    pub evaluation_changed_returns: u64,
+    pub evaluation_memo_inserts: u64,
+    pub durable_evaluation_inserts: u64,
+    pub exhaustion_frontiers: u64,
+    pub evaluation_budget_exhaustions: u64,
+    pub evaluation_cycle_exhaustions: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static QUERY_DEMAND_MEASURE: std::cell::RefCell<QueryDemandMeasure> =
+        std::cell::RefCell::new(QueryDemandMeasure::default());
+}
+
+#[cfg(test)]
+pub(crate) fn reset_query_demand_measure() {
+    QUERY_DEMAND_MEASURE.with(|measure| *measure.borrow_mut() = QueryDemandMeasure::default());
+}
+
+#[cfg(test)]
+pub(crate) fn query_demand_measure() -> QueryDemandMeasure {
+    QUERY_DEMAND_MEASURE.with(|measure| *measure.borrow())
+}
+
+#[cfg(test)]
+fn measure_query_demand(update: impl FnOnce(&mut QueryDemandMeasure)) {
+    QUERY_DEMAND_MEASURE.with(|measure| update(&mut measure.borrow_mut()));
+}
+
 /// Immutable published-class boundary consumed by query planning. Implementors
 /// must return poison/pre-publication exhaustion before exposing any template.
 pub(crate) trait PublishedClassLookup {
@@ -83,6 +125,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
     /// Demand one normalized outer shape. Successful untainted work promotes
     /// projection/evaluator memo entries together; exhaustion promotes nothing.
     pub(crate) fn demand(&mut self, root: TypeId) -> DemandOutcome<TypeId> {
+        #[cfg(test)]
+        measure_query_demand(|measure| measure.root_calls += 1);
         let transaction = ProjectionPlanner::new(
             self.interner,
             self.published,
@@ -351,6 +395,11 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
     }
 
     fn commit_plan(&mut self, transaction: PlannedQuery) {
+        #[cfg(test)]
+        measure_query_demand(|measure| {
+            measure.durable_evaluation_inserts +=
+                u64::try_from(transaction.pending_evaluator_writes.len()).unwrap();
+        });
         self.state
             .projection_memo
             .extend(transaction.pending_projection_writes);
@@ -492,6 +541,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
             | TypeTag::Instantiation
             | TypeTag::Mapped
             | TypeTag::Template => {
+                #[cfg(test)]
+                measure_query_demand(|measure| measure.planner_root_visits += 1);
                 self.visit(root);
             }
             TypeTag::Intrinsic
@@ -562,13 +613,24 @@ impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
     }
 
     fn visit(&mut self, ty: TypeId) -> TypeId {
+        #[cfg(test)]
+        measure_query_demand(|measure| measure.planner_visits += 1);
         if let Ok(normalized) = self.plan.normalize(ty) {
             if normalized != ty {
+                #[cfg(test)]
+                measure_query_demand(|measure| measure.overlay_hits += 1);
                 self.visit_demand_result(normalized);
                 return self.plan.normalize(ty).unwrap_or(normalized);
             }
         }
-        if self.visited.contains(&ty) || !self.visiting.insert(ty) {
+        if self.visited.contains(&ty) {
+            #[cfg(test)]
+            measure_query_demand(|measure| measure.visited_hits += 1);
+            return ty;
+        }
+        if !self.visiting.insert(ty) {
+            #[cfg(test)]
+            measure_query_demand(|measure| measure.reentries += 1);
             return ty;
         }
 
@@ -720,7 +782,11 @@ impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
     }
 
     fn evaluate_existing(&mut self, ty: TypeId) -> TypeId {
+        #[cfg(test)]
+        measure_query_demand(|measure| measure.pending_evaluations += 1);
         if let Some(&result) = self.durable_evaluation_memo.get(&ty) {
+            #[cfg(test)]
+            measure_query_demand(|measure| measure.durable_evaluation_hits += 1);
             self.record_evaluation(ty, result);
             self.visit_demand_result(result);
             return result;
@@ -736,6 +802,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
             return ty;
         }
         self.evaluation_expansions += 1;
+        #[cfg(test)]
+        measure_query_demand(|measure| measure.evaluation_expansions += 1);
 
         let (outcome, exhausted, cycle_detected) = {
             let mut evaluator = ConditionalEvaluator::new(
@@ -762,6 +830,14 @@ impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
                 return ty;
             }
         };
+        #[cfg(test)]
+        measure_query_demand(|measure| {
+            if result == ty {
+                measure.evaluation_identity_returns += 1;
+            } else {
+                measure.evaluation_changed_returns += 1;
+            }
+        });
         self.record_evaluation(ty, result);
         self.visit_demand_result(result);
         result
@@ -785,6 +861,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
 
     fn record_evaluation(&mut self, source: TypeId, result: TypeId) {
         self.plan.resolved_evaluations.insert(source);
+        #[cfg(test)]
+        measure_query_demand(|measure| measure.evaluation_memo_inserts += 1);
         self.working_evaluation_memo.insert(source, result);
         if source != result {
             self.plan.evaluation_overlay.insert(source, result);
@@ -792,6 +870,15 @@ impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
     }
 
     fn mark_frontier(&mut self, ty: TypeId, reason: Exhaustion) {
+        #[cfg(test)]
+        measure_query_demand(|measure| {
+            measure.exhaustion_frontiers += 1;
+            match &reason {
+                Exhaustion::EvaluationBudget => measure.evaluation_budget_exhaustions += 1,
+                Exhaustion::EvaluationCycle { .. } => measure.evaluation_cycle_exhaustions += 1,
+                _ => {}
+            }
+        });
         self.planning_tainted = true;
         if self.first_exhaustion.is_none() {
             self.first_exhaustion = Some(reason.clone());

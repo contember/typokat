@@ -1,11 +1,12 @@
 use super::*;
 use crate::check::checker::eval::keyof::{contains_deferred_keyof, keyof_of_object};
 use crate::types::repr::{
-    ConditionalType, FunctionType, GenericTypeParam, ObjectType, ParameterType, PropertyType,
-    TemplateType,
+    ConditionalType, FunctionType, GenericTypeParam, LiteralValue, MappedType, ModifierOp,
+    ObjectType, ParameterType, PropertyType, TemplateType,
 };
 use crate::types::ClassId;
 use rustc_hash::FxHashMap;
+use std::time::{Duration, Instant};
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
@@ -1493,6 +1494,152 @@ fn eval(
 ) -> TypeId {
     let mut ev = ConditionalEvaluator::new(interner, next, memo, DEFAULT_STEP_BUDGET);
     evaluate_ready(&mut ev, ty)
+}
+
+fn measure_mapped_property_fanout(
+    count: usize,
+    repeated_context: bool,
+) -> (super::mapped::MappedRewriteMeasure, Duration) {
+    let mut interner = Interner::with_intrinsics();
+    let placeholder = interner.intern_mapped_value();
+    let shared = interner.intern_object(ObjectType {
+        properties: vec![prop("value", placeholder)],
+        ..Default::default()
+    });
+    let value_template = interner.intern_tuple(vec![shared, shared]);
+    let repeated_value = interner.well_known().string;
+    let properties = (0..count)
+        .map(|index| {
+            let value = if repeated_context {
+                repeated_value
+            } else {
+                interner.intern_literal(LiteralValue::String(format!("value-{index}")))
+            };
+            prop(&format!("p{index}"), value)
+        })
+        .collect();
+    let source = interner.intern_object(ObjectType {
+        properties,
+        ..Default::default()
+    });
+    let mapped = interner.intern_mapped(MappedType {
+        homomorphic: true,
+        key_source: source,
+        value_template,
+        modifiers_source: None,
+        optional_modifier: ModifierOp::Keep,
+        readonly_modifier: ModifierOp::Keep,
+    });
+    let mut next = 0;
+    let mut memo = FxHashMap::default();
+
+    super::mapped::reset_mapped_rewrite_measure();
+    let started = Instant::now();
+    let result = eval(&mut interner, &mut next, &mut memo, mapped);
+    let elapsed = started.elapsed();
+    let measure = super::mapped::mapped_rewrite_measure();
+
+    assert_eq!(
+        interner
+            .store()
+            .object_type(result)
+            .map(|object| object.properties.len()),
+        Some(count)
+    );
+    (measure, elapsed)
+}
+
+#[test]
+fn measure_mapped_property_fanout_pins_complete_context_repetition() {
+    for repeated_context in [true, false] {
+        let (measure, _) = measure_mapped_property_fanout(10, repeated_context);
+        assert_eq!(
+            measure,
+            super::mapped::MappedRewriteMeasure {
+                root_calls: 10,
+                child_visits: 30,
+                memo_hits: 10,
+                memo_inserts: 30,
+                reentries: 0,
+                reentry_identity_returns: 0,
+                structural_identity_returns: 0,
+                re_interns: 20,
+                mapped_assemblies: 1,
+                property_contexts: 10,
+                repeated_property_contexts: if repeated_context { 9 } else { 0 },
+                scheduled_property_evaluations: 10,
+            }
+        );
+    }
+}
+
+#[test]
+fn measure_mapped_rewrite_pins_cycle_identity_policy() {
+    let mut interner = Interner::with_intrinsics();
+    let placeholder = interner.intern_mapped_value();
+    let shared = interner.intern_object(ObjectType {
+        properties: vec![prop("value", placeholder)],
+        ..Default::default()
+    });
+    let recursive = interner.reserve_object();
+    interner.fill_object(
+        recursive,
+        ObjectType {
+            properties: vec![prop("self", recursive)],
+            ..Default::default()
+        },
+    );
+    let template = interner.intern_tuple(vec![shared, recursive, shared]);
+    let replacement = interner.well_known().number;
+    let mut next = 0;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    super::mapped::reset_mapped_rewrite_measure();
+    assert_ne!(
+        evaluator.replace_mapped_value(template, replacement),
+        template
+    );
+    assert_eq!(
+        super::mapped::mapped_rewrite_measure(),
+        super::mapped::MappedRewriteMeasure {
+            root_calls: 1,
+            child_visits: 5,
+            memo_hits: 1,
+            memo_inserts: 4,
+            reentries: 1,
+            reentry_identity_returns: 1,
+            structural_identity_returns: 1,
+            re_interns: 2,
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
+#[ignore = "WU7 release measurement; run explicitly with --ignored --nocapture"]
+fn measure_mapped_property_fanout_at_10k_and_100k_release() {
+    for count in [10_000, 100_000] {
+        for repeated_context in [true, false] {
+            let (measure, elapsed) = measure_mapped_property_fanout(count, repeated_context);
+            let operations = u64::try_from(count).unwrap();
+            assert_eq!(measure.root_calls, operations);
+            assert_eq!(measure.child_visits, 3 * operations);
+            assert_eq!(measure.memo_hits, operations);
+            assert_eq!(measure.memo_inserts, 3 * operations);
+            assert_eq!(measure.re_interns, 2 * operations);
+            assert_eq!(measure.property_contexts, operations);
+            assert_eq!(measure.scheduled_property_evaluations, operations);
+            assert_eq!(
+                measure.repeated_property_contexts,
+                if repeated_context { operations - 1 } else { 0 }
+            );
+            println!(
+                "mapped fanout count={count} repeated_context={repeated_context} measure={measure:?} elapsed={elapsed:?}"
+            );
+        }
+    }
 }
 
 #[test]

@@ -1,5 +1,75 @@
 use super::*;
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct MappedRewriteMeasure {
+    pub root_calls: u64,
+    pub child_visits: u64,
+    pub memo_hits: u64,
+    pub memo_inserts: u64,
+    pub reentries: u64,
+    pub reentry_identity_returns: u64,
+    pub structural_identity_returns: u64,
+    pub re_interns: u64,
+    pub mapped_assemblies: u64,
+    pub property_contexts: u64,
+    pub repeated_property_contexts: u64,
+    pub scheduled_property_evaluations: u64,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct MappedRewriteMeasureState {
+    measure: MappedRewriteMeasure,
+    assembly_contexts: FxHashSet<(TypeId, TypeId)>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static MAPPED_REWRITE_MEASURE: std::cell::RefCell<MappedRewriteMeasureState> =
+        std::cell::RefCell::new(MappedRewriteMeasureState::default());
+}
+
+#[cfg(test)]
+pub(super) fn reset_mapped_rewrite_measure() {
+    MAPPED_REWRITE_MEASURE.with(|state| *state.borrow_mut() = MappedRewriteMeasureState::default());
+}
+
+#[cfg(test)]
+pub(super) fn mapped_rewrite_measure() -> MappedRewriteMeasure {
+    MAPPED_REWRITE_MEASURE.with(|state| state.borrow().measure)
+}
+
+#[cfg(test)]
+fn measure_mapped_rewrite(update: impl FnOnce(&mut MappedRewriteMeasure)) {
+    MAPPED_REWRITE_MEASURE.with(|state| update(&mut state.borrow_mut().measure));
+}
+
+#[cfg(test)]
+fn note_mapped_reintern() {
+    measure_mapped_rewrite(|measure| measure.re_interns += 1);
+}
+
+#[cfg(test)]
+fn begin_mapped_assembly() {
+    MAPPED_REWRITE_MEASURE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.measure.mapped_assemblies += 1;
+        state.assembly_contexts.clear();
+    });
+}
+
+#[cfg(test)]
+fn measure_mapped_property_context(template: TypeId, value: TypeId) {
+    MAPPED_REWRITE_MEASURE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.measure.property_contexts += 1;
+        if !state.assembly_contexts.insert((template, value)) {
+            state.measure.repeated_property_contexts += 1;
+        }
+    });
+}
+
 /// Per-call context for [`ConditionalEvaluator::replace_mapped_value`] (M26 `T[K]`
 /// substitution). Kept SEPARATE from the evaluator's `in_flight`/`memo` so a provisional
 /// rewrite over a cyclic value template can never poison the durable evaluator memo.
@@ -373,6 +443,8 @@ impl<'a> ConditionalEvaluator<'a> {
 
         let mut meta: Vec<MappedProp> = Vec::new();
         let mut value_pre: Vec<TypeId> = Vec::new();
+        #[cfg(test)]
+        begin_mapped_assembly();
         if mapped.homomorphic {
             let Some(props) = self.homomorphic_source_props(key_source) else {
                 // Non-iterable source (index signatures, primitives, …): out of the M26
@@ -381,6 +453,8 @@ impl<'a> ConditionalEvaluator<'a> {
                 return;
             };
             for prop in props {
+                #[cfg(test)]
+                measure_mapped_property_context(mapped.value_template, prop.ty);
                 let value = self.replace_mapped_value(mapped.value_template, prop.ty);
                 meta.push(MappedProp {
                     name: prop.name,
@@ -414,6 +488,8 @@ impl<'a> ConditionalEvaluator<'a> {
                     .and_then(|source| self.modifiers_source_property(source, &name));
                 match source_prop {
                     Some(prop) => {
+                        #[cfg(test)]
+                        measure_mapped_property_context(mapped.value_template, prop.ty);
                         let value = self.replace_mapped_value(mapped.value_template, prop.ty);
                         meta.push(MappedProp {
                             name,
@@ -427,6 +503,8 @@ impl<'a> ConditionalEvaluator<'a> {
                         value_pre.push(value);
                     }
                     None => {
+                        #[cfg(test)]
+                        measure_mapped_property_context(mapped.value_template, error);
                         let value = self.replace_mapped_value(mapped.value_template, error);
                         meta.push(MappedProp {
                             name,
@@ -444,6 +522,8 @@ impl<'a> ConditionalEvaluator<'a> {
         // Push in reverse so the per-property values pop (and their results land) in
         // order, aligning with the metadata order in `BuildMappedObject`.
         for &v in value_pre.iter().rev() {
+            #[cfg(test)]
+            measure_mapped_rewrite(|measure| measure.scheduled_property_evaluations += 1);
             tasks.push(Task::Eval(v));
         }
     }
@@ -732,6 +812,8 @@ impl<'a> ConditionalEvaluator<'a> {
     /// placeholder and stays untouched (the cross-binder case is out of subset, safe
     /// over-report).
     pub(super) fn replace_mapped_value(&mut self, ty: TypeId, value: TypeId) -> TypeId {
+        #[cfg(test)]
+        measure_mapped_rewrite(|measure| measure.root_calls += 1);
         let mut ctx = MappedRewrite {
             value,
             in_progress: FxHashSet::default(),
@@ -740,15 +822,30 @@ impl<'a> ConditionalEvaluator<'a> {
         let mut tasks = vec![MappedRewriteTask::Visit(ty)];
         let mut frames = Vec::new();
         let mut values = Vec::new();
+        #[cfg(test)]
+        let mut root_visit = true;
 
         while let Some(task) = tasks.pop() {
             match task {
                 MappedRewriteTask::Visit(ty) => {
+                    #[cfg(test)]
+                    if root_visit {
+                        root_visit = false;
+                    } else {
+                        measure_mapped_rewrite(|measure| measure.child_visits += 1);
+                    }
                     if let Some(&done) = ctx.memo.get(&ty) {
+                        #[cfg(test)]
+                        measure_mapped_rewrite(|measure| measure.memo_hits += 1);
                         values.push(done);
                         continue;
                     }
                     if !ctx.in_progress.insert(ty) {
+                        #[cfg(test)]
+                        measure_mapped_rewrite(|measure| {
+                            measure.reentries += 1;
+                            measure.reentry_identity_returns += 1;
+                        });
                         values.push(ty);
                         continue;
                     }
@@ -765,6 +862,8 @@ impl<'a> ConditionalEvaluator<'a> {
                         continue;
                     };
                     let ty = frame.ty();
+                    #[cfg(test)]
+                    let structural = !matches!(&frame, MappedRewriteFrame::Identity { .. });
                     let child_count = frame.child_count();
                     let result = if let Some(start) = values.len().checked_sub(child_count) {
                         let result = self.rebuild_mapped_rewrite_frame(frame, &values[start..]);
@@ -775,6 +874,13 @@ impl<'a> ConditionalEvaluator<'a> {
                         ty
                     };
                     debug_assert!(ctx.in_progress.remove(&ty));
+                    #[cfg(test)]
+                    measure_mapped_rewrite(|measure| {
+                        measure.memo_inserts += 1;
+                        if structural && result == ty {
+                            measure.structural_identity_returns += 1;
+                        }
+                    });
                     ctx.memo.insert(ty, result);
                     values.push(result);
                 }
@@ -936,6 +1042,8 @@ impl<'a> ConditionalEvaluator<'a> {
                 let key_source = children.next(mapped.key_source);
                 let modifiers_source = mapped.modifiers_source.map(|source| children.next(source));
                 if key_source != mapped.key_source || modifiers_source != mapped.modifiers_source {
+                    #[cfg(test)]
+                    note_mapped_reintern();
                     self.interner.intern_mapped(MappedType {
                         key_source,
                         modifiers_source,
@@ -975,6 +1083,8 @@ impl<'a> ConditionalEvaluator<'a> {
                     .collect();
                 changed |= new.construct_signatures != object.construct_signatures;
                 if changed {
+                    #[cfg(test)]
+                    note_mapped_reintern();
                     self.interner.intern_object(new)
                 } else {
                     ty
@@ -999,18 +1109,26 @@ impl<'a> ConditionalEvaluator<'a> {
                 new.ret = children.next(function.ret);
                 changed |= new.ret != function.ret;
                 if changed {
+                    #[cfg(test)]
+                    note_mapped_reintern();
                     self.interner.intern_function(new)
                 } else {
                     ty
                 }
             }
             MappedRewriteFrame::Union { ty, members } => match children.take(members.len()) {
-                Some(rewritten) if rewritten != members => self.interner.union(rewritten.to_vec()),
+                Some(rewritten) if rewritten != members => {
+                    #[cfg(test)]
+                    note_mapped_reintern();
+                    self.interner.union(rewritten.to_vec())
+                }
                 Some(_) | None => ty,
             },
             MappedRewriteFrame::Intersection { ty, members } => {
                 match children.take(members.len()) {
                     Some(rewritten) if rewritten != members => {
+                        #[cfg(test)]
+                        note_mapped_reintern();
                         self.interner.intersection(rewritten.to_vec())
                     }
                     Some(_) | None => ty,
@@ -1019,6 +1137,8 @@ impl<'a> ConditionalEvaluator<'a> {
             MappedRewriteFrame::Array { ty, element } => {
                 let rewritten = children.next(element);
                 if rewritten != element {
+                    #[cfg(test)]
+                    note_mapped_reintern();
                     self.interner.intern_array(rewritten)
                 } else {
                     ty
@@ -1044,6 +1164,8 @@ impl<'a> ConditionalEvaluator<'a> {
                     }
                 });
                 if changed {
+                    #[cfg(test)]
+                    note_mapped_reintern();
                     self.interner
                         .intern_tuple_type(TupleType { elements, rest })
                 } else {
@@ -1053,6 +1175,8 @@ impl<'a> ConditionalEvaluator<'a> {
             MappedRewriteFrame::Readonly { ty, operand } => {
                 let rewritten = children.next(operand);
                 if rewritten != operand {
+                    #[cfg(test)]
+                    note_mapped_reintern();
                     self.interner.intern_readonly(rewritten)
                 } else {
                     ty
@@ -1068,6 +1192,8 @@ impl<'a> ConditionalEvaluator<'a> {
                     || true_branch != conditional.true_branch
                     || false_branch != conditional.false_branch
                 {
+                    #[cfg(test)]
+                    note_mapped_reintern();
                     self.interner.intern_conditional(ConditionalType {
                         check,
                         extends_ty,
@@ -1087,6 +1213,8 @@ impl<'a> ConditionalEvaluator<'a> {
                             .map(|(_, value)| *value)
                             .ne(values.iter().copied()) =>
                     {
+                        #[cfg(test)]
+                        note_mapped_reintern();
                         self.interner.intern_instantiation(
                             base,
                             args.iter()
@@ -1101,6 +1229,8 @@ impl<'a> ConditionalEvaluator<'a> {
             MappedRewriteFrame::ClassInstance { ty, class, args } => {
                 match children.take(args.len()) {
                     Some(values) if values != args => {
+                        #[cfg(test)]
+                        note_mapped_reintern();
                         self.interner.intern_class_instance(class, values.to_vec())
                     }
                     Some(_) | None => ty,
@@ -1109,6 +1239,8 @@ impl<'a> ConditionalEvaluator<'a> {
             MappedRewriteFrame::Template { ty, template } => {
                 match children.take(template.holes.len()) {
                     Some(holes) if holes != template.holes => {
+                        #[cfg(test)]
+                        note_mapped_reintern();
                         self.interner.intern_template(TemplateType {
                             texts: template.texts,
                             holes: holes.to_vec(),
@@ -1120,6 +1252,8 @@ impl<'a> ConditionalEvaluator<'a> {
             MappedRewriteFrame::Keyof { ty, operand } => {
                 let rewritten = children.next(operand);
                 if rewritten != operand {
+                    #[cfg(test)]
+                    note_mapped_reintern();
                     self.interner.intern_keyof(rewritten)
                 } else {
                     ty
@@ -1129,6 +1263,8 @@ impl<'a> ConditionalEvaluator<'a> {
                 let rewritten_object = children.next(object);
                 let rewritten_index = children.next(index);
                 if rewritten_object != object || rewritten_index != index {
+                    #[cfg(test)]
+                    note_mapped_reintern();
                     self.interner
                         .intern_deferred_indexed_access(rewritten_object, rewritten_index)
                 } else {
