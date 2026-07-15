@@ -69,9 +69,15 @@ do not belong on this critical path.
 | Namespace declarations | Identifier, nested, dotted, reopened, and ambient `declare namespace` forms bind into namespace scopes | Runtime emit/transformation is out of scope |
 | Qualified types | Resolve `A.B.C` segment by segment with correct shadowing, export visibility, type arguments, `TK2503`, and `TK2694` | String-literal external modules remain backlog `15` |
 | Cross-space coexistence | Value/type/namespace slots resolve independently; all 28 ES5 interface+`declare var` constructor pairs see the final merged interface | Coexistence is not misreported as interface merging |
-| Keep-pair merging | Interface+namespace, function+namespace, and class+namespace static/type surfaces work in either declaration order | Rare enum+namespace+function chimeras remain conservative and explicit |
+| Keep-pair merging | Interface+namespace, function+namespace, class+namespace, and the approved class+interface(+namespace) composition preserve their instance/type/static/container surfaces in every strict-tsc-legal order | Rare enum+namespace+function chimeras remain conservative and explicit |
 | Namespace visibility | Exported members form the reopened public namespace surface; non-exported members remain local to their declaration block | No accidental sharing of private block members across reopenings |
 | Global/UMD surface | Give the currently `43`-owned `declare global` and `export as namespace` inventory entries an implemented or precise non-`43` disposition | Do not absorb general package/module loading |
+
+**Approved scope addendum (2026-07-15).** Backlog `43` includes full
+class+interface(+namespace) merging even though architecture §4.1's original keep-list did not name
+class+interface. The class remains the identity/value owner: construction, existing statics,
+private nominal origin, generic application, and atomic publication must survive while interface
+instance members and namespace static/container members compose in either class/interface order.
 
 ## Work units
 
@@ -152,6 +158,10 @@ do not belong on this critical path.
 ### WU4 — approved keep-pairs and static/value augmentation (effort XL)
 
 - Implement interface+namespace type/container coexistence and composition.
+- Implement the approved class+interface merge in both declaration orders, including interface-added
+  required/method/generic/recursive instance members and strict-tsc generic-header/property-conflict
+  diagnostics. Preserve the class constructor/value, existing statics, private nominal origin, and
+  atomic class identity; a conflict must not recover to a permissive surface.
 - Attach function+namespace and class+namespace exported members to the value/static surface while
   retaining callable rows, overload visibility, class construction capability, nominal metadata,
   and atomic class publication.
@@ -274,9 +284,9 @@ adding `42` or `44` only if a reproducible pinned-library audit contradicts the 
   made machine-valid surface/manifest ownership a closure gate. The plan now incorporates all three
   blockers.
 - **2026-07-15 — WU0 oracle and baseline.** Added the disabled, unregistered
-  `tests/cases/b43_namespaces_declaration_merging/` matrix (17 files). `tsc --version` is `6.0.3`;
-  `tsc --strict --noEmit --pretty false --lib es5 --module commonjs` over every fixture produced 87
-  diagnostics: all 85 ordinary `TK` markers match by code/line. The two additional `TS2567`s in the
+  `tests/cases/b43_namespaces_declaration_merging/` matrix (23 files). `tsc --version` is `6.0.3`;
+  `tsc --strict --noEmit --pretty false --lib es5 --module commonjs` over every fixture produced 186
+  diagnostics: all 184 ordinary `TK` markers match by code/line. The two additional `TS2567`s in the
   enum/function/namespace chimera are not claimed as backlog-43 marker parity: its enum declaration
   remains explicitly incomplete under backlog `42`, and exact duplicate-kind diagnostic ownership
   is a WU0A/direct-test gate. The valid UMD `.d.ts` retains both
@@ -287,14 +297,20 @@ adding `42` or `44` only if a reproducible pinned-library audit contradicts the 
   reverse order is clean; private members do not cross reopened namespace blocks; ambient namespace
   members export by default; and legal `declare global` requires an external-module context.
   Two separate legal global-augmentation blocks merge while a module-local same-name interface
-  stays isolated. A clean class+interface(+namespace) tsc probe was removed from required behavior
-  because architecture §4.1 does not approve class+interface composition; WU0A must decide its
-  conservative disposition.
+  stays isolated. The user-approved addendum promotes class+interface(+namespace) from a decision
+  probe to required behavior: six fixtures pin both orders, composed instance/static/container
+  surfaces, class construction and private origin, matching/conflicting generic headers, recursive
+  members, namespace placement, instance call/construct signatures, capability separation, and
+  non-permissive property/method/heritage conflict recovery. Omitted-vs-introduced constraints and
+  defaults are legal in either order; only conflicting supplied names/constraints/defaults or
+  arities reject. Invalid groups may conservatively exhaust rather than synthesize tsc's
+  multi-parameter recovery, but cannot become permissive. Direct identity remains
+  a WU0A test obligation.
   Conflict probes pin `TS2300/2320/2374/2411/2413/2428/2687/2717` plus downstream wrong-type demands so
   recovery cannot become `any`/error-permissive. Qualified probes pin
   `TS2315/2344/2503/2694/2702/2707/2749` across namespace, type-only, and value-only slots.
-- **2026-07-15 — WU0 current-checker measurement.** The existing debug binary over the 17 focused
-  files exited incomplete for 15 and diagnostic-only for 2, emitting 108 diagnostics and 70
+- **2026-07-15 — WU0 current-checker measurement.** The existing debug binary over the 23 focused
+  files exited incomplete for 19 and diagnostic-only for 4, emitting 183 diagnostics and 94
   incomplete records; `cargo test conformance` remains green because the new corpus is deliberately
   unregistered. The inventory has exactly five backlog-43 records:
   `type-fill/module-declaration/self`, `annotation-lower/type-name/qualified-name`,

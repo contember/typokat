@@ -77,6 +77,7 @@ EOF spans.
 | `TK2341` | Property is private (accessed outside its declaring class) |
 | `TK2344` | Type argument does not satisfy the type parameter's constraint |
 | `TK2345` | Argument type not assignable to parameter type |
+| `TK2349` | Expression is not callable |
 | `TK2445` | Property is protected (accessed outside the class and its subclasses) |
 | `TK2456` | Type alias circularly references itself |
 | `TK2416` | Property in derived type not assignable to the same property in base type (override compatibility) |
@@ -91,10 +92,12 @@ EOF spans.
 | `TK2411` | Property is incompatible with a string index signature |
 | `TK2413` | Numeric index type is not assignable to string index type |
 | `TK2428` | Merged declarations must have identical type parameters |
+| `TK2430` | Interface incorrectly extends a base interface |
 | `TK2434` | Namespace declaration precedes the class or function it augments |
 | `TK2554` | Wrong number of arguments (arity) |
 | `TK2555` | Too few arguments for a rest/min-arity call |
 | `TK2558` | Wrong number of type arguments |
+| `TK2576` | Static class member is accessed on an instance |
 | `TK2589` | Type instantiation is excessively deep and possibly infinite |
 | `TK2503` | Cannot find namespace |
 | `TK2669` | Global augmentation is outside an external or ambient module |
@@ -349,13 +352,22 @@ qualified lookup through value/type/namespace slots, all approved keep-pairs, re
 interface+constructor-variable coexistence, and ambient/global/UMD boundaries. The corpus pins
 strict `tsc 6.0.3 --strict --lib es5 --module commonjs` results. Ordinary
 namespace-before-function/class pairs report `TS2434`; only their ambient reverse-order forms are
-clean. Class+interface(+namespace), although accepted by tsc, is not in architecture §4.1's
-keep-list and remains a WU0A decision probe rather than required corpus behavior. The valid UMD
-`.d.ts` keeps both `export as namespace` and `export =` explicitly incomplete under backlog `15`;
+clean. The approved WU0 addendum expands backlog `43` to full class+interface(+namespace)
+composition in both class/interface orders. Its six focused fixtures require interface-added
+required, method, generic, and recursive instance members; matching and conflicting generic
+headers; property/method/heritage conflicts with non-permissive recovery; instance call/construct
+signatures; namespace placement; and preservation of construction, capability separation, existing
+and namespace-added statics, nested namespace types, and private nominal origin. Omitted versus
+introduced constraints/defaults are legal and effective in either order; only conflicting supplied
+names/constraints/defaults or arities reject. Invalid groups may conservatively exhaust/reject at use sites instead of
+synthesizing tsc's multi-parameter recovery symbol, but must never become `any`/error-permissive.
+The valid UMD `.d.ts` keeps both `export as namespace` and `export =` explicitly incomplete under backlog `15`;
 local access to its merged `Options` alone would not prove a global UMD export. The
 enum/function/namespace chimera keeps its enum surface explicitly incomplete under backlog `42`,
 pins the namespace-order diagnostic, and requires receiver-use errors so an `any`/error recovery
 cannot pass it. Exact `TS2567` ownership remains a WU0A/direct-test gate.
+Direct merged-class identity/publication remains a WU0A test because marker fixtures observe only
+downstream surfaces and diagnostics.
 
 ## Soundness-review corpora (sprint 2026-07-10)
 
