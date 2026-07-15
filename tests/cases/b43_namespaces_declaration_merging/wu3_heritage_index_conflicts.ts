@@ -42,6 +42,19 @@ interface OwnPropertyTypeDerived extends OwnPropertyTypeBase { // error[TK2430]:
   fixed: number;
 }
 
+interface RequiredPropertyBase { value: string | undefined }
+interface OptionalPropertyDerived extends RequiredPropertyBase { // error[TK2430]: Interface 'OptionalPropertyDerived' incorrectly extends interface 'RequiredPropertyBase'
+  value?: string;
+}
+
+// Own-vs-base compatibility is directional and ignores readonly, unlike base/base identity.
+interface OptionalPropertyBase { value?: string }
+interface RequiredPropertyDerived extends OptionalPropertyBase { value: string }
+interface WritablePropertyBase { value: string }
+interface ReadonlyPropertyDerived extends WritablePropertyBase { readonly value: string }
+interface ReadonlyPropertyBase { readonly value: string }
+interface WritablePropertyDerived extends ReadonlyPropertyBase { value: string }
+
 interface OwnPropertyIndexBase { [key: string]: number }
 interface OwnPropertyAgainstIndex extends OwnPropertyIndexBase {
   fixed: string; // error[TK2411]: Property 'fixed' of type 'string' is not assignable to 'string' index type 'number'
