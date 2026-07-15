@@ -381,7 +381,9 @@ independent `TK2694` routes are union, intersection, tuple, indexed access, cond
 template literal, function/constructor type, type-literal call/construct/method signature, and class
 constraint/field/method annotations. Named/default import coexistence is a project-shaped oracle
 recorded in the sprint rather than a single-file fixture. Reopening-private helper lookup is already
-pinned by `namespace_visibility.ts`; no duplicate fixture owns it.
+pinned by `namespace_visibility.ts`; no duplicate fixture owns it. Three mixed-order controls require
+a later missing-root `TK2503` to survive an earlier WU3-successful qualified endpoint or a
+backlog-42-deferred enum endpoint; they claim no semantic leaf lowering.
 The valid UMD `.d.ts` is the current `export =` form witness: it keeps both
 `export as namespace` and `export =` explicitly incomplete under backlog `15`; local access to its
 merged `Options` alone would not prove a global UMD export. `export as namespace` may also publish an

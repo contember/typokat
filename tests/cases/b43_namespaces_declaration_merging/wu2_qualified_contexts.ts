@@ -1,4 +1,4 @@
-// tsc 6.0.3 --strict: TS2694 x32 across the measured independently visited routes.
+// tsc 6.0.3 --strict: TS2694 x32 and TS2503 x3 across the measured routes.
 namespace N {}
 
 type UnionContext = N.UnionLeft | N.UnionRight; // error[TK2694]: Namespace 'N' has no exported member 'UnionLeft' | error[TK2694]: Namespace 'N' has no exported member 'UnionRight'
@@ -20,3 +20,12 @@ abstract class ClassContext<T extends N.ClassConstraint> { // error[TK2694]: Nam
   abstract field: N.ClassField; // error[TK2694]: Namespace 'N' has no exported member 'ClassField'
   abstract method<U extends N.MethodConstraint>(value: N.MethodParameter): N.MethodReturn; // error[TK2694]: Namespace 'N' has no exported member 'MethodConstraint' | error[TK2694]: Namespace 'N' has no exported member 'MethodParameter' | error[TK2694]: Namespace 'N' has no exported member 'MethodReturn'
 }
+
+namespace Available {
+  export interface Good {}
+}
+type UnionUnavailableFirst = Available.Good | MissingRoot.Bad; // error[TK2503]: Cannot find namespace 'MissingRoot'
+type FunctionUnavailableFirst = (value: Available.Good) => MissingReturn.Bad; // error[TK2503]: Cannot find namespace 'MissingReturn'
+
+enum DeferredEnum { A }
+type EnumUnavailableFirst = DeferredEnum.A | MissingEnumSibling.Bad; // error[TK2503]: Cannot find namespace 'MissingEnumSibling'

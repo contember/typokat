@@ -167,8 +167,10 @@ instance members and namespace static/container members compose in either class/
 - Independently visit the measured qualified paths in union, intersection, tuple, indexed access,
   conditional, mapped, template literal, function/constructor type, type-literal
   call/construct/method signature, and class constraint/field/method annotation routes. One failed
-  child must not suppress its measured sibling. Reopening-private helper lexical lookup is already
-  pinned by `namespace_visibility.ts` and needs no duplicate fixture.
+  child must not suppress its measured sibling, and an earlier WU3-successful or
+  backlog-42-deferred endpoint must not suppress a later topology diagnostic. This is a traversal
+  guarantee, not semantic leaf lowering. Reopening-private helper lexical lookup is already pinned
+  by `namespace_visibility.ts` and needs no duplicate fixture.
 - Emit strict-tsc-compatible topology/slot diagnostics `TK2503`, `TK2694`, `TK2702`, `TK2713`, and
   `TK2749`, with deterministic lexical event ownership. This includes missing/value-only roots,
   missing/value-only/private intermediates, type/class-only intermediate segments, namespace-only
@@ -436,8 +438,11 @@ adding `42` or `44` only if a reproducible pinned-library audit contradicts the 
   `Namespace 'N' has no exported member 'X'` message and prove independent visits only across the
   enumerated union, intersection, tuple, indexed access, conditional, mapped, template literal,
   function/constructor type, type-literal call/construct/method signature, and class annotation
-  routes. The aggregate 27-file oracle exits `2` with 237 diagnostics: 235 ordinary marker-owned
-  diagnostics plus the two existing backlog-42 `TS2567`s.
+  routes. It also reports exactly three `TS2503`s at `27:47`, `28:60`, and `31:46`: an earlier
+  `Available.Good` endpoint in union/function routes and an earlier backlog-42-deferred
+  `DeferredEnum.A` endpoint do not suppress the later missing root. These controls claim traversal
+  only, not WU3 semantic leaf lowering. The aggregate 27-file oracle exits `2` with 240 diagnostics:
+  238 ordinary marker-owned diagnostics plus the two existing backlog-42 `TS2567`s.
 - **2026-07-15 — WU2 import-root oracle.** A scratch two-file project checked with the same pinned
   `tsc 6.0.3` command exits `0`: a named import plus same-name namespace exposes `NamedN.X`, and a
   default import plus same-name namespace exposes `DefaultN.X`. The dependency exports
