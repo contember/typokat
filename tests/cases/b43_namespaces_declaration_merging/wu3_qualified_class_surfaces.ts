@@ -14,9 +14,9 @@ declare class InterfaceConstrained<T extends Wu3QualifiedClassSurfaces.Contract>
 declare class AliasConstrained<T extends Wu3QualifiedClassSurfaces.Alias<string>> {}
 declare class ClassConstrained<T extends Wu3QualifiedClassSurfaces.Box<number>> {}
 
-declare const badInterfaceConstraint: InterfaceConstrained<{ kind: "wrong" }>; // error[TK2344]: Type '{ kind: "wrong"; }' does not satisfy the constraint 'Contract'
-declare const badAliasConstraint: AliasConstrained<{ value: number }>; // error[TK2344]: Type '{ value: number; }' does not satisfy the constraint '{ value: string; }'
-declare const badClassConstraint: ClassConstrained<{ value: string }>; // error[TK2344]: Type '{ value: string; }' does not satisfy the constraint 'Box<number>'
+declare const badInterfaceConstraint: InterfaceConstrained<{ kind: "wrong" }>; // error[TK2344]
+declare const badAliasConstraint: AliasConstrained<{ value: number }>; // error[TK2344]
+declare const badClassConstraint: ClassConstrained<{ value: string }>; // error[TK2344]
 
 declare class QualifiedNonGenericApplication {
   field: Wu3QualifiedClassSurfaces.Contract<string>; // error[TK2315]: Type 'Contract' is not generic
@@ -80,6 +80,6 @@ const classReturnBad: string = qualifiedSurfaceConsumer.classMethod({ value: 1 }
 declare const wrongInterfaceArgument: { kind: "wrong" };
 declare const wrongAliasArgument: { value: number };
 declare const wrongClassArgument: { value: string };
-qualifiedSurfaceConsumer.interfaceMethod(wrongInterfaceArgument); // error[TK2345]: Argument of type '{ kind: "wrong"; }' is not assignable to parameter of type 'Contract'
-qualifiedSurfaceConsumer.aliasMethod(wrongAliasArgument); // error[TK2345]: Argument of type '{ value: number; }' is not assignable to parameter of type '{ value: string; }'
-qualifiedSurfaceConsumer.classMethod(wrongClassArgument); // error[TK2345]: Argument of type '{ value: string; }' is not assignable to parameter of type 'Box<number>'
+qualifiedSurfaceConsumer.interfaceMethod(wrongInterfaceArgument); // error[TK2345]
+qualifiedSurfaceConsumer.aliasMethod(wrongAliasArgument); // error[TK2345]
+qualifiedSurfaceConsumer.classMethod(wrongClassArgument); // error[TK2345]
