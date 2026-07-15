@@ -70,3 +70,17 @@ interface SelfInterfaceDefault<T = T> {} // error[TK2744]: Type parameter defaul
 
 type RequiredAfterOptionalAlias<T = string, U> = [T, U]; // error[TK2706]: Required type parameters may not follow optional type parameters
 interface RequiredAfterOptionalInterface<T = string, U> {} // error[TK2706]: Required type parameters may not follow optional type parameters
+
+// Every reopening header owns descriptor validation even when its one-sided
+// metadata is merge-compatible and therefore does not produce TK2428.
+interface LaterSelfDefault<T> {}
+interface LaterSelfDefault<T = T> {} // error[TK2744]: Type parameter defaults can only reference previously declared type parameters
+
+interface LaterRequiredAfterOptional<T, U> {}
+interface LaterRequiredAfterOptional<T = string, U> {} // error[TK2706]: Required type parameters may not follow optional type parameters
+
+interface LaterInvalidConstraintDefault<T extends string> {}
+interface LaterInvalidConstraintDefault<T extends string = number> {} // error[TK2344]: Type 'number' does not satisfy the constraint 'string'
+
+interface LaterCircularConstraint<T> {}
+interface LaterCircularConstraint<T extends T> {} // error[TK2313]: Type parameter 'T' has a circular constraint
