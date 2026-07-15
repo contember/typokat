@@ -1,8 +1,12 @@
-// tsc 6.0.3 --strict --noEmit: TS2344 x3, TS2322 x6, and TS2345 x3 below.
+// tsc 6.0.3 --strict --noEmit: TS2315, TS2314, TS2707, TS2344 x5, TS2322 x8, and TS2345 x3 below.
 declare namespace Wu3QualifiedClassSurfaces { // incomplete[decl/module-declaration/self]
   interface Contract { kind: "contract" }
   type Alias<T> = { value: T };
+  type Pair<T, U> = { left: T; right: U };
+  type ConstrainedAlias<T extends number> = { value: T };
   class Box<T> { value: T }
+  interface Ranged<T, U = string> { first: T; second: U }
+  class ConstrainedBox<T extends number> { value: T }
 }
 
 declare class InterfaceConstrained<T extends Wu3QualifiedClassSurfaces.Contract> {}
@@ -12,6 +16,29 @@ declare class ClassConstrained<T extends Wu3QualifiedClassSurfaces.Box<number>> 
 declare const badInterfaceConstraint: InterfaceConstrained<{ kind: "wrong" }>; // error[TK2344]: Type '{ kind: "wrong"; }' does not satisfy the constraint 'Contract'
 declare const badAliasConstraint: AliasConstrained<{ value: number }>; // error[TK2344]: Type '{ value: number; }' does not satisfy the constraint '{ value: string; }'
 declare const badClassConstraint: ClassConstrained<{ value: string }>; // error[TK2344]: Type '{ value: string; }' does not satisfy the constraint 'Box<number>'
+
+declare class QualifiedNonGenericApplication {
+  field: Wu3QualifiedClassSurfaces.Contract<string>; // error[TK2315]: Type 'Contract' is not generic
+}
+declare class QualifiedRequiredArityApplication {
+  field: Wu3QualifiedClassSurfaces.Pair<string>; // error[TK2314]: Generic type 'Pair' requires 2 type argument(s)
+}
+declare class QualifiedRangeArityApplication {
+  field: Wu3QualifiedClassSurfaces.Ranged<string, number, boolean>; // error[TK2707]: Generic type 'Ranged<T, U>' requires between 1 and 2 type arguments
+}
+declare class QualifiedAliasConstraintApplication {
+  field: Wu3QualifiedClassSurfaces.ConstrainedAlias<string>; // error[TK2344]: Type 'string' does not satisfy the constraint 'number'
+}
+declare class QualifiedClassConstraintApplication {
+  field: Wu3QualifiedClassSurfaces.ConstrainedBox<string>; // error[TK2344]: Type 'string' does not satisfy the constraint 'number'
+}
+
+declare const qualifiedAliasConstraintApplication: QualifiedAliasConstraintApplication;
+const qualifiedAliasConstraintRecoveryGood: string = qualifiedAliasConstraintApplication.field.value;
+const qualifiedAliasConstraintRecoveryBad: number = qualifiedAliasConstraintApplication.field.value; // error[TK2322]: Type 'string' is not assignable to type 'number'
+declare const qualifiedClassConstraintApplication: QualifiedClassConstraintApplication;
+const qualifiedClassConstraintRecoveryGood: string = qualifiedClassConstraintApplication.field.value;
+const qualifiedClassConstraintRecoveryBad: number = qualifiedClassConstraintApplication.field.value; // error[TK2322]: Type 'string' is not assignable to type 'number'
 
 declare class QualifiedSurfaceConsumer {
   interfaceField: Wu3QualifiedClassSurfaces.Contract;
