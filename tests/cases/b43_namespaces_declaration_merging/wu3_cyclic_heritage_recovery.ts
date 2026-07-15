@@ -64,6 +64,9 @@ interface MutualAliasReverseA { a: number } // error[TK2310]: Type 'MutualAliasR
 type IdentityAlias<T> = T;
 interface IdentitySelf extends IdentityAlias<IdentitySelf> {} // error[TK2310]: Type 'IdentitySelf' recursively references itself as a base type
 
+type NestedIdentityAlias<T> = T;
+interface NestedIdentitySelf extends NestedIdentityAlias<NestedIdentityAlias<NestedIdentitySelf>> {} // error[TK2310]: Type 'NestedIdentitySelf' recursively references itself as a base type
+
 type DefaultIdentityAlias<T = DefaultIdentitySelf> = T;
 interface DefaultIdentitySelf extends DefaultIdentityAlias {} // error[TK2310]: Type 'DefaultIdentitySelf' recursively references itself as a base type
 
@@ -76,9 +79,9 @@ interface WrongFinalAritySelf<T> extends WrongFinalArityAlias<T> {}
 type UnresolvedArgumentAlias<T> = UnresolvedArgumentSelf<T>;
 interface UnresolvedArgumentSelf<T> extends UnresolvedArgumentAlias<MissingArgument> {} // error[TK2310]: Type 'UnresolvedArgumentSelf<T>' recursively references itself as a base type | error[TK2304]: Cannot find name 'MissingArgument'
 
+type QualifiedAlias<T> = QualifiedAliasCycle.Target<T>;
 namespace QualifiedAliasCycle {
-  export type Alias<T> = Target<T>;
-  export interface Target<T> extends Alias<T> {} // error[TK2310]: Type 'Target<T>' recursively references itself as a base type
+  export interface Target<T> extends QualifiedAlias<T> {} // error[TK2310]: Type 'Target<T>' recursively references itself as a base type
 }
 
 type IntersectionAliasCycle = IntersectionAliasSelf & { marker: number };
