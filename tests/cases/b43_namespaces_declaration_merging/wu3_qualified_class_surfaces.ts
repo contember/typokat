@@ -1,8 +1,9 @@
-// tsc 6.0.3 --strict --noEmit: TS2315, TS2314, TS2707, TS2344 x5, TS2322 x8, and TS2345 x3 below.
+// tsc 6.0.3 --strict --noEmit: TS2315, TS2314, TS2707, TS2344 x5, TS2322 x12, and TS2345 x3 below.
 declare namespace Wu3QualifiedClassSurfaces { // incomplete[decl/module-declaration/self]
   interface Contract { kind: "contract" }
   type Alias<T> = { value: T };
   type Pair<T, U> = { left: T; right: U };
+  type Dependent<T, U = T> = { first: T; second: U };
   type ConstrainedAlias<T extends number> = { value: T };
   class Box<T> { value: T }
   interface Ranged<T, U = string> { first: T; second: U }
@@ -44,6 +45,8 @@ declare class QualifiedSurfaceConsumer {
   interfaceField: Wu3QualifiedClassSurfaces.Contract;
   aliasField: Wu3QualifiedClassSurfaces.Alias<string>;
   classField: Wu3QualifiedClassSurfaces.Box<number>;
+  rangedDefaultField: Wu3QualifiedClassSurfaces.Ranged<number>;
+  dependentDefaultField: Wu3QualifiedClassSurfaces.Dependent<string>;
 
   interfaceMethod(value: Wu3QualifiedClassSurfaces.Contract): Wu3QualifiedClassSurfaces.Contract;
   aliasMethod(value: Wu3QualifiedClassSurfaces.Alias<string>): Wu3QualifiedClassSurfaces.Alias<string>;
@@ -58,6 +61,14 @@ const aliasFieldGood: string = qualifiedSurfaceConsumer.aliasField.value;
 const aliasFieldBad: number = qualifiedSurfaceConsumer.aliasField.value; // error[TK2322]: Type 'string' is not assignable to type 'number'
 const classFieldGood: number = qualifiedSurfaceConsumer.classField.value;
 const classFieldBad: string = qualifiedSurfaceConsumer.classField.value; // error[TK2322]: Type 'number' is not assignable to type 'string'
+const rangedDefaultFirstGood: number = qualifiedSurfaceConsumer.rangedDefaultField.first;
+const rangedDefaultSecondGood: string = qualifiedSurfaceConsumer.rangedDefaultField.second;
+const rangedDefaultFirstBad: string = qualifiedSurfaceConsumer.rangedDefaultField.first; // error[TK2322]: Type 'number' is not assignable to type 'string'
+const rangedDefaultSecondBad: number = qualifiedSurfaceConsumer.rangedDefaultField.second; // error[TK2322]: Type 'string' is not assignable to type 'number'
+const dependentDefaultFirstGood: string = qualifiedSurfaceConsumer.dependentDefaultField.first;
+const dependentDefaultSecondGood: string = qualifiedSurfaceConsumer.dependentDefaultField.second;
+const dependentDefaultFirstBad: number = qualifiedSurfaceConsumer.dependentDefaultField.first; // error[TK2322]: Type 'string' is not assignable to type 'number'
+const dependentDefaultSecondBad: number = qualifiedSurfaceConsumer.dependentDefaultField.second; // error[TK2322]: Type 'string' is not assignable to type 'number'
 
 const interfaceReturnGood: "contract" = qualifiedSurfaceConsumer.interfaceMethod({ kind: "contract" }).kind;
 const interfaceReturnBad: "wrong" = qualifiedSurfaceConsumer.interfaceMethod({ kind: "contract" }).kind; // error[TK2322]: Type '"contract"' is not assignable to type '"wrong"'
