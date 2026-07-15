@@ -11,7 +11,8 @@ use crate::types::repr::{ClassId, TypeParamId};
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, ChainElement, Class, ClassElement, Declaration,
     ExportDefaultDeclarationKind, Expression, ForStatementInit, ForStatementLeft, FormalParameters,
-    Function, ObjectPropertyKind, Program, PropertyKey, Statement, VariableDeclaration,
+    Function, ObjectPropertyKind, Program, PropertyKey, Statement, TSModuleDeclaration,
+    TSModuleDeclarationBody, VariableDeclaration,
 };
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
@@ -74,6 +75,13 @@ pub(crate) struct DeclarationReservation {
     pub(crate) owner: RecordTicket,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct ExportAliasReservation {
+    local_span: Span,
+    event: EventId,
+    owner: RecordTicket,
+}
+
 /// Stable class identities attached after binder/type reservation and before fill.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ClassBinding {
@@ -122,12 +130,22 @@ pub(crate) struct ClassDefaultReservation {
     pub(crate) owner: RecordTicket,
 }
 
+/// One lexical owner per source class type-parameter constraint.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ClassConstraintReservation {
+    pub(crate) parameter_index: usize,
+    pub(crate) source: SourceSite,
+    pub(crate) event: EventId,
+    pub(crate) owner: RecordTicket,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ClassReservation {
     pub(crate) id: ClassSiteId,
     pub(crate) source: SourceSite,
     pub(crate) event: EventId,
     pub(crate) tickets: SiteTickets,
+    pub(crate) constraints: Vec<ClassConstraintReservation>,
     pub(crate) defaults: Vec<ClassDefaultReservation>,
     pub(crate) members: Vec<MemberSiteId>,
     pub(crate) binding: Option<ClassBinding>,
@@ -181,7 +199,9 @@ pub(crate) struct LexicalReservations {
     callables: Vec<CallableReservation>,
     expression_site_tickets: Vec<SiteTickets>,
     declarations: Vec<DeclarationReservation>,
+    export_aliases: Vec<ExportAliasReservation>,
     declarations_by_binding: FxHashMap<(ModuleOrdinal, u32, u32), usize>,
+    export_aliases_by_local_span: FxHashMap<(ModuleOrdinal, u32, u32), usize>,
     classes_by_source: BTreeMap<(ModuleOrdinal, u32), Vec<ClassSiteId>>,
     callables_by_source: BTreeMap<(ModuleOrdinal, u32), Vec<CallableSiteId>>,
     declaration_owners: FxHashMap<DeclId, LexicalOwner>,
@@ -221,7 +241,80 @@ impl LexicalReservations {
                 "one declaration per exact binding range"
             );
         }
+        for statement in &program.body {
+            match statement {
+                Statement::TSModuleDeclaration(declaration) => {
+                    self.reserve_export_aliases_in_module(module_ordinal, declaration, store)?;
+                }
+                Statement::ExportNamedDeclaration(export) => {
+                    if let Some(Declaration::TSModuleDeclaration(declaration)) = &export.declaration
+                    {
+                        self.reserve_export_aliases_in_module(module_ordinal, declaration, store)?;
+                    }
+                }
+                _ => {}
+            }
+        }
         self.reserve_statement_list(module_ordinal, unit_slot, &program.body, true, store)
+    }
+
+    fn reserve_export_aliases_in_statement(
+        &mut self,
+        module_ordinal: ModuleOrdinal,
+        statement: &Statement<'_>,
+        store: &mut EventStore,
+    ) -> Result<(), ReservationError> {
+        match statement {
+            Statement::TSModuleDeclaration(declaration) => {
+                self.reserve_export_aliases_in_module(module_ordinal, declaration, store)?;
+            }
+            Statement::ExportNamedDeclaration(export) => {
+                if export.source.is_none() && export.declaration.is_none() {
+                    for specifier in &export.specifiers {
+                        let local_span = Span::from_oxc(specifier.local.span());
+                        let event = store.reserve_event(module_ordinal, local_span.start);
+                        let index = self.export_aliases.len();
+                        self.export_aliases.push(ExportAliasReservation {
+                            local_span,
+                            event: event.id,
+                            owner: event.primary,
+                        });
+                        let previous = self
+                            .export_aliases_by_local_span
+                            .insert((module_ordinal, local_span.start, local_span.end), index);
+                        debug_assert!(
+                            previous.is_none(),
+                            "one export alias reservation per exact local span"
+                        );
+                    }
+                }
+                if let Some(Declaration::TSModuleDeclaration(declaration)) = &export.declaration {
+                    self.reserve_export_aliases_in_module(module_ordinal, declaration, store)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn reserve_export_aliases_in_module(
+        &mut self,
+        module_ordinal: ModuleOrdinal,
+        declaration: &TSModuleDeclaration<'_>,
+        store: &mut EventStore,
+    ) -> Result<(), ReservationError> {
+        match &declaration.body {
+            Some(TSModuleDeclarationBody::TSModuleBlock(block)) => {
+                for statement in &block.body {
+                    self.reserve_export_aliases_in_statement(module_ordinal, statement, store)?;
+                }
+            }
+            Some(TSModuleDeclarationBody::TSModuleDeclaration(nested)) => {
+                self.reserve_export_aliases_in_module(module_ordinal, nested, store)?;
+            }
+            None => {}
+        }
+        Ok(())
     }
 
     fn reserve_statement_list(
@@ -874,6 +967,22 @@ impl LexicalReservations {
         Ok(())
     }
 
+    pub(crate) fn export_alias_owner(
+        &self,
+        module_ordinal: ModuleOrdinal,
+        local_span: Span,
+    ) -> Option<LexicalOwner> {
+        let reservation = self
+            .export_aliases_by_local_span
+            .get(&(module_ordinal, local_span.start, local_span.end))
+            .and_then(|index| self.export_aliases.get(*index))?;
+        debug_assert_eq!(reservation.local_span, local_span);
+        Some(LexicalOwner {
+            event: reservation.event,
+            ticket: reservation.owner,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn declaration_owner(&self, declaration: DeclId) -> Option<LexicalOwner> {
         self.declaration_owners.get(&declaration).copied()
@@ -1002,6 +1111,7 @@ impl LexicalReservations {
                 .iter()
                 .map(|declaration| declaration.owner),
         );
+        tickets.extend(self.export_aliases.iter().map(|alias| alias.owner));
         for site in &self.top_level {
             tickets.extend(site_tickets(site.tickets));
         }
@@ -1012,6 +1122,7 @@ impl LexicalReservations {
             tickets.extend(site_tickets(declarator.tickets));
         }
         for class in &self.classes {
+            tickets.extend(class.constraints.iter().map(|constraint| constraint.owner));
             tickets.extend(class.defaults.iter().map(|default| default.owner));
         }
         for member in &self.members {
@@ -1035,33 +1146,50 @@ impl LexicalReservations {
         store: &mut EventStore,
     ) -> Result<ClassSiteId, ReservationError> {
         let id = ClassSiteId(self.classes.len());
-        let defaults = class
+        let mut constraints = Vec::new();
+        let mut defaults = Vec::new();
+        for (parameter_index, parameter) in class
             .type_parameters
             .as_deref()
             .into_iter()
             .flat_map(|parameters| parameters.params.iter())
             .enumerate()
-            .filter_map(|(parameter_index, parameter)| {
-                let default = parameter.default.as_ref()?;
+        {
+            if let Some(constraint) = parameter.constraint.as_ref() {
+                let source = SourceSite {
+                    module_ordinal: source.module_ordinal,
+                    unit_slot: source.unit_slot,
+                    source_start: constraint.span().start,
+                };
+                let event = store.reserve_event(source.module_ordinal, source.source_start);
+                constraints.push(ClassConstraintReservation {
+                    parameter_index,
+                    source,
+                    event: event.id,
+                    owner: event.primary,
+                });
+            }
+            if let Some(default) = parameter.default.as_ref() {
                 let source = SourceSite {
                     module_ordinal: source.module_ordinal,
                     unit_slot: source.unit_slot,
                     source_start: default.span().start,
                 };
                 let event = store.reserve_event(source.module_ordinal, source.source_start);
-                Some(ClassDefaultReservation {
+                defaults.push(ClassDefaultReservation {
                     parameter_index,
                     source,
                     event: event.id,
                     owner: event.primary,
-                })
-            })
-            .collect();
+                });
+            }
+        }
         self.classes.push(ClassReservation {
             id,
             source,
             event: event.id,
             tickets,
+            constraints,
             defaults,
             members: Vec::new(),
             binding: None,
@@ -1281,6 +1409,74 @@ mod tests {
     use oxc_parser::Parser;
     use oxc_span::SourceType;
 
+    fn source_span(source: &str, needle: &str) -> Span {
+        let start = source.find(needle).expect("test source contains needle");
+        Span::new(
+            u32::try_from(start).expect("source offset fits u32"),
+            u32::try_from(start + needle.len()).expect("source offset fits u32"),
+        )
+    }
+
+    #[test]
+    fn namespace_export_aliases_keep_exact_preallocated_local_owners() {
+        let source = "\
+export { TopLevel };
+declare namespace N {
+  interface Resolved {}
+  export { MissingOne as First, Resolved as PublicResolved };
+  export { PublicResolved as Chained };
+  export namespace Child { export { MissingTwo as Second }; }
+}
+";
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let module = ModuleOrdinal::new(0);
+        let mut store = EventStore::default();
+        let mut reservations = LexicalReservations::default();
+        reservations
+            .reserve_program(module, UnitSlot::new(0), &parsed.program, &mut store)
+            .unwrap();
+
+        assert!(reservations
+            .export_alias_owner(module, source_span(source, "TopLevel"))
+            .is_none());
+        let first = reservations
+            .export_alias_owner(module, source_span(source, "MissingOne"))
+            .expect("first local alias owner");
+        let resolved_start = source
+            .find("Resolved as PublicResolved")
+            .expect("resolved local export alias");
+        let resolved_span = Span::new(
+            u32::try_from(resolved_start).expect("source offset fits u32"),
+            u32::try_from(resolved_start + "Resolved".len()).expect("source offset fits u32"),
+        );
+        let resolved = reservations
+            .export_alias_owner(module, resolved_span)
+            .expect("resolved local alias owner");
+        let chained_start = source
+            .find("PublicResolved as Chained")
+            .expect("alias-output local export alias");
+        let chained_span = Span::new(
+            u32::try_from(chained_start).expect("source offset fits u32"),
+            u32::try_from(chained_start + "PublicResolved".len()).expect("source offset fits u32"),
+        );
+        let chained = reservations
+            .export_alias_owner(module, chained_span)
+            .expect("alias-output local owner");
+        let second = reservations
+            .export_alias_owner(module, source_span(source, "MissingTwo"))
+            .expect("nested local alias owner");
+        assert_eq!(reservations.export_aliases.len(), 4);
+        assert_eq!(first.ticket.record_ordinal, 0);
+        assert_eq!(resolved.ticket.record_ordinal, 0);
+        assert_eq!(chained.ticket.record_ordinal, 0);
+        assert_eq!(second.ticket.record_ordinal, 0);
+        assert_ne!(first.event, resolved.event);
+        assert_ne!(resolved.event, chained.event);
+        assert_ne!(chained.event, second.event);
+    }
+
     #[test]
     fn class_and_non_class_sites_keep_lexical_interleaving() {
         let source = "const before = 1; class C { a = 1; m<T>() {} } const after = 2;";
@@ -1313,8 +1509,8 @@ mod tests {
     }
 
     #[test]
-    fn every_class_default_has_a_distinct_source_owner() {
-        let source = "class C<T = string, U = number> {}";
+    fn every_class_header_child_has_a_distinct_source_owner() {
+        let source = "class C<T extends object = string, U extends unknown = number> {}";
         let allocator = Allocator::default();
         let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
         assert!(parsed.diagnostics.is_empty());
@@ -1329,20 +1525,38 @@ mod tests {
             )
             .unwrap();
 
-        let defaults = &reservations.classes()[0].defaults;
+        let class = &reservations.classes()[0];
+        let constraints = &class.constraints;
+        assert_eq!(constraints.len(), 2);
+        assert_eq!(constraints[0].parameter_index, 0);
+        assert_eq!(constraints[1].parameter_index, 1);
+        assert_eq!(
+            constraints[0].source.source_start,
+            u32::try_from(source.find("object").unwrap()).unwrap()
+        );
+        assert_eq!(
+            constraints[1].source.source_start,
+            u32::try_from(source.find("unknown").unwrap()).unwrap()
+        );
+        assert_ne!(constraints[0].event, constraints[1].event);
+        assert_ne!(constraints[0].owner, constraints[1].owner);
+
+        let defaults = &class.defaults;
         assert_eq!(defaults.len(), 2);
         assert_eq!(defaults[0].parameter_index, 0);
         assert_eq!(defaults[1].parameter_index, 1);
         assert_eq!(
             defaults[0].source.source_start,
-            source.find("string").unwrap() as u32
+            u32::try_from(source.find("string").unwrap()).unwrap()
         );
         assert_eq!(
             defaults[1].source.source_start,
-            source.find("number").unwrap() as u32
+            u32::try_from(source.find("number").unwrap()).unwrap()
         );
         assert_ne!(defaults[0].event, defaults[1].event);
         assert_ne!(defaults[0].owner, defaults[1].owner);
+        assert_ne!(constraints[0].owner, defaults[0].owner);
+        assert_ne!(constraints[1].owner, defaults[1].owner);
 
         for ticket in reservations.tickets() {
             store.complete(ticket, Vec::new()).unwrap();
@@ -1448,7 +1662,7 @@ mod tests {
         assert_eq!(second_reservation.binding_span, second.site.binding_span);
 
         let legacy = symbol.ty.expect("legacy production storage");
-        assert_eq!(legacy, second.legacy_storage);
+        assert_eq!(Some(legacy), second.legacy_storage);
         assert_eq!(
             reservations.type_decl_source(legacy),
             Some(SourceSite {
@@ -1742,22 +1956,39 @@ mod tests {
     }
 
     #[test]
-    fn interface_and_alias_records_replay_at_their_declaration_owners() {
+    fn interface_and_alias_qualified_errors_replay_at_their_declaration_owners() {
         let source = "interface First { value: ns.One } type Second = ns.Two;";
         let output = crate::driver::check_source(source);
-        assert!(output.diagnostics.is_empty());
-        assert_eq!(output.incomplete.len(), 2);
+        assert_eq!(output.diagnostics.len(), 2);
         assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (
+                    diagnostic.code,
+                    diagnostic.message.as_str(),
+                    diagnostic.span.start,
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    crate::diagnostics::DiagnosticCode::TK2503,
+                    "Cannot find namespace 'ns'.",
+                    u32::try_from(source.find("ns.One").unwrap()).unwrap(),
+                ),
+                (
+                    crate::diagnostics::DiagnosticCode::TK2503,
+                    "Cannot find namespace 'ns'.",
+                    u32::try_from(source.find("ns.Two").unwrap()).unwrap(),
+                ),
+            ]
+        );
+        assert!(
             output
                 .incomplete
                 .iter()
-                .map(|record| record.id.as_str())
-                .collect::<Vec<_>>(),
-            vec![
-                "annotation-lower/type-name/qualified-name",
-                "annotation-lower/type-name/qualified-name",
-            ]
+                .all(|record| record.id != "annotation-lower/type-name/qualified-name"),
+            "failed paths must not retain a qualified-name incomplete"
         );
-        assert!(output.incomplete[0].span.start < output.incomplete[1].span.start);
     }
 }

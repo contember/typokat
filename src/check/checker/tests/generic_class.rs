@@ -325,3 +325,53 @@ const excess: Shape = { x: 1, y: 2 }; // TK2353
         vec![(5, "TK2322".to_string()), (6, "TK2353".to_string())]
     );
 }
+
+#[test]
+fn generic_heritage_composes_only_after_every_argument_is_available() {
+    let src = "\
+class Base<T> {
+  value!: T;
+}
+class Derived extends Base<number> {}
+const good: number = new Derived().value;
+const bad: string = new Derived().value;
+";
+    let out = check_source(src);
+    assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+    assert_eq!(diags(src), vec![(6, "TK2322".to_string())]);
+    assert_eq!(
+        out.incomplete
+            .iter()
+            .map(|record| record.id.as_str())
+            .collect::<Vec<_>>(),
+        ["class/class-heritage/type-arguments"]
+    );
+}
+
+#[test]
+fn qualified_heritage_visits_every_argument_without_a_partial_application() {
+    let src = "\
+namespace N {}
+class Base<First, Second> {
+  inherited!: First | Second;
+}
+class Derived extends Base<N.First, N.Second> {}
+new Derived().inherited;
+";
+    let out = check_source(src);
+    assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+    assert_eq!(
+        diags(src),
+        vec![(5, "TK2694".to_string()), (5, "TK2694".to_string())]
+    );
+    assert_eq!(
+        out.incomplete
+            .iter()
+            .map(|record| record.id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "decl/module-declaration/self",
+            "class/class-heritage/type-arguments"
+        ]
+    );
+}

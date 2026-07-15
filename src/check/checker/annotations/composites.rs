@@ -2,6 +2,13 @@ use super::super::decls::alloc_type_param_ids;
 use super::*;
 use oxc_ast::ast::TSTypeParameterDeclaration;
 
+#[derive(Default)]
+struct MethodOverloadAccumulator {
+    call_signatures: Vec<TypeId>,
+    unsupported: bool,
+    unavailable: bool,
+}
+
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Lower `A | B | …` to a canonical interned union. Any unlowerable member
     /// aborts the whole annotation; dropping it would mis-state the union.
@@ -11,8 +18,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         members: &[TSType<'_>],
     ) -> Option<TypeId> {
         let mut lowered: Vec<TypeId> = Vec::with_capacity(members.len());
+        let mut unavailable = false;
         for member in members {
-            lowered.push(self.lower_annotation(scope, member)?);
+            match self.lower_annotation(scope, member) {
+                Some(member) => lowered.push(member),
+                None => unavailable = true,
+            }
+        }
+        if unavailable {
+            return None;
         }
         Some(self.interner.union(lowered))
     }
@@ -28,9 +42,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> Option<TypeId> {
         let mut structural: Vec<TypeId> = Vec::with_capacity(members.len());
         let mut this_type = None;
+        let mut unavailable = false;
         for member in members {
-            let lowered_member = self.lower_annotation(scope, member)?;
-            self.extract_contextual_this_members(lowered_member, &mut structural, &mut this_type);
+            match self.lower_annotation(scope, member) {
+                Some(lowered_member) => self.extract_contextual_this_members(
+                    lowered_member,
+                    &mut structural,
+                    &mut this_type,
+                ),
+                None => unavailable = true,
+            }
+        }
+        if unavailable {
+            return None;
         }
         if let Some(this_type) = this_type {
             structural.push(this_type);
@@ -76,38 +100,67 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> Option<TypeId> {
         let mut lowered: Vec<TypeId> = Vec::with_capacity(elements.len());
         let mut rest: Option<TupleRestType> = None;
+        let mut seen_rest = false;
+        let mut unavailable = false;
+        let mut recorded_optional = false;
+        let mut recorded_named = false;
         for element in elements {
             match element {
                 TSTupleElement::TSRestType(rest_type) => {
-                    if rest.is_some() {
-                        return None;
+                    if seen_rest {
+                        unavailable = true;
                     }
+                    seen_rest = true;
                     let ty = self.with_indirection(|p| {
                         p.lower_annotation(scope, &rest_type.type_annotation)
-                    })?;
-                    rest = Some(TupleRestType::new(lowered.len(), ty));
+                    });
+                    match ty {
+                        Some(ty) if rest.is_none() => {
+                            rest = Some(TupleRestType::new(lowered.len(), ty));
+                        }
+                        Some(_) => {}
+                        None => unavailable = true,
+                    }
                 }
                 TSTupleElement::TSOptionalType(optional) => {
-                    self.record_incomplete(
-                        "annotation-lower/tuple-optional-element/self",
-                        Span::from_oxc(optional.span),
-                        "optional tuple element aborts tuple lowering",
-                    );
-                    return None;
+                    if !recorded_optional {
+                        self.record_incomplete(
+                            "annotation-lower/tuple-optional-element/self",
+                            Span::from_oxc(optional.span),
+                            "optional tuple element aborts tuple lowering",
+                        );
+                        recorded_optional = true;
+                    }
+                    unavailable = true;
+                    self.with_indirection(|p| p.lower_annotation(scope, &optional.type_annotation));
                 }
                 _ => {
-                    let ts_type = element.as_ts_type()?;
+                    let Some(ts_type) = element.as_ts_type() else {
+                        unavailable = true;
+                        continue;
+                    };
                     if let TSType::TSNamedTupleMember(named) = ts_type {
-                        self.record_incomplete(
-                            "annotation-lower/named-tuple-member/self",
-                            Span::from_oxc(named.span),
-                            "named tuple member aborts tuple lowering",
-                        );
-                        return None;
+                        if !recorded_named {
+                            self.record_incomplete(
+                                "annotation-lower/named-tuple-member/self",
+                                Span::from_oxc(named.span),
+                                "named tuple member aborts tuple lowering",
+                            );
+                            recorded_named = true;
+                        }
+                        unavailable = true;
+                        self.visit_tuple_element_annotation(scope, &named.element_type);
+                        continue;
                     }
-                    lowered.push(self.with_indirection(|p| p.lower_annotation(scope, ts_type))?);
+                    match self.with_indirection(|p| p.lower_annotation(scope, ts_type)) {
+                        Some(ty) => lowered.push(ty),
+                        None => unavailable = true,
+                    }
                 }
             }
+        }
+        if unavailable {
+            return None;
         }
         if let Some(rest) = rest {
             Some(
@@ -116,6 +169,25 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             )
         } else {
             Some(self.interner.intern_tuple(lowered))
+        }
+    }
+
+    fn visit_tuple_element_annotation(&mut self, scope: ScopeId, element: &TSTupleElement<'_>) {
+        match element {
+            TSTupleElement::TSRestType(rest) => {
+                self.with_indirection(|p| p.lower_annotation(scope, &rest.type_annotation));
+            }
+            TSTupleElement::TSOptionalType(optional) => {
+                self.with_indirection(|p| p.lower_annotation(scope, &optional.type_annotation));
+            }
+            TSTupleElement::TSNamedTupleMember(named) => {
+                self.visit_tuple_element_annotation(scope, &named.element_type);
+            }
+            _ => {
+                if let Some(ty) = element.as_ts_type() {
+                    self.with_indirection(|p| p.lower_annotation(scope, ty));
+                }
+            }
         }
     }
 
@@ -169,23 +241,62 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> Option<TypeId> {
         let mut object = ObjectType::default();
         let overloaded_method_names = self.overloaded_method_names(members);
-        let mut lowered_overloaded_methods: FxHashSet<String> = FxHashSet::default();
+        let mut overloads: FxHashMap<String, MethodOverloadAccumulator> = FxHashMap::default();
+        let mut overload_order = Vec::new();
+        let mut unavailable = false;
         for member in members {
             match member {
                 TSSignature::TSPropertySignature(sig) => {
-                    let Some(name) = sig.key.static_name() else {
+                    if sig.computed {
                         self.record_property_signature_computed_key(&sig.key);
-                        return None;
-                    };
-                    if overloaded_method_names.contains(name.as_ref()) {
+                        if let Some(annotation) = sig.type_annotation.as_ref() {
+                            self.with_indirection(|p| {
+                                p.lower_annotation(scope, &annotation.type_annotation)
+                            });
+                        }
+                        unavailable = true;
                         continue;
                     }
-                    let annotation = sig.type_annotation.as_ref()?;
+                    let Some(name) = sig.key.static_name() else {
+                        self.record_property_signature_computed_key(&sig.key);
+                        if let Some(annotation) = sig.type_annotation.as_ref() {
+                            self.with_indirection(|p| {
+                                p.lower_annotation(scope, &annotation.type_annotation)
+                            });
+                        }
+                        unavailable = true;
+                        continue;
+                    };
+                    if overloaded_method_names.contains(name.as_ref()) {
+                        let name = name.into_owned();
+                        if !overloads.contains_key(&name) {
+                            overload_order.push(name.clone());
+                        }
+                        let overload = overloads.entry(name).or_default();
+                        overload.unsupported = true;
+                        let lowered = sig.type_annotation.as_ref().and_then(|annotation| {
+                            self.with_indirection(|p| {
+                                p.lower_annotation(scope, &annotation.type_annotation)
+                            })
+                        });
+                        if lowered.is_none() {
+                            overload.unavailable = true;
+                        }
+                        continue;
+                    }
+                    let Some(annotation) = sig.type_annotation.as_ref() else {
+                        unavailable = true;
+                        continue;
+                    };
                     // B29: an object member is a legal-recursion boundary (`type W = { a: W
                     // } | null`), so lower it at a deeper indirection level.
                     let ty = self.with_indirection(|p| {
                         p.lower_annotation(scope, &annotation.type_annotation)
-                    })?;
+                    });
+                    let Some(ty) = ty else {
+                        unavailable = true;
+                        continue;
+                    };
                     // M21: optional properties intern `T | undefined` here, matching
                     // interface members and keeping this out of the relation engine.
                     let ty = if sig.optional {
@@ -203,34 +314,104 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
                 // M19: an index signature `[k: string]: T` / `[i: number]: T`.
                 TSSignature::TSIndexSignature(sig) => {
-                    self.lower_index_signature(scope, sig, &mut object)?;
+                    if self
+                        .lower_index_signature(scope, sig, &mut object)
+                        .is_none()
+                    {
+                        unavailable = true;
+                    }
                 }
                 TSSignature::TSMethodSignature(sig) => {
+                    if sig.computed {
+                        self.record_method_signature_computed_key(&sig.key);
+                        self.lower_generic_strict_signature_function_type(
+                            scope,
+                            sig.type_parameters.as_deref(),
+                            sig.this_param.as_deref(),
+                            &sig.params,
+                            sig.return_type.as_deref(),
+                        );
+                        unavailable = true;
+                        continue;
+                    }
                     let Some(name) = sig.key.static_name() else {
                         self.record_method_signature_computed_key(&sig.key);
-                        return None;
+                        self.lower_generic_strict_signature_function_type(
+                            scope,
+                            sig.type_parameters.as_deref(),
+                            sig.this_param.as_deref(),
+                            &sig.params,
+                            sig.return_type.as_deref(),
+                        );
+                        unavailable = true;
+                        continue;
                     };
                     if overloaded_method_names.contains(name.as_ref()) {
                         let name = name.into_owned();
-                        if lowered_overloaded_methods.insert(name.clone()) {
-                            let prop =
-                                self.lower_method_overload_property(scope, members, &name)?;
-                            object.properties.push(prop);
+                        if !overloads.contains_key(&name) {
+                            overload_order.push(name.clone());
+                        }
+                        let overload = overloads.entry(name).or_default();
+                        let signature = self.lower_generic_strict_signature_function_type(
+                            scope,
+                            sig.type_parameters.as_deref(),
+                            sig.this_param.as_deref(),
+                            &sig.params,
+                            sig.return_type.as_deref(),
+                        );
+                        if sig.kind != TSMethodSignatureKind::Method || sig.optional {
+                            overload.unsupported = true;
+                        }
+                        match signature {
+                            Some(signature)
+                                if sig.kind == TSMethodSignatureKind::Method && !sig.optional =>
+                            {
+                                overload.call_signatures.push(signature);
+                            }
+                            Some(_) => {}
+                            None => overload.unavailable = true,
                         }
                         continue;
                     }
-                    let prop = self.lower_method_signature_property(scope, sig)?;
-                    object.properties.push(prop);
+                    match self.lower_method_signature_property(scope, sig) {
+                        Some(prop) => object.properties.push(prop),
+                        None => unavailable = true,
+                    }
                 }
                 TSSignature::TSCallSignatureDeclaration(sig) => {
-                    let signature = self.lower_call_signature(scope, sig)?;
-                    object.call_signatures.push(signature);
+                    match self.lower_call_signature(scope, sig) {
+                        Some(signature) => object.call_signatures.push(signature),
+                        None => unavailable = true,
+                    }
                 }
                 TSSignature::TSConstructSignatureDeclaration(sig) => {
-                    let signature = self.lower_construct_signature(scope, sig)?;
-                    object.construct_signatures.push(signature);
+                    match self.lower_construct_signature(scope, sig) {
+                        Some(signature) => object.construct_signatures.push(signature),
+                        None => unavailable = true,
+                    }
                 }
             }
+        }
+        for name in overload_order {
+            let overload = overloads
+                .remove(&name)
+                .expect("every overload name retains its accumulator");
+            if overload.unavailable || overload.call_signatures.is_empty() {
+                unavailable = true;
+                continue;
+            }
+            let ty = if overload.unsupported {
+                self.interner.well_known().never
+            } else {
+                self.interner.intern_object(ObjectType {
+                    call_signatures: overload.call_signatures,
+                    ..Default::default()
+                })
+            };
+            object.properties.push(PropertyType::public(name, ty));
+        }
+        if unavailable {
+            return None;
         }
         Some(self.interner.intern_object(object))
     }
@@ -249,11 +430,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let frame = self.build_type_param_frame(type_parameter_decl, &ids);
         self.with_type_params(frame, |pass| {
             let type_params = pass.lower_signature_type_params(scope, type_parameter_decl, &ids);
-            let receiver = pass.lower_this_parameter(scope, this_param)?;
-            let params = pass.lower_strict_signature_parameters(scope, params, true)?;
-            let ret = pass.with_indirection(|p| p.lower_annotation(scope, return_type))?;
+            let receiver = pass.lower_this_parameter(scope, this_param);
+            let params = pass.lower_strict_signature_parameters(scope, params, true);
+            let ret = pass.with_indirection(|p| p.lower_annotation(scope, return_type));
+            let (Some(receiver), Some(params), Some(ret)) = (receiver, params, ret) else {
+                return None;
+            };
+            if type_params.unavailable {
+                return None;
+            }
             Some(pass.interner.intern_function(FunctionType {
-                type_params,
+                type_params: type_params.params,
                 receiver,
                 params,
                 ret,

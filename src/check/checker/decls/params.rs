@@ -9,6 +9,11 @@ use oxc_ast::ast::TSTypeParameterDeclaration;
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+pub(in crate::check::checker) struct LoweredSignatureTypeParams {
+    pub(in crate::check::checker) params: Vec<GenericTypeParam>,
+    pub(in crate::check::checker) unavailable: bool,
+}
+
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Build a source-name to type-parameter-id frame from pre-allocated ids.
     /// Unnameable parameters are skipped; named ones resolve to stable ids in bodies.
@@ -50,31 +55,81 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         param_decl: Option<&TSTypeParameterDeclaration<'_>>,
         ids: &[TypeParamId],
-    ) -> Vec<GenericTypeParam> {
-        self.lower_type_param_constraints_inner(scope, param_decl, ids, false);
+    ) -> LoweredSignatureTypeParams {
         let Some(param_decl) = param_decl else {
-            return Vec::new();
+            return LoweredSignatureTypeParams {
+                params: Vec::new(),
+                unavailable: false,
+            };
         };
+        let error_ty = self.interner.well_known().error;
+        let mut unavailable = false;
         let mut type_params: Vec<GenericTypeParam> = Vec::with_capacity(ids.len());
         for (index, (param, &id)) in param_decl.params.iter().zip(ids).enumerate() {
+            let constraint = match param.constraint.as_ref() {
+                Some(constraint) => match self.lower_annotation(scope, constraint) {
+                    Some(ty) if ty != error_ty => {
+                        self.interner.set_type_param_constraint(id, ty);
+                        Some(ty)
+                    }
+                    Some(_) | None => {
+                        unavailable = true;
+                        None
+                    }
+                },
+                None => None,
+            };
             let default = param.default.as_ref().and_then(|default| {
-                let lowered = self.lower_annotation(scope, default)?;
+                let Some(lowered) = self.lower_annotation(scope, default) else {
+                    unavailable = true;
+                    return None;
+                };
+                if lowered == error_ty {
+                    unavailable = true;
+                    return None;
+                }
                 if self.default_references_later_signature_binder(index, param, ids, lowered) {
                     self.emit_diagnostic(Diagnostic::type_parameter_default_forward_reference(
                         Span::from_oxc(default.span()),
                     ));
+                    unavailable = true;
                     return None;
                 }
                 Some(lowered)
             });
             type_params.push(GenericTypeParam {
                 id,
-                constraint: self.interner.store().type_param_constraint(id),
+                constraint,
                 default,
             });
         }
+        let mut circular = Vec::new();
+        for (index, (param, &id)) in param_decl.params.iter().zip(ids).enumerate() {
+            let Some(constraint) = param.constraint.as_ref() else {
+                continue;
+            };
+            if self.constraint_chain_revisits(id) {
+                circular.push((
+                    index,
+                    id,
+                    Span::from_oxc(constraint.span()),
+                    param.name.name.to_string(),
+                ));
+            }
+        }
+        for (index, id, span, name) in circular {
+            self.emit_diagnostic(Diagnostic::circular_constraint(span, &name));
+            self.interner.remove_type_param_constraint(id);
+            if let Some(type_param) = type_params.get_mut(index) {
+                type_param.constraint = None;
+            }
+            unavailable = true;
+        }
         self.validate_signature_type_param_defaults(&type_params, param_decl);
-        type_params
+        LoweredSignatureTypeParams {
+            params: type_params,
+            unavailable,
+        }
     }
 
     /// Signature defaults see earlier binders only, while constraints retain their

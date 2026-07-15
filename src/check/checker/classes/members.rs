@@ -322,12 +322,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             self.check_retained_function_body(
                 scope,
                 function,
-                RetainedFunctionBodySurface {
+                &RetainedFunctionBodySurface {
                     type_param_frame: retained.type_param_frame,
                     receiver: retained.receiver,
                     params: retained.params,
                     declared_return: retained.declared_return,
-                    tickets: retained.tickets,
+                    tickets: Some(retained.tickets),
                 },
             );
             return;

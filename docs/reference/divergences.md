@@ -82,6 +82,10 @@ and validated the same way.
   the first. Fixtures keep at most one mismatched argument per call so the corpus
   matches both.
   <!-- div: id=calls/multiple-mismatched-arguments dir=over scope=s-call-arguments owner=design-oos witness=../../tests/cases/m3_functions -->
+- **Diagnosed ambient export-alias endpoints suppress qualified-use cascades
+  (under-report).** After `TK2661` rejects an alias-only local name, typokat keeps the
+  exported endpoint unavailable and omits tsc's follow-on `TS2694` at each use.
+  <!-- div: id=namespaces/ambient-alias-use-cascade dir=under scope=b-namespaces owner=../backlog/43-namespaces-declaration-merging.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu2_ambient_export_alias_list.ts -->
 - **Unannotated forward `var` value types are unresolved (under-report).** The
   declaration-hoisting sprint shipped name hoisting and explicit-annotation reservation, but a later
   unannotated initializer still does not type an earlier read/write. Moving value

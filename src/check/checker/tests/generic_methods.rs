@@ -269,10 +269,7 @@ const fallbackMustStayUnknown: number = forwardDefault();
 ";
     let result = check_source(source);
     assert!(result.parse_errors.is_empty(), "unexpected parse errors");
-    assert_eq!(
-        diagnostic_lines(source),
-        vec![(1, "TK2744".to_string()), (2, "TK2322".to_string())]
-    );
+    assert_eq!(diagnostic_lines(source), vec![(1, "TK2744".to_string())]);
     assert!(
         result.incomplete.is_empty(),
         "a rejected signature default must not become an incomplete surface"

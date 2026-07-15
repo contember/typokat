@@ -646,6 +646,36 @@ class A {
 }
 
 #[test]
+fn computed_property_replays_its_annotation_without_publishing_the_member() {
+    let src = "\
+namespace N {}
+declare const computedKey: \"field\";
+class C {
+  [computedKey]!: N.Missing;
+  sibling: number = 1;
+}
+const sibling: number = new C().sibling;
+new C().field;
+";
+    let out = check_source(src);
+    assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+    assert_eq!(
+        diags(src),
+        vec![(4, "TK2694".to_string()), (8, "TK2339".to_string())]
+    );
+    assert_eq!(
+        out.incomplete
+            .iter()
+            .map(|incomplete| incomplete.id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "decl/module-declaration/self",
+            "class/property-definition/computed-key"
+        ]
+    );
+}
+
+#[test]
 fn unavailable_retained_parameter_still_checks_its_default_initializer() {
     let src = "\
 class C {

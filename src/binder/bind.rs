@@ -546,7 +546,20 @@ fn bind_source_type(
 ) {
     let declaration = state.attach_declaration_scope(binding_start, declaration_kind, scope);
     let storage = state.fresh_legacy_type_storage();
-    declare_type(state, scope, name, declaration, storage, fragment_kind);
+    let source = state
+        .module_sources
+        .get(&state.current_module)
+        .copied()
+        .expect("current module has stable source ownership");
+    declare_type(
+        state,
+        scope,
+        name,
+        declaration,
+        Some(storage),
+        fragment_kind,
+        source,
+    );
 }
 
 /// Bind a list of statements into `scope`.
@@ -1088,20 +1101,26 @@ fn declare_function_value(
 
 /// Retain one source fragment in its stable group while preserving last-wins
 /// legacy production type storage until WU3.
-fn declare_type(
+pub(super) fn declare_type(
     state: &mut BindState,
-    scope: ScopeId,
+    target_scope: ScopeId,
     name: &str,
     declaration: DeclId,
-    storage: LegacyTypeStorageId,
+    legacy_storage: Option<LegacyTypeStorageId>,
     kind: TypeFragmentKind,
+    source: SourceUnitKey,
 ) {
     let site = state
         .declarations
         .get(declaration)
         .expect("fresh type declaration exists")
         .site;
-    if let Some(existing) = state.graph.get(scope).and_then(|s| s.lookup_local(name)) {
+    let fragment_scope = site.scope.expect("type declaration has a lexical scope");
+    if let Some(existing) = state
+        .graph
+        .get(target_scope)
+        .and_then(|s| s.lookup_local(name))
+    {
         let group = match state
             .symbols
             .get(existing)
@@ -1117,22 +1136,37 @@ fn declare_type(
             .fragments
             .push(TypeGroupFragment {
                 declaration,
-                scope,
+                source,
+                scope: fragment_scope,
                 site,
                 kind,
-                legacy_storage: storage,
+                legacy_storage,
+            });
+        state
+            .type_groups
+            .get_mut(group)
+            .expect("allocated type group exists")
+            .fragments
+            .sort_by_key(|fragment| {
+                (
+                    fragment.source,
+                    fragment.site.declaration_span.start,
+                    fragment.declaration.0,
+                )
             });
         let lexical = state
             .declarations
             .get_mut(declaration)
             .expect("fresh type declaration exists");
-        lexical.legacy_type_storage = Some(storage);
+        lexical.legacy_type_storage = legacy_storage;
         lexical.type_group = Some(group);
         let symbol = state
             .symbols
             .get_mut(existing)
             .expect("resolved symbol exists");
-        symbol.ty = Some(storage);
+        if let Some(storage) = legacy_storage {
+            symbol.ty = Some(storage);
+        }
         symbol.type_group = Some(group);
         state.attach_symbol_declaration(existing, declaration);
         return;
@@ -1145,22 +1179,23 @@ fn declare_type(
         .fragments
         .push(TypeGroupFragment {
             declaration,
-            scope,
+            source,
+            scope: fragment_scope,
             site,
             kind,
-            legacy_storage: storage,
+            legacy_storage,
         });
     let lexical = state
         .declarations
         .get_mut(declaration)
         .expect("fresh type declaration exists");
-    lexical.legacy_type_storage = Some(storage);
+    lexical.legacy_type_storage = legacy_storage;
     lexical.type_group = Some(group);
     let mut symbol = Symbol::new(name);
-    symbol.ty = Some(storage);
+    symbol.ty = legacy_storage;
     symbol.type_group = Some(group);
     let symbol_id: SymbolId = state.symbols.push(symbol);
-    state.graph.declare(scope, name, symbol_id);
+    state.graph.declare(target_scope, name, symbol_id);
     state.attach_symbol_declaration(symbol_id, declaration);
 }
 
@@ -1374,7 +1409,7 @@ mod tests {
                 .is_some_and(|declaration| {
                     declaration.site == fragment.site
                         && declaration.type_group == Some(group_id)
-                        && declaration.legacy_type_storage == Some(fragment.legacy_storage)
+                        && declaration.legacy_type_storage == fragment.legacy_storage
                         && fragment.scope == declaration.site.scope.expect("bound type scope")
                 })
         }));
@@ -1398,7 +1433,7 @@ mod tests {
             group
                 .fragments
                 .last()
-                .map(|fragment| fragment.legacy_storage)
+                .and_then(|fragment| fragment.legacy_storage)
         );
 
         let class = group

@@ -1,6 +1,11 @@
 //! Query-free lowering of class surface type syntax.
 
+use crate::binder::namespace::QualifiedTypePathResolution;
 use crate::class_semantics::{ClassApplicationArguments, DemandOutcome, Exhaustion};
+use crate::diagnostics::{
+    qualified_type_incomplete, qualified_type_topology_diagnostic, Diagnostic,
+};
+use crate::span::Span as CheckSpan;
 use crate::types::repr::{
     ClassId, ConditionalType, FunctionType, GenericTypeParam, LiteralValue, MappedType, ModifierOp,
     ObjectType, ParameterType, PropertyType, TemplateType, TupleRestType, TupleType, TypeParamId,
@@ -35,6 +40,16 @@ pub(in crate::check::checker) enum SurfaceTypeFailure<Ticket> {
         owner: Ticket,
         span: Span,
         name: String,
+    },
+    QualifiedTopology {
+        owner: Ticket,
+        diagnostic: Diagnostic,
+    },
+    QualifiedIncomplete {
+        owner: Ticket,
+        span: Span,
+        id: &'static str,
+        context: &'static str,
     },
     WrongArity {
         span: Span,
@@ -73,12 +88,20 @@ pub(in crate::check::checker) enum SurfaceNameResolution<Ticket> {
     },
     Poisoned(Ticket),
     Unavailable(Ticket),
+    Qualified {
+        owner: Ticket,
+        resolution: QualifiedTypePathResolution,
+    },
 }
 
 /// Narrow reservation/name capability. Implementations only read identities and
 /// preallocated tickets; they cannot evaluate, project, relate, or allocate events.
 pub(in crate::check::checker) trait SurfaceTypeResolver<Ticket> {
     fn resolve_name(&mut self, name: &str) -> SurfaceNameResolution<Ticket>;
+
+    fn resolve_qualified_name(&mut self, segments: &[&str]) -> SurfaceNameResolution<Ticket>;
+
+    fn qualified_outer_type_parameters_visible(&self) -> bool;
 
     fn signature_type_parameter(
         &mut self,
@@ -100,6 +123,38 @@ struct InferFrame {
 struct MappedFrame {
     key: String,
     captured_source: Option<TypeId>,
+}
+
+#[derive(Copy, Clone)]
+struct SurfaceQualifiedSegment<'a> {
+    name: &'a str,
+    span: Span,
+}
+
+fn flatten_qualified_type_name<'a>(
+    name: &'a TSTypeName<'_>,
+    segments: &mut Vec<SurfaceQualifiedSegment<'a>>,
+) -> bool {
+    match name {
+        TSTypeName::IdentifierReference(identifier) => {
+            segments.push(SurfaceQualifiedSegment {
+                name: identifier.name.as_str(),
+                span: identifier.span,
+            });
+            true
+        }
+        TSTypeName::QualifiedName(qualified) => {
+            if !flatten_qualified_type_name(&qualified.left, segments) {
+                return false;
+            }
+            segments.push(SurfaceQualifiedSegment {
+                name: qualified.right.name.as_str(),
+                span: qualified.right.span,
+            });
+            true
+        }
+        TSTypeName::ThisExpression(_) => false,
+    }
 }
 
 /// Produces immutable raw/deferred nodes only. Child failures are retained so
@@ -437,8 +492,12 @@ where
         arguments: Option<&oxc_ast::ast::TSTypeParameterInstantiation<'_>>,
         span: Span,
     ) -> SurfaceTypeResult<Ticket> {
-        let TSTypeName::IdentifierReference(identifier) = name else {
-            return Err(self.unsupported(span));
+        let identifier = match name {
+            TSTypeName::IdentifierReference(identifier) => identifier,
+            TSTypeName::QualifiedName(_) => {
+                return self.lower_qualified_reference(name, arguments, span);
+            }
+            TSTypeName::ThisExpression(_) => return Err(self.unsupported(span)),
         };
         let name = identifier.name.as_str();
         if arguments.is_none() {
@@ -553,7 +612,107 @@ where
                 span: identifier.span,
                 name: name.to_string(),
             }),
+            SurfaceNameResolution::Qualified { .. } => {
+                unreachable!("simple-name lookup returned a qualified-path outcome")
+            }
         }
+    }
+
+    fn lower_qualified_reference(
+        &mut self,
+        name: &TSTypeName<'_>,
+        arguments: Option<&oxc_ast::ast::TSTypeParameterInstantiation<'_>>,
+        span: Span,
+    ) -> SurfaceTypeResult<Ticket> {
+        let mut segments = Vec::new();
+        if !flatten_qualified_type_name(name, &mut segments) {
+            return Err(self.unsupported(span));
+        }
+        let names = segments
+            .iter()
+            .map(|segment| segment.name)
+            .collect::<Vec<_>>();
+        let spans = segments
+            .iter()
+            .map(|segment| CheckSpan::from_oxc(segment.span))
+            .collect::<Vec<_>>();
+        let SurfaceNameResolution::Qualified {
+            owner,
+            mut resolution,
+        } = self.resolver.resolve_qualified_name(&names)
+        else {
+            unreachable!("qualified-name lookup returned a simple-name outcome")
+        };
+        if matches!(resolution, QualifiedTypePathResolution::MissingRoot { .. })
+            && self.checker_local_qualified_root(names[0])
+        {
+            resolution = QualifiedTypePathResolution::TypeOnlyRoot { segment: 0 };
+        }
+
+        if matches!(resolution, QualifiedTypePathResolution::Unavailable { .. }) {
+            self.lower_qualified_type_arguments(arguments);
+            return Err(SurfaceTypeFailure::Poisoned(owner));
+        }
+
+        if let Some(incomplete) = qualified_type_incomplete(resolution) {
+            self.lower_qualified_type_arguments(arguments);
+            return Err(SurfaceTypeFailure::QualifiedIncomplete {
+                owner,
+                span,
+                id: incomplete.id,
+                context: incomplete.context,
+            });
+        }
+
+        let diagnostic = qualified_type_topology_diagnostic(
+            resolution,
+            &names,
+            &spans,
+            CheckSpan::from_oxc(span),
+        )
+        .expect("every non-incomplete qualified outcome is a topology diagnostic");
+        self.child_failures
+            .push(SurfaceTypeFailure::QualifiedTopology { owner, diagnostic });
+        self.lower_qualified_type_arguments(arguments);
+        Ok(self.factory.well_known().error)
+    }
+
+    fn lower_qualified_type_arguments(
+        &mut self,
+        arguments: Option<&oxc_ast::ast::TSTypeParameterInstantiation<'_>>,
+    ) {
+        if let Some(arguments) = arguments {
+            for argument in &arguments.params {
+                if let Err(failure) = self.lower_type(argument) {
+                    self.child_failures.push(failure);
+                }
+            }
+        }
+    }
+
+    fn checker_local_qualified_root(&self, name: &str) -> bool {
+        let first_visible_frame = usize::from(
+            !self.resolver.qualified_outer_type_parameters_visible()
+                && !self.type_param_frames.is_empty(),
+        );
+        name == "Array"
+            || self
+                .type_param_frames
+                .iter()
+                .skip(first_visible_frame)
+                .rev()
+                .any(|frame| frame.contains_key(name))
+            || self
+                .infer_frames
+                .iter()
+                .rev()
+                .filter(|frame| frame.active)
+                .any(|frame| frame.binders.contains_key(name))
+            || self
+                .mapped_frames
+                .iter()
+                .rev()
+                .any(|frame| frame.key == name)
     }
 
     fn lower_conditional(
@@ -1132,6 +1291,7 @@ mod tests {
     #[derive(Default)]
     struct Resolver {
         names: FxHashMap<String, SurfaceNameResolution<u32>>,
+        qualified_resolution: Option<QualifiedTypePathResolution>,
         next_parameter: u32,
     }
 
@@ -1141,6 +1301,19 @@ mod tests {
                 .get(name)
                 .cloned()
                 .unwrap_or(SurfaceNameResolution::Unavailable(900))
+        }
+
+        fn resolve_qualified_name(&mut self, _segments: &[&str]) -> SurfaceNameResolution<u32> {
+            SurfaceNameResolution::Qualified {
+                owner: 900,
+                resolution: self
+                    .qualified_resolution
+                    .unwrap_or(QualifiedTypePathResolution::MissingRoot { segment: 0 }),
+            }
+        }
+
+        fn qualified_outer_type_parameters_visible(&self) -> bool {
+            true
         }
 
         fn signature_type_parameter(
@@ -1164,6 +1337,17 @@ mod tests {
     impl SurfaceTypeResolver<u32> for MissingCallableResolver {
         fn resolve_name(&mut self, _name: &str) -> SurfaceNameResolution<u32> {
             SurfaceNameResolution::Unavailable(900)
+        }
+
+        fn resolve_qualified_name(&mut self, _segments: &[&str]) -> SurfaceNameResolution<u32> {
+            SurfaceNameResolution::Qualified {
+                owner: 900,
+                resolution: QualifiedTypePathResolution::MissingRoot { segment: 0 },
+            }
+        }
+
+        fn qualified_outer_type_parameters_visible(&self) -> bool {
+            true
         }
 
         fn signature_type_parameter(
@@ -1277,6 +1461,33 @@ mod tests {
             let stored = factory.store().class_instance_type(application).unwrap();
             assert_eq!(stored.class, ClassId(1));
             assert_eq!(stored.args, [factory.well_known().number]);
+        });
+    }
+
+    #[test]
+    fn unavailable_qualified_path_withholds_the_parent_and_visits_its_arguments() {
+        with_alias_type("type X = Missing.Child<AlsoMissing>;", |annotation| {
+            let mut interner = Interner::with_intrinsics();
+            let before = interner.store().len();
+            let mut factory = SurfaceTypeFactory::new(&mut interner);
+            let mut resolver = Resolver {
+                qualified_resolution: Some(QualifiedTypePathResolution::Unavailable { segment: 1 }),
+                ..Default::default()
+            };
+            let mut lowerer = TypeSyntaxLowerer::new(&mut factory, &mut resolver);
+
+            assert_eq!(
+                lowerer.lower(annotation),
+                Err(SurfaceTypeFailure::Poisoned(900))
+            );
+            let child_failures = lowerer.take_child_failures();
+            assert!(matches!(
+                child_failures.as_slice(),
+                [SurfaceTypeFailure::Unresolved { owner: 900, name, .. }]
+                    if name == "AlsoMissing"
+            ));
+            drop(lowerer);
+            assert_eq!(factory.store().len(), before);
         });
     }
 

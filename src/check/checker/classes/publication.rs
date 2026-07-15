@@ -98,6 +98,7 @@ struct Resolver<'a, 'ast> {
     module: ModuleOrdinal,
     fallback: RecordTicket,
     error: TypeId,
+    qualified_outer_type_parameters_visible: bool,
 }
 
 impl Resolver<'_, '_> {
@@ -193,6 +194,19 @@ impl SurfaceTypeResolver<RecordTicket> for Resolver<'_, '_> {
                 }
             }
         }
+    }
+
+    fn resolve_qualified_name(&mut self, segments: &[&str]) -> SurfaceNameResolution<RecordTicket> {
+        SurfaceNameResolution::Qualified {
+            owner: self.fallback,
+            resolution: self
+                .binder
+                .resolve_qualified_type_path(self.scope, segments),
+        }
+    }
+
+    fn qualified_outer_type_parameters_visible(&self) -> bool {
+        self.qualified_outer_type_parameters_visible
     }
 
     fn signature_type_parameter(
@@ -318,6 +332,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 module: reservation.source.module_ordinal,
                 fallback: reservation.tickets.incomplete,
                 error,
+                qualified_outer_type_parameters_visible: true,
             };
             let mut factory = SurfaceTypeFactory::new(self.interner);
             let frame: Vec<(String, TypeId)> = param_decl
@@ -333,39 +348,73 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .collect();
 
             let mut publication_surface_poison = Vec::new();
-            let constraints: Vec<Option<TypeId>> = param_decl
-                .iter()
-                .flat_map(|declaration| declaration.params.iter())
-                .map(|parameter| {
-                    let constraint = parameter.constraint.as_ref()?;
-                    let (lowered, child_failures) =
-                        lower_type(&mut factory, &mut resolver, constraint, &frame);
-                    let constraint_ty = lowered.as_ref().ok().copied();
-                    for failure in lowered.err().into_iter().chain(child_failures) {
-                        let (owner, record) = own_surface_failure(
-                            failure,
-                            reservation.tickets.immediate,
-                            reservation.tickets.incomplete,
-                            CheckSpan::from_oxc(constraint.span()),
-                            "annotation-lower/type-parameter-constraint/self",
-                            "class type-parameter constraint could not be lowered",
-                        );
-                        if let Some(record) = record {
-                            records.push(record);
-                        }
-                        publication_surface_poison.push(owner);
-                    }
-                    constraint_ty
-                })
-                .collect();
+            let mut constraints = Vec::with_capacity(params.len());
             if let Some(declaration) = param_decl {
                 for (index, parameter) in declaration.params.iter().enumerate() {
+                    let constraint_ty = if let Some(constraint) = parameter.constraint.as_ref() {
+                        let owner = reservation
+                            .constraints
+                            .iter()
+                            .find(|reserved| reserved.parameter_index == index)
+                            .map_or(reservation.tickets.immediate, |reserved| reserved.owner);
+                        resolver.fallback = owner;
+                        resolver.qualified_outer_type_parameters_visible = true;
+                        let (lowered, child_failures) =
+                            lower_type(&mut factory, &mut resolver, constraint, &frame);
+                        let constraint_ty = lowered.as_ref().ok().copied();
+                        for failure in lowered.err().into_iter().chain(child_failures) {
+                            let recovered_topology =
+                                matches!(&failure, SurfaceTypeFailure::QualifiedTopology { .. });
+                            let (owner, record) = own_surface_failure(
+                                failure,
+                                owner,
+                                owner,
+                                CheckSpan::from_oxc(constraint.span()),
+                                "annotation-lower/type-parameter-constraint/self",
+                                "class type-parameter constraint could not be lowered",
+                            );
+                            if let Some(record) = record {
+                                records.push(record);
+                            }
+                            if !recovered_topology {
+                                publication_surface_poison.push(owner);
+                            }
+                        }
+                        constraint_ty
+                    } else {
+                        None
+                    };
+                    constraints.push(constraint_ty);
                     if let Some(default) = parameter.default.as_ref() {
                         let owner = reservation
                             .defaults
                             .iter()
                             .find(|reserved| reserved.parameter_index == index)
                             .map_or(reservation.tickets.incomplete, |reserved| reserved.owner);
+                        resolver.fallback = owner;
+                        resolver.qualified_outer_type_parameters_visible = true;
+                        let (lowered, child_failures) =
+                            lower_type(&mut factory, &mut resolver, default, &frame);
+                        for failure in lowered.err().into_iter().chain(child_failures) {
+                            if !matches!(
+                                &failure,
+                                SurfaceTypeFailure::QualifiedTopology { .. }
+                                    | SurfaceTypeFailure::QualifiedIncomplete { .. }
+                            ) {
+                                continue;
+                            }
+                            let (_, record) = own_surface_failure(
+                                failure,
+                                owner,
+                                owner,
+                                CheckSpan::from_oxc(default.span()),
+                                "annotation-lower/type-parameter-default/self",
+                                "class type-parameter default could not be lowered",
+                            );
+                            if let Some(record) = record {
+                                records.push(record);
+                            }
+                        }
                         records.push(TicketRecord::incomplete(
                             owner,
                             IncompleteSurface::new(
@@ -441,7 +490,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             if let Some(name) = class.id.as_ref() {
                 self.class_names.insert(class_id, name.name.to_string());
             }
-            let (heritage_result, heritage_children) = lower_heritage_application(
+            resolver.fallback = reservation.tickets.immediate;
+            resolver.qualified_outer_type_parameters_visible = true;
+            let (heritage, heritage_surface_failures) = lower_heritage_application(
                 &mut factory,
                 &mut resolver,
                 self.binder,
@@ -451,44 +502,33 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 &frame,
             );
             let mut heritage_failures = Vec::new();
-            let heritage = match heritage_result {
-                Ok(heritage) => heritage,
-                Err(failure) => {
-                    if class.super_type_arguments.is_some() {
-                        // Generic heritage is record-only accounted above; its child
-                        // failure must not replay a second record for the same source.
-                        let _ = (failure, heritage_children);
-                        None
-                    } else {
-                        let span = class.super_type_arguments.as_deref().map_or_else(
-                            || {
-                                class
-                                    .super_class
-                                    .as_ref()
-                                    .map_or(CheckSpan::from_oxc(class.span), |heritage| {
-                                        CheckSpan::from_oxc(heritage.span())
-                                    })
-                            },
-                            |arguments| CheckSpan::from_oxc(arguments.span),
-                        );
-                        for failure in std::iter::once(failure).chain(heritage_children) {
-                            let (owner, record) = own_surface_failure(
-                                failure,
-                                reservation.tickets.immediate,
-                                reservation.tickets.incomplete,
-                                span,
-                                "class/class-heritage/type-arguments",
-                                "class heritage type arguments could not be lowered",
-                            );
-                            if let Some(record) = record {
-                                records.push(record);
-                            }
-                            heritage_failures.push(owner);
-                        }
-                        None
-                    }
+            let heritage_span = class.super_type_arguments.as_deref().map_or_else(
+                || {
+                    class
+                        .super_class
+                        .as_ref()
+                        .map_or(CheckSpan::from_oxc(class.span), |heritage| {
+                            CheckSpan::from_oxc(heritage.span())
+                        })
+                },
+                |arguments| CheckSpan::from_oxc(arguments.span),
+            );
+            for failure in heritage_surface_failures {
+                let generic_unsupported = class.super_type_arguments.is_some()
+                    && matches!(&failure, SurfaceTypeFailure::Unsupported(_));
+                let (owner, record) = own_surface_failure(
+                    failure,
+                    reservation.tickets.immediate,
+                    reservation.tickets.incomplete,
+                    heritage_span,
+                    "class/class-heritage/type-arguments",
+                    "class heritage type arguments could not be lowered",
+                );
+                if let Some(record) = record.filter(|_| !generic_unsupported) {
+                    records.push(record);
                 }
-            };
+                heritage_failures.push(owner);
+            }
             let mut lowerer = ClassSurfaceLowerer::new(
                 class_id,
                 type_parameters,
@@ -916,10 +956,14 @@ fn lower_class<'ast>(
                     }
                 }
                 let ty = if let Some(annotation) = property.type_annotation.as_ref() {
+                    resolver.fallback = immediate_owner;
+                    resolver.qualified_outer_type_parameters_visible = !property.r#static;
                     let (lowered, child_failures) =
                         lower_type(factory, resolver, &annotation.type_annotation, frame);
                     let annotation_ty = lowered.as_ref().ok().copied();
                     for failure in lowered.err().into_iter().chain(child_failures) {
+                        let recovered_topology =
+                            matches!(&failure, SurfaceTypeFailure::QualifiedTopology { .. });
                         let (owner, record) = own_surface_failure(
                             failure,
                             immediate_owner,
@@ -931,7 +975,9 @@ fn lower_class<'ast>(
                         if let Some(record) = record {
                             records.push(record);
                         }
-                        surface_poison.push(owner);
+                        if !recovered_topology {
+                            surface_poison.push(owner);
+                        }
                     }
                     annotation_ty
                 } else if let Some(value) = property.value.as_ref() {
@@ -1068,8 +1114,12 @@ fn lower_class<'ast>(
                         }),
                     );
                 }
+                resolver.fallback = immediate_owner;
+                resolver.qualified_outer_type_parameters_visible = !method.r#static;
                 let (syntax, failures) = lower_callable(factory, resolver, &method.value, frame);
                 for failure in syntax.failure.iter().cloned().chain(failures) {
+                    let recovered_topology =
+                        matches!(&failure, SurfaceTypeFailure::QualifiedTopology { .. });
                     match failure {
                         SurfaceTypeFailure::Unresolved {
                             owner: _,
@@ -1096,7 +1146,7 @@ fn lower_class<'ast>(
                             if let Some(record) = record {
                                 records.push(record);
                             }
-                            if !method.computed {
+                            if !method.computed && !recovered_topology {
                                 surface_poison.push(owner);
                             }
                         }
@@ -1364,6 +1414,25 @@ fn lower_class<'ast>(
                         "computed property key is not collected",
                     ),
                 ));
+                if let Some(annotation) = property.type_annotation.as_ref() {
+                    resolver.fallback = incomplete_owner;
+                    resolver.qualified_outer_type_parameters_visible = !property.r#static;
+                    let (lowered, child_failures) =
+                        lower_type(factory, resolver, &annotation.type_annotation, frame);
+                    for failure in lowered.err().into_iter().chain(child_failures) {
+                        let (_, record) = own_surface_failure(
+                            failure,
+                            incomplete_owner,
+                            incomplete_owner,
+                            CheckSpan::from_oxc(annotation.type_annotation.span()),
+                            "class/property-definition/type-annotation",
+                            "computed property type annotation could not be lowered",
+                        );
+                        if let Some(record) = record {
+                            records.push(record);
+                        }
+                    }
+                }
             }
             ClassElement::StaticBlock(block) => {
                 records.push(TicketRecord::incomplete(
@@ -1935,6 +2004,7 @@ fn register_reserved_surface_roots<'ast>(
                     module: source.module_ordinal,
                     fallback,
                     error,
+                    qualified_outer_type_parameters_visible: true,
                 };
                 let frame = param_decl
                     .iter()
@@ -2110,7 +2180,7 @@ fn resolve_parent(
 }
 
 type HeritageApplicationResult = (
-    Result<Option<(ClassId, TypeId)>, SurfaceTypeFailure<RecordTicket>>,
+    Option<(ClassId, TypeId)>,
     Vec<SurfaceTypeFailure<RecordTicket>>,
 );
 
@@ -2123,8 +2193,27 @@ fn lower_heritage_application(
     class: &Class<'_>,
     frame: &[(String, TypeId)],
 ) -> HeritageApplicationResult {
-    let Some(parent) = resolve_parent(binder, scope, declarations, class) else {
-        return (Ok(None), Vec::new());
+    if class.super_class.is_none() {
+        return (None, Vec::new());
+    }
+    let parent = resolve_parent(binder, scope, declarations, class);
+    let mut explicit = Vec::new();
+    let mut failures = Vec::new();
+    if let Some(source) = class.super_type_arguments.as_deref() {
+        for argument in &source.params {
+            let (lowered, nested_failures) = lower_type(factory, resolver, argument, frame);
+            match lowered {
+                Ok(argument) => explicit.push(ExplicitClassArgument::Ready(argument)),
+                Err(failure) => failures.push(failure),
+            }
+            failures.extend(nested_failures);
+        }
+    }
+    if !failures.is_empty() {
+        return (None, failures);
+    }
+    let Some(parent) = parent else {
+        return (None, failures);
     };
     let parameters = declarations
         .iter()
@@ -2133,25 +2222,6 @@ fn lower_heritage_application(
         })
         .map(|declaration| resolver.class_parameters(declaration))
         .unwrap_or_default();
-    let mut explicit = Vec::new();
-    let mut first_failure = None;
-    let mut child_failures = Vec::new();
-    if let Some(source) = class.super_type_arguments.as_deref() {
-        for argument in &source.params {
-            let (lowered, nested_failures) = lower_type(factory, resolver, argument, frame);
-            match lowered {
-                Ok(argument) => explicit.push(ExplicitClassArgument::Ready(argument)),
-                Err(failure) if first_failure.is_none() => first_failure = Some(failure),
-                Err(failure) => child_failures.push(failure),
-            }
-            for failure in nested_failures {
-                child_failures.push(failure);
-            }
-        }
-    }
-    if let Some(failure) = first_failure {
-        return (Err(failure), child_failures);
-    }
     let arguments = match complete_class_arguments(ClassApplicationRequest {
         class: parent,
         parameters: &parameters,
@@ -2161,15 +2231,13 @@ fn lower_heritage_application(
     }) {
         DemandOutcome::Ready(arguments) => arguments,
         DemandOutcome::Exhausted(reason) => {
-            return (Err(SurfaceTypeFailure::Exhausted(reason)), child_failures);
+            failures.push(SurfaceTypeFailure::Exhausted(reason));
+            return (None, failures);
         }
     };
     (
-        Ok(Some((
-            parent,
-            factory.intern_class_instance(parent, arguments),
-        ))),
-        child_failures,
+        Some((parent, factory.intern_class_instance(parent, arguments))),
+        failures,
     )
 }
 
@@ -2189,6 +2257,21 @@ fn own_surface_failure(
                 Some(TicketRecord::diagnostic(diagnostic_owner, diagnostic)),
             )
         }
+        SurfaceTypeFailure::QualifiedTopology { owner, diagnostic } => {
+            (owner, Some(TicketRecord::diagnostic(owner, diagnostic)))
+        }
+        SurfaceTypeFailure::QualifiedIncomplete {
+            owner,
+            span,
+            id,
+            context,
+        } => (
+            owner,
+            Some(TicketRecord::incomplete(
+                owner,
+                IncompleteSurface::new(id, CheckSpan::from_oxc(span), context),
+            )),
+        ),
         SurfaceTypeFailure::WrongArity {
             span,
             name,

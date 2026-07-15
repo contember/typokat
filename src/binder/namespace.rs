@@ -3,8 +3,8 @@
 //! WU1b deliberately inventories source topology without binding namespace/global
 //! bodies into production scopes or allocating checker storage.
 
-use crate::binder::bind::BindState;
-use crate::binder::declaration::{DeclId, DeclarationKind};
+use crate::binder::bind::{declare_type, BindState, Binder};
+use crate::binder::declaration::{DeclId, DeclarationKind, TypeFragmentKind, TypeGroupId};
 use crate::binder::scope::{Scope, ScopeId, ScopeKind};
 use crate::binder::symbol::{Symbol, SymbolId};
 use crate::span::Span;
@@ -282,6 +282,53 @@ pub enum AliasContext {
 pub enum AliasSpaceIntent {
     Type,
     UnresolvedValueOrType,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum QualifiedTypePathDeferredReason {
+    Import,
+    Enum,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) enum QualifiedTypePathResolution {
+    TypeGroup(TypeGroupId),
+    MissingRoot {
+        segment: usize,
+    },
+    TypeOnlyRoot {
+        segment: usize,
+    },
+    MissingMember {
+        segment: usize,
+    },
+    TypeOnlyIntermediate {
+        segment: usize,
+    },
+    ValueOnlyLeaf {
+        segment: usize,
+    },
+    Unavailable {
+        segment: usize,
+    },
+    Deferred {
+        segment: usize,
+        reason: QualifiedTypePathDeferredReason,
+    },
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct LocalAmbientExportAliasFailure {
+    pub original_module: OriginalModuleOrdinal,
+    pub local_span: Span,
+    pub local_name: String,
+    pub kind: LocalAmbientExportAliasFailureKind,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) enum LocalAmbientExportAliasFailureKind {
+    Missing,
+    NonLocal,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -967,6 +1014,358 @@ impl NamespaceTable {
     }
 }
 
+#[derive(Copy, Clone, Default)]
+struct QualifiedSymbolView {
+    namespace: Option<NamespaceId>,
+    type_group: Option<TypeGroupId>,
+    value: bool,
+    unavailable: bool,
+    deferred: Option<QualifiedTypePathDeferredReason>,
+}
+
+impl Binder {
+    pub(crate) fn local_ambient_export_alias_failures(
+        &self,
+    ) -> Vec<LocalAmbientExportAliasFailure> {
+        self.namespaces
+            .members
+            .iter()
+            .filter(|member| {
+                matches!(member.owner, NamespaceMemberOwner::Fragment(_))
+                    && member.kind == MergeDeclarationKind::DeferredExport
+                    && member.declaration.is_none()
+                    && member.alias_context == Some(AliasContext::ValidAmbient)
+                    && member.module_specifier.is_none()
+                    && member.local_symbol.is_none()
+            })
+            .filter_map(|member| {
+                let local_name = member.local_name.as_ref()?.text();
+                let kind = match member.owner {
+                    NamespaceMemberOwner::Fragment(fragment) => {
+                        let fragment = self.namespaces.fragment(fragment)?;
+                        let public_scope = self.namespaces.get(fragment.namespace)?.public_scope;
+                        let has_dormant_symbol = [fragment.private_scope, public_scope]
+                            .into_iter()
+                            .any(|scope| {
+                                self.graph
+                                    .get(scope)
+                                    .and_then(|scope| scope.lookup_local(local_name))
+                                    .is_some()
+                            });
+                        if has_dormant_symbol {
+                            LocalAmbientExportAliasFailureKind::NonLocal
+                        } else {
+                            LocalAmbientExportAliasFailureKind::Missing
+                        }
+                    }
+                    NamespaceMemberOwner::GlobalAugmentation(_)
+                    | NamespaceMemberOwner::DeferredAmbientModule(_) => {
+                        LocalAmbientExportAliasFailureKind::Missing
+                    }
+                };
+                Some(LocalAmbientExportAliasFailure {
+                    original_module: member.original_module,
+                    local_span: member.local_span?,
+                    local_name: local_name.to_string(),
+                    kind,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn resolve_qualified_type_path(
+        &self,
+        scope: ScopeId,
+        segments: &[&str],
+    ) -> QualifiedTypePathResolution {
+        if segments.len() < 2 {
+            return QualifiedTypePathResolution::MissingRoot { segment: 0 };
+        }
+
+        let root_name = segments[0];
+        let mut current_scope = Some(scope);
+        let mut saw_type_root = false;
+        let root_namespace = loop {
+            let Some(candidate_scope) = current_scope else {
+                return if saw_type_root {
+                    QualifiedTypePathResolution::TypeOnlyRoot { segment: 0 }
+                } else {
+                    QualifiedTypePathResolution::MissingRoot { segment: 0 }
+                };
+            };
+            let scope_record = match self.graph.get(candidate_scope) {
+                Some(scope) => scope,
+                None => return QualifiedTypePathResolution::MissingRoot { segment: 0 },
+            };
+            let owning_namespace = self.namespace_for_lookup_scope(candidate_scope);
+            let root_merge = owning_namespace
+                .is_none()
+                .then(|| self.root_merge_record(candidate_scope, root_name))
+                .flatten();
+            let root_deferred = root_merge.and_then(Self::merge_deferred_reason);
+            let root_symbol = scope_record.lookup_local(root_name);
+            if let Some(symbol) = root_symbol {
+                let view = self.qualified_symbol_view(owning_namespace, symbol, &mut Vec::new());
+                if view.unavailable {
+                    return QualifiedTypePathResolution::Unavailable { segment: 0 };
+                }
+                if let Some(reason) = view.deferred {
+                    return QualifiedTypePathResolution::Deferred { segment: 0, reason };
+                }
+                if let Some(reason) = root_deferred {
+                    let known_target = view.namespace.is_some() || view.type_group.is_some();
+                    let admitted = root_merge.is_some_and(|record| {
+                        record.classification.disposition == MergeDisposition::Admitted
+                    });
+                    let concrete_import_namespace = reason
+                        == QualifiedTypePathDeferredReason::Import
+                        && view.namespace.is_some()
+                        && root_merge.is_some_and(Self::has_qualified_import_namespace_target);
+                    if !known_target || (!admitted && !concrete_import_namespace) {
+                        return QualifiedTypePathResolution::Deferred { segment: 0, reason };
+                    }
+                }
+                if let Some(namespace) = view.namespace {
+                    break namespace;
+                }
+                saw_type_root |= view.type_group.is_some()
+                    || self
+                        .symbols
+                        .get(symbol)
+                        .is_some_and(|symbol| symbol.ty.is_some());
+            } else if let Some(reason) = root_deferred {
+                return QualifiedTypePathResolution::Deferred { segment: 0, reason };
+            }
+
+            if scope_record.kind == ScopeKind::NamespacePrivate {
+                if let Some(namespace) = owning_namespace {
+                    let public_scope = self
+                        .namespaces
+                        .get(namespace)
+                        .map(|namespace| namespace.public_scope);
+                    if let Some(public_scope) = public_scope {
+                        if let Some(symbol) = self
+                            .graph
+                            .get(public_scope)
+                            .and_then(|scope| scope.lookup_local(root_name))
+                        {
+                            let view = self.qualified_symbol_view(
+                                Some(namespace),
+                                symbol,
+                                &mut Vec::new(),
+                            );
+                            if view.unavailable {
+                                return QualifiedTypePathResolution::Unavailable { segment: 0 };
+                            }
+                            if let Some(reason) = view.deferred {
+                                return QualifiedTypePathResolution::Deferred {
+                                    segment: 0,
+                                    reason,
+                                };
+                            }
+                            if let Some(namespace) = view.namespace {
+                                break namespace;
+                            }
+                            saw_type_root |= view.type_group.is_some()
+                                || self
+                                    .symbols
+                                    .get(symbol)
+                                    .is_some_and(|symbol| symbol.ty.is_some());
+                        }
+                    }
+                }
+            }
+            current_scope = scope_record.parent;
+        };
+
+        let mut namespace = root_namespace;
+        for (segment, name) in segments.iter().enumerate().skip(1) {
+            let public_scope = match self.namespaces.get(namespace) {
+                Some(namespace) => namespace.public_scope,
+                None => return QualifiedTypePathResolution::MissingMember { segment },
+            };
+            let Some(symbol) = self
+                .graph
+                .get(public_scope)
+                .and_then(|scope| scope.lookup_local(name))
+            else {
+                return QualifiedTypePathResolution::MissingMember { segment };
+            };
+            let view = self.qualified_symbol_view(Some(namespace), symbol, &mut Vec::new());
+            if view.unavailable {
+                return QualifiedTypePathResolution::Unavailable { segment };
+            }
+            if let Some(reason) = view.deferred {
+                return QualifiedTypePathResolution::Deferred { segment, reason };
+            }
+            let leaf = segment + 1 == segments.len();
+            if !leaf {
+                if let Some(next) = view.namespace {
+                    namespace = next;
+                    continue;
+                }
+                return if view.type_group.is_some() {
+                    QualifiedTypePathResolution::TypeOnlyIntermediate { segment }
+                } else {
+                    QualifiedTypePathResolution::MissingMember { segment }
+                };
+            }
+            if let Some(group) = view.type_group {
+                return QualifiedTypePathResolution::TypeGroup(group);
+            }
+            return if view.value {
+                QualifiedTypePathResolution::ValueOnlyLeaf { segment }
+            } else {
+                QualifiedTypePathResolution::MissingMember { segment }
+            };
+        }
+
+        QualifiedTypePathResolution::MissingMember {
+            segment: segments.len() - 1,
+        }
+    }
+
+    fn namespace_for_lookup_scope(&self, scope: ScopeId) -> Option<NamespaceId> {
+        self.namespaces.namespaces.iter().find_map(|namespace| {
+            if namespace.public_scope == scope {
+                return Some(namespace.id);
+            }
+            namespace.fragments.iter().find_map(|fragment| {
+                self.namespaces
+                    .fragments
+                    .get(fragment.index())
+                    .filter(|fragment| fragment.private_scope == scope)
+                    .map(|_| namespace.id)
+            })
+        })
+    }
+
+    fn root_merge_record(&self, scope: ScopeId, name: &str) -> Option<&MergeRecord> {
+        self.namespaces
+            .merges
+            .iter()
+            .find(|record| record.owner == DeclarationOwner::Lexical(scope) && record.name == name)
+    }
+
+    fn merge_deferred_reason(record: &MergeRecord) -> Option<QualifiedTypePathDeferredReason> {
+        if record
+            .declarations
+            .iter()
+            .any(|declaration| declaration.kind == MergeDeclarationKind::ImportAlias)
+        {
+            Some(QualifiedTypePathDeferredReason::Import)
+        } else if record
+            .declarations
+            .iter()
+            .any(|declaration| declaration.kind == MergeDeclarationKind::Enum)
+        {
+            Some(QualifiedTypePathDeferredReason::Enum)
+        } else {
+            None
+        }
+    }
+
+    fn has_qualified_import_namespace_target(record: &MergeRecord) -> bool {
+        record
+            .classification
+            .compositions
+            .iter()
+            .any(|composition| {
+                matches!(
+                    composition.kind,
+                    MergeCompositionKind::ImportNamespace(
+                        ImportBindingForm::Named | ImportBindingForm::Default
+                    )
+                ) && matches!(
+                    composition.disposition,
+                    MergeDisposition::Admitted | MergeDisposition::DeferredBacklog15
+                )
+            })
+    }
+
+    fn qualified_symbol_view(
+        &self,
+        owner: Option<NamespaceId>,
+        symbol: SymbolId,
+        visited: &mut Vec<SymbolId>,
+    ) -> QualifiedSymbolView {
+        if visited.contains(&symbol) {
+            return QualifiedSymbolView {
+                unavailable: true,
+                ..QualifiedSymbolView::default()
+            };
+        }
+        visited.push(symbol);
+        let mut view = self
+            .symbols
+            .get(symbol)
+            .map(|symbol| QualifiedSymbolView {
+                namespace: symbol.ns,
+                type_group: symbol.type_group,
+                value: symbol.value.is_some(),
+                unavailable: false,
+                deferred: None,
+            })
+            .unwrap_or_default();
+
+        if let Some(owner) = owner {
+            for member in self.namespace_members_for_symbol(owner, symbol) {
+                match member.kind {
+                    MergeDeclarationKind::ImportAlias => {
+                        view.deferred = Some(QualifiedTypePathDeferredReason::Import);
+                        break;
+                    }
+                    MergeDeclarationKind::Enum => {
+                        view.deferred = Some(QualifiedTypePathDeferredReason::Enum);
+                        break;
+                    }
+                    MergeDeclarationKind::DeferredExport if member.declaration.is_none() => {
+                        if member.module_specifier.is_some() {
+                            view.deferred = Some(QualifiedTypePathDeferredReason::Import);
+                            break;
+                        }
+                        let Some(target) = member.local_symbol else {
+                            view = QualifiedSymbolView {
+                                unavailable: true,
+                                ..QualifiedSymbolView::default()
+                            };
+                            break;
+                        };
+                        let mut target_view =
+                            self.qualified_symbol_view(Some(owner), target, visited);
+                        if member.alias_space_intent == Some(AliasSpaceIntent::Type) {
+                            target_view.value = false;
+                        }
+                        view = target_view;
+                        break;
+                    }
+                    _ => {
+                        view.value |= member.spaces.value;
+                    }
+                }
+            }
+        }
+        visited.pop();
+        view
+    }
+
+    fn namespace_members_for_symbol(
+        &self,
+        namespace: NamespaceId,
+        symbol: SymbolId,
+    ) -> Vec<&NamespaceMember> {
+        self.namespaces
+            .get(namespace)
+            .into_iter()
+            .flat_map(|namespace| namespace.fragments.iter())
+            .filter_map(|fragment| self.namespaces.fragment(*fragment))
+            .flat_map(|fragment| fragment.members.iter())
+            .filter_map(|member| self.namespaces.member(*member))
+            .filter(|member| member.symbol == Some(symbol))
+            .collect()
+    }
+}
+
 fn join_instance_state(
     left: NamespaceInstanceState,
     right: NamespaceInstanceState,
@@ -1291,11 +1690,7 @@ pub(crate) fn bind_namespace_metadata(
     unit: CompilationUnit,
     compilation_global: ScopeId,
 ) {
-    let storage_snapshot = (
-        state.next_value_storage,
-        state.next_legacy_type_storage,
-        state.type_groups.len(),
-    );
+    let storage_snapshot = (state.next_value_storage, state.next_legacy_type_storage);
     state.namespaces.source_units.push(SourceUnitRecord {
         source: unit.source,
         original_module: unit.original_module,
@@ -1315,16 +1710,68 @@ pub(crate) fn bind_namespace_metadata(
         direct_top_level: true,
     };
     walk_statements(state, &program.body, context, unit, compilation_global);
+    resolve_local_ambient_export_alias_targets(state);
     state.namespaces.classify();
     assert_eq!(
         storage_snapshot,
-        (
-            state.next_value_storage,
-            state.next_legacy_type_storage,
-            state.type_groups.len(),
-        ),
-        "WU1b metadata must not allocate checker storage or type groups"
+        (state.next_value_storage, state.next_legacy_type_storage,),
+        "namespace metadata must not allocate checker storage"
     );
+}
+
+fn resolve_local_ambient_export_alias_targets(state: &mut BindState) {
+    let candidates = state
+        .namespaces
+        .members
+        .iter()
+        .enumerate()
+        .filter(|(_, member)| {
+            matches!(member.owner, NamespaceMemberOwner::Fragment(_))
+                && member.kind == MergeDeclarationKind::DeferredExport
+                && member.declaration.is_none()
+                && member.alias_context == Some(AliasContext::ValidAmbient)
+                && member.module_specifier.is_none()
+        })
+        .filter_map(|(index, member)| {
+            let NamespaceMemberOwner::Fragment(fragment) = member.owner else {
+                return None;
+            };
+            Some((
+                index,
+                fragment,
+                member.local_name.as_ref()?.text().to_string(),
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    for (index, fragment, local_name) in candidates {
+        let Some(fragment) = state.namespaces.fragment(fragment) else {
+            continue;
+        };
+        let private_scope = fragment.private_scope;
+        let public_scope = state
+            .namespaces
+            .get(fragment.namespace)
+            .map(|namespace| namespace.public_scope);
+        let local_symbol =
+            local_declaration_symbol(state, private_scope, &local_name).or_else(|| {
+                public_scope.and_then(|scope| local_declaration_symbol(state, scope, &local_name))
+            });
+        state.namespaces.members[index].local_symbol = local_symbol;
+    }
+}
+
+fn local_declaration_symbol(state: &BindState, scope: ScopeId, name: &str) -> Option<SymbolId> {
+    state
+        .graph
+        .get(scope)
+        .and_then(|scope| scope.lookup_local(name))
+        .filter(|symbol| {
+            state
+                .symbols
+                .get(*symbol)
+                .is_some_and(|symbol| !symbol.declarations.is_empty())
+        })
 }
 
 fn walk_statements(
@@ -1833,6 +2280,19 @@ fn bind_named_declaration_with_syntax(
         source,
     );
     set_placement_syntax(state, declaration, syntax);
+    if context.namespace.is_some() {
+        let fragment_kind = match merge_kind {
+            MergeDeclarationKind::TypeAlias => Some(TypeFragmentKind::TypeAlias),
+            MergeDeclarationKind::Interface => Some(TypeFragmentKind::Interface),
+            MergeDeclarationKind::Class => Some(TypeFragmentKind::Class),
+            _ => None,
+        };
+        if let (Some(fragment_kind), Some(scope)) =
+            (fragment_kind, declaration_owner_scope(state, owner))
+        {
+            declare_type(state, scope, name, declaration, None, fragment_kind, source);
+        }
+    }
     if context.member_owner().is_some() {
         let site = state
             .declarations
@@ -1852,6 +2312,22 @@ fn bind_named_declaration_with_syntax(
             publication,
             source,
         );
+    }
+}
+
+fn declaration_owner_scope(state: &BindState, owner: DeclarationOwner) -> Option<ScopeId> {
+    match owner {
+        DeclarationOwner::Lexical(scope) => Some(scope),
+        DeclarationOwner::NamespacePublic(namespace) => state
+            .namespaces
+            .get(namespace)
+            .map(|namespace| namespace.public_scope),
+        DeclarationOwner::NamespacePrivate(fragment) => state
+            .namespaces
+            .fragment(fragment)
+            .map(|fragment| fragment.private_scope),
+        DeclarationOwner::CompilationGlobal => state.namespaces.compilation_global,
+        DeclarationOwner::DeferredAmbientModule(_) => None,
     }
 }
 
@@ -2257,11 +2733,7 @@ fn dormant_symbol_for_namespace_owner(
     name: &str,
 ) -> SymbolId {
     match owner {
-        NamespaceOwner::Lexical(scope) => state
-            .graph
-            .get(scope)
-            .and_then(|scope| scope.lookup_local(name))
-            .unwrap_or_else(|| state.symbols.push(Symbol::new(name))),
+        NamespaceOwner::Lexical(scope) => dormant_symbol_in_scope(state, scope, name),
         NamespaceOwner::NamespacePublic(namespace) => {
             let scope = state
                 .namespaces
@@ -3177,7 +3649,7 @@ fn metadata_name(name: &ModuleExportName<'_>) -> MetadataName {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::binder::bind::{Binder, ProjectBinderBuilder};
+    use crate::binder::bind::{Binder, ImportedSymbol, ProjectBinderBuilder};
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
@@ -3265,7 +3737,7 @@ mod tests {
                 .graph
                 .get(binder.module)
                 .and_then(|scope| scope.lookup_local("N")),
-            None
+            Some(namespace.symbol)
         );
         let root_symbol = binder
             .symbols
@@ -3329,6 +3801,767 @@ mod tests {
     }
 
     #[test]
+    fn namespace_type_groups_use_no_legacy_storage_and_preserve_public_private_identity() {
+        let binder = bind(
+            "interface Top {} namespace N { export interface Shared { first: number } interface Hidden { first: number } export type Alias = number; export class Box {} } namespace N { export interface Shared { second: string } interface Hidden { second: string } }",
+            false,
+        );
+        assert_eq!(binder.type_decl_count, 1);
+
+        let top = binder
+            .graph
+            .get(binder.module)
+            .and_then(|scope| scope.lookup_local("Top"))
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .and_then(|symbol| symbol.type_group)
+            .and_then(|group| binder.type_groups.get(group))
+            .expect("top-level legacy group");
+        assert_eq!(top.fragments.len(), 1);
+        assert!(top.fragments[0].legacy_storage.is_some());
+        assert_eq!(top.fragments[0].source, SourceUnitKey::SINGLE_SOURCE);
+
+        let namespace = binder
+            .namespaces
+            .namespaces()
+            .find(|namespace| namespace.name == "N")
+            .expect("N namespace");
+        let public = binder
+            .graph
+            .get(namespace.public_scope)
+            .expect("N public scope");
+        let reopening_scopes = namespace
+            .fragments
+            .iter()
+            .map(|fragment| {
+                binder
+                    .namespaces
+                    .fragment(*fragment)
+                    .expect("namespace fragment")
+                    .private_scope
+            })
+            .collect::<Vec<_>>();
+        let shared_group = public
+            .lookup_local("Shared")
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .and_then(|symbol| symbol.type_group)
+            .expect("shared public type group");
+        let shared = binder
+            .type_groups
+            .get(shared_group)
+            .expect("shared group row");
+        assert_eq!(shared.fragments.len(), 2);
+        assert_eq!(
+            shared
+                .fragments
+                .iter()
+                .map(|fragment| fragment.scope)
+                .collect::<Vec<_>>(),
+            reopening_scopes
+        );
+        assert!(shared.fragments.iter().all(|fragment| {
+            fragment.source == SourceUnitKey::SINGLE_SOURCE
+                && fragment.legacy_storage.is_none()
+                && fragment.site.scope == Some(fragment.scope)
+        }));
+        assert!(shared.fragments.windows(2).all(|pair| {
+            (
+                pair[0].source,
+                pair[0].site.declaration_span.start,
+                pair[0].declaration.0,
+            ) < (
+                pair[1].source,
+                pair[1].site.declaration_span.start,
+                pair[1].declaration.0,
+            )
+        }));
+
+        for name in ["Alias", "Box"] {
+            let group = public
+                .lookup_local(name)
+                .and_then(|symbol| binder.symbols.get(symbol))
+                .and_then(|symbol| symbol.type_group)
+                .and_then(|group| binder.type_groups.get(group))
+                .expect("public namespace type group");
+            assert_eq!(group.fragments.len(), 1);
+            assert_eq!(group.fragments[0].scope, reopening_scopes[0]);
+            assert_eq!(group.fragments[0].legacy_storage, None);
+        }
+
+        let hidden_groups = namespace
+            .fragments
+            .iter()
+            .map(|fragment| {
+                let fragment = binder
+                    .namespaces
+                    .fragment(*fragment)
+                    .expect("namespace fragment");
+                let group = binder
+                    .graph
+                    .get(fragment.private_scope)
+                    .and_then(|scope| scope.lookup_local("Hidden"))
+                    .and_then(|symbol| binder.symbols.get(symbol))
+                    .and_then(|symbol| symbol.type_group)
+                    .expect("fragment-private group");
+                let row = binder.type_groups.get(group).expect("private group row");
+                assert_eq!(row.fragments.len(), 1);
+                assert_eq!(row.fragments[0].scope, fragment.private_scope);
+                assert_eq!(row.fragments[0].legacy_storage, None);
+                group
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(hidden_groups.len(), 2);
+        assert_ne!(hidden_groups[0], hidden_groups[1]);
+        assert_eq!(
+            binder
+                .declarations
+                .iter()
+                .filter(|declaration| {
+                    declaration.type_group.is_some() && declaration.legacy_type_storage.is_none()
+                })
+                .count(),
+            6
+        );
+    }
+
+    #[test]
+    fn public_namespace_group_target_is_distinct_from_fragment_lexical_scopes() {
+        let binder = bind(
+            "namespace N { interface PrivateHelper { value: number } export interface Public { helper: PrivateHelper } } namespace N { export interface Public { reopened: true } }",
+            false,
+        );
+        let namespace = binder
+            .namespaces
+            .namespaces()
+            .find(|namespace| namespace.name == "N")
+            .expect("N namespace");
+        let private_scopes = namespace
+            .fragments
+            .iter()
+            .map(|fragment| {
+                binder
+                    .namespaces
+                    .fragment(*fragment)
+                    .expect("namespace fragment")
+                    .private_scope
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(private_scopes.len(), 2);
+        assert_ne!(private_scopes[0], private_scopes[1]);
+
+        let public_symbol = binder
+            .graph
+            .get(namespace.public_scope)
+            .and_then(|scope| scope.lookup_local("Public"))
+            .expect("Public is published in the namespace target scope");
+        let public_group = binder
+            .symbols
+            .get(public_symbol)
+            .and_then(|symbol| symbol.type_group)
+            .and_then(|group| binder.type_groups.get(group))
+            .expect("Public group");
+        assert_eq!(
+            public_group
+                .fragments
+                .iter()
+                .map(|fragment| fragment.scope)
+                .collect::<Vec<_>>(),
+            private_scopes
+        );
+        assert!(public_group.fragments.iter().all(|fragment| {
+            fragment.site.scope == Some(fragment.scope) && fragment.legacy_storage.is_none()
+        }));
+        assert!(private_scopes.iter().all(|scope| {
+            binder
+                .graph
+                .get(*scope)
+                .is_some_and(|scope| scope.lookup_local("Public").is_none())
+        }));
+
+        let helper_group = binder
+            .graph
+            .get(private_scopes[0])
+            .and_then(|scope| scope.lookup_local("PrivateHelper"))
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .and_then(|symbol| symbol.type_group)
+            .and_then(|group| binder.type_groups.get(group))
+            .expect("private helper group");
+        assert_eq!(helper_group.fragments.len(), 1);
+        assert_eq!(helper_group.fragments[0].scope, private_scopes[0]);
+        assert_eq!(
+            helper_group.fragments[0].site.scope,
+            Some(private_scopes[0])
+        );
+    }
+
+    #[test]
+    fn namespace_public_type_groups_are_source_ordered_across_global_reopenings() {
+        fn fragment_sources(reverse_input: bool) -> Vec<SourceUnitKey> {
+            let prelude_allocator = Allocator::default();
+            let first_allocator = Allocator::default();
+            let second_allocator = Allocator::default();
+            let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+            let first = Parser::new(
+                &first_allocator,
+                "export {}; declare global { namespace N { interface Shared { first: number } } }",
+                SourceType::ts(),
+            )
+            .parse();
+            let second = Parser::new(
+                &second_allocator,
+                "export {}; declare global { namespace N { interface Shared { second: string } } }",
+                SourceType::ts(),
+            )
+            .parse();
+            assert!(!first.panicked && !second.panicked);
+
+            let mut builder = ProjectBinderBuilder::new(&prelude.program);
+            let units = if reverse_input {
+                [
+                    (&second.program, SourceUnitKey(20)),
+                    (&first.program, SourceUnitKey(10)),
+                ]
+            } else {
+                [
+                    (&first.program, SourceUnitKey(10)),
+                    (&second.program, SourceUnitKey(20)),
+                ]
+            };
+            let mut last_module = None;
+            for (original_module, (program, source)) in units.into_iter().enumerate() {
+                let unit = CompilationUnit {
+                    source,
+                    original_module: OriginalModuleOrdinal(
+                        u32::try_from(original_module).expect("two modules fit u32"),
+                    ),
+                    binding: ModuleBindingContext::for_program(
+                        program,
+                        SourceFileKind::ImplementationTs,
+                    ),
+                };
+                let (module, _) = builder.add_module(program, &[], unit);
+                last_module = Some(module);
+            }
+            let binder = builder.finish(last_module.expect("one project module"));
+            assert_eq!(binder.type_decl_count, 0);
+            let namespace = binder
+                .namespaces
+                .namespaces()
+                .find(|namespace| {
+                    namespace.owner == NamespaceOwner::CompilationGlobal && namespace.name == "N"
+                })
+                .expect("shared dormant global namespace");
+            let group = binder
+                .graph
+                .get(namespace.public_scope)
+                .and_then(|scope| scope.lookup_local("Shared"))
+                .and_then(|symbol| binder.symbols.get(symbol))
+                .and_then(|symbol| symbol.type_group)
+                .and_then(|group| binder.type_groups.get(group))
+                .expect("shared global namespace type group");
+            assert!(group
+                .fragments
+                .iter()
+                .all(|fragment| fragment.legacy_storage.is_none()));
+            group
+                .fragments
+                .iter()
+                .map(|fragment| fragment.source)
+                .collect()
+        }
+
+        assert_eq!(
+            fragment_sources(false),
+            [SourceUnitKey(10), SourceUnitKey(20)]
+        );
+        assert_eq!(
+            fragment_sources(true),
+            [SourceUnitKey(10), SourceUnitKey(20)]
+        );
+    }
+
+    #[test]
+    fn qualified_type_path_resolver_classifies_topology_slots_and_aliases() {
+        let source = r#"
+type AliasRoot = { alias: true };
+class ClassRoot {}
+const ValueRoot = 1;
+import RootImport = require("pkg");
+enum RootEnum { Member }
+namespace TopologyRoot {
+  export const ValueMiddle = 1;
+  export interface TypeMiddle { type: true }
+  export class ClassMiddle {}
+  export namespace NamespaceLeaf {}
+  export interface ParentLeaf { parent: true }
+  export namespace Child {}
+  export namespace Nested { export interface Leaf { nested: true } }
+}
+let forward: ForwardRoot.Later;
+declare namespace ForwardRoot { interface Earlier { earlier: true } }
+declare namespace ForwardRoot { interface Later { later: true } }
+namespace Dotted.Root { export interface Leaf { dotted: true } }
+declare namespace AmbientAliasList {
+  interface HiddenType { hidden: true }
+  interface HiddenExplicitType { explicit: true }
+  namespace HiddenChild { interface Leaf { child: true } }
+  const HiddenValue: 1;
+  export {
+    HiddenType as PublicType,
+    type HiddenExplicitType as ExplicitTypeOnly,
+    HiddenChild as PublicChild,
+    HiddenValue as PublicValue,
+  };
+  interface AfterList { after: true }
+}
+declare namespace DeferredRoot {
+  export import External = require("pkg");
+  export enum Enumeration { Member }
+  export { Missing as Unresolved };
+}
+"#;
+        let binder = bind(source, false);
+
+        let success = |segments: &[&str]| {
+            assert!(
+                matches!(
+                    binder.resolve_qualified_type_path(binder.module, segments),
+                    QualifiedTypePathResolution::TypeGroup(_)
+                ),
+                "expected a type group for {segments:?}"
+            );
+        };
+        for path in [
+            &["TopologyRoot", "TypeMiddle"][..],
+            &["TopologyRoot", "Nested", "Leaf"][..],
+            &["ForwardRoot", "Later"][..],
+            &["Dotted", "Root", "Leaf"][..],
+            &["AmbientAliasList", "PublicType"][..],
+            &["AmbientAliasList", "ExplicitTypeOnly"][..],
+            &["AmbientAliasList", "PublicChild", "Leaf"][..],
+        ] {
+            success(path);
+        }
+
+        for (path, expected) in [
+            (
+                &["MissingRoot", "Member"][..],
+                QualifiedTypePathResolution::MissingRoot { segment: 0 },
+            ),
+            (
+                &["ValueRoot", "Member"][..],
+                QualifiedTypePathResolution::MissingRoot { segment: 0 },
+            ),
+            (
+                &["AliasRoot", "Member"][..],
+                QualifiedTypePathResolution::TypeOnlyRoot { segment: 0 },
+            ),
+            (
+                &["ClassRoot", "Member"][..],
+                QualifiedTypePathResolution::TypeOnlyRoot { segment: 0 },
+            ),
+            (
+                &["RootImport", "Member"][..],
+                QualifiedTypePathResolution::Deferred {
+                    segment: 0,
+                    reason: QualifiedTypePathDeferredReason::Import,
+                },
+            ),
+            (
+                &["RootEnum", "Member"][..],
+                QualifiedTypePathResolution::Deferred {
+                    segment: 0,
+                    reason: QualifiedTypePathDeferredReason::Enum,
+                },
+            ),
+            (
+                &["TopologyRoot", "Missing", "Leaf"][..],
+                QualifiedTypePathResolution::MissingMember { segment: 1 },
+            ),
+            (
+                &["TopologyRoot", "ValueMiddle", "Leaf"][..],
+                QualifiedTypePathResolution::MissingMember { segment: 1 },
+            ),
+            (
+                &["TopologyRoot", "TypeMiddle", "Leaf"][..],
+                QualifiedTypePathResolution::TypeOnlyIntermediate { segment: 1 },
+            ),
+            (
+                &["TopologyRoot", "ClassMiddle", "Leaf"][..],
+                QualifiedTypePathResolution::TypeOnlyIntermediate { segment: 1 },
+            ),
+            (
+                &["TopologyRoot", "Child", "ParentLeaf"][..],
+                QualifiedTypePathResolution::MissingMember { segment: 2 },
+            ),
+            (
+                &["TopologyRoot", "NamespaceLeaf"][..],
+                QualifiedTypePathResolution::MissingMember { segment: 1 },
+            ),
+            (
+                &["TopologyRoot", "ValueMiddle"][..],
+                QualifiedTypePathResolution::ValueOnlyLeaf { segment: 1 },
+            ),
+            (
+                &["AmbientAliasList", "PublicValue"][..],
+                QualifiedTypePathResolution::ValueOnlyLeaf { segment: 1 },
+            ),
+            (
+                &["AmbientAliasList", "HiddenType"][..],
+                QualifiedTypePathResolution::MissingMember { segment: 1 },
+            ),
+            (
+                &["AmbientAliasList", "AfterList"][..],
+                QualifiedTypePathResolution::MissingMember { segment: 1 },
+            ),
+            (
+                &["DeferredRoot", "External"][..],
+                QualifiedTypePathResolution::Deferred {
+                    segment: 1,
+                    reason: QualifiedTypePathDeferredReason::Import,
+                },
+            ),
+            (
+                &["DeferredRoot", "Enumeration"][..],
+                QualifiedTypePathResolution::Deferred {
+                    segment: 1,
+                    reason: QualifiedTypePathDeferredReason::Enum,
+                },
+            ),
+            (
+                &["DeferredRoot", "Unresolved"][..],
+                QualifiedTypePathResolution::Unavailable { segment: 1 },
+            ),
+        ] {
+            assert_eq!(
+                binder.resolve_qualified_type_path(binder.module, path),
+                expected,
+                "unexpected resolution for {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ambient_export_alias_outputs_are_not_local_bindings_but_namespace_aliases_keep_type_groups()
+    {
+        let source = r#"
+declare namespace AliasOutputForward {
+  interface Local { forward: true }
+  export { Local as A };
+  export { A as B };
+}
+declare namespace AliasOutputReverse {
+  interface Local { reverse: true }
+  export { A as B };
+  export { Local as A };
+}
+declare namespace GenuineLocalControl {
+  interface Local { aliasTarget: true }
+  export { Local as A };
+  export { A as B };
+  interface A { genuineLocal: true }
+}
+declare namespace A {
+  namespace N { export interface X {} }
+  export { type N as TN };
+}
+"#;
+        let binder = bind(source, false);
+
+        let failures = binder.local_ambient_export_alias_failures();
+        assert_eq!(failures.len(), 2, "{failures:?}");
+        assert_eq!(
+            failures
+                .iter()
+                .map(|failure| (
+                    failure.local_name.as_str(),
+                    &source[failure.local_span.range()],
+                    failure.kind,
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("A", "A", LocalAmbientExportAliasFailureKind::NonLocal),
+                ("A", "A", LocalAmbientExportAliasFailureKind::NonLocal),
+            ],
+            "both source orders must reject an alias-only local name"
+        );
+
+        for path in [
+            &["AliasOutputForward", "B"][..],
+            &["AliasOutputReverse", "B"][..],
+        ] {
+            assert_eq!(
+                binder.resolve_qualified_type_path(binder.module, path),
+                QualifiedTypePathResolution::Unavailable { segment: 1 },
+                "a diagnosed alias output must not publish a qualified endpoint: {path:?}"
+            );
+        }
+
+        for path in [&["GenuineLocalControl", "B"][..], &["A", "TN", "X"][..]] {
+            assert!(
+                matches!(
+                    binder.resolve_qualified_type_path(binder.module, path),
+                    QualifiedTypePathResolution::TypeGroup(_)
+                ),
+                "a genuine declaration or type-only namespace alias must preserve its type group: {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn import_namespace_compositions_resolve_only_concrete_named_and_default_paths() {
+        fn bind_project_source(source: &str, import_name: &str, type_only: bool) -> Binder {
+            let prelude_allocator = Allocator::default();
+            let source_allocator = Allocator::default();
+            let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+            let parsed = Parser::new(&source_allocator, source, SourceType::ts()).parse();
+            assert!(!parsed.panicked, "parse failed: {source}");
+            let import_span = parsed
+                .program
+                .body
+                .iter()
+                .find_map(|statement| match statement {
+                    Statement::ImportDeclaration(import) => import
+                        .specifiers
+                        .as_ref()
+                        .into_iter()
+                        .flatten()
+                        .find(|specifier| specifier.local().name == import_name)
+                        .map(|specifier| Span::from_oxc(specifier.local().span)),
+                    Statement::TSImportEqualsDeclaration(import)
+                        if import.id.name == import_name =>
+                    {
+                        Some(Span::from_oxc(import.id.span))
+                    }
+                    _ => None,
+                })
+                .expect("import binding span");
+            let imported = if type_only {
+                ImportedSymbol::placeholder_type(import_name.to_string(), import_span)
+            } else {
+                ImportedSymbol::placeholder_value_and_type(import_name.to_string(), import_span)
+            };
+            let imports = [imported];
+            let mut builder = ProjectBinderBuilder::new(&prelude.program);
+            let unit =
+                CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, &parsed.program);
+            let (module, _) = builder.add_module(&parsed.program, &imports, unit);
+            builder.finish(module)
+        }
+
+        for (source, name) in [
+            (
+                "import type { Remote as Named } from './dep'; namespace Named { export interface X {} }",
+                "Named",
+            ),
+            (
+                "namespace NamedReverse { export interface X {} } import type { Remote as NamedReverse } from './dep';",
+                "NamedReverse",
+            ),
+            (
+                "import type Defaulted from './dep'; namespace Defaulted { export interface X {} }",
+                "Defaulted",
+            ),
+            (
+                "namespace DefaultedReverse { export interface X {} } import type DefaultedReverse from './dep';",
+                "DefaultedReverse",
+            ),
+        ] {
+            let binder = bind_project_source(source, name, true);
+            assert_eq!(
+                merge(&binder, name).classification.disposition,
+                MergeDisposition::Admitted,
+                "{name} composition must be admitted"
+            );
+            assert!(matches!(
+                binder.resolve_qualified_type_path(binder.module, &[name, "X"]),
+                QualifiedTypePathResolution::TypeGroup(_)
+            ));
+        }
+
+        for (source, name) in [
+            (
+                "import { Remote as NamedValue } from './dep'; namespace NamedValue { export interface X {} }",
+                "NamedValue",
+            ),
+            (
+                "namespace NamedValueReverse { export interface X {} } import { Remote as NamedValueReverse } from './dep';",
+                "NamedValueReverse",
+            ),
+            (
+                "import DefaultValue from './dep'; namespace DefaultValue { export interface X {} }",
+                "DefaultValue",
+            ),
+            (
+                "namespace DefaultValueReverse { export interface X {} } import DefaultValueReverse from './dep';",
+                "DefaultValueReverse",
+            ),
+        ] {
+            let binder = bind_project_source(source, name, false);
+            assert_eq!(
+                merge(&binder, name).classification.disposition,
+                MergeDisposition::DeferredBacklog15,
+                "{name} keeps its import-endpoint classification"
+            );
+            assert!(matches!(
+                binder.resolve_qualified_type_path(binder.module, &[name, "X"]),
+                QualifiedTypePathResolution::TypeGroup(_)
+            ));
+        }
+
+        for (source, name, type_only) in [
+            (
+                "import type { Remote as PureTypeImport } from './dep';",
+                "PureTypeImport",
+                true,
+            ),
+            (
+                "import { Remote as PureNamedImport } from './dep';",
+                "PureNamedImport",
+                false,
+            ),
+            (
+                "import PureDefaultImport from './dep';",
+                "PureDefaultImport",
+                false,
+            ),
+        ] {
+            let binder = bind_project_source(source, name, type_only);
+            assert_eq!(
+                binder.resolve_qualified_type_path(binder.module, &[name, "X"]),
+                QualifiedTypePathResolution::Deferred {
+                    segment: 0,
+                    reason: QualifiedTypePathDeferredReason::Import,
+                }
+            );
+        }
+
+        for (source, name) in [
+            (
+                "import type * as NamespaceImport from './dep'; namespace NamespaceImport { export interface X {} }",
+                "NamespaceImport",
+            ),
+            (
+                "import EqualsImport = require('./dep'); namespace EqualsImport { export interface X {} }",
+                "EqualsImport",
+            ),
+        ] {
+            let binder = bind(source, false);
+            assert_eq!(
+                merge(&binder, name).classification.disposition,
+                MergeDisposition::RejectedFutureTk2440
+            );
+            assert_eq!(
+                binder.resolve_qualified_type_path(binder.module, &[name, "X"]),
+                QualifiedTypePathResolution::Deferred {
+                    segment: 0,
+                    reason: QualifiedTypePathDeferredReason::Import,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn qualified_type_path_root_lookup_is_slot_aware_and_private_scope_ordered() {
+        let source = r#"
+namespace SlotRoot { export interface Item { item: true } }
+function valueShadow() { const SlotRoot = 1; }
+function typeShadow() { interface SlotRoot { local: true } }
+namespace NamespaceHost {
+  export namespace SlotRoot { export interface ParentItem { parent: true } }
+  export namespace Nested {
+    namespace SlotRoot { export interface Inner { inner: true } }
+  }
+}
+namespace Visibility {
+  export namespace Shared { export interface Leaf { shared: true } }
+  namespace FirstPrivate { export interface Leaf { first: true } }
+}
+namespace Visibility {
+  namespace SecondPrivate { export interface Leaf { second: true } }
+}
+"#;
+        let binder = bind(source, false);
+        for function_name in ["valueShadow", "typeShadow"] {
+            let start = u32::try_from(
+                source
+                    .find(&format!("function {function_name}"))
+                    .expect("function source start"),
+            )
+            .expect("source span fits u32");
+            let scope = binder
+                .fn_scopes
+                .get(&(binder.module, start))
+                .copied()
+                .expect("function scope");
+            assert!(matches!(
+                binder.resolve_qualified_type_path(scope, &["SlotRoot", "Item"]),
+                QualifiedTypePathResolution::TypeGroup(_)
+            ));
+        }
+
+        let host = binder
+            .namespaces
+            .namespaces()
+            .find(|namespace| namespace.name == "NamespaceHost")
+            .expect("NamespaceHost");
+        let nested = binder
+            .namespaces
+            .namespaces()
+            .find(|namespace| {
+                namespace.name == "Nested"
+                    && namespace.owner == NamespaceOwner::NamespacePublic(host.id)
+            })
+            .expect("NamespaceHost.Nested");
+        let nested_private = binder
+            .namespaces
+            .fragment(nested.fragments[0])
+            .expect("Nested fragment")
+            .private_scope;
+        assert!(matches!(
+            binder.resolve_qualified_type_path(nested_private, &["SlotRoot", "Inner"]),
+            QualifiedTypePathResolution::TypeGroup(_)
+        ));
+        assert_eq!(
+            binder.resolve_qualified_type_path(nested_private, &["SlotRoot", "ParentItem"]),
+            QualifiedTypePathResolution::MissingMember { segment: 1 }
+        );
+        assert!(matches!(
+            binder.resolve_qualified_type_path(
+                nested_private,
+                &["NamespaceHost", "SlotRoot", "ParentItem"]
+            ),
+            QualifiedTypePathResolution::TypeGroup(_)
+        ));
+
+        let visibility = binder
+            .namespaces
+            .namespaces()
+            .find(|namespace| namespace.name == "Visibility")
+            .expect("Visibility");
+        let second_private = binder
+            .namespaces
+            .fragment(visibility.fragments[1])
+            .expect("second Visibility reopening")
+            .private_scope;
+        assert!(matches!(
+            binder.resolve_qualified_type_path(second_private, &["SecondPrivate", "Leaf"]),
+            QualifiedTypePathResolution::TypeGroup(_)
+        ));
+        assert!(matches!(
+            binder.resolve_qualified_type_path(second_private, &["Shared", "Leaf"]),
+            QualifiedTypePathResolution::TypeGroup(_)
+        ));
+        assert_eq!(
+            binder.resolve_qualified_type_path(second_private, &["FirstPrivate", "Leaf"]),
+            QualifiedTypePathResolution::MissingRoot { segment: 0 }
+        );
+        assert!(matches!(
+            binder.resolve_qualified_type_path(second_private, &["SlotRoot", "Item"]),
+            QualifiedTypePathResolution::TypeGroup(_)
+        ));
+    }
+
+    #[test]
     fn dotted_and_explicit_nested_namespaces_share_typed_owner_identity() {
         let binder = bind(
             "namespace A.B.C {} namespace A { export namespace B { export namespace C {} } }",
@@ -3355,9 +4588,10 @@ mod tests {
             .get(namespace.public_scope)
             .is_some_and(|scope| scope.parent.is_none())));
         assert!(binder.graph.get(binder.module).is_some_and(|scope| {
-            ["A", "B", "C"]
-                .iter()
-                .all(|name| scope.lookup_local(name).is_none())
+            scope.lookup_local("A").is_some()
+                && ["B", "C"]
+                    .iter()
+                    .all(|name| scope.lookup_local(name).is_none())
         }));
     }
 
@@ -3625,6 +4859,51 @@ mod tests {
     }
 
     #[test]
+    fn module_specifier_aliases_are_unreachable_from_qualified_identifier_paths() {
+        struct Case {
+            name: &'static str,
+            source: &'static str,
+            declaration_file: bool,
+            path: &'static [&'static str],
+            expected: QualifiedTypePathResolution,
+        }
+
+        let cases = [
+            Case {
+                name: "invalid identifier-namespace re-export",
+                source: "namespace N { export { X } from 'pkg'; }",
+                declaration_file: false,
+                path: &["N", "X"],
+                expected: QualifiedTypePathResolution::MissingMember { segment: 1 },
+            },
+            Case {
+                name: "valid top-level re-export",
+                source: "export { X as TopAlias } from 'pkg';",
+                declaration_file: false,
+                path: &["TopAlias", "Member"],
+                expected: QualifiedTypePathResolution::MissingRoot { segment: 0 },
+            },
+            Case {
+                name: "valid string ambient-module re-export",
+                source: "declare module 'pkg' { export { X as StringAlias } from 'dep'; }",
+                declaration_file: true,
+                path: &["StringAlias", "Member"],
+                expected: QualifiedTypePathResolution::MissingRoot { segment: 0 },
+            },
+        ];
+
+        for case in cases {
+            let binder = bind(case.source, case.declaration_file);
+            assert_eq!(
+                binder.resolve_qualified_type_path(binder.module, case.path),
+                case.expected,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
     fn string_module_children_are_opaque_and_cannot_collide_with_root_namespaces() {
         let source = r#"declare module "pkg" {
             export namespace X { const hidden: number; }
@@ -3781,7 +5060,7 @@ mod tests {
         let binder = bind(source, false);
         assert_eq!(binder.decl_count, 0);
         assert_eq!(binder.type_decl_count, 1);
-        assert_eq!(binder.type_groups.len(), 1);
+        assert_eq!(binder.type_groups.len(), 4);
 
         let existing_symbol = binder
             .graph
@@ -3806,8 +5085,12 @@ mod tests {
         }) {
             assert_eq!(declaration.value_storage, None);
             assert_eq!(declaration.legacy_type_storage, None);
-            assert_eq!(declaration.type_group, None);
             let name = &source[declaration.site.binding_span.range()];
+            if matches!(name, "C" | "T" | "I") {
+                assert!(declaration.type_group.is_some());
+            } else {
+                assert_eq!(declaration.type_group, None);
+            }
             if matches!(name, "param" | "arg") {
                 assert_eq!(declaration.site.scope, None);
             } else {

@@ -6,7 +6,7 @@
 use crate::binder::bind::{ImportPlaceholder, ImportedSymbol, ProjectBinderBuilder};
 use crate::binder::bind_module_with_prelude;
 use crate::binder::declaration::{LegacyTypeStorageId, ValueStorageId};
-use crate::binder::namespace::CompilationUnit;
+use crate::binder::namespace::{CompilationUnit, LocalAmbientExportAliasFailureKind};
 use crate::binder::scope::ScopeId;
 use crate::binder::Binder;
 use crate::check::query::SemanticQueryCoordinator;
@@ -351,6 +351,8 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
     lexical_events
         .reserve_callable_type_params(&mut next_type_param)
         .expect("one callable binder reservation pass");
+    let mut external_effects = BTreeMap::new();
+    enqueue_local_ambient_export_alias_diagnostics(&binder, &lexical_events, &mut external_effects);
     let mut pass = build_pass_with_reporting(
         interner,
         &binder,
@@ -366,6 +368,9 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
             suppress_effects: false,
         },
     );
+    for effects in external_effects.into_values() {
+        pass.enqueue_effects(CheckerEffects::from_records(effects));
+    }
 
     // Phase 0: fill named type declarations before walking values.
     pass.fill_type_decls(binder.module);
@@ -555,6 +560,7 @@ where
         .reserve_callable_type_params(&mut next_type_param)
         .expect("one callable binder reservation pass");
     inspect(&binder, &lexical_events, &module_scopes);
+    enqueue_local_ambient_export_alias_diagnostics(&binder, &lexical_events, &mut external_effects);
 
     for placeholders in &module_placeholders {
         for placeholder in placeholders {
@@ -900,6 +906,33 @@ fn enqueue_external_diagnostic(
         .entry(owner.ticket)
         .or_insert_with(|| CandidateEffects::new(owner.ticket))
         .diagnostic(diagnostic);
+}
+
+fn enqueue_local_ambient_export_alias_diagnostics(
+    binder: &Binder,
+    reservations: &LexicalReservations,
+    effects: &mut BTreeMap<RecordTicket, CandidateEffects>,
+) {
+    for failure in binder.local_ambient_export_alias_failures() {
+        let module_ordinal = ModuleOrdinal::new(
+            usize::try_from(failure.original_module.0)
+                .expect("original module ordinal fits checker ownership"),
+        );
+        let owner = reservations
+            .export_alias_owner(module_ordinal, failure.local_span)
+            .expect("local ambient export alias must have an exact lexical owner");
+        effects
+            .entry(owner.ticket)
+            .or_insert_with(|| CandidateEffects::new(owner.ticket))
+            .diagnostic(match failure.kind {
+                LocalAmbientExportAliasFailureKind::Missing => {
+                    Diagnostic::cannot_find_name(failure.local_span, &failure.local_name)
+                }
+                LocalAmbientExportAliasFailureKind::NonLocal => {
+                    Diagnostic::cannot_export_non_local(failure.local_span, &failure.local_name)
+                }
+            });
+    }
 }
 
 fn module_export_name<'ast>(name: &'ast ModuleExportName<'ast>) -> Option<&'ast str> {

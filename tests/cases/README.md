@@ -534,7 +534,7 @@ wildcard/`None`/skip that drops the position.
 | `typeof_query.ts` | WU5 | `lower_annotation_inner` records before dropping `TSTypeQuery` | `annotation-lower/type-query/typeof` | TS2304 |
 | `annotation_keywords.ts` | WU5 | keyword/literal annotation leaves record before `None` | `annotation-lower/{symbol,bigint,object,intrinsic}-keyword/self`, `literal-type/bigint` | TS2304/TS2552 |
 | `tuple_members.ts` | WU5 | `lower_tuple_annotation` records the named/optional member | `annotation-lower/{named-tuple-member,tuple-optional-element}/self` | (tuple mis-shape) |
-| `type_name_qualified.ts` | WU5 | qualified/`this` name + `this`/predicate type leaves record | `annotation-lower/type-name/qualified-name`, `type-predicate/self`, `this-type/self` | TS2304 |
+| `type_name_qualified.ts` | WU2/WU5 | a successful public qualified type-group path stays recorded for WU3 lowering; `this`/predicate type leaves remain recorded | `decl/module-declaration/self`, `annotation-lower/type-name/qualified-name`, `type-predicate/self`, `this-type/self` | clean |
 | `signature_computed_key.ts` | WU5 | object/interface member collection records the computed key (property AND method signatures — WU7-E F1) | `signature/{property,method}-signature/computed-key` | TS1170/TS2304 |
 | `class_members.ts` | WU5 | `collect_class_own_members` records static-block/accessor/index-sig/computed method + property keys (WU7-E F2) | `class/{static-block,accessor-property,class-index-signature}/self`, `class/{method,property}-definition/computed-key` | (member skip) |
 | `class_heritage.ts` | WU5 | record-only: extends type arguments + implements clause never processed (WU7-E F3) | `class/class-heritage/type-arguments`, `class/implements-clause/self` | TS2304 |

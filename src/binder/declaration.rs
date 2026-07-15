@@ -1,6 +1,7 @@
 //! Source declaration identities and dormant type-group metadata.
 
 use crate::binder::namespace::NamespaceId;
+use crate::binder::namespace::SourceUnitKey;
 use crate::binder::scope::ScopeId;
 use crate::span::Span;
 use oxc_ast::ast::{Program, TSModuleDeclarationName};
@@ -278,14 +279,15 @@ pub enum TypeFragmentKind {
     Class,
 }
 
-/// One ordered group fragment with its exact source and legacy storage sites.
+/// One ordered group fragment with its exact lexical scope and optional legacy storage site.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct TypeGroupFragment {
     pub declaration: DeclId,
+    pub source: SourceUnitKey,
     pub scope: ScopeId,
     pub site: DeclarationSite,
     pub kind: TypeFragmentKind,
-    pub legacy_storage: LegacyTypeStorageId,
+    pub legacy_storage: Option<LegacyTypeStorageId>,
 }
 
 /// Dormant ordered metadata for every admitted same-name type declaration.

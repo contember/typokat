@@ -151,15 +151,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 if self.index_is_active_mapped_key(&access.index_type) {
                     // M28: capture the `T` of `T[P]` for homomorphic modifiers only
                     // in the bare type-parameter (`Pick`) shape. First capture wins.
+                    let object = self.lower_annotation(scope, &access.object_type);
                     if let Some(param_ty) = self.bare_type_param_reference(&access.object_type) {
                         if let Some(frame) = self.mapped_frames.last_mut() {
                             frame.captured_source.get_or_insert(param_ty);
                         }
                     }
-                    return Some(self.interner.intern_mapped_value());
+                    return object.map(|_| self.interner.intern_mapped_value());
                 }
-                let object = self.lower_annotation(scope, &access.object_type)?;
-                let index = self.lower_annotation(scope, &access.index_type)?;
+                let object = self.lower_annotation(scope, &access.object_type);
+                let index = self.lower_annotation(scope, &access.index_type);
+                let (Some(object), Some(index)) = (object, index) else {
+                    return None;
+                };
                 return Some(self.indexed_access_type(object, index));
             }
             // M26: a mapped type `{ [K in S]: V }`. Lowered to an interned node (WU1)
@@ -381,6 +385,49 @@ mod multi_child_recovery_tests {
                 "decl/module-declaration/self",
                 "annotation-lower/type-name/qualified-name",
             ]
+        );
+    }
+
+    #[test]
+    fn unavailable_overload_row_keeps_ready_compatibility_without_publication() {
+        let source = r#"
+            enum DeferredOverload { A }
+            function mixed(value: DeferredOverload.A): number;
+            function mixed(value: string): string;
+            function mixed(value: number): number {
+                const bodyStillChecked: string = 1;
+                return value;
+            }
+            const noPartialOverload: never = mixed("ready");
+        "#;
+        let output = check_source(source);
+        assert!(output.parse_errors.is_empty());
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>(),
+            [DiagnosticCode::TK2394, DiagnosticCode::TK2322],
+            "ready compatibility and bodies run, but the unavailable group publishes no callable"
+        );
+    }
+
+    #[test]
+    fn wrong_arity_array_visits_every_argument_once_in_source_order() {
+        let source = "type Probe = Array<MissingArray.First, AlsoMissingArray.Second>;";
+        let output = check_source(source);
+        assert!(output.parse_errors.is_empty());
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.code, diagnostic.span.start))
+                .collect::<Vec<_>>(),
+            ["MissingArray", "AlsoMissingArray"]
+                .into_iter()
+                .map(|name| (DiagnosticCode::TK2503, starts(source, name)[0]))
+                .collect::<Vec<_>>()
         );
     }
 }

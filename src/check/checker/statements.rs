@@ -2,7 +2,7 @@
 
 use super::assignment::binding_decl_id;
 use super::assignment::declared_from_init;
-use super::calls::widen;
+use super::calls::{widen, FunctionReservation};
 use super::context::*;
 use super::decls::value_decl_id;
 use super::lexical_events::LexicalOwnerPhase;
@@ -75,7 +75,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         statements: &[Statement<'_>],
         declared_ret: Option<TypeId>,
         inferred: &mut Option<TypeId>,
-        surfaces: &mut FxHashMap<u32, FunctionSurface>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation>,
     ) {
         let mut index = 0;
         while index < statements.len() {
@@ -985,7 +985,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         statements: &[Statement<'_>],
-    ) -> FxHashMap<u32, FunctionSurface> {
+    ) -> FxHashMap<u32, FunctionReservation> {
         let mut surfaces = FxHashMap::default();
         self.reserve_function_surfaces_into(scope, statements, &mut surfaces);
         surfaces
@@ -997,7 +997,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         statement_lists: &[&[Statement<'_>]],
-    ) -> FxHashMap<u32, FunctionSurface> {
+    ) -> FxHashMap<u32, FunctionReservation> {
         let mut surfaces = FxHashMap::default();
         for statements in statement_lists {
             self.reserve_function_surfaces_into(scope, statements, &mut surfaces);
@@ -1009,7 +1009,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         statements: &[Statement<'_>],
-        surfaces: &mut FxHashMap<u32, FunctionSurface>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation>,
     ) {
         let mut index = 0;
         while index < statements.len() {
@@ -1018,7 +1018,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     let Some(func) = function_decl_from_statement(stmt) else {
                         continue;
                     };
-                    self.reserve_function_surface(scope, func, surfaces);
+                    self.reserve_function_surface(scope, func, surfaces, false);
                 }
                 self.publish_reserved_overload_group(
                     scope,
@@ -1030,7 +1030,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 continue;
             }
             if let Some(func) = function_decl_from_statement(&statements[index]) {
-                self.reserve_function_surface(scope, func, surfaces);
+                self.reserve_function_surface(scope, func, surfaces, true);
             }
             index += 1;
         }
@@ -1040,7 +1040,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         func: &Function<'_>,
-        surfaces: &mut FxHashMap<u32, FunctionSurface>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation>,
+        publish_value: bool,
     ) {
         let tickets = self
             .lexical_events
@@ -1052,7 +1053,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .with_ticket_effects(tickets.signature, |pass| pass.reserve_function(scope, func)),
             None => self.reserve_function(scope, func),
         };
-        self.publish_function_type(scope, func, surface.function_ty);
+        if publish_value {
+            if let FunctionReservation::Ready(surface) = &surface {
+                self.publish_function_type(scope, func, surface.function_ty);
+            }
+        }
         surfaces.insert(func.span.start, surface);
     }
 
@@ -1060,21 +1065,29 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         func: &Function<'_>,
-        surfaces: &mut FxHashMap<u32, FunctionSurface>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation>,
         publish_value: bool,
     ) -> bool {
-        let Some(mut surface) = surfaces.remove(&func.span.start) else {
+        let Some(surface) = surfaces.remove(&func.span.start) else {
             // Defensive fallback for an AST shape outside the shared statement-list
             // walker (for example a labeled declaration).
             self.check_function_declaration(scope, func);
             return false;
         };
-        let function_ty = self.fill_reserved_function(scope, func, &surface);
-        surface.function_ty = function_ty;
-        if publish_value {
-            self.publish_function_type(scope, func, function_ty);
+        match surface {
+            FunctionReservation::Ready(mut surface) => {
+                let function_ty = self.fill_reserved_function(scope, func, &surface);
+                surface.function_ty = function_ty;
+                if publish_value {
+                    self.publish_function_type(scope, func, function_ty);
+                }
+                surfaces.insert(func.span.start, FunctionReservation::Ready(surface));
+            }
+            FunctionReservation::Unavailable(surface) => {
+                self.check_retained_function_body(scope, func, &surface);
+                surfaces.insert(func.span.start, FunctionReservation::Unavailable(surface));
+            }
         }
-        surfaces.insert(func.span.start, surface);
         true
     }
 
@@ -1128,15 +1141,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         statements: &[Statement<'_>],
         name: &str,
-        surfaces: &FxHashMap<u32, FunctionSurface>,
+        surfaces: &FxHashMap<u32, FunctionReservation>,
     ) {
-        let signatures: Vec<TypeId> = statements
-            .iter()
-            .filter_map(function_decl_from_statement)
-            .filter(|func| func.body.is_none())
-            .filter_map(|func| surfaces.get(&func.span.start))
-            .map(|surface| surface.function_ty)
-            .collect();
+        let mut signatures = Vec::new();
+        for func in statements.iter().filter_map(function_decl_from_statement) {
+            let Some(surface) = surfaces.get(&func.span.start) else {
+                return;
+            };
+            let FunctionReservation::Ready(surface) = surface else {
+                return;
+            };
+            if func.body.is_none() {
+                signatures.push(surface.function_ty);
+            }
+        }
         if signatures.is_empty() {
             return;
         }
@@ -1158,14 +1176,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// behaviorally equivalent without introducing a second declaration model.
     fn check_function_declaration(&mut self, scope: ScopeId, func: &Function<'_>) {
         let mut surfaces = FxHashMap::default();
-        self.reserve_function_surface(scope, func, &mut surfaces);
+        self.reserve_function_surface(scope, func, &mut surfaces, true);
         if !self.fill_reserved_function_body(scope, func, &mut surfaces, true) {
             return;
         }
         if func.body.is_none() && !func.declare {
             let ticket = surfaces
                 .get(&func.span.start)
-                .and_then(|surface| surface.tickets)
+                .and_then(|surface| match surface {
+                    FunctionReservation::Ready(surface) => surface.tickets,
+                    FunctionReservation::Unavailable(surface) => surface.tickets,
+                })
                 .map(|tickets| tickets.deferred);
             match ticket {
                 Some(ticket) => self.with_ticket_effects(ticket, |pass| {
@@ -1184,7 +1205,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         func: &Function<'_>,
-        surfaces: &mut FxHashMap<u32, FunctionSurface>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation>,
     ) {
         if !self.fill_reserved_function_body(scope, func, surfaces, true) {
             return;
@@ -1192,7 +1213,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         if func.body.is_none() && !func.declare {
             let ticket = surfaces
                 .get(&func.span.start)
-                .and_then(|surface| surface.tickets)
+                .and_then(|surface| match surface {
+                    FunctionReservation::Ready(surface) => surface.tickets,
+                    FunctionReservation::Unavailable(surface) => surface.tickets,
+                })
                 .map(|tickets| tickets.deferred);
             match ticket {
                 Some(ticket) => self.with_ticket_effects(ticket, |pass| {
@@ -1212,10 +1236,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         statements: &[Statement<'_>],
         name: &str,
-        surfaces: &mut FxHashMap<u32, FunctionSurface>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation>,
     ) {
         let mut signatures = Vec::new();
         let mut implementation: Option<(TypeId, ValueStorageId)> = None;
+        let mut unavailable = false;
         for stmt in statements {
             let Some(func) = function_decl_from_statement(stmt) else {
                 continue;
@@ -1225,16 +1250,33 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 continue;
             };
             if let Some(surface) = surfaces.get(&func.span.start) {
-                if func.body.is_some() {
-                    implementation = Some((surface.function_ty, decl_id));
-                } else {
-                    signatures.push((
-                        surface.function_ty,
-                        Span::from_oxc(func.span),
-                        surface.tickets.map(|tickets| tickets.deferred),
-                    ));
+                match surface {
+                    FunctionReservation::Ready(surface) => {
+                        if func.body.is_some() {
+                            implementation = Some((surface.function_ty, decl_id));
+                        } else {
+                            signatures.push((
+                                surface.function_ty,
+                                Span::from_oxc(func.span),
+                                surface.tickets.map(|tickets| tickets.deferred),
+                            ));
+                        }
+                    }
+                    FunctionReservation::Unavailable(_) => unavailable = true,
                 }
             }
+        }
+
+        // Compatibility diagnostics belong to each ready overload row, even when a
+        // different row is unavailable and therefore withholds the whole group.
+        if let Some((implementation_ty, _)) = implementation {
+            if !signatures.is_empty() {
+                self.check_overload_implementation_compatibility(implementation_ty, &signatures);
+            }
+        }
+
+        if unavailable {
+            return;
         }
 
         let overload_ty = if signatures.is_empty() {
@@ -1275,7 +1317,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return;
         }
 
-        self.check_overload_implementation_compatibility(implementation_ty, &signatures);
         let Some(overload_ty) = overload_ty else {
             return;
         };

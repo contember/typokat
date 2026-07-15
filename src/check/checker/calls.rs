@@ -184,7 +184,12 @@ pub(in crate::check::checker) struct RetainedFunctionBodySurface {
     pub receiver: Option<TypeId>,
     pub params: Vec<Option<ParameterType>>,
     pub declared_return: Option<TypeId>,
-    pub tickets: super::lexical_events::CallableTickets,
+    pub tickets: Option<super::lexical_events::CallableTickets>,
+}
+
+pub(in crate::check::checker) enum FunctionReservation {
+    Ready(FunctionSurface),
+    Unavailable(RetainedFunctionBodySurface),
 }
 
 impl<'a, 'ast> Pass<'a, 'ast> {
@@ -2138,7 +2143,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         enclosing: ScopeId,
         func: &Function<'_>,
-    ) -> FunctionSurface {
+    ) -> FunctionReservation {
         let retained = self
             .lexical_events
             .callable_at(self.current_module_ordinal, func.span.start)
@@ -2170,24 +2175,46 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     .fn_scopes
                     .get(&(pass.current_module, func.span.start))
                     .copied();
-                let receiver = func.this_param.as_ref().map(|this_param| {
-                    this_param
+                let receiver = match func.this_param.as_ref() {
+                    Some(this_param) => this_param
                         .type_annotation
                         .as_ref()
                         .and_then(|annotation| {
                             pass.lower_annotation(enclosing, &annotation.type_annotation)
                         })
-                        .unwrap_or(pass.interner.well_known().error)
-                });
-                let params = pass.lower_parameters(enclosing, fn_scope, &func.params, false);
+                        .map(Some),
+                    None => Some(None),
+                };
+                let params = pass.lower_parameter_slots(enclosing, fn_scope, &func.params, false);
                 // Type references in the signature resolve from the enclosing scope,
                 // while declared type parameters resolve through the pushed frame.
-                let declared_return = func
-                    .return_type
-                    .as_ref()
-                    .and_then(|ann| pass.lower_annotation(enclosing, &ann.type_annotation));
+                let declared_return = match func.return_type.as_ref() {
+                    Some(annotation) => pass
+                        .lower_annotation(enclosing, &annotation.type_annotation)
+                        .map(Some),
+                    None => Some(None),
+                };
                 (generic_params, receiver, params, declared_return)
             });
+        let unavailable = generic_params.unavailable
+            || receiver.is_none()
+            || params.iter().any(Option::is_none)
+            || declared_return.is_none();
+        let receiver = receiver.flatten();
+        let declared_return = declared_return.flatten();
+        if unavailable {
+            return FunctionReservation::Unavailable(RetainedFunctionBodySurface {
+                type_param_frame,
+                receiver,
+                params,
+                declared_return,
+                tickets,
+            });
+        }
+        let params = params
+            .into_iter()
+            .map(|parameter| parameter.expect("ready function retains every parameter"))
+            .collect::<Vec<_>>();
         let ret = declared_return.unwrap_or_else(|| {
             let well_known = self.interner.well_known();
             if func.body.is_some() {
@@ -2199,20 +2226,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         });
         let function_ty = self.interner.intern_function(FunctionType {
-            type_params: generic_params.clone(),
+            type_params: generic_params.params.clone(),
             receiver,
             params: params.clone(),
             ret,
         });
-        FunctionSurface {
+        FunctionReservation::Ready(FunctionSurface {
             receiver,
             params,
-            generic_params,
+            generic_params: generic_params.params,
             type_param_frame,
             declared_return,
             function_ty,
             tickets,
-        }
+        })
     }
 
     /// Check a previously reserved function body and return its completed callable
@@ -2276,16 +2303,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         enclosing: ScopeId,
         func: &Function<'_>,
-        surface: RetainedFunctionBodySurface,
+        surface: &RetainedFunctionBodySurface,
     ) {
-        let RetainedFunctionBodySurface {
-            type_param_frame,
-            receiver,
-            params,
-            declared_return,
-            tickets,
-        } = surface;
-        self.with_ticket_effects(tickets.body, |pass| {
+        let type_param_frame = surface.type_param_frame.clone();
+        let receiver = surface.receiver;
+        let params = &surface.params;
+        let declared_return = surface.declared_return;
+        let tickets = surface.tickets;
+        let check_body = |pass: &mut Self| {
             pass.with_type_params(type_param_frame, |pass| {
                 let fn_scope = pass
                     .binder
@@ -2293,11 +2318,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     .get(&(pass.current_module, func.span.start))
                     .copied();
                 let body_scope = fn_scope.unwrap_or(enclosing);
-                pass.bind_partial_retained_parameter_types(fn_scope, &func.params, &params);
+                pass.bind_partial_retained_parameter_types(fn_scope, &func.params, params);
                 pass.check_partial_retained_parameter_initializers(
                     body_scope,
                     &func.params,
-                    &params,
+                    params,
                 );
                 let saved_this = pass.current_this;
                 if let Some(receiver) = receiver {
@@ -2308,7 +2333,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
                 pass.current_this = saved_this;
             });
-        });
+        };
+        match tickets {
+            Some(tickets) => self.with_ticket_effects(tickets.body, check_body),
+            None => check_body(self),
+        }
     }
 
     /// Infer a function expression or class member type and check its body. Function
@@ -2324,13 +2353,21 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .callable_at(self.current_module_ordinal, func.span.start)
             .and_then(|site| self.lexical_events.callable(site))
             .map(|callable| callable.tickets);
-        let surface = match tickets {
+        let reservation = match tickets {
             Some(tickets) => self.with_ticket_effects(tickets.signature, |pass| {
                 pass.reserve_function(enclosing, func)
             }),
             None => self.reserve_function(enclosing, func),
         };
-        self.fill_reserved_function(enclosing, func, &surface)
+        match reservation {
+            FunctionReservation::Ready(surface) => {
+                self.fill_reserved_function(enclosing, func, &surface)
+            }
+            FunctionReservation::Unavailable(surface) => {
+                self.check_retained_function_body(enclosing, func, &surface);
+                self.interner.well_known().error
+            }
+        }
     }
 
     /// Infer an arrow's type and check its body. Generic arrow type parameters are
@@ -2569,6 +2606,24 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         check_initializers: bool,
     ) -> Vec<ParameterType> {
         let error_ty = self.interner.well_known().error;
+        parameter_syntaxes(params)
+            .zip(self.lower_parameter_slots(enclosing, fn_scope, params, check_initializers))
+            .map(|(syntax, lowered)| {
+                lowered.unwrap_or_else(|| {
+                    syntax.with_type(syntax.name().unwrap_or_default(), error_ty)
+                })
+            })
+            .collect()
+    }
+
+    fn lower_parameter_slots(
+        &mut self,
+        enclosing: ScopeId,
+        fn_scope: Option<ScopeId>,
+        params: &FormalParameters<'_>,
+        check_initializers: bool,
+    ) -> Vec<Option<ParameterType>> {
+        let error_ty = self.interner.well_known().error;
         let mut lowered = Vec::with_capacity(parameter_count(params));
         let parameter_scope = fn_scope.unwrap_or(enclosing);
         for syntax in parameter_syntaxes(params) {
@@ -2582,17 +2637,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         .as_ref()
                         .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation));
                     let ty = if parameter.type_annotation.is_some() {
-                        annotation_ty.unwrap_or(error_ty)
+                        annotation_ty
                     } else {
-                        error_ty
+                        Some(error_ty)
                     };
 
                     // F4: object destructuring parameters run M13 access checks against the
                     // annotation type only; binding destructured names is deferred. The
                     // annotation resolves in the enclosing class context.
                     if let BindingPattern::ObjectPattern(object) = &parameter.pattern {
-                        if parameter.type_annotation.is_some() {
-                            match self.demand_apparent_type(ty) {
+                        if let Some(annotation_ty) = annotation_ty {
+                            match self.demand_apparent_type(annotation_ty) {
                                 DemandOutcome::Ready(source) => {
                                     self.check_object_pattern_access(object, source);
                                 }
@@ -2620,26 +2675,26 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     ty
                 }
                 ParameterSyntax::Rest { parameter } => match parameter.type_annotation.as_ref() {
-                    Some(ann) => self
-                        .lower_annotation(enclosing, &ann.type_annotation)
-                        .unwrap_or(error_ty),
-                    None => error_ty,
+                    Some(ann) => self.lower_annotation(enclosing, &ann.type_annotation),
+                    None => Some(error_ty),
                 },
             };
 
+            let parameter = ty.map(|ty| syntax.with_type(name, ty));
+
             // Bind the parameter's type into the function scope so the body resolves
             // it (the binder declared the parameter symbol + value-storage id).
-            if let Some(scope) = fn_scope {
+            if let (Some(scope), Some(parameter)) = (fn_scope, parameter.as_ref()) {
                 if let Some(decl_id) = parameter_name(syntax.pattern())
                     .and_then(|n| self.binder.resolve_value(scope, &n))
                     .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
                     .and_then(|s| s.value)
                 {
-                    self.decl_types.set(decl_id, ty);
+                    self.decl_types.set(decl_id, parameter.ty);
                 }
             }
 
-            lowered.push(syntax.with_type(name, ty));
+            lowered.push(parameter);
         }
         lowered
     }

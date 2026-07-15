@@ -15,6 +15,7 @@ pub use reason::render_reason_chain;
 pub use render_type::render_type;
 pub use writer::{render_to_writer, render_to_writer_with_format};
 
+use crate::binder::namespace::{QualifiedTypePathDeferredReason, QualifiedTypePathResolution};
 use crate::span::Span;
 
 /// A tsc-compatible diagnostic code (numbers reused from tsc, `TK` prefix to be
@@ -58,6 +59,8 @@ pub enum DiagnosticCode {
     /// Property is protected (accessed outside the class and its subclasses) —
     /// M13.
     TK2445,
+    /// Cannot find namespace.
+    TK2503,
     /// Cannot create an instance of an abstract class — M15.
     TK2511,
     /// Non-abstract class does not implement one inherited abstract member —
@@ -66,6 +69,8 @@ pub enum DiagnosticCode {
     /// Non-abstract class is missing implementations for two or more inherited
     /// abstract members (aggregated) — backlog 06.
     TK2654,
+    /// An ambient export list references an alias output instead of a local declaration.
+    TK2661,
     /// Constructor of class is private (constructed outside its declaring class) —
     /// backlog 20.
     TK2673,
@@ -74,8 +79,14 @@ pub enum DiagnosticCode {
     TK2674,
     /// The call receiver is not assignable to an explicit `this` parameter.
     TK2684,
+    /// Namespace has no exported member.
+    TK2694,
+    /// A type-only name is used as a namespace.
+    TK2702,
     /// Generic type requires a bounded range of type arguments.
     TK2707,
+    /// A type-only path segment is accessed as a namespace.
+    TK2713,
     /// Cannot assign to a read-only property — M14.
     TK2540,
     /// Wrong number of call arguments (arity).
@@ -90,6 +101,8 @@ pub enum DiagnosticCode {
     TK2741,
     /// Type parameter defaults can only reference preceding type parameters.
     TK2744,
+    /// A value is used as a type.
+    TK2749,
     /// No overload matches this call.
     TK2769,
 }
@@ -115,13 +128,18 @@ impl DiagnosticCode {
             DiagnosticCode::TK2394 => "TK2394",
             DiagnosticCode::TK2416 => "TK2416",
             DiagnosticCode::TK2445 => "TK2445",
+            DiagnosticCode::TK2503 => "TK2503",
             DiagnosticCode::TK2511 => "TK2511",
             DiagnosticCode::TK2515 => "TK2515",
             DiagnosticCode::TK2654 => "TK2654",
+            DiagnosticCode::TK2661 => "TK2661",
             DiagnosticCode::TK2673 => "TK2673",
             DiagnosticCode::TK2674 => "TK2674",
             DiagnosticCode::TK2684 => "TK2684",
+            DiagnosticCode::TK2694 => "TK2694",
+            DiagnosticCode::TK2702 => "TK2702",
             DiagnosticCode::TK2707 => "TK2707",
+            DiagnosticCode::TK2713 => "TK2713",
             DiagnosticCode::TK2540 => "TK2540",
             DiagnosticCode::TK2554 => "TK2554",
             DiagnosticCode::TK2555 => "TK2555",
@@ -129,6 +147,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2589 => "TK2589",
             DiagnosticCode::TK2741 => "TK2741",
             DiagnosticCode::TK2744 => "TK2744",
+            DiagnosticCode::TK2749 => "TK2749",
             DiagnosticCode::TK2769 => "TK2769",
         }
     }
@@ -153,7 +172,7 @@ pub enum DiagnosticFormat {
 
 /// A structured diagnostic. `span` is the **primary** span — its start is what
 /// the harness maps to a 1-based line for marker matching.
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Diagnostic {
     pub code: DiagnosticCode,
     pub severity: Severity,
@@ -163,6 +182,106 @@ pub struct Diagnostic {
     /// and leaf last. A single-`Leaf` failure stays headline-only; both the
     /// harness text and terminal notes consume the same elaboration.
     elaboration: Vec<String>,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) struct QualifiedTypeIncomplete {
+    pub id: &'static str,
+    pub context: &'static str,
+}
+
+pub(crate) fn qualified_type_incomplete(
+    resolution: QualifiedTypePathResolution,
+) -> Option<QualifiedTypeIncomplete> {
+    let (id, context) = match resolution {
+        QualifiedTypePathResolution::TypeGroup(_) => (
+            "annotation-lower/type-name/qualified-name",
+            "qualified type path classified; leaf lowering deferred to WU3",
+        ),
+        QualifiedTypePathResolution::Deferred {
+            reason: QualifiedTypePathDeferredReason::Import,
+            ..
+        } => (
+            "annotation-lower/type-name/qualified-import-alias",
+            "qualified import-alias resolution deferred to backlog 15",
+        ),
+        QualifiedTypePathResolution::Deferred {
+            reason: QualifiedTypePathDeferredReason::Enum,
+            ..
+        } => (
+            "annotation-lower/type-name/qualified-enum",
+            "qualified enum type resolution deferred to backlog 42",
+        ),
+        QualifiedTypePathResolution::MissingRoot { .. }
+        | QualifiedTypePathResolution::TypeOnlyRoot { .. }
+        | QualifiedTypePathResolution::MissingMember { .. }
+        | QualifiedTypePathResolution::TypeOnlyIntermediate { .. }
+        | QualifiedTypePathResolution::ValueOnlyLeaf { .. }
+        | QualifiedTypePathResolution::Unavailable { .. } => return None,
+    };
+    Some(QualifiedTypeIncomplete { id, context })
+}
+
+pub(crate) fn qualified_type_topology_diagnostic(
+    resolution: QualifiedTypePathResolution,
+    names: &[&str],
+    spans: &[Span],
+    qualified_span: Span,
+) -> Option<Diagnostic> {
+    match resolution {
+        QualifiedTypePathResolution::MissingRoot { segment } => {
+            let name = *names
+                .get(segment)
+                .expect("binder root failure references a path segment");
+            let span = *spans
+                .get(segment)
+                .expect("binder root failure retains a segment span");
+            Some(Diagnostic::cannot_find_namespace(span, name))
+        }
+        QualifiedTypePathResolution::TypeOnlyRoot { segment } => {
+            let name = *names
+                .get(segment)
+                .expect("binder type-only root references a path segment");
+            let span = *spans
+                .get(segment)
+                .expect("binder type-only root retains a segment span");
+            Some(Diagnostic::type_used_as_namespace(span, name))
+        }
+        QualifiedTypePathResolution::MissingMember { segment } => {
+            let member = *names
+                .get(segment)
+                .expect("binder member failure references a path segment");
+            let span = *spans
+                .get(segment)
+                .expect("binder member failure retains a segment span");
+            Some(Diagnostic::namespace_has_no_exported_member(
+                span,
+                &names[..segment].join("."),
+                member,
+            ))
+        }
+        QualifiedTypePathResolution::TypeOnlyIntermediate { segment } => {
+            let type_name = *names
+                .get(segment)
+                .expect("binder intermediate failure references a path segment");
+            let property = *names
+                .get(segment + 1)
+                .expect("type-only intermediate has a following path segment");
+            let span = *spans
+                .get(segment + 1)
+                .expect("type-only intermediate retains the following segment span");
+            Some(Diagnostic::cannot_access_type_as_namespace(
+                span, type_name, property,
+            ))
+        }
+        QualifiedTypePathResolution::ValueOnlyLeaf { .. } => Some(Diagnostic::value_used_as_type(
+            qualified_span,
+            &names.join("."),
+        )),
+        QualifiedTypePathResolution::TypeGroup(_)
+        | QualifiedTypePathResolution::Unavailable { .. }
+        | QualifiedTypePathResolution::Deferred { .. } => None,
+    }
 }
 
 impl Diagnostic {
@@ -196,6 +315,80 @@ impl Diagnostic {
             code: DiagnosticCode::TK2304,
             severity: Severity::Error,
             message: format!("Cannot find name '{name}'"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2503` unresolved namespace-root error.
+    pub fn cannot_find_namespace(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2503,
+            severity: Severity::Error,
+            message: format!("Cannot find namespace '{name}'."),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2661` non-local ambient export-alias error.
+    pub fn cannot_export_non_local(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2661,
+            severity: Severity::Error,
+            message: format!(
+                "Cannot export '{name}'. Only local declarations can be exported from a module"
+            ),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2694` missing public namespace-member error.
+    pub fn namespace_has_no_exported_member(span: Span, namespace: &str, member: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2694,
+            severity: Severity::Error,
+            message: format!("Namespace '{namespace}' has no exported member '{member}'."),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2702` type-only root used as a namespace error.
+    pub fn type_used_as_namespace(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2702,
+            severity: Severity::Error,
+            message: format!(
+                "'{name}' only refers to a type, but is being used as a namespace here."
+            ),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2713` type-only intermediate path segment error.
+    pub fn cannot_access_type_as_namespace(span: Span, type_name: &str, property: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2713,
+            severity: Severity::Error,
+            message: format!(
+                "Cannot access '{type_name}.{property}' because '{type_name}' is a type, but not a namespace. Did you mean to retrieve the type of the property '{property}' in '{type_name}' with '{type_name}[\"{property}\"]'?"
+            ),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2749` value-only qualified leaf used as a type error.
+    pub fn value_used_as_type(span: Span, path: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2749,
+            severity: Severity::Error,
+            message: format!(
+                "'{path}' refers to a value, but is being used as a type here. Did you mean 'typeof {path}'?"
+            ),
             span,
             elaboration: Vec::new(),
         }
@@ -644,3 +837,111 @@ impl Diagnostic {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod qualified_name_tests {
+    use super::{qualified_type_incomplete, Diagnostic, DiagnosticCode, QualifiedTypeIncomplete};
+    use crate::binder::declaration::TypeGroupId;
+    use crate::binder::namespace::{QualifiedTypePathDeferredReason, QualifiedTypePathResolution};
+    use crate::span::Span;
+
+    fn assert_diagnostic(diagnostic: Diagnostic, code: DiagnosticCode, message: &str, span: Span) {
+        assert_eq!(diagnostic.code, code);
+        assert_eq!(diagnostic.message, message);
+        assert_eq!(diagnostic.span, span);
+    }
+
+    #[test]
+    fn qualified_name_diagnostics_match_tsc_6_0_3() {
+        assert_diagnostic(
+            Diagnostic::cannot_find_namespace(Span::new(1, 5), "Root"),
+            DiagnosticCode::TK2503,
+            "Cannot find namespace 'Root'.",
+            Span::new(1, 5),
+        );
+        assert_diagnostic(
+            Diagnostic::cannot_export_non_local(Span::new(7, 8), "A"),
+            DiagnosticCode::TK2661,
+            "Cannot export 'A'. Only local declarations can be exported from a module",
+            Span::new(7, 8),
+        );
+        assert_diagnostic(
+            Diagnostic::namespace_has_no_exported_member(Span::new(8, 14), "Root.Child", "Hidden"),
+            DiagnosticCode::TK2694,
+            "Namespace 'Root.Child' has no exported member 'Hidden'.",
+            Span::new(8, 14),
+        );
+        assert_diagnostic(
+            Diagnostic::type_used_as_namespace(Span::new(2, 6), "OnlyType"),
+            DiagnosticCode::TK2702,
+            "'OnlyType' only refers to a type, but is being used as a namespace here.",
+            Span::new(2, 6),
+        );
+        assert_diagnostic(
+            Diagnostic::cannot_access_type_as_namespace(
+                Span::new(18, 22),
+                "Middle",
+                "Leaf",
+            ),
+            DiagnosticCode::TK2713,
+            "Cannot access 'Middle.Leaf' because 'Middle' is a type, but not a namespace. Did you mean to retrieve the type of the property 'Leaf' in 'Middle' with 'Middle[\"Leaf\"]'?",
+            Span::new(18, 22),
+        );
+        assert_diagnostic(
+            Diagnostic::value_used_as_type(Span::new(4, 20), "Root.Value"),
+            DiagnosticCode::TK2749,
+            "'Root.Value' refers to a value, but is being used as a type here. Did you mean 'typeof Root.Value'?",
+            Span::new(4, 20),
+        );
+    }
+
+    #[test]
+    fn qualified_name_codes_render_with_tk_prefix() {
+        assert_eq!(DiagnosticCode::TK2503.as_str(), "TK2503");
+        assert_eq!(DiagnosticCode::TK2661.as_str(), "TK2661");
+        assert_eq!(DiagnosticCode::TK2694.as_str(), "TK2694");
+        assert_eq!(DiagnosticCode::TK2702.as_str(), "TK2702");
+        assert_eq!(DiagnosticCode::TK2713.as_str(), "TK2713");
+        assert_eq!(DiagnosticCode::TK2749.as_str(), "TK2749");
+    }
+
+    #[test]
+    fn qualified_incomplete_reasons_keep_their_backlog_owner() {
+        let cases = [
+            (
+                QualifiedTypePathResolution::TypeGroup(TypeGroupId(1)),
+                QualifiedTypeIncomplete {
+                    id: "annotation-lower/type-name/qualified-name",
+                    context: "qualified type path classified; leaf lowering deferred to WU3",
+                },
+            ),
+            (
+                QualifiedTypePathResolution::Deferred {
+                    segment: 0,
+                    reason: QualifiedTypePathDeferredReason::Import,
+                },
+                QualifiedTypeIncomplete {
+                    id: "annotation-lower/type-name/qualified-import-alias",
+                    context: "qualified import-alias resolution deferred to backlog 15",
+                },
+            ),
+            (
+                QualifiedTypePathResolution::Deferred {
+                    segment: 1,
+                    reason: QualifiedTypePathDeferredReason::Enum,
+                },
+                QualifiedTypeIncomplete {
+                    id: "annotation-lower/type-name/qualified-enum",
+                    context: "qualified enum type resolution deferred to backlog 42",
+                },
+            ),
+        ];
+        for (resolution, expected) in cases {
+            assert_eq!(qualified_type_incomplete(resolution), Some(expected));
+        }
+        assert_eq!(
+            qualified_type_incomplete(QualifiedTypePathResolution::Unavailable { segment: 1 }),
+            None
+        );
+    }
+}

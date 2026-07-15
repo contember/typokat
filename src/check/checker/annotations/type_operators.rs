@@ -27,10 +27,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // TK2456: the check surface-references the conditional alias currently being
         // resolved (`type Self = Self extends string ? 1 : 2`). Scoped to the check
         // surface so m5 recursion through object members stays legal.
-        if let Some((decl_id, alias_span, name)) = self.resolving_conditional_alias.clone() {
-            if self.check_surface_references(scope, &cond.check_type, decl_id) {
+        let circular_check =
+            self.resolving_conditional_alias
+                .clone()
+                .is_some_and(|(decl_id, _, _)| {
+                    self.check_surface_references(scope, &cond.check_type, decl_id)
+                });
+        if circular_check {
+            if let Some((_, alias_span, name)) = self.resolving_conditional_alias.clone() {
                 self.emit_diagnostic(Diagnostic::circular_type_alias(alias_span, &name));
-                return Some(error_ty);
             }
         }
 
@@ -39,15 +44,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         // Check type — this node's own binders are NOT in scope (frame inactive). A
         // naked declaration type parameter check drives distribution.
-        let check = self.lower_annotation(scope, &cond.check_type);
+        let check = if circular_check {
+            self.lower_surface_reference_arguments(scope, &cond.check_type)
+                .then_some(error_ty)
+        } else {
+            self.lower_annotation(scope, &cond.check_type)
+        };
         let distributive =
             check.is_some_and(|c| self.interner.store().tag(c) == TypeTag::TypeParam);
-        // An out-of-subset check aborts the whole annotation (pre-poison behavior kept);
-        // the context must still unwind.
-        let Some(check) = check else {
-            self.cond_frames.pop();
-            return None;
-        };
 
         // The `infer` binders declared in the extends type are in scope for the extends
         // type itself and the true branch only.
@@ -68,13 +72,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let infer_count = frame.binders.len() as u32;
         let poisoned = frame.poisoned;
 
-        let (extends_ty, true_branch, false_branch) = match (extends_ty, true_branch, false_branch)
-        {
-            (Some(e), Some(t), Some(f)) => (e, t, f),
-            // An out-of-subset component degrades the whole conditional to the error
-            // type (the M22 discipline — the diagnostics for the component are
-            // already emitted; the error type suppresses cascade).
-            _ => return Some(error_ty),
+        let (check, extends_ty, true_branch, false_branch) =
+            match (check, extends_ty, true_branch, false_branch) {
+                (Some(c), Some(e), Some(t), Some(f)) => (c, e, t, f),
+                _ => return None,
+            };
+        if circular_check {
+            return Some(error_ty);
         };
 
         let id = self.interner.intern_conditional(ConditionalType {
@@ -133,15 +137,25 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Text segments — the cooked quasi values (`texts.len() == holes.len() + 1`). An
         // invalid escape (`cooked == None`) is out of subset.
         let mut texts: Vec<String> = Vec::with_capacity(template.quasis.len());
+        let mut unavailable = false;
         for quasi in &template.quasis {
-            texts.push(quasi.value.cooked.as_ref()?.to_string());
+            match quasi.value.cooked.as_ref() {
+                Some(cooked) => texts.push(cooked.to_string()),
+                None => unavailable = true,
+            }
         }
 
         // Holes — the interpolated types, lowered in order (an `infer` hole registers into
         // the active conditional frame, exactly like a bare `infer U`).
         let mut holes: Vec<TypeId> = Vec::with_capacity(template.types.len());
         for hole in &template.types {
-            holes.push(self.lower_annotation(scope, hole)?);
+            match self.lower_annotation(scope, hole) {
+                Some(hole) => holes.push(hole),
+                None => unavailable = true,
+            }
+        }
+        if unavailable {
+            return None;
         }
 
         // Adjacent-`infer` poison: an empty interior separator between two holes where
@@ -179,6 +193,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             return false;
         };
         type_decl_id(self.binder, scope, ident.name.as_str()) == Some(decl_id)
+    }
+
+    fn lower_surface_reference_arguments(&mut self, scope: ScopeId, ty: &TSType<'_>) -> bool {
+        let TSType::TSTypeReference(reference) = ty else {
+            return true;
+        };
+        let Some(arguments) = reference.type_arguments.as_deref() else {
+            return true;
+        };
+        let mut available = true;
+        for argument in &arguments.params {
+            if self.lower_annotation(scope, argument).is_none() {
+                available = false;
+            }
+        }
+        available
     }
 
     /// Resolve a type-name reference against the in-scope `infer` binders (M25),
@@ -245,11 +275,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         mapped: &TSMappedType<'_>,
     ) -> Option<TypeId> {
-        // `as` key remapping is out of the M26 subset (backlog 11).
-        if mapped.name_type.is_some() {
-            return None;
-        }
-
         // The key-source surface: the `keyof` operand for a homomorphic map, else the
         // constraint itself.
         let key_surface: &TSType<'_> = match &mapped.constraint {
@@ -263,20 +288,36 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // is circular; otherwise the re-entry error type would silently feed the
         // map. The alias degrades to the error type (M22); tsc's extra TS2313 is
         // documented but omitted.
-        if let Some((decl_id, alias_span, name)) = self.resolving_alias.clone() {
-            if self.check_surface_references(scope, key_surface, decl_id) {
+        let circular_key = self.resolving_alias.clone().is_some_and(|(decl_id, _, _)| {
+            self.check_surface_references(scope, key_surface, decl_id)
+        });
+        if circular_key {
+            if let Some((_, alias_span, name)) = self.resolving_alias.clone() {
                 self.emit_diagnostic(Diagnostic::circular_type_alias(alias_span, &name));
-                return Some(self.interner.well_known().error);
             }
         }
+        let circular_arguments_available =
+            !circular_key || self.lower_surface_reference_arguments(scope, key_surface);
 
         // Classify the `in` clause: `keyof <source>` is homomorphic (preserves the
         // source's `?`/`readonly`); anything else is a non-homomorphic key set.
         let (homomorphic, key_source) = match &mapped.constraint {
-            TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Keyof => {
-                (true, self.lower_annotation(scope, &op.type_annotation)?)
-            }
-            other => (false, self.lower_annotation(scope, other)?),
+            TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Keyof => (
+                true,
+                if circular_key {
+                    circular_arguments_available.then_some(self.interner.well_known().error)
+                } else {
+                    self.lower_annotation(scope, &op.type_annotation)
+                },
+            ),
+            other => (
+                false,
+                if circular_key {
+                    circular_arguments_available.then_some(self.interner.well_known().error)
+                } else {
+                    self.lower_annotation(scope, other)
+                },
+            ),
         };
 
         // Lower the value template with this node's key binder in scope, so `X[K]`
@@ -285,6 +326,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             key_name: mapped.key.name.to_string(),
             captured_source: None,
         });
+        if let Some(name_type) = mapped.name_type.as_ref() {
+            self.lower_annotation(scope, name_type);
+        }
         // B29: a mapped VALUE template is a legal-recursion boundary (`type MapRec =
         // string | { [K in "a" | "b"]: MapRec }`), so it lowers one indirection deeper.
         // The key source stays at surface depth (a self-referencing key set is the
@@ -298,7 +342,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .mapped_frames
             .pop()
             .and_then(|frame| frame.captured_source);
-        let value_template = value_template?;
+        let (Some(key_source), Some(value_template)) = (key_source, value_template) else {
+            return None;
+        };
+        if mapped.name_type.is_some() {
+            return None;
+        }
+        if circular_key {
+            return Some(self.interner.well_known().error);
+        }
 
         let id = self.interner.intern_mapped(MappedType {
             homomorphic,

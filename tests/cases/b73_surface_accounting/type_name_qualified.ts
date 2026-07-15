@@ -1,11 +1,16 @@
-// Surface-accounting spec (backlog 43 / 75). ENABLED by WU5: annotation lowering records
-// the incomplete surface for qualified type names, `this` types, and type predicates
-// before degrading. See tests/cases/README.md ("Surface-accounting corpus").
+// Surface-accounting spec (backlog 43 / 75). WU2 classifies the successful qualified
+// path but leaves its type-group lowering to WU3; `this` types and type predicates
+// remain recorded before degrading. See tests/cases/README.md ("Surface-accounting corpus").
 //
-// Skip accounted: `resolve_type_reference` returned `None` for a qualified/`this` name,
-// and `lower_annotation_inner` dropped `TSThisType` / `TSTypePredicate` silently.
+// Skip accounted: `resolve_type_reference` returns `None` after classifying the qualified
+// type group (or for a `this` name), and `lower_annotation_inner` drops `TSThisType` /
+// `TSTypePredicate` silently.
 
-// INCOMPLETE: a qualified type name `A.B` is not resolved (owner 43).
+namespace A { // incomplete[decl/module-declaration/self]
+  export interface B {}
+}
+
+// INCOMPLETE: the public type-group leaf is classified but not lowered until WU3 (owner 43).
 type Q = A.B; // incomplete[annotation-lower/type-name/qualified-name]
 
 // INCOMPLETE: a type predicate return annotation is not lowered (owner 50).

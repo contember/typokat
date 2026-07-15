@@ -1,5 +1,6 @@
 use super::*;
 use crate::binder::declaration::LegacyTypeStorageId;
+use crate::binder::namespace::QualifiedTypePathResolution;
 use crate::binder::scope::ScopeId;
 use crate::check::checker::classes::application::{
     build_class_application, complete_class_arguments, ClassApplicationKind,
@@ -10,7 +11,9 @@ use crate::check::checker::classes::surface_types::SurfaceTypeFactory;
 use crate::class_semantics::{
     ClassApplicationArguments, ClassConstructionState, DemandOutcome, Exhaustion,
 };
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{
+    qualified_type_incomplete, qualified_type_topology_diagnostic, Diagnostic,
+};
 use crate::span::Span;
 use crate::types::repr::{TypeParamId, TypeTag};
 use crate::types::store::TypeId;
@@ -18,6 +21,45 @@ use crate::types::substitute;
 use oxc_ast::ast::{TSTypeName, TSTypeParameterInstantiation};
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct QualifiedTypeSegment<'a> {
+    pub(super) name: &'a str,
+    pub(super) span: Span,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(super) enum QualifiedTypeDisposition {
+    RecoveredTopologyFailure,
+    IncompleteEndpoint,
+    UnavailableEndpoint,
+}
+
+fn flatten_qualified_type_name<'a>(
+    type_name: &'a TSTypeName<'_>,
+    segments: &mut Vec<QualifiedTypeSegment<'a>>,
+) -> bool {
+    match type_name {
+        TSTypeName::IdentifierReference(identifier) => {
+            segments.push(QualifiedTypeSegment {
+                name: identifier.name.as_str(),
+                span: Span::from_oxc(identifier.span),
+            });
+            true
+        }
+        TSTypeName::QualifiedName(qualified) => {
+            if !flatten_qualified_type_name(&qualified.left, segments) {
+                return false;
+            }
+            segments.push(QualifiedTypeSegment {
+                name: qualified.right.name.as_str(),
+                span: Span::from_oxc(qualified.right.span),
+            });
+            true
+        }
+        TSTypeName::ThisExpression(_) => false,
+    }
+}
 
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Resolve one type declaration to a memoized `TypeId`.
@@ -170,15 +212,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> Option<TypeId> {
         let ident = match type_name {
             TSTypeName::IdentifierReference(ident) => ident,
-            // Qualified names (`A.B`) and `this`-qualified names are out of subset;
-            // record the skipped surface before degrading (WU5 accounting).
             TSTypeName::QualifiedName(qualified) => {
-                self.record_incomplete(
-                    "annotation-lower/type-name/qualified-name",
-                    Span::from_oxc(qualified.span),
-                    "qualified type name A.B not resolved",
-                );
-                return None;
+                return self.resolve_qualified_type_reference(scope, qualified, type_arguments);
             }
             TSTypeName::ThisExpression(this_name) => {
                 self.record_incomplete(
@@ -224,11 +259,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     let element = self.lower_annotation(scope, &args.params[0])?;
                     return Some(self.interner.intern_array(element));
                 }
+                Some(args) => {
+                    for argument in &args.params {
+                        let _ = self.lower_annotation(scope, argument);
+                    }
+                    return Some(self.interner.well_known().error);
+                }
                 // `Array` IS a recognized built-in, so a bare `Array` or a wrong type-argument
                 // count is a type-argument-count error (tsc TS2314, deferred) — NOT "cannot find
                 // name". Degrade to the error type silently (matching M17), rather than falling
                 // through to the M22 unresolved-name arm below.
-                _ => return Some(self.interner.well_known().error),
+                None => return Some(self.interner.well_known().error),
             }
         }
 
@@ -238,7 +279,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 // Report `TK2304` only for truly undeclared names. Value-as-type,
                 // applied type parameters, and qualified names are found/deferred cases,
                 // not "cannot find name".
-                let found_in_some_space = self.binder.graph.resolve(scope, name).is_some()
+                let found_in_some_space = self.binder.resolve_type(scope, name).is_some()
+                    || self.binder.resolve_value(scope, name).is_some()
                     || self.lookup_type_param(name).is_some();
                 if !found_in_some_space {
                     let span = Span::from_oxc(ident.span);
@@ -287,6 +329,95 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         //    here at a value-position demand site.
         let resolved = self.resolve_type_decl(scope, decl_id);
         self.maybe_evaluate(resolved, ref_span)
+    }
+
+    fn resolve_qualified_type_reference(
+        &mut self,
+        scope: ScopeId,
+        qualified: &oxc_ast::ast::TSQualifiedName<'_>,
+        type_arguments: Option<&TSTypeParameterInstantiation<'_>>,
+    ) -> Option<TypeId> {
+        let qualified_span = Span::from_oxc(qualified.span);
+        let mut segments = Vec::new();
+        if !flatten_qualified_type_name(&qualified.left, &mut segments) {
+            self.record_incomplete(
+                "annotation-lower/type-name/qualified-name",
+                qualified_span,
+                "qualified type name A.B not resolved",
+            );
+            return None;
+        }
+        segments.push(QualifiedTypeSegment {
+            name: qualified.right.name.as_str(),
+            span: Span::from_oxc(qualified.right.span),
+        });
+
+        match self.classify_qualified_type_path(scope, &segments, qualified_span, type_arguments) {
+            QualifiedTypeDisposition::RecoveredTopologyFailure => {
+                Some(self.interner.well_known().error)
+            }
+            QualifiedTypeDisposition::IncompleteEndpoint
+            | QualifiedTypeDisposition::UnavailableEndpoint => None,
+        }
+    }
+
+    pub(super) fn classify_qualified_type_path(
+        &mut self,
+        scope: ScopeId,
+        segments: &[QualifiedTypeSegment<'_>],
+        qualified_span: Span,
+        type_arguments: Option<&TSTypeParameterInstantiation<'_>>,
+    ) -> QualifiedTypeDisposition {
+        let names = segments
+            .iter()
+            .map(|segment| segment.name)
+            .collect::<Vec<_>>();
+        let spans = segments
+            .iter()
+            .map(|segment| segment.span)
+            .collect::<Vec<_>>();
+        let mut resolution = self.binder.resolve_qualified_type_path(scope, &names);
+        if matches!(resolution, QualifiedTypePathResolution::MissingRoot { .. })
+            && self.checker_local_qualified_root(names[0])
+        {
+            resolution = QualifiedTypePathResolution::TypeOnlyRoot { segment: 0 };
+        }
+
+        let disposition = if matches!(resolution, QualifiedTypePathResolution::Unavailable { .. }) {
+            QualifiedTypeDisposition::UnavailableEndpoint
+        } else if let Some(incomplete) = qualified_type_incomplete(resolution) {
+            self.record_incomplete(incomplete.id, qualified_span, incomplete.context);
+            QualifiedTypeDisposition::IncompleteEndpoint
+        } else {
+            let diagnostic =
+                qualified_type_topology_diagnostic(resolution, &names, &spans, qualified_span)
+                    .expect("every non-incomplete qualified outcome is a topology diagnostic");
+            self.emit_diagnostic(diagnostic);
+            QualifiedTypeDisposition::RecoveredTopologyFailure
+        };
+
+        if let Some(arguments) = type_arguments {
+            for argument in &arguments.params {
+                let _ = self.lower_annotation(scope, argument);
+            }
+        }
+        disposition
+    }
+
+    fn checker_local_qualified_root(&self, name: &str) -> bool {
+        name == "Array"
+            || self.lookup_type_param(name).is_some()
+            || self
+                .cond_frames
+                .iter()
+                .rev()
+                .filter(|frame| frame.active)
+                .any(|frame| frame.binders.contains_key(name))
+            || self
+                .mapped_frames
+                .iter()
+                .rev()
+                .any(|frame| frame.key_name == name)
     }
 
     pub(super) fn resolve_class_type_reference(
@@ -483,11 +614,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // type names / parameters live), keeping each one's span for a constraint
         // diagnostic. A non-lowerable argument aborts.
         let mut arg_infos: Vec<(TypeId, Span)> = Vec::with_capacity(args.params.len());
+        let mut unavailable = false;
         for arg in &args.params {
-            arg_infos.push((
-                self.lower_annotation(scope, arg)?,
-                Span::from_oxc(arg.span()),
-            ));
+            match self.lower_annotation(scope, arg) {
+                Some(lowered) => arg_infos.push((lowered, Span::from_oxc(arg.span()))),
+                None => unavailable = true,
+            }
+        }
+        if unavailable {
+            return None;
         }
 
         // The declaration's template (its body with parameter types embedded) and its
@@ -553,5 +688,557 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             | Some(TypeDecl::Resolved { params }) => params.clone(),
             None => Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod qualified_name_tests {
+    use crate::diagnostics::DiagnosticCode;
+    use crate::driver::{check_project, check_source, CheckOutput, FileInput};
+
+    fn checked(source: &str) -> CheckOutput {
+        let output = check_source(source);
+        assert!(
+            output.parse_errors.is_empty(),
+            "unexpected parse errors: {:?}",
+            output.parse_errors
+        );
+        output
+    }
+
+    fn span_text(source: &str, span: crate::span::Span) -> &str {
+        let start = usize::try_from(span.start).expect("source span start fits usize");
+        let end = usize::try_from(span.end).expect("source span end fits usize");
+        &source[start..end]
+    }
+
+    fn diagnostic_rows(
+        output: &CheckOutput,
+        source: &str,
+    ) -> Vec<(DiagnosticCode, String, String)> {
+        output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.code,
+                    diagnostic.message.clone(),
+                    span_text(source, diagnostic.span).to_string(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn qualified_topology_diagnostics_match_tsc_messages_spans_and_order() {
+        let source = "\
+type AliasRoot = {};
+let alias: AliasRoot.Member;
+class ClassRoot {}
+let classRef: ClassRoot.Member;
+const ValueRoot = 1;
+let valueRoot: ValueRoot.Member;
+namespace Root {
+  export const ValueMiddle = 1;
+  export interface TypeMiddle {}
+  export namespace NamespaceLeaf {}
+  export namespace Child {}
+}
+let missing: Root.Missing.Leaf;
+let valueMiddle: Root.ValueMiddle.Leaf;
+let typeMiddle: Root.TypeMiddle.Leaf;
+let childMissing: Root.Child.ParentLeaf;
+let namespaceLeaf: Root.NamespaceLeaf;
+let valueLeaf: Root.ValueMiddle;
+";
+        let output = checked(source);
+        assert_eq!(
+            diagnostic_rows(&output, source),
+            vec![
+                (
+                    DiagnosticCode::TK2702,
+                    "'AliasRoot' only refers to a type, but is being used as a namespace here."
+                        .to_string(),
+                    "AliasRoot".to_string(),
+                ),
+                (
+                    DiagnosticCode::TK2702,
+                    "'ClassRoot' only refers to a type, but is being used as a namespace here."
+                        .to_string(),
+                    "ClassRoot".to_string(),
+                ),
+                (
+                    DiagnosticCode::TK2503,
+                    "Cannot find namespace 'ValueRoot'.".to_string(),
+                    "ValueRoot".to_string(),
+                ),
+                (
+                    DiagnosticCode::TK2694,
+                    "Namespace 'Root' has no exported member 'Missing'.".to_string(),
+                    "Missing".to_string(),
+                ),
+                (
+                    DiagnosticCode::TK2694,
+                    "Namespace 'Root' has no exported member 'ValueMiddle'.".to_string(),
+                    "ValueMiddle".to_string(),
+                ),
+                (
+                    DiagnosticCode::TK2713,
+                    "Cannot access 'TypeMiddle.Leaf' because 'TypeMiddle' is a type, but not a namespace. Did you mean to retrieve the type of the property 'Leaf' in 'TypeMiddle' with 'TypeMiddle[\"Leaf\"]'?".to_string(),
+                    "Leaf".to_string(),
+                ),
+                (
+                    DiagnosticCode::TK2694,
+                    "Namespace 'Root.Child' has no exported member 'ParentLeaf'.".to_string(),
+                    "ParentLeaf".to_string(),
+                ),
+                (
+                    DiagnosticCode::TK2694,
+                    "Namespace 'Root' has no exported member 'NamespaceLeaf'.".to_string(),
+                    "NamespaceLeaf".to_string(),
+                ),
+                (
+                    DiagnosticCode::TK2749,
+                    "'Root.ValueMiddle' refers to a value, but is being used as a type here. Did you mean 'typeof Root.ValueMiddle'?".to_string(),
+                    "Root.ValueMiddle".to_string(),
+                ),
+            ]
+        );
+        assert!(
+            output
+                .incomplete
+                .iter()
+                .all(|record| record.id != "annotation-lower/type-name/qualified-name"),
+            "failed paths must not retain the generic qualified-name incomplete"
+        );
+    }
+
+    #[test]
+    fn qualified_failure_precedes_each_nested_type_argument_diagnostic() {
+        let source = "namespace Root {}\nlet value: Root.Missing<First, Second>;";
+        let output = checked(source);
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.code, diagnostic.message.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    DiagnosticCode::TK2694,
+                    "Namespace 'Root' has no exported member 'Missing'.",
+                ),
+                (DiagnosticCode::TK2304, "Cannot find name 'First'"),
+                (DiagnosticCode::TK2304, "Cannot find name 'Second'"),
+            ]
+        );
+    }
+
+    #[test]
+    fn successful_qualified_type_group_has_one_wu3_incomplete() {
+        let source =
+            "namespace Root { export interface Member {} }\nlet value: Root.Member<Missing>;";
+        let output = checked(source);
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>(),
+            vec![DiagnosticCode::TK2304]
+        );
+        let records = output
+            .incomplete
+            .iter()
+            .filter(|record| record.id == "annotation-lower/type-name/qualified-name")
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(
+            records[0].context,
+            "qualified type path classified; leaf lowering deferred to WU3"
+        );
+        assert_eq!(span_text(source, records[0].span), "Root.Member");
+    }
+
+    #[test]
+    fn deferred_qualified_enum_endpoint_has_one_backlog_42_incomplete() {
+        let source = "enum DeferredRoot { Item }\nlet value: DeferredRoot.Member;";
+        let output = checked(source);
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        let records = output
+            .incomplete
+            .iter()
+            .filter(|record| record.id == "annotation-lower/type-name/qualified-enum")
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(
+            records[0].context,
+            "qualified enum type resolution deferred to backlog 42"
+        );
+        assert_eq!(span_text(source, records[0].span), "DeferredRoot.Member");
+    }
+
+    #[test]
+    fn missing_local_ambient_export_aliases_diagnose_once_at_their_local_spans() {
+        let source = "\
+declare namespace AliasOwner {
+  interface Local {}
+  export {
+    MissingUnused as UnusedAlias,
+    MissingUsed as UsedAlias,
+  };
+}
+let diagnosedAliasStaysOpaque: AliasOwner.UsedAlias;
+";
+        let output = checked(source);
+        assert_eq!(
+            diagnostic_rows(&output, source),
+            vec![
+                (
+                    DiagnosticCode::TK2304,
+                    "Cannot find name 'MissingUnused'".to_string(),
+                    "MissingUnused".to_string(),
+                ),
+                (
+                    DiagnosticCode::TK2304,
+                    "Cannot find name 'MissingUsed'".to_string(),
+                    "MissingUsed".to_string(),
+                ),
+            ],
+            "each missing local alias has one declaration-owned diagnostic and no use-site diagnostic"
+        );
+        assert_eq!(
+            output
+                .incomplete
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            ["decl/module-declaration/self"],
+            "the diagnosed alias endpoint must add no qualified use-site incomplete"
+        );
+    }
+
+    #[test]
+    fn ambient_alias_outputs_are_rejected_order_independently_and_namespace_aliases_resolve() {
+        let source = "\
+declare namespace AliasOutputForward {
+  interface Local { forward: true }
+  export { Local as A };
+  export { A as B };
+}
+let diagnosedForwardAliasUse: AliasOutputForward.B;
+declare namespace AliasOutputReverse {
+  interface Local { reverse: true }
+  export { A as B };
+  export { Local as A };
+}
+let diagnosedReverseAliasUse: AliasOutputReverse.B;
+declare namespace GenuineLocalControl {
+  interface Local { aliasTarget: true }
+  export { Local as A };
+  export { A as B };
+  interface A { genuineLocal: true }
+}
+let genuineLocalAliasUse: GenuineLocalControl.B;
+declare namespace A {
+  namespace N { export interface X {} }
+  export { type N as TN };
+}
+type TypeOnlyNamespaceAlias = A.TN.X;
+";
+        let output = checked(source);
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (
+                    diagnostic.code.as_str(),
+                    diagnostic.message.as_str(),
+                    span_text(source, diagnostic.span),
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "TK2661",
+                    "Cannot export 'A'. Only local declarations can be exported from a module",
+                    "A",
+                ),
+                (
+                    "TK2661",
+                    "Cannot export 'A'. Only local declarations can be exported from a module",
+                    "A",
+                ),
+            ],
+            "alias-only locals diagnose once at their declarations in either source order"
+        );
+
+        let module_records = output
+            .incomplete
+            .iter()
+            .filter(|record| record.id == "decl/module-declaration/self")
+            .count();
+        assert_eq!(module_records, 4, "top-level ambient module records");
+
+        let qualified_spans = output
+            .incomplete
+            .iter()
+            .filter(|record| record.id == "annotation-lower/type-name/qualified-name")
+            .map(|record| span_text(source, record.span))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            qualified_spans,
+            ["GenuineLocalControl.B", "A.TN.X"],
+            "diagnosed endpoints add no use-site incomplete, while successful type groups defer to WU3"
+        );
+        assert_eq!(
+            output.incomplete.len(),
+            module_records + qualified_spans.len(),
+            "the aliases must not add any other recovery record"
+        );
+    }
+
+    #[test]
+    fn project_alias_diagnostics_keep_original_module_owners_after_dependency_ordering() {
+        let reports = check_project(vec![
+            FileInput {
+                name: "a.ts".to_string(),
+                source: "import { marker } from './z'; declare namespace A { export { MissingA as PublicA }; } let a: A.PublicA; marker;".to_string(),
+            },
+            FileInput {
+                name: "z.ts".to_string(),
+                source: "export const marker = 1; declare namespace Z { export { MissingZ as PublicZ }; } let z: Z.PublicZ;".to_string(),
+            },
+        ]);
+        assert_eq!(reports.len(), 2);
+        for (report, missing) in reports.iter().zip(["MissingA", "MissingZ"]) {
+            assert!(
+                report.output.parse_errors.is_empty(),
+                "{}: {:?}",
+                report.name,
+                report.output.parse_errors
+            );
+            assert_eq!(
+                diagnostic_rows(&report.output, &report.source),
+                vec![(
+                    DiagnosticCode::TK2304,
+                    format!("Cannot find name '{missing}'"),
+                    missing.to_string(),
+                )],
+                "{} must retain exactly its declaration-owned alias diagnostic",
+                report.name
+            );
+        }
+    }
+
+    #[test]
+    fn project_non_local_alias_diagnostics_keep_source_owners_after_dependency_ordering() {
+        let reports = check_project(vec![
+            FileInput {
+                name: "a.ts".to_string(),
+                source: "import { marker } from './z'; declare namespace A { interface Local {} export { Local as AliasA }; export { AliasA as PublicA }; } let a: A.PublicA; marker;".to_string(),
+            },
+            FileInput {
+                name: "z.ts".to_string(),
+                source: "export const marker = 1; declare namespace Z { interface Local {} export { AliasZ as PublicZ }; export { Local as AliasZ }; } let z: Z.PublicZ;".to_string(),
+            },
+        ]);
+        assert_eq!(reports.len(), 2);
+        for (report, local_name) in reports.iter().zip(["AliasA", "AliasZ"]) {
+            assert!(
+                report.output.parse_errors.is_empty(),
+                "{}: {:?}",
+                report.name,
+                report.output.parse_errors
+            );
+            assert_eq!(
+                report
+                    .output
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| (
+                        diagnostic.code.as_str(),
+                        diagnostic.message.as_str(),
+                        span_text(&report.source, diagnostic.span),
+                    ))
+                    .collect::<Vec<_>>(),
+                [(
+                    "TK2661",
+                    if local_name == "AliasA" {
+                        "Cannot export 'AliasA'. Only local declarations can be exported from a module"
+                    } else {
+                        "Cannot export 'AliasZ'. Only local declarations can be exported from a module"
+                    },
+                    local_name,
+                )],
+                "{} must retain exactly its declaration-owned non-local alias diagnostic",
+                report.name
+            );
+            assert!(
+                report
+                    .output
+                    .incomplete
+                    .iter()
+                    .all(|record| { record.id != "annotation-lower/type-name/qualified-name" }),
+                "the diagnosed endpoint must add no qualified use-site incomplete"
+            );
+        }
+    }
+
+    #[test]
+    fn qualified_declaration_and_variable_errors_replay_at_source_owners() {
+        let source = "\
+namespace Root {}
+interface Derived { base: Root.Base }
+let value: Root.Member;
+";
+        let output = checked(source);
+        assert_eq!(
+            diagnostic_rows(&output, source)
+                .into_iter()
+                .map(|(code, _, span)| (code, span))
+                .collect::<Vec<_>>(),
+            vec![
+                (DiagnosticCode::TK2694, "Base".to_string()),
+                (DiagnosticCode::TK2694, "Member".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn simple_type_name_resolution_and_nested_argument_order_are_unchanged() {
+        let source = "let value: Missing<AlsoMissing>;";
+        let output = checked(source);
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.code, diagnostic.message.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (DiagnosticCode::TK2304, "Cannot find name 'Missing'"),
+                (DiagnosticCode::TK2304, "Cannot find name 'AlsoMissing'"),
+            ]
+        );
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+    }
+
+    #[test]
+    fn checker_local_roots_and_namespace_precedence_match_tsc() {
+        let source = "\
+declare function functionRoot<FunctionT>(): FunctionT.Member;
+interface MethodRoot { method<MethodT>(): MethodT.Member }
+type InferRoot<S> = S extends infer InferT ? InferT.Member : never;
+type MappedRoot<S> = { [MappedK in keyof S]: MappedK.Member };
+type BuiltinRoot = Array.Member;
+abstract class ClassRoot<ClassT> { abstract field: ClassT.Member }
+class StaticRoot<StaticT> { static field: StaticT.Member }
+namespace T { export interface Member {} }
+declare function namespaceFirst<T>(): T.Member;
+namespace U { export interface Member {} }
+type InferNamespace<S> = S extends infer U ? U.Member : never;
+namespace K { export interface Member {} }
+type MappedNamespace<S> = { [K in keyof S]: K.Member };
+";
+        let output = checked(source);
+        assert_eq!(
+            diagnostic_rows(&output, source)
+                .into_iter()
+                .map(|(code, _, span)| (code, span))
+                .collect::<Vec<_>>(),
+            vec![
+                (DiagnosticCode::TK2702, "FunctionT".to_string()),
+                (DiagnosticCode::TK2702, "MethodT".to_string()),
+                (DiagnosticCode::TK2702, "InferT".to_string()),
+                (DiagnosticCode::TK2702, "MappedK".to_string()),
+                (DiagnosticCode::TK2702, "Array".to_string()),
+                (DiagnosticCode::TK2702, "ClassT".to_string()),
+                (DiagnosticCode::TK2503, "StaticT".to_string()),
+            ]
+        );
+        assert_eq!(
+            output
+                .incomplete
+                .iter()
+                .filter(|record| record.id == "annotation-lower/type-name/qualified-name")
+                .count(),
+            3,
+            "namespace slots must win over local T/U/K binders"
+        );
+    }
+
+    #[test]
+    fn qualified_topology_recovery_visits_every_independent_context() {
+        let source = "\
+namespace N {}
+type U = N.UnionLeft | N.UnionRight;
+type I = N.IntersectionLeft & N.IntersectionRight;
+type T = [N.TupleFirst, N.TupleSecond];
+type X = N.IndexedObject[N.IndexedKey];
+type C = N.Check extends N.Extends ? N.TrueBranch : N.FalseBranch;
+type M = { [K in keyof N.MappedKeys]: N.MappedValue };
+type F = (value: N.FunctionParameter) => N.FunctionReturn;
+type R = new (value: N.ConstructorParameter) => N.ConstructorReturn;
+type L = `${N.TemplateFirst}${N.TemplateSecond}`;
+type Call = { (value: N.CallParameter): N.CallReturn };
+type Construct = { new (value: N.ConstructParameter): N.ConstructReturn };
+type Method = { method<P extends N.SignatureConstraint>(value: N.SignatureParameter): N.SignatureReturn };
+abstract class K<C extends N.ClassConstraint> {
+  abstract field: N.ClassField;
+  abstract method<P extends N.MethodConstraint>(value: N.MethodParameter): N.MethodReturn;
+}
+";
+        let output = checked(source);
+        let expected = [
+            "UnionLeft",
+            "UnionRight",
+            "IntersectionLeft",
+            "IntersectionRight",
+            "TupleFirst",
+            "TupleSecond",
+            "IndexedObject",
+            "IndexedKey",
+            "Check",
+            "Extends",
+            "TrueBranch",
+            "FalseBranch",
+            "MappedKeys",
+            "MappedValue",
+            "FunctionParameter",
+            "FunctionReturn",
+            "ConstructorParameter",
+            "ConstructorReturn",
+            "TemplateFirst",
+            "TemplateSecond",
+            "CallParameter",
+            "CallReturn",
+            "ConstructParameter",
+            "ConstructReturn",
+            "SignatureConstraint",
+            "SignatureParameter",
+            "SignatureReturn",
+            "ClassConstraint",
+            "ClassField",
+            "MethodConstraint",
+            "MethodParameter",
+            "MethodReturn",
+        ];
+        assert_eq!(output.diagnostics.len(), expected.len());
+        for (diagnostic, expected_span) in output.diagnostics.iter().zip(expected) {
+            assert_eq!(diagnostic.code, DiagnosticCode::TK2694);
+            assert_eq!(span_text(source, diagnostic.span), expected_span);
+            assert_eq!(
+                diagnostic.message,
+                format!("Namespace 'N' has no exported member '{expected_span}'.")
+            );
+        }
+    }
+
+    #[test]
+    fn qualified_topology_error_type_suppresses_assignment_cascade() {
+        let source = "namespace N {}\nconst value: N.Missing = 1;";
+        let output = checked(source);
+        assert_eq!(output.diagnostics.len(), 1, "{:?}", output.diagnostics);
+        assert_eq!(output.diagnostics[0].code, DiagnosticCode::TK2694);
+        assert_eq!(span_text(source, output.diagnostics[0].span), "Missing");
     }
 }

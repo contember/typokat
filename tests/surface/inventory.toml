@@ -1117,7 +1117,27 @@ slot = "qualified-name"
 oxc_variant = "TSTypeName::QualifiedName"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/43-namespaces-declaration-merging.md"
-witness = "qualified type name A.B not resolved"
+witness = "qualified type path classified; leaf lowering deferred to WU3"
+
+[[surface]]
+id = "annotation-lower/type-name/qualified-import-alias"
+role = "annotation-lower"
+surface = "type-name"
+slot = "qualified-import-alias"
+oxc_variant = "TSTypeName::QualifiedName"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/15-modules-imports.md"
+witness = "qualified import-alias resolution deferred to backlog 15"
+
+[[surface]]
+id = "annotation-lower/type-name/qualified-enum"
+role = "annotation-lower"
+surface = "type-name"
+slot = "qualified-enum"
+oxc_variant = "TSTypeName::QualifiedName"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/42-enums-type-side.md"
+witness = "qualified enum type resolution deferred to backlog 42"
 
 [[surface]]
 id = "annotation-lower/type-name/this"
