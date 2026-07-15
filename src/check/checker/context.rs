@@ -2,8 +2,9 @@
 //! The `checker` submodules all operate on [`Pass`], so this module owns the
 //! obligation, declaration, class, and flow bookkeeping visible within the tree.
 
+use crate::binder::declaration::{LegacyTypeStorageId, ValueStorageId};
 use crate::binder::scope::ScopeId;
-use crate::binder::symbol::{DeclId, SymbolId};
+use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
 use crate::check::flow::{FlowNode, FlowNodeId};
 use crate::check::query::SemanticQueryState;
@@ -104,7 +105,7 @@ impl CheckerEffects {
     }
 }
 
-/// Per-declaration computed types, indexed by `DeclId`. `None` means a
+/// Per-declaration computed types, indexed by [`ValueStorageId`]. `None` means a
 /// declaration whose type could not be computed (out of subset); a reference to
 /// it resolves to the error type defensively.
 #[derive(Clone)]
@@ -119,13 +120,13 @@ impl DeclTypes {
         }
     }
 
-    pub(in crate::check::checker) fn set(&mut self, id: DeclId, ty: TypeId) {
+    pub(in crate::check::checker) fn set(&mut self, id: ValueStorageId, ty: TypeId) {
         if let Some(slot) = self.types.get_mut(id.index()) {
             *slot = Some(ty);
         }
     }
 
-    pub(in crate::check::checker) fn get(&self, id: DeclId) -> Option<TypeId> {
+    pub(in crate::check::checker) fn get(&self, id: ValueStorageId) -> Option<TypeId> {
         self.types.get(id.index()).copied().flatten()
     }
 }
@@ -160,7 +161,7 @@ pub(in crate::check::checker) enum VarValueTypeState {
 }
 
 /// A top-level type declaration's reserve-then-fill plan, indexed by type-space
-/// `DeclId`. Generic declarations carry ordered type-parameter ids and resolve to
+/// [`LegacyTypeStorageId`]. Generic declarations carry ordered type-parameter ids and resolve to
 /// templates instantiated by substitution.
 pub(in crate::check::checker) enum TypeDecl<'ast> {
     /// An interface reserves an object id, then fills own and inherited members into it.
@@ -206,7 +207,7 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
     Resolved { params: Vec<TypeParamId> },
 }
 
-/// A class's copyable `new` metadata, keyed by value-space `DeclId`.
+/// A class's copyable `new` metadata, keyed by [`ValueStorageId`].
 #[derive(Copy, Clone)]
 pub(in crate::check::checker) struct ClassInfo {
     /// Constructor parameters as a function type.
@@ -277,11 +278,11 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     pub(in crate::check::checker) class_body_views: BTreeMap<ClassId, BodyClassView>,
     /// Exact substituted base constructor for each published derived class.
     pub(in crate::check::checker) class_super_constructors: BTreeMap<ClassId, TypeId>,
-    /// Named-type declarations (M5), indexed by type-space `DeclId`. Reserve-then-
+    /// Named-type declarations (M5), indexed by [`LegacyTypeStorageId`]. Reserve-then-
     /// fill populates this in phase 0; a `TSTypeReference` resolves through the
-    /// binder's type slot to a `DeclId`, then to a `TypeId` via `type_resolved`.
+    /// binder's type slot to storage, then to a `TypeId` via `type_resolved`.
     pub(in crate::check::checker) type_decls: Vec<TypeDecl<'ast>>,
-    /// Resolved named types, indexed by type-space `DeclId`.
+    /// Resolved named types, indexed by [`LegacyTypeStorageId`].
     /// References read stored ids, never inline copies, which keeps lowering
     /// terminating. Generic entries store templates to instantiate by substitution.
     pub(in crate::check::checker) type_resolved: Vec<Option<TypeId>>,
@@ -301,7 +302,7 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     pub(in crate::check::checker) class_parents: FxHashMap<ClassId, ClassId>,
     /// One-step `const Alias = Class` origins. `infer_new` uses this only to retain
     /// the direct class's abstract and constructor-accessibility facts.
-    pub(in crate::check::checker) class_value_aliases: FxHashMap<DeclId, DeclId>,
+    pub(in crate::check::checker) class_value_aliases: FxHashMap<ValueStorageId, ValueStorageId>,
     /// Display name by stable [`ClassId`].
     /// Lets constructor-access diagnostics name the declaring class, which may be
     /// an inherited base, while keeping [`ClassInfo`] `Copy`.
@@ -317,7 +318,8 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
         FxHashMap<(ScopeId, u32), VarAnnotationSurface>,
     /// Publication state for each shared `var` value declaration. This keeps a
     /// forward annotation provisional without overwriting a parameter type.
-    pub(in crate::check::checker) var_value_type_states: FxHashMap<DeclId, VarValueTypeState>,
+    pub(in crate::check::checker) var_value_type_states:
+        FxHashMap<ValueStorageId, VarValueTypeState>,
     /// Current `this` type while checking class members.
     /// Save/restored at member boundaries so it never leaks; nested functions keep
     /// the enclosing value in this subset.
@@ -387,20 +389,22 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// demand evaluates them.
     pub(in crate::check::checker) building_template: bool,
     /// The **conditional-alias declaration currently being resolved** (M25): its type
-    /// `DeclId`, name-declaration span, and name. Set while a `type A = C extends E ? …`
+    /// storage id, name-declaration span, and name. Set while a `type A = C extends E ? …`
     /// body is lowered, so a check type that surface-references `A` itself is caught as
     /// `TK2456` at the alias declaration. `None` outside such a body.
-    pub(in crate::check::checker) resolving_conditional_alias: Option<(DeclId, Span, String)>,
+    pub(in crate::check::checker) resolving_conditional_alias:
+        Option<(LegacyTypeStorageId, Span, String)>,
     /// Plain alias currently being resolved, for mapped self-reference diagnostics.
     /// `lower_mapped_type` uses this to report `TK2456` at the alias declaration
     /// instead of feeding a silent re-entry error type into mapped evaluation.
     /// Separate from conditional alias tracking so nested conditionals keep M25 behavior.
-    pub(in crate::check::checker) resolving_alias: Option<(DeclId, Span, String)>,
+    pub(in crate::check::checker) resolving_alias: Option<(LegacyTypeStorageId, Span, String)>,
     /// Stack of aliases currently resolving, used to report `TK2456` on every alias
     /// in a surface cycle. Each entry records its starting indirection depth: same-depth
     /// re-entry is circular; deeper re-entry came through a type constructor and is
     /// legal recursion, silently error-typed.
-    pub(in crate::check::checker) resolving_alias_stack: Vec<(DeclId, Span, String, u32)>,
+    pub(in crate::check::checker) resolving_alias_stack:
+        Vec<(LegacyTypeStorageId, Span, String, u32)>,
     /// Current legal-recursion indirection depth.
     /// Incremented only across type constructors; unions/intersections/`keyof` stay
     /// surface cycles. Missed increments over-report `TK2456`, the safe direction.

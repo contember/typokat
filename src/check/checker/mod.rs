@@ -5,8 +5,8 @@
 
 use crate::binder::bind::{ImportPlaceholder, ImportedSymbol, ProjectBinderBuilder};
 use crate::binder::bind_module_with_prelude;
+use crate::binder::declaration::{LegacyTypeStorageId, ValueStorageId};
 use crate::binder::scope::ScopeId;
-use crate::binder::symbol::DeclId;
 use crate::binder::Binder;
 use crate::check::query::SemanticQueryCoordinator;
 use crate::check::query::SemanticQueryState;
@@ -149,7 +149,7 @@ fn trusted_prelude_records_are_clean(
 
 /// Lifetime-free state handed from the trusted prelude pass to user checking.
 struct TrustedPreludeHandoff {
-    /// Ordered by prelude type-space `DeclId`, preserving the user table prefix.
+    /// Ordered by prelude legacy type-storage id, preserving the user table prefix.
     type_decl_params: Vec<Vec<TypeParamId>>,
     type_resolved: Vec<Option<TypeId>>,
     decl_types: DeclTypes,
@@ -317,7 +317,7 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
         bind_module_with_prelude(prelude, program)
     });
 
-    // User declarations append after prelude placeholders, preserving binder DeclId indices.
+    // User declarations append after prelude placeholders, preserving legacy storage indices.
     let mut type_decls: Vec<TypeDecl<'ast>> = type_decl_params
         .into_iter()
         .map(|params| TypeDecl::Resolved { params })
@@ -405,6 +405,9 @@ pub struct ProjectImport {
     pub module: String,
     pub source: ProjectImportSource,
     pub type_only: bool,
+    /// Exact local binding-name span used to attach binder identity.
+    pub local_span: Span,
+    /// Full import-specifier span used for diagnostics.
     pub span: Span,
     /// Owning import-declaration start reserved before project binding.
     pub owner_start: u32,
@@ -417,8 +420,8 @@ pub enum ProjectImportSource {
 
 #[derive(Clone, Copy)]
 struct ExportedSlots {
-    value: Option<DeclId>,
-    ty: Option<DeclId>,
+    value: Option<ValueStorageId>,
+    ty: Option<LegacyTypeStorageId>,
     /// A type-only export hid a real local value slot. Imports must keep its
     /// runtime barrier even though no value declaration crosses the boundary.
     value_erased: bool,
@@ -432,6 +435,29 @@ pub fn check_project_programs<'ast>(
     interner: &mut Interner,
     units: &[ProjectProgram<'ast>],
 ) -> Vec<CheckResult> {
+    check_project_programs_inner(interner, units, |_, _, _| {})
+}
+
+#[cfg(test)]
+pub(crate) fn check_project_programs_with_binding_inspector<'ast, F>(
+    interner: &mut Interner,
+    units: &[ProjectProgram<'ast>],
+    inspect: F,
+) -> Vec<CheckResult>
+where
+    F: FnOnce(&Binder, &LexicalReservations, &[ScopeId]),
+{
+    check_project_programs_inner(interner, units, inspect)
+}
+
+fn check_project_programs_inner<'ast, F>(
+    interner: &mut Interner,
+    units: &[ProjectProgram<'ast>],
+    inspect: F,
+) -> Vec<CheckResult>
+where
+    F: FnOnce(&Binder, &LexicalReservations, &[ScopeId]),
+{
     let mut event_store = EventStore::default();
     let mut lexical_events = LexicalReservations::default();
     for (slot, unit) in units.iter().enumerate() {
@@ -525,6 +551,7 @@ pub fn check_project_programs<'ast>(
     lexical_events
         .reserve_callable_type_params(&mut next_type_param)
         .expect("one callable binder reservation pass");
+    inspect(&binder, &lexical_events, &module_scopes);
 
     for placeholders in &module_placeholders {
         for placeholder in placeholders {
@@ -633,7 +660,7 @@ fn imported_symbols(
                     import.owner_start,
                     Diagnostic::cannot_find_module(import.span, module),
                 );
-                imports.push(placeholder_import(&import.local, import.type_only));
+                imports.push(placeholder_import(import));
             }
             ProjectImportSource::Resolved(module_index) => {
                 let slots = exports
@@ -648,6 +675,7 @@ fn imported_symbols(
                             imports.push(ImportedSymbol::value_lookup_barrier(
                                 import.local.clone(),
                                 slots.ty,
+                                import.local_span,
                             ));
                         } else {
                             let value = if import.type_only { None } else { slots.value };
@@ -655,6 +683,7 @@ fn imported_symbols(
                                 import.local.clone(),
                                 value,
                                 slots.ty,
+                                import.local_span,
                             ));
                         }
                     }
@@ -670,7 +699,7 @@ fn imported_symbols(
                                 &import.imported,
                             ),
                         );
-                        imports.push(placeholder_import(&import.local, import.type_only));
+                        imports.push(placeholder_import(import));
                     }
                 }
             }
@@ -679,11 +708,11 @@ fn imported_symbols(
     imports
 }
 
-fn placeholder_import(local: &str, type_only: bool) -> ImportedSymbol {
-    if type_only {
-        ImportedSymbol::placeholder_type(local.to_string())
+fn placeholder_import(import: &ProjectImport) -> ImportedSymbol {
+    if import.type_only {
+        ImportedSymbol::placeholder_type(import.local.clone(), import.local_span)
     } else {
-        ImportedSymbol::placeholder_value_and_type(local.to_string())
+        ImportedSymbol::placeholder_value_and_type(import.local.clone(), import.local_span)
     }
 }
 
@@ -888,7 +917,7 @@ fn binding_name<'a>(pattern: &'a oxc_ast::ast::BindingPattern<'a>) -> Option<&'a
 fn seed_resolved_type<'ast>(
     type_decls: &mut Vec<TypeDecl<'ast>>,
     type_resolved: &mut [Option<TypeId>],
-    decl_id: DeclId,
+    decl_id: LegacyTypeStorageId,
     ty: TypeId,
 ) {
     let index = decl_id.index();
@@ -932,6 +961,22 @@ fn attach_type_decl_owners(
     scope: ScopeId,
     program: &Program<'_>,
 ) {
+    for declaration in binder
+        .declarations
+        .iter()
+        .filter(|declaration| declaration.site.module == scope)
+    {
+        reservations
+            .attach_declaration_owner(
+                declaration.id,
+                module_ordinal,
+                declaration.kind,
+                declaration.site.declaration_span,
+                declaration.site.binding_span,
+            )
+            .expect("source declaration must have its exact lexical event owner");
+    }
+
     walk_type_decls(
         binder,
         scope,

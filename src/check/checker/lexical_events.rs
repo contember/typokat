@@ -3,7 +3,10 @@
 use super::events::{
     EventId, EventStore, EventStoreError, ModuleOrdinal, RecordTicket, ReservedEvent, UnitSlot,
 };
-use crate::binder::symbol::DeclId;
+use crate::binder::declaration::{
+    source_declaration_occurrences, DeclId, DeclarationKind, LegacyTypeStorageId, ValueStorageId,
+};
+use crate::span::Span;
 use crate::types::repr::{ClassId, TypeParamId};
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, ChainElement, Class, ClassElement, Declaration,
@@ -61,12 +64,22 @@ pub(crate) struct LexicalOwner {
     pub(crate) ticket: RecordTicket,
 }
 
+/// Neutral event reserved for one exact source declaration occurrence.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DeclarationReservation {
+    pub(crate) kind: DeclarationKind,
+    pub(crate) declaration_span: Span,
+    pub(crate) binding_span: Span,
+    pub(crate) event: EventId,
+    pub(crate) owner: RecordTicket,
+}
+
 /// Stable class identities attached after binder/type reservation and before fill.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ClassBinding {
     pub(crate) class_id: ClassId,
-    pub(crate) type_decl: DeclId,
-    pub(crate) value_decl: DeclId,
+    pub(crate) type_decl: LegacyTypeStorageId,
+    pub(crate) value_decl: ValueStorageId,
     pub(crate) header_type_params: Vec<TypeParamId>,
 }
 
@@ -146,7 +159,8 @@ pub(crate) enum ReservationError {
     UnknownClass(ClassSiteId),
     DuplicateClassBinding(ClassSiteId),
     DuplicateCallableBinding(CallableSiteId),
-    MissingTypeDeclOwner(DeclId),
+    MissingDeclarationOwner(DeclId),
+    MissingTypeDeclOwner(LegacyTypeStorageId),
     EventStore(EventStoreError),
 }
 
@@ -166,10 +180,13 @@ pub(crate) struct LexicalReservations {
     members: Vec<MemberReservation>,
     callables: Vec<CallableReservation>,
     expression_site_tickets: Vec<SiteTickets>,
+    declarations: Vec<DeclarationReservation>,
+    declarations_by_binding: FxHashMap<(ModuleOrdinal, u32, u32), usize>,
     classes_by_source: BTreeMap<(ModuleOrdinal, u32), Vec<ClassSiteId>>,
     callables_by_source: BTreeMap<(ModuleOrdinal, u32), Vec<CallableSiteId>>,
-    type_decl_owners: FxHashMap<DeclId, LexicalOwner>,
-    type_decl_sources: FxHashMap<DeclId, SourceSite>,
+    declaration_owners: FxHashMap<DeclId, LexicalOwner>,
+    type_decl_owners: FxHashMap<LegacyTypeStorageId, LexicalOwner>,
+    type_decl_sources: FxHashMap<LegacyTypeStorageId, SourceSite>,
 }
 
 impl LexicalReservations {
@@ -181,6 +198,29 @@ impl LexicalReservations {
         program: &Program<'_>,
         store: &mut EventStore,
     ) -> Result<(), ReservationError> {
+        for occurrence in source_declaration_occurrences(program) {
+            let event = store.reserve_event(module_ordinal, occurrence.binding_span.start);
+            let index = self.declarations.len();
+            self.declarations.push(DeclarationReservation {
+                kind: occurrence.kind,
+                declaration_span: occurrence.declaration_span,
+                binding_span: occurrence.binding_span,
+                event: event.id,
+                owner: event.primary,
+            });
+            let previous = self.declarations_by_binding.insert(
+                (
+                    module_ordinal,
+                    occurrence.binding_span.start,
+                    occurrence.binding_span.end,
+                ),
+                index,
+            );
+            debug_assert!(
+                previous.is_none(),
+                "one declaration per exact binding range"
+            );
+        }
         self.reserve_statement_list(module_ordinal, unit_slot, &program.body, true, store)
     }
 
@@ -772,7 +812,7 @@ impl LexicalReservations {
 
     pub(crate) fn attach_type_decl_owner(
         &mut self,
-        decl_id: DeclId,
+        decl_id: LegacyTypeStorageId,
         module_ordinal: ModuleOrdinal,
         source_start: u32,
     ) -> Result<(), ReservationError> {
@@ -797,12 +837,57 @@ impl LexicalReservations {
         Ok(())
     }
 
-    pub(crate) fn type_decl_owner(&self, decl_id: DeclId) -> Option<LexicalOwner> {
+    pub(crate) fn type_decl_owner(&self, decl_id: LegacyTypeStorageId) -> Option<LexicalOwner> {
         self.type_decl_owners.get(&decl_id).copied()
     }
 
-    pub(crate) fn type_decl_source(&self, decl_id: DeclId) -> Option<SourceSite> {
+    pub(crate) fn type_decl_source(&self, decl_id: LegacyTypeStorageId) -> Option<SourceSite> {
         self.type_decl_sources.get(&decl_id).copied()
+    }
+
+    pub(crate) fn attach_declaration_owner(
+        &mut self,
+        declaration: DeclId,
+        module_ordinal: ModuleOrdinal,
+        kind: DeclarationKind,
+        declaration_span: Span,
+        binding_span: Span,
+    ) -> Result<(), ReservationError> {
+        let reservation = self
+            .declarations_by_binding
+            .get(&(module_ordinal, binding_span.start, binding_span.end))
+            .and_then(|index| self.declarations.get(*index))
+            .ok_or(ReservationError::MissingDeclarationOwner(declaration))?;
+        assert_eq!(
+            reservation.kind, kind,
+            "declaration kind must match source prewalk"
+        );
+        assert_eq!(
+            reservation.declaration_span, declaration_span,
+            "declaration node span must match source prewalk"
+        );
+        let owner = LexicalOwner {
+            event: reservation.event,
+            ticket: reservation.owner,
+        };
+        self.declaration_owners.insert(declaration, owner);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn declaration_owner(&self, declaration: DeclId) -> Option<LexicalOwner> {
+        self.declaration_owners.get(&declaration).copied()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn declaration_reservation(
+        &self,
+        declaration: DeclId,
+    ) -> Option<&DeclarationReservation> {
+        let owner = self.declaration_owner(declaration)?;
+        self.declarations.iter().find(|reservation| {
+            reservation.event == owner.event && reservation.owner == owner.ticket
+        })
     }
 
     pub(crate) fn owner_at(
@@ -912,6 +997,11 @@ impl LexicalReservations {
 
     pub(crate) fn tickets(&self) -> Vec<RecordTicket> {
         let mut tickets = Vec::new();
+        tickets.extend(
+            self.declarations
+                .iter()
+                .map(|declaration| declaration.owner),
+        );
         for site in &self.top_level {
             tickets.extend(site_tickets(site.tickets));
         }
@@ -1261,7 +1351,7 @@ mod tests {
     }
 
     #[test]
-    fn merged_type_declaration_owner_tracks_the_last_source_declaration() {
+    fn legacy_type_storage_owner_tracks_the_last_source_declaration() {
         let source = "class C {} interface C { value: number }";
         let allocator = Allocator::default();
         let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
@@ -1272,7 +1362,7 @@ mod tests {
         reservations
             .reserve_program(module, UnitSlot::new(0), &parsed.program, &mut store)
             .unwrap();
-        let declaration = DeclId(7);
+        let declaration = LegacyTypeStorageId(7);
         let class_start = u32::try_from(source.find("class C").unwrap()).unwrap();
         let interface_start = u32::try_from(source.find("interface C").unwrap()).unwrap();
 
@@ -1291,6 +1381,199 @@ mod tests {
                 source_start: interface_start,
             })
         );
+    }
+
+    #[test]
+    fn lexical_declaration_owners_keep_each_repeated_type_fragment_site() {
+        let source = "interface M { first: number } interface M { last: string }";
+        let prelude_allocator = Allocator::default();
+        let allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty());
+        let binder = crate::binder::bind_module_with_prelude(&prelude.program, &parsed.program);
+        let module = ModuleOrdinal::new(0);
+        let mut store = EventStore::default();
+        let mut reservations = LexicalReservations::default();
+        reservations
+            .reserve_program(module, UnitSlot::new(0), &parsed.program, &mut store)
+            .unwrap();
+        super::super::attach_type_decl_owners(
+            &mut reservations,
+            module,
+            &binder,
+            binder.module,
+            &parsed.program,
+        );
+
+        let symbol = binder
+            .graph
+            .get(binder.module)
+            .and_then(|scope| scope.lookup_local("M"))
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .expect("merged interface symbol");
+        let group = binder
+            .type_groups
+            .get(symbol.type_group.expect("dormant group"))
+            .expect("group row");
+        assert_eq!(group.fragments.len(), 2);
+
+        let first = group.fragments[0];
+        let second = group.fragments[1];
+        let first_owner = reservations
+            .declaration_owner(first.declaration)
+            .expect("first declaration owner");
+        let second_owner = reservations
+            .declaration_owner(second.declaration)
+            .expect("second declaration owner");
+        assert_ne!(first.declaration, second.declaration);
+        assert_ne!(first_owner.event, second_owner.event);
+        let first_reservation = reservations
+            .declaration_reservation(first.declaration)
+            .expect("first exact reservation");
+        let second_reservation = reservations
+            .declaration_reservation(second.declaration)
+            .expect("second exact reservation");
+        assert_eq!(first_reservation.kind, DeclarationKind::Interface);
+        assert_eq!(
+            first_reservation.declaration_span,
+            first.site.declaration_span
+        );
+        assert_eq!(first_reservation.binding_span, first.site.binding_span);
+        assert_eq!(second_reservation.kind, DeclarationKind::Interface);
+        assert_eq!(
+            second_reservation.declaration_span,
+            second.site.declaration_span
+        );
+        assert_eq!(second_reservation.binding_span, second.site.binding_span);
+
+        let legacy = symbol.ty.expect("legacy production storage");
+        assert_eq!(legacy, second.legacy_storage);
+        assert_eq!(
+            reservations.type_decl_source(legacy),
+            Some(SourceSite {
+                module_ordinal: module,
+                unit_slot: UnitSlot::new(0),
+                source_start: second.site.declaration_span.start,
+            })
+        );
+    }
+
+    #[test]
+    fn every_binding_leaf_has_a_distinct_empty_declaration_event() {
+        let source = "import Default, * as NS from 'pkg'; import type { A as Local } from './x'; const { a: [b], ...c } = value; function f(x, y, { z: [w] }) {} try {} catch ({ q, ...r }) {}";
+        let prelude_allocator = Allocator::default();
+        let allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty());
+        let binder = crate::binder::bind_module_with_prelude(&prelude.program, &parsed.program);
+        let module = ModuleOrdinal::new(0);
+        let mut store = EventStore::default();
+        let mut reservations = LexicalReservations::default();
+        reservations
+            .reserve_program(module, UnitSlot::new(0), &parsed.program, &mut store)
+            .unwrap();
+        super::super::attach_type_decl_owners(
+            &mut reservations,
+            module,
+            &binder,
+            binder.module,
+            &parsed.program,
+        );
+
+        let declarations: Vec<_> = binder
+            .declarations
+            .iter()
+            .filter(|declaration| declaration.site.module == binder.module)
+            .collect();
+        let owners: Vec<_> = declarations
+            .iter()
+            .map(|declaration| {
+                let reservation = reservations
+                    .declaration_reservation(declaration.id)
+                    .expect("exact declaration reservation");
+                assert_eq!(reservation.kind, declaration.kind);
+                assert_eq!(
+                    reservation.declaration_span,
+                    declaration.site.declaration_span
+                );
+                assert_eq!(reservation.binding_span, declaration.site.binding_span);
+                reservations
+                    .declaration_owner(declaration.id)
+                    .expect("declaration owner")
+            })
+            .collect();
+        assert!(owners.iter().enumerate().all(|(index, owner)| owners
+            .iter()
+            .skip(index + 1)
+            .all(|other| owner.event != other.event && owner.ticket != other.ticket)));
+
+        for ticket in reservations.tickets() {
+            store.complete(ticket, Vec::new()).unwrap();
+        }
+        assert!(store.finish().unwrap().is_empty());
+    }
+
+    #[test]
+    fn declaration_owner_replays_one_record_through_ordinary_pending_effects() {
+        let source = "const value = 1;";
+        let prelude_allocator = Allocator::default();
+        let allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        let binder = crate::binder::bind_module_with_prelude(&prelude.program, &parsed.program);
+        let module = ModuleOrdinal::new(0);
+        let mut store = EventStore::default();
+        let mut reservations = LexicalReservations::default();
+        reservations
+            .reserve_program(module, UnitSlot::new(0), &parsed.program, &mut store)
+            .unwrap();
+        super::super::attach_type_decl_owners(
+            &mut reservations,
+            module,
+            &binder,
+            binder.module,
+            &parsed.program,
+        );
+        let declaration = binder
+            .declarations
+            .iter()
+            .find(|declaration| declaration.kind == DeclarationKind::Variable)
+            .expect("variable declaration");
+        let owner = reservations
+            .declaration_owner(declaration.id)
+            .expect("declaration owner");
+
+        let mut pending: Vec<_> = reservations
+            .tickets()
+            .into_iter()
+            .map(super::super::CheckerEffects::new)
+            .collect();
+        let effects = pending
+            .iter_mut()
+            .find(|effects| effects.records.owner() == owner.ticket)
+            .expect("declaration ticket participates in ordinary pending effects");
+        effects
+            .records
+            .diagnostic(crate::diagnostics::Diagnostic::cannot_find_name(
+                declaration.site.binding_span,
+                "recorded",
+            ));
+        for effects in pending {
+            store.commit(effects.records).unwrap();
+        }
+        assert_eq!(
+            store.complete(owner.ticket, Vec::new()),
+            Err(EventStoreError::DuplicateCompletion(owner.ticket))
+        );
+        let records = store.finish().unwrap();
+        assert_eq!(records.len(), 1);
+        let super::super::events::CheckerRecord::Diagnostic(diagnostic) = &records[0].1 else {
+            panic!("expected declaration diagnostic");
+        };
+        assert_eq!(diagnostic.code, crate::diagnostics::DiagnosticCode::TK2304);
+        assert!(diagnostic.message.contains("recorded"));
     }
 
     #[test]
@@ -1334,8 +1617,8 @@ mod tests {
                 class,
                 ClassBinding {
                     class_id: ClassId(7),
-                    type_decl: DeclId(8),
-                    value_decl: DeclId(9),
+                    type_decl: LegacyTypeStorageId(8),
+                    value_decl: ValueStorageId(9),
                     header_type_params: vec![TypeParamId(10)],
                 },
             )

@@ -3,8 +3,8 @@
 use super::calls::parameter_name;
 use super::context::*;
 use super::decls::type_decl_id;
+use crate::binder::declaration::LegacyTypeStorageId;
 use crate::binder::scope::ScopeId;
-use crate::binder::symbol::DeclId;
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
 use crate::types::repr::{

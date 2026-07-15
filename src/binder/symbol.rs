@@ -3,16 +3,7 @@
 //! One symbol owns separate value/type/namespace slots, so declaration merging is
 //! represented directly in the scope graph instead of by a parallel model.
 
-/// Index of a declaration site; the checker stores declared/inferred types by `DeclId`.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct DeclId(pub u32);
-
-impl DeclId {
-    #[inline]
-    pub fn index(self) -> usize {
-        self.0 as usize
-    }
-}
+use crate::binder::declaration::{DeclId, LegacyTypeStorageId, TypeGroupId, ValueStorageId};
 
 /// Index of a symbol within the binder's [`SymbolTable`].
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -33,7 +24,7 @@ pub struct Symbol {
     /// The bound name.
     pub name: String,
     /// Value-space declaration (`const`/`let`/`var`/`function`/`class` value side).
-    pub value: Option<DeclId>,
+    pub value: Option<ValueStorageId>,
     /// An import whose source value is erased must hide parent value slots. Ordinary
     /// type-only declarations leave this false, so cross-space lookup still falls through.
     pub blocks_value_lookup: bool,
@@ -43,9 +34,11 @@ pub struct Symbol {
     /// separate external overload signatures from the implementation declaration
     /// while keeping the ordinary `value` slot as the current externally resolved
     /// declaration.
-    pub function_values: Vec<DeclId>,
-    /// Type-space declaration; uses the binder's separate type `DeclId` range.
-    pub ty: Option<DeclId>,
+    pub function_values: Vec<ValueStorageId>,
+    /// Legacy type-storage declaration retained until the atomic WU3 cutover.
+    pub ty: Option<LegacyTypeStorageId>,
+    /// Dormant ordered type declaration group; production consumers ignore it in WU1a.
+    pub type_group: Option<TypeGroupId>,
     /// Namespace-space declaration (`namespace`/module).
     /// TODO(post-MVP): filled by the namespace binder.
     pub ns: Option<DeclId>,
@@ -60,6 +53,7 @@ impl Symbol {
             blocks_value_lookup: false,
             function_values: Vec::new(),
             ty: None,
+            type_group: None,
             ns: None,
         }
     }

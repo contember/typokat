@@ -10,8 +10,8 @@ use super::decls::alloc_type_param_ids;
 use super::decls::value_decl_id;
 use super::eval::{contains_deferred_argument, contains_deferred_keyof};
 use super::expr::contextual_literal_target;
+use crate::binder::declaration::ValueStorageId;
 use crate::binder::scope::ScopeId;
-use crate::binder::symbol::DeclId;
 use crate::check::infer;
 use crate::check::query::SemanticQueryCoordinator;
 use crate::class_semantics::{
@@ -1730,7 +1730,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         callee: &Expression<'_>,
-    ) -> DemandOutcome<Option<(DeclId, ClassInfo)>> {
+    ) -> DemandOutcome<Option<(ValueStorageId, ClassInfo)>> {
         let callee = match callee {
             Expression::ParenthesizedExpression(paren) => {
                 return self.class_new_target(scope, &paren.expression)
@@ -1908,7 +1908,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn new_class_substitution(
         &mut self,
         scope: ScopeId,
-        _decl_id: DeclId,
+        _decl_id: ValueStorageId,
         info: &ClassInfo,
         new_expr: &NewExpression<'_>,
         args: (&[(TypeId, Span)], &[bool], &[&Expression<'_>]),
@@ -2628,7 +2628,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             };
 
             // Bind the parameter's type into the function scope so the body resolves
-            // it (the binder declared the parameter symbol + DeclId).
+            // it (the binder declared the parameter symbol + value-storage id).
             if let Some(scope) = fn_scope {
                 if let Some(decl_id) = parameter_name(syntax.pattern())
                     .and_then(|n| self.binder.resolve_value(scope, &n))

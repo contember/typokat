@@ -24,8 +24,8 @@ use super::type_syntax::{
     TypeSyntaxLowerer,
 };
 use super::visibility::{has_public_constructor, lower_visibility};
+use crate::binder::declaration::LegacyTypeStorageId;
 use crate::binder::scope::ScopeId;
-use crate::binder::symbol::DeclId;
 use crate::check::checker::context::{OverrideCheck, Pass, TypeDecl};
 use crate::check::checker::decls::type_decl_id;
 use crate::check::checker::events::{CheckerRecord, ModuleOrdinal, RecordTicket};
@@ -1910,7 +1910,7 @@ fn register_reserved_surface_roots<'ast>(
                 extends,
                 ..
             } => {
-                let decl_id = DeclId(
+                let decl_id = LegacyTypeStorageId(
                     u32::try_from(index).expect("type declaration index fits binder identity"),
                 );
                 let Some(source) = reservations.type_decl_source(decl_id) else {

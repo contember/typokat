@@ -1,6 +1,6 @@
 use super::*;
+use crate::binder::declaration::LegacyTypeStorageId;
 use crate::binder::scope::ScopeId;
-use crate::binder::symbol::DeclId;
 use crate::check::checker::classes::application::{
     build_class_application, complete_class_arguments, ClassApplicationKind,
     ClassApplicationRequest, ClassTypeParameter, ClassTypeParameterDefault, ExplicitClassArgument,
@@ -24,7 +24,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// Surface alias cycles report `TK2456` at every alias in the cycle and become
     /// error types; legal recursion through members uses seeded reserved ids instead
     /// of re-entering resolution.
-    pub(super) fn resolve_type_decl_inner(&mut self, _scope: ScopeId, decl_id: DeclId) -> TypeId {
+    pub(super) fn resolve_type_decl_inner(
+        &mut self,
+        _scope: ScopeId,
+        decl_id: LegacyTypeStorageId,
+    ) -> TypeId {
         let error_ty = self.interner.well_known().error;
 
         // Already resolved (interface reserved id, a seeded object/conditional template,
@@ -133,8 +137,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// `decl_id`'s position on the resolving-alias stack up to the top (the whole cycle),
     /// deduped via `circular_aliases`, and return the error type. Cloning the slice keeps
     /// the diagnostic/set writes off the stack borrow.
-    fn report_surface_cycle(&mut self, decl_id: DeclId) -> TypeId {
-        let cycle: Vec<(DeclId, Span, String)> = self
+    fn report_surface_cycle(&mut self, decl_id: LegacyTypeStorageId) -> TypeId {
+        let cycle: Vec<(LegacyTypeStorageId, Span, String)> = self
             .resolving_alias_stack
             .iter()
             .position(|(id, ..)| *id == decl_id)
@@ -288,7 +292,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     pub(super) fn resolve_class_type_reference(
         &mut self,
         scope: ScopeId,
-        decl_id: DeclId,
+        decl_id: LegacyTypeStorageId,
         name: &str,
         span: Span,
         arguments: Option<&TSTypeParameterInstantiation<'_>>,
@@ -472,7 +476,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     pub(super) fn instantiate_type_reference(
         &mut self,
         scope: ScopeId,
-        decl_id: DeclId,
+        decl_id: LegacyTypeStorageId,
         args: &TSTypeParameterInstantiation<'_>,
     ) -> Option<TypeId> {
         // Lower the type arguments first (in the referencing scope, where any nested
@@ -536,8 +540,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     }
 
     /// The ordered type-parameter ids of a type declaration (M9), or an empty list for
-    /// a non-generic one / an unknown `DeclId`.
-    fn type_decl_params(&self, decl_id: DeclId) -> Vec<TypeParamId> {
+    /// a non-generic one / an unknown legacy type-storage id.
+    fn type_decl_params(&self, decl_id: LegacyTypeStorageId) -> Vec<TypeParamId> {
         match self.type_decls.get(decl_id.index()) {
             Some(TypeDecl::Interface { params, .. })
             | Some(TypeDecl::Alias { params, .. })

@@ -6,8 +6,9 @@ use super::calls::widen;
 use super::context::*;
 use super::decls::value_decl_id;
 use super::lexical_events::LexicalOwnerPhase;
+use crate::binder::declaration::ValueStorageId;
 use crate::binder::scope::ScopeId;
-use crate::binder::symbol::{DeclId, SymbolId};
+use crate::binder::symbol::SymbolId;
 use crate::check::query::SemanticQueryCoordinator;
 use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
@@ -703,7 +704,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         kind: VariableDeclarationKind,
         declarator: &VariableDeclarator<'_>,
-        alias_decl: Option<DeclId>,
+        alias_decl: Option<ValueStorageId>,
     ) {
         if !kind.is_const() {
             return;
@@ -876,7 +877,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         kind: VariableDeclarationKind,
         pattern: &BindingPattern<'_>,
-        decl_id: DeclId,
+        decl_id: ValueStorageId,
         ty: TypeId,
     ) {
         if kind.is_var() {
@@ -913,7 +914,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         kind: VariableDeclarationKind,
         pattern: &BindingPattern<'_>,
-        decl_id: DeclId,
+        decl_id: ValueStorageId,
         ty: TypeId,
     ) {
         if let Some(function_ty) = self.function_value_type_for_var(scope, kind, pattern) {
@@ -961,7 +962,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         kind: VariableDeclarationKind,
         pattern: &BindingPattern<'_>,
-        decl_id: DeclId,
+        decl_id: ValueStorageId,
         ty: TypeId,
     ) {
         let previous = self.decl_types.get(decl_id);
@@ -1101,7 +1102,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
     /// Publish a callable type into one declaration sharing `symbol_id`, evicting
     /// only that symbol's stale flow results when its visible type changes.
-    fn publish_symbol_value_type(&mut self, decl_id: DeclId, ty: TypeId, symbol_id: SymbolId) {
+    fn publish_symbol_value_type(
+        &mut self,
+        decl_id: ValueStorageId,
+        ty: TypeId,
+        symbol_id: SymbolId,
+    ) {
         let previous = self.decl_types.get(decl_id);
         self.decl_types.set(decl_id, ty);
         if previous != Some(ty) {
@@ -1110,7 +1116,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
     }
 
-    fn function_decl_id(&self, func: &Function<'_>) -> Option<DeclId> {
+    fn function_decl_id(&self, func: &Function<'_>) -> Option<ValueStorageId> {
         self.binder
             .fn_decl_ids
             .get(&(self.current_module, func.span.start))
@@ -1209,7 +1215,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         surfaces: &mut FxHashMap<u32, FunctionSurface>,
     ) {
         let mut signatures = Vec::new();
-        let mut implementation: Option<(TypeId, DeclId)> = None;
+        let mut implementation: Option<(TypeId, ValueStorageId)> = None;
         for stmt in statements {
             let Some(func) = function_decl_from_statement(stmt) else {
                 continue;
@@ -1280,7 +1286,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         name: &str,
-        implementation_decl: Option<DeclId>,
+        implementation_decl: Option<ValueStorageId>,
         overload_ty: TypeId,
     ) {
         if let Some(symbol_id) = self.binder.resolve_value(scope, name) {
@@ -1355,7 +1361,7 @@ fn variable_declaration_decl_id(
     scope: ScopeId,
     kind: VariableDeclarationKind,
     pattern: &BindingPattern<'_>,
-) -> Option<DeclId> {
+) -> Option<ValueStorageId> {
     let declaration_scope = if kind.is_var() {
         binder.graph.var_scope(scope).unwrap_or(scope)
     } else {

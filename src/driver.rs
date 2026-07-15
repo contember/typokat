@@ -3,6 +3,8 @@
 //! The driver owns the per-run allocator that backs the AST and the type
 //! `Interner`, keeping borrowed parser data inside the parse/check call.
 
+#[cfg(test)]
+use crate::check::checker::check_project_programs_with_binding_inspector;
 use crate::check::checker::events::{ModuleOrdinal, UnitSlot};
 use crate::check::{
     check_program, check_project_programs, CheckResult, ProjectImport, ProjectImportSource,
@@ -161,6 +163,30 @@ pub fn check_project(inputs: Vec<FileInput>) -> Vec<FileReport> {
 }
 
 fn check_project_inner(inputs: Vec<FileInput>) -> Vec<FileReport> {
+    check_project_inner_with_checker(inputs, check_project_programs)
+}
+
+#[cfg(test)]
+fn check_project_inner_with_binding_inspector<F>(
+    inputs: Vec<FileInput>,
+    inspect: F,
+) -> Vec<FileReport>
+where
+    F: FnOnce(
+        &crate::binder::Binder,
+        &crate::check::checker::lexical_events::LexicalReservations,
+        &[crate::binder::scope::ScopeId],
+    ),
+{
+    check_project_inner_with_checker(inputs, |interner, units| {
+        check_project_programs_with_binding_inspector(interner, units, inspect)
+    })
+}
+
+fn check_project_inner_with_checker<F>(inputs: Vec<FileInput>, check_project: F) -> Vec<FileReport>
+where
+    F: for<'ast> FnOnce(&mut Interner, &[ProjectProgram<'ast>]) -> Vec<CheckResult>,
+{
     if inputs.is_empty() {
         return Vec::new();
     }
@@ -220,6 +246,7 @@ fn check_project_inner(inputs: Vec<FileInput>) -> Vec<FileReport> {
                         }
                     },
                     type_only: import.type_only,
+                    local_span: import.local_span,
                     span: import.span,
                     owner_start: import.owner_start,
                 })
@@ -228,7 +255,7 @@ fn check_project_inner(inputs: Vec<FileInput>) -> Vec<FileReport> {
         .collect();
 
     let mut interner = Interner::with_intrinsics();
-    let ordered_results = check_project_programs(&mut interner, &project_units);
+    let ordered_results = check_project(&mut interner, &project_units);
     let mut diagnostics_by_original: Vec<Vec<Diagnostic>> =
         (0..inputs.len()).map(|_| Vec::new()).collect();
     let mut incomplete_by_original: Vec<Vec<IncompleteSurface>> =
@@ -277,6 +304,7 @@ struct RawImport {
     specifier: String,
     source: RawImportSource,
     type_only: bool,
+    local_span: Span,
     span: Span,
     owner_start: u32,
 }
@@ -321,6 +349,7 @@ fn scan_imports(
                     specifier: specifier.clone(),
                     source,
                     type_only,
+                    local_span: Span::from_oxc(named.local.span),
                     span: Span::from_oxc(named.span),
                     owner_start: import.span.start,
                 });
@@ -715,5 +744,168 @@ mod tests {
         assert_eq!(codes(&reports[0].output), ["TK2304"]);
         assert_eq!(reports[1].name, "dep.ts");
         assert_eq!(codes(&reports[1].output), ["TK2322"]);
+    }
+
+    #[test]
+    fn project_imports_attach_to_preallocated_local_declarations_in_dependency_order() {
+        fn files(use_first: bool) -> Vec<FileInput> {
+            let use_file = FileInput {
+                name: "use.ts".into(),
+                source: "import { value as first, value as second, type Both as TypeOnly } from './dep'; import { Missing as MissingLocal, Other as OtherMissing } from './absent'; const one: number = first; const two: number = second; const typed: TypeOnly = new TypeOnly();".into(),
+            };
+            let dep_file = FileInput {
+                name: "dep.ts".into(),
+                source: "export class Both {} export const value = 1;".into(),
+            };
+            if use_first {
+                vec![use_file, dep_file]
+            } else {
+                vec![dep_file, use_file]
+            }
+        }
+
+        fn inspect(
+            binder: &crate::binder::Binder,
+            reservations: &crate::check::checker::lexical_events::LexicalReservations,
+            scopes: &[crate::binder::scope::ScopeId],
+        ) {
+            let dep_scope = scopes[0];
+            let use_scope = scopes[1];
+            let source = "import { value as first, value as second, type Both as TypeOnly } from './dep'; import { Missing as MissingLocal, Other as OtherMissing } from './absent'; const one: number = first; const two: number = second; const typed: TypeOnly = new TypeOnly();";
+            let imports: Vec<_> = binder
+                .declarations
+                .iter()
+                .filter(|declaration| {
+                    declaration.site.module == use_scope
+                        && declaration.kind == crate::binder::declaration::DeclarationKind::Import
+                })
+                .collect();
+            assert_eq!(imports.len(), 5);
+            assert!(imports
+                .iter()
+                .enumerate()
+                .all(|(index, declaration)| imports
+                    .iter()
+                    .skip(index + 1)
+                    .all(|other| declaration.id != other.id)));
+            assert_eq!(
+                imports
+                    .iter()
+                    .map(|declaration| &source[declaration.site.declaration_span.range()])
+                    .collect::<Vec<_>>(),
+                vec![
+                    "import { value as first, value as second, type Both as TypeOnly } from './dep';",
+                    "import { value as first, value as second, type Both as TypeOnly } from './dep';",
+                    "import { value as first, value as second, type Both as TypeOnly } from './dep';",
+                    "import { Missing as MissingLocal, Other as OtherMissing } from './absent';",
+                    "import { Missing as MissingLocal, Other as OtherMissing } from './absent';",
+                ]
+            );
+            assert_eq!(
+                imports
+                    .iter()
+                    .map(|declaration| &source[declaration.site.binding_span.range()])
+                    .collect::<Vec<_>>(),
+                vec![
+                    "first",
+                    "second",
+                    "TypeOnly",
+                    "MissingLocal",
+                    "OtherMissing"
+                ]
+            );
+            assert!(imports
+                .iter()
+                .all(|declaration| declaration.type_group.is_none()));
+            assert!(imports
+                .iter()
+                .all(|declaration| declaration.site.scope == Some(use_scope)));
+
+            let symbol = |scope, name: &str| {
+                binder
+                    .graph
+                    .get(scope)
+                    .and_then(|scope| scope.lookup_local(name))
+                    .and_then(|symbol| binder.symbols.get(symbol))
+                    .expect("project symbol")
+            };
+            let remote_value = symbol(dep_scope, "value")
+                .value
+                .expect("exported value storage");
+            assert_eq!(imports[0].value_storage, Some(remote_value));
+            assert_eq!(imports[1].value_storage, Some(remote_value));
+            assert_eq!(symbol(use_scope, "first").value, Some(remote_value));
+            assert_eq!(symbol(use_scope, "second").value, Some(remote_value));
+
+            let remote_type = symbol(dep_scope, "Both").ty.expect("exported type storage");
+            assert_eq!(imports[2].value_storage, None);
+            assert_eq!(imports[2].legacy_type_storage, Some(remote_type));
+            assert_eq!(symbol(use_scope, "TypeOnly").value, None);
+            assert_eq!(symbol(use_scope, "TypeOnly").ty, Some(remote_type));
+            assert!(symbol(use_scope, "TypeOnly").blocks_value_lookup);
+
+            assert!(imports[3].value_storage.is_some());
+            assert!(imports[3].legacy_type_storage.is_some());
+            assert!(imports[4].value_storage.is_some());
+            assert!(imports[4].legacy_type_storage.is_some());
+            assert_ne!(imports[3].value_storage, imports[4].value_storage);
+            assert_ne!(
+                imports[3].legacy_type_storage,
+                imports[4].legacy_type_storage
+            );
+            assert_eq!(
+                symbol(use_scope, "MissingLocal").value,
+                imports[3].value_storage
+            );
+            assert_eq!(
+                symbol(use_scope, "MissingLocal").ty,
+                imports[3].legacy_type_storage
+            );
+            assert_eq!(
+                symbol(use_scope, "OtherMissing").value,
+                imports[4].value_storage
+            );
+            assert_eq!(
+                symbol(use_scope, "OtherMissing").ty,
+                imports[4].legacy_type_storage
+            );
+
+            let owners: Vec<_> = imports
+                .iter()
+                .map(|declaration| {
+                    let reservation = reservations
+                        .declaration_reservation(declaration.id)
+                        .expect("exact project import reservation");
+                    assert_eq!(
+                        reservation.declaration_span,
+                        declaration.site.declaration_span
+                    );
+                    assert_eq!(reservation.binding_span, declaration.site.binding_span);
+                    reservations
+                        .declaration_owner(declaration.id)
+                        .expect("project import owner")
+                })
+                .collect();
+            assert!(owners.iter().enumerate().all(|(index, owner)| owners
+                .iter()
+                .skip(index + 1)
+                .all(|other| owner.event != other.event && owner.ticket != other.ticket)));
+        }
+
+        let use_first = check_project_inner_with_binding_inspector(files(true), inspect);
+        let dep_first = check_project_inner_with_binding_inspector(files(false), inspect);
+        for name in ["use.ts", "dep.ts"] {
+            let first = use_first
+                .iter()
+                .find(|report| report.name == name)
+                .expect("first-order report");
+            let second = dep_first
+                .iter()
+                .find(|report| report.name == name)
+                .expect("opposite-order report");
+            assert_eq!(debug_diags(&first.output), debug_diags(&second.output));
+            assert_eq!(first.output.parse_errors, second.output.parse_errors);
+            assert_eq!(first.output.incomplete, second.output.incomplete);
+        }
     }
 }

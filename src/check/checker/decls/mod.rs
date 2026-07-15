@@ -1,8 +1,8 @@
 //! decls module (extracted from checker/mod.rs).
 
 use super::context::*;
+use crate::binder::declaration::LegacyTypeStorageId;
 use crate::binder::scope::ScopeId;
-use crate::binder::symbol::DeclId;
 use crate::binder::Binder;
 use crate::span::Span;
 use crate::types::repr::{ClassId, TypeParamId, TypeTag};
@@ -21,7 +21,7 @@ mod resolve;
 impl<'a, 'ast> Pass<'a, 'ast> {
     fn with_type_decl_effects<R>(
         &mut self,
-        decl_id: DeclId,
+        decl_id: LegacyTypeStorageId,
         produce: impl FnOnce(&mut Self) -> R,
     ) -> R {
         let owner = self
@@ -31,7 +31,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.with_ticket_effects(owner.ticket, produce)
     }
 
-    pub(super) fn resolve_type_decl(&mut self, scope: ScopeId, decl_id: DeclId) -> TypeId {
+    pub(super) fn resolve_type_decl(
+        &mut self,
+        scope: ScopeId,
+        decl_id: LegacyTypeStorageId,
+    ) -> TypeId {
         if self
             .type_resolved
             .get(decl_id.index())
@@ -46,7 +50,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
     pub(super) fn emit_type_decl_diagnostic(
         &mut self,
-        decl_id: DeclId,
+        decl_id: LegacyTypeStorageId,
         diagnostic: crate::diagnostics::Diagnostic,
     ) {
         self.with_type_decl_effects(decl_id, |pass| pass.emit_diagnostic(diagnostic));
@@ -98,7 +102,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     ),
                     _ => continue,
                 };
-            let decl_id = DeclId(index as u32);
+            let decl_id =
+                LegacyTypeStorageId(u32::try_from(index).expect("type declaration index fits u32"));
             let frame = self.build_type_param_frame(param_decl, &params);
             self.resolving_conditional_alias = Some((decl_id, name_span, name));
             let lowered = self.with_type_decl_effects(decl_id, |pass| {
@@ -152,7 +157,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     ),
                     _ => continue,
                 };
-            let decl_id = DeclId(index as u32);
+            let decl_id =
+                LegacyTypeStorageId(u32::try_from(index).expect("type declaration index fits u32"));
             let frame = self.build_type_param_frame(param_decl, &params);
             let prev_resolving_alias = self.resolving_alias.take();
             self.resolving_alias = Some((decl_id, name_span, name.clone()));
@@ -199,7 +205,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Touch remaining aliases to resolve the whole memoized DAG.
         for index in start..end {
             if matches!(self.type_decls[index], TypeDecl::Alias { .. }) {
-                self.resolve_type_decl(scope, DeclId(index as u32));
+                self.resolve_type_decl(
+                    scope,
+                    LegacyTypeStorageId(
+                        u32::try_from(index).expect("type declaration index fits u32"),
+                    ),
+                );
             }
         }
 
@@ -227,7 +238,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         if !matches!(self.template_fill.get(index), Some(ClassFillState::Pending)) {
             return;
         }
-        let decl_id = DeclId(u32::try_from(index).expect("type declaration index fits u32"));
+        let decl_id =
+            LegacyTypeStorageId(u32::try_from(index).expect("type declaration index fits u32"));
         self.with_type_decl_effects(decl_id, |pass| {
             pass.ensure_interface_filled_inner(scope, index)
         });
@@ -315,7 +327,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         if !matches!(self.template_fill.get(index), Some(ClassFillState::Pending)) {
             return;
         }
-        let decl_id = DeclId(u32::try_from(index).expect("type declaration index fits u32"));
+        let decl_id =
+            LegacyTypeStorageId(u32::try_from(index).expect("type declaration index fits u32"));
         self.with_type_decl_effects(decl_id, |pass| {
             pass.ensure_object_alias_filled_inner(scope, index)
         });
@@ -343,7 +356,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         if let Some(slot) = self.template_fill.get_mut(index) {
             *slot = ClassFillState::Filling;
         }
-        let decl_id = DeclId(index as u32);
+        let decl_id =
+            LegacyTypeStorageId(u32::try_from(index).expect("type declaration index fits u32"));
         let prev_resolving_alias = self.resolving_alias.take();
         self.resolving_alias = Some((decl_id, name_span, name.clone()));
         self.resolving_alias_stack
@@ -402,9 +416,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     }
 }
 
-/// Reserve top-level type declarations by type-space `DeclId`.
+/// Reserve top-level type declarations by [`LegacyTypeStorageId`].
 /// Interfaces get ids before bodies resolve, enabling self/sibling references.
-/// Reserve runs per compilation unit; append order matches binder `DeclId` order so
+/// Reserve runs per compilation unit; append order matches legacy storage order so
 /// prelude and user declarations stay index-aligned.
 #[allow(clippy::too_many_arguments)] // Two counters + two appended tables — irreducible reserve state.
 pub(in crate::check::checker) fn reserve_type_decls<'ast>(
@@ -418,7 +432,7 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
     resolved: &mut [Option<TypeId>],
 ) {
     // The binder and this walker use the same scope maps and source order, keeping
-    // every nested declaration aligned with its type-space `DeclId`.
+    // every nested declaration aligned with its legacy type-storage id.
     walk_type_decls(binder, scope, program, &mut |scope, _, declaration| {
         match declaration {
             TopTypeDecl::Interface(iface) => {
@@ -948,25 +962,25 @@ pub(in crate::check::checker) fn alloc_type_param_ids(
         .collect()
 }
 
-/// The type-space `DeclId` a name resolves to from `scope` (binder type slot), if
+/// The legacy type-storage id a name resolves to from `scope` (binder type slot), if
 /// any. Walks the scope graph like value resolution, then reads the `ty` slot.
 pub(in crate::check::checker) fn type_decl_id(
     binder: &Binder,
     scope: ScopeId,
     name: &str,
-) -> Option<DeclId> {
+) -> Option<LegacyTypeStorageId> {
     let symbol_id = binder.resolve_type(scope, name)?;
     binder.symbols.get(symbol_id).and_then(|s| s.ty)
 }
 
-/// The **value**-space `DeclId` a name resolves to from `scope` (binder value slot),
+/// The value-storage id a name resolves to from `scope` (binder value slot),
 /// if any (M11 — the class constructor side). Mirrors [`type_decl_id`] for the value
 /// space.
 pub(in crate::check::checker) fn value_decl_id(
     binder: &Binder,
     scope: ScopeId,
     name: &str,
-) -> Option<DeclId> {
+) -> Option<crate::binder::declaration::ValueStorageId> {
     let symbol_id = binder.resolve_value(scope, name)?;
     binder.symbols.get(symbol_id).and_then(|s| s.value)
 }

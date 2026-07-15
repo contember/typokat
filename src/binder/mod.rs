@@ -4,6 +4,7 @@
 //! Resolution is parent-walk over the scope graph; the checker chooses the slot.
 
 pub mod bind;
+pub mod declaration;
 pub mod scope;
 pub mod symbol;
 

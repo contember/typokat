@@ -4,8 +4,8 @@ use super::calls::intrinsic_id;
 use super::classes::body::BodyMemberLookup;
 use super::context::*;
 use super::expr::contextual_literal_target;
+use crate::binder::declaration::ValueStorageId;
 use crate::binder::scope::ScopeId;
-use crate::binder::symbol::DeclId;
 use crate::binder::Binder;
 use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::{render_type, Diagnostic};
@@ -698,13 +698,13 @@ pub(in crate::check::checker) fn declared_from_init(
     }
 }
 
-/// The `DeclId` of a declarator's binding, resolved through the scope graph by
+/// The [`ValueStorageId`] of a declarator's binding, resolved through the scope graph by
 /// name from `scope`. `None` for non-identifier bindings (out of subset).
 pub(in crate::check::checker) fn binding_decl_id(
     binder: &Binder,
     scope: ScopeId,
     pattern: &BindingPattern<'_>,
-) -> Option<DeclId> {
+) -> Option<ValueStorageId> {
     let name = match pattern {
         BindingPattern::BindingIdentifier(ident) => ident.name.as_str(),
         _ => return None,

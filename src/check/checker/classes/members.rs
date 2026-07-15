@@ -57,7 +57,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .cloned()
             .unwrap_or_default();
 
-        // M16: the class's value `DeclId`, used to look up its type parameters so a member
+        // M16: the class's value-storage id, used to look up its type parameters so a member
         // **body** annotation referencing `T` (a parameter / return type) resolves while the
         // body is checked — exactly as the instance template was lowered in `fill_class`.
         // Save class context so nested classes do not permanently clobber enclosing state.

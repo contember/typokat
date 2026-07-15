@@ -170,7 +170,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &self,
         scope: ScopeId,
         check: &TSType<'_>,
-        decl_id: DeclId,
+        decl_id: LegacyTypeStorageId,
     ) -> bool {
         let TSType::TSTypeReference(reference) = check else {
             return false;

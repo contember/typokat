@@ -1,24 +1,32 @@
 //! AST → scope graph + multi-slot symbols (architecture §4).
-//! Declares value/type names, keeps separate `DeclId` spaces, and records scopes
+//! Declares value/type names, keeps lexical and storage identities separate, and records scopes
 //! keyed by `(module scope, span start)` for the checker's reserve-then-fill pass.
 //! The checker owns type construction and semantic diagnostics.
 
+use crate::binder::declaration::{
+    source_declaration_occurrences, DeclId, DeclarationKind, DeclarationSite, DeclarationTable,
+    LegacyTypeStorageId, TypeFragmentKind, TypeGroupFragment, TypeGroupTable, ValueStorageId,
+};
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
-use crate::binder::symbol::{DeclId, Symbol, SymbolId, SymbolTable};
+use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
+use crate::span::Span;
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, BlockStatement, Class, ClassElement, Declaration,
     Expression, ForStatement, ForStatementInit, ForStatementLeft, FormalParameters, Function,
-    FunctionBody, Program, Statement, SwitchStatement, TryStatement, VariableDeclarationKind,
-    VariableDeclarator,
+    FunctionBody, FunctionType, Program, Statement, SwitchStatement, TryStatement,
+    VariableDeclarationKind, VariableDeclarator,
 };
 use rustc_hash::FxHashMap;
 
 /// The binder's output for one file: the scope graph, the symbol table, the
-/// module scope id, and the per-function scope map. `decl_count` is the number of
-/// value declarations bound, which sizes the checker's `DeclId → TypeId` table.
+/// module scope id, source declarations, and the per-function scope map.
 pub struct Binder {
     pub graph: ScopeGraph,
     pub symbols: SymbolTable,
+    /// Every admitted source declaration in one unified lexical identity space.
+    pub declarations: DeclarationTable,
+    /// Dormant ordered same-name type groups; production lookup ignores these in WU1a.
+    pub type_groups: TypeGroupTable,
     /// The **user** module scope. M28: its parent is [`Binder::prelude_module`], so a
     /// user reference falls through to the prelude names and a user declaration
     /// shadows them by ordinary innermost-first resolution (no duplicate-name
@@ -27,11 +35,11 @@ pub struct Binder {
     /// The **prelude** root scope (M28) — the compilation unit holding the built-in
     /// utility aliases, bound BEFORE the user program. Its parent is `None`.
     pub prelude_module: ScopeId,
-    /// Number of value declarations assigned a `DeclId` (`DeclId`s run
+    /// Number of value storage slots (`ValueStorageId`s run
     /// `0..decl_count`). Includes variable bindings, function declaration names,
     /// and function parameters.
     pub decl_count: u32,
-    /// Number of **type** declarations assigned a `DeclId` in the separate type
+    /// Number of legacy type storage slots in the pre-WU3 production path.
     /// numbering space. Type slots key the checker's type table, value slots key
     /// the value table, so one name can occupy both without collision (§4.1).
     pub type_decl_count: u32,
@@ -39,7 +47,7 @@ pub struct Binder {
     /// span start)` because offsets are unique only within one file (backlog 58).
     pub fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     /// Maps function declarations to their value declaration id.
-    pub fn_decl_ids: FxHashMap<(ScopeId, u32), DeclId>,
+    pub fn_decl_ids: FxHashMap<(ScopeId, u32), ValueStorageId>,
     /// Maps a `{ … }` block to its lexical scope (M7), keyed like `fn_scopes` so
     /// branch-local declarations stay local and cross-file offsets do not collide.
     pub block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
@@ -99,89 +107,175 @@ fn resolve_type_symbol(
 /// Mutable binder state threaded through the recursive walk.
 pub(crate) struct ImportedSymbol {
     name: String,
-    value: Option<ImportedSlot>,
-    ty: Option<ImportedSlot>,
+    value: Option<ImportedValueSlot>,
+    ty: Option<ImportedTypeSlot>,
     value_barrier: bool,
+    site: Span,
 }
 
 impl ImportedSymbol {
-    pub(crate) fn new(name: String, value: Option<DeclId>, ty: Option<DeclId>) -> Self {
+    pub(crate) fn new(
+        name: String,
+        value: Option<ValueStorageId>,
+        ty: Option<LegacyTypeStorageId>,
+        site: Span,
+    ) -> Self {
         ImportedSymbol {
             name,
-            value: value.map(ImportedSlot::Existing),
-            ty: ty.map(ImportedSlot::Existing),
+            value: value.map(ImportedValueSlot::Existing),
+            ty: ty.map(ImportedTypeSlot::Existing),
             value_barrier: false,
+            site,
         }
     }
 
     /// Keep imports whose source value is erased from reaching a parent value slot.
-    pub(crate) fn value_lookup_barrier(name: String, ty: Option<DeclId>) -> Self {
+    pub(crate) fn value_lookup_barrier(
+        name: String,
+        ty: Option<LegacyTypeStorageId>,
+        site: Span,
+    ) -> Self {
         ImportedSymbol {
             name,
             value: None,
-            ty: ty.map(ImportedSlot::Existing),
+            ty: ty.map(ImportedTypeSlot::Existing),
             value_barrier: true,
+            site,
         }
     }
 
-    pub(crate) fn placeholder_type(name: String) -> Self {
+    pub(crate) fn placeholder_type(name: String, site: Span) -> Self {
         ImportedSymbol {
             name,
             value: None,
-            ty: Some(ImportedSlot::Placeholder),
+            ty: Some(ImportedTypeSlot::Placeholder),
             value_barrier: false,
+            site,
         }
     }
 
-    pub(crate) fn placeholder_value_and_type(name: String) -> Self {
+    pub(crate) fn placeholder_value_and_type(name: String, site: Span) -> Self {
         ImportedSymbol {
             name,
-            value: Some(ImportedSlot::Placeholder),
-            ty: Some(ImportedSlot::Placeholder),
+            value: Some(ImportedValueSlot::Placeholder),
+            ty: Some(ImportedTypeSlot::Placeholder),
             value_barrier: false,
+            site,
         }
     }
 }
 
-pub(crate) enum ImportedSlot {
-    Existing(DeclId),
+pub(crate) enum ImportedValueSlot {
+    Existing(ValueStorageId),
+    Placeholder,
+}
+
+pub(crate) enum ImportedTypeSlot {
+    Existing(LegacyTypeStorageId),
     Placeholder,
 }
 
 pub(crate) struct ImportPlaceholder {
-    pub(crate) value: Option<DeclId>,
-    pub(crate) ty: Option<DeclId>,
+    pub(crate) value: Option<ValueStorageId>,
+    pub(crate) ty: Option<LegacyTypeStorageId>,
 }
 
 struct BindState {
     graph: ScopeGraph,
     symbols: SymbolTable,
+    declarations: DeclarationTable,
+    type_groups: TypeGroupTable,
+    declarations_by_site: FxHashMap<(ScopeId, u32, DeclarationKind), DeclId>,
     fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
-    fn_decl_ids: FxHashMap<(ScopeId, u32), DeclId>,
+    fn_decl_ids: FxHashMap<(ScopeId, u32), ValueStorageId>,
     /// Per-block lexical scopes (M7), keyed by `(module scope, block span start)`.
     block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     /// The module scope currently being bound — the disambiguating half of the
     /// scope-map keys (backlog 58). Set before each module's body is walked.
     current_module: ScopeId,
-    /// Running `DeclId` counter for value declarations.
-    next_decl: u32,
-    /// Running `DeclId` counter for **type** declarations (separate space).
-    next_type_decl: u32,
+    /// Running checker storage counter for value declarations.
+    next_value_storage: u32,
+    /// Running checker storage counter for the legacy type path.
+    next_legacy_type_storage: u32,
 }
 
 impl BindState {
-    /// Allocate the next value-space `DeclId`.
-    fn fresh_decl(&mut self) -> DeclId {
-        let id = DeclId(self.next_decl);
-        self.next_decl += 1;
+    fn record_source_declarations(&mut self, program: &Program<'_>) {
+        for occurrence in source_declaration_occurrences(program) {
+            let site = DeclarationSite {
+                module: self.current_module,
+                scope: None,
+                declaration_span: occurrence.declaration_span,
+                binding_span: occurrence.binding_span,
+            };
+            let id = self.declarations.push(occurrence.kind, site);
+            let previous = self.declarations_by_site.insert(
+                (
+                    self.current_module,
+                    occurrence.binding_span.start,
+                    occurrence.kind,
+                ),
+                id,
+            );
+            debug_assert!(previous.is_none(), "one declaration per binding leaf");
+        }
+    }
+
+    fn source_decl_at(&self, span_start: u32, kind: DeclarationKind) -> Option<DeclId> {
+        self.declarations_by_site
+            .get(&(self.current_module, span_start, kind))
+            .copied()
+    }
+
+    fn attach_declaration_scope(
+        &mut self,
+        span_start: u32,
+        kind: DeclarationKind,
+        scope: ScopeId,
+    ) -> DeclId {
+        let declaration = self
+            .source_decl_at(span_start, kind)
+            .expect("semantic binding attaches to a source-prewalk declaration");
+        let site = &mut self
+            .declarations
+            .get_mut(declaration)
+            .expect("source declaration exists")
+            .site;
+        match site.scope {
+            Some(existing) => assert_eq!(existing, scope, "declaration scope is stable"),
+            None => site.scope = Some(scope),
+        }
+        declaration
+    }
+
+    fn attach_pattern_scope(
+        &mut self,
+        pattern: &BindingPattern<'_>,
+        kind: DeclarationKind,
+        scope: ScopeId,
+    ) {
+        for identifier in pattern.get_binding_identifiers() {
+            self.attach_declaration_scope(identifier.span.start, kind, scope);
+        }
+    }
+
+    fn fresh_value_storage(&mut self) -> ValueStorageId {
+        let id = ValueStorageId(self.next_value_storage);
+        self.next_value_storage += 1;
         id
     }
 
-    /// Allocate the next type-space `DeclId` (separate numbering space).
-    fn fresh_type_decl(&mut self) -> DeclId {
-        let id = DeclId(self.next_type_decl);
-        self.next_type_decl += 1;
+    fn fresh_legacy_type_storage(&mut self) -> LegacyTypeStorageId {
+        let id = LegacyTypeStorageId(self.next_legacy_type_storage);
+        self.next_legacy_type_storage += 1;
         id
+    }
+
+    fn attach_value_storage(&mut self, declaration: DeclId, storage: ValueStorageId) {
+        self.declarations
+            .get_mut(declaration)
+            .expect("fresh lexical declaration exists")
+            .value_storage = Some(storage);
     }
 }
 
@@ -202,21 +296,25 @@ pub(crate) struct ProjectBinderBuilder {
 }
 
 impl ProjectBinderBuilder {
-    /// Bind the prelude first so its declarations keep the low `DeclId` ranges.
+    /// Bind the prelude first so its checker storage keeps the low id ranges.
     pub(crate) fn new(prelude: &Program<'_>) -> Self {
         let mut state = BindState {
             graph: ScopeGraph::new(),
             symbols: SymbolTable::new(),
+            declarations: DeclarationTable::default(),
+            type_groups: TypeGroupTable::default(),
+            declarations_by_site: FxHashMap::default(),
             fn_scopes: FxHashMap::default(),
             fn_decl_ids: FxHashMap::default(),
             block_scopes: FxHashMap::default(),
             current_module: ScopeId(0),
-            next_decl: 0,
-            next_type_decl: 0,
+            next_value_storage: 0,
+            next_legacy_type_storage: 0,
         };
 
         let prelude_module = state.graph.push(Scope::new(ScopeKind::Module, None));
         state.current_module = prelude_module;
+        state.record_source_declarations(prelude);
         bind_statements(&mut state, prelude_module, &prelude.body);
 
         ProjectBinderBuilder {
@@ -237,16 +335,10 @@ impl ProjectBinderBuilder {
             .graph
             .push(Scope::new(ScopeKind::Module, Some(self.prelude_module)));
         self.state.current_module = module;
+        self.state.record_source_declarations(program);
         let mut placeholders = Vec::new();
         for import in imports {
-            placeholders.push(declare_import(
-                &mut self.state,
-                module,
-                &import.name,
-                &import.value,
-                &import.ty,
-                import.value_barrier,
-            ));
+            placeholders.push(declare_import(&mut self.state, module, import));
         }
         bind_statements(&mut self.state, module, &program.body);
         (module, placeholders)
@@ -256,10 +348,12 @@ impl ProjectBinderBuilder {
         Binder {
             graph: self.state.graph,
             symbols: self.state.symbols,
+            declarations: self.state.declarations,
+            type_groups: self.state.type_groups,
             module,
             prelude_module: self.prelude_module,
-            decl_count: self.state.next_decl,
-            type_decl_count: self.state.next_type_decl,
+            decl_count: self.state.next_value_storage,
+            type_decl_count: self.state.next_legacy_type_storage,
             fn_scopes: self.state.fn_scopes,
             fn_decl_ids: self.state.fn_decl_ids,
             block_scopes: self.state.block_scopes,
@@ -272,7 +366,7 @@ impl ProjectBinderBuilder {
         &self,
         scope: ScopeId,
         name: &str,
-    ) -> (Option<DeclId>, Option<DeclId>) {
+    ) -> (Option<ValueStorageId>, Option<LegacyTypeStorageId>) {
         self.state
             .graph
             .get(scope)
@@ -305,18 +399,36 @@ fn bind_type_declarations(state: &mut BindState, scope: ScopeId, statements: &[S
 fn bind_type_declaration_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
     match stmt {
         Statement::TSTypeAliasDeclaration(alias) => {
-            let decl_id = state.fresh_type_decl();
-            declare_type(state, scope, alias.id.name.as_str(), decl_id);
+            bind_source_type(
+                state,
+                scope,
+                alias.id.name.as_str(),
+                alias.id.span.start,
+                DeclarationKind::TypeAlias,
+                TypeFragmentKind::TypeAlias,
+            );
         }
         Statement::TSInterfaceDeclaration(iface) => {
-            let decl_id = state.fresh_type_decl();
-            declare_type(state, scope, iface.id.name.as_str(), decl_id);
+            bind_source_type(
+                state,
+                scope,
+                iface.id.name.as_str(),
+                iface.id.span.start,
+                DeclarationKind::Interface,
+                TypeFragmentKind::Interface,
+            );
         }
         // Class type-side names are reserved up front so self/sibling type references resolve.
         Statement::ClassDeclaration(class) => {
             if let Some(id) = &class.id {
-                let decl_id = state.fresh_type_decl();
-                declare_type(state, scope, id.name.as_str(), decl_id);
+                bind_source_type(
+                    state,
+                    scope,
+                    id.name.as_str(),
+                    id.span.start,
+                    DeclarationKind::Class,
+                    TypeFragmentKind::Class,
+                );
             }
         }
         Statement::ExportNamedDeclaration(export) => {
@@ -331,21 +443,52 @@ fn bind_type_declaration_statement(state: &mut BindState, scope: ScopeId, stmt: 
 fn bind_type_declaration(state: &mut BindState, scope: ScopeId, decl: &Declaration<'_>) {
     match decl {
         Declaration::TSTypeAliasDeclaration(alias) => {
-            let decl_id = state.fresh_type_decl();
-            declare_type(state, scope, alias.id.name.as_str(), decl_id);
+            bind_source_type(
+                state,
+                scope,
+                alias.id.name.as_str(),
+                alias.id.span.start,
+                DeclarationKind::TypeAlias,
+                TypeFragmentKind::TypeAlias,
+            );
         }
         Declaration::TSInterfaceDeclaration(iface) => {
-            let decl_id = state.fresh_type_decl();
-            declare_type(state, scope, iface.id.name.as_str(), decl_id);
+            bind_source_type(
+                state,
+                scope,
+                iface.id.name.as_str(),
+                iface.id.span.start,
+                DeclarationKind::Interface,
+                TypeFragmentKind::Interface,
+            );
         }
         Declaration::ClassDeclaration(class) => {
             if let Some(id) = &class.id {
-                let decl_id = state.fresh_type_decl();
-                declare_type(state, scope, id.name.as_str(), decl_id);
+                bind_source_type(
+                    state,
+                    scope,
+                    id.name.as_str(),
+                    id.span.start,
+                    DeclarationKind::Class,
+                    TypeFragmentKind::Class,
+                );
             }
         }
         _ => {}
     }
+}
+
+fn bind_source_type(
+    state: &mut BindState,
+    scope: ScopeId,
+    name: &str,
+    binding_start: u32,
+    declaration_kind: DeclarationKind,
+    fragment_kind: TypeFragmentKind,
+) {
+    let declaration = state.attach_declaration_scope(binding_start, declaration_kind, scope);
+    let storage = state.fresh_legacy_type_storage();
+    declare_type(state, scope, name, declaration, storage, fragment_kind);
 }
 
 /// Bind a list of statements into `scope`.
@@ -459,9 +602,20 @@ fn bind_try(state: &mut BindState, parent: ScopeId, try_stmt: &TryStatement<'_>)
             .block_scopes
             .insert((state.current_module, handler.span.start), catch_scope);
         if let Some(param) = &handler.param {
-            if let Some(name) = binding_name(&param.pattern) {
-                let decl_id = state.fresh_decl();
-                declare_value(state, catch_scope, name, decl_id);
+            state.attach_pattern_scope(
+                &param.pattern,
+                DeclarationKind::CatchParameter,
+                catch_scope,
+            );
+            if let Some((name, binding_start)) = binding_name_and_start(&param.pattern) {
+                let (_, storage) = bind_source_value(
+                    state,
+                    catch_scope,
+                    name,
+                    binding_start,
+                    DeclarationKind::CatchParameter,
+                );
+                declare_value(state, catch_scope, name, storage);
             }
         }
         bind_block(state, catch_scope, &handler.body);
@@ -595,9 +749,16 @@ fn bind_declarator(
     } else {
         scope
     };
-    if let Some(name) = binding_name(&declarator.id) {
-        let decl_id = state.fresh_decl();
-        declare_value(state, declaration_scope, name, decl_id);
+    state.attach_pattern_scope(&declarator.id, DeclarationKind::Variable, declaration_scope);
+    if let Some((name, binding_start)) = binding_name_and_start(&declarator.id) {
+        let (_, storage) = bind_source_value(
+            state,
+            declaration_scope,
+            name,
+            binding_start,
+            DeclarationKind::Variable,
+        );
+        declare_value(state, declaration_scope, name, storage);
     }
     if let Some(init) = &declarator.init {
         bind_expression(state, scope, init);
@@ -608,11 +769,18 @@ fn bind_declarator(
 /// bind the function itself (its own scope + parameters + body).
 fn bind_function_declaration(state: &mut BindState, scope: ScopeId, func: &Function<'_>) {
     if let Some(id) = &func.id {
-        let decl_id = state.fresh_decl();
+        state.attach_declaration_scope(id.span.start, DeclarationKind::Function, scope);
+        let (_, storage) = bind_source_value(
+            state,
+            scope,
+            id.name.as_str(),
+            id.span.start,
+            DeclarationKind::Function,
+        );
         state
             .fn_decl_ids
-            .insert((state.current_module, func.span.start), decl_id);
-        declare_function_value(state, scope, id.name.as_str(), decl_id);
+            .insert((state.current_module, func.span.start), storage);
+        declare_function_value(state, scope, id.name.as_str(), storage);
     }
     bind_function(state, scope, func);
 }
@@ -621,8 +789,11 @@ fn bind_function_declaration(state: &mut BindState, scope: ScopeId, func: &Funct
 /// the body. Anonymous class bodies are still walked for nested scopes.
 fn bind_class_declaration(state: &mut BindState, scope: ScopeId, class: &Class<'_>) {
     if let Some(id) = &class.id {
-        let decl_id = state.fresh_decl();
-        declare_value(state, scope, id.name.as_str(), decl_id);
+        let declaration =
+            state.attach_declaration_scope(id.span.start, DeclarationKind::Class, scope);
+        let storage = state.fresh_value_storage();
+        state.attach_value_storage(declaration, storage);
+        declare_value(state, scope, id.name.as_str(), storage);
     }
     bind_class(state, scope, class);
 }
@@ -651,7 +822,7 @@ fn bind_class(state: &mut BindState, parent: ScopeId, class: &Class<'_>) {
 }
 
 /// Bind a function/arrow scope, record it by `(module scope, span start)`, and
-/// declare parameters with fresh value `DeclId`s for the checker to fill.
+/// declare parameters with fresh value-storage ids for the checker to fill.
 fn bind_function(state: &mut BindState, parent: ScopeId, func: &Function<'_>) {
     let fn_scope = state
         .graph
@@ -659,6 +830,14 @@ fn bind_function(state: &mut BindState, parent: ScopeId, func: &Function<'_>) {
     state
         .fn_scopes
         .insert((state.current_module, func.span.start), fn_scope);
+    if matches!(
+        func.r#type,
+        FunctionType::FunctionExpression | FunctionType::TSEmptyBodyFunctionExpression
+    ) {
+        if let Some(id) = &func.id {
+            state.attach_declaration_scope(id.span.start, DeclarationKind::Function, fn_scope);
+        }
+    }
 
     bind_parameters(state, fn_scope, &func.params);
 
@@ -695,15 +874,29 @@ fn bind_arrow(state: &mut BindState, parent: ScopeId, arrow: &ArrowFunctionExpre
 
 fn bind_parameters(state: &mut BindState, fn_scope: ScopeId, params: &FormalParameters<'_>) {
     for param in &params.items {
-        if let Some(name) = binding_name(&param.pattern) {
-            let decl_id = state.fresh_decl();
-            declare_value(state, fn_scope, name, decl_id);
+        state.attach_pattern_scope(&param.pattern, DeclarationKind::Parameter, fn_scope);
+        if let Some((name, binding_start)) = binding_name_and_start(&param.pattern) {
+            let (_, storage) = bind_source_value(
+                state,
+                fn_scope,
+                name,
+                binding_start,
+                DeclarationKind::Parameter,
+            );
+            declare_value(state, fn_scope, name, storage);
         }
     }
     if let Some(rest) = &params.rest {
-        if let Some(name) = binding_name(&rest.rest.argument) {
-            let decl_id = state.fresh_decl();
-            declare_value(state, fn_scope, name, decl_id);
+        state.attach_pattern_scope(&rest.rest.argument, DeclarationKind::Parameter, fn_scope);
+        if let Some((name, binding_start)) = binding_name_and_start(&rest.rest.argument) {
+            let (_, storage) = bind_source_value(
+                state,
+                fn_scope,
+                name,
+                binding_start,
+                DeclarationKind::Parameter,
+            );
+            declare_value(state, fn_scope, name, storage);
         }
     }
 }
@@ -775,49 +968,128 @@ fn bind_expression(state: &mut BindState, scope: ScopeId, expr: &Expression<'_>)
     }
 }
 
+fn bind_source_value(
+    state: &mut BindState,
+    scope: ScopeId,
+    _name: &str,
+    binding_start: u32,
+    kind: DeclarationKind,
+) -> (DeclId, ValueStorageId) {
+    let declaration = state.attach_declaration_scope(binding_start, kind, scope);
+    let storage = state.fresh_value_storage();
+    state.attach_value_storage(declaration, storage);
+    (declaration, storage)
+}
+
 /// Declare a value-space binding `name` in `scope`, merging into an existing
 /// symbol if the name is already present (so the multi-slot symbol carries the
 /// value slot under the same id — architecture §4.1). Redeclaration in the same
 /// space (`TK2451`) is deferred (mvp-plan); the later binding wins.
-fn declare_value(state: &mut BindState, scope: ScopeId, name: &str, decl_id: DeclId) {
+fn declare_value(state: &mut BindState, scope: ScopeId, name: &str, storage: ValueStorageId) {
     if let Some(existing) = state.graph.get(scope).and_then(|s| s.lookup_local(name)) {
         if let Some(symbol) = state.symbols.get_mut(existing) {
-            symbol.value = Some(decl_id);
+            symbol.value = Some(storage);
         }
         return;
     }
     let mut symbol = Symbol::new(name);
-    symbol.value = Some(decl_id);
+    symbol.value = Some(storage);
     let symbol_id: SymbolId = state.symbols.push(symbol);
     state.graph.declare(scope, name, symbol_id);
 }
 
-fn declare_function_value(state: &mut BindState, scope: ScopeId, name: &str, decl_id: DeclId) {
+fn declare_function_value(
+    state: &mut BindState,
+    scope: ScopeId,
+    name: &str,
+    storage: ValueStorageId,
+) {
     if let Some(existing) = state.graph.get(scope).and_then(|s| s.lookup_local(name)) {
         if let Some(symbol) = state.symbols.get_mut(existing) {
-            symbol.value = Some(decl_id);
-            symbol.function_values.push(decl_id);
+            symbol.value = Some(storage);
+            symbol.function_values.push(storage);
         }
         return;
     }
     let mut symbol = Symbol::new(name);
-    symbol.value = Some(decl_id);
-    symbol.function_values.push(decl_id);
+    symbol.value = Some(storage);
+    symbol.function_values.push(storage);
     let symbol_id: SymbolId = state.symbols.push(symbol);
     state.graph.declare(scope, name, symbol_id);
 }
 
-/// Declare a type-space binding, merging with any existing value slot under the
-/// same symbol id (§4.1). Duplicate type declarations remain deferred (`TK2451`).
-fn declare_type(state: &mut BindState, scope: ScopeId, name: &str, decl_id: DeclId) {
+/// Retain one source fragment in its stable group while preserving last-wins
+/// legacy production type storage until WU3.
+fn declare_type(
+    state: &mut BindState,
+    scope: ScopeId,
+    name: &str,
+    declaration: DeclId,
+    storage: LegacyTypeStorageId,
+    kind: TypeFragmentKind,
+) {
+    let site = state
+        .declarations
+        .get(declaration)
+        .expect("fresh type declaration exists")
+        .site;
     if let Some(existing) = state.graph.get(scope).and_then(|s| s.lookup_local(name)) {
-        if let Some(symbol) = state.symbols.get_mut(existing) {
-            symbol.ty = Some(decl_id);
-        }
+        let group = match state
+            .symbols
+            .get(existing)
+            .and_then(|symbol| symbol.type_group)
+        {
+            Some(group) => group,
+            None => state.type_groups.push(name),
+        };
+        state
+            .type_groups
+            .get_mut(group)
+            .expect("allocated type group exists")
+            .fragments
+            .push(TypeGroupFragment {
+                declaration,
+                scope,
+                site,
+                kind,
+                legacy_storage: storage,
+            });
+        let lexical = state
+            .declarations
+            .get_mut(declaration)
+            .expect("fresh type declaration exists");
+        lexical.legacy_type_storage = Some(storage);
+        lexical.type_group = Some(group);
+        let symbol = state
+            .symbols
+            .get_mut(existing)
+            .expect("resolved symbol exists");
+        symbol.ty = Some(storage);
+        symbol.type_group = Some(group);
         return;
     }
+    let group = state.type_groups.push(name);
+    state
+        .type_groups
+        .get_mut(group)
+        .expect("allocated type group exists")
+        .fragments
+        .push(TypeGroupFragment {
+            declaration,
+            scope,
+            site,
+            kind,
+            legacy_storage: storage,
+        });
+    let lexical = state
+        .declarations
+        .get_mut(declaration)
+        .expect("fresh type declaration exists");
+    lexical.legacy_type_storage = Some(storage);
+    lexical.type_group = Some(group);
     let mut symbol = Symbol::new(name);
-    symbol.ty = Some(decl_id);
+    symbol.ty = Some(storage);
+    symbol.type_group = Some(group);
     let symbol_id: SymbolId = state.symbols.push(symbol);
     state.graph.declare(scope, name, symbol_id);
 }
@@ -825,44 +1097,53 @@ fn declare_type(state: &mut BindState, scope: ScopeId, name: &str, decl_id: Decl
 fn declare_import(
     state: &mut BindState,
     scope: ScopeId,
-    name: &str,
-    value: &Option<ImportedSlot>,
-    ty: &Option<ImportedSlot>,
-    value_barrier: bool,
+    import: &ImportedSymbol,
 ) -> ImportPlaceholder {
-    let (value_decl, value_placeholder) = match value {
-        Some(ImportedSlot::Existing(decl_id)) => (Some(*decl_id), None),
-        Some(ImportedSlot::Placeholder) => {
-            let decl_id = state.fresh_decl();
-            (Some(decl_id), Some(decl_id))
+    let (value_decl, value_placeholder) = match &import.value {
+        Some(ImportedValueSlot::Existing(storage)) => (Some(*storage), None),
+        Some(ImportedValueSlot::Placeholder) => {
+            let storage = state.fresh_value_storage();
+            (Some(storage), Some(storage))
         }
         None => (None, None),
     };
-    let (type_decl, type_placeholder) = match ty {
-        Some(ImportedSlot::Existing(decl_id)) => (Some(*decl_id), None),
-        Some(ImportedSlot::Placeholder) => {
-            let decl_id = state.fresh_type_decl();
-            (Some(decl_id), Some(decl_id))
+    let (type_decl, type_placeholder) = match &import.ty {
+        Some(ImportedTypeSlot::Existing(storage)) => (Some(*storage), None),
+        Some(ImportedTypeSlot::Placeholder) => {
+            let storage = state.fresh_legacy_type_storage();
+            (Some(storage), Some(storage))
         }
         None => (None, None),
     };
-    if let Some(existing) = state.graph.get(scope).and_then(|s| s.lookup_local(name)) {
+    let declaration =
+        state.attach_declaration_scope(import.site.start, DeclarationKind::Import, scope);
+    let lexical = state
+        .declarations
+        .get_mut(declaration)
+        .expect("fresh import declaration exists");
+    lexical.value_storage = value_decl;
+    lexical.legacy_type_storage = type_decl;
+    if let Some(existing) = state
+        .graph
+        .get(scope)
+        .and_then(|s| s.lookup_local(&import.name))
+    {
         if let Some(symbol) = state.symbols.get_mut(existing) {
             symbol.value = value_decl;
             symbol.ty = type_decl;
-            symbol.blocks_value_lookup = value_barrier;
+            symbol.blocks_value_lookup = import.value_barrier;
         }
         return ImportPlaceholder {
             value: value_placeholder,
             ty: type_placeholder,
         };
     }
-    let mut symbol = Symbol::new(name);
+    let mut symbol = Symbol::new(&import.name);
     symbol.value = value_decl;
     symbol.ty = type_decl;
-    symbol.blocks_value_lookup = value_barrier;
+    symbol.blocks_value_lookup = import.value_barrier;
     let symbol_id: SymbolId = state.symbols.push(symbol);
-    state.graph.declare(scope, name, symbol_id);
+    state.graph.declare(scope, &import.name, symbol_id);
     ImportPlaceholder {
         value: value_placeholder,
         ty: type_placeholder,
@@ -871,9 +1152,9 @@ fn declare_import(
 
 /// The bound name of a binding pattern, if it is a plain identifier. Returns
 /// `None` for destructuring patterns (out of the M3 subset).
-fn binding_name<'a>(pattern: &'a BindingPattern<'a>) -> Option<&'a str> {
+fn binding_name_and_start<'a>(pattern: &'a BindingPattern<'a>) -> Option<(&'a str, u32)> {
     match pattern {
-        BindingPattern::BindingIdentifier(ident) => Some(ident.name.as_str()),
+        BindingPattern::BindingIdentifier(ident) => Some((ident.name.as_str(), ident.span.start)),
         _ => None,
     }
 }
@@ -892,6 +1173,298 @@ mod tests {
         let parsed = Parser::new(&alloc, src, SourceType::ts()).parse();
         assert!(!parsed.panicked, "parse failed: {src}");
         bind_module_with_prelude(&prelude.program, &parsed.program)
+    }
+
+    #[test]
+    fn lexical_declarations_and_storage_identities_do_not_alias() {
+        fn lexical(_: DeclId) {}
+        fn value_storage(_: ValueStorageId) {}
+        fn legacy_type_storage(_: LegacyTypeStorageId) {}
+        fn type_group(_: crate::binder::declaration::TypeGroupId) {}
+
+        let source = "const value = 0; function f(param: number, ...rest: string[]) { try {} catch (caught) {} } type Alias = number; interface Shape {} class Both {}";
+        let binder = bind(source);
+        assert_eq!(binder.declarations.len(), 8);
+
+        let declarations: Vec<_> = binder.declarations.iter().collect();
+        for (index, declaration) in declarations.iter().enumerate() {
+            assert_eq!(declaration.id.index(), index);
+            assert_eq!(declaration.site.module, binder.module);
+            assert!(
+                declaration.site.declaration_span.start < declaration.site.declaration_span.end
+            );
+            assert!(declaration.site.binding_span.start < declaration.site.binding_span.end);
+            lexical(declaration.id);
+        }
+        assert!(declarations.iter().all(|declaration| {
+            (declaration.value_storage.is_none() && declaration.legacy_type_storage.is_none())
+                || declaration.site.scope.is_some()
+        }));
+
+        let value = declarations
+            .iter()
+            .find(|declaration| declaration.kind == DeclarationKind::Variable)
+            .expect("variable declaration");
+        assert_eq!(&source[value.site.declaration_span.range()], "value = 0");
+        assert_eq!(&source[value.site.binding_span.range()], "value");
+        value_storage(value.value_storage.expect("variable value storage"));
+
+        let parameters: Vec<_> = declarations
+            .iter()
+            .filter(|declaration| declaration.kind == DeclarationKind::Parameter)
+            .collect();
+        assert_eq!(parameters.len(), 2);
+        assert_eq!(
+            parameters
+                .iter()
+                .map(|declaration| &source[declaration.site.binding_span.range()])
+                .collect::<Vec<_>>(),
+            vec!["param", "rest"]
+        );
+
+        let caught = declarations
+            .iter()
+            .find(|declaration| declaration.kind == DeclarationKind::CatchParameter)
+            .expect("catch declaration");
+        assert_eq!(&source[caught.site.declaration_span.range()], "caught");
+        assert_eq!(&source[caught.site.binding_span.range()], "caught");
+
+        for kind in [
+            DeclarationKind::TypeAlias,
+            DeclarationKind::Interface,
+            DeclarationKind::Class,
+        ] {
+            let declaration = declarations
+                .iter()
+                .find(|declaration| declaration.kind == kind)
+                .expect("type declaration");
+            legacy_type_storage(
+                declaration
+                    .legacy_type_storage
+                    .expect("type storage identity"),
+            );
+            type_group(declaration.type_group.expect("type group identity"));
+        }
+
+        let class = declarations
+            .iter()
+            .find(|declaration| declaration.kind == DeclarationKind::Class)
+            .expect("class declaration");
+        value_storage(class.value_storage.expect("class value storage"));
+        legacy_type_storage(
+            class
+                .legacy_type_storage
+                .expect("class type storage identity"),
+        );
+    }
+
+    #[test]
+    fn type_groups_retain_every_fragment_in_source_order_behind_legacy_boundary() {
+        let source = "export interface M { first: number } export class M {} export interface M { last: string }";
+        let binder = bind(source);
+        let symbol_id = binder
+            .graph
+            .get(binder.module)
+            .and_then(|scope| scope.lookup_local("M"))
+            .expect("merged symbol");
+        let symbol = binder.symbols.get(symbol_id).expect("merged symbol row");
+        let group_id = symbol.type_group.expect("dormant type group");
+        let group = binder.type_groups.get(group_id).expect("type group row");
+
+        assert_eq!(group.name, "M");
+        assert_eq!(
+            group
+                .fragments
+                .iter()
+                .map(|fragment| fragment.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                TypeFragmentKind::Interface,
+                TypeFragmentKind::Class,
+                TypeFragmentKind::Interface,
+            ]
+        );
+        assert!(group
+            .fragments
+            .windows(2)
+            .all(|pair| pair[0].site.declaration_span.start < pair[1].site.declaration_span.start));
+        assert!(group.fragments.iter().all(|fragment| {
+            binder
+                .declarations
+                .get(fragment.declaration)
+                .is_some_and(|declaration| {
+                    declaration.site == fragment.site
+                        && declaration.type_group == Some(group_id)
+                        && declaration.legacy_type_storage == Some(fragment.legacy_storage)
+                        && fragment.scope == declaration.site.scope.expect("bound type scope")
+                })
+        }));
+
+        assert!(group.fragments.iter().all(
+            |fragment| fragment.site.declaration_span.start < fragment.site.binding_span.start
+        ));
+        assert_eq!(
+            group
+                .fragments
+                .iter()
+                .map(|fragment| &source[fragment.site.binding_span.range()])
+                .collect::<Vec<_>>(),
+            vec!["M", "M", "M"]
+        );
+
+        // WU1a is deliberately dormant: the legacy production slot still names
+        // exactly the final declaration's storage identity.
+        assert_eq!(
+            symbol.ty,
+            group
+                .fragments
+                .last()
+                .map(|fragment| fragment.legacy_storage)
+        );
+
+        let class = group
+            .fragments
+            .iter()
+            .find(|fragment| fragment.kind == TypeFragmentKind::Class)
+            .and_then(|fragment| binder.declarations.get(fragment.declaration))
+            .expect("class fragment declaration");
+        assert!(class.value_storage.is_some());
+    }
+
+    #[test]
+    fn source_prewalk_records_imports_and_every_nested_binding_leaf() {
+        let source = "import Default, * as NS from 'pkg'; import type { Remote as Local } from './dep'; const { a, nested: { b = 1 }, ...objectRest } = value; const [c, , [d], ...arrayRest] = value; function f({ p: [q] }, [r, ...s], t = 1) {} try {} catch ({ e: [caught], ...catchRest }) {}";
+        let binder = bind(source);
+        let declarations: Vec<_> = binder
+            .declarations
+            .iter()
+            .filter(|declaration| declaration.site.module == binder.module)
+            .collect();
+
+        let binding_names: Vec<_> = declarations
+            .iter()
+            .map(|declaration| &source[declaration.site.binding_span.range()])
+            .collect();
+        assert_eq!(
+            binding_names,
+            vec![
+                "Default",
+                "NS",
+                "Local",
+                "a",
+                "b",
+                "objectRest",
+                "c",
+                "d",
+                "arrayRest",
+                "f",
+                "q",
+                "r",
+                "s",
+                "t",
+                "caught",
+                "catchRest",
+            ]
+        );
+
+        let imports: Vec<_> = declarations
+            .iter()
+            .filter(|declaration| declaration.kind == DeclarationKind::Import)
+            .collect();
+        assert_eq!(imports.len(), 3);
+        assert_eq!(
+            imports
+                .iter()
+                .map(|declaration| &source[declaration.site.declaration_span.range()])
+                .collect::<Vec<_>>(),
+            vec![
+                "import Default, * as NS from 'pkg';",
+                "import Default, * as NS from 'pkg';",
+                "import type { Remote as Local } from './dep';",
+            ]
+        );
+        assert!(imports.iter().all(|declaration| {
+            declaration.value_storage.is_none()
+                && declaration.legacy_type_storage.is_none()
+                && declaration.type_group.is_none()
+        }));
+
+        let a = declarations
+            .iter()
+            .find(|declaration| source[declaration.site.binding_span.range()] == *"a")
+            .expect("nested object leaf");
+        let b = declarations
+            .iter()
+            .find(|declaration| source[declaration.site.binding_span.range()] == *"b")
+            .expect("nested assignment leaf");
+        assert_eq!(a.site.declaration_span, b.site.declaration_span);
+        assert_eq!(
+            &source[a.site.declaration_span.range()],
+            "{ a, nested: { b = 1 }, ...objectRest } = value"
+        );
+        assert!(a.value_storage.is_none());
+        assert!(b.value_storage.is_none());
+
+        let supported_parameter = declarations
+            .iter()
+            .find(|declaration| source[declaration.site.binding_span.range()] == *"t")
+            .expect("simple parameter");
+        assert!(supported_parameter.value_storage.is_some());
+        for name in ["q", "r", "s", "caught", "catchRest"] {
+            let declaration = declarations
+                .iter()
+                .find(|declaration| source[declaration.site.binding_span.range()] == *name)
+                .expect("destructured binding leaf");
+            assert!(declaration.value_storage.is_none());
+        }
+    }
+
+    #[test]
+    fn semantic_walk_attaches_truthful_scopes_without_fabricating_unsupported_ones() {
+        let source = "const { top, nested: [topNested] } = value; { let [blockLeaf] = value; type BlockType = number; function nested({ paramLeaf }, ...restParam) { try {} catch ({ caughtLeaf }) {} } } namespace Unsupported { export const hidden = 1; } export {}; declare global { interface GlobalShape {} }";
+        let binder = bind(source);
+        let outer_block_start = u32::try_from(source.find("{ let").unwrap()).unwrap();
+        let function_start = u32::try_from(source.find("function nested").unwrap()).unwrap();
+        let catch_start = u32::try_from(source.find("catch").unwrap()).unwrap();
+        let block_scope = binder
+            .block_scopes
+            .get(&(binder.module, outer_block_start))
+            .copied()
+            .expect("outer block scope");
+        let function_scope = binder
+            .fn_scopes
+            .get(&(binder.module, function_start))
+            .copied()
+            .expect("nested function scope");
+        let catch_scope = binder
+            .block_scopes
+            .get(&(binder.module, catch_start))
+            .copied()
+            .expect("catch scope");
+
+        let declaration = |name: &str| {
+            binder
+                .declarations
+                .iter()
+                .find(|declaration| &source[declaration.site.binding_span.range()] == name)
+                .expect("source declaration")
+        };
+        for name in ["top", "topNested"] {
+            assert_eq!(declaration(name).site.scope, Some(binder.module));
+        }
+        for name in ["blockLeaf", "BlockType", "nested"] {
+            assert_eq!(declaration(name).site.scope, Some(block_scope));
+        }
+        for name in ["paramLeaf", "restParam"] {
+            assert_eq!(declaration(name).site.scope, Some(function_scope));
+        }
+        assert_eq!(declaration("caughtLeaf").site.scope, Some(catch_scope));
+
+        for name in ["Unsupported", "hidden", "global", "GlobalShape"] {
+            assert_eq!(declaration(name).site.scope, None);
+        }
+        assert_eq!(declaration("Unsupported").kind, DeclarationKind::Namespace);
+        assert_eq!(declaration("global").kind, DeclarationKind::Global);
     }
 
     /// WU2: every `case`/`default` clause binds into ONE switch-local lexical
