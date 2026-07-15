@@ -24,3 +24,17 @@ interface NestedHeaderConflict< // error[TK2428]: All declarations of 'NestedHea
 interface NestedHeaderConflict< // error[TK2428]: All declarations of 'NestedHeaderConflict' must have identical type parameters
   T extends NestedHeaderShape<<V>(value: V) => readonly [V]> = NestedHeaderShape<<V>(value: V) => readonly [V]>
 > {}
+
+// On conflicting supplied constraints, recovery keeps the first declaration's
+// binder for downstream applications in either source order.
+interface FirstStringConstraint<T extends string> {} // error[TK2428]: All declarations of 'FirstStringConstraint' must have identical type parameters
+interface FirstStringConstraint<T extends number> {} // error[TK2428]: All declarations of 'FirstStringConstraint' must have identical type parameters
+type FirstStringAcceptsString = FirstStringConstraint<string>;
+type FirstStringRejectsBoolean = FirstStringConstraint<boolean>; // error[TK2344]: Type 'boolean' does not satisfy the constraint 'string'
+type FirstStringRejectsNumber = FirstStringConstraint<number>; // error[TK2344]: Type 'number' does not satisfy the constraint 'string'
+
+interface FirstNumberConstraint<T extends number> {} // error[TK2428]: All declarations of 'FirstNumberConstraint' must have identical type parameters
+interface FirstNumberConstraint<T extends string> {} // error[TK2428]: All declarations of 'FirstNumberConstraint' must have identical type parameters
+type FirstNumberAcceptsNumber = FirstNumberConstraint<number>;
+type FirstNumberRejectsBoolean = FirstNumberConstraint<boolean>; // error[TK2344]: Type 'boolean' does not satisfy the constraint 'number'
+type FirstNumberRejectsString = FirstNumberConstraint<string>; // error[TK2344]: Type 'string' does not satisfy the constraint 'number'
