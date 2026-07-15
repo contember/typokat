@@ -2,13 +2,12 @@
 //! The `checker` submodules all operate on [`Pass`], so this module owns the
 //! obligation, declaration, class, and flow bookkeeping visible within the tree.
 
-use crate::binder::declaration::{LegacyTypeStorageId, ValueStorageId};
+use crate::binder::declaration::{DeclId, TypeGroupId, ValueStorageId};
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
 use crate::check::flow::{FlowNode, FlowNodeId};
 use crate::check::query::SemanticQueryState;
-use crate::class_semantics::PublishedClasses;
 use crate::span::Span;
 use crate::types::repr::{ClassId, TypeParamId, Visibility};
 use crate::types::store::TypeId;
@@ -16,13 +15,19 @@ use crate::types::Interner;
 use oxc_ast::ast::{Class, TSInterfaceHeritage, TSType, TSTypeParameterDeclaration};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::BTreeMap;
+use std::ops::{Deref, DerefMut};
 
 use super::classes::body::{BodyClassView, BodyMemberEnvironment};
 use super::classes::construction::DraftClassTypeParameter;
+use super::classes::publication::StagedClassValidation;
 use super::classes::retained::RetainedClassCallable;
 use super::events::{CandidateEffects, RecordTicket};
 use super::events::{EventId, EventStore, ModuleOrdinal, UnitSlot};
 use super::lexical_events::{CallableTickets, LexicalReservations};
+use super::type_groups::{
+    InterfaceTypedAlternative, PublishedTypeParameterDefault, TypeEnvironmentState,
+    TypeGroupConstruction,
+};
 
 /// Which diagnostic an assignability obligation produces on failure. The
 /// structural verdict is the same relation query; only the code/message mapping
@@ -52,6 +57,38 @@ pub(in crate::check::checker) struct AssignObligation {
     pub(in crate::check::checker) kind: ObligationKind,
 }
 
+/// One generic application whose constraint relation is intentionally delayed
+/// until the complete class and type-group registries are immutable.
+pub(in crate::check::checker) struct ConstraintCheckObligation {
+    pub(in crate::check::checker) checks: Vec<(Option<TypeId>, TypeId, Span)>,
+    pub(in crate::check::checker) substitutions: FxHashMap<TypeParamId, TypeId>,
+}
+
+pub(in crate::check::checker) enum InterfaceRelationKind {
+    NumberIndex,
+    PropertyStringIndex { name: String },
+    Heritage { left: String, right: String },
+    MergedProperty { name: String },
+    HeaderMetadata { name: String },
+    HeritageMember { derived: String, base: String },
+    HeritageIndex { derived: String, base: String },
+}
+
+pub(in crate::check::checker) struct InterfaceRelationObligation {
+    pub(in crate::check::checker) source: TypeId,
+    pub(in crate::check::checker) target: TypeId,
+    pub(in crate::check::checker) span: Span,
+    pub(in crate::check::checker) kind: InterfaceRelationKind,
+    pub(in crate::check::checker) report: InterfaceRelationReport,
+}
+
+#[derive(Copy, Clone)]
+pub(in crate::check::checker) enum InterfaceRelationReport {
+    Always,
+    FirstFailedHeritagePair(u32),
+    FirstFailedHeaderGroup(crate::binder::declaration::TypeGroupId),
+}
+
 /// One class-member override-compatibility check (`TK2416`).
 /// Collected at fill time, decided in phase 2, and kept separate from
 /// [`AssignObligation`] because method overrides use tsc's bivariant-param /
@@ -74,6 +111,8 @@ pub(in crate::check::checker) struct OverrideCheck {
 pub(in crate::check::checker) struct CheckerEffects {
     pub(in crate::check::checker) records: CandidateEffects,
     pub(in crate::check::checker) obligations: Vec<AssignObligation>,
+    pub(in crate::check::checker) constraint_checks: Vec<ConstraintCheckObligation>,
+    pub(in crate::check::checker) interface_relations: Vec<InterfaceRelationObligation>,
     pub(in crate::check::checker) override_checks: Vec<OverrideCheck>,
     pub(in crate::check::checker) nested: Vec<CheckerEffects>,
 }
@@ -83,6 +122,8 @@ impl CheckerEffects {
         Self {
             records: CandidateEffects::new(owner),
             obligations: Vec::new(),
+            constraint_checks: Vec::new(),
+            interface_relations: Vec::new(),
             override_checks: Vec::new(),
             nested: Vec::new(),
         }
@@ -92,6 +133,8 @@ impl CheckerEffects {
         Self {
             records,
             obligations: Vec::new(),
+            constraint_checks: Vec::new(),
+            interface_relations: Vec::new(),
             override_checks: Vec::new(),
             nested: Vec::new(),
         }
@@ -100,6 +143,8 @@ impl CheckerEffects {
     pub(in crate::check::checker) fn merge(&mut self, child: CheckerEffects) {
         self.records.merge(child.records);
         self.obligations.extend(child.obligations);
+        self.constraint_checks.extend(child.constraint_checks);
+        self.interface_relations.extend(child.interface_relations);
         self.override_checks.extend(child.override_checks);
         self.nested.extend(child.nested);
     }
@@ -161,26 +206,77 @@ pub(in crate::check::checker) enum VarValueTypeState {
 }
 
 /// A top-level type declaration's reserve-then-fill plan, indexed by type-space
-/// [`LegacyTypeStorageId`]. Generic declarations carry ordered type-parameter ids and resolve to
+/// [`TypeGroupId`]. Generic declarations carry ordered type-parameter ids and resolve to
 /// templates instantiated by substitution.
+#[derive(Clone)]
+pub(in crate::check::checker) struct InterfaceFragment<'ast> {
+    pub(in crate::check::checker) declaration: DeclId,
+    pub(in crate::check::checker) scope: ScopeId,
+    pub(in crate::check::checker) param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
+    /// Fragment-local recovery frame: matching name/position shares the canonical id;
+    /// renamed and excess parameters retain distinct binders as typed alternatives.
+    pub(in crate::check::checker) params: Vec<TypeParamId>,
+    pub(in crate::check::checker) members: &'ast [oxc_ast::ast::TSSignature<'ast>],
+    pub(in crate::check::checker) extends: &'ast [TSInterfaceHeritage<'ast>],
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) enum TypeParameterMetadataState {
+    Absent,
+    Ready(TypeId),
+    Poisoned,
+    Unsupported,
+}
+
+impl TypeParameterMetadataState {
+    pub(in crate::check::checker) fn ready(self) -> Option<TypeId> {
+        match self {
+            Self::Ready(ty) => Some(ty),
+            Self::Absent | Self::Poisoned | Self::Unsupported => None,
+        }
+    }
+
+    pub(in crate::check::checker) fn is_supplied(self) -> bool {
+        !matches!(self, Self::Absent)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) struct TypeGroupParameterDescriptors {
+    pub(in crate::check::checker) constraints: Vec<TypeParameterMetadataState>,
+    pub(in crate::check::checker) defaults: Vec<TypeParameterMetadataState>,
+}
+
+#[derive(Clone)]
 pub(in crate::check::checker) enum TypeDecl<'ast> {
     /// An interface reserves an object id, then fills own and inherited members into it.
     /// Generic interfaces fill a template that type references instantiate later.
     Interface {
+        declaration: DeclId,
         scope: ScopeId,
         reserved: TypeId,
         params: Vec<TypeParamId>,
+        recovery_params: Vec<TypeParamId>,
+        recovery_names: Vec<String>,
+        recovery_defaults: Vec<PublishedTypeParameterDefault>,
+        param_slots: BTreeMap<(usize, String), TypeParamId>,
+        conflict_alternatives: Vec<InterfaceTypedAlternative>,
+        defaults: Vec<Option<TypeId>>,
+        parameter_descriptors: Option<TypeGroupParameterDescriptors>,
         param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
-        members: &'ast [oxc_ast::ast::TSSignature<'ast>],
         /// Heritage clauses are composed into the reserved object during fill.
         extends: &'ast [TSInterfaceHeritage<'ast>],
+        /// Every declaration fragment in canonical source order shares `reserved`.
+        fragments: Vec<InterfaceFragment<'ast>>,
     },
     /// A transparent alias lowers on demand. Template placeholders keep recursive
     /// conditional, mapped, and object-literal alias shapes from expanding inline.
     Alias {
+        declaration: DeclId,
         scope: ScopeId,
         annotation: &'ast TSType<'ast>,
         params: Vec<TypeParamId>,
+        defaults: Vec<Option<TypeId>>,
         param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
         resolving: bool,
         /// Reserved conditional template id, seeded before the body is lowered.
@@ -197,12 +293,20 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
     /// A class reserves only stable nominal/application metadata. Publication builds
     /// immutable instance/static templates after every surface child is lowered.
     Class {
+        declaration: DeclId,
         scope: ScopeId,
         class_id: ClassId,
         params: Vec<TypeParamId>,
         param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
         class: &'ast Class<'ast>,
     },
+    /// A class/interface group is a typed non-permissive stop until WU4.
+    UnsupportedClassInterface {
+        declaration: DeclId,
+        params: Vec<TypeParamId>,
+    },
+    /// Any other unsupported multi-kind group has no permissive semantic surface.
+    Unavailable { declaration: DeclId },
     /// A declaration already resolved by an earlier compilation unit, such as the prelude.
     Resolved { params: Vec<TypeParamId> },
 }
@@ -222,14 +326,34 @@ pub(in crate::check::checker) struct ClassInfo {
     pub(in crate::check::checker) ctor_declaring_class: ClassId,
 }
 
+#[derive(Copy, Clone)]
+pub(in crate::check::checker) struct PublishedClassNewMetadata {
+    pub(in crate::check::checker) is_abstract: bool,
+    pub(in crate::check::checker) ctor_visibility: Visibility,
+    pub(in crate::check::checker) ctor_declaring_class: ClassId,
+    pub(in crate::check::checker) has_source_overloads: bool,
+}
+
 /// A class's fill progress, tracked per [`TypeDecl`] index.
 /// `Filling` breaks `extends` cycles by treating the re-entered base as absent, so
 /// lowering terminates; non-class indices start as `Done`.
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) enum ClassFillState {
     Pending,
     Filling,
     Done,
+}
+
+/// Query-invisible AST and fill state owned only by the construction phase.
+/// Atomic publication consumes this object, so body/query phases cannot retain or
+/// accidentally consult a mutable declaration draft.
+pub(in crate::check::checker) struct ConstructionDrafts<'ast> {
+    pub(in crate::check::checker) staged_published_classes:
+        Option<crate::class_semantics::PublishedClasses>,
+    pub(in crate::check::checker) type_group_construction: Option<TypeGroupConstruction>,
+    pub(in crate::check::checker) type_decls: Vec<TypeDecl<'ast>>,
+    pub(in crate::check::checker) type_resolved: Vec<Option<TypeId>>,
+    pub(in crate::check::checker) template_fill: Vec<ClassFillState>,
 }
 
 /// The phase-1 working set threaded through the walk: everything the inference
@@ -260,15 +384,15 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     pub(in crate::check::checker) suppress_effects: bool,
     /// Persistent lexical reservations built before class fill and body checking.
     pub(in crate::check::checker) lexical_events: LexicalReservations,
-    /// Immutable class surfaces visible to every semantic query after publication.
-    pub(in crate::check::checker) published_classes: PublishedClasses,
+    /// Construction-only inherited view or the sole query-visible published snapshot.
+    pub(in crate::check::checker) type_environment: TypeEnvironmentState<'ast>,
     /// Durable coordinator-owned projection, evaluation, and relation state.
     pub(in crate::check::checker) semantic_queries: SemanticQueryState,
     /// Frozen class parameter descriptors retained from the atomic publication.
     pub(in crate::check::checker) class_application_parameters:
         BTreeMap<ClassId, Vec<DraftClassTypeParameter<RecordTicket>>>,
-    /// Separates the explicit reserve/fill typestate from ordinary semantic demand.
-    pub(in crate::check::checker) class_publication_complete: bool,
+    /// Query-bearing class validation is held until type groups publish atomically.
+    pub(in crate::check::checker) staged_class_validation: Option<StagedClassValidation>,
     /// Exact class callables retained by the one surface-lowering pass.
     pub(in crate::check::checker) retained_class_callables:
         BTreeMap<ClassId, Vec<RetainedClassCallable<RecordTicket>>>,
@@ -278,14 +402,8 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     pub(in crate::check::checker) class_body_views: BTreeMap<ClassId, BodyClassView>,
     /// Exact substituted base constructor for each published derived class.
     pub(in crate::check::checker) class_super_constructors: BTreeMap<ClassId, TypeId>,
-    /// Named-type declarations (M5), indexed by [`LegacyTypeStorageId`]. Reserve-then-
-    /// fill populates this in phase 0; a `TSTypeReference` resolves through the
-    /// binder's type slot to storage, then to a `TypeId` via `type_resolved`.
-    pub(in crate::check::checker) type_decls: Vec<TypeDecl<'ast>>,
-    /// Resolved named types, indexed by [`LegacyTypeStorageId`].
-    /// References read stored ids, never inline copies, which keeps lowering
-    /// terminating. Generic entries store templates to instantiate by substitution.
-    pub(in crate::check::checker) type_resolved: Vec<Option<TypeId>>,
+    /// Owner-free `new` facts frozen before construction ASTs are dropped.
+    pub(in crate::check::checker) class_new_metadata: BTreeMap<ClassId, PublishedClassNewMetadata>,
     /// Type-parameter scope stack.
     /// Frames are pushed only around their generic declaration, and innermost
     /// frames shadow binder type slots so `T` does not leak.
@@ -307,10 +425,6 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// Lets constructor-access diagnostics name the declaring class, which may be
     /// an inherited base, while keeping [`ClassInfo`] `Copy`.
     pub(in crate::check::checker) class_names: FxHashMap<ClassId, String>,
-    /// Per-template fill state for interfaces and seeded object-literal aliases.
-    /// Mirrors class fill: on-demand, base-first, decl-kind-specific, and guarded
-    /// by `Filling` so out-of-scope `extends` cycles terminate.
-    pub(in crate::check::checker) template_fill: Vec<ClassFillState>,
     pub(in crate::check::checker) decl_types: DeclTypes,
     /// Explicit `var` annotations reserved across one function/module hoist
     /// container, keyed by their own `(module, declarator span)` source site.
@@ -392,19 +506,17 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// storage id, name-declaration span, and name. Set while a `type A = C extends E ? …`
     /// body is lowered, so a check type that surface-references `A` itself is caught as
     /// `TK2456` at the alias declaration. `None` outside such a body.
-    pub(in crate::check::checker) resolving_conditional_alias:
-        Option<(LegacyTypeStorageId, Span, String)>,
+    pub(in crate::check::checker) resolving_conditional_alias: Option<(TypeGroupId, Span, String)>,
     /// Plain alias currently being resolved, for mapped self-reference diagnostics.
     /// `lower_mapped_type` uses this to report `TK2456` at the alias declaration
     /// instead of feeding a silent re-entry error type into mapped evaluation.
     /// Separate from conditional alias tracking so nested conditionals keep M25 behavior.
-    pub(in crate::check::checker) resolving_alias: Option<(LegacyTypeStorageId, Span, String)>,
+    pub(in crate::check::checker) resolving_alias: Option<(TypeGroupId, Span, String)>,
     /// Stack of aliases currently resolving, used to report `TK2456` on every alias
     /// in a surface cycle. Each entry records its starting indirection depth: same-depth
     /// re-entry is circular; deeper re-entry came through a type constructor and is
     /// legal recursion, silently error-typed.
-    pub(in crate::check::checker) resolving_alias_stack:
-        Vec<(LegacyTypeStorageId, Span, String, u32)>,
+    pub(in crate::check::checker) resolving_alias_stack: Vec<(TypeGroupId, Span, String, u32)>,
     /// Current legal-recursion indirection depth.
     /// Incremented only across type constructors; unions/intersections/`keyof` stay
     /// surface cycles. Missed increments over-report `TK2456`, the safe direction.
@@ -421,6 +533,20 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// `X[K]` using the innermost mapped key lowers to the node-scoped
     /// [`crate::types::repr::TypeTag::MappedValue`] placeholder instead of eager resolution.
     pub(in crate::check::checker) mapped_frames: Vec<MappedFrame>,
+}
+
+impl<'ast> Deref for Pass<'_, 'ast> {
+    type Target = ConstructionDrafts<'ast>;
+
+    fn deref(&self) -> &Self::Target {
+        self.type_environment.drafts()
+    }
+}
+
+impl DerefMut for Pass<'_, '_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.type_environment.drafts_mut()
+    }
 }
 
 /// One enclosing-loop frame for the flow pre-pass: the loop's label (the

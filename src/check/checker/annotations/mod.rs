@@ -3,7 +3,7 @@
 use super::calls::parameter_name;
 use super::context::*;
 use super::decls::type_decl_id;
-use crate::binder::declaration::LegacyTypeStorageId;
+use crate::binder::declaration::TypeGroupId;
 use crate::binder::scope::ScopeId;
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
@@ -362,9 +362,7 @@ mod multi_child_recovery_tests {
     #[test]
     fn unavailable_child_withholds_the_whole_annotation_callable() {
         let source = r#"
-            declare namespace DeferredCallable {
-                interface Parameter {}
-            }
+            enum DeferredCallable { Parameter }
             declare const unavailable: (value: DeferredCallable.Parameter) => string;
             const noPartialReturn: never = unavailable({});
         "#;
@@ -382,8 +380,8 @@ mod multi_child_recovery_tests {
                 .map(|record| record.id.as_str())
                 .collect::<Vec<_>>(),
             [
-                "decl/module-declaration/self",
-                "annotation-lower/type-name/qualified-name",
+                "decl/enum-declaration/self",
+                "annotation-lower/type-name/qualified-enum",
             ]
         );
     }
@@ -424,10 +422,14 @@ mod multi_child_recovery_tests {
                 .iter()
                 .map(|diagnostic| (diagnostic.code, diagnostic.span.start))
                 .collect::<Vec<_>>(),
-            ["MissingArray", "AlsoMissingArray"]
-                .into_iter()
-                .map(|name| (DiagnosticCode::TK2503, starts(source, name)[0]))
-                .collect::<Vec<_>>()
+            vec![
+                (DiagnosticCode::TK2503, starts(source, "MissingArray")[0]),
+                (
+                    DiagnosticCode::TK2503,
+                    starts(source, "AlsoMissingArray")[0],
+                ),
+                (DiagnosticCode::TK2314, starts(source, "Array")[0]),
+            ]
         );
     }
 }

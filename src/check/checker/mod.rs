@@ -5,17 +5,16 @@
 
 use crate::binder::bind::{ImportPlaceholder, ImportedSymbol, ProjectBinderBuilder};
 use crate::binder::bind_module_with_prelude;
-use crate::binder::declaration::{LegacyTypeStorageId, ValueStorageId};
+use crate::binder::declaration::{TypeGroupId, ValueStorageId};
 use crate::binder::namespace::{CompilationUnit, LocalAmbientExportAliasFailureKind};
 use crate::binder::scope::ScopeId;
 use crate::binder::Binder;
 use crate::check::query::SemanticQueryCoordinator;
 use crate::check::query::SemanticQueryState;
-use crate::class_semantics::{Exhaustion, PublishedClasses};
-use crate::diagnostics::{render_reason_chain, Diagnostic, IncompleteSurface};
+use crate::class_semantics::{DemandOutcome, Exhaustion};
+use crate::diagnostics::{render_reason_chain, render_type, Diagnostic, IncompleteSurface};
 use crate::relate::RelationOutcome;
 use crate::span::Span;
-use crate::types::repr::TypeParamId;
 use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_allocator::Allocator;
@@ -25,7 +24,7 @@ use oxc_ast::ast::{
 use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType};
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 mod annotations;
 mod assignment;
@@ -41,9 +40,12 @@ mod indexed_access;
 pub(crate) mod lexical_events;
 mod narrowing;
 mod statements;
+mod type_groups;
 
 use context::{
-    AssignObligation, CheckerEffects, ClassFillState, DeclTypes, OverrideCheck, Pass, TypeDecl,
+    AssignObligation, CheckerEffects, ClassFillState, ConstructionDrafts, DeclTypes,
+    InterfaceRelationKind, InterfaceRelationObligation, InterfaceRelationReport, OverrideCheck,
+    Pass, TypeDecl,
 };
 use decls::{reserve_type_decls, type_decl_id, value_decl_id, walk_type_decls, TopTypeDecl};
 use events::{CandidateEffects, EventStore, ModuleOrdinal, RecordTicket, UnitSlot};
@@ -150,9 +152,7 @@ fn trusted_prelude_records_are_clean(
 
 /// Lifetime-free state handed from the trusted prelude pass to user checking.
 struct TrustedPreludeHandoff {
-    /// Ordered by prelude legacy type-storage id, preserving the user table prefix.
-    type_decl_params: Vec<Vec<TypeParamId>>,
-    type_resolved: Vec<Option<TypeId>>,
+    published_types: type_groups::PublishedTypeEnvironment,
     decl_types: DeclTypes,
     next_type_param: u32,
     next_class_id: u32,
@@ -174,7 +174,7 @@ fn bootstrap_trusted_prelude(
     let binder = bind(&parsed.program);
     let mut next_type_param = 0;
     let mut next_class_id = 0;
-    let mut type_resolved = vec![None; binder.type_decl_count as usize];
+    let mut type_resolved = vec![None; binder.type_groups.len()];
     let mut type_decls = Vec::new();
     reserve_type_decls(
         interner,
@@ -198,6 +198,14 @@ fn bootstrap_trusted_prelude(
         binder.prelude_module,
         &parsed.program,
     );
+    attach_class_bindings(
+        &mut reporting.lexical_events,
+        prelude_ordinal,
+        &binder,
+        binder.prelude_module,
+        &parsed.program,
+        &type_decls,
+    );
     let mut pass = build_pass_with_reporting(
         interner,
         &binder,
@@ -208,7 +216,14 @@ fn bootstrap_trusted_prelude(
         reporting,
     );
     pass.current_module = binder.prelude_module;
+    let intrinsic_markers = prelude_intrinsic_markers(pass.interner);
+    seed_prelude_intrinsics(&binder, &mut pass.type_resolved, intrinsic_markers);
     pass.fill_type_decls(binder.prelude_module);
+    pass.publish_class_surfaces(&[(prelude_ordinal, binder.prelude_module)]);
+    pass.fill_pending_interfaces_range(binder.prelude_module, 0, pass.type_decls.len());
+    pass.freeze_seeded_type_groups();
+    pass.publish_type_groups();
+    pass.validate_published_class_surfaces();
     pass.build_flow_graph(binder.prelude_module, &parsed.program.body);
     pass.check_statements(binder.prelude_module, &parsed.program.body);
 
@@ -218,29 +233,19 @@ fn bootstrap_trusted_prelude(
         "the prelude must check clean: {records:?}"
     );
 
-    let type_decl_params = pass
-        .type_decls
-        .iter()
-        .map(|decl| match decl {
-            TypeDecl::Interface { params, .. }
-            | TypeDecl::Alias { params, .. }
-            | TypeDecl::Class { params, .. }
-            | TypeDecl::Resolved { params } => params.clone(),
-        })
-        .collect();
     let Pass {
-        mut type_resolved,
+        type_environment,
         decl_types,
         next_type_param,
         ..
     } = pass;
-    seed_prelude_intrinsics(interner, &binder, &mut type_resolved);
-
+    let type_groups::TypeEnvironmentState::Published(published_types) = type_environment else {
+        panic!("trusted prelude must hand off one published environment")
+    };
     (
         binder,
         TrustedPreludeHandoff {
-            type_decl_params,
-            type_resolved,
+            published_types,
             decl_types,
             next_type_param,
             next_class_id,
@@ -297,6 +302,29 @@ fn emit_test_incomplete(pass: &mut Pass<'_, '_>) {
 
 /// Check a parsed program and return the diagnostics plus incomplete surfaces it produces.
 pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>) -> CheckResult {
+    check_program_inner(interner, program, |_, _, _| {})
+}
+
+#[cfg(test)]
+fn check_program_with_publication_inspector<'ast, F>(
+    interner: &mut Interner,
+    program: &'ast Program<'ast>,
+    inspect: F,
+) -> CheckResult
+where
+    F: FnOnce(&Binder, &type_groups::PublishedTypeEnvironment, &Interner),
+{
+    check_program_inner(interner, program, inspect)
+}
+
+fn check_program_inner<'ast, F>(
+    interner: &mut Interner,
+    program: &'ast Program<'ast>,
+    inspect: F,
+) -> CheckResult
+where
+    F: FnOnce(&Binder, &type_groups::PublishedTypeEnvironment, &Interner),
+{
     let module_ordinal = ModuleOrdinal::new(0);
     let unit_slot = UnitSlot::new(0);
     let mut event_store = EventStore::default();
@@ -308,8 +336,7 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
     let (
         binder,
         TrustedPreludeHandoff {
-            type_decl_params,
-            mut type_resolved,
+            published_types,
             decl_types,
             mut next_type_param,
             mut next_class_id,
@@ -319,10 +346,8 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
     });
 
     // User declarations append after prelude placeholders, preserving legacy storage indices.
-    let mut type_decls: Vec<TypeDecl<'ast>> = type_decl_params
-        .into_iter()
-        .map(|params| TypeDecl::Resolved { params })
-        .collect();
+    let (mut type_decls, mut type_resolved) = published_types.construction_prefix();
+    type_resolved.resize(binder.type_groups.len(), None);
     reserve_type_decls(
         interner,
         &binder,
@@ -368,6 +393,7 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
             suppress_effects: false,
         },
     );
+    pass.install_published_type_environment_base(published_types);
     for effects in external_effects.into_values() {
         pass.enqueue_effects(CheckerEffects::from_records(effects));
     }
@@ -376,6 +402,9 @@ pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>
     pass.fill_type_decls(binder.module);
     pass.publish_class_surfaces(&[(module_ordinal, binder.module)]);
     pass.fill_pending_interfaces_range(binder.module, 0, pass.type_decls.len());
+    pass.publish_type_groups();
+    pass.validate_published_class_surfaces();
+    inspect(&binder, pass.type_environment.published(), pass.interner);
 
     // Phase 0.5: build complete flow graphs before narrowed reads are resolved.
     pass.build_flow_graph(binder.module, &program.body);
@@ -428,10 +457,12 @@ pub enum ProjectImportSource {
 #[derive(Clone, Copy)]
 struct ExportedSlots {
     value: Option<ValueStorageId>,
-    ty: Option<LegacyTypeStorageId>,
+    ty: Option<TypeGroupId>,
     /// A type-only export hid a real local value slot. Imports must keep its
     /// runtime barrier even though no value declaration crosses the boundary.
     value_erased: bool,
+    /// Missing imported/re-exported types hide ambient names without a fake group.
+    type_unavailable: bool,
 }
 
 type ExportSurface = BTreeMap<String, ExportedSlots>;
@@ -485,8 +516,7 @@ where
     let (
         binder,
         TrustedPreludeHandoff {
-            type_decl_params,
-            mut type_resolved,
+            published_types,
             mut decl_types,
             mut next_type_param,
             mut next_class_id,
@@ -514,21 +544,11 @@ where
         builder.finish(binder_module)
     });
 
-    let mut type_decls: Vec<TypeDecl<'ast>> = type_decl_params
-        .into_iter()
-        .map(|params| TypeDecl::Resolved { params })
-        .collect();
+    let (mut type_decls, mut type_resolved) = published_types.construction_prefix();
+    let user_type_start = type_decls.len();
+    type_resolved.resize(binder.type_groups.len(), None);
     let error = interner.well_known().error;
-    let mut type_decl_ranges = Vec::with_capacity(units.len());
     for (scope, unit) in module_scopes.iter().copied().zip(units) {
-        let start = type_decls.len();
-        if let Some(placeholders) = module_placeholders.get(type_decl_ranges.len()) {
-            for placeholder in placeholders {
-                if let Some(decl_id) = placeholder.ty {
-                    seed_resolved_type(&mut type_decls, &mut type_resolved, decl_id, error);
-                }
-            }
-        }
         reserve_type_decls(
             interner,
             &binder,
@@ -554,11 +574,24 @@ where
             unit.program,
             &type_decls,
         );
-        type_decl_ranges.push((start, type_decls.len()));
     }
     lexical_events
         .reserve_callable_type_params(&mut next_type_param)
         .expect("one callable binder reservation pass");
+    let unreserved_user_groups: Vec<_> = type_decls
+        .iter()
+        .enumerate()
+        .skip(user_type_start)
+        .filter(|(_, declaration)| matches!(declaration, TypeDecl::Resolved { .. }))
+        .map(|(index, _)| {
+            let group = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
+            (group, binder.type_groups.get(group).cloned())
+        })
+        .collect();
+    assert!(
+        unreserved_user_groups.is_empty(),
+        "every user type group has one construction draft: {unreserved_user_groups:?}"
+    );
     inspect(&binder, &lexical_events, &module_scopes);
     enqueue_local_ambient_export_alias_diagnostics(&binder, &lexical_events, &mut external_effects);
 
@@ -590,22 +623,12 @@ where
             suppress_effects: false,
         },
     );
+    pass.install_published_type_environment_base(published_types);
     for effects in external_effects.into_values() {
         pass.enqueue_effects(CheckerEffects::from_records(effects));
     }
 
-    for (index, scope) in module_scopes.iter().copied().enumerate() {
-        let (start, end) = type_decl_ranges
-            .get(index)
-            .copied()
-            .unwrap_or((0, pass.type_decls.len()));
-        pass.current_module = scope;
-        if let Some(unit) = units.get(index) {
-            pass.current_module_ordinal = unit.module_ordinal;
-            pass.current_unit_slot = unit.unit_slot;
-        }
-        pass.fill_type_decls_range(scope, start, end);
-    }
+    pass.fill_type_decls_range(binder.module, user_type_start, pass.type_decls.len());
 
     let publication_scopes: Vec<(ModuleOrdinal, ScopeId)> = units
         .iter()
@@ -614,18 +637,9 @@ where
         .collect();
     pass.publish_class_surfaces(&publication_scopes);
 
-    for (index, scope) in module_scopes.iter().copied().enumerate() {
-        let (start, end) = type_decl_ranges
-            .get(index)
-            .copied()
-            .unwrap_or((0, pass.type_decls.len()));
-        pass.current_module = scope;
-        if let Some(unit) = units.get(index) {
-            pass.current_module_ordinal = unit.module_ordinal;
-            pass.current_unit_slot = unit.unit_slot;
-        }
-        pass.fill_pending_interfaces_range(scope, start, end);
-    }
+    pass.fill_pending_interfaces_range(binder.module, user_type_start, pass.type_decls.len());
+    pass.publish_type_groups();
+    pass.validate_published_class_surfaces();
 
     for (scope, unit) in module_scopes.iter().copied().zip(units) {
         pass.current_module = scope;
@@ -680,21 +694,15 @@ fn imported_symbols(
                     Some(slots) => {
                         let value_barrier =
                             slots.value_erased || (import.type_only && slots.value.is_some());
-                        if value_barrier {
-                            imports.push(ImportedSymbol::value_lookup_barrier(
-                                import.local.clone(),
-                                slots.ty,
-                                import.local_span,
-                            ));
-                        } else {
-                            let value = if import.type_only { None } else { slots.value };
-                            imports.push(ImportedSymbol::new(
-                                import.local.clone(),
-                                value,
-                                slots.ty,
-                                import.local_span,
-                            ));
-                        }
+                        let value = if import.type_only { None } else { slots.value };
+                        imports.push(ImportedSymbol::new(
+                            import.local.clone(),
+                            value,
+                            slots.ty,
+                            value_barrier,
+                            slots.type_unavailable,
+                            import.local_span,
+                        ));
                     }
                     None => {
                         enqueue_external_diagnostic(
@@ -780,6 +788,7 @@ fn collect_declaration_export(
                             value,
                             ty: None,
                             value_erased: false,
+                            type_unavailable: false,
                         },
                     );
                 }
@@ -794,6 +803,7 @@ fn collect_declaration_export(
                         value,
                         ty: None,
                         value_erased: false,
+                        type_unavailable: false,
                     },
                 );
             }
@@ -807,6 +817,7 @@ fn collect_declaration_export(
                         value,
                         ty,
                         value_erased: false,
+                        type_unavailable: false,
                     },
                 );
             }
@@ -819,6 +830,7 @@ fn collect_declaration_export(
                     value: None,
                     ty,
                     value_erased: false,
+                    type_unavailable: false,
                 },
             );
         }
@@ -830,6 +842,7 @@ fn collect_declaration_export(
                     value: None,
                     ty,
                     value_erased: false,
+                    type_unavailable: false,
                 },
             );
         }
@@ -862,9 +875,12 @@ fn collect_list_export(
     let local_value_barrier = context
         .builder
         .local_value_lookup_barrier(context.scope, local);
+    let local_type_barrier = context
+        .builder
+        .local_type_lookup_barrier(context.scope, local);
     // Existence is judged against the real symbol; a value-only local is still a
     // valid `export type { x }` target (the error surfaces on the importer, below).
-    if value.is_none() && ty.is_none() && !local_value_barrier {
+    if value.is_none() && ty.is_none() && !local_value_barrier && !local_type_barrier {
         enqueue_external_diagnostic(
             context.reservations,
             context.effects,
@@ -888,6 +904,7 @@ fn collect_list_export(
             value,
             ty,
             value_erased,
+            type_unavailable: local_type_barrier,
         },
     );
 }
@@ -950,38 +967,34 @@ fn binding_name<'a>(pattern: &'a oxc_ast::ast::BindingPattern<'a>) -> Option<&'a
     }
 }
 
-fn seed_resolved_type<'ast>(
-    type_decls: &mut Vec<TypeDecl<'ast>>,
-    type_resolved: &mut [Option<TypeId>],
-    decl_id: LegacyTypeStorageId,
-    ty: TypeId,
-) {
-    let index = decl_id.index();
-    while type_decls.len() < index {
-        type_decls.push(TypeDecl::Resolved { params: Vec::new() });
-    }
-    if type_decls.len() == index {
-        type_decls.push(TypeDecl::Resolved { params: Vec::new() });
-    }
-    if let Some(slot) = type_resolved.get_mut(index) {
-        *slot = Some(ty);
-    }
+fn prelude_intrinsic_markers(interner: &Interner) -> [TypeId; 6] {
+    let wk = interner.well_known();
+    [
+        wk.uppercase,
+        wk.lowercase,
+        wk.capitalize,
+        wk.uncapitalize,
+        wk.this_type,
+        wk.omit_this_parameter,
+    ]
 }
 
 fn seed_prelude_intrinsics(
-    interner: &Interner,
     binder: &Binder,
     type_resolved: &mut [Option<TypeId>],
+    markers: [TypeId; 6],
 ) {
-    let wk = interner.well_known();
     for (name, marker) in [
-        ("Uppercase", wk.uppercase),
-        ("Lowercase", wk.lowercase),
-        ("Capitalize", wk.capitalize),
-        ("Uncapitalize", wk.uncapitalize),
-        ("ThisType", wk.this_type),
-        ("OmitThisParameter", wk.omit_this_parameter),
-    ] {
+        "Uppercase",
+        "Lowercase",
+        "Capitalize",
+        "Uncapitalize",
+        "ThisType",
+        "OmitThisParameter",
+    ]
+    .into_iter()
+    .zip(markers)
+    {
         if let Some(decl_id) = type_decl_id(binder, binder.prelude_module, name) {
             if let Some(slot) = type_resolved.get_mut(decl_id.index()) {
                 *slot = Some(marker);
@@ -1013,27 +1026,7 @@ fn attach_type_decl_owners(
             .expect("source declaration must have its exact lexical event owner");
     }
 
-    walk_type_decls(
-        binder,
-        scope,
-        program,
-        &mut |declaration_scope, owner_start, declaration| {
-            let name = match declaration {
-                TopTypeDecl::Interface(declaration) => Some(declaration.id.name.as_str()),
-                TopTypeDecl::Alias(declaration) => Some(declaration.id.name.as_str()),
-                TopTypeDecl::Class(declaration) => {
-                    declaration.id.as_ref().map(|id| id.name.as_str())
-                }
-            };
-            let Some(decl_id) = name.and_then(|name| type_decl_id(binder, declaration_scope, name))
-            else {
-                return;
-            };
-            reservations
-                .attach_type_decl_owner(decl_id, module_ordinal, owner_start)
-                .expect("named type declaration must have a lexical owner");
-        },
-    );
+    let _ = program;
 }
 
 fn attach_class_bindings(
@@ -1058,12 +1051,15 @@ fn attach_class_bindings(
             let Some(site) = reservations.class_at(module_ordinal, class.span.start) else {
                 return;
             };
-            let Some(type_decl) = type_decl_id(binder, declaration_scope, name) else {
+            let Some((type_decl, _, _)) = decls::exact_type_fragment_at(
+                binder,
+                scope,
+                crate::binder::declaration::TypeFragmentKind::Class,
+                class.id.as_ref().expect("named class binding").span.start,
+            ) else {
                 return;
             };
-            let Some(value_decl) = value_decl_id(binder, declaration_scope, name) else {
-                return;
-            };
+            let value_decl = value_decl_id(binder, declaration_scope, name);
             let Some(TypeDecl::Class {
                 class_id, params, ..
             }) = declarations.get(type_decl.index())
@@ -1085,15 +1081,122 @@ fn attach_class_bindings(
     );
 }
 
+fn consume_interface_relation_decision(
+    pass: &mut Pass<'_, '_>,
+    effects: CheckerEffects,
+    decision: Result<bool, Exhaustion>,
+    span: Span,
+) -> (CheckerEffects, Option<bool>) {
+    match decision {
+        Ok(failed) => (effects, Some(failed)),
+        Err(exhaustion) => {
+            pass.effect_stack.push(effects);
+            let _: Option<TypeId> =
+                pass.own_type_demand(DemandOutcome::Exhausted(exhaustion), span);
+            let effects = pass
+                .effect_stack
+                .pop()
+                .expect("interface relation exhaustion lexical effect frame");
+            (effects, None)
+        }
+    }
+}
+
 fn finish_event_effects(
     pass: &mut Pass<'_, '_>,
 ) -> BTreeMap<ModuleOrdinal, (Vec<Diagnostic>, Vec<IncompleteSurface>)> {
     let pending = std::mem::take(&mut pass.pending_effects);
     for mut effects in pending {
+        let mut reported_heritage_pairs = BTreeSet::new();
+        let mut reported_header_groups = BTreeSet::new();
+        for check in std::mem::take(&mut effects.constraint_checks) {
+            pass.effect_stack.push(effects);
+            pass.check_constraint_arguments(&check.checks, &check.substitutions);
+            effects = pass
+                .effect_stack
+                .pop()
+                .expect("constraint obligation lexical effect frame");
+        }
+        for check in std::mem::take(&mut effects.interface_relations) {
+            let decision = if matches!(
+                &check.kind,
+                InterfaceRelationKind::Heritage { .. }
+                    | InterfaceRelationKind::MergedProperty { .. }
+                    | InterfaceRelationKind::HeaderMetadata { .. }
+            ) {
+                match SemanticQueryCoordinator::new(
+                    pass.interner,
+                    pass.type_environment.published().classes(),
+                    &mut pass.semantic_queries,
+                    &mut pass.next_type_param,
+                )
+                .is_identical(check.source, check.target)
+                {
+                    DemandOutcome::Ready(identical) => Ok(!identical),
+                    DemandOutcome::Exhausted(exhaustion) => Err(exhaustion),
+                }
+            } else {
+                match SemanticQueryCoordinator::new(
+                    pass.interner,
+                    pass.type_environment.published().classes(),
+                    &mut pass.semantic_queries,
+                    &mut pass.next_type_param,
+                )
+                .is_assignable(check.source, check.target)
+                {
+                    RelationOutcome::Yes => Ok(false),
+                    RelationOutcome::No(_) => Ok(true),
+                    RelationOutcome::Exhausted(exhaustion) => Err(exhaustion),
+                }
+            };
+            let consumed = consume_interface_relation_decision(pass, effects, decision, check.span);
+            effects = consumed.0;
+            let Some(failed) = consumed.1 else {
+                continue;
+            };
+            let report_failure = failed
+                && match check.report {
+                    InterfaceRelationReport::Always => true,
+                    InterfaceRelationReport::FirstFailedHeritagePair(pair) => {
+                        reported_heritage_pairs.insert(pair)
+                    }
+                    InterfaceRelationReport::FirstFailedHeaderGroup(group) => {
+                        reported_header_groups.insert(group)
+                    }
+                };
+            if report_failure {
+                let source = render_type(pass.interner.store(), check.source, false);
+                let target = render_type(pass.interner.store(), check.target, false);
+                let diagnostic = match check.kind {
+                    InterfaceRelationKind::NumberIndex => {
+                        Diagnostic::number_index_incompatible(check.span, &source, &target)
+                    }
+                    InterfaceRelationKind::PropertyStringIndex { name } => {
+                        Diagnostic::property_incompatible_with_string_index(
+                            check.span, &name, &source, &target,
+                        )
+                    }
+                    InterfaceRelationKind::Heritage { left, right } => {
+                        Diagnostic::incompatible_interface_heritage(check.span, &left, &right)
+                    }
+                    InterfaceRelationKind::MergedProperty { name } => {
+                        Diagnostic::subsequent_property_type(check.span, &name)
+                    }
+                    InterfaceRelationKind::HeaderMetadata { name } => {
+                        Diagnostic::merged_interface_type_parameters(check.span, &name)
+                    }
+                    InterfaceRelationKind::HeritageMember { derived, base }
+                    | InterfaceRelationKind::HeritageIndex { derived, base } => {
+                        Diagnostic::incorrectly_extends_interface(check.span, &derived, &base)
+                    }
+                };
+                effects.records.diagnostic(diagnostic);
+            }
+        }
         for obligation in std::mem::take(&mut effects.obligations) {
             let outcome = SemanticQueryCoordinator::new(
                 pass.interner,
-                &pass.published_classes,
+                pass.type_environment.published().classes(),
                 &mut pass.semantic_queries,
                 &mut pass.next_type_param,
             )
@@ -1131,7 +1234,7 @@ fn finish_event_effects(
             if check.base_is_method {
                 let strict = SemanticQueryCoordinator::new(
                     pass.interner,
-                    &pass.published_classes,
+                    pass.type_environment.published().classes(),
                     &mut pass.semantic_queries,
                     &mut pass.next_type_param,
                 )
@@ -1140,7 +1243,7 @@ fn finish_event_effects(
                     RelationOutcome::Yes => (true, None),
                     RelationOutcome::No(_) => match SemanticQueryCoordinator::new(
                         pass.interner,
-                        &pass.published_classes,
+                        pass.type_environment.published().classes(),
                         &mut pass.semantic_queries,
                         &mut pass.next_type_param,
                     )
@@ -1172,7 +1275,7 @@ fn finish_event_effects(
             } else {
                 let outcome = SemanticQueryCoordinator::new(
                     pass.interner,
-                    &pass.published_classes,
+                    pass.type_environment.published().classes(),
                     &mut pass.semantic_queries,
                     &mut pass.next_type_param,
                 )
@@ -1353,6 +1456,17 @@ impl Pass<'_, '_> {
             .push(check);
     }
 
+    pub(in crate::check::checker) fn schedule_interface_relation(
+        &mut self,
+        check: InterfaceRelationObligation,
+    ) {
+        self.effect_stack
+            .last_mut()
+            .expect("interface relation requires a lexical owner")
+            .interface_relations
+            .push(check);
+    }
+
     /// Record an in-scope AST position the walk skipped (WU2, sprint 2026-07-10). `id`
     /// is the stable `role/surface/slot-or-variant` identity; `span` is the skipped
     /// position. This is the single entry point the checker calls when WU3–5 wire real
@@ -1422,8 +1536,7 @@ fn build_pass_with_reporting<'a, 'ast>(
             _ => ClassFillState::Done,
         })
         .collect();
-
-    Pass {
+    let mut pass = Pass {
         interner,
         binder,
         // Overwritten before each module's fill/flow/check phase; the user module is
@@ -1437,22 +1550,28 @@ fn build_pass_with_reporting<'a, 'ast>(
         pending_effects,
         lexical_events: reporting.lexical_events,
         suppress_effects: reporting.suppress_effects,
-        published_classes: PublishedClasses::empty(),
+        type_environment: type_groups::TypeEnvironmentState::constructing(ConstructionDrafts {
+            staged_published_classes: None,
+            type_group_construction: Some(type_groups::TypeGroupConstruction::new(
+                type_decls.len(),
+            )),
+            type_decls,
+            type_resolved,
+            template_fill,
+        }),
         semantic_queries: SemanticQueryState::default(),
         class_application_parameters: BTreeMap::new(),
-        class_publication_complete: false,
+        staged_class_validation: None,
         retained_class_callables: BTreeMap::new(),
         class_body_views: BTreeMap::new(),
         class_super_constructors: BTreeMap::new(),
-        type_decls,
-        type_resolved,
+        class_new_metadata: BTreeMap::new(),
         type_param_scopes: Vec::new(),
         static_class_type_param_barriers: Vec::new(),
         next_type_param,
         class_parents: FxHashMap::default(),
         class_value_aliases: FxHashMap::default(),
         class_names: FxHashMap::default(),
-        template_fill,
         decl_types,
         var_annotation_surfaces: FxHashMap::default(),
         var_value_type_states: FxHashMap::default(),
@@ -1485,7 +1604,24 @@ fn build_pass_with_reporting<'a, 'ast>(
         enclosing_classes: Vec::new(),
         current_super_ctor: None,
         current_in_ctor: false,
+    };
+    let terminal_groups: Vec<TypeGroupId> = pass
+        .type_decls
+        .iter()
+        .enumerate()
+        .filter(|(_, declaration)| {
+            matches!(
+                declaration,
+                TypeDecl::UnsupportedClassInterface { .. } | TypeDecl::Unavailable { .. }
+            )
+        })
+        .map(|(index, _)| TypeGroupId(u32::try_from(index).expect("type group index fits u32")))
+        .collect();
+    for group in terminal_groups {
+        pass.begin_type_group_construction(group);
+        pass.freeze_type_group(group);
     }
+    pass
 }
 
 // ===========================================================================

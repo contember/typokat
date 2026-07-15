@@ -1,5 +1,6 @@
 //! Direct compilation-wide class-surface lowering and publication.
 
+use super::super::type_groups::PublishedTypeParameterDefault;
 use super::application::{
     build_open_class_application, complete_class_arguments, ClassApplicationKind,
     ClassApplicationRequest, ClassTypeParameter, ClassTypeParameterDefault, ExplicitClassArgument,
@@ -24,9 +25,11 @@ use super::type_syntax::{
     TypeSyntaxLowerer,
 };
 use super::visibility::{has_public_constructor, lower_visibility};
-use crate::binder::declaration::LegacyTypeStorageId;
 use crate::binder::scope::ScopeId;
-use crate::check::checker::context::{OverrideCheck, Pass, TypeDecl};
+use crate::check::checker::context::{
+    CheckerEffects, ConstraintCheckObligation, OverrideCheck, Pass, PublishedClassNewMetadata,
+    TypeDecl,
+};
 use crate::check::checker::decls::type_decl_id;
 use crate::check::checker::events::{CheckerRecord, ModuleOrdinal, RecordTicket};
 use crate::check::checker::lexical_events::{ClassReservation, LexicalReservations};
@@ -71,6 +74,19 @@ struct TicketRecord {
     record: CheckerRecord,
 }
 
+pub(in crate::check::checker) struct StagedClassValidation {
+    records: Vec<TicketRecord>,
+    default_checks: Vec<(RecordTicket, TypeId, TypeId, CheckSpan)>,
+    application_checks: Vec<StagedClassApplicationCheck>,
+}
+
+struct StagedClassApplicationCheck {
+    owner: RecordTicket,
+    parameters: Vec<TypeParamId>,
+    arguments: Vec<TypeId>,
+    explicit_spans: Vec<CheckSpan>,
+}
+
 impl TicketRecord {
     fn diagnostic(owner: RecordTicket, diagnostic: Diagnostic) -> Self {
         Self {
@@ -99,6 +115,7 @@ struct Resolver<'a, 'ast> {
     fallback: RecordTicket,
     error: TypeId,
     qualified_outer_type_parameters_visible: bool,
+    application_checks: Vec<StagedClassApplicationCheck>,
 }
 
 impl Resolver<'_, '_> {
@@ -150,13 +167,62 @@ impl Resolver<'_, '_> {
             })
             .collect()
     }
-}
 
-impl SurfaceTypeResolver<RecordTicket> for Resolver<'_, '_> {
-    fn resolve_name(&mut self, name: &str) -> SurfaceNameResolution<RecordTicket> {
-        let Some(id) = type_decl_id(self.binder, self.scope, name) else {
-            return SurfaceNameResolution::Unavailable(self.fallback);
-        };
+    fn alias_parameters(
+        &self,
+        params: &[TypeParamId],
+        defaults: &[Option<TypeId>],
+        declaration: Option<&oxc_ast::ast::TSTypeParameterDeclaration<'_>>,
+    ) -> Vec<ClassTypeParameter<RecordTicket>> {
+        params
+            .iter()
+            .enumerate()
+            .map(|(index, id)| ClassTypeParameter {
+                id: *id,
+                default: declaration
+                    .and_then(|declaration| declaration.params.get(index))
+                    .and_then(|parameter| parameter.default.as_ref())
+                    .map_or(ClassTypeParameterDefault::Absent, |_| {
+                        defaults.get(index).copied().flatten().map_or(
+                            ClassTypeParameterDefault::Unsupported(self.fallback),
+                            ClassTypeParameterDefault::Ready,
+                        )
+                    }),
+            })
+            .collect()
+    }
+
+    fn interface_parameters(
+        &self,
+        params: &[TypeParamId],
+        defaults: &[PublishedTypeParameterDefault],
+    ) -> Vec<ClassTypeParameter<RecordTicket>> {
+        params
+            .iter()
+            .enumerate()
+            .map(|(index, id)| ClassTypeParameter {
+                id: *id,
+                default: match defaults
+                    .get(index)
+                    .copied()
+                    .unwrap_or(PublishedTypeParameterDefault::Absent)
+                {
+                    PublishedTypeParameterDefault::Absent => ClassTypeParameterDefault::Absent,
+                    PublishedTypeParameterDefault::Ready(default) => {
+                        ClassTypeParameterDefault::Ready(default)
+                    }
+                    PublishedTypeParameterDefault::Unsupported => {
+                        ClassTypeParameterDefault::Unsupported(self.fallback)
+                    }
+                },
+            })
+            .collect()
+    }
+
+    fn resolve_group(
+        &self,
+        id: crate::binder::declaration::TypeGroupId,
+    ) -> SurfaceNameResolution<RecordTicket> {
         let Some(declaration) = self.declarations.get(id.index()) else {
             return SurfaceNameResolution::Unavailable(self.fallback);
         };
@@ -166,18 +232,26 @@ impl SurfaceTypeResolver<RecordTicket> for Resolver<'_, '_> {
                 parameters: self.class_parameters(declaration),
             },
             TypeDecl::Interface {
-                reserved, params, ..
+                reserved,
+                recovery_params,
+                recovery_defaults,
+                ..
             } => {
-                if params.is_empty() {
+                if recovery_params.is_empty() {
                     SurfaceNameResolution::Direct(*reserved)
                 } else {
                     SurfaceNameResolution::Alias {
                         template: *reserved,
-                        parameters: params.clone(),
+                        parameters: self.interface_parameters(recovery_params, recovery_defaults),
                     }
                 }
             }
-            TypeDecl::Alias { params, .. } | TypeDecl::Resolved { params } => {
+            TypeDecl::Alias {
+                params,
+                defaults,
+                param_decl,
+                ..
+            } => {
                 let Some(template) = self.resolved.get(id.index()).copied().flatten() else {
                     return SurfaceNameResolution::Poisoned(self.fallback);
                 };
@@ -189,24 +263,89 @@ impl SurfaceTypeResolver<RecordTicket> for Resolver<'_, '_> {
                 } else {
                     SurfaceNameResolution::Alias {
                         template,
-                        parameters: params.clone(),
+                        parameters: self.alias_parameters(params, defaults, *param_decl),
                     }
                 }
             }
+            TypeDecl::Resolved { params } => {
+                let Some(template) = self.resolved.get(id.index()).copied().flatten() else {
+                    return SurfaceNameResolution::Poisoned(self.fallback);
+                };
+                if template == self.error {
+                    return SurfaceNameResolution::Poisoned(self.fallback);
+                }
+                if params.is_empty() {
+                    SurfaceNameResolution::Direct(template)
+                } else {
+                    SurfaceNameResolution::Alias {
+                        template,
+                        parameters: params
+                            .iter()
+                            .map(|id| ClassTypeParameter {
+                                id: *id,
+                                default: ClassTypeParameterDefault::Absent,
+                            })
+                            .collect(),
+                    }
+                }
+            }
+            TypeDecl::UnsupportedClassInterface { .. } | TypeDecl::Unavailable { .. } => {
+                SurfaceNameResolution::FoundUnavailable(self.fallback)
+            }
         }
+    }
+}
+
+impl SurfaceTypeResolver<RecordTicket> for Resolver<'_, '_> {
+    fn resolve_name(&mut self, name: &str) -> SurfaceNameResolution<RecordTicket> {
+        let Some(id) = type_decl_id(self.binder, self.scope, name) else {
+            return SurfaceNameResolution::Unavailable(self.fallback);
+        };
+        self.resolve_group(id)
     }
 
     fn resolve_qualified_name(&mut self, segments: &[&str]) -> SurfaceNameResolution<RecordTicket> {
+        let resolution = self
+            .binder
+            .resolve_qualified_type_path(self.scope, segments);
+        if let crate::binder::namespace::QualifiedTypePathResolution::TypeGroup(group) = resolution
+        {
+            let endpoint = self.resolve_group(group);
+            if matches!(
+                endpoint,
+                SurfaceNameResolution::Direct(_)
+                    | SurfaceNameResolution::Alias { .. }
+                    | SurfaceNameResolution::Class { .. }
+                    | SurfaceNameResolution::FoundUnavailable(_)
+            ) {
+                return endpoint;
+            }
+        }
         SurfaceNameResolution::Qualified {
             owner: self.fallback,
-            resolution: self
-                .binder
-                .resolve_qualified_type_path(self.scope, segments),
+            resolution,
         }
     }
 
     fn qualified_outer_type_parameters_visible(&self) -> bool {
         self.qualified_outer_type_parameters_visible
+    }
+
+    fn record_type_argument_constraints(
+        &mut self,
+        parameters: &[TypeParamId],
+        arguments: &[TypeId],
+        explicit_spans: &[CheckSpan],
+    ) {
+        if explicit_spans.is_empty() {
+            return;
+        }
+        self.application_checks.push(StagedClassApplicationCheck {
+            owner: self.fallback,
+            parameters: parameters.to_vec(),
+            arguments: arguments.to_vec(),
+            explicit_spans: explicit_spans.to_vec(),
+        });
     }
 
     fn signature_type_parameter(
@@ -260,9 +399,26 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         _scopes: &[(ModuleOrdinal, ScopeId)],
     ) {
+        let class_groups: Vec<crate::binder::declaration::TypeGroupId> = self
+            .type_decls
+            .iter()
+            .enumerate()
+            .filter(|(_, declaration)| matches!(declaration, TypeDecl::Class { .. }))
+            .map(|(index, _)| {
+                crate::binder::declaration::TypeGroupId(
+                    u32::try_from(index).expect("type group index fits u32"),
+                )
+            })
+            .collect();
+        for group in &class_groups {
+            self.begin_type_group_construction(*group);
+        }
+        let type_decls = self.type_decls.clone();
+        let type_resolved = self.type_resolved.clone();
         let reservations: Vec<ClassReservation> = self.lexical_events.classes().to_vec();
         let mut construction = ClassConstruction::default();
         let mut default_checks = Vec::new();
+        let mut application_checks = Vec::new();
         let mut records = Vec::new();
         let mut heritage_spans = BTreeMap::new();
 
@@ -273,8 +429,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 &mut construction,
                 &mut factory,
                 self.binder,
-                &self.type_decls,
-                &self.type_resolved,
+                &type_decls,
+                &type_resolved,
                 &self.lexical_events,
                 error,
             );
@@ -290,7 +446,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 params,
                 param_decl,
                 class,
-            }) = self.type_decls.get(binding.type_decl.index())
+                ..
+            }) = type_decls.get(binding.type_decl.index())
             else {
                 continue;
             };
@@ -326,13 +483,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let mut resolver = Resolver {
                 binder: self.binder,
                 scope,
-                declarations: &self.type_decls,
-                resolved: &self.type_resolved,
+                declarations: &type_decls,
+                resolved: &type_resolved,
                 reservations: &self.lexical_events,
                 module: reservation.source.module_ordinal,
                 fallback: reservation.tickets.incomplete,
                 error,
                 qualified_outer_type_parameters_visible: true,
+                application_checks: Vec::new(),
             };
             let mut factory = SurfaceTypeFactory::new(self.interner);
             let frame: Vec<(String, TypeId)> = param_decl
@@ -484,9 +642,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             );
             records.extend(produced);
             default_checks.extend(checks);
+            application_checks.append(&mut resolver.application_checks);
             surface_poison.extend(publication_surface_poison);
             self.class_body_views.insert(class_id, body_view);
-            self.decl_types.set(binding.value_decl, static_side);
+            if let Some(value_decl) = binding.value_decl {
+                self.decl_types.set(value_decl, static_side);
+            }
             if let Some(name) = class.id.as_ref() {
                 self.class_names.insert(class_id, name.name.to_string());
             }
@@ -497,7 +658,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 &mut resolver,
                 self.binder,
                 scope,
-                &self.type_decls,
+                &type_decls,
                 class,
                 &frame,
             );
@@ -564,7 +725,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let publication = construction
             .finish(self.interner)
             .expect("class publication must preserve reserved identities");
-        self.published_classes = publication.published;
+        self.staged_published_classes = Some(publication.published);
         self.class_application_parameters = publication.type_parameters;
         for obligation in publication.obligations {
             match obligation {
@@ -611,22 +772,102 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
         self.retained_class_callables = publication.retained_callables;
         self.class_super_constructors = publication.heritage_constructors;
-        self.class_publication_complete = true;
+        for group in class_groups {
+            self.freeze_type_group(group);
+        }
         for reservation in self.lexical_events.classes() {
             let Some(binding) = reservation.binding.as_ref() else {
                 continue;
             };
-            if let DemandOutcome::Ready(surface) =
-                self.published_classes.published_class(binding.class_id)
+            if let DemandOutcome::Ready(surface) = self
+                .staged_published_classes
+                .as_ref()
+                .expect("class registry remains staged until type publication")
+                .published_class(binding.class_id)
             {
-                self.decl_types
-                    .set(binding.value_decl, surface.static_template());
+                if let Some(value_decl) = binding.value_decl {
+                    self.decl_types.set(value_decl, surface.static_template());
+                }
             }
+        }
+        records.extend(abstract_completeness_records(
+            &self.lexical_events,
+            &type_decls,
+            &self.class_parents,
+        ));
+        for declaration in &type_decls {
+            let TypeDecl::Class {
+                class_id, class, ..
+            } = declaration
+            else {
+                continue;
+            };
+            let (ctor_visibility, ctor_declaring_class) =
+                effective_constructor_access(*class_id, class, &type_decls, &self.class_parents);
+            self.class_new_metadata.insert(
+                *class_id,
+                PublishedClassNewMetadata {
+                    is_abstract: class.r#abstract,
+                    ctor_visibility,
+                    ctor_declaring_class,
+                    has_source_overloads: super::visibility::constructor_declaration_count(class)
+                        > 1,
+                },
+            );
+        }
+        self.collect_override_checks(&type_decls);
+        assert!(self.staged_class_validation.is_none());
+        self.staged_class_validation = Some(StagedClassValidation {
+            records,
+            default_checks,
+            application_checks,
+        });
+    }
+
+    pub(in crate::check::checker) fn validate_published_class_surfaces(&mut self) {
+        assert!(
+            self.type_environment.is_published(),
+            "class validation requires the complete immutable type-group registry"
+        );
+        let StagedClassValidation {
+            mut records,
+            default_checks,
+            application_checks,
+        } = self
+            .staged_class_validation
+            .take()
+            .expect("class validation is consumed exactly once");
+        for check in application_checks {
+            let substitutions = check
+                .parameters
+                .iter()
+                .copied()
+                .zip(check.arguments.iter().copied())
+                .collect();
+            let checks = check
+                .parameters
+                .iter()
+                .zip(&check.arguments)
+                .zip(&check.explicit_spans)
+                .map(|((&parameter, &argument), &span)| {
+                    (
+                        self.interner.store().type_param_constraint(parameter),
+                        argument,
+                        span,
+                    )
+                })
+                .collect();
+            let mut effects = CheckerEffects::new(check.owner);
+            effects.constraint_checks.push(ConstraintCheckObligation {
+                checks,
+                substitutions,
+            });
+            self.enqueue_effects(effects);
         }
         for (owner, source, target, span) in default_checks {
             let outcome = SemanticQueryCoordinator::new(
                 self.interner,
-                &self.published_classes,
+                self.type_environment.published().classes(),
                 &mut self.semantic_queries,
                 &mut self.next_type_param,
             )
@@ -652,7 +893,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         owner,
                         IncompleteSurface::new(id, span, context),
                     ));
-                    true
+                    false
                 }
             };
             if failed {
@@ -664,21 +905,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 ));
             }
         }
-        records.extend(abstract_completeness_records(
-            &self.lexical_events,
-            &self.type_decls,
-            &self.class_parents,
-        ));
         records.sort_by_key(|record| (record.owner, record.source_start));
         for record in records {
             self.enqueue_ticket_record(record.owner, record.record);
         }
-        self.collect_override_checks();
     }
 
-    fn collect_override_checks(&mut self) {
-        let class_defs: FxHashMap<ClassId, &Class<'_>> = self
-            .type_decls
+    fn collect_override_checks(&mut self, type_decls: &[TypeDecl<'_>]) {
+        let class_defs: FxHashMap<ClassId, &Class<'_>> = type_decls
             .iter()
             .filter_map(|declaration| match declaration {
                 TypeDecl::Class {
@@ -697,7 +931,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 class,
                 class_id,
                 ..
-            }) = self.type_decls.get(binding.type_decl.index())
+            }) = type_decls.get(binding.type_decl.index())
             else {
                 continue;
             };
@@ -719,8 +953,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 continue;
             }
             let (derived_object, base_object) = match (
-                self.published_classes.published_class(class_id),
-                self.published_classes.published_class(parent),
+                self.staged_published_classes
+                    .as_ref()
+                    .expect("override candidates use the frozen staged class registry")
+                    .published_class(class_id),
+                self.staged_published_classes
+                    .as_ref()
+                    .expect("override candidates use the frozen staged class registry")
+                    .published_class(parent),
             ) {
                 (DemandOutcome::Ready(derived), DemandOutcome::Ready(base)) => (
                     self.interner
@@ -832,6 +1072,43 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         }
     }
+}
+
+fn effective_constructor_access(
+    class_id: ClassId,
+    class: &Class<'_>,
+    declarations: &[TypeDecl<'_>],
+    parents: &FxHashMap<ClassId, ClassId>,
+) -> (Visibility, ClassId) {
+    if super::visibility::constructor_declaration_count(class) > 0 {
+        return (super::visibility::constructor_visibility(class), class_id);
+    }
+    let mut visited = rustc_hash::FxHashSet::default();
+    let mut current = class_id;
+    while visited.insert(current) {
+        let Some(parent) = parents.get(&current).copied() else {
+            break;
+        };
+        let parent_class = declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                TypeDecl::Class {
+                    class_id, class, ..
+                } if *class_id == parent => Some(*class),
+                _ => None,
+            });
+        let Some(parent_class) = parent_class else {
+            break;
+        };
+        if super::visibility::constructor_declaration_count(parent_class) > 0 {
+            return (
+                super::visibility::constructor_visibility(parent_class),
+                parent,
+            );
+        }
+        current = parent;
+    }
+    (Visibility::Public, class_id)
 }
 
 type DefaultConstraintCheck = (RecordTicket, TypeId, TypeId, CheckSpan);
@@ -1972,6 +2249,7 @@ fn register_reserved_surface_roots<'ast>(
                 }
             }
             TypeDecl::Interface {
+                declaration,
                 scope,
                 reserved,
                 params,
@@ -1979,10 +2257,7 @@ fn register_reserved_surface_roots<'ast>(
                 extends,
                 ..
             } => {
-                let decl_id = LegacyTypeStorageId(
-                    u32::try_from(index).expect("type declaration index fits binder identity"),
-                );
-                let Some(source) = reservations.type_decl_source(decl_id) else {
+                let Some(source) = reservations.declaration_source(*declaration) else {
                     let _ = construction.roots_mut().register(
                         *reserved,
                         ReservedRootKind::Interface,
@@ -1992,7 +2267,7 @@ fn register_reserved_surface_roots<'ast>(
                 };
                 let scope = *scope;
                 let fallback = reservations
-                    .type_decl_owner(decl_id)
+                    .declaration_owner(*declaration)
                     .expect("reserved type declaration retains its lexical owner")
                     .ticket;
                 let mut resolver = Resolver {
@@ -2005,6 +2280,7 @@ fn register_reserved_surface_roots<'ast>(
                     fallback,
                     error,
                     qualified_outer_type_parameters_visible: true,
+                    application_checks: Vec::new(),
                 };
                 let frame = param_decl
                     .iter()
@@ -2072,6 +2348,8 @@ fn register_reserved_surface_roots<'ast>(
                             .copied()
                             .flatten()
                             .filter(|root| *root != error),
+                        TypeDecl::UnsupportedClassInterface { .. }
+                        | TypeDecl::Unavailable { .. } => None,
                     };
                     children.extend(child);
                 }
@@ -2081,7 +2359,10 @@ fn register_reserved_surface_roots<'ast>(
                     children,
                 );
             }
-            TypeDecl::Class { .. } | TypeDecl::Resolved { .. } => {}
+            TypeDecl::Class { .. }
+            | TypeDecl::Resolved { .. }
+            | TypeDecl::UnsupportedClassInterface { .. }
+            | TypeDecl::Unavailable { .. } => {}
         }
     }
 }
@@ -2278,7 +2559,9 @@ fn own_surface_failure(
             expected_min,
             expected_max,
         } => {
-            let diagnostic = if expected_min == expected_max {
+            let diagnostic = if expected_max == 0 {
+                Diagnostic::type_is_not_generic(CheckSpan::from_oxc(span), &name)
+            } else if expected_min == expected_max {
                 Diagnostic::generic_type_requires_arguments(
                     CheckSpan::from_oxc(span),
                     &name,

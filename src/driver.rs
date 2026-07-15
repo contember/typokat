@@ -858,9 +858,6 @@ mod tests {
             );
             assert!(imports
                 .iter()
-                .all(|declaration| declaration.type_group.is_none()));
-            assert!(imports
-                .iter()
                 .all(|declaration| declaration.site.scope == Some(use_scope)));
 
             let symbol = |scope, name: &str| {
@@ -886,36 +883,26 @@ mod tests {
 
             let remote_type = symbol(dep_scope, "Both").ty.expect("exported type storage");
             assert_eq!(imports[2].value_storage, None);
-            assert_eq!(imports[2].legacy_type_storage, Some(remote_type));
+            assert_eq!(imports[2].type_group, Some(remote_type));
             assert_eq!(symbol(use_scope, "TypeOnly").value, None);
             assert_eq!(symbol(use_scope, "TypeOnly").ty, Some(remote_type));
             assert!(symbol(use_scope, "TypeOnly").blocks_value_lookup);
 
             assert!(imports[3].value_storage.is_some());
-            assert!(imports[3].legacy_type_storage.is_some());
+            assert!(imports[3].type_group.is_none());
             assert!(imports[4].value_storage.is_some());
-            assert!(imports[4].legacy_type_storage.is_some());
+            assert!(imports[4].type_group.is_none());
             assert_ne!(imports[3].value_storage, imports[4].value_storage);
-            assert_ne!(
-                imports[3].legacy_type_storage,
-                imports[4].legacy_type_storage
-            );
             assert_eq!(
                 symbol(use_scope, "MissingLocal").value,
                 imports[3].value_storage
             );
-            assert_eq!(
-                symbol(use_scope, "MissingLocal").ty,
-                imports[3].legacy_type_storage
-            );
+            assert_eq!(symbol(use_scope, "MissingLocal").ty, imports[3].type_group);
             assert_eq!(
                 symbol(use_scope, "OtherMissing").value,
                 imports[4].value_storage
             );
-            assert_eq!(
-                symbol(use_scope, "OtherMissing").ty,
-                imports[4].legacy_type_storage
-            );
+            assert_eq!(symbol(use_scope, "OtherMissing").ty, imports[4].type_group);
 
             let owners: Vec<_> = imports
                 .iter()
@@ -1188,7 +1175,7 @@ mod tests {
                     symbol.name,
                     symbol.value.is_some(),
                     symbol.ty.is_some(),
-                    symbol.type_group.is_some(),
+                    symbol.ty.is_some(),
                     symbol.function_values.len()
                 )
             }
@@ -1265,7 +1252,6 @@ mod tests {
                     .expect("dormant global anchor");
                 assert_eq!(symbol.value, None);
                 assert_eq!(symbol.ty, None);
-                assert_eq!(symbol.type_group, None);
             }
             assert!(scopes.iter().all(|scope| binder
                 .graph
@@ -1568,7 +1554,7 @@ mod tests {
         let source = "namespace Dormant {} let typed: Dormant; Dormant;";
         let output = check_source(source);
         assert!(output.parse_errors.is_empty());
-        assert_eq!(output.incomplete.len(), 1);
+        assert!(output.incomplete.is_empty());
         assert_eq!(
             output
                 .diagnostics

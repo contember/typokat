@@ -68,6 +68,7 @@ EOF spans.
 | `TK2304` | Cannot find name (unresolved identifier) |
 | `TK2305` | Module has no exported member |
 | `TK2307` | Cannot find module |
+| `TK2310` | Type recursively references itself as a base type |
 | `TK2313` | Type parameter has a circular constraint (`<T extends T>`) |
 | `TK2314` | Generic type requires a different number of type arguments |
 | `TK2315` | Type is not generic |
@@ -107,6 +108,7 @@ EOF spans.
 | `TK2687` | Merged property declarations must have identical modifiers |
 | `TK2694` | Namespace has no exported member |
 | `TK2702` | A type-only name is used as a namespace |
+| `TK2706` | Required type parameters may not follow optional type parameters |
 | `TK2707` | Generic type requires between a minimum and maximum number of type arguments |
 | `TK2713` | A type-only path segment is accessed as a namespace |
 | `TK2717` | Subsequent property declaration has an incompatible type |
@@ -258,7 +260,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b41_generic_methods/` | shipped B41 | generic method/call/construct signatures: persistent binders through outer substitution, calls, relation, overloads, inheritance, and cache order |
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
-| `b43_namespaces_declaration_merging/` | backlog `43` (disabled, unregistered) | namespace type containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global/UMD forms, and an explicitly backlog-42-deferred typed-incomplete chimera |
+| `b43_namespaces_declaration_merging/` | backlog `43` (WU3 subset gated; full directory disabled) | namespace type containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global/UMD forms, and an explicitly backlog-42-deferred typed-incomplete chimera |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 
@@ -345,7 +347,7 @@ code-only because the exact fixed target can be literal-, primitive-, or
 union-shaped depending on candidate priority and contextual use. The corpus keeps
 at most one mismatched argument per call, per the general call-marker rule above.
 
-`b43_namespaces_declaration_merging/` is the disabled 30-file WU0/WU2 oracle corpus for the
+`b43_namespaces_declaration_merging/` is the 41-file WU0-WU3 oracle corpus for the
 namespace/declaration-space sprint. It covers merged property/method/call/construct/index and
 heritage surfaces, overload precedence and query order, generic constraint/default compatibility,
 recursive merge groups in opposite declaration orders, namespace syntax/reopening/visibility,
@@ -394,6 +396,54 @@ pins the namespace-order diagnostic, and requires receiver-use errors so an `any
 cannot pass it. Exact `TS2567` ownership remains a WU0A/direct-test gate.
 Direct merged-class identity/publication remains a WU0A test because marker fixtures observe only
 downstream surfaces and diagnostics.
+
+The full directory remains disabled while WU4/WU5-owned fixtures are red. The conformance harness
+instead gates this 19-file WU3 slice explicitly through `ENABLED_FIXTURES`:
+`interface_conflicts.ts`, `interface_members.ts`, `interface_recursion.ts`, `namespace_forms.ts`,
+`wu2_annotation_recovery.ts`, `wu2_checker_local_qualified_roots.ts`,
+`wu2_interface_traversal.ts`, `wu2_qualified_contexts.ts`,
+`wu3_cyclic_heritage_recovery.ts`, `wu3_deferred_heritage_identity.ts`,
+`wu3_forward_reopening_qualified_leaf.ts`, `wu3_heritage_index_conflicts.ts`,
+`wu3_independent_heritage_conflicts.ts`,
+`wu3_merged_interface_recovery.ts`, `wu3_qualified_alias_chain.ts`,
+`wu3_qualified_class_surfaces.ts`, `wu3_qualified_generic_leaves.ts`,
+`wu3_sole_supplied_constraint_orders.ts`, and `wu3_unavailable_header_metadata.ts`. The new cyclic
+heritage oracle pins `tsc 6.0.3 --strict --lib es5 --noEmit`: each interface binding owns one
+source-ordered `TS2310`, an unresolved in-SCC heritage argument independently owns `TS2304`, and a
+non-heritage generic recursive member remains clean. A singleton self-SCC diagnoses only its
+self-edge fragments, while a multi-group mutual SCC diagnoses every reopening fragment. Direct,
+chained, generic, and mutual alias-mediated heritage cycles follow the same alias-transparent rule
+in both declaration orders; the generic self-cycle also retains its deterministic own/external
+members. Other invalid-cycle downstream recovery is deliberately not an oracle because tsc exposes
+partial members by declaration order. The selected
+heritage/index oracle pins both base orders for inherited string/number indices, inherited
+property-to-string-index and number-to-string-index constraints, own property/index overlays,
+directional optional-required property overrides, compatible readonly/reverse-optional controls,
+and legal accumulation of differing call signatures. Same-kind inherited and
+own-overlay failures use header-owned `TS2430`; cross-family failures use `TS2411`/`TS2413` at the
+derived header or exact own member occurrence, matching the tsc source site. The selected
+deferred-identity oracle balances alpha-equivalent clean controls against unequal `TS2320`
+controls for conditional, `keyof`, template, mapped, alias-instantiation, and indexed-access
+generic method returns, plus duplicate-collapsing normalized intersection semantics. Per-base-pair
+coalescing waits for the first semantic failure after an earlier raw-different/equal-normalized
+property, in canonical property order. It also requires distinct same-shaped public classes to remain structurally
+identical while private/protected declaring origins remain nominally unequal, and treats property
+readonly/optional metadata as identity-bearing even when the read `TypeId` is equal. Cross-fragment
+property conflicts likewise compare alias-normalized, alpha-generic, and distinct public-class
+types semantically after publication, while a distinct private class origin owns `TS2717` at the
+later property occurrence. The selected
+generic-header oracle also requires alpha-equivalent nested generic binders in constraints and
+defaults to remain clean, while a declaration pair with both unequal nested constraints and
+defaults coalesces to one header-owned `TS2428` per declaration. The selected
+WU2 fixtures contain successful qualified
+leaves whose classification belongs to WU2 but whose lowering closes only with WU3; the gate also
+retains their earlier diagnostics and incomplete records unchanged.
+
+Three mixed WU2/WU3 fixtures remain outside this gate because their namespace surfaces cross into
+WU4/WU5 value/static or ambient publication: `qualified_diagnostics.ts`,
+`wu2_ambient_export_alias_list.ts`, and `wu2_topology_slot_edges.ts`. The selected type-only WU3
+fixtures cover qualified generic-leaf arity/constraint checks and nested generic lowering,
+qualified leaves through exported type-alias chains, and qualified forward-reopening leaf lowering.
 
 ## Soundness-review corpora (sprint 2026-07-10)
 

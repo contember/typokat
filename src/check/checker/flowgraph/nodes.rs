@@ -166,7 +166,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         let t = if guard_symbol == symbol {
                             match narrow_query(
                                 self.interner,
-                                &self.published_classes,
+                                self.type_environment.published().classes(),
                                 &mut self.semantic_queries,
                                 &mut self.next_type_param,
                                 base,

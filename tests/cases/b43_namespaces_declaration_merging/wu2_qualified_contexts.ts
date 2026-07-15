@@ -28,7 +28,7 @@ type UnionUnavailableFirst = Available.Good | MissingRoot.Bad; // error[TK2503]:
 type FunctionUnavailableFirst = (value: Available.Good) => MissingReturn.Bad; // error[TK2503]: Cannot find namespace 'MissingReturn'
 
 enum DeferredEnum { A } // incomplete[decl/enum-declaration/self]
-type EnumUnavailableFirst = DeferredEnum.A | MissingEnumSibling.Bad; // error[TK2503]: Cannot find namespace 'MissingEnumSibling'
+type EnumUnavailableFirst = DeferredEnum.A | MissingEnumSibling.Bad; // incomplete[annotation-lower/type-name/qualified-enum] | error[TK2503]: Cannot find namespace 'MissingEnumSibling'
 
 class GenericBase<T> {}
 class QualifiedHeritage extends GenericBase<MissingHeritage.Root> {} // incomplete[class/class-heritage/type-arguments] | error[TK2503]: Cannot find namespace 'MissingHeritage'
@@ -39,6 +39,6 @@ class ComputedClassField {
 }
 
 class GenericHeaderOrder<
-  First extends MissingHeader.C1 = MissingHeader.D1, // error[TK2503]: Cannot find namespace 'MissingHeader' | error[TK2503]: Cannot find namespace 'MissingHeader'
-  Second extends MissingHeader.C2 = MissingHeader.D2, // error[TK2503]: Cannot find namespace 'MissingHeader' | error[TK2503]: Cannot find namespace 'MissingHeader'
+  First extends MissingHeader.C1 = MissingHeader.D1, // error[TK2503]: Cannot find namespace 'MissingHeader' | error[TK2503]: Cannot find namespace 'MissingHeader' | incomplete[annotation-lower/type-parameter-default/self]
+  Second extends MissingHeader.C2 = MissingHeader.D2, // error[TK2503]: Cannot find namespace 'MissingHeader' | error[TK2503]: Cannot find namespace 'MissingHeader' | incomplete[annotation-lower/type-parameter-default/self]
 > {}

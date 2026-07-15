@@ -369,9 +369,6 @@ new Derived().inherited;
             .iter()
             .map(|record| record.id.as_str())
             .collect::<Vec<_>>(),
-        [
-            "decl/module-declaration/self",
-            "class/class-heritage/type-arguments"
-        ]
+        ["class/class-heritage/type-arguments"]
     );
 }

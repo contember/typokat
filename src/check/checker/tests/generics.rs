@@ -189,5 +189,8 @@ const x: Box<number> = { value: 1 };
 type Bad = Box<number, string>;
 const y: Bad = { value: 1 };
 ";
-    assert_eq!(diags(src), vec![(3, "TK2558".to_string())]);
+    assert_eq!(
+        diags(src),
+        vec![(3, "TK2558".to_string()), (5, "TK2314".to_string())]
+    );
 }

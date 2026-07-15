@@ -23,6 +23,7 @@ use crate::span::Span;
 /// listed; later milestones add variants.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum DiagnosticCode {
+    TK2300,
     /// Static member references its containing class's type parameter.
     TK2302,
     /// Cannot find name (unresolved identifier).
@@ -31,10 +32,15 @@ pub enum DiagnosticCode {
     TK2305,
     /// Cannot find module.
     TK2307,
+    /// An interface recursively references itself through its base types.
+    TK2310,
     /// Type parameter has a circular constraint (`<T extends T>`) — M24.
     TK2313,
     /// Generic type requires an exact number of type arguments.
     TK2314,
+    /// A non-generic type was supplied type arguments.
+    TK2315,
+    TK2320,
     /// Type X is not assignable to type Y.
     TK2322,
     /// Property does not exist on type (member access).
@@ -53,9 +59,15 @@ pub enum DiagnosticCode {
     TK2391,
     /// Overload signature is not compatible with its implementation signature.
     TK2394,
+    TK2374,
+    TK2411,
+    TK2413,
     /// Property in a derived type is not assignable to the same property in the
     /// base type (override compatibility) — backlog 06.
     TK2416,
+    TK2428,
+    /// An interface's complete surface is incompatible with one extended base.
+    TK2430,
     /// Property is protected (accessed outside the class and its subclasses) —
     /// M13.
     TK2445,
@@ -79,14 +91,18 @@ pub enum DiagnosticCode {
     TK2674,
     /// The call receiver is not assignable to an explicit `this` parameter.
     TK2684,
+    TK2687,
     /// Namespace has no exported member.
     TK2694,
     /// A type-only name is used as a namespace.
     TK2702,
+    /// A required type parameter follows an optional type parameter.
+    TK2706,
     /// Generic type requires a bounded range of type arguments.
     TK2707,
     /// A type-only path segment is accessed as a namespace.
     TK2713,
+    TK2717,
     /// Cannot assign to a read-only property — M14.
     TK2540,
     /// Wrong number of call arguments (arity).
@@ -111,12 +127,16 @@ impl DiagnosticCode {
     /// The rendered code string, e.g. `"TK2322"`.
     pub fn as_str(self) -> &'static str {
         match self {
+            DiagnosticCode::TK2300 => "TK2300",
             DiagnosticCode::TK2302 => "TK2302",
             DiagnosticCode::TK2304 => "TK2304",
             DiagnosticCode::TK2305 => "TK2305",
             DiagnosticCode::TK2307 => "TK2307",
+            DiagnosticCode::TK2310 => "TK2310",
             DiagnosticCode::TK2313 => "TK2313",
             DiagnosticCode::TK2314 => "TK2314",
+            DiagnosticCode::TK2315 => "TK2315",
+            DiagnosticCode::TK2320 => "TK2320",
             DiagnosticCode::TK2322 => "TK2322",
             DiagnosticCode::TK2339 => "TK2339",
             DiagnosticCode::TK2341 => "TK2341",
@@ -126,7 +146,12 @@ impl DiagnosticCode {
             DiagnosticCode::TK2353 => "TK2353",
             DiagnosticCode::TK2391 => "TK2391",
             DiagnosticCode::TK2394 => "TK2394",
+            DiagnosticCode::TK2374 => "TK2374",
+            DiagnosticCode::TK2411 => "TK2411",
+            DiagnosticCode::TK2413 => "TK2413",
             DiagnosticCode::TK2416 => "TK2416",
+            DiagnosticCode::TK2428 => "TK2428",
+            DiagnosticCode::TK2430 => "TK2430",
             DiagnosticCode::TK2445 => "TK2445",
             DiagnosticCode::TK2503 => "TK2503",
             DiagnosticCode::TK2511 => "TK2511",
@@ -136,10 +161,13 @@ impl DiagnosticCode {
             DiagnosticCode::TK2673 => "TK2673",
             DiagnosticCode::TK2674 => "TK2674",
             DiagnosticCode::TK2684 => "TK2684",
+            DiagnosticCode::TK2687 => "TK2687",
             DiagnosticCode::TK2694 => "TK2694",
             DiagnosticCode::TK2702 => "TK2702",
+            DiagnosticCode::TK2706 => "TK2706",
             DiagnosticCode::TK2707 => "TK2707",
             DiagnosticCode::TK2713 => "TK2713",
+            DiagnosticCode::TK2717 => "TK2717",
             DiagnosticCode::TK2540 => "TK2540",
             DiagnosticCode::TK2554 => "TK2554",
             DiagnosticCode::TK2555 => "TK2555",
@@ -285,6 +313,93 @@ pub(crate) fn qualified_type_topology_diagnostic(
 }
 
 impl Diagnostic {
+    fn declaration_merge(code: DiagnosticCode, span: Span, message: String) -> Self {
+        Diagnostic {
+            code,
+            severity: Severity::Error,
+            message,
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    pub fn merged_interface_type_parameters(span: Span, name: &str) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK2428,
+            span,
+            format!("All declarations of '{name}' must have identical type parameters."),
+        )
+    }
+
+    pub fn duplicate_identifier(span: Span, name: &str) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK2300,
+            span,
+            format!("Duplicate identifier '{name}'."),
+        )
+    }
+
+    pub fn subsequent_property_type(span: Span, name: &str) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK2717,
+            span,
+            format!("Subsequent property declarations must have the same type. Property '{name}' has a conflicting type."),
+        )
+    }
+
+    pub fn identical_property_modifiers(span: Span, name: &str) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK2687,
+            span,
+            format!("All declarations of '{name}' must have identical modifiers."),
+        )
+    }
+
+    pub fn duplicate_index_signature(span: Span, key: &str) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK2374,
+            span,
+            format!("Duplicate index signature for type '{key}'."),
+        )
+    }
+
+    pub fn number_index_incompatible(span: Span, source: &str, target: &str) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK2413,
+            span,
+            format!("'number' index type '{source}' is not assignable to 'string' index type '{target}'."),
+        )
+    }
+
+    pub fn property_incompatible_with_string_index(
+        span: Span,
+        name: &str,
+        source: &str,
+        target: &str,
+    ) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK2411,
+            span,
+            format!("Property '{name}' of type '{source}' is not assignable to 'string' index type '{target}'."),
+        )
+    }
+
+    pub fn incompatible_interface_heritage(span: Span, left: &str, right: &str) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK2320,
+            span,
+            format!("Interface cannot simultaneously extend types '{left}' and '{right}'."),
+        )
+    }
+
+    pub fn incorrectly_extends_interface(span: Span, derived: &str, base: &str) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK2430,
+            span,
+            format!("Interface '{derived}' incorrectly extends interface '{base}'."),
+        )
+    }
+
     /// Construct a `TK2302` static-member class-binder error.
     pub fn static_member_references_class_type_parameter(span: Span) -> Self {
         Diagnostic {
@@ -424,6 +539,17 @@ impl Diagnostic {
             code: DiagnosticCode::TK2313,
             severity: Severity::Error,
             message: format!("Type parameter '{name}' has a circular constraint."),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2310` cyclic-interface-heritage error at the interface binding.
+    pub fn circular_interface_heritage(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2310,
+            severity: Severity::Error,
+            message: format!("Type '{name}' recursively references itself as a base type."),
             span,
             elaboration: Vec::new(),
         }
@@ -767,6 +893,16 @@ impl Diagnostic {
         }
     }
 
+    pub fn type_is_not_generic(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2315,
+            severity: Severity::Error,
+            message: format!("Type '{name}' is not generic"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
     /// Construct a `TK2707` ranged generic type-argument count error.
     pub fn generic_type_requires_argument_range(
         span: Span,
@@ -780,6 +916,18 @@ impl Diagnostic {
             message: format!(
                 "Generic type '{display}' requires between {min} and {max} type arguments"
             ),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2706` required-after-optional type parameter error.
+    pub fn required_type_parameter_after_optional(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2706,
+            severity: Severity::Error,
+            message: "Required type parameters may not follow optional type parameters."
+                .to_string(),
             span,
             elaboration: Vec::new(),
         }

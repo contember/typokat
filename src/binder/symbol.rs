@@ -3,7 +3,7 @@
 //! One symbol owns separate value/type/namespace slots, so declaration merging is
 //! represented directly in the scope graph instead of by a parallel model.
 
-use crate::binder::declaration::{DeclId, LegacyTypeStorageId, TypeGroupId, ValueStorageId};
+use crate::binder::declaration::{DeclId, TypeGroupId, ValueStorageId};
 use crate::binder::namespace::NamespaceId;
 
 /// Index of a symbol within the binder's [`SymbolTable`].
@@ -36,10 +36,12 @@ pub struct Symbol {
     /// while keeping the ordinary `value` slot as the current externally resolved
     /// declaration.
     pub function_values: Vec<ValueStorageId>,
-    /// Legacy type-storage declaration retained until the atomic WU3 cutover.
-    pub ty: Option<LegacyTypeStorageId>,
-    /// Dormant ordered type declaration group; production consumers ignore it in WU1a.
-    pub type_group: Option<TypeGroupId>,
+    /// Stable ordered type declaration group.
+    pub ty: Option<TypeGroupId>,
+    /// Imported group ids are references, never declaration-merge owners.
+    pub owns_type_group: bool,
+    /// An unavailable import must hide matching type slots in parent scopes.
+    pub blocks_type_lookup: bool,
     /// Namespace-space declaration (`namespace`/module).
     /// Dormant until the namespace publication cutover.
     pub ns: Option<NamespaceId>,
@@ -57,7 +59,8 @@ impl Symbol {
             blocks_value_lookup: false,
             function_values: Vec::new(),
             ty: None,
-            type_group: None,
+            owns_type_group: false,
+            blocks_type_lookup: false,
             ns: None,
             declarations: Vec::new(),
         }

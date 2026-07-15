@@ -40,7 +40,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     pub(in crate::check::checker) fn evaluate_type(&mut self, ty: TypeId) -> DemandOutcome<TypeId> {
         SemanticQueryCoordinator::new(
             self.interner,
-            &self.published_classes,
+            self.type_environment.published().classes(),
             &mut self.semantic_queries,
             &mut self.next_type_param,
         )

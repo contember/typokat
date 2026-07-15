@@ -6,7 +6,7 @@
 // type group (or for a `this` name), and `lower_annotation_inner` drops `TSThisType` /
 // `TSTypePredicate` silently.
 
-namespace A { // incomplete[decl/module-declaration/self]
+namespace A {
   export interface B {}
 }
 

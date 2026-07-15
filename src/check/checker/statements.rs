@@ -18,8 +18,9 @@ use crate::types::repr::ObjectType;
 use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
     BindingPattern, BlockStatement, Declaration, Expression, ForInStatement, ForOfStatement,
-    ForStatement, ForStatementInit, ForStatementLeft, Function, Statement, TryStatement,
-    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    ForStatement, ForStatementInit, ForStatementLeft, Function, Statement, TSModuleDeclaration,
+    TSModuleDeclarationBody, TryStatement, VariableDeclaration, VariableDeclarationKind,
+    VariableDeclarator,
 };
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
@@ -224,11 +225,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     "enum declaration not modeled",
                 );
             }
-            Statement::TSModuleDeclaration(_) => {
+            Statement::TSModuleDeclaration(declaration)
+                if !module_declaration_is_type_only(declaration) =>
+            {
                 self.record_incomplete(
                     "decl/module-declaration/self",
                     Span::from_oxc(stmt.span()),
-                    "namespace/module declaration not modeled",
+                    "namespace/module declaration has an unmodeled value surface",
                 );
             }
             Statement::TSGlobalDeclaration(_) => {
@@ -332,11 +335,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     "enum declaration not modeled",
                 );
             }
-            Declaration::TSModuleDeclaration(_) => {
+            Declaration::TSModuleDeclaration(declaration)
+                if !module_declaration_is_type_only(declaration) =>
+            {
                 self.record_incomplete(
                     "decl/module-declaration/self",
                     Span::from_oxc(decl.span()),
-                    "namespace/module declaration not modeled",
+                    "namespace/module declaration has an unmodeled value surface",
                 );
             }
             Declaration::TSGlobalDeclaration(_) => {
@@ -720,9 +725,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         };
         let published = self.lexical_events.classes().iter().any(|reservation| {
             reservation.binding.as_ref().is_some_and(|binding| {
-                binding.value_decl == class_decl
+                binding.value_decl == Some(class_decl)
                     && matches!(
-                        self.published_classes.published_class(binding.class_id),
+                        self.type_environment
+                            .published()
+                            .classes()
+                            .published_class(binding.class_id),
                         crate::class_semantics::DemandOutcome::Ready(_)
                     )
             })
@@ -1361,7 +1369,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let check = |pass: &mut Self| {
                 let outcome = SemanticQueryCoordinator::new(
                     pass.interner,
-                    &pass.published_classes,
+                    pass.type_environment.published().classes(),
                     &mut pass.semantic_queries,
                     &mut pass.next_type_param,
                 )
@@ -1392,6 +1400,35 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 break;
             }
         }
+    }
+}
+
+fn module_declaration_is_type_only(declaration: &TSModuleDeclaration<'_>) -> bool {
+    match &declaration.body {
+        Some(TSModuleDeclarationBody::TSModuleBlock(block)) => {
+            block.body.iter().all(module_statement_is_type_only)
+        }
+        Some(TSModuleDeclarationBody::TSModuleDeclaration(nested)) => {
+            module_declaration_is_type_only(nested)
+        }
+        None => true,
+    }
+}
+
+fn module_statement_is_type_only(statement: &Statement<'_>) -> bool {
+    match statement {
+        Statement::TSInterfaceDeclaration(_) | Statement::TSTypeAliasDeclaration(_) => true,
+        Statement::TSModuleDeclaration(declaration) => module_declaration_is_type_only(declaration),
+        Statement::ExportNamedDeclaration(export) => match &export.declaration {
+            Some(Declaration::TSInterfaceDeclaration(_))
+            | Some(Declaration::TSTypeAliasDeclaration(_)) => true,
+            Some(Declaration::TSModuleDeclaration(declaration)) => {
+                module_declaration_is_type_only(declaration)
+            }
+            None => true,
+            _ => false,
+        },
+        _ => false,
     }
 }
 

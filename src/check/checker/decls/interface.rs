@@ -5,6 +5,7 @@ use crate::span::Span;
 use crate::types::repr::{ObjectType, PropertyType};
 use crate::types::store::TypeId;
 use oxc_ast::ast::{Expression, TSInterfaceHeritage, TSSignature};
+use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
 
 #[derive(Default)]
@@ -40,36 +41,236 @@ fn flatten_qualified_heritage_expression<'a>(
     }
 }
 
+pub(super) fn interface_heritage_root<'name>(
+    binder: &Binder,
+    scope: ScopeId,
+    heritage: &'name TSInterfaceHeritage<'_>,
+) -> Option<(crate::binder::declaration::TypeGroupId, &'name str, Span)> {
+    match &heritage.expression {
+        Expression::Identifier(identifier) => Some((
+            type_decl_id(binder, scope, identifier.name.as_str())?,
+            identifier.name.as_str(),
+            Span::from_oxc(identifier.span),
+        )),
+        Expression::StaticMemberExpression(member) => {
+            let mut segments = Vec::new();
+            if !flatten_qualified_heritage_expression(&heritage.expression, &mut segments) {
+                return None;
+            }
+            let names = segments
+                .iter()
+                .map(|segment| segment.name)
+                .collect::<Vec<_>>();
+            let crate::binder::namespace::QualifiedTypePathResolution::TypeGroup(group) =
+                binder.resolve_qualified_type_path(scope, &names)
+            else {
+                return None;
+            };
+            Some((group, segments.last()?.name, Span::from_oxc(member.span)))
+        }
+        _ => None,
+    }
+}
+
 impl<'a, 'ast> Pass<'a, 'ast> {
-    /// Fold `extends` bases into `own`, then return the composed object.
-    /// Bases merge left-to-right, own members override inherited ones, and non-object
-    /// bases contribute nothing in this deferred slice.
-    pub(super) fn compose_interface_heritage(
+    pub(super) fn validate_interface_heritage_application_without_resolution(
         &mut self,
         scope: ScopeId,
-        own: ObjectType,
-        extends: &[TSInterfaceHeritage<'_>],
+        heritage: &TSInterfaceHeritage<'_>,
+    ) {
+        let Some((group, name, span)) = interface_heritage_root(self.binder, scope, heritage)
+        else {
+            return;
+        };
+        self.validate_type_group_application_without_resolution(
+            scope,
+            group,
+            name,
+            span,
+            heritage.type_arguments.as_deref(),
+        );
+    }
+
+    pub(super) fn record_opaque_interface_heritage(
+        &mut self,
+        scope: ScopeId,
+        heritage: &TSInterfaceHeritage<'_>,
+    ) {
+        if let Some(arguments) = &heritage.type_arguments {
+            for argument in &arguments.params {
+                let _ = self.lower_annotation(scope, argument);
+            }
+        }
+        self.record_incomplete(
+            "interface/heritage/topology",
+            Span::from_oxc(heritage.span),
+            "heritage topology is outside the alias-transparent interface model",
+        );
+    }
+
+    pub(super) fn diagnose_poisoned_interface_heritage(
+        &mut self,
+        scope: ScopeId,
+        heritage: &TSInterfaceHeritage<'_>,
+    ) {
+        match &heritage.expression {
+            Expression::Identifier(identifier) => {
+                if let Some(group) = type_decl_id(self.binder, scope, identifier.name.as_str()) {
+                    let _ = self.resolve_type_group_reference(
+                        scope,
+                        group,
+                        identifier.name.as_str(),
+                        Span::from_oxc(identifier.span),
+                        heritage.type_arguments.as_deref(),
+                    );
+                    return;
+                }
+                if self
+                    .binder
+                    .resolve_type(scope, identifier.name.as_str())
+                    .is_none()
+                    && self
+                        .binder
+                        .resolve_value(scope, identifier.name.as_str())
+                        .is_none()
+                {
+                    self.emit_diagnostic(crate::diagnostics::Diagnostic::cannot_find_name(
+                        Span::from_oxc(identifier.span),
+                        identifier.name.as_str(),
+                    ));
+                }
+                if let Some(arguments) = &heritage.type_arguments {
+                    for argument in &arguments.params {
+                        let _ = self.lower_annotation(scope, argument);
+                    }
+                }
+            }
+            Expression::StaticMemberExpression(member) => {
+                let mut segments = Vec::new();
+                if flatten_qualified_heritage_expression(&heritage.expression, &mut segments) {
+                    self.classify_qualified_type_path(
+                        scope,
+                        &segments,
+                        Span::from_oxc(member.span),
+                        Span::from_oxc(heritage.span),
+                        heritage.type_arguments.as_deref(),
+                    );
+                }
+            }
+            _ => {
+                if let Some(arguments) = &heritage.type_arguments {
+                    for argument in &arguments.params {
+                        let _ = self.lower_annotation(scope, argument);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Merge source-ordered fragments of one interface identity. Ordinary members
+    /// recover to the first declaration; callable members accumulate overloads in
+    /// source order so identical-applicability ties select the earlier signature.
+    pub(super) fn merge_interface_fragment_members(
+        &mut self,
+        base: ObjectType,
+        overlay: ObjectType,
+        first_method_members: &mut BTreeSet<String>,
+        overlay_methods: &BTreeSet<String>,
     ) -> ObjectType {
-        if extends.is_empty() {
-            return own;
-        }
-        let mut base = ObjectType::default();
-        for heritage in extends {
-            let Some(base_ty) = self.resolve_heritage_type(scope, heritage) else {
-                continue;
-            };
-            let demanded = self.evaluate_type(base_ty);
-            let Some(base_ty) =
-                self.own_type_demand(demanded, crate::span::Span::from_oxc(heritage.span))
+        let mut properties = base.properties;
+        for property in overlay.properties {
+            let Some(existing) = properties
+                .iter_mut()
+                .find(|existing| existing.name == property.name)
             else {
+                if overlay_methods.contains(&property.name) {
+                    first_method_members.insert(property.name.clone());
+                }
+                properties.push(property);
                 continue;
             };
-            let Some(base_obj) = self.interner.store().object_type(base_ty).cloned() else {
+            if !first_method_members.contains(&property.name)
+                || !overlay_methods.contains(&property.name)
+            {
                 continue;
+            }
+            let mut overloads = match self.interner.store().tag(existing.ty) {
+                crate::types::repr::TypeTag::Function => vec![existing.ty],
+                crate::types::repr::TypeTag::Object => self
+                    .interner
+                    .store()
+                    .object_type(existing.ty)
+                    .filter(|object| !object.call_signatures.is_empty())
+                    .map(|object| object.call_signatures.clone())
+                    .unwrap_or_default(),
+                _ => Vec::new(),
             };
-            base = merge_object_members(base, base_obj);
+            let appended = match self.interner.store().tag(property.ty) {
+                crate::types::repr::TypeTag::Function => Some(vec![property.ty]),
+                crate::types::repr::TypeTag::Object => self
+                    .interner
+                    .store()
+                    .object_type(property.ty)
+                    .filter(|object| !object.call_signatures.is_empty())
+                    .map(|object| object.call_signatures.clone()),
+                _ => None,
+            };
+            if !overloads.is_empty() {
+                if let Some(appended) = appended {
+                    overloads.extend(appended);
+                    existing.ty = self.interner.intern_object(ObjectType {
+                        call_signatures: overloads,
+                        ..Default::default()
+                    });
+                }
+            }
         }
-        merge_object_members(base, own)
+        let mut call_signatures = base.call_signatures;
+        call_signatures.extend(overlay.call_signatures);
+        let mut construct_signatures = base.construct_signatures;
+        construct_signatures.extend(overlay.construct_signatures);
+        ObjectType {
+            properties,
+            string_index: base.string_index.or(overlay.string_index),
+            number_index: base.number_index.or(overlay.number_index),
+            call_signatures,
+            construct_signatures,
+        }
+    }
+
+    /// Resolve and project one already-terminal heritage endpoint without invoking
+    /// the semantic query coordinator. Construction may only read frozen roots.
+    pub(super) fn resolve_interface_heritage_object(
+        &mut self,
+        scope: ScopeId,
+        heritage: &TSInterfaceHeritage<'_>,
+    ) -> Option<ObjectType> {
+        let base_ty = self.resolve_heritage_type(scope, heritage)?;
+        if let Some(object) = self.interner.store().object_type(base_ty).cloned() {
+            return Some(object);
+        }
+        let application = self
+            .interner
+            .store()
+            .class_instance_type(base_ty)
+            .cloned()?;
+        let crate::class_semantics::DemandOutcome::Ready(surface) = self
+            .staged_published_classes
+            .as_ref()
+            .expect("class registry is frozen before interface heritage construction")
+            .published_class(application.class)
+        else {
+            return None;
+        };
+        let substitutions: FxHashMap<_, _> = surface
+            .type_params()
+            .iter()
+            .copied()
+            .zip(application.args)
+            .collect();
+        let projected =
+            crate::types::substitute(self.interner, surface.instance_template(), &substitutions);
+        self.interner.store().object_type(projected).cloned()
     }
 
     /// B28 — resolve a heritage clause's base to its `TypeId`: a bare interface/alias
@@ -81,39 +282,43 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         heritage: &TSInterfaceHeritage<'_>,
     ) -> Option<TypeId> {
-        let ident = match &heritage.expression {
-            Expression::Identifier(ident) => ident,
+        let (decl_id, name, span) = match &heritage.expression {
+            Expression::Identifier(ident) => (
+                type_decl_id(self.binder, scope, ident.name.as_str())?,
+                ident.name.as_str(),
+                Span::from_oxc(ident.span),
+            ),
             Expression::StaticMemberExpression(member) => {
                 let mut segments = Vec::new();
                 if flatten_qualified_heritage_expression(&heritage.expression, &mut segments) {
-                    self.classify_qualified_type_path(
-                        scope,
-                        &segments,
-                        Span::from_oxc(member.span),
-                        heritage.type_arguments.as_deref(),
-                    );
+                    let names: Vec<&str> = segments.iter().map(|segment| segment.name).collect();
+                    if let crate::binder::namespace::QualifiedTypePathResolution::TypeGroup(group) =
+                        self.binder.resolve_qualified_type_path(scope, &names)
+                    {
+                        (group, segments.last()?.name, Span::from_oxc(member.span))
+                    } else {
+                        self.classify_qualified_type_path(
+                            scope,
+                            &segments,
+                            Span::from_oxc(member.span),
+                            Span::from_oxc(heritage.span),
+                            heritage.type_arguments.as_deref(),
+                        );
+                        return None;
+                    }
+                } else {
+                    return None;
                 }
-                return None;
             }
             _ => return None,
         };
-        let decl_id = type_decl_id(self.binder, scope, ident.name.as_str())?;
-        if matches!(
-            self.type_decls.get(decl_id.index()),
-            Some(TypeDecl::Class { .. })
-        ) {
-            return self.resolve_class_type_reference(
-                scope,
-                decl_id,
-                ident.name.as_str(),
-                crate::span::Span::from_oxc(ident.span),
-                heritage.type_arguments.as_deref(),
-            );
-        }
-        match heritage.type_arguments.as_deref() {
-            Some(args) => self.instantiate_type_reference(scope, decl_id, args),
-            None => Some(self.resolve_type_decl(scope, decl_id)),
-        }
+        self.resolve_type_group_reference(
+            scope,
+            decl_id,
+            name,
+            span,
+            heritage.type_arguments.as_deref(),
+        )
     }
 
     /// Lower interface members to the reserved nominal object's `ObjectType`.
@@ -124,27 +329,45 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         members: &[TSSignature<'_>],
     ) -> ObjectType {
+        self.lower_interface_members_inner(scope, members, None)
+    }
+
+    pub(super) fn lower_interface_declaration_members(
+        &mut self,
+        declaration: crate::binder::declaration::DeclId,
+        scope: ScopeId,
+        members: &[TSSignature<'_>],
+    ) -> ObjectType {
+        self.lower_interface_members_inner(scope, members, Some(declaration))
+    }
+
+    fn lower_interface_members_inner(
+        &mut self,
+        scope: ScopeId,
+        members: &[TSSignature<'_>],
+        declaration: Option<crate::binder::declaration::DeclId>,
+    ) -> ObjectType {
         let mut object = ObjectType::default();
         let overloaded_method_names = self.overloaded_method_names(members);
         let mut overloads: FxHashMap<String, InterfaceMethodOverloadAccumulator> =
             FxHashMap::default();
         let mut overload_order = Vec::new();
         for member in members {
-            match member {
+            let mut lower = |pass: &mut Self| match member {
                 TSSignature::TSPropertySignature(sig) => {
                     if sig.computed {
-                        self.record_property_signature_computed_key(&sig.key);
+                        pass.record_property_signature_computed_key(&sig.key);
                         if let Some(annotation) = sig.type_annotation.as_ref() {
-                            self.lower_annotation(scope, &annotation.type_annotation);
+                            pass.lower_annotation(scope, &annotation.type_annotation);
                         }
-                        continue;
+                        return;
                     }
                     let Some(name) = sig.key.static_name() else {
-                        self.record_property_signature_computed_key(&sig.key);
+                        pass.record_property_signature_computed_key(&sig.key);
                         if let Some(annotation) = sig.type_annotation.as_ref() {
-                            self.lower_annotation(scope, &annotation.type_annotation);
+                            pass.lower_annotation(scope, &annotation.type_annotation);
                         }
-                        continue;
+                        return;
                     };
                     if overloaded_method_names.contains(name.as_ref()) {
                         let name = name.into_owned();
@@ -154,32 +377,32 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         let overload = overloads.entry(name).or_default();
                         overload.unsupported = true;
                         let lowered = sig.type_annotation.as_ref().and_then(|annotation| {
-                            self.lower_annotation(scope, &annotation.type_annotation)
+                            pass.lower_annotation(scope, &annotation.type_annotation)
                         });
                         if lowered.is_none() {
                             overload.unavailable = true;
                         }
-                        continue;
+                        return;
                     }
                     let ty = match sig.type_annotation.as_ref() {
                         Some(annotation) => {
                             let Some(ty) =
-                                self.lower_annotation(scope, &annotation.type_annotation)
+                                pass.lower_annotation(scope, &annotation.type_annotation)
                             else {
-                                continue;
+                                return;
                             };
                             ty
                         }
                         // tsc treats annotationless interface properties as `any`.
-                        None => self.interner.well_known().any,
+                        None => pass.interner.well_known().any,
                     };
                     // Optional properties are real members with `| undefined` baked in
                     // while interning is available. The read-only relation engine then
                     // uses existing union-target logic, and `keyof`/indexed access see
                     // the key.
                     let ty = if sig.optional {
-                        let undefined = self.interner.well_known().undefined;
-                        self.interner.union(vec![ty, undefined])
+                        let undefined = pass.interner.well_known().undefined;
+                        pass.interner.union(vec![ty, undefined])
                     } else {
                         ty
                     };
@@ -196,30 +419,30 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 // un-lowerable value) is **skipped** (lenient, like an out-of-subset
                 // property), so the interface keeps the members it can express.
                 TSSignature::TSIndexSignature(sig) => {
-                    let _ = self.lower_index_signature(scope, sig, &mut object);
+                    let _ = pass.lower_index_signature(scope, sig, &mut object);
                 }
                 TSSignature::TSMethodSignature(sig) => {
                     if sig.computed {
-                        self.record_method_signature_computed_key(&sig.key);
-                        self.lower_generic_strict_signature_function_type(
+                        pass.record_method_signature_computed_key(&sig.key);
+                        pass.lower_generic_strict_signature_function_type(
                             scope,
                             sig.type_parameters.as_deref(),
                             sig.this_param.as_deref(),
                             &sig.params,
                             sig.return_type.as_deref(),
                         );
-                        continue;
+                        return;
                     }
                     let Some(name) = sig.key.static_name() else {
-                        self.record_method_signature_computed_key(&sig.key);
-                        self.lower_generic_strict_signature_function_type(
+                        pass.record_method_signature_computed_key(&sig.key);
+                        pass.lower_generic_strict_signature_function_type(
                             scope,
                             sig.type_parameters.as_deref(),
                             sig.this_param.as_deref(),
                             &sig.params,
                             sig.return_type.as_deref(),
                         );
-                        continue;
+                        return;
                     };
                     if overloaded_method_names.contains(name.as_ref()) {
                         let name = name.into_owned();
@@ -227,7 +450,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                             overload_order.push(name.clone());
                         }
                         let overload = overloads.entry(name).or_default();
-                        let signature = self.lower_generic_strict_signature_function_type(
+                        let signature = pass.lower_generic_strict_signature_function_type(
                             scope,
                             sig.type_parameters.as_deref(),
                             sig.this_param.as_deref(),
@@ -247,22 +470,35 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                             Some(_) => {}
                             None => overload.unavailable = true,
                         }
-                        continue;
+                        return;
                     }
-                    if let Some(prop) = self.lower_method_signature_property(scope, sig) {
+                    if let Some(prop) = pass.lower_method_signature_property(scope, sig) {
                         object.properties.push(prop);
                     }
                 }
                 TSSignature::TSCallSignatureDeclaration(sig) => {
-                    if let Some(signature) = self.lower_call_signature(scope, sig) {
+                    if let Some(signature) = pass.lower_call_signature(scope, sig) {
                         object.call_signatures.push(signature);
                     }
                 }
                 TSSignature::TSConstructSignatureDeclaration(sig) => {
-                    if let Some(signature) = self.lower_construct_signature(scope, sig) {
+                    if let Some(signature) = pass.lower_construct_signature(scope, sig) {
                         object.construct_signatures.push(signature);
                     }
                 }
+            };
+            if let Some(declaration) = declaration {
+                let owner = self
+                    .lexical_events
+                    .interface_occurrence_owner(
+                        declaration,
+                        InterfaceOccurrenceKind::Member,
+                        member.span().start,
+                    )
+                    .expect("interface member has one exact preallocated owner");
+                self.with_ticket_effects(owner, lower);
+            } else {
+                lower(self);
             }
         }
         for name in overload_order {
@@ -286,9 +522,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     }
 }
 
-/// Merge `overlay` onto `base`, with overlay members/signatures winning conflicts.
-/// Used for interface `extends` and own-member composition.
-fn merge_object_members(base: ObjectType, overlay: ObjectType) -> ObjectType {
+/// Compose an interface's own surface over its already validated heritage surface.
+pub(super) fn merge_object_members_overlay(base: ObjectType, overlay: ObjectType) -> ObjectType {
     let mut properties = base.properties;
     for prop in overlay.properties {
         match properties.iter_mut().find(|p| p.name == prop.name) {
@@ -296,20 +531,40 @@ fn merge_object_members(base: ObjectType, overlay: ObjectType) -> ObjectType {
             None => properties.push(prop),
         }
     }
+    let mut call_signatures = overlay.call_signatures;
+    call_signatures.extend(base.call_signatures);
+    let mut construct_signatures = overlay.construct_signatures;
+    construct_signatures.extend(base.construct_signatures);
     ObjectType {
         properties,
         string_index: overlay.string_index.or(base.string_index),
         number_index: overlay.number_index.or(base.number_index),
-        call_signatures: if overlay.call_signatures.is_empty() {
-            base.call_signatures
-        } else {
-            overlay.call_signatures
-        },
-        construct_signatures: if overlay.construct_signatures.is_empty() {
-            base.construct_signatures
-        } else {
-            overlay.construct_signatures
-        },
+        call_signatures,
+        construct_signatures,
+    }
+}
+
+/// Compose base surfaces in source order without letting later conflicts replace the first.
+pub(super) fn merge_object_members_first(primary: ObjectType, fallback: ObjectType) -> ObjectType {
+    let mut properties = primary.properties;
+    for property in fallback.properties {
+        if properties
+            .iter()
+            .all(|existing| existing.name != property.name)
+        {
+            properties.push(property);
+        }
+    }
+    let mut call_signatures = primary.call_signatures;
+    call_signatures.extend(fallback.call_signatures);
+    let mut construct_signatures = primary.construct_signatures;
+    construct_signatures.extend(fallback.construct_signatures);
+    ObjectType {
+        properties,
+        string_index: primary.string_index.or(fallback.string_index),
+        number_index: primary.number_index.or(fallback.number_index),
+        call_signatures,
+        construct_signatures,
     }
 }
 
@@ -369,24 +624,14 @@ mod qualified_heritage_tests {
     }
 
     #[test]
-    fn successful_qualified_heritage_has_one_precise_wu3_incomplete() {
+    fn successful_qualified_heritage_uses_the_published_type_endpoint() {
         let source = "\
 namespace HeritageNs { export interface Base {} }
 interface D extends HeritageNs.Base {}
 ";
         let output = checked(source);
         assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-        let records = output
-            .incomplete
-            .iter()
-            .filter(|record| record.id == "annotation-lower/type-name/qualified-name")
-            .collect::<Vec<_>>();
-        assert_eq!(records.len(), 1, "{records:?}");
-        assert_eq!(
-            records[0].context,
-            "qualified type path classified; leaf lowering deferred to WU3"
-        );
-        assert_eq!(span_text(source, records[0].span), "HeritageNs.Base");
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
     }
 
     #[test]

@@ -668,10 +668,7 @@ new C().field;
             .iter()
             .map(|incomplete| incomplete.id.as_str())
             .collect::<Vec<_>>(),
-        [
-            "decl/module-declaration/self",
-            "class/property-definition/computed-key"
-        ]
+        ["class/property-definition/computed-key"]
     );
 }
 

@@ -199,7 +199,7 @@ impl Interner {
         // A placeholder body; overwritten by `fill_conditional`. The error type is a
         // safe neutral filler (never observed before the fill).
         let error = self.well_known.error;
-        self.store.push_conditional(
+        let id = self.store.push_conditional(
             ConditionalType {
                 check: error,
                 extends_ty: error,
@@ -210,14 +210,16 @@ impl Interner {
                 poisoned: false,
             },
             TypeFlags::EMPTY,
-        )
+        );
+        self.register_reserved_type(id, super::ReservedTypeKind::Conditional)
     }
 
     /// Fill the body of a previously [reserved](Interner::reserve_conditional)
     /// conditional template in place (M25). The id is **not** added to the dedup index
-    /// (it stays nominal); a no-op if `id` is not a conditional row.
+    /// (it stays nominal).
     pub fn fill_conditional(&mut self, id: TypeId, conditional: ConditionalType) {
-        self.store.set_conditional(id, conditional);
+        self.fill_reserved_type_batch(vec![super::ReservedTypeFill::Conditional(id, conditional)])
+            .expect("fill_conditional requires one pending reserved conditional");
     }
 
     /// Intern a **lazy instantiation** `substitute(base, args)` (M25). `args` are sorted
@@ -326,7 +328,7 @@ impl Interner {
         // A placeholder body; overwritten by `fill_mapped`. The error type is a safe
         // neutral filler (never observed before the fill).
         let error = self.well_known.error;
-        self.store.push_mapped(
+        let id = self.store.push_mapped(
             MappedType {
                 homomorphic: false,
                 key_source: error,
@@ -336,14 +338,16 @@ impl Interner {
                 readonly_modifier: crate::types::repr::ModifierOp::Keep,
             },
             TypeFlags::EMPTY,
-        )
+        );
+        self.register_reserved_type(id, super::ReservedTypeKind::Mapped)
     }
 
     /// Fill the body of a previously [reserved](Interner::reserve_mapped) mapped
     /// template in place (M28). The id is **not** added to the dedup index (it stays
-    /// nominal); a no-op if `id` is not a mapped row.
+    /// nominal).
     pub fn fill_mapped(&mut self, id: TypeId, mapped: MappedType) {
-        self.store.set_mapped(id, mapped);
+        self.fill_reserved_type_batch(vec![super::ReservedTypeFill::Mapped(id, mapped)])
+            .expect("fill_mapped requires one pending reserved mapped type");
     }
 
     /// Intern a **deferred `keyof`** node (M28). Identity is the operand id alone, so

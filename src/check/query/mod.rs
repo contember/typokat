@@ -13,12 +13,20 @@ use crate::relate::cache::RelationCache;
 use crate::relate::{
     ReasonChain, Relater, RelationAttempt, RelationDemand, RelationNormalization, RelationOutcome,
 };
-use crate::types::repr::{ClassId, TypeTag, Visibility};
+use crate::types::repr::{ClassId, TypeParamId, TypeTag, Visibility};
 use crate::types::store::{Store, TypeId};
 use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 pub(crate) const MAX_CLASS_PROJECTION_EXPANSIONS: usize = 128;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct AlphaBinderKey {
+    forward: Vec<(TypeParamId, TypeParamId)>,
+    reverse: Vec<(TypeParamId, TypeParamId)>,
+}
+
+type IdentitySeen = FxHashSet<(TypeId, TypeId, AlphaBinderKey)>;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -170,6 +178,632 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             self.interner
                 .intern_class_instance(application.class, normalized),
         )
+    }
+
+    /// Normalize two published roots in one query transaction, then compare their
+    /// canonical identities. Interface heritage uses identity rather than
+    /// assignability (`1` differs from `number`, and `any` differs from `string`).
+    pub(crate) fn is_identical(&mut self, left: TypeId, right: TypeId) -> DemandOutcome<bool> {
+        if let Some(reason) =
+            publication_exhaustion(self.interner.store(), &[left, right], self.published)
+        {
+            return DemandOutcome::Exhausted(reason);
+        }
+        let transaction = ProjectionPlanner::new(
+            self.interner,
+            self.published,
+            &self.state.projection_memo,
+            &self.state.evaluation_memo,
+            *self.next_type_param,
+        )
+        .plan(&[left, right]);
+        *self.next_type_param = transaction.next_type_param;
+        if transaction.planning_tainted {
+            return DemandOutcome::Exhausted(
+                transaction
+                    .first_exhaustion
+                    .clone()
+                    .unwrap_or(Exhaustion::ClassProjectionBudget),
+            );
+        }
+        let outcome = Self::identical_recursive(
+            self.interner.store(),
+            &transaction.plan,
+            left,
+            right,
+            &mut FxHashSet::default(),
+            &mut Vec::new(),
+        );
+        if matches!(outcome, DemandOutcome::Ready(_)) {
+            self.commit_plan(transaction);
+        }
+        outcome
+    }
+
+    fn identical_recursive(
+        store: &Store,
+        plan: &ProjectionPlan,
+        left: TypeId,
+        right: TypeId,
+        seen: &mut IdentitySeen,
+        alpha_binders: &mut Vec<(TypeParamId, TypeParamId)>,
+    ) -> DemandOutcome<bool> {
+        let mut left = match plan.normalize(left) {
+            Ok(left) => left,
+            Err(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
+        };
+        let mut right = match plan.normalize(right) {
+            Ok(right) => right,
+            Err(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
+        };
+        left = match Self::collapse_exact_family_root(store, plan, left) {
+            Ok(left) => left,
+            Err(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
+        };
+        right = match Self::collapse_exact_family_root(store, plan, right) {
+            Ok(right) => right,
+            Err(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
+        };
+        if let (Some(left_param), Some(right_param)) =
+            (store.type_param(left), store.type_param(right))
+        {
+            return DemandOutcome::Ready(Self::alpha_type_params_identical(
+                left_param.id,
+                right_param.id,
+                alpha_binders,
+            ));
+        }
+        if left == right {
+            return DemandOutcome::Ready(true);
+        }
+        if !seen.insert((left, right, Self::alpha_binder_key(alpha_binders))) {
+            return DemandOutcome::Ready(true);
+        }
+        let tag = store.tag(left);
+        if tag != store.tag(right) {
+            return DemandOutcome::Ready(false);
+        }
+        match tag {
+            TypeTag::Object => {
+                let left = store
+                    .object_type(left)
+                    .expect("object tag has payload")
+                    .clone();
+                let right = store
+                    .object_type(right)
+                    .expect("object tag has payload")
+                    .clone();
+                if left.properties.len() != right.properties.len()
+                    || left.call_signatures.len() != right.call_signatures.len()
+                    || left.construct_signatures.len() != right.construct_signatures.len()
+                {
+                    return DemandOutcome::Ready(false);
+                }
+                for (left, right) in left.properties.iter().zip(&right.properties) {
+                    if left.name != right.name
+                        || left.optional != right.optional
+                        || left.visibility != right.visibility
+                        || (left.visibility != Visibility::Public
+                            && left.declaring_class != right.declaring_class)
+                        || left.readonly != right.readonly
+                        || left.is_accessor != right.is_accessor
+                    {
+                        return DemandOutcome::Ready(false);
+                    }
+                    match Self::identical_recursive(
+                        store,
+                        plan,
+                        left.ty,
+                        right.ty,
+                        seen,
+                        alpha_binders,
+                    ) {
+                        DemandOutcome::Ready(true) => {}
+                        outcome => return outcome,
+                    }
+                    match Self::identical_optional(
+                        store,
+                        plan,
+                        left.write_ty,
+                        right.write_ty,
+                        seen,
+                        alpha_binders,
+                    ) {
+                        DemandOutcome::Ready(true) => {}
+                        outcome => return outcome,
+                    }
+                }
+                for (left, right) in left.call_signatures.iter().zip(&right.call_signatures) {
+                    match Self::identical_recursive(store, plan, *left, *right, seen, alpha_binders)
+                    {
+                        DemandOutcome::Ready(true) => {}
+                        outcome => return outcome,
+                    }
+                }
+                for (left, right) in left
+                    .construct_signatures
+                    .iter()
+                    .zip(&right.construct_signatures)
+                {
+                    match Self::identical_recursive(store, plan, *left, *right, seen, alpha_binders)
+                    {
+                        DemandOutcome::Ready(true) => {}
+                        outcome => return outcome,
+                    }
+                }
+                match Self::identical_optional(
+                    store,
+                    plan,
+                    left.string_index,
+                    right.string_index,
+                    seen,
+                    alpha_binders,
+                ) {
+                    DemandOutcome::Ready(true) => {}
+                    outcome => return outcome,
+                }
+                Self::identical_optional(
+                    store,
+                    plan,
+                    left.number_index,
+                    right.number_index,
+                    seen,
+                    alpha_binders,
+                )
+            }
+            TypeTag::Function => {
+                let left = store
+                    .function_type(left)
+                    .expect("function tag has payload")
+                    .clone();
+                let right = store
+                    .function_type(right)
+                    .expect("function tag has payload")
+                    .clone();
+                if left.type_params.len() != right.type_params.len()
+                    || left.params.len() != right.params.len()
+                {
+                    return DemandOutcome::Ready(false);
+                }
+                let binder_start = alpha_binders.len();
+                alpha_binders.extend(
+                    left.type_params
+                        .iter()
+                        .zip(&right.type_params)
+                        .map(|(left, right)| (left.id, right.id)),
+                );
+                let outcome = (|| {
+                    for (left, right) in left.type_params.iter().zip(&right.type_params) {
+                        match Self::identical_optional(
+                            store,
+                            plan,
+                            left.constraint,
+                            right.constraint,
+                            seen,
+                            alpha_binders,
+                        ) {
+                            DemandOutcome::Ready(true) => {}
+                            outcome => return outcome,
+                        }
+                        match Self::identical_optional(
+                            store,
+                            plan,
+                            left.default,
+                            right.default,
+                            seen,
+                            alpha_binders,
+                        ) {
+                            DemandOutcome::Ready(true) => {}
+                            outcome => return outcome,
+                        }
+                    }
+                    match Self::identical_optional(
+                        store,
+                        plan,
+                        left.receiver,
+                        right.receiver,
+                        seen,
+                        alpha_binders,
+                    ) {
+                        DemandOutcome::Ready(true) => {}
+                        outcome => return outcome,
+                    }
+                    for (left, right) in left.params.iter().zip(&right.params) {
+                        if left.optional != right.optional
+                            || left.has_default != right.has_default
+                            || left.rest != right.rest
+                        {
+                            return DemandOutcome::Ready(false);
+                        }
+                        match Self::identical_recursive(
+                            store,
+                            plan,
+                            left.ty,
+                            right.ty,
+                            seen,
+                            alpha_binders,
+                        ) {
+                            DemandOutcome::Ready(true) => {}
+                            outcome => return outcome,
+                        }
+                    }
+                    Self::identical_recursive(store, plan, left.ret, right.ret, seen, alpha_binders)
+                })();
+                alpha_binders.truncate(binder_start);
+                outcome
+            }
+            TypeTag::Array => {
+                let left = store.array_type(left).unwrap().element;
+                let right = store.array_type(right).unwrap().element;
+                Self::identical_recursive(store, plan, left, right, seen, alpha_binders)
+            }
+            TypeTag::Tuple => {
+                let left = store.tuple_type(left).unwrap().clone();
+                let right = store.tuple_type(right).unwrap().clone();
+                if left.elements.len() != right.elements.len()
+                    || left.rest.map(|rest| rest.position) != right.rest.map(|rest| rest.position)
+                {
+                    return DemandOutcome::Ready(false);
+                }
+                for (left, right) in left.elements.iter().zip(&right.elements) {
+                    match Self::identical_recursive(store, plan, *left, *right, seen, alpha_binders)
+                    {
+                        DemandOutcome::Ready(true) => {}
+                        outcome => return outcome,
+                    }
+                }
+                Self::identical_optional(
+                    store,
+                    plan,
+                    left.rest.map(|rest| rest.ty),
+                    right.rest.map(|rest| rest.ty),
+                    seen,
+                    alpha_binders,
+                )
+            }
+            TypeTag::Readonly => Self::identical_recursive(
+                store,
+                plan,
+                store.readonly_operand(left).unwrap(),
+                store.readonly_operand(right).unwrap(),
+                seen,
+                alpha_binders,
+            ),
+            TypeTag::Union | TypeTag::Intersection => {
+                let left = if tag == TypeTag::Union {
+                    store.union_members(left)
+                } else {
+                    store.intersection_members(left)
+                }
+                .unwrap()
+                .to_vec();
+                let right = if tag == TypeTag::Union {
+                    store.union_members(right)
+                } else {
+                    store.intersection_members(right)
+                }
+                .unwrap()
+                .to_vec();
+                let left = match Self::flatten_normalized_family(store, plan, tag, &left) {
+                    Ok(left) => left,
+                    Err(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
+                };
+                let right = match Self::flatten_normalized_family(store, plan, tag, &right) {
+                    Ok(right) => right,
+                    Err(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
+                };
+                Self::identical_unordered(store, plan, &left, &right, seen, alpha_binders)
+            }
+            TypeTag::ClassInstance => {
+                let left = store.class_instance_type(left).unwrap().clone();
+                let right = store.class_instance_type(right).unwrap().clone();
+                if left.class != right.class || left.args.len() != right.args.len() {
+                    return DemandOutcome::Ready(false);
+                }
+                for (left, right) in left.args.into_iter().zip(right.args) {
+                    match Self::identical_recursive(store, plan, left, right, seen, alpha_binders) {
+                        DemandOutcome::Ready(true) => {}
+                        outcome => return outcome,
+                    }
+                }
+                DemandOutcome::Ready(true)
+            }
+            TypeTag::Conditional => {
+                let left = *store.conditional_type(left).expect("conditional payload");
+                let right = *store.conditional_type(right).expect("conditional payload");
+                if left.infer_count != right.infer_count
+                    || left.distributive != right.distributive
+                    || left.poisoned != right.poisoned
+                {
+                    return DemandOutcome::Ready(false);
+                }
+                for (left, right) in [
+                    (left.check, right.check),
+                    (left.extends_ty, right.extends_ty),
+                    (left.true_branch, right.true_branch),
+                    (left.false_branch, right.false_branch),
+                ] {
+                    match Self::identical_recursive(store, plan, left, right, seen, alpha_binders) {
+                        DemandOutcome::Ready(true) => {}
+                        outcome => return outcome,
+                    }
+                }
+                DemandOutcome::Ready(true)
+            }
+            TypeTag::Instantiation => {
+                let left = store
+                    .instantiation_type(left)
+                    .expect("instantiation payload")
+                    .clone();
+                let right = store
+                    .instantiation_type(right)
+                    .expect("instantiation payload")
+                    .clone();
+                if left.args.len() != right.args.len() {
+                    return DemandOutcome::Ready(false);
+                }
+                match Self::identical_recursive(
+                    store,
+                    plan,
+                    left.base,
+                    right.base,
+                    seen,
+                    alpha_binders,
+                ) {
+                    DemandOutcome::Ready(true) => {}
+                    outcome => return outcome,
+                }
+                let mut remaining = right.args;
+                for (left_key, left_value) in left.args {
+                    let Some(position) = remaining.iter().position(|(right_key, _)| {
+                        Self::alpha_type_params_identical(left_key, *right_key, alpha_binders)
+                    }) else {
+                        return DemandOutcome::Ready(false);
+                    };
+                    let (_, right_value) = remaining.remove(position);
+                    match Self::identical_recursive(
+                        store,
+                        plan,
+                        left_value,
+                        right_value,
+                        seen,
+                        alpha_binders,
+                    ) {
+                        DemandOutcome::Ready(true) => {}
+                        outcome => return outcome,
+                    }
+                }
+                DemandOutcome::Ready(true)
+            }
+            TypeTag::Mapped => {
+                let left = *store.mapped_type(left).expect("mapped payload");
+                let right = *store.mapped_type(right).expect("mapped payload");
+                if left.homomorphic != right.homomorphic
+                    || left.optional_modifier != right.optional_modifier
+                    || left.readonly_modifier != right.readonly_modifier
+                {
+                    return DemandOutcome::Ready(false);
+                }
+                for (left, right) in [
+                    (Some(left.key_source), Some(right.key_source)),
+                    (Some(left.value_template), Some(right.value_template)),
+                    (left.modifiers_source, right.modifiers_source),
+                ] {
+                    match Self::identical_optional(store, plan, left, right, seen, alpha_binders) {
+                        DemandOutcome::Ready(true) => {}
+                        outcome => return outcome,
+                    }
+                }
+                DemandOutcome::Ready(true)
+            }
+            TypeTag::Template => {
+                let left = store.template_type(left).expect("template payload").clone();
+                let right = store
+                    .template_type(right)
+                    .expect("template payload")
+                    .clone();
+                if left.texts != right.texts || left.holes.len() != right.holes.len() {
+                    return DemandOutcome::Ready(false);
+                }
+                for (left, right) in left.holes.into_iter().zip(right.holes) {
+                    match Self::identical_recursive(store, plan, left, right, seen, alpha_binders) {
+                        DemandOutcome::Ready(true) => {}
+                        outcome => return outcome,
+                    }
+                }
+                DemandOutcome::Ready(true)
+            }
+            TypeTag::Keyof => Self::identical_recursive(
+                store,
+                plan,
+                store.keyof_operand(left).expect("keyof payload"),
+                store.keyof_operand(right).expect("keyof payload"),
+                seen,
+                alpha_binders,
+            ),
+            TypeTag::DeferredIndexedAccess => {
+                let left = *store
+                    .deferred_indexed_access_type(left)
+                    .expect("indexed-access payload");
+                let right = *store
+                    .deferred_indexed_access_type(right)
+                    .expect("indexed-access payload");
+                match Self::identical_recursive(
+                    store,
+                    plan,
+                    left.object,
+                    right.object,
+                    seen,
+                    alpha_binders,
+                ) {
+                    DemandOutcome::Ready(true) => Self::identical_recursive(
+                        store,
+                        plan,
+                        left.index,
+                        right.index,
+                        seen,
+                        alpha_binders,
+                    ),
+                    outcome => outcome,
+                }
+            }
+            TypeTag::Infer => DemandOutcome::Ready(
+                store.infer_index(left).expect("infer payload")
+                    == store.infer_index(right).expect("infer payload"),
+            ),
+            TypeTag::MappedValue => DemandOutcome::Ready(true),
+            _ => DemandOutcome::Ready(false),
+        }
+    }
+
+    fn identical_optional(
+        store: &Store,
+        plan: &ProjectionPlan,
+        left: Option<TypeId>,
+        right: Option<TypeId>,
+        seen: &mut IdentitySeen,
+        alpha_binders: &mut Vec<(TypeParamId, TypeParamId)>,
+    ) -> DemandOutcome<bool> {
+        match (left, right) {
+            (Some(left), Some(right)) => {
+                Self::identical_recursive(store, plan, left, right, seen, alpha_binders)
+            }
+            (None, None) => DemandOutcome::Ready(true),
+            _ => DemandOutcome::Ready(false),
+        }
+    }
+
+    fn alpha_binder_key(alpha_binders: &[(TypeParamId, TypeParamId)]) -> AlphaBinderKey {
+        let mut forward_seen = FxHashSet::default();
+        let mut forward = Vec::new();
+        let mut reverse_seen = FxHashSet::default();
+        let mut reverse = Vec::new();
+        for &(left, right) in alpha_binders.iter().rev() {
+            if forward_seen.insert(left) {
+                forward.push((left, right));
+            }
+            if reverse_seen.insert(right) {
+                reverse.push((right, left));
+            }
+        }
+        forward.sort_unstable();
+        reverse.sort_unstable();
+        AlphaBinderKey { forward, reverse }
+    }
+
+    fn alpha_type_params_identical(
+        left: TypeParamId,
+        right: TypeParamId,
+        alpha_binders: &[(TypeParamId, TypeParamId)],
+    ) -> bool {
+        let mapped_right = alpha_binders
+            .iter()
+            .rev()
+            .find_map(|(candidate, mapped)| (*candidate == left).then_some(*mapped));
+        let mapped_left = alpha_binders
+            .iter()
+            .rev()
+            .find_map(|(mapped, candidate)| (*candidate == right).then_some(*mapped));
+        match (mapped_right, mapped_left) {
+            (Some(mapped), _) => mapped == right,
+            (None, Some(_)) => false,
+            (None, None) => left == right,
+        }
+    }
+
+    fn identical_unordered(
+        store: &Store,
+        plan: &ProjectionPlan,
+        left: &[TypeId],
+        right: &[TypeId],
+        seen: &mut IdentitySeen,
+        alpha_binders: &[(TypeParamId, TypeParamId)],
+    ) -> DemandOutcome<bool> {
+        if left.len() != right.len() {
+            return DemandOutcome::Ready(false);
+        }
+        let mut remaining = right.to_vec();
+        for &candidate in left {
+            let mut matched = None;
+            for (position, &target) in remaining.iter().enumerate() {
+                let mut trial_seen = seen.clone();
+                let mut trial_binders = alpha_binders.to_vec();
+                match Self::identical_recursive(
+                    store,
+                    plan,
+                    candidate,
+                    target,
+                    &mut trial_seen,
+                    &mut trial_binders,
+                ) {
+                    DemandOutcome::Ready(true) => {
+                        matched = Some((position, trial_seen));
+                        break;
+                    }
+                    DemandOutcome::Ready(false) => {}
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion)
+                    }
+                }
+            }
+            let Some((position, trial_seen)) = matched else {
+                return DemandOutcome::Ready(false);
+            };
+            *seen = trial_seen;
+            remaining.remove(position);
+        }
+        DemandOutcome::Ready(remaining.is_empty())
+    }
+
+    fn flatten_normalized_family(
+        store: &Store,
+        plan: &ProjectionPlan,
+        family: TypeTag,
+        roots: &[TypeId],
+    ) -> Result<Vec<TypeId>, Exhaustion> {
+        let mut flattened = Vec::new();
+        let mut stack = roots.to_vec();
+        let mut expanded = FxHashSet::default();
+        while let Some(root) = stack.pop() {
+            let normalized = plan.normalize(root)?;
+            if store.tag(normalized) == family && expanded.insert(normalized) {
+                let members = if family == TypeTag::Union {
+                    store.union_members(normalized)
+                } else {
+                    store.intersection_members(normalized)
+                }
+                .expect("normalized family tag has members");
+                stack.extend(members.iter().copied());
+            } else if store.tag(normalized) != family {
+                flattened.push(normalized);
+            }
+        }
+        flattened.sort_unstable();
+        flattened.dedup();
+        Ok(flattened)
+    }
+
+    fn collapse_exact_family_root(
+        store: &Store,
+        plan: &ProjectionPlan,
+        root: TypeId,
+    ) -> Result<TypeId, Exhaustion> {
+        let tag = store.tag(root);
+        if !matches!(tag, TypeTag::Union | TypeTag::Intersection) {
+            return Ok(root);
+        }
+        let roots = if tag == TypeTag::Union {
+            store.union_members(root)
+        } else {
+            store.intersection_members(root)
+        }
+        .expect("family root has members");
+        let flattened = Self::flatten_normalized_family(store, plan, tag, roots)?;
+        Ok(if flattened.len() == 1 {
+            flattened[0]
+        } else {
+            root
+        })
     }
 
     /// Plan, normalize, and relate one top-level assignability operation.

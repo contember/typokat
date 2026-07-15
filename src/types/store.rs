@@ -418,16 +418,15 @@ impl Store {
         self.push(TypeTag::Object, flags, payload)
     }
 
-    /// Replace a reserved object body in place, preserving the row's `TypeId` and
-    /// hot columns. No-op if `id` is not an object row.
-    pub(crate) fn set_object(&mut self, id: TypeId, object: ObjectType) {
-        if self.tag(id) != TypeTag::Object {
-            return;
-        }
+    /// Replace a prevalidated reserved object body while preserving its `TypeId`.
+    pub(super) fn set_object(&mut self, id: TypeId, object: ObjectType) {
+        assert_eq!(self.tag(id), TypeTag::Object);
         let payload = self.payload(id) as usize;
-        if let Some(slot) = self.objects.get_mut(payload) {
-            *slot = object;
-        }
+        let slot = self
+            .objects
+            .get_mut(payload)
+            .expect("validated object row must have a side-table entry");
+        *slot = object;
     }
 
     /// Append a function row (function into the side-table, index into payload).
@@ -500,17 +499,15 @@ impl Store {
         self.push(TypeTag::Conditional, flags, payload)
     }
 
-    /// Replace the body of an existing `Conditional` row in place (M25 recursive
-    /// conditional-alias reserve-then-fill — `Interner::fill_conditional`). Preserves
-    /// the row's `TypeId`; a no-op if `id` is not a conditional row.
-    pub(crate) fn set_conditional(&mut self, id: TypeId, conditional: ConditionalType) {
-        if self.tag(id) != TypeTag::Conditional {
-            return;
-        }
+    /// Replace a prevalidated reserved conditional body while preserving its `TypeId`.
+    pub(super) fn set_conditional(&mut self, id: TypeId, conditional: ConditionalType) {
+        assert_eq!(self.tag(id), TypeTag::Conditional);
         let payload = self.payload(id) as usize;
-        if let Some(slot) = self.conditionals.get_mut(payload) {
-            *slot = conditional;
-        }
+        let slot = self
+            .conditionals
+            .get_mut(payload)
+            .expect("validated conditional row must have a side-table entry");
+        *slot = conditional;
     }
 
     /// Append an instantiation row (M25). Internal — `Interner` owns dedup.
@@ -562,18 +559,15 @@ impl Store {
         self.push(TypeTag::Mapped, flags, payload)
     }
 
-    /// Replace the body of an existing `Mapped` row in place (M28 recursive
-    /// mapped-alias reserve-then-fill — `Interner::fill_mapped`, mirroring
-    /// [`Store::set_conditional`]). Preserves the row's `TypeId`; a no-op if `id` is
-    /// not a mapped row.
-    pub(crate) fn set_mapped(&mut self, id: TypeId, mapped: MappedType) {
-        if self.tag(id) != TypeTag::Mapped {
-            return;
-        }
+    /// Replace a prevalidated reserved mapped body while preserving its `TypeId`.
+    pub(super) fn set_mapped(&mut self, id: TypeId, mapped: MappedType) {
+        assert_eq!(self.tag(id), TypeTag::Mapped);
         let payload = self.payload(id) as usize;
-        if let Some(slot) = self.mapped.get_mut(payload) {
-            *slot = mapped;
-        }
+        let slot = self
+            .mapped
+            .get_mut(payload)
+            .expect("validated mapped row must have a side-table entry");
+        *slot = mapped;
     }
 
     /// Append a deferred-`keyof` row (M28). Internal — `Interner` owns dedup (by

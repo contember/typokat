@@ -13,8 +13,8 @@
 //! `m11_classes/`, `m12_inheritance/`, `m13_modifiers/`, `m14_readonly/`,
 //! `m15_accessors/`, `m16_generic_classes/`, `m17_arrays/`, `m18_tuples/`,
 //! `m19_index_sig/`, `m20_keyof/`, `m21_optional/`, `m22_unresolved_type/`) are
-//! enabled. The `MILESTONE_DIRS` table is the extension point: flip a row to
-//! turn a milestone's fixtures on as it lands (mvp-plan §5).
+//! enabled. `MILESTONE_DIRS` enables whole corpora; `ENABLED_FIXTURES` gates a
+//! selected flat subset while the rest of its corpus remains disabled.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -188,6 +188,82 @@ const PROJECT_DIRS: &[&str] = &[
     "sr_semantic_duplication_project",
 ];
 
+/// Flat fixtures that are enabled before their containing corpus can run in
+/// full. Keep this list path-sorted so execution and failure aggregation stay
+/// deterministic.
+const ENABLED_FIXTURES: &[(&str, &str)] = &[
+    (
+        "b43_namespaces_declaration_merging",
+        "interface_conflicts.ts",
+    ),
+    ("b43_namespaces_declaration_merging", "interface_members.ts"),
+    (
+        "b43_namespaces_declaration_merging",
+        "interface_recursion.ts",
+    ),
+    ("b43_namespaces_declaration_merging", "namespace_forms.ts"),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu2_annotation_recovery.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu2_checker_local_qualified_roots.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu2_interface_traversal.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu2_qualified_contexts.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu3_cyclic_heritage_recovery.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu3_deferred_heritage_identity.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu3_forward_reopening_qualified_leaf.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu3_heritage_index_conflicts.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu3_independent_heritage_conflicts.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu3_merged_interface_recovery.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu3_qualified_alias_chain.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu3_qualified_class_surfaces.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu3_qualified_generic_leaves.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu3_sole_supplied_constraint_orders.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu3_unavailable_header_metadata.ts",
+    ),
+];
+
 /// An expectation parsed from a single inline marker.
 #[derive(Debug, Clone)]
 struct ExpectedMarker {
@@ -248,6 +324,19 @@ fn conformance() {
             if let Err(file_failures) = run_fixture(&fixture) {
                 failures.extend(file_failures);
             }
+        }
+    }
+
+    for (dir, file) in ENABLED_FIXTURES {
+        let fixture = cases_root.join(dir).join(file);
+        assert!(
+            fixture.is_file(),
+            "fixture not found: {}",
+            fixture.display()
+        );
+        files_checked += 1;
+        if let Err(file_failures) = run_fixture(&fixture) {
+            failures.extend(file_failures);
         }
     }
 

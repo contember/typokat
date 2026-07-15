@@ -184,7 +184,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &self,
         scope: ScopeId,
         check: &TSType<'_>,
-        decl_id: LegacyTypeStorageId,
+        decl_id: TypeGroupId,
     ) -> bool {
         let TSType::TSTypeReference(reference) = check else {
             return false;
@@ -459,6 +459,24 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// diagnostic — matching the M19 element-access leniency). An error/`any` object or
     /// key likewise yields the error type.
     pub(super) fn indexed_access_type(&mut self, object: TypeId, index: TypeId) -> TypeId {
+        let stays_open = |ty| {
+            matches!(
+                self.interner.store().tag(ty),
+                TypeTag::TypeParam
+                    | TypeTag::Conditional
+                    | TypeTag::Instantiation
+                    | TypeTag::Mapped
+                    | TypeTag::Template
+                    | TypeTag::Keyof
+                    | TypeTag::Infer
+                    | TypeTag::MappedValue
+                    | TypeTag::ClassInstance
+                    | TypeTag::DeferredIndexedAccess
+            )
+        };
+        if self.building_template && (stays_open(object) || stays_open(index)) {
+            return self.interner.intern_deferred_indexed_access(object, index);
+        }
         super::super::indexed_access::resolve_indexed_access(self.interner, object, index)
     }
 }

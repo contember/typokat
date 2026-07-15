@@ -6,7 +6,7 @@ pub(super) mod construction;
 mod inheritance;
 mod initializer;
 mod members;
-mod publication;
+pub(super) mod publication;
 pub(super) mod retained;
 pub(super) mod surface_types;
 mod type_syntax;

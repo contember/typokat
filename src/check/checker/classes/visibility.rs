@@ -84,3 +84,18 @@ pub(in crate::check::checker) fn constructor_visibility(class: &Class<'_>) -> Vi
     }
     Visibility::Public
 }
+
+pub(in crate::check::checker) fn constructor_declaration_count(class: &Class<'_>) -> usize {
+    class
+        .body
+        .body
+        .iter()
+        .filter(|element| {
+            matches!(
+                element,
+                ClassElement::MethodDefinition(method)
+                    if method.kind == MethodDefinitionKind::Constructor
+            )
+        })
+        .count()
+}

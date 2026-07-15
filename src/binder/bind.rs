@@ -5,7 +5,7 @@
 
 use crate::binder::declaration::{
     source_declaration_occurrences, DeclId, DeclarationKind, DeclarationSite, DeclarationTable,
-    LegacyTypeStorageId, TypeFragmentKind, TypeGroupFragment, TypeGroupTable, ValueStorageId,
+    TypeFragmentKind, TypeGroupFragment, TypeGroupId, TypeGroupTable, ValueStorageId,
 };
 use crate::binder::namespace::{
     bind_namespace_metadata, CompilationUnit, NamespaceTable, SourceUnitKey,
@@ -28,7 +28,7 @@ pub struct Binder {
     pub symbols: SymbolTable,
     /// Every admitted source declaration in one unified lexical identity space.
     pub declarations: DeclarationTable,
-    /// Dormant ordered same-name type groups; production lookup ignores these in WU1a.
+    /// Ordered same-name type groups used by every production type-space lookup.
     pub type_groups: TypeGroupTable,
     /// Dormant WU1b namespace/global/merge metadata.
     pub namespaces: NamespaceTable,
@@ -46,10 +46,9 @@ pub struct Binder {
     /// `0..decl_count`). Includes variable bindings, function declaration names,
     /// and function parameters.
     pub decl_count: u32,
-    /// Number of legacy type storage slots in the pre-WU3 production path.
-    /// numbering space. Type slots key the checker's type table, value slots key
-    /// the value table, so one name can occupy both without collision (§4.1).
-    pub type_decl_count: u32,
+    /// Number of type groups bound from the trusted prelude. User groups form the
+    /// dense suffix, allowing two immutable publication epochs.
+    pub prelude_type_group_count: u32,
     /// Maps a function/arrow node to its parameter scope. Keyed by `(module scope,
     /// span start)` because offsets are unique only within one file (backlog 58).
     pub fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
@@ -103,12 +102,18 @@ fn resolve_type_symbol(
     scope: ScopeId,
     name: &str,
 ) -> Option<SymbolId> {
-    graph.resolve_matching(scope, name, |symbol_id| {
-        symbols
-            .get(symbol_id)
-            .and_then(|symbol| symbol.ty)
-            .is_some()
-    })
+    let mut current = Some(scope);
+    while let Some(id) = current {
+        let current_scope = graph.get(id)?;
+        if let Some(symbol_id) = current_scope.lookup_local(name) {
+            let symbol = symbols.get(symbol_id)?;
+            if symbol.ty.is_some() || symbol.blocks_type_lookup {
+                return Some(symbol_id);
+            }
+        }
+        current = current_scope.parent;
+    }
+    None
 }
 
 /// Mutable binder state threaded through the recursive walk.
@@ -117,6 +122,7 @@ pub(crate) struct ImportedSymbol {
     value: Option<ImportedValueSlot>,
     ty: Option<ImportedTypeSlot>,
     value_barrier: bool,
+    type_barrier: bool,
     site: Span,
 }
 
@@ -124,29 +130,17 @@ impl ImportedSymbol {
     pub(crate) fn new(
         name: String,
         value: Option<ValueStorageId>,
-        ty: Option<LegacyTypeStorageId>,
+        ty: Option<TypeGroupId>,
+        value_barrier: bool,
+        type_barrier: bool,
         site: Span,
     ) -> Self {
         ImportedSymbol {
             name,
             value: value.map(ImportedValueSlot::Existing),
             ty: ty.map(ImportedTypeSlot::Existing),
-            value_barrier: false,
-            site,
-        }
-    }
-
-    /// Keep imports whose source value is erased from reaching a parent value slot.
-    pub(crate) fn value_lookup_barrier(
-        name: String,
-        ty: Option<LegacyTypeStorageId>,
-        site: Span,
-    ) -> Self {
-        ImportedSymbol {
-            name,
-            value: None,
-            ty: ty.map(ImportedTypeSlot::Existing),
-            value_barrier: true,
+            value_barrier,
+            type_barrier,
             site,
         }
     }
@@ -155,8 +149,9 @@ impl ImportedSymbol {
         ImportedSymbol {
             name,
             value: None,
-            ty: Some(ImportedTypeSlot::Placeholder),
+            ty: None,
             value_barrier: false,
+            type_barrier: true,
             site,
         }
     }
@@ -165,8 +160,9 @@ impl ImportedSymbol {
         ImportedSymbol {
             name,
             value: Some(ImportedValueSlot::Placeholder),
-            ty: Some(ImportedTypeSlot::Placeholder),
+            ty: None,
             value_barrier: false,
+            type_barrier: true,
             site,
         }
     }
@@ -178,13 +174,11 @@ pub(crate) enum ImportedValueSlot {
 }
 
 pub(crate) enum ImportedTypeSlot {
-    Existing(LegacyTypeStorageId),
-    Placeholder,
+    Existing(TypeGroupId),
 }
 
 pub(crate) struct ImportPlaceholder {
     pub(crate) value: Option<ValueStorageId>,
-    pub(crate) ty: Option<LegacyTypeStorageId>,
 }
 
 pub(crate) struct BindState {
@@ -205,8 +199,6 @@ pub(crate) struct BindState {
     pub(crate) current_module: ScopeId,
     /// Running checker storage counter for value declarations.
     pub(crate) next_value_storage: u32,
-    /// Running checker storage counter for the legacy type path.
-    pub(crate) next_legacy_type_storage: u32,
 }
 
 impl BindState {
@@ -275,12 +267,6 @@ impl BindState {
         id
     }
 
-    fn fresh_legacy_type_storage(&mut self) -> LegacyTypeStorageId {
-        let id = LegacyTypeStorageId(self.next_legacy_type_storage);
-        self.next_legacy_type_storage += 1;
-        id
-    }
-
     fn attach_value_storage(&mut self, declaration: DeclId, storage: ValueStorageId) {
         self.declarations
             .get_mut(declaration)
@@ -330,6 +316,7 @@ pub(crate) struct ProjectBinderBuilder {
     state: BindState,
     prelude_module: ScopeId,
     compilation_global: ScopeId,
+    prelude_type_group_count: u32,
 }
 
 impl ProjectBinderBuilder {
@@ -348,7 +335,6 @@ impl ProjectBinderBuilder {
             block_scopes: FxHashMap::default(),
             current_module: ScopeId(0),
             next_value_storage: 0,
-            next_legacy_type_storage: 0,
         };
 
         let prelude_module = state.graph.push(Scope::new(ScopeKind::Module, None));
@@ -358,6 +344,8 @@ impl ProjectBinderBuilder {
             .insert(prelude_module, SourceUnitKey::PRELUDE);
         state.record_source_declarations(prelude);
         bind_statements(&mut state, prelude_module, &prelude.body);
+        let prelude_type_group_count =
+            u32::try_from(state.type_groups.len()).expect("prelude type group count fits u32");
         let compilation_global = state.graph.push(Scope::new(
             ScopeKind::CompilationGlobal,
             Some(prelude_module),
@@ -367,6 +355,7 @@ impl ProjectBinderBuilder {
             state,
             prelude_module,
             compilation_global,
+            prelude_type_group_count,
         }
     }
 
@@ -411,7 +400,7 @@ impl ProjectBinderBuilder {
             prelude_module: self.prelude_module,
             compilation_global: self.compilation_global,
             decl_count: self.state.next_value_storage,
-            type_decl_count: self.state.next_legacy_type_storage,
+            prelude_type_group_count: self.prelude_type_group_count,
             fn_scopes: self.state.fn_scopes,
             fn_decl_ids: self.state.fn_decl_ids,
             block_scopes: self.state.block_scopes,
@@ -424,7 +413,7 @@ impl ProjectBinderBuilder {
         &self,
         scope: ScopeId,
         name: &str,
-    ) -> (Option<ValueStorageId>, Option<LegacyTypeStorageId>) {
+    ) -> (Option<ValueStorageId>, Option<TypeGroupId>) {
         self.state
             .graph
             .get(scope)
@@ -443,6 +432,15 @@ impl ProjectBinderBuilder {
             .and_then(|scope| scope.lookup_local(name))
             .and_then(|symbol_id| self.state.symbols.get(symbol_id))
             .is_some_and(|symbol| symbol.blocks_value_lookup)
+    }
+
+    pub(crate) fn local_type_lookup_barrier(&self, scope: ScopeId, name: &str) -> bool {
+        self.state
+            .graph
+            .get(scope)
+            .and_then(|scope| scope.lookup_local(name))
+            .and_then(|symbol_id| self.state.symbols.get(symbol_id))
+            .is_some_and(|symbol| symbol.blocks_type_lookup)
     }
 }
 
@@ -545,21 +543,12 @@ fn bind_source_type(
     fragment_kind: TypeFragmentKind,
 ) {
     let declaration = state.attach_declaration_scope(binding_start, declaration_kind, scope);
-    let storage = state.fresh_legacy_type_storage();
     let source = state
         .module_sources
         .get(&state.current_module)
         .copied()
         .expect("current module has stable source ownership");
-    declare_type(
-        state,
-        scope,
-        name,
-        declaration,
-        Some(storage),
-        fragment_kind,
-        source,
-    );
+    declare_type(state, scope, name, declaration, fragment_kind, source);
 }
 
 /// Bind a list of statements into `scope`.
@@ -1099,14 +1088,12 @@ fn declare_function_value(
     state.attach_symbol_declaration(symbol_id, declaration);
 }
 
-/// Retain one source fragment in its stable group while preserving last-wins
-/// legacy production type storage until WU3.
+/// Retain one source fragment in its stable production type group.
 pub(super) fn declare_type(
     state: &mut BindState,
     target_scope: ScopeId,
     name: &str,
     declaration: DeclId,
-    legacy_storage: Option<LegacyTypeStorageId>,
     kind: TypeFragmentKind,
     source: SourceUnitKey,
 ) {
@@ -1124,7 +1111,7 @@ pub(super) fn declare_type(
         let group = match state
             .symbols
             .get(existing)
-            .and_then(|symbol| symbol.type_group)
+            .and_then(|symbol| symbol.owns_type_group.then_some(symbol.ty).flatten())
         {
             Some(group) => group,
             None => state.type_groups.push(name),
@@ -1140,7 +1127,6 @@ pub(super) fn declare_type(
                 scope: fragment_scope,
                 site,
                 kind,
-                legacy_storage,
             });
         state
             .type_groups
@@ -1158,16 +1144,14 @@ pub(super) fn declare_type(
             .declarations
             .get_mut(declaration)
             .expect("fresh type declaration exists");
-        lexical.legacy_type_storage = legacy_storage;
         lexical.type_group = Some(group);
         let symbol = state
             .symbols
             .get_mut(existing)
             .expect("resolved symbol exists");
-        if let Some(storage) = legacy_storage {
-            symbol.ty = Some(storage);
-        }
-        symbol.type_group = Some(group);
+        symbol.ty = Some(group);
+        symbol.owns_type_group = true;
+        symbol.blocks_type_lookup = false;
         state.attach_symbol_declaration(existing, declaration);
         return;
     }
@@ -1183,17 +1167,15 @@ pub(super) fn declare_type(
             scope: fragment_scope,
             site,
             kind,
-            legacy_storage,
         });
     let lexical = state
         .declarations
         .get_mut(declaration)
         .expect("fresh type declaration exists");
-    lexical.legacy_type_storage = legacy_storage;
     lexical.type_group = Some(group);
     let mut symbol = Symbol::new(name);
-    symbol.ty = legacy_storage;
-    symbol.type_group = Some(group);
+    symbol.ty = Some(group);
+    symbol.owns_type_group = true;
     let symbol_id: SymbolId = state.symbols.push(symbol);
     state.graph.declare(target_scope, name, symbol_id);
     state.attach_symbol_declaration(symbol_id, declaration);
@@ -1212,14 +1194,10 @@ fn declare_import(
         }
         None => (None, None),
     };
-    let (type_decl, type_placeholder) = match &import.ty {
-        Some(ImportedTypeSlot::Existing(storage)) => (Some(*storage), None),
-        Some(ImportedTypeSlot::Placeholder) => {
-            let storage = state.fresh_legacy_type_storage();
-            (Some(storage), Some(storage))
-        }
-        None => (None, None),
-    };
+    let type_group = import
+        .ty
+        .as_ref()
+        .map(|ImportedTypeSlot::Existing(group)| *group);
     let declaration =
         state.attach_declaration_scope(import.site.start, DeclarationKind::Import, scope);
     let lexical = state
@@ -1227,7 +1205,7 @@ fn declare_import(
         .get_mut(declaration)
         .expect("fresh import declaration exists");
     lexical.value_storage = value_decl;
-    lexical.legacy_type_storage = type_decl;
+    lexical.type_group = type_group;
     if let Some(existing) = state
         .graph
         .get(scope)
@@ -1235,25 +1213,27 @@ fn declare_import(
     {
         if let Some(symbol) = state.symbols.get_mut(existing) {
             symbol.value = value_decl;
-            symbol.ty = type_decl;
+            symbol.ty = type_group;
+            symbol.owns_type_group = false;
             symbol.blocks_value_lookup = import.value_barrier;
+            symbol.blocks_type_lookup = import.type_barrier;
         }
         state.attach_symbol_declaration(existing, declaration);
         return ImportPlaceholder {
             value: value_placeholder,
-            ty: type_placeholder,
         };
     }
     let mut symbol = Symbol::new(&import.name);
     symbol.value = value_decl;
-    symbol.ty = type_decl;
+    symbol.ty = type_group;
+    symbol.owns_type_group = false;
     symbol.blocks_value_lookup = import.value_barrier;
+    symbol.blocks_type_lookup = import.type_barrier;
     let symbol_id: SymbolId = state.symbols.push(symbol);
     state.graph.declare(scope, &import.name, symbol_id);
     state.attach_symbol_declaration(symbol_id, declaration);
     ImportPlaceholder {
         value: value_placeholder,
-        ty: type_placeholder,
     }
 }
 
@@ -1286,7 +1266,6 @@ mod tests {
     fn lexical_declarations_and_storage_identities_do_not_alias() {
         fn lexical(_: DeclId) {}
         fn value_storage(_: ValueStorageId) {}
-        fn legacy_type_storage(_: LegacyTypeStorageId) {}
         fn type_group(_: crate::binder::declaration::TypeGroupId) {}
 
         let source = "const value = 0; function f(param: number, ...rest: string[]) { try {} catch (caught) {} } type Alias = number; interface Shape {} class Both {}";
@@ -1304,7 +1283,7 @@ mod tests {
             lexical(declaration.id);
         }
         assert!(declarations.iter().all(|declaration| {
-            (declaration.value_storage.is_none() && declaration.legacy_type_storage.is_none())
+            (declaration.value_storage.is_none() && declaration.type_group.is_none())
                 || declaration.site.scope.is_some()
         }));
 
@@ -1345,11 +1324,6 @@ mod tests {
                 .iter()
                 .find(|declaration| declaration.kind == kind)
                 .expect("type declaration");
-            legacy_type_storage(
-                declaration
-                    .legacy_type_storage
-                    .expect("type storage identity"),
-            );
             type_group(declaration.type_group.expect("type group identity"));
         }
 
@@ -1358,11 +1332,7 @@ mod tests {
             .find(|declaration| declaration.kind == DeclarationKind::Class)
             .expect("class declaration");
         value_storage(class.value_storage.expect("class value storage"));
-        legacy_type_storage(
-            class
-                .legacy_type_storage
-                .expect("class type storage identity"),
-        );
+        type_group(class.type_group.expect("class type group identity"));
         let class_symbol = binder
             .graph
             .get(binder.module)
@@ -1382,7 +1352,7 @@ mod tests {
             .and_then(|scope| scope.lookup_local("M"))
             .expect("merged symbol");
         let symbol = binder.symbols.get(symbol_id).expect("merged symbol row");
-        let group_id = symbol.type_group.expect("dormant type group");
+        let group_id = symbol.ty.expect("type group");
         let group = binder.type_groups.get(group_id).expect("type group row");
 
         assert_eq!(group.name, "M");
@@ -1409,7 +1379,6 @@ mod tests {
                 .is_some_and(|declaration| {
                     declaration.site == fragment.site
                         && declaration.type_group == Some(group_id)
-                        && declaration.legacy_type_storage == fragment.legacy_storage
                         && fragment.scope == declaration.site.scope.expect("bound type scope")
                 })
         }));
@@ -1426,15 +1395,7 @@ mod tests {
             vec!["M", "M", "M"]
         );
 
-        // WU1a is deliberately dormant: the legacy production slot still names
-        // exactly the final declaration's storage identity.
-        assert_eq!(
-            symbol.ty,
-            group
-                .fragments
-                .last()
-                .and_then(|fragment| fragment.legacy_storage)
-        );
+        assert_eq!(symbol.ty, Some(group_id));
 
         let class = group
             .fragments
@@ -1498,9 +1459,7 @@ mod tests {
             ]
         );
         assert!(imports.iter().all(|declaration| {
-            declaration.value_storage.is_none()
-                && declaration.legacy_type_storage.is_none()
-                && declaration.type_group.is_none()
+            declaration.value_storage.is_none() && declaration.type_group.is_none()
         }));
 
         let a = declarations

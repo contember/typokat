@@ -47,6 +47,144 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.lower_type_param_constraints_inner(scope, param_decl, ids, true);
     }
 
+    /// Lower type-group constraints and raw defaults while the declaration
+    /// graph is private. Default constraint relations are captured as obligations
+    /// and run only after both semantic registries publish.
+    pub(super) fn lower_type_group_parameter_descriptors(
+        &mut self,
+        scope: ScopeId,
+        param_decl: Option<&TSTypeParameterDeclaration<'_>>,
+        ids: &[TypeParamId],
+        validate_locally: bool,
+    ) -> TypeGroupParameterDescriptors {
+        self.lower_type_group_parameter_descriptors_inner(
+            scope,
+            param_decl,
+            ids,
+            true,
+            validate_locally,
+        )
+    }
+
+    pub(super) fn lower_interface_fragment_parameter_descriptors(
+        &mut self,
+        scope: ScopeId,
+        param_decl: Option<&TSTypeParameterDeclaration<'_>>,
+        ids: &[TypeParamId],
+    ) -> TypeGroupParameterDescriptors {
+        self.lower_type_group_parameter_descriptors_inner(scope, param_decl, ids, false, false)
+    }
+
+    fn lower_type_group_parameter_descriptors_inner(
+        &mut self,
+        scope: ScopeId,
+        param_decl: Option<&TSTypeParameterDeclaration<'_>>,
+        ids: &[TypeParamId],
+        publish_constraints: bool,
+        validate_locally: bool,
+    ) -> TypeGroupParameterDescriptors {
+        let Some(param_decl) = param_decl else {
+            return TypeGroupParameterDescriptors {
+                constraints: Vec::new(),
+                defaults: Vec::new(),
+            };
+        };
+        let error = self.interner.well_known().error;
+        let mut constraints = param_decl
+            .params
+            .iter()
+            .map(|parameter| {
+                let Some(constraint) = parameter.constraint.as_ref() else {
+                    return TypeParameterMetadataState::Absent;
+                };
+                match self.lower_annotation(scope, constraint) {
+                    Some(lowered) if lowered == error => TypeParameterMetadataState::Poisoned,
+                    Some(lowered) => TypeParameterMetadataState::Ready(lowered),
+                    None => TypeParameterMetadataState::Unsupported,
+                }
+            })
+            .collect::<Vec<_>>();
+        let constraint_overlay = ids
+            .iter()
+            .copied()
+            .zip(constraints.iter().copied())
+            .filter_map(|(id, constraint)| constraint.ready().map(|constraint| (id, constraint)))
+            .collect::<FxHashMap<_, _>>();
+        for (index, ((parameter, &id), constraint)) in param_decl
+            .params
+            .iter()
+            .zip(ids)
+            .zip(constraints.clone())
+            .enumerate()
+        {
+            let TypeParameterMetadataState::Ready(constraint) = constraint else {
+                continue;
+            };
+            if validate_locally
+                && self.constraint_chain_revisits_with_overlay(id, &constraint_overlay)
+            {
+                self.emit_diagnostic(Diagnostic::circular_constraint(
+                    Span::from_oxc(
+                        parameter
+                            .constraint
+                            .as_ref()
+                            .expect("lowered constraint has syntax")
+                            .span(),
+                    ),
+                    parameter.name.name.as_str(),
+                ));
+                constraints[index] = TypeParameterMetadataState::Poisoned;
+            } else if publish_constraints {
+                self.interner.set_type_param_constraint(id, constraint);
+            }
+        }
+        let mut defaults = Vec::with_capacity(ids.len());
+        let mut checks = Vec::new();
+        let mut optional_seen = false;
+        for (index, parameter) in param_decl.params.iter().enumerate() {
+            if parameter.default.is_none() && optional_seen {
+                self.emit_diagnostic(Diagnostic::required_type_parameter_after_optional(
+                    Span::from_oxc(parameter.name.span),
+                ));
+            }
+            optional_seen |= parameter.default.is_some();
+            let default = match parameter.default.as_ref() {
+                None => TypeParameterMetadataState::Absent,
+                Some(default) => match self.lower_annotation(scope, default) {
+                    None => TypeParameterMetadataState::Unsupported,
+                    Some(lowered) if lowered == error => TypeParameterMetadataState::Poisoned,
+                    Some(lowered)
+                        if self.default_references_nonpreceding_binder(index, ids, lowered) =>
+                    {
+                        self.emit_diagnostic(Diagnostic::type_parameter_default_forward_reference(
+                            Span::from_oxc(default.span()),
+                        ));
+                        TypeParameterMetadataState::Poisoned
+                    }
+                    Some(lowered) => {
+                        if validate_locally {
+                            checks.push((
+                                constraints
+                                    .get(index)
+                                    .copied()
+                                    .and_then(|state| state.ready()),
+                                lowered,
+                                Span::from_oxc(default.span()),
+                            ));
+                        }
+                        TypeParameterMetadataState::Ready(lowered)
+                    }
+                },
+            };
+            defaults.push(default);
+        }
+        self.check_constraint_arguments(&checks, &FxHashMap::default());
+        TypeGroupParameterDescriptors {
+            constraints,
+            defaults,
+        }
+    }
+
     /// Lower the persistent binder descriptors of a function-like signature.
     /// The caller must have pushed this signature's frame, nested inside any
     /// enclosing class/interface frame, before invoking this helper.
@@ -88,7 +226,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     unavailable = true;
                     return None;
                 }
-                if self.default_references_later_signature_binder(index, param, ids, lowered) {
+                if self.default_references_nonpreceding_binder(index, ids, lowered) {
                     self.emit_diagnostic(Diagnostic::type_parameter_default_forward_reference(
                         Span::from_oxc(default.span()),
                     ));
@@ -136,19 +274,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// TypeScript-wide declaration visibility. Detect a later binder after lowering
     /// under the existing full frame, then discard that default so it cannot become
     /// a permissive call-site fallback.
-    fn default_references_later_signature_binder(
+    fn default_references_nonpreceding_binder(
         &mut self,
         index: usize,
-        param: &oxc_ast::ast::TSTypeParameter<'_>,
         ids: &[TypeParamId],
         default: TypeId,
     ) -> bool {
-        let Some(current) = self.lookup_type_param(param.name.name.as_str()) else {
-            return false;
-        };
         let mut replacements: FxHashMap<TypeParamId, TypeId> = FxHashMap::default();
-        for &later in &ids[index.saturating_add(1)..] {
-            replacements.insert(later, current);
+        let marker = self.interner.well_known().error;
+        for &nonpreceding in &ids[index..] {
+            replacements.insert(nonpreceding, marker);
         }
         !replacements.is_empty() && substitute(self.interner, default, &replacements) != default
     }
@@ -241,11 +376,34 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// shapes end the branch because structural recursion is relation-cycle handled.
     /// Visited-set termination avoids flagging cycles that do not pass through `start`.
     fn constraint_chain_revisits(&self, start: TypeParamId) -> bool {
+        self.constraint_chain_revisits_from_sources(start, &FxHashMap::default(), true)
+    }
+
+    pub(super) fn constraint_chain_revisits_with_overlay(
+        &self,
+        start: TypeParamId,
+        overlay: &FxHashMap<TypeParamId, TypeId>,
+    ) -> bool {
+        self.constraint_chain_revisits_from_sources(start, overlay, false)
+    }
+
+    fn constraint_chain_revisits_from_sources(
+        &self,
+        start: TypeParamId,
+        overlay: &FxHashMap<TypeParamId, TypeId>,
+        include_store: bool,
+    ) -> bool {
         let store = self.interner.store();
         let mut visited: FxHashSet<TypeParamId> = FxHashSet::default();
         let mut stack: Vec<TypeParamId> = vec![start];
         while let Some(param) = stack.pop() {
-            let Some(constraint) = store.type_param_constraint(param) else {
+            let Some(constraint) = overlay.get(&param).copied().or_else(|| {
+                if include_store {
+                    store.type_param_constraint(param)
+                } else {
+                    None
+                }
+            }) else {
                 continue;
             };
             // One-step bare-parameter successors: the constraint itself, or the

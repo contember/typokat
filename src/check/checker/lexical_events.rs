@@ -4,7 +4,7 @@ use super::events::{
     EventId, EventStore, EventStoreError, ModuleOrdinal, RecordTicket, ReservedEvent, UnitSlot,
 };
 use crate::binder::declaration::{
-    source_declaration_occurrences, DeclId, DeclarationKind, LegacyTypeStorageId, ValueStorageId,
+    source_declaration_occurrences, DeclId, DeclarationKind, TypeGroupId, ValueStorageId,
 };
 use crate::span::Span;
 use crate::types::repr::{ClassId, TypeParamId};
@@ -12,7 +12,7 @@ use oxc_ast::ast::{
     Argument, ArrayExpressionElement, ChainElement, Class, ClassElement, Declaration,
     ExportDefaultDeclarationKind, Expression, ForStatementInit, ForStatementLeft, FormalParameters,
     Function, ObjectPropertyKind, Program, PropertyKey, Statement, TSModuleDeclaration,
-    TSModuleDeclarationBody, VariableDeclaration,
+    TSModuleDeclarationBody, TSSignature, VariableDeclaration,
 };
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
@@ -68,6 +68,7 @@ pub(crate) struct LexicalOwner {
 /// Neutral event reserved for one exact source declaration occurrence.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DeclarationReservation {
+    pub(crate) source: SourceSite,
     pub(crate) kind: DeclarationKind,
     pub(crate) declaration_span: Span,
     pub(crate) binding_span: Span,
@@ -82,12 +83,27 @@ struct ExportAliasReservation {
     owner: RecordTicket,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum InterfaceOccurrenceKind {
+    Header,
+    Member,
+    Heritage,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct InterfaceOccurrenceReservation {
+    binding_start: u32,
+    source_start: u32,
+    kind: InterfaceOccurrenceKind,
+    owner: RecordTicket,
+}
+
 /// Stable class identities attached after binder/type reservation and before fill.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ClassBinding {
     pub(crate) class_id: ClassId,
-    pub(crate) type_decl: LegacyTypeStorageId,
-    pub(crate) value_decl: ValueStorageId,
+    pub(crate) type_decl: TypeGroupId,
+    pub(crate) value_decl: Option<ValueStorageId>,
     pub(crate) header_type_params: Vec<TypeParamId>,
 }
 
@@ -178,7 +194,6 @@ pub(crate) enum ReservationError {
     DuplicateClassBinding(ClassSiteId),
     DuplicateCallableBinding(CallableSiteId),
     MissingDeclarationOwner(DeclId),
-    MissingTypeDeclOwner(LegacyTypeStorageId),
     EventStore(EventStoreError),
 }
 
@@ -200,13 +215,14 @@ pub(crate) struct LexicalReservations {
     expression_site_tickets: Vec<SiteTickets>,
     declarations: Vec<DeclarationReservation>,
     export_aliases: Vec<ExportAliasReservation>,
+    interface_occurrences: Vec<InterfaceOccurrenceReservation>,
+    interface_occurrences_by_source:
+        FxHashMap<(ModuleOrdinal, u32, InterfaceOccurrenceKind, u32), usize>,
     declarations_by_binding: FxHashMap<(ModuleOrdinal, u32, u32), usize>,
     export_aliases_by_local_span: FxHashMap<(ModuleOrdinal, u32, u32), usize>,
     classes_by_source: BTreeMap<(ModuleOrdinal, u32), Vec<ClassSiteId>>,
     callables_by_source: BTreeMap<(ModuleOrdinal, u32), Vec<CallableSiteId>>,
     declaration_owners: FxHashMap<DeclId, LexicalOwner>,
-    type_decl_owners: FxHashMap<LegacyTypeStorageId, LexicalOwner>,
-    type_decl_sources: FxHashMap<LegacyTypeStorageId, SourceSite>,
 }
 
 impl LexicalReservations {
@@ -222,6 +238,11 @@ impl LexicalReservations {
             let event = store.reserve_event(module_ordinal, occurrence.binding_span.start);
             let index = self.declarations.len();
             self.declarations.push(DeclarationReservation {
+                source: SourceSite {
+                    module_ordinal,
+                    unit_slot,
+                    source_start: occurrence.declaration_span.start,
+                },
                 kind: occurrence.kind,
                 declaration_span: occurrence.declaration_span,
                 binding_span: occurrence.binding_span,
@@ -255,7 +276,131 @@ impl LexicalReservations {
                 _ => {}
             }
         }
+        self.reserve_interface_occurrences_in_statements(module_ordinal, &program.body, store);
         self.reserve_statement_list(module_ordinal, unit_slot, &program.body, true, store)
+    }
+
+    fn reserve_interface_occurrences_in_statements(
+        &mut self,
+        module_ordinal: ModuleOrdinal,
+        statements: &[Statement<'_>],
+        store: &mut EventStore,
+    ) {
+        for statement in statements {
+            match statement {
+                Statement::TSInterfaceDeclaration(interface) => {
+                    self.reserve_interface_occurrences(module_ordinal, interface, store);
+                }
+                Statement::ExportNamedDeclaration(export) => match &export.declaration {
+                    Some(Declaration::TSInterfaceDeclaration(interface)) => {
+                        self.reserve_interface_occurrences(module_ordinal, interface, store);
+                    }
+                    Some(Declaration::TSModuleDeclaration(module)) => {
+                        self.reserve_interface_occurrences_in_module(module_ordinal, module, store);
+                    }
+                    Some(Declaration::TSGlobalDeclaration(global)) => {
+                        self.reserve_interface_occurrences_in_statements(
+                            module_ordinal,
+                            &global.body.body,
+                            store,
+                        );
+                    }
+                    _ => {}
+                },
+                Statement::TSModuleDeclaration(module) => {
+                    self.reserve_interface_occurrences_in_module(module_ordinal, module, store);
+                }
+                Statement::TSGlobalDeclaration(global) => {
+                    self.reserve_interface_occurrences_in_statements(
+                        module_ordinal,
+                        &global.body.body,
+                        store,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn reserve_interface_occurrences_in_module(
+        &mut self,
+        module_ordinal: ModuleOrdinal,
+        module: &TSModuleDeclaration<'_>,
+        store: &mut EventStore,
+    ) {
+        match &module.body {
+            Some(TSModuleDeclarationBody::TSModuleBlock(block)) => {
+                self.reserve_interface_occurrences_in_statements(module_ordinal, &block.body, store)
+            }
+            Some(TSModuleDeclarationBody::TSModuleDeclaration(nested)) => {
+                self.reserve_interface_occurrences_in_module(module_ordinal, nested, store);
+            }
+            None => {}
+        }
+    }
+
+    fn reserve_interface_occurrences(
+        &mut self,
+        module_ordinal: ModuleOrdinal,
+        interface: &oxc_ast::ast::TSInterfaceDeclaration<'_>,
+        store: &mut EventStore,
+    ) {
+        let binding_start = interface.id.span.start;
+        self.reserve_interface_occurrence(
+            module_ordinal,
+            binding_start,
+            InterfaceOccurrenceKind::Header,
+            binding_start,
+            store,
+        );
+        for heritage in &interface.extends {
+            self.reserve_interface_occurrence(
+                module_ordinal,
+                binding_start,
+                InterfaceOccurrenceKind::Heritage,
+                heritage.span.start,
+                store,
+            );
+        }
+        for member in &interface.body.body {
+            let source_start = match member {
+                TSSignature::TSPropertySignature(signature) => signature.span.start,
+                TSSignature::TSMethodSignature(signature) => signature.span.start,
+                TSSignature::TSCallSignatureDeclaration(signature) => signature.span.start,
+                TSSignature::TSConstructSignatureDeclaration(signature) => signature.span.start,
+                TSSignature::TSIndexSignature(signature) => signature.span.start,
+            };
+            self.reserve_interface_occurrence(
+                module_ordinal,
+                binding_start,
+                InterfaceOccurrenceKind::Member,
+                source_start,
+                store,
+            );
+        }
+    }
+
+    fn reserve_interface_occurrence(
+        &mut self,
+        module_ordinal: ModuleOrdinal,
+        binding_start: u32,
+        kind: InterfaceOccurrenceKind,
+        source_start: u32,
+        store: &mut EventStore,
+    ) {
+        let event = store.reserve_event(module_ordinal, source_start);
+        let index = self.interface_occurrences.len();
+        self.interface_occurrences
+            .push(InterfaceOccurrenceReservation {
+                binding_start,
+                source_start,
+                kind,
+                owner: event.primary,
+            });
+        let previous = self
+            .interface_occurrences_by_source
+            .insert((module_ordinal, binding_start, kind, source_start), index);
+        debug_assert!(previous.is_none(), "one exact interface occurrence owner");
     }
 
     fn reserve_export_aliases_in_statement(
@@ -474,7 +619,34 @@ impl LexicalReservations {
                     )?;
                 }
             }
+            Statement::TSModuleDeclaration(module) => {
+                self.reserve_module_statements(module_ordinal, unit_slot, module, store)?;
+            }
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(Declaration::TSModuleDeclaration(module)) = &export.declaration {
+                    self.reserve_module_statements(module_ordinal, unit_slot, module, store)?;
+                }
+            }
             _ => {}
+        }
+        Ok(())
+    }
+
+    fn reserve_module_statements(
+        &mut self,
+        module_ordinal: ModuleOrdinal,
+        unit_slot: UnitSlot,
+        module: &TSModuleDeclaration<'_>,
+        store: &mut EventStore,
+    ) -> Result<(), ReservationError> {
+        match &module.body {
+            Some(TSModuleDeclarationBody::TSModuleBlock(block)) => {
+                self.reserve_statement_list(module_ordinal, unit_slot, &block.body, false, store)?;
+            }
+            Some(TSModuleDeclarationBody::TSModuleDeclaration(nested)) => {
+                self.reserve_module_statements(module_ordinal, unit_slot, nested, store)?;
+            }
+            None => {}
         }
         Ok(())
     }
@@ -903,41 +1075,6 @@ impl LexicalReservations {
             .copied()
     }
 
-    pub(crate) fn attach_type_decl_owner(
-        &mut self,
-        decl_id: LegacyTypeStorageId,
-        module_ordinal: ModuleOrdinal,
-        source_start: u32,
-    ) -> Result<(), ReservationError> {
-        let owner = self
-            .owner_at(module_ordinal, source_start, LexicalOwnerPhase::Immediate)
-            .ok_or(ReservationError::MissingTypeDeclOwner(decl_id))?;
-        let source = self
-            .top_level
-            .iter()
-            .map(|reservation| (reservation.event, reservation.source))
-            .chain(
-                self.nested_statements
-                    .iter()
-                    .map(|reservation| (reservation.event, reservation.source)),
-            )
-            .find_map(|(event, source)| (event == owner.event).then_some(source))
-            .ok_or(ReservationError::MissingTypeDeclOwner(decl_id))?;
-        // Merged declarations share one binder identity; the declaration table and
-        // its diagnostic owner both follow the last source declaration.
-        self.type_decl_owners.insert(decl_id, owner);
-        self.type_decl_sources.insert(decl_id, source);
-        Ok(())
-    }
-
-    pub(crate) fn type_decl_owner(&self, decl_id: LegacyTypeStorageId) -> Option<LexicalOwner> {
-        self.type_decl_owners.get(&decl_id).copied()
-    }
-
-    pub(crate) fn type_decl_source(&self, decl_id: LegacyTypeStorageId) -> Option<SourceSite> {
-        self.type_decl_sources.get(&decl_id).copied()
-    }
-
     pub(crate) fn attach_declaration_owner(
         &mut self,
         declaration: DeclId,
@@ -983,12 +1120,15 @@ impl LexicalReservations {
         })
     }
 
-    #[cfg(test)]
     pub(crate) fn declaration_owner(&self, declaration: DeclId) -> Option<LexicalOwner> {
         self.declaration_owners.get(&declaration).copied()
     }
 
-    #[cfg(test)]
+    pub(crate) fn declaration_source(&self, declaration: DeclId) -> Option<SourceSite> {
+        self.declaration_reservation(declaration)
+            .map(|reservation| reservation.source)
+    }
+
     pub(crate) fn declaration_reservation(
         &self,
         declaration: DeclId,
@@ -997,6 +1137,26 @@ impl LexicalReservations {
         self.declarations.iter().find(|reservation| {
             reservation.event == owner.event && reservation.owner == owner.ticket
         })
+    }
+
+    pub(crate) fn interface_occurrence_owner(
+        &self,
+        declaration: DeclId,
+        kind: InterfaceOccurrenceKind,
+        source_start: u32,
+    ) -> Option<RecordTicket> {
+        let reservation = self.declaration_reservation(declaration)?;
+        let index = self.interface_occurrences_by_source.get(&(
+            reservation.source.module_ordinal,
+            reservation.binding_span.start,
+            kind,
+            source_start,
+        ))?;
+        let occurrence = self.interface_occurrences.get(*index)?;
+        debug_assert_eq!(occurrence.binding_start, reservation.binding_span.start);
+        debug_assert_eq!(occurrence.source_start, source_start);
+        debug_assert_eq!(occurrence.kind, kind);
+        Some(occurrence.owner)
     }
 
     pub(crate) fn owner_at(
@@ -1112,6 +1272,11 @@ impl LexicalReservations {
                 .map(|declaration| declaration.owner),
         );
         tickets.extend(self.export_aliases.iter().map(|alias| alias.owner));
+        tickets.extend(
+            self.interface_occurrences
+                .iter()
+                .map(|occurrence| occurrence.owner),
+        );
         for site in &self.top_level {
             tickets.extend(site_tickets(site.tickets));
         }
@@ -1408,6 +1573,7 @@ mod tests {
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
+    use std::collections::BTreeSet;
 
     fn source_span(source: &str, needle: &str) -> Span {
         let start = source.find(needle).expect("test source contains needle");
@@ -1509,6 +1675,111 @@ declare namespace N {
     }
 
     #[test]
+    fn every_interface_header_heritage_and_member_has_one_exact_ticket() {
+        let source = "\
+interface Combined extends First, Second {
+  value: boolean;
+  [first: string]: number;
+  [second: string]: string;
+  [first: number]: 1;
+  [second: number]: 2;
+}
+";
+        let prelude_allocator = Allocator::default();
+        let allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let binder = crate::binder::bind_module_with_prelude(&prelude.program, &parsed.program);
+        let mut store = EventStore::default();
+        let mut reservations = LexicalReservations::default();
+        reservations
+            .reserve_program(
+                ModuleOrdinal::new(0),
+                UnitSlot::new(0),
+                &parsed.program,
+                &mut store,
+            )
+            .unwrap();
+        super::super::attach_type_decl_owners(
+            &mut reservations,
+            ModuleOrdinal::new(0),
+            &binder,
+            binder.module,
+            &parsed.program,
+        );
+
+        assert_eq!(
+            reservations
+                .interface_occurrences
+                .iter()
+                .filter(|occurrence| occurrence.kind == InterfaceOccurrenceKind::Header)
+                .count(),
+            1
+        );
+        assert_eq!(
+            reservations
+                .interface_occurrences
+                .iter()
+                .filter(|occurrence| occurrence.kind == InterfaceOccurrenceKind::Heritage)
+                .count(),
+            2
+        );
+        assert_eq!(
+            reservations
+                .interface_occurrences
+                .iter()
+                .filter(|occurrence| occurrence.kind == InterfaceOccurrenceKind::Member)
+                .count(),
+            5
+        );
+        let occurrence_owners: BTreeSet<_> = reservations
+            .interface_occurrences
+            .iter()
+            .map(|occurrence| occurrence.owner)
+            .collect();
+        assert_eq!(occurrence_owners.len(), 8);
+        let declaration = binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "Combined")
+            .and_then(|group| group.fragments.first())
+            .map(|fragment| fragment.declaration)
+            .expect("combined interface declaration");
+        let declaration_owner = reservations
+            .declaration_owner(declaration)
+            .expect("declaration fallback owner");
+        assert!(!occurrence_owners.contains(&declaration_owner.ticket));
+        for occurrence in &reservations.interface_occurrences {
+            assert_eq!(
+                reservations.interface_occurrence_owner(
+                    declaration,
+                    occurrence.kind,
+                    occurrence.source_start,
+                ),
+                Some(occurrence.owner),
+                "each interface child resolves only through its exact occurrence key"
+            );
+        }
+        let all_tickets = reservations.tickets();
+        for owner in occurrence_owners {
+            assert_eq!(
+                all_tickets
+                    .iter()
+                    .filter(|ticket| **ticket == owner)
+                    .count(),
+                1,
+                "each exact interface occurrence participates once in pending effects"
+            );
+        }
+
+        for ticket in all_tickets {
+            store.complete(ticket, Vec::new()).unwrap();
+        }
+        assert!(store.finish().unwrap().is_empty());
+    }
+
+    #[test]
     fn every_class_header_child_has_a_distinct_source_owner() {
         let source = "class C<T extends object = string, U extends unknown = number> {}";
         let allocator = Allocator::default();
@@ -1565,36 +1836,46 @@ declare namespace N {
     }
 
     #[test]
-    fn legacy_type_storage_owner_tracks_the_last_source_declaration() {
+    fn repeated_type_group_fragments_keep_exact_declaration_sources() {
         let source = "class C {} interface C { value: number }";
+        let prelude_allocator = Allocator::default();
         let allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
         let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
         assert!(parsed.diagnostics.is_empty());
+        let binder = crate::binder::bind_module_with_prelude(&prelude.program, &parsed.program);
         let module = ModuleOrdinal::new(0);
         let mut store = EventStore::default();
         let mut reservations = LexicalReservations::default();
         reservations
             .reserve_program(module, UnitSlot::new(0), &parsed.program, &mut store)
             .unwrap();
-        let declaration = LegacyTypeStorageId(7);
-        let class_start = u32::try_from(source.find("class C").unwrap()).unwrap();
-        let interface_start = u32::try_from(source.find("interface C").unwrap()).unwrap();
-
-        reservations
-            .attach_type_decl_owner(declaration, module, class_start)
-            .unwrap();
-        reservations
-            .attach_type_decl_owner(declaration, module, interface_start)
-            .unwrap();
-
-        assert_eq!(
-            reservations.type_decl_source(declaration),
-            Some(SourceSite {
-                module_ordinal: module,
-                unit_slot: UnitSlot::new(0),
-                source_start: interface_start,
-            })
+        super::super::attach_type_decl_owners(
+            &mut reservations,
+            module,
+            &binder,
+            binder.module,
+            &parsed.program,
         );
+        let group = binder
+            .graph
+            .get(binder.module)
+            .and_then(|scope| scope.lookup_local("C"))
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .and_then(|symbol| symbol.ty)
+            .and_then(|group| binder.type_groups.get(group))
+            .expect("class-interface group");
+        assert_eq!(group.fragments.len(), 2);
+        for fragment in &group.fragments {
+            assert_eq!(
+                reservations.declaration_source(fragment.declaration),
+                Some(SourceSite {
+                    module_ordinal: module,
+                    unit_slot: UnitSlot::new(0),
+                    source_start: fragment.site.declaration_span.start,
+                })
+            );
+        }
     }
 
     #[test]
@@ -1628,7 +1909,7 @@ declare namespace N {
             .expect("merged interface symbol");
         let group = binder
             .type_groups
-            .get(symbol.type_group.expect("dormant group"))
+            .get(symbol.ty.expect("type group"))
             .expect("group row");
         assert_eq!(group.fragments.len(), 2);
 
@@ -1661,10 +1942,16 @@ declare namespace N {
         );
         assert_eq!(second_reservation.binding_span, second.site.binding_span);
 
-        let legacy = symbol.ty.expect("legacy production storage");
-        assert_eq!(Some(legacy), second.legacy_storage);
         assert_eq!(
-            reservations.type_decl_source(legacy),
+            reservations.declaration_source(first.declaration),
+            Some(SourceSite {
+                module_ordinal: module,
+                unit_slot: UnitSlot::new(0),
+                source_start: first.site.declaration_span.start,
+            })
+        );
+        assert_eq!(
+            reservations.declaration_source(second.declaration),
             Some(SourceSite {
                 module_ordinal: module,
                 unit_slot: UnitSlot::new(0),
@@ -1831,8 +2118,8 @@ declare namespace N {
                 class,
                 ClassBinding {
                     class_id: ClassId(7),
-                    type_decl: LegacyTypeStorageId(8),
-                    value_decl: ValueStorageId(9),
+                    type_decl: TypeGroupId(8),
+                    value_decl: Some(ValueStorageId(9)),
                     header_type_params: vec![TypeParamId(10)],
                 },
             )

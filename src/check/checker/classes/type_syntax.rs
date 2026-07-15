@@ -17,12 +17,12 @@ use oxc_ast::ast::{
     TSSignature, TSThisParameter, TSTupleElement, TSType, TSTypeName, TSTypeOperatorOperator,
     TSTypeParameterDeclaration, UnaryOperator,
 };
-use oxc_span::Span;
+use oxc_span::{GetSpan, Span};
 use rustc_hash::FxHashMap;
 
 use super::application::{
     complete_class_arguments, ClassApplicationKind, ClassApplicationRequest, ClassTypeParameter,
-    ExplicitClassArgument, SourceClassArguments,
+    ClassTypeParameterDefault, ExplicitClassArgument, SourceClassArguments,
 };
 use super::surface_types::SurfaceTypeFactory;
 
@@ -80,13 +80,14 @@ pub(in crate::check::checker) enum SurfaceNameResolution<Ticket> {
     Direct(TypeId),
     Alias {
         template: TypeId,
-        parameters: Vec<TypeParamId>,
+        parameters: Vec<ClassTypeParameter<Ticket>>,
     },
     Class {
         class: ClassId,
         parameters: Vec<ClassTypeParameter<Ticket>>,
     },
     Poisoned(Ticket),
+    FoundUnavailable(Ticket),
     Unavailable(Ticket),
     Qualified {
         owner: Ticket,
@@ -102,6 +103,13 @@ pub(in crate::check::checker) trait SurfaceTypeResolver<Ticket> {
     fn resolve_qualified_name(&mut self, segments: &[&str]) -> SurfaceNameResolution<Ticket>;
 
     fn qualified_outer_type_parameters_visible(&self) -> bool;
+
+    fn record_type_argument_constraints(
+        &mut self,
+        parameters: &[TypeParamId],
+        arguments: &[TypeId],
+        explicit_spans: &[CheckSpan],
+    );
 
     fn signature_type_parameter(
         &mut self,
@@ -514,10 +522,25 @@ where
             }
         }
 
+        let resolution = self.resolver.resolve_name(name);
+        self.lower_resolved_reference(name, identifier.span, arguments, span, resolution)
+    }
+
+    fn lower_resolved_reference(
+        &mut self,
+        name: &str,
+        identifier_span: Span,
+        arguments: Option<&oxc_ast::ast::TSTypeParameterInstantiation<'_>>,
+        span: Span,
+        resolution: SurfaceNameResolution<Ticket>,
+    ) -> SurfaceTypeResult<Ticket> {
         let mut explicit = Vec::new();
+        let mut explicit_spans = Vec::new();
         if let Some(arguments) = arguments {
             explicit.reserve(arguments.params.len());
+            explicit_spans.reserve(arguments.params.len());
             for child in &arguments.params {
+                explicit_spans.push(CheckSpan::from_oxc(child.span()));
                 match self.lower_type(child) {
                     Ok(ty) => explicit.push(ExplicitClassArgument::Ready(ty)),
                     Err(failure) => {
@@ -531,7 +554,7 @@ where
             SourceClassArguments::Explicit(&explicit)
         });
 
-        match self.resolver.resolve_name(name) {
+        match resolution {
             SurfaceNameResolution::Direct(ty) => {
                 if explicit.is_empty() {
                     Ok(ty)
@@ -553,43 +576,108 @@ where
                 template,
                 parameters,
             } => {
-                if explicit.len() != parameters.len()
-                    || explicit
-                        .iter()
-                        .any(|argument| matches!(argument, ExplicitClassArgument::Unavailable))
+                let expected_max = parameters.len();
+                let expected_min = parameters
+                    .iter()
+                    .rposition(|parameter| {
+                        matches!(parameter.default, ClassTypeParameterDefault::Absent)
+                    })
+                    .map_or(0, |index| index + 1);
+                if explicit.len() < expected_min || explicit.len() > expected_max {
+                    let display =
+                        self.arity_display_name(name, &parameters, expected_min, expected_max);
+                    return Err(reference_exhaustion(
+                        &display,
+                        span,
+                        Exhaustion::ClassApplicationArguments(
+                            ClassApplicationArguments::WrongArity {
+                                expected_min,
+                                expected_max,
+                                actual: explicit.len(),
+                            },
+                        ),
+                    ));
+                }
+                if let Some(index) = explicit
+                    .iter()
+                    .position(|argument| matches!(argument, ExplicitClassArgument::Unavailable))
                 {
-                    let reason = if explicit.len() != parameters.len() {
-                        ClassApplicationArguments::WrongArity {
-                            expected_min: parameters.len(),
-                            expected_max: parameters.len(),
-                            actual: explicit.len(),
-                        }
-                    } else {
-                        let index = explicit
-                            .iter()
-                            .position(|argument| {
-                                matches!(argument, ExplicitClassArgument::Unavailable)
-                            })
-                            .unwrap_or(0);
-                        ClassApplicationArguments::UnavailableExplicitArgument { index }
-                    };
                     return Err(reference_exhaustion(
                         name,
                         span,
-                        Exhaustion::ClassApplicationArguments(reason),
+                        Exhaustion::ClassApplicationArguments(
+                            ClassApplicationArguments::UnavailableExplicitArgument { index },
+                        ),
                     ));
                 }
-                let substitutions = parameters
-                    .into_iter()
-                    .zip(explicit)
-                    .filter_map(|(parameter, argument)| match argument {
-                        ExplicitClassArgument::Ready(ty) => Some((parameter, ty)),
-                        ExplicitClassArgument::Unavailable => None,
-                    })
-                    .collect();
+                let mut substitutions = Vec::with_capacity(parameters.len());
+                for (index, parameter) in parameters.iter().enumerate() {
+                    let argument = match explicit.get(index) {
+                        Some(ExplicitClassArgument::Ready(ty)) => *ty,
+                        Some(ExplicitClassArgument::Unavailable) => unreachable!(),
+                        None => match parameter.default {
+                            ClassTypeParameterDefault::Ready(default) => {
+                                if substitutions.is_empty() {
+                                    default
+                                } else {
+                                    self.factory
+                                        .intern_instantiation(default, substitutions.clone())
+                                }
+                            }
+                            ClassTypeParameterDefault::Unsupported(ticket) => {
+                                return Err(SurfaceTypeFailure::Unsupported(ticket));
+                            }
+                            ClassTypeParameterDefault::Absent => {
+                                return Err(reference_exhaustion(
+                                    name,
+                                    span,
+                                    Exhaustion::ClassApplicationArguments(
+                                        ClassApplicationArguments::InferenceIncomplete { index },
+                                    ),
+                                ));
+                            }
+                        },
+                    };
+                    substitutions.push((parameter.id, argument));
+                }
+                let parameter_ids = parameters
+                    .iter()
+                    .map(|parameter| parameter.id)
+                    .collect::<Vec<_>>();
+                let application_arguments = substitutions
+                    .iter()
+                    .map(|(_, argument)| *argument)
+                    .collect::<Vec<_>>();
+                self.resolver.record_type_argument_constraints(
+                    &parameter_ids,
+                    &application_arguments,
+                    &explicit_spans,
+                );
                 Ok(self.factory.intern_instantiation(template, substitutions))
             }
             SurfaceNameResolution::Class { class, parameters } => {
+                let expected_max = parameters.len();
+                let expected_min = parameters
+                    .iter()
+                    .rposition(|parameter| {
+                        matches!(parameter.default, ClassTypeParameterDefault::Absent)
+                    })
+                    .map_or(0, |index| index + 1);
+                if explicit.len() < expected_min || explicit.len() > expected_max {
+                    let display =
+                        self.arity_display_name(name, &parameters, expected_min, expected_max);
+                    return Err(reference_exhaustion(
+                        &display,
+                        span,
+                        Exhaustion::ClassApplicationArguments(
+                            ClassApplicationArguments::WrongArity {
+                                expected_min,
+                                expected_max,
+                                actual: explicit.len(),
+                            },
+                        ),
+                    ));
+                }
                 let request = ClassApplicationRequest {
                     class,
                     parameters: &parameters,
@@ -599,6 +687,15 @@ where
                 };
                 match complete_class_arguments(request) {
                     DemandOutcome::Ready(arguments) => {
+                        let parameter_ids = parameters
+                            .iter()
+                            .map(|parameter| parameter.id)
+                            .collect::<Vec<_>>();
+                        self.resolver.record_type_argument_constraints(
+                            &parameter_ids,
+                            &arguments,
+                            &explicit_spans,
+                        );
                         Ok(self.factory.intern_class_instance(class, arguments))
                     }
                     DemandOutcome::Exhausted(reason) => {
@@ -607,15 +704,38 @@ where
                 }
             }
             SurfaceNameResolution::Poisoned(ticket) => Err(SurfaceTypeFailure::Poisoned(ticket)),
+            SurfaceNameResolution::FoundUnavailable(ticket) => {
+                Err(SurfaceTypeFailure::Poisoned(ticket))
+            }
             SurfaceNameResolution::Unavailable(ticket) => Err(SurfaceTypeFailure::Unresolved {
                 owner: ticket,
-                span: identifier.span,
+                span: identifier_span,
                 name: name.to_string(),
             }),
             SurfaceNameResolution::Qualified { .. } => {
-                unreachable!("simple-name lookup returned a qualified-path outcome")
+                unreachable!("resolved endpoint remained a qualified-path outcome")
             }
         }
+    }
+
+    fn arity_display_name(
+        &self,
+        name: &str,
+        parameters: &[ClassTypeParameter<Ticket>],
+        expected_min: usize,
+        expected_max: usize,
+    ) -> String {
+        if expected_min == expected_max {
+            return name.to_string();
+        }
+        let names = parameters
+            .iter()
+            .map(|parameter| self.factory.store().type_param_name(parameter.id))
+            .collect::<Option<Vec<_>>>();
+        names.map_or_else(
+            || name.to_string(),
+            |names| format!("{}<{}>", name, names.join(", ")),
+        )
     }
 
     fn lower_qualified_reference(
@@ -636,12 +756,14 @@ where
             .iter()
             .map(|segment| CheckSpan::from_oxc(segment.span))
             .collect::<Vec<_>>();
+        let resolved = self.resolver.resolve_qualified_name(&names);
         let SurfaceNameResolution::Qualified {
             owner,
             mut resolution,
-        } = self.resolver.resolve_qualified_name(&names)
+        } = resolved
         else {
-            unreachable!("qualified-name lookup returned a simple-name outcome")
+            let leaf = segments.last().expect("qualified path has a leaf");
+            return self.lower_resolved_reference(leaf.name, leaf.span, arguments, span, resolved);
         };
         if matches!(resolution, QualifiedTypePathResolution::MissingRoot { .. })
             && self.checker_local_qualified_root(names[0])
@@ -1291,7 +1413,9 @@ mod tests {
     #[derive(Default)]
     struct Resolver {
         names: FxHashMap<String, SurfaceNameResolution<u32>>,
+        qualified_names: FxHashMap<String, SurfaceNameResolution<u32>>,
         qualified_resolution: Option<QualifiedTypePathResolution>,
+        recorded_constraints: Vec<(Vec<TypeParamId>, Vec<TypeId>, Vec<CheckSpan>)>,
         next_parameter: u32,
     }
 
@@ -1303,7 +1427,10 @@ mod tests {
                 .unwrap_or(SurfaceNameResolution::Unavailable(900))
         }
 
-        fn resolve_qualified_name(&mut self, _segments: &[&str]) -> SurfaceNameResolution<u32> {
+        fn resolve_qualified_name(&mut self, segments: &[&str]) -> SurfaceNameResolution<u32> {
+            if let Some(resolution) = self.qualified_names.get(&segments.join(".")).cloned() {
+                return resolution;
+            }
             SurfaceNameResolution::Qualified {
                 owner: 900,
                 resolution: self
@@ -1314,6 +1441,19 @@ mod tests {
 
         fn qualified_outer_type_parameters_visible(&self) -> bool {
             true
+        }
+
+        fn record_type_argument_constraints(
+            &mut self,
+            parameters: &[TypeParamId],
+            arguments: &[TypeId],
+            explicit_spans: &[CheckSpan],
+        ) {
+            self.recorded_constraints.push((
+                parameters.to_vec(),
+                arguments.to_vec(),
+                explicit_spans.to_vec(),
+            ));
         }
 
         fn signature_type_parameter(
@@ -1348,6 +1488,14 @@ mod tests {
 
         fn qualified_outer_type_parameters_visible(&self) -> bool {
             true
+        }
+
+        fn record_type_argument_constraints(
+            &mut self,
+            _parameters: &[TypeParamId],
+            _arguments: &[TypeId],
+            _explicit_spans: &[CheckSpan],
+        ) {
         }
 
         fn signature_type_parameter(
@@ -1461,6 +1609,129 @@ mod tests {
             let stored = factory.store().class_instance_type(application).unwrap();
             assert_eq!(stored.class, ClassId(1));
             assert_eq!(stored.args, [factory.well_known().number]);
+        });
+    }
+
+    #[test]
+    fn qualified_endpoints_lower_and_retain_application_obligations() {
+        with_alias_type(
+            "type X = [Ns.Direct, Ns.Alias<string>, Ns.Box<number>];",
+            |annotation| {
+                let mut interner = Interner::with_intrinsics();
+                let direct = interner.well_known().boolean;
+                let template = interner.intern_keyof(interner.well_known().string);
+                let mut resolver = Resolver::default();
+                resolver.qualified_names.insert(
+                    "Ns.Direct".to_string(),
+                    SurfaceNameResolution::Direct(direct),
+                );
+                resolver.qualified_names.insert(
+                    "Ns.Alias".to_string(),
+                    SurfaceNameResolution::Alias {
+                        template,
+                        parameters: vec![class_parameter(8)],
+                    },
+                );
+                resolver.qualified_names.insert(
+                    "Ns.Box".to_string(),
+                    SurfaceNameResolution::Class {
+                        class: ClassId(9),
+                        parameters: vec![class_parameter(9)],
+                    },
+                );
+                let mut factory = SurfaceTypeFactory::new(&mut interner);
+                let mut lowerer = TypeSyntaxLowerer::new(&mut factory, &mut resolver);
+                let root = lowerer.lower(annotation).unwrap();
+                drop(lowerer);
+                let tuple = factory.store().tuple_type(root).unwrap();
+                assert_eq!(tuple.elements[0], direct);
+                assert_eq!(
+                    factory.store().tag(tuple.elements[1]),
+                    TypeTag::Instantiation
+                );
+                assert_eq!(
+                    factory.store().tag(tuple.elements[2]),
+                    TypeTag::ClassInstance
+                );
+                assert_eq!(resolver.recorded_constraints.len(), 2);
+                assert_eq!(resolver.recorded_constraints[0].0, [TypeParamId(8)]);
+                assert_eq!(resolver.recorded_constraints[1].0, [TypeParamId(9)]);
+            },
+        );
+    }
+
+    #[test]
+    fn qualified_application_arity_retains_the_full_reference_span() {
+        with_alias_type(
+            "type X = Ns.Range<string, number, boolean>;",
+            |annotation| {
+                let mut interner = Interner::with_intrinsics();
+                let template = interner.intern_keyof(interner.well_known().string);
+                interner.intern_type_param(TypeParamId(10), "T");
+                interner.intern_type_param(TypeParamId(11), "U");
+                let mut resolver = Resolver::default();
+                resolver.qualified_names.insert(
+                    "Ns.Range".to_string(),
+                    SurfaceNameResolution::Alias {
+                        template,
+                        parameters: vec![
+                            class_parameter(10),
+                            ClassTypeParameter {
+                                id: TypeParamId(11),
+                                default: ClassTypeParameterDefault::Ready(
+                                    interner.well_known().string,
+                                ),
+                            },
+                        ],
+                    },
+                );
+                let mut factory = SurfaceTypeFactory::new(&mut interner);
+                let mut lowerer = TypeSyntaxLowerer::new(&mut factory, &mut resolver);
+
+                assert_eq!(
+                    lowerer.lower(annotation),
+                    Err(SurfaceTypeFailure::WrongArity {
+                        span: annotation.span(),
+                        name: "Range<T, U>".to_string(),
+                        expected_min: 1,
+                        expected_max: 2,
+                    })
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn qualified_application_arity_counts_later_required_parameters() {
+        with_alias_type("type X = Ns.Invalid;", |annotation| {
+            let mut interner = Interner::with_intrinsics();
+            let template = interner.intern_keyof(interner.well_known().string);
+            let mut resolver = Resolver::default();
+            resolver.qualified_names.insert(
+                "Ns.Invalid".to_string(),
+                SurfaceNameResolution::Alias {
+                    template,
+                    parameters: vec![
+                        ClassTypeParameter {
+                            id: TypeParamId(12),
+                            default: ClassTypeParameterDefault::Ready(interner.well_known().string),
+                        },
+                        class_parameter(13),
+                    ],
+                },
+            );
+            let mut factory = SurfaceTypeFactory::new(&mut interner);
+            let mut lowerer = TypeSyntaxLowerer::new(&mut factory, &mut resolver);
+
+            assert_eq!(
+                lowerer.lower(annotation),
+                Err(SurfaceTypeFailure::WrongArity {
+                    span: annotation.span(),
+                    name: "Invalid".to_string(),
+                    expected_min: 2,
+                    expected_max: 2,
+                })
+            );
         });
     }
 
@@ -1666,7 +1937,7 @@ mod tests {
                 "Alias".to_string(),
                 SurfaceNameResolution::Alias {
                     template,
-                    parameters: vec![TypeParamId(8)],
+                    parameters: vec![class_parameter(8)],
                 },
             );
             let mut factory = SurfaceTypeFactory::new(&mut interner);

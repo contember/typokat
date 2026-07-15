@@ -22,7 +22,6 @@ use crate::relate::RelationOutcome;
 use crate::span::Span;
 use crate::types::repr::{
     FunctionType, GenericTypeParam, IntrinsicKind, ParameterType, TupleType, TypeParamId, TypeTag,
-    Visibility,
 };
 use crate::types::store::TypeId;
 use crate::types::{instantiate_function, substitute, Interner, WellKnown};
@@ -32,7 +31,7 @@ use oxc_ast::ast::{
     TSTypeParameterInstantiation,
 };
 use oxc_span::GetSpan;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -284,6 +283,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 )
             })
             .collect();
+        if self.building_template {
+            self.effect_stack
+                .last_mut()
+                .expect("construction constraint check requires a lexical owner")
+                .constraint_checks
+                .push(ConstraintCheckObligation {
+                    checks,
+                    substitutions: map.clone(),
+                });
+            return;
+        }
         let outcome = self.check_constraint_arguments_outcome(&checks, map);
         if let (DemandOutcome::Exhausted(exhaustion), Some((_, span))) = (outcome, args.first()) {
             self.own_type_demand(DemandOutcome::Exhausted(exhaustion), *span);
@@ -314,6 +324,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         args: &[(Option<TypeId>, TypeId, Span)],
         map: &FxHashMap<TypeParamId, TypeId>,
     ) {
+        if self.building_template {
+            self.effect_stack
+                .last_mut()
+                .expect("construction constraint check requires a lexical owner")
+                .constraint_checks
+                .push(ConstraintCheckObligation {
+                    checks: args.to_vec(),
+                    substitutions: map.clone(),
+                });
+            return;
+        }
         let outcome = self.check_constraint_arguments_outcome(args, map);
         if let (DemandOutcome::Exhausted(exhaustion), Some((_, _, span))) = (outcome, args.first())
         {
@@ -372,7 +393,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         for (evaluated_arg, written_arg, constraint, span) in checks {
             match SemanticQueryCoordinator::new(
                 self.interner,
-                &self.published_classes,
+                self.type_environment.published().classes(),
                 &mut self.semantic_queries,
                 &mut self.next_type_param,
             )
@@ -388,7 +409,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     } else {
                         evaluated_arg
                     };
-                    let src = render_type(store, render_id, /* widen */ false);
+                    let src = render_type(store, render_id, /* widen */ true);
                     let tgt = render_type(store, constraint, /* widen */ false);
                     let elaboration = render_reason_chain(store, chain.head());
                     failures.push((src, tgt, span, elaboration));
@@ -890,7 +911,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         let preliminary = infer::infer_signature_type_arguments_from_params(
                             self.interner,
                             &mut self.next_type_param,
-                            &self.published_classes,
+                            self.type_environment.published().classes(),
                             &mut self.semantic_queries,
                             infer::SignatureInferenceRequest {
                                 type_params: &generic_params,
@@ -934,6 +955,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     } else {
                         params.clone()
                     };
+                    let contextual_params = match self.evaluate_parameters(contextual_params) {
+                        DemandOutcome::Ready(params) => params,
+                        DemandOutcome::Exhausted(exhaustion) => {
+                            return Err(CandidateBuildFailure::Exhausted(exhaustion))
+                        }
+                    };
                     let inference_args = contextual_inference_args!(
                         self,
                         scope,
@@ -947,7 +974,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     match infer::infer_signature_type_arguments_from_params(
                         self.interner,
                         &mut self.next_type_param,
-                        &self.published_classes,
+                        self.type_environment.published().classes(),
                         &mut self.semantic_queries,
                         infer::SignatureInferenceRequest {
                             type_params: &generic_params,
@@ -1101,7 +1128,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
             match SemanticQueryCoordinator::new(
                 self.interner,
-                &self.published_classes,
+                self.type_environment.published().classes(),
                 &mut self.semantic_queries,
                 &mut self.next_type_param,
             )
@@ -1270,7 +1297,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             call_receiver.unwrap_or((self.interner.well_known().undefined, call_span));
         match SemanticQueryCoordinator::new(
             self.interner,
-            &self.published_classes,
+            self.type_environment.published().classes(),
             &mut self.semantic_queries,
             &mut self.next_type_param,
         )
@@ -1303,7 +1330,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let source_receiver = call_receiver.unwrap_or(self.interner.well_known().undefined);
         SemanticQueryCoordinator::new(
             self.interner,
-            &self.published_classes,
+            self.type_environment.published().classes(),
             &mut self.semantic_queries,
             &mut self.next_type_param,
         )
@@ -1331,11 +1358,37 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         if self.interner.store().tag(ty) == TypeTag::ClassInstance {
             return SemanticQueryCoordinator::new(
                 self.interner,
-                &self.published_classes,
+                self.type_environment.published().classes(),
                 &mut self.semantic_queries,
                 &mut self.next_type_param,
             )
             .normalize_class_application(ty);
+        }
+        if let Some(mut function) = self.interner.store().function_type(ty).cloned() {
+            for parameter in &mut function.params {
+                parameter.ty = match self.evaluate_type(parameter.ty) {
+                    DemandOutcome::Ready(ty) => ty,
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion)
+                    }
+                };
+            }
+            function.receiver = match function.receiver {
+                Some(receiver) => match self.evaluate_type(receiver) {
+                    DemandOutcome::Ready(receiver) => Some(receiver),
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion)
+                    }
+                },
+                None => None,
+            };
+            function.ret = match self.evaluate_type(function.ret) {
+                DemandOutcome::Ready(ret) => ret,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
+            };
+            return DemandOutcome::Ready(self.interner.intern_function(function));
         }
         self.evaluate_type(ty)
     }
@@ -1756,7 +1809,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .classes()
             .iter()
             .filter_map(|reservation| reservation.binding.as_ref())
-            .find(|binding| binding.value_decl == class_decl)
+            .find(|binding| binding.value_decl == Some(class_decl))
             .cloned()
         else {
             return DemandOutcome::Ready(None);
@@ -1764,72 +1817,33 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         if value_decl != class_decl && !binding.header_type_params.is_empty() {
             return DemandOutcome::Ready(None);
         }
-        let surface = match self.published_classes.published_class(binding.class_id) {
+        let surface = match self
+            .type_environment
+            .published()
+            .classes()
+            .published_class(binding.class_id)
+        {
             DemandOutcome::Ready(surface) => surface,
             DemandOutcome::Exhausted(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
         };
         let Some(ctor) = surface.constructor_template() else {
             return DemandOutcome::Ready(None);
         };
-        let (is_abstract, ctor_visibility, ctor_declaring_class) =
-            match self.type_decls.get(binding.type_decl.index()) {
-                Some(TypeDecl::Class { class, .. }) => {
-                    let (visibility, declaring_class) =
-                        self.effective_constructor_access(binding.class_id, class);
-                    (class.r#abstract, visibility, declaring_class)
-                }
-                _ => (false, Visibility::Public, binding.class_id),
-            };
+        let metadata = self
+            .class_new_metadata
+            .get(&binding.class_id)
+            .copied()
+            .expect("every published source class freezes its new metadata");
         DemandOutcome::Ready(Some((
             class_decl,
             ClassInfo {
                 ctor,
                 class_id: binding.class_id,
-                is_abstract,
-                ctor_visibility,
-                ctor_declaring_class,
+                is_abstract: metadata.is_abstract,
+                ctor_visibility: metadata.ctor_visibility,
+                ctor_declaring_class: metadata.ctor_declaring_class,
             },
         )))
-    }
-
-    fn effective_constructor_access(
-        &self,
-        class_id: crate::types::repr::ClassId,
-        class: &oxc_ast::ast::Class<'_>,
-    ) -> (Visibility, crate::types::repr::ClassId) {
-        if class_declares_constructor(class) {
-            return (
-                super::classes::visibility::constructor_visibility(class),
-                class_id,
-            );
-        }
-        let mut visited = FxHashSet::default();
-        let mut current = class_id;
-        while visited.insert(current) {
-            let Some(parent) = self.class_parents.get(&current).copied() else {
-                break;
-            };
-            let parent_class = self
-                .type_decls
-                .iter()
-                .find_map(|declaration| match declaration {
-                    TypeDecl::Class {
-                        class_id, class, ..
-                    } if *class_id == parent => Some(*class),
-                    _ => None,
-                });
-            let Some(parent_class) = parent_class else {
-                break;
-            };
-            if class_declares_constructor(parent_class) {
-                return (
-                    super::classes::visibility::constructor_visibility(parent_class),
-                    parent,
-                );
-            }
-            current = parent;
-        }
-        (Visibility::Public, class_id)
     }
 
     fn direct_class_construct_overloads(
@@ -1837,16 +1851,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         info: &ClassInfo,
         instance: TypeId,
     ) -> Vec<TypeId> {
-        let has_source_overloads = self.type_decls.iter().any(|declaration| match declaration {
-            TypeDecl::Class {
-                class_id, class, ..
-            } if *class_id == info.class_id => class_constructor_declaration_count(class) > 1,
-            _ => false,
-        });
+        let has_source_overloads = self
+            .class_new_metadata
+            .get(&info.class_id)
+            .is_some_and(|metadata| metadata.has_source_overloads);
         if !has_source_overloads {
             return Vec::new();
         }
-        let surface = match self.published_classes.published_class(info.class_id) {
+        let surface = match self
+            .type_environment
+            .published()
+            .classes()
+            .published_class(info.class_id)
+        {
             DemandOutcome::Ready(surface) => surface,
             DemandOutcome::Exhausted(_) => return Vec::new(),
         };
@@ -2024,7 +2041,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 match infer::infer_partial_signature_type_arguments_from_params(
                     self.interner,
                     &mut self.next_type_param,
-                    &self.published_classes,
+                    self.type_environment.published().classes(),
                     &mut self.semantic_queries,
                     infer::SignatureInferenceRequest {
                         type_params: &generic_params,
@@ -2062,7 +2079,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             });
         let outcome = build_class_application(
             &mut SurfaceTypeFactory::new(self.interner),
-            &self.published_classes,
+            self.type_environment.published().classes(),
             ClassApplicationRequest {
                 class: info.class_id,
                 parameters: &parameters,
@@ -2967,25 +2984,6 @@ fn is_fresh_literal(expr: &Expression<'_>) -> bool {
         Expression::ParenthesizedExpression(paren) => is_fresh_literal(&paren.expression),
         _ => false,
     }
-}
-
-fn class_declares_constructor(class: &oxc_ast::ast::Class<'_>) -> bool {
-    class_constructor_declaration_count(class) > 0
-}
-
-fn class_constructor_declaration_count(class: &oxc_ast::ast::Class<'_>) -> usize {
-    class
-        .body
-        .body
-        .iter()
-        .filter(|element| {
-            matches!(
-                element,
-                oxc_ast::ast::ClassElement::MethodDefinition(method)
-                    if method.kind == oxc_ast::ast::MethodDefinitionKind::Constructor
-            )
-        })
-        .count()
 }
 
 /// The parameter name of a binding pattern, if it is a plain identifier. `None`

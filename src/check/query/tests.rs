@@ -2,7 +2,7 @@ use super::*;
 use crate::class_semantics::{ClassConstructionState, PublishedClassPoison, PublishedClassSurface};
 use crate::types::repr::{
     ClassId, ConditionalType, FunctionType, LiteralValue, MappedType, ModifierOp, ObjectType,
-    ParameterType, PropertyType, TypeParamId,
+    ParameterType, PropertyType, TemplateType, TypeParamId, Visibility,
 };
 
 fn published(
@@ -802,6 +802,473 @@ fn evaluator_overlay_is_transactional_and_relation_order_independent() {
         coordinator.is_assignable(conditional, wk.string)
     };
     assert!(matches!(yes_again, RelationOutcome::Yes));
+}
+
+#[test]
+fn identity_normalizes_nested_aliases_without_mutating_the_published_shape() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter = TypeParamId(80_305);
+    let parameter_ty = interner.intern_type_param(parameter, "T");
+    let identity_template = interner.intern_conditional(ConditionalType {
+        check: parameter_ty,
+        extends_ty: wk.any,
+        true_branch: parameter_ty,
+        false_branch: wk.never,
+        infer_count: 0,
+        distributive: true,
+        poisoned: false,
+    });
+    let identity_string =
+        interner.intern_instantiation(identity_template, vec![(parameter, wk.string)]);
+    let published_root = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", identity_string)],
+        ..Default::default()
+    });
+    let normalized_root = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.string)],
+        ..Default::default()
+    });
+    let published_before = interner
+        .store()
+        .object_type(published_root)
+        .expect("published root is an object")
+        .clone();
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    let outcome =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_identical(published_root, normalized_root);
+
+    assert_eq!(outcome, DemandOutcome::Ready(true));
+    let published_after = interner
+        .store()
+        .object_type(published_root)
+        .expect("published root remains an object");
+    assert_eq!(
+        published_after.properties.len(),
+        published_before.properties.len()
+    );
+    assert_eq!(published_after.string_index, published_before.string_index);
+    assert_eq!(published_after.number_index, published_before.number_index);
+    assert_eq!(
+        published_after.call_signatures,
+        published_before.call_signatures
+    );
+    assert_eq!(
+        published_after.construct_signatures,
+        published_before.construct_signatures
+    );
+    assert_eq!(
+        interner
+            .store()
+            .object_type(published_root)
+            .and_then(|object| object.property("value"))
+            .map(|property| property.ty),
+        Some(identity_string)
+    );
+    let (_, evaluations, relations) = state.durable_lengths();
+    assert!(evaluations > 0);
+    assert_eq!(relations, 0);
+}
+
+#[test]
+fn identity_is_exact_for_literals_any_and_optional_properties() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let literal = interner.intern_literal(LiteralValue::Number(1.0));
+    let required = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.string)],
+        ..Default::default()
+    });
+    let mut optional_property = PropertyType::public("value", wk.string);
+    optional_property.optional = true;
+    let optional = interner.intern_object(ObjectType {
+        properties: vec![optional_property],
+        ..Default::default()
+    });
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    for (left, right) in [
+        (literal, wk.number),
+        (wk.any, wk.string),
+        (required, optional),
+    ] {
+        assert_eq!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_identical(left, right),
+            DemandOutcome::Ready(false)
+        );
+    }
+    assert_eq!(state.durable_lengths().2, 0);
+}
+
+#[test]
+fn identity_aligns_generic_function_binders_and_handles_recursive_objects() {
+    let mut interner = Interner::with_intrinsics();
+    let left_parameter = TypeParamId(80_405);
+    let right_parameter = TypeParamId(80_406);
+    let left_parameter_ty = interner.intern_type_param(left_parameter, "T");
+    let right_parameter_ty = interner.intern_type_param(right_parameter, "U");
+    let left_function = interner.intern_function(FunctionType {
+        type_params: vec![crate::types::repr::GenericTypeParam {
+            id: left_parameter,
+            constraint: None,
+            default: None,
+        }],
+        receiver: None,
+        params: vec![ParameterType::required("left", left_parameter_ty)],
+        ret: left_parameter_ty,
+    });
+    let right_function = interner.intern_function(FunctionType {
+        type_params: vec![crate::types::repr::GenericTypeParam {
+            id: right_parameter,
+            constraint: None,
+            default: None,
+        }],
+        receiver: None,
+        params: vec![ParameterType::required("right", right_parameter_ty)],
+        ret: right_parameter_ty,
+    });
+    let left_recursive = interner.reserve_object();
+    interner.fill_object(
+        left_recursive,
+        ObjectType {
+            properties: vec![PropertyType::public("next", left_recursive)],
+            ..Default::default()
+        },
+    );
+    let right_recursive = interner.reserve_object();
+    interner.fill_object(
+        right_recursive,
+        ObjectType {
+            properties: vec![PropertyType::public("next", right_recursive)],
+            ..Default::default()
+        },
+    );
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    for (left, right) in [
+        (left_function, right_function),
+        (left_recursive, right_recursive),
+    ] {
+        assert_eq!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_identical(left, right),
+            DemandOutcome::Ready(true)
+        );
+    }
+}
+
+#[test]
+fn identity_terminates_for_recursive_generic_function_shapes() {
+    let mut interner = Interner::with_intrinsics();
+    let left_parameter = TypeParamId(80_455);
+    let right_parameter = TypeParamId(80_456);
+    let left_parameter_ty = interner.intern_type_param(left_parameter, "T");
+    let right_parameter_ty = interner.intern_type_param(right_parameter, "U");
+    let left_recursive = interner.reserve_object();
+    let right_recursive = interner.reserve_object();
+    let left_function = interner.intern_function(FunctionType {
+        type_params: vec![crate::types::repr::GenericTypeParam {
+            id: left_parameter,
+            constraint: None,
+            default: None,
+        }],
+        receiver: None,
+        params: vec![ParameterType::required("left", left_parameter_ty)],
+        ret: left_recursive,
+    });
+    let right_function = interner.intern_function(FunctionType {
+        type_params: vec![crate::types::repr::GenericTypeParam {
+            id: right_parameter,
+            constraint: None,
+            default: None,
+        }],
+        receiver: None,
+        params: vec![ParameterType::required("right", right_parameter_ty)],
+        ret: right_recursive,
+    });
+    interner.fill_object(
+        left_recursive,
+        ObjectType {
+            call_signatures: vec![left_function],
+            ..Default::default()
+        },
+    );
+    interner.fill_object(
+        right_recursive,
+        ObjectType {
+            call_signatures: vec![right_function],
+            ..Default::default()
+        },
+    );
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    assert_eq!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .is_identical(left_recursive, right_recursive),
+        DemandOutcome::Ready(true)
+    );
+}
+
+#[test]
+fn identity_aligns_alpha_binders_through_every_deferred_tag() {
+    fn generic(interner: &mut Interner, parameter: TypeParamId, ret: TypeId) -> TypeId {
+        interner.intern_function(FunctionType {
+            type_params: vec![crate::types::repr::GenericTypeParam {
+                id: parameter,
+                constraint: None,
+                default: None,
+            }],
+            receiver: None,
+            params: Vec::new(),
+            ret,
+        })
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let left_parameter = TypeParamId(80_465);
+    let right_parameter = TypeParamId(80_466);
+    let alias_parameter = TypeParamId(80_467);
+    let left_param = interner.intern_type_param(left_parameter, "T");
+    let right_param = interner.intern_type_param(right_parameter, "U");
+    let alias_param = interner.intern_type_param(alias_parameter, "A");
+    let mapped_value = interner.intern_mapped_value();
+    let index = interner.intern_literal(LiteralValue::String("value".into()));
+    let constraint = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("value", wk.string),
+            PropertyType::public("other", wk.number),
+        ],
+        ..Default::default()
+    });
+    assert!(interner.set_type_param_constraint(left_parameter, constraint));
+    assert!(interner.set_type_param_constraint(right_parameter, constraint));
+    let alias_template = interner.intern_conditional(ConditionalType {
+        check: alias_param,
+        extends_ty: wk.any,
+        true_branch: alias_param,
+        false_branch: wk.never,
+        infer_count: 0,
+        distributive: true,
+        poisoned: true,
+    });
+
+    let left_deferred = [
+        interner.intern_conditional(ConditionalType {
+            check: left_param,
+            extends_ty: wk.any,
+            true_branch: left_param,
+            false_branch: wk.never,
+            infer_count: 0,
+            distributive: true,
+            poisoned: true,
+        }),
+        interner.intern_keyof(left_param),
+        interner.intern_template(TemplateType {
+            texts: vec!["x".into(), String::new()],
+            holes: vec![left_param],
+        }),
+        interner.intern_mapped(MappedType {
+            homomorphic: true,
+            key_source: left_param,
+            value_template: mapped_value,
+            modifiers_source: None,
+            optional_modifier: ModifierOp::Keep,
+            readonly_modifier: ModifierOp::Keep,
+        }),
+        interner.intern_instantiation(alias_template, vec![(alias_parameter, left_param)]),
+        interner.intern_deferred_indexed_access(left_param, index),
+    ];
+    let right_deferred = [
+        interner.intern_conditional(ConditionalType {
+            check: right_param,
+            extends_ty: wk.any,
+            true_branch: right_param,
+            false_branch: wk.never,
+            infer_count: 0,
+            distributive: true,
+            poisoned: true,
+        }),
+        interner.intern_keyof(right_param),
+        interner.intern_template(TemplateType {
+            texts: vec!["x".into(), String::new()],
+            holes: vec![right_param],
+        }),
+        interner.intern_mapped(MappedType {
+            homomorphic: true,
+            key_source: right_param,
+            value_template: mapped_value,
+            modifiers_source: None,
+            optional_modifier: ModifierOp::Keep,
+            readonly_modifier: ModifierOp::Keep,
+        }),
+        interner.intern_instantiation(alias_template, vec![(alias_parameter, right_param)]),
+        interner.intern_deferred_indexed_access(right_param, index),
+    ];
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    for (left, right) in left_deferred.into_iter().zip(right_deferred) {
+        let left = generic(&mut interner, left_parameter, left);
+        let right = generic(&mut interner, right_parameter, right);
+        assert_eq!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_identical(left, right),
+            DemandOutcome::Ready(true)
+        );
+    }
+
+    let other = interner.intern_literal(LiteralValue::String("other".into()));
+    let left_indexed = interner.intern_deferred_indexed_access(left_param, index);
+    let right_indexed = interner.intern_deferred_indexed_access(right_param, other);
+    let left = generic(&mut interner, left_parameter, left_indexed);
+    let right = generic(&mut interner, right_parameter, right_indexed);
+    assert_eq!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .is_identical(left, right),
+        DemandOutcome::Ready(false)
+    );
+}
+
+#[test]
+fn identity_ignores_only_public_declaring_class_origins() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let mut left_public = PropertyType::public("value", wk.string);
+    left_public.declaring_class = Some(ClassId(80_601));
+    let mut right_public = PropertyType::public("value", wk.string);
+    right_public.declaring_class = Some(ClassId(80_602));
+    let left_public = interner.intern_object(ObjectType {
+        properties: vec![left_public],
+        ..Default::default()
+    });
+    let right_public = interner.intern_object(ObjectType {
+        properties: vec![right_public],
+        ..Default::default()
+    });
+    let mut left_private = PropertyType::public("value", wk.string);
+    left_private.visibility = Visibility::Private;
+    left_private.declaring_class = Some(ClassId(80_603));
+    let mut right_private = PropertyType::public("value", wk.string);
+    right_private.visibility = Visibility::Private;
+    right_private.declaring_class = Some(ClassId(80_604));
+    let left_private = interner.intern_object(ObjectType {
+        properties: vec![left_private],
+        ..Default::default()
+    });
+    let right_private = interner.intern_object(ObjectType {
+        properties: vec![right_private],
+        ..Default::default()
+    });
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    for (left, right, expected) in [
+        (left_public, right_public, true),
+        (left_private, right_private, false),
+    ] {
+        assert_eq!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_identical(left, right),
+            DemandOutcome::Ready(expected)
+        );
+    }
+}
+
+#[test]
+fn identity_exhaustion_discards_both_roots_pending_writes() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let class = ClassId(80_505);
+    let infer = interner.intern_infer(0);
+    let allocating = interner.intern_conditional(ConditionalType {
+        check: wk.string,
+        extends_ty: infer,
+        true_branch: infer,
+        false_branch: wk.never,
+        infer_count: 1,
+        distributive: false,
+        poisoned: false,
+    });
+    let template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", allocating)],
+        ..Default::default()
+    });
+    let published = published(class, Vec::new(), template, wk.error);
+    let left = interner.intern_class_instance(class, Vec::new());
+    let mut right = wk.string;
+    for _ in 0..=DEFAULT_STEP_BUDGET {
+        right = interner.intern_conditional(ConditionalType {
+            check: wk.number,
+            extends_ty: wk.number,
+            true_branch: right,
+            false_branch: wk.never,
+            infer_count: 0,
+            distributive: false,
+            poisoned: false,
+        });
+    }
+    let mut state = SemanticQueryState::default();
+    let initial_type_param = 90_505;
+    let mut next_type_param = initial_type_param;
+
+    let outcome =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_identical(left, right);
+
+    assert_eq!(
+        outcome,
+        DemandOutcome::Exhausted(Exhaustion::EvaluationBudget)
+    );
+    assert_eq!(state.durable_lengths(), (0, 0, 0));
+    assert_eq!(next_type_param, initial_type_param + 1);
+    let subsequent_binder = TypeParamId(next_type_param);
+    assert_ne!(subsequent_binder, TypeParamId(initial_type_param));
+    assert!(matches!(
+        published.published_class(class),
+        DemandOutcome::Ready(surface) if surface.instance_template() == template
+    ));
+    assert_eq!(
+        interner
+            .store()
+            .object_type(template)
+            .and_then(|object| object.property("value"))
+            .map(|property| property.ty),
+        Some(allocating)
+    );
 }
 
 #[test]

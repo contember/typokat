@@ -1,8 +1,8 @@
 use super::*;
 use crate::diagnostics::render_type;
 use crate::types::repr::{
-    ClassId, FunctionType, GenericTypeParam, LiteralValue, ObjectType, ParameterType, PropertyType,
-    TupleRestType, TupleType, TypeParamId, TypeTag,
+    ClassId, ConditionalType, FunctionType, GenericTypeParam, LiteralValue, MappedType, ModifierOp,
+    ObjectType, ParameterType, PropertyType, TupleRestType, TupleType, TypeParamId, TypeTag,
 };
 
 /// Build a required public property `name: ty`.
@@ -180,6 +180,259 @@ fn object_canonicalization_dedups_by_member_set() {
         ..Default::default()
     });
     assert_eq!(outer1, outer2, "nested object identity must propagate");
+}
+
+#[test]
+fn reserved_type_batch_fills_and_freezes_every_placeholder_kind() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let object = interner.reserve_object();
+    let conditional = interner.reserve_conditional();
+    let mapped = interner.reserve_mapped();
+
+    let conditional_body = ConditionalType {
+        check: wk.number,
+        extends_ty: wk.number,
+        true_branch: wk.string,
+        false_branch: wk.boolean,
+        infer_count: 0,
+        distributive: false,
+        poisoned: false,
+    };
+    let mapped_body = MappedType {
+        homomorphic: false,
+        key_source: wk.string,
+        value_template: wk.number,
+        modifiers_source: None,
+        optional_modifier: ModifierOp::Keep,
+        readonly_modifier: ModifierOp::Keep,
+    };
+
+    assert_eq!(
+        interner.fill_reserved_type_batch(vec![
+            ReservedTypeFill::Object(
+                object,
+                ObjectType {
+                    properties: vec![prop("z", wk.string), prop("a", wk.number)],
+                    ..Default::default()
+                },
+            ),
+            ReservedTypeFill::Conditional(conditional, conditional_body),
+            ReservedTypeFill::Mapped(mapped, mapped_body),
+        ]),
+        Ok(())
+    );
+
+    let stored_object = interner
+        .store()
+        .object_type(object)
+        .expect("reserved object must retain its backing row");
+    let names: Vec<&str> = stored_object
+        .properties
+        .iter()
+        .map(|property| property.name.as_str())
+        .collect();
+    assert_eq!(names, ["a", "z"]);
+    let stored_conditional = interner
+        .store()
+        .conditional_type(conditional)
+        .expect("reserved conditional must retain its backing row");
+    assert_eq!(stored_conditional.check, conditional_body.check);
+    assert_eq!(stored_conditional.extends_ty, conditional_body.extends_ty);
+    assert_eq!(stored_conditional.true_branch, conditional_body.true_branch);
+    assert_eq!(
+        stored_conditional.false_branch,
+        conditional_body.false_branch
+    );
+    assert_eq!(stored_conditional.infer_count, conditional_body.infer_count);
+    assert_eq!(
+        stored_conditional.distributive,
+        conditional_body.distributive
+    );
+    assert_eq!(stored_conditional.poisoned, conditional_body.poisoned);
+    let stored_mapped = interner
+        .store()
+        .mapped_type(mapped)
+        .expect("reserved mapped type must retain its backing row");
+    assert_eq!(stored_mapped.homomorphic, mapped_body.homomorphic);
+    assert_eq!(stored_mapped.key_source, mapped_body.key_source);
+    assert_eq!(stored_mapped.value_template, mapped_body.value_template);
+    assert_eq!(stored_mapped.modifiers_source, mapped_body.modifiers_source);
+    assert_eq!(
+        stored_mapped.optional_modifier,
+        mapped_body.optional_modifier
+    );
+    assert_eq!(
+        stored_mapped.readonly_modifier,
+        mapped_body.readonly_modifier
+    );
+    assert_eq!(
+        interner.fill_reserved_type_batch(vec![ReservedTypeFill::Object(
+            object,
+            ObjectType::default(),
+        )]),
+        Err(ReservedTypeFillError::AlreadyFrozen(object))
+    );
+    assert_eq!(
+        interner.fill_reserved_type_batch(vec![ReservedTypeFill::Conditional(
+            conditional,
+            conditional_body,
+        )]),
+        Err(ReservedTypeFillError::AlreadyFrozen(conditional))
+    );
+    assert_eq!(
+        interner.fill_reserved_type_batch(vec![ReservedTypeFill::Mapped(mapped, mapped_body)]),
+        Err(ReservedTypeFillError::AlreadyFrozen(mapped))
+    );
+}
+
+#[test]
+fn reserved_type_batch_prevalidation_is_all_or_nothing() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let first = interner.reserve_object();
+    let second = interner.reserve_object();
+
+    assert_eq!(
+        interner.fill_reserved_type_batch(vec![
+            ReservedTypeFill::Object(
+                first,
+                ObjectType {
+                    properties: vec![prop("first", wk.number)],
+                    ..Default::default()
+                },
+            ),
+            ReservedTypeFill::Object(first, ObjectType::default()),
+            ReservedTypeFill::Object(
+                second,
+                ObjectType {
+                    properties: vec![prop("second", wk.string)],
+                    ..Default::default()
+                },
+            ),
+        ]),
+        Err(ReservedTypeFillError::Duplicate(first))
+    );
+    assert!(
+        interner
+            .store()
+            .object_type(first)
+            .expect("reserved object must remain readable")
+            .properties
+            .is_empty(),
+        "duplicate prevalidation must precede every body write"
+    );
+    assert!(interner
+        .store()
+        .object_type(second)
+        .expect("reserved object must remain readable")
+        .properties
+        .is_empty());
+
+    assert_eq!(
+        interner.fill_reserved_type_batch(vec![
+            ReservedTypeFill::Object(
+                first,
+                ObjectType {
+                    properties: vec![prop("first", wk.number)],
+                    ..Default::default()
+                },
+            ),
+            ReservedTypeFill::Object(
+                second,
+                ObjectType {
+                    properties: vec![prop("second", wk.string)],
+                    ..Default::default()
+                },
+            ),
+        ]),
+        Ok(())
+    );
+}
+
+#[test]
+fn reserved_type_batch_rejects_target_kind_and_state_before_writing() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let not_reserved = wk.number;
+    let pending = interner.reserve_object();
+
+    assert_eq!(
+        interner.fill_reserved_type_batch(vec![
+            ReservedTypeFill::Object(pending, ObjectType::default()),
+            ReservedTypeFill::Object(not_reserved, ObjectType::default()),
+        ]),
+        Err(ReservedTypeFillError::NotReserved(not_reserved))
+    );
+    assert!(
+        interner
+            .store()
+            .object_type(pending)
+            .expect("reserved object must remain readable")
+            .properties
+            .is_empty(),
+        "target prevalidation must precede every body write"
+    );
+
+    let conditional_body = ConditionalType {
+        check: wk.number,
+        extends_ty: wk.number,
+        true_branch: wk.string,
+        false_branch: wk.boolean,
+        infer_count: 0,
+        distributive: false,
+        poisoned: false,
+    };
+    assert_eq!(
+        interner.fill_reserved_type_batch(vec![ReservedTypeFill::Conditional(
+            pending,
+            conditional_body,
+        )]),
+        Err(ReservedTypeFillError::KindMismatch {
+            id: pending,
+            reserved: ReservedTypeKind::Object,
+            supplied: ReservedTypeKind::Conditional,
+        })
+    );
+
+    interner
+        .fill_reserved_type_batch(vec![ReservedTypeFill::Object(
+            pending,
+            ObjectType {
+                properties: vec![prop("stable", wk.number)],
+                ..Default::default()
+            },
+        )])
+        .expect("failed batches must leave the valid target pending");
+    let other = interner.reserve_object();
+    assert_eq!(
+        interner.fill_reserved_type_batch(vec![
+            ReservedTypeFill::Object(other, ObjectType::default()),
+            ReservedTypeFill::Object(pending, ObjectType::default()),
+        ]),
+        Err(ReservedTypeFillError::AlreadyFrozen(pending))
+    );
+    assert!(
+        interner
+            .store()
+            .object_type(other)
+            .expect("reserved object must remain readable")
+            .properties
+            .is_empty(),
+        "state prevalidation must precede every body write"
+    );
+    interner
+        .fill_reserved_type_batch(vec![ReservedTypeFill::Object(other, ObjectType::default())])
+        .expect("a frozen sibling must not partially freeze a pending target");
+    assert_eq!(
+        interner
+            .store()
+            .object_type(pending)
+            .expect("filled object must remain readable")
+            .properties[0]
+            .name,
+        "stable"
+    );
 }
 
 #[test]

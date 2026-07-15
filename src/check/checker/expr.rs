@@ -1406,12 +1406,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .classes()
             .iter()
             .filter_map(|reservation| reservation.binding.as_ref())
-            .find(|binding| binding.value_decl == class_decl)?;
+            .find(|binding| binding.value_decl == Some(class_decl))?;
         if value_decl != class_decl && !binding.header_type_params.is_empty() {
             return None;
         }
         Some(
-            match self.published_classes.published_class(binding.class_id) {
+            match self
+                .type_environment
+                .published()
+                .classes()
+                .published_class(binding.class_id)
+            {
                 DemandOutcome::Ready(_) => DemandOutcome::Ready(()),
                 DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
             },

@@ -1301,7 +1301,7 @@ impl Binder {
             .get(symbol)
             .map(|symbol| QualifiedSymbolView {
                 namespace: symbol.ns,
-                type_group: symbol.type_group,
+                type_group: symbol.ty,
                 value: symbol.value.is_some(),
                 unavailable: false,
                 deferred: None,
@@ -1690,7 +1690,7 @@ pub(crate) fn bind_namespace_metadata(
     unit: CompilationUnit,
     compilation_global: ScopeId,
 ) {
-    let storage_snapshot = (state.next_value_storage, state.next_legacy_type_storage);
+    let storage_snapshot = state.next_value_storage;
     state.namespaces.source_units.push(SourceUnitRecord {
         source: unit.source,
         original_module: unit.original_module,
@@ -1713,8 +1713,7 @@ pub(crate) fn bind_namespace_metadata(
     resolve_local_ambient_export_alias_targets(state);
     state.namespaces.classify();
     assert_eq!(
-        storage_snapshot,
-        (state.next_value_storage, state.next_legacy_type_storage,),
+        storage_snapshot, state.next_value_storage,
         "namespace metadata must not allocate checker storage"
     );
 }
@@ -2290,7 +2289,7 @@ fn bind_named_declaration_with_syntax(
         if let (Some(fragment_kind), Some(scope)) =
             (fragment_kind, declaration_owner_scope(state, owner))
         {
-            declare_type(state, scope, name, declaration, None, fragment_kind, source);
+            declare_type(state, scope, name, declaration, fragment_kind, source);
         }
     }
     if context.member_owner().is_some() {
@@ -3746,13 +3745,11 @@ mod tests {
         assert_eq!(root_symbol.ns, Some(namespace.id));
         assert_eq!(root_symbol.value, None);
         assert_eq!(root_symbol.ty, None);
-        assert_eq!(root_symbol.type_group, None);
         assert_eq!(root_symbol.declarations.len(), 3);
         assert_eq!(binder.resolve_value(binder.module, "N"), None);
         assert_eq!(binder.resolve_type(binder.module, "N"), None);
 
         assert_eq!(binder.decl_count, 0);
-        assert_eq!(binder.type_decl_count, 0);
         assert!(binder.type_groups.is_empty());
         for name in ["publicOne", "privateOne", "privateTwo", "privateThree"] {
             let declaration = binder
@@ -3761,7 +3758,6 @@ mod tests {
                 .find(|declaration| &source[declaration.site.binding_span.range()] == name)
                 .expect("body declaration");
             assert_eq!(declaration.value_storage, None);
-            assert_eq!(declaration.legacy_type_storage, None);
             assert_eq!(declaration.type_group, None);
             assert!(private_scopes.contains(&declaration.site.scope.expect("private context")));
         }
@@ -3806,18 +3802,17 @@ mod tests {
             "interface Top {} namespace N { export interface Shared { first: number } interface Hidden { first: number } export type Alias = number; export class Box {} } namespace N { export interface Shared { second: string } interface Hidden { second: string } }",
             false,
         );
-        assert_eq!(binder.type_decl_count, 1);
+        assert_eq!(binder.type_groups.len(), 6);
 
         let top = binder
             .graph
             .get(binder.module)
             .and_then(|scope| scope.lookup_local("Top"))
             .and_then(|symbol| binder.symbols.get(symbol))
-            .and_then(|symbol| symbol.type_group)
+            .and_then(|symbol| symbol.ty)
             .and_then(|group| binder.type_groups.get(group))
-            .expect("top-level legacy group");
+            .expect("top-level group");
         assert_eq!(top.fragments.len(), 1);
-        assert!(top.fragments[0].legacy_storage.is_some());
         assert_eq!(top.fragments[0].source, SourceUnitKey::SINGLE_SOURCE);
 
         let namespace = binder
@@ -3843,7 +3838,7 @@ mod tests {
         let shared_group = public
             .lookup_local("Shared")
             .and_then(|symbol| binder.symbols.get(symbol))
-            .and_then(|symbol| symbol.type_group)
+            .and_then(|symbol| symbol.ty)
             .expect("shared public type group");
         let shared = binder
             .type_groups
@@ -3860,7 +3855,6 @@ mod tests {
         );
         assert!(shared.fragments.iter().all(|fragment| {
             fragment.source == SourceUnitKey::SINGLE_SOURCE
-                && fragment.legacy_storage.is_none()
                 && fragment.site.scope == Some(fragment.scope)
         }));
         assert!(shared.fragments.windows(2).all(|pair| {
@@ -3879,12 +3873,11 @@ mod tests {
             let group = public
                 .lookup_local(name)
                 .and_then(|symbol| binder.symbols.get(symbol))
-                .and_then(|symbol| symbol.type_group)
+                .and_then(|symbol| symbol.ty)
                 .and_then(|group| binder.type_groups.get(group))
                 .expect("public namespace type group");
             assert_eq!(group.fragments.len(), 1);
             assert_eq!(group.fragments[0].scope, reopening_scopes[0]);
-            assert_eq!(group.fragments[0].legacy_storage, None);
         }
 
         let hidden_groups = namespace
@@ -3900,12 +3893,11 @@ mod tests {
                     .get(fragment.private_scope)
                     .and_then(|scope| scope.lookup_local("Hidden"))
                     .and_then(|symbol| binder.symbols.get(symbol))
-                    .and_then(|symbol| symbol.type_group)
+                    .and_then(|symbol| symbol.ty)
                     .expect("fragment-private group");
                 let row = binder.type_groups.get(group).expect("private group row");
                 assert_eq!(row.fragments.len(), 1);
                 assert_eq!(row.fragments[0].scope, fragment.private_scope);
-                assert_eq!(row.fragments[0].legacy_storage, None);
                 group
             })
             .collect::<Vec<_>>();
@@ -3915,11 +3907,10 @@ mod tests {
             binder
                 .declarations
                 .iter()
-                .filter(|declaration| {
-                    declaration.type_group.is_some() && declaration.legacy_type_storage.is_none()
-                })
+                .filter(|declaration| { declaration.type_group.is_some() })
                 .count(),
-            6
+            7,
+            "every exact type-bearing declaration points at its group, including both Shared fragments"
         );
     }
 
@@ -3956,7 +3947,7 @@ mod tests {
         let public_group = binder
             .symbols
             .get(public_symbol)
-            .and_then(|symbol| symbol.type_group)
+            .and_then(|symbol| symbol.ty)
             .and_then(|group| binder.type_groups.get(group))
             .expect("Public group");
         assert_eq!(
@@ -3967,9 +3958,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             private_scopes
         );
-        assert!(public_group.fragments.iter().all(|fragment| {
-            fragment.site.scope == Some(fragment.scope) && fragment.legacy_storage.is_none()
-        }));
+        assert!(public_group
+            .fragments
+            .iter()
+            .all(|fragment| { fragment.site.scope == Some(fragment.scope) }));
         assert!(private_scopes.iter().all(|scope| {
             binder
                 .graph
@@ -3982,7 +3974,7 @@ mod tests {
             .get(private_scopes[0])
             .and_then(|scope| scope.lookup_local("PrivateHelper"))
             .and_then(|symbol| binder.symbols.get(symbol))
-            .and_then(|symbol| symbol.type_group)
+            .and_then(|symbol| symbol.ty)
             .and_then(|group| binder.type_groups.get(group))
             .expect("private helper group");
         assert_eq!(helper_group.fragments.len(), 1);
@@ -4042,7 +4034,6 @@ mod tests {
                 last_module = Some(module);
             }
             let binder = builder.finish(last_module.expect("one project module"));
-            assert_eq!(binder.type_decl_count, 0);
             let namespace = binder
                 .namespaces
                 .namespaces()
@@ -4055,13 +4046,9 @@ mod tests {
                 .get(namespace.public_scope)
                 .and_then(|scope| scope.lookup_local("Shared"))
                 .and_then(|symbol| binder.symbols.get(symbol))
-                .and_then(|symbol| symbol.type_group)
+                .and_then(|symbol| symbol.ty)
                 .and_then(|group| binder.type_groups.get(group))
                 .expect("shared global namespace type group");
-            assert!(group
-                .fragments
-                .iter()
-                .all(|fragment| fragment.legacy_storage.is_none()));
             group
                 .fragments
                 .iter()
@@ -5059,7 +5046,6 @@ namespace Visibility {
         let source = "interface Existing {} namespace Existing { export const { a, nested: { b } } = value; export function f(param: number): void {} export class C {} export type T = number; export interface I {} export enum E {} export namespace Child {} export { a as alias }; } declare global { const [g]: number[]; function gf(arg: number): void; class GC {} type GT = number; interface GI {} enum GE {} namespace GN {} }";
         let binder = bind(source, false);
         assert_eq!(binder.decl_count, 0);
-        assert_eq!(binder.type_decl_count, 1);
         assert_eq!(binder.type_groups.len(), 4);
 
         let existing_symbol = binder
@@ -5084,7 +5070,6 @@ namespace Visibility {
                 || &source[declaration.site.binding_span.range()] != "Existing"
         }) {
             assert_eq!(declaration.value_storage, None);
-            assert_eq!(declaration.legacy_type_storage, None);
             let name = &source[declaration.site.binding_span.range()];
             if matches!(name, "C" | "T" | "I") {
                 assert!(declaration.type_group.is_some());

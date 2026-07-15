@@ -30,19 +30,8 @@ impl ValueStorageId {
     }
 }
 
-/// Checker storage identity retained by the pre-group production type path.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct LegacyTypeStorageId(pub u32);
-
-impl LegacyTypeStorageId {
-    #[inline]
-    pub fn index(self) -> usize {
-        usize::try_from(self.0).expect("legacy type storage id fits usize")
-    }
-}
-
 /// Stable identity of an ordered same-name type declaration group.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct TypeGroupId(pub u32);
 
 impl TypeGroupId {
@@ -221,7 +210,6 @@ pub struct LexicalDeclaration {
     pub kind: DeclarationKind,
     pub site: DeclarationSite,
     pub value_storage: Option<ValueStorageId>,
-    pub legacy_type_storage: Option<LegacyTypeStorageId>,
     pub type_group: Option<TypeGroupId>,
     /// Dormant exact namespace identity for namespace headers.
     pub namespace: Option<NamespaceId>,
@@ -243,7 +231,6 @@ impl DeclarationTable {
             kind,
             site,
             value_storage: None,
-            legacy_type_storage: None,
             type_group: None,
             namespace: None,
         });
@@ -279,7 +266,7 @@ pub enum TypeFragmentKind {
     Class,
 }
 
-/// One ordered group fragment with its exact lexical scope and optional legacy storage site.
+/// One ordered group fragment with its exact lexical scope.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct TypeGroupFragment {
     pub declaration: DeclId,
@@ -287,7 +274,6 @@ pub struct TypeGroupFragment {
     pub scope: ScopeId,
     pub site: DeclarationSite,
     pub kind: TypeFragmentKind,
-    pub legacy_storage: Option<LegacyTypeStorageId>,
 }
 
 /// Dormant ordered metadata for every admitted same-name type declaration.
@@ -331,6 +317,10 @@ impl TypeGroupTable {
 
     pub fn is_empty(&self) -> bool {
         self.groups.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &TypeGroup> {
+        self.groups.iter()
     }
 }
 

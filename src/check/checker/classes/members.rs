@@ -41,7 +41,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .and_then(|reservation| reservation.binding.as_ref())
             .cloned();
         let published_templates = binding.as_ref().and_then(|binding| {
-            match self.published_classes.published_class(binding.class_id) {
+            match self
+                .type_environment
+                .published()
+                .classes()
+                .published_class(binding.class_id)
+            {
                 DemandOutcome::Ready(surface) => {
                     Some((surface.instance_template(), surface.static_template()))
                 }
@@ -398,7 +403,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     };
                     let outcome = SemanticQueryCoordinator::new(
                         self.interner,
-                        &self.published_classes,
+                        self.type_environment.published().classes(),
                         &mut self.semantic_queries,
                         &mut self.next_type_param,
                     )

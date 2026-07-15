@@ -433,7 +433,13 @@ impl<Ticket: Copy> ClassConstruction<Ticket> {
         }
 
         let graph = ClassGraph::build(interner.store(), &self.roots, &self.drafts)?;
-        let components = dependency_first_components(&graph);
+        let dependency_map: BTreeMap<ClassId, BTreeSet<ClassId>> = graph
+            .edges
+            .keys()
+            .copied()
+            .map(|class| (class, graph.dependencies(class).collect()))
+            .collect();
+        let components = dependency_first_sccs(&dependency_map);
 
         let mut states = FxHashMap::default();
         let mut surfaces: FxHashMap<ClassId, PublishedClassSurface> = FxHashMap::default();
@@ -798,33 +804,35 @@ fn walk_identity(
     }
 }
 
-fn dependency_first_components(graph: &ClassGraph) -> Vec<Vec<ClassId>> {
-    fn visit(
-        graph: &ClassGraph,
-        class: ClassId,
-        seen: &mut BTreeSet<ClassId>,
-        order: &mut Vec<ClassId>,
+pub(in crate::check::checker) fn dependency_first_sccs<Node: Copy + Ord>(
+    graph: &BTreeMap<Node, BTreeSet<Node>>,
+) -> Vec<Vec<Node>> {
+    fn visit<Node: Copy + Ord>(
+        graph: &BTreeMap<Node, BTreeSet<Node>>,
+        node: Node,
+        seen: &mut BTreeSet<Node>,
+        order: &mut Vec<Node>,
     ) {
-        if !seen.insert(class) {
+        if !seen.insert(node) {
             return;
         }
-        for dependency in graph.dependencies(class) {
+        for dependency in graph.get(&node).into_iter().flatten().copied() {
             visit(graph, dependency, seen, order);
         }
-        order.push(class);
+        order.push(node);
     }
 
-    fn reverse_visit(
-        reverse: &BTreeMap<ClassId, BTreeSet<ClassId>>,
-        class: ClassId,
-        seen: &mut BTreeSet<ClassId>,
-        component: &mut Vec<ClassId>,
+    fn reverse_visit<Node: Copy + Ord>(
+        reverse: &BTreeMap<Node, BTreeSet<Node>>,
+        node: Node,
+        seen: &mut BTreeSet<Node>,
+        component: &mut Vec<Node>,
     ) {
-        if !seen.insert(class) {
+        if !seen.insert(node) {
             return;
         }
-        component.push(class);
-        if let Some(dependents) = reverse.get(&class) {
+        component.push(node);
+        if let Some(dependents) = reverse.get(&node) {
             for dependent in dependents {
                 reverse_visit(reverse, *dependent, seen, component);
             }
@@ -833,27 +841,24 @@ fn dependency_first_components(graph: &ClassGraph) -> Vec<Vec<ClassId>> {
 
     let mut order = Vec::new();
     let mut seen = BTreeSet::new();
-    for class in graph.edges.keys().copied() {
-        visit(graph, class, &mut seen, &mut order);
+    for node in graph.keys().copied() {
+        visit(graph, node, &mut seen, &mut order);
     }
-    let mut reverse: BTreeMap<ClassId, BTreeSet<ClassId>> = graph
-        .edges
-        .keys()
-        .map(|class| (*class, BTreeSet::new()))
-        .collect();
-    for class in graph.edges.keys().copied() {
-        for dependency in graph.dependencies(class) {
-            reverse.entry(dependency).or_default().insert(class);
+    let mut reverse: BTreeMap<Node, BTreeSet<Node>> =
+        graph.keys().map(|node| (*node, BTreeSet::new())).collect();
+    for (node, dependencies) in graph {
+        for dependency in dependencies {
+            reverse.entry(*dependency).or_default().insert(*node);
         }
     }
     seen.clear();
     let mut components = Vec::new();
-    while let Some(class) = order.pop() {
-        if seen.contains(&class) {
+    while let Some(node) = order.pop() {
+        if seen.contains(&node) {
             continue;
         }
         let mut component = Vec::new();
-        reverse_visit(&reverse, class, &mut seen, &mut component);
+        reverse_visit(&reverse, node, &mut seen, &mut component);
         component.sort_unstable();
         components.push(component);
     }
@@ -862,15 +867,15 @@ fn dependency_first_components(graph: &ClassGraph) -> Vec<Vec<ClassId>> {
     // pass. Stabilize the condensation explicitly: zero-outgoing dependencies first.
     let mut component_of = BTreeMap::new();
     for (index, component) in components.iter().enumerate() {
-        for class in component {
-            component_of.insert(*class, index);
+        for node in component {
+            component_of.insert(*node, index);
         }
     }
     let mut dependencies: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); components.len()];
     let mut dependents: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); components.len()];
-    for (&class, &component) in &component_of {
-        for dependency in graph.dependencies(class) {
-            let Some(&target) = component_of.get(&dependency) else {
+    for (&node, &component) in &component_of {
+        for dependency in graph.get(&node).into_iter().flatten() {
+            let Some(&target) = component_of.get(dependency) else {
                 continue;
             };
             if component != target {
@@ -879,7 +884,7 @@ fn dependency_first_components(graph: &ClassGraph) -> Vec<Vec<ClassId>> {
             }
         }
     }
-    let mut ready: BTreeSet<(ClassId, usize)> = dependencies
+    let mut ready: BTreeSet<(Node, usize)> = dependencies
         .iter()
         .enumerate()
         .filter_map(|(index, dependencies)| {

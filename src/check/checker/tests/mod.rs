@@ -12,6 +12,7 @@ mod keyof_indexed_access;
 mod member_assign;
 mod modifiers;
 mod narrowing;
+mod publication;
 mod tuple;
 mod utility_types;
 mod wu1_statements;

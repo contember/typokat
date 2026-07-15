@@ -10,12 +10,69 @@ mod tests;
 
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
-    IntrinsicKind, LiteralValue, ParameterType, PropertyType, TypeFlags, TypeParamId,
-    TypeParamType, TypeTag,
+    ConditionalType, IntrinsicKind, LiteralValue, MappedType, ObjectType, ParameterType,
+    PropertyType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
 };
 use crate::types::store::{Store, TypeId, TypeParamFreezeError};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReservedTypeKind {
+    Object,
+    Conditional,
+    Mapped,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ReservedTypeFill {
+    Object(TypeId, ObjectType),
+    Conditional(TypeId, ConditionalType),
+    Mapped(TypeId, MappedType),
+}
+
+impl ReservedTypeFill {
+    fn target(&self) -> TypeId {
+        match self {
+            ReservedTypeFill::Object(id, _)
+            | ReservedTypeFill::Conditional(id, _)
+            | ReservedTypeFill::Mapped(id, _) => *id,
+        }
+    }
+
+    fn kind(&self) -> ReservedTypeKind {
+        match self {
+            ReservedTypeFill::Object(_, _) => ReservedTypeKind::Object,
+            ReservedTypeFill::Conditional(_, _) => ReservedTypeKind::Conditional,
+            ReservedTypeFill::Mapped(_, _) => ReservedTypeKind::Mapped,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReservedTypeFillError {
+    Duplicate(TypeId),
+    NotReserved(TypeId),
+    KindMismatch {
+        id: TypeId,
+        reserved: ReservedTypeKind,
+        supplied: ReservedTypeKind,
+    },
+    AlreadyFrozen(TypeId),
+    InvalidBackingRow(TypeId),
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum ReservedTypeState {
+    Pending,
+    Frozen,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct ReservedType {
+    kind: ReservedTypeKind,
+    state: ReservedTypeState,
+}
 
 /// Well-known intrinsic type ids. Because intrinsics are interned first and in a
 /// fixed order, these ids are stable for the life of the process and can be used
@@ -69,6 +126,8 @@ pub struct Interner {
     /// §3.3). `SmallVec` because collisions are rare; the common case is a
     /// 1-element bucket.
     dedup: FxHashMap<u64, SmallVec<[TypeId; 2]>>,
+    /// Nominal placeholder rows are mutable exactly once, as one validated batch.
+    reserved_types: FxHashMap<TypeId, ReservedType>,
     well_known: WellKnown,
 }
 
@@ -80,6 +139,7 @@ impl Interner {
         let mut interner = Interner {
             store: Store::new(),
             dedup: FxHashMap::default(),
+            reserved_types: FxHashMap::default(),
             // Placeholder; overwritten below before any use.
             well_known: WellKnown {
                 error: TypeId(0),
@@ -141,6 +201,84 @@ impl Interner {
     /// renderer borrow it).
     pub fn store(&self) -> &Store {
         &self.store
+    }
+
+    fn register_reserved_type(&mut self, id: TypeId, kind: ReservedTypeKind) -> TypeId {
+        let previous = self.reserved_types.insert(
+            id,
+            ReservedType {
+                kind,
+                state: ReservedTypeState::Pending,
+            },
+        );
+        debug_assert!(
+            previous.is_none(),
+            "new type ids cannot already be reserved"
+        );
+        id
+    }
+
+    /// Atomically fill and freeze a complete recursive publication batch.
+    pub(crate) fn fill_reserved_type_batch(
+        &mut self,
+        mut fills: Vec<ReservedTypeFill>,
+    ) -> Result<(), ReservedTypeFillError> {
+        let mut targets = FxHashSet::default();
+        for fill in &fills {
+            let id = fill.target();
+            if !targets.insert(id) {
+                return Err(ReservedTypeFillError::Duplicate(id));
+            }
+        }
+
+        for fill in &fills {
+            let id = fill.target();
+            let Some(reserved) = self.reserved_types.get(&id) else {
+                return Err(ReservedTypeFillError::NotReserved(id));
+            };
+            if reserved.kind != fill.kind() {
+                return Err(ReservedTypeFillError::KindMismatch {
+                    id,
+                    reserved: reserved.kind,
+                    supplied: fill.kind(),
+                });
+            }
+            if reserved.state == ReservedTypeState::Frozen {
+                return Err(ReservedTypeFillError::AlreadyFrozen(id));
+            }
+            let valid_backing_row = match reserved.kind {
+                ReservedTypeKind::Object => self.store.object_type(id).is_some(),
+                ReservedTypeKind::Conditional => self.store.conditional_type(id).is_some(),
+                ReservedTypeKind::Mapped => self.store.mapped_type(id).is_some(),
+            };
+            if !valid_backing_row {
+                return Err(ReservedTypeFillError::InvalidBackingRow(id));
+            }
+        }
+
+        for fill in &mut fills {
+            if let ReservedTypeFill::Object(_, object) = fill {
+                object.properties.sort_by(|a, b| a.name.cmp(&b.name));
+            }
+        }
+
+        // Every fallible check is complete. The exclusive interner borrow keeps the
+        // sequential writes unobservable until the whole batch is frozen.
+        for fill in fills {
+            let id = fill.target();
+            match fill {
+                ReservedTypeFill::Object(_, object) => self.store.set_object(id, object),
+                ReservedTypeFill::Conditional(_, conditional) => {
+                    self.store.set_conditional(id, conditional);
+                }
+                ReservedTypeFill::Mapped(_, mapped) => self.store.set_mapped(id, mapped),
+            }
+            self.reserved_types
+                .get_mut(&id)
+                .expect("validated reservation must remain registered")
+                .state = ReservedTypeState::Frozen;
+        }
+        Ok(())
     }
 
     /// Record a type parameter's `extends` constraint (M24) in the store-side

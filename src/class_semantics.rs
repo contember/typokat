@@ -132,6 +132,7 @@ pub(crate) enum PublishedClassPoison {
 
 /// Immutable proof that every registered class reached a final state. Drafts
 /// and partially composed surfaces never enter this registry.
+#[derive(Clone)]
 pub(crate) struct PublishedClasses {
     states: FxHashMap<ClassId, ClassConstructionState>,
     surfaces: FxHashMap<ClassId, PublishedClassSurface>,
@@ -139,6 +140,28 @@ pub(crate) struct PublishedClasses {
 }
 
 impl PublishedClasses {
+    pub(crate) fn extend(mut self, extension: Self) -> Option<Self> {
+        if extension
+            .states
+            .keys()
+            .any(|class| self.states.contains_key(class))
+            || extension
+                .surfaces
+                .keys()
+                .any(|class| self.surfaces.contains_key(class))
+            || extension
+                .poison
+                .keys()
+                .any(|class| self.poison.contains_key(class))
+        {
+            return None;
+        }
+        self.states.extend(extension.states);
+        self.surfaces.extend(extension.surfaces);
+        self.poison.extend(extension.poison);
+        Some(self)
+    }
+
     pub(crate) fn from_publication(
         states: FxHashMap<ClassId, ClassConstructionState>,
         surfaces: FxHashMap<ClassId, PublishedClassSurface>,

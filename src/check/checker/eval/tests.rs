@@ -124,7 +124,7 @@ fn pass_evaluate_type_does_not_descend_through_an_ordinary_wrapper() {
         oxc_parser::Parser::new(&prelude_allocator, "", oxc_span::SourceType::ts()).parse();
     let user = oxc_parser::Parser::new(&user_allocator, "", oxc_span::SourceType::ts()).parse();
     let binder = crate::binder::bind_module_with_prelude(&prelude.program, &user.program);
-    let resolved_len = usize::try_from(binder.type_decl_count).unwrap();
+    let resolved_len = binder.type_groups.len();
     let mut pass = super::super::build_pass(
         &mut interner,
         &binder,
@@ -132,6 +132,9 @@ fn pass_evaluate_type_does_not_descend_through_an_ordinary_wrapper() {
         vec![None; resolved_len],
         super::super::context::DeclTypes::new(binder.decl_count),
         0,
+    );
+    pass.type_environment = super::super::type_groups::TypeEnvironmentState::Published(
+        super::super::type_groups::PublishedTypeEnvironment::empty(),
     );
 
     let result = pass.evaluate_type(nested);

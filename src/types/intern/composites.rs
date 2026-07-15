@@ -56,15 +56,17 @@ impl Interner {
     /// through `structural_hash`. (Aliases that resolve to a non-recursive
     /// structural type are still interned normally, so they keep sharing ids.)
     pub fn reserve_object(&mut self) -> TypeId {
-        self.store
-            .push_object(ObjectType::default(), TypeFlags::EMPTY)
+        let id = self
+            .store
+            .push_object(ObjectType::default(), TypeFlags::EMPTY);
+        self.register_reserved_type(id, super::ReservedTypeKind::Object)
     }
 
     /// Fill a reserved object in place. Properties are sorted like `intern_object`;
     /// the id stays nominal and is not added to the dedup index.
-    pub fn fill_object(&mut self, id: TypeId, mut object: ObjectType) {
-        object.properties.sort_by(|a, b| a.name.cmp(&b.name));
-        self.store.set_object(id, object);
+    pub fn fill_object(&mut self, id: TypeId, object: ObjectType) {
+        self.fill_reserved_type_batch(vec![super::ReservedTypeFill::Object(id, object)])
+            .expect("fill_object requires one pending reserved object");
     }
 
     /// Intern a function type. Generic binders and parameters are positional and
