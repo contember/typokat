@@ -1,5 +1,5 @@
 // tsc 6.0.3 --strict: TS2300 x2, TS2320, TS2374 x2, TS2413, TS2428 x4,
-// TS2411/2687 x2, TS2717 x2, and two downstream TS2322 recovery witnesses below.
+// TS2411/2687 x2, TS2717 x3, and two downstream TS2322 recovery witnesses below.
 interface ConstraintConflict<T extends string = "x"> {} // error[TK2428]: All declarations of 'ConstraintConflict' must have identical type parameters
 interface ConstraintConflict<T extends number = 1> {} // error[TK2428]: All declarations of 'ConstraintConflict' must have identical type parameters
 
@@ -13,6 +13,24 @@ interface PropertyConflict { value: number }
 interface PropertyConflict { value: string } // error[TK2717]: Subsequent property declarations must have the same type
 declare const propertyConflict: PropertyConflict;
 const propertyConflictWrong: boolean = propertyConflict.value; // error[TK2322]
+
+// Cross-fragment property identity is semantic and runs after publication.
+type FragmentIdentity<T> = T extends any ? T : never;
+interface NormalizedPropertyIdentity { value: FragmentIdentity<string> }
+interface NormalizedPropertyIdentity { value: string }
+
+interface AlphaPropertyIdentity { value: <T>(input: T) => T }
+interface AlphaPropertyIdentity { value: <U>(input: U) => U }
+
+class PublicPropertyIdentityLeft { value!: string }
+class PublicPropertyIdentityRight { value!: string }
+interface PublicPropertyIdentity { item: PublicPropertyIdentityLeft }
+interface PublicPropertyIdentity { item: PublicPropertyIdentityRight }
+
+class PrivatePropertyIdentityLeft { private value!: string }
+class PrivatePropertyIdentityRight { private value!: string }
+interface PrivatePropertyIdentity { item: PrivatePropertyIdentityLeft }
+interface PrivatePropertyIdentity { item: PrivatePropertyIdentityRight } // error[TK2717]: Subsequent property declarations must have the same type
 
 interface DuplicateKind { entry: number } // error[TK2300]: Duplicate identifier 'entry'
 interface DuplicateKind { entry(): void } // error[TK2300]: Duplicate identifier 'entry'
