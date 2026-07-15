@@ -59,6 +59,34 @@ interface MutualAliasReverseB { b: number } // error[TK2310]: Type 'MutualAliasR
 interface MutualAliasReverseA extends MutualAliasReverseToB {} // error[TK2310]: Type 'MutualAliasReverseA' recursively references itself as a base type
 interface MutualAliasReverseA { a: number } // error[TK2310]: Type 'MutualAliasReverseA' recursively references itself as a base type
 
+// Alias-transparent topology forwards symbolic parameters/defaults and validates every
+// group application before admitting a cycle edge.
+type IdentityAlias<T> = T;
+interface IdentitySelf extends IdentityAlias<IdentitySelf> {} // error[TK2310]: Type 'IdentitySelf' recursively references itself as a base type
+
+type DefaultIdentityAlias<T = DefaultIdentitySelf> = T;
+interface DefaultIdentitySelf extends DefaultIdentityAlias {} // error[TK2310]: Type 'DefaultIdentitySelf' recursively references itself as a base type
+
+type WrongAliasArity<T> = WrongAliasAritySelf;
+interface WrongAliasAritySelf extends WrongAliasArity {} // error[TK2314]: Generic type 'WrongAliasArity' requires 1 type argument
+
+type WrongFinalArityAlias<T> = WrongFinalAritySelf<T, T>; // error[TK2314]: Generic type 'WrongFinalAritySelf<T>' requires 1 type argument
+interface WrongFinalAritySelf<T> extends WrongFinalArityAlias<T> {}
+
+type UnresolvedArgumentAlias<T> = UnresolvedArgumentSelf<T>;
+interface UnresolvedArgumentSelf<T> extends UnresolvedArgumentAlias<MissingArgument> {} // error[TK2310]: Type 'UnresolvedArgumentSelf<T>' recursively references itself as a base type | error[TK2304]: Cannot find name 'MissingArgument'
+
+namespace QualifiedAliasCycle {
+  export type Alias<T> = Target<T>;
+  export interface Target<T> extends Alias<T> {} // error[TK2310]: Type 'Target<T>' recursively references itself as a base type
+}
+
+type IntersectionAliasCycle = IntersectionAliasSelf & { marker: number };
+interface IntersectionAliasSelf extends IntersectionAliasCycle {} // error[TK2310]: Type 'IntersectionAliasSelf' recursively references itself as a base type
+
+type PoisonedIntersectionAlias = PoisonedIntersectionSelf & MissingIntersectionBase; // error[TK2304]: Cannot find name 'MissingIntersectionBase'
+interface PoisonedIntersectionSelf extends PoisonedIntersectionAlias {}
+
 // Ordinary recursive members remain complete; only intra-SCC heritage edges are excluded.
 interface RecursiveMemberControl<T> {
   value: T;
