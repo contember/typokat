@@ -49,6 +49,15 @@ declare const methodThenCallableProperty: MethodThenCallableProperty;
 const methodThenCallablePropertyString: string = methodThenCallableProperty.entry("value");
 methodThenCallableProperty.entry(1); // error[TK2345]: Argument of type 'number' is not assignable to parameter of type 'string'
 
+interface SameMethodThenCallableProperty {
+  entry(value: string): string;
+}
+interface SameMethodThenCallableProperty {
+  entry: (value: string) => string;
+}
+declare const sameMethodThenCallableProperty: SameMethodThenCallableProperty;
+const sameMethodThenCallablePropertyString: string = sameMethodThenCallableProperty.entry("value");
+
 interface CallablePropertyThenMethod {
   entry: (value: number) => number; // error[TK2300]: Duplicate identifier 'entry'
 }
@@ -58,6 +67,15 @@ interface CallablePropertyThenMethod {
 declare const callablePropertyThenMethod: CallablePropertyThenMethod;
 const callablePropertyThenMethodNumber: number = callablePropertyThenMethod.entry(1);
 callablePropertyThenMethod.entry("value"); // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'
+
+interface SameCallablePropertyThenMethod {
+  entry: (value: string) => string; // error[TK2300]: Duplicate identifier 'entry'
+}
+interface SameCallablePropertyThenMethod {
+  entry(value: string): string; // error[TK2300]: Duplicate identifier 'entry'
+}
+declare const sameCallablePropertyThenMethod: SameCallablePropertyThenMethod;
+const sameCallablePropertyThenMethodString: string = sameCallablePropertyThenMethod.entry("value");
 
 interface CallablePropertyConflict {
   entry: (value: string) => string;
