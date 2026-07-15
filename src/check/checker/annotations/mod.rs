@@ -277,3 +277,110 @@ pub(super) fn modifier_op(op: Option<TSMappedTypeModifierOperator>) -> ModifierO
         Some(TSMappedTypeModifierOperator::Minus) => ModifierOp::Remove,
     }
 }
+
+#[cfg(test)]
+mod multi_child_recovery_tests {
+    use crate::diagnostics::DiagnosticCode;
+    use crate::driver::check_source;
+
+    fn starts(source: &str, needle: &str) -> Vec<u32> {
+        source
+            .match_indices(needle)
+            .map(|(start, _)| u32::try_from(start).expect("test source span fits u32"))
+            .collect()
+    }
+
+    #[test]
+    fn interleaved_overload_diagnostics_keep_global_source_order() {
+        let source = r#"
+            type Interleaved = {
+                method(value: MissingOverload.First): void;
+                middle: MissingOverload.Middle;
+                method(value: MissingOverload.Last): void;
+            };
+        "#;
+        let output = check_source(source);
+        assert!(output.parse_errors.is_empty());
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.code, diagnostic.span.start))
+                .collect::<Vec<_>>(),
+            starts(source, "MissingOverload")
+                .into_iter()
+                .map(|start| (DiagnosticCode::TK2503, start))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn unavailable_children_do_not_hide_later_or_reversed_topology_errors() {
+        let source = r#"
+            namespace Available { export interface Good {} }
+            enum DeferredEnum { A }
+            type UnionForward = Available.Good | MissingForward.Bad;
+            type UnionReverse = MissingReverse.Bad | Available.Good;
+            type FunctionForward = (value: Available.Good) => MissingReturn.Bad;
+            type FunctionReverse = (value: MissingParameter.Bad) => Available.Good;
+            type EnumForward = DeferredEnum.A | MissingEnumForward.Bad;
+            type EnumReverse = MissingEnumReverse.Bad | DeferredEnum.A;
+        "#;
+        let output = check_source(source);
+        assert!(output.parse_errors.is_empty());
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.code, diagnostic.span.start))
+                .collect::<Vec<_>>(),
+            [
+                "MissingForward",
+                "MissingReverse",
+                "MissingReturn",
+                "MissingParameter",
+                "MissingEnumForward",
+                "MissingEnumReverse",
+            ]
+            .into_iter()
+            .map(|name| (DiagnosticCode::TK2503, starts(source, name)[0]))
+            .collect::<Vec<_>>()
+        );
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != DiagnosticCode::TK2322),
+            "unavailable parents must not publish a partial semantic type"
+        );
+    }
+
+    #[test]
+    fn unavailable_child_withholds_the_whole_annotation_callable() {
+        let source = r#"
+            declare namespace DeferredCallable {
+                interface Parameter {}
+            }
+            declare const unavailable: (value: DeferredCallable.Parameter) => string;
+            const noPartialReturn: never = unavailable({});
+        "#;
+        let output = check_source(source);
+        assert!(output.parse_errors.is_empty());
+        assert!(
+            output.diagnostics.is_empty(),
+            "a TK2322 from the call result would expose a partial callable: {:?}",
+            output.diagnostics
+        );
+        assert_eq!(
+            output
+                .incomplete
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "decl/module-declaration/self",
+                "annotation-lower/type-name/qualified-name",
+            ]
+        );
+    }
+}

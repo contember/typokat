@@ -164,6 +164,52 @@ const laterNonClass: number = \"later\";
 }
 
 #[test]
+fn class_type_parameter_headers_replay_each_default_after_its_constraint() {
+    let source = "\
+class HeaderOrder<
+  First extends MissingHeader.C1 = MissingHeader.D1,
+  Second extends MissingHeader.C2 = MissingHeader.D2,
+> {}
+";
+    let result = check_source(source);
+    assert!(
+        result.parse_errors.is_empty(),
+        "unexpected parse error(s): {:?}",
+        result.parse_errors
+    );
+    let actual = result
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            (
+                diagnostic.code.as_str(),
+                diagnostic.span.range(),
+                &source[diagnostic.span.range()],
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected = [
+        "MissingHeader.C1",
+        "MissingHeader.D1",
+        "MissingHeader.C2",
+        "MissingHeader.D2",
+    ]
+    .into_iter()
+    .map(|qualified| {
+        let start = source
+            .find(qualified)
+            .expect("qualified header name exists");
+        (
+            "TK2503",
+            start..start + "MissingHeader".len(),
+            "MissingHeader",
+        )
+    })
+    .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn generic_object_call_and_construct_signatures_lower_without_name_errors() {
     let source = "\
 interface Methods { map<U>(value: U): U; }

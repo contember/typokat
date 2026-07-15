@@ -345,7 +345,7 @@ code-only because the exact fixed target can be literal-, primitive-, or
 union-shaped depending on candidate priority and contextual use. The corpus keeps
 at most one mismatched argument per call, per the general call-marker rule above.
 
-`b43_namespaces_declaration_merging/` is the disabled 27-file WU0/WU2 oracle corpus for the
+`b43_namespaces_declaration_merging/` is the disabled 30-file WU0/WU2 oracle corpus for the
 namespace/declaration-space sprint. It covers merged property/method/call/construct/index and
 heritage surfaces, overload precedence and query order, generic constraint/default compatibility,
 recursive merge groups in opposite declaration orders, namespace syntax/reopening/visibility,

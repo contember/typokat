@@ -1,9 +1,14 @@
-// tsc 6.0.3 --strict --noEmit: TS2503 x11 plus the documented TS2322 recovery control below.
+// tsc 6.0.3 --strict --noEmit: TS2394, TS2503 x13, plus the documented TS2314/TS2322
+// recovery controls below.
 namespace Available {
   export interface Good { good: true }
 }
 
-enum DeferredEnum { A }
+enum DeferredEnum { A } // incomplete[decl/enum-declaration/self]
+
+function mixedOverload(value: DeferredEnum.A): number; // incomplete[annotation-lower/type-name/qualified-enum]
+function mixedOverload(value: string): string; // error[TK2394]: This overload signature is not compatible with its implementation signature
+function mixedOverload(value: number): number { return value; }
 
 type GenericSiblingTraversal = <
   First extends DeferredEnum.A = MissingGeneric.FirstDefault, // incomplete[annotation-lower/type-name/qualified-enum] | error[TK2503]: Cannot find namespace 'MissingGeneric'
@@ -31,6 +36,10 @@ interface ResolvedPair<Left, Right> {
   right: Right;
 }
 type ResolvedGenericArguments = ResolvedPair<Available.Good, MissingArguments.Second>; // incomplete[annotation-lower/type-name/qualified-name] | error[TK2503]: Cannot find namespace 'MissingArguments'
+
+// tsc additionally reports TS2314 for Array's arity. That arity check remains WU3-owned;
+// WU2 must still visit both unavailable arguments instead of short-circuiting on the first.
+type UnavailableGenericArguments = Array<MissingArguments.First, AlsoMissingArguments.Second>; // error[TK2503]: Cannot find namespace 'MissingArguments' | error[TK2503]: Cannot find namespace 'AlsoMissingArguments'
 
 type MappedIndexedObject<Source> = {
   [Key in keyof Source]: MissingMapped.Object[Key]; // error[TK2503]: Cannot find namespace 'MissingMapped'

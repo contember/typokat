@@ -1,4 +1,4 @@
-// tsc 6.0.3 --strict: TS2694 x32 and TS2503 x3 across the measured routes.
+// tsc 6.0.3 --strict: TS2694 x32 and TS2503 x9 across the measured routes.
 namespace N {}
 
 type UnionContext = N.UnionLeft | N.UnionRight; // error[TK2694]: Namespace 'N' has no exported member 'UnionLeft' | error[TK2694]: Namespace 'N' has no exported member 'UnionRight'
@@ -27,5 +27,18 @@ namespace Available {
 type UnionUnavailableFirst = Available.Good | MissingRoot.Bad; // error[TK2503]: Cannot find namespace 'MissingRoot'
 type FunctionUnavailableFirst = (value: Available.Good) => MissingReturn.Bad; // error[TK2503]: Cannot find namespace 'MissingReturn'
 
-enum DeferredEnum { A }
+enum DeferredEnum { A } // incomplete[decl/enum-declaration/self]
 type EnumUnavailableFirst = DeferredEnum.A | MissingEnumSibling.Bad; // error[TK2503]: Cannot find namespace 'MissingEnumSibling'
+
+class GenericBase<T> {}
+class QualifiedHeritage extends GenericBase<MissingHeritage.Root> {} // incomplete[class/class-heritage/type-arguments] | error[TK2503]: Cannot find namespace 'MissingHeritage'
+
+declare const computedClassKey: "field";
+class ComputedClassField {
+  [computedClassKey]!: MissingField.Root; // incomplete[class/property-definition/computed-key] | error[TK2503]: Cannot find namespace 'MissingField'
+}
+
+class GenericHeaderOrder<
+  First extends MissingHeader.C1 = MissingHeader.D1, // error[TK2503]: Cannot find namespace 'MissingHeader' | error[TK2503]: Cannot find namespace 'MissingHeader'
+  Second extends MissingHeader.C2 = MissingHeader.D2, // error[TK2503]: Cannot find namespace 'MissingHeader' | error[TK2503]: Cannot find namespace 'MissingHeader'
+> {}
