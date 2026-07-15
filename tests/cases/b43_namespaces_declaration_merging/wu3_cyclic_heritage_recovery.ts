@@ -14,7 +14,7 @@ interface RenamedMissingForwardB<U> extends RenamedMissingForwardA<U> {} // erro
 interface RenamedMissingReverseB<U> extends RenamedMissingReverseA<U> {} // error[TK2310]: Type 'RenamedMissingReverseB<U>' recursively references itself as a base type
 interface RenamedMissingReverseA<T> extends RenamedMissingReverseB<MissingReverse> {} // error[TK2310]: Type 'RenamedMissingReverseA<T>' recursively references itself as a base type | error[TK2304]: Cannot find name 'MissingReverse'
 
-// Ordinary recursive members remain a complete generic surface; only heritage SCCs poison.
+// Ordinary recursive members remain complete; only intra-SCC heritage edges are excluded.
 interface RecursiveMemberControl<T> {
   value: T;
   next: RecursiveMemberControl<T>;
