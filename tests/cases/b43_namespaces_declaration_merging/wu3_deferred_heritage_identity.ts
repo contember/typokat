@@ -84,3 +84,16 @@ class ProtectedOriginRight { protected value!: string }
 interface ProtectedOriginBaseLeft { item: ProtectedOriginLeft }
 interface ProtectedOriginBaseRight { item: ProtectedOriginRight }
 interface ProtectedOriginUnequal extends ProtectedOriginBaseLeft, ProtectedOriginBaseRight {} // error[TK2320]: cannot simultaneously extend types 'ProtectedOriginBaseLeft' and 'ProtectedOriginBaseRight'
+
+// Property identity includes modifiers and accessor direction, not only the read TypeId.
+interface ReadonlyMetadataLeft { readonly value: string }
+interface ReadonlyMetadataRight { value: string }
+interface ReadonlyMetadataUnequal extends ReadonlyMetadataLeft, ReadonlyMetadataRight {} // error[TK2320]: cannot simultaneously extend types 'ReadonlyMetadataLeft' and 'ReadonlyMetadataRight'
+
+interface OptionalMetadataLeft { value?: string }
+interface OptionalMetadataRight { value: string | undefined }
+interface OptionalMetadataUnequal extends OptionalMetadataLeft, OptionalMetadataRight {} // error[TK2320]: cannot simultaneously extend types 'OptionalMetadataLeft' and 'OptionalMetadataRight'
+
+interface GetterMetadataLeft { get value(): string }
+interface SetterMetadataRight { set value(value: string) }
+interface AccessorMetadataUnequal extends GetterMetadataLeft, SetterMetadataRight {} // error[TK2320]: cannot simultaneously extend types 'GetterMetadataLeft' and 'SetterMetadataRight'
