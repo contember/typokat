@@ -39,3 +39,34 @@ declare const reverseDefaultedArityRecovery: ReverseDefaultedArityRecovery<numbe
 const reverseDefaultedFirst: number = reverseDefaultedArityRecovery.first;
 const reverseDefaultedSecond: string = reverseDefaultedArityRecovery.second;
 const reverseDefaultedSecondWrong: number = reverseDefaultedArityRecovery.second; // error[TK2322]: Type 'string' is not assignable to type 'number'
+
+// Dependent defaults retain the raw earlier-binder reference. Explicit arguments
+// substitute sequentially at application time for both interfaces and aliases.
+interface DependentInterfaceDefault<T = string, U = T> { u: U }
+declare const dependentInterfaceDefault: DependentInterfaceDefault<number>;
+const dependentInterfaceNumber: number = dependentInterfaceDefault.u;
+const dependentInterfaceString: string = dependentInterfaceDefault.u; // error[TK2322]: Type 'number' is not assignable to type 'string'
+
+type DependentAliasDefault<T = string, U = T> = { u: U };
+declare const dependentAliasDefault: DependentAliasDefault<number>;
+const dependentAliasNumber: number = dependentAliasDefault.u;
+const dependentAliasString: string = dependentAliasDefault.u; // error[TK2322]: Type 'number' is not assignable to type 'string'
+
+// Merged header identity compares raw binder references, not eagerly substituted
+// default values.
+interface IdenticalDependentHeader<T = string, U = T> { first: U }
+interface IdenticalDependentHeader<T = string, U = T> { second: U }
+
+interface MismatchedDependentHeader<T = string, U = T> {} // error[TK2428]: All declarations of 'MismatchedDependentHeader' must have identical type parameters
+interface MismatchedDependentHeader<T = string, U = string> {} // error[TK2428]: All declarations of 'MismatchedDependentHeader' must have identical type parameters
+
+// Declaration-time validation uses the raw constraint/default pair.
+type InvalidDependentConstraint<T = string, U extends T = string> = U; // error[TK2344]: Type 'string' does not satisfy the constraint 'T'
+type ValidDependentConstraint<T = string, U extends T = T> = U;
+
+// A default may reference only a strictly earlier type parameter.
+type SelfAliasDefault<T = T> = T; // error[TK2744]: Type parameter defaults can only reference previously declared type parameters
+interface SelfInterfaceDefault<T = T> {} // error[TK2744]: Type parameter defaults can only reference previously declared type parameters
+
+type RequiredAfterOptionalAlias<T = string, U> = [T, U]; // error[TK2706]: Required type parameters may not follow optional type parameters
+interface RequiredAfterOptionalInterface<T = string, U> {} // error[TK2706]: Required type parameters may not follow optional type parameters
