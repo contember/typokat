@@ -37,6 +37,38 @@ interface DuplicateKind { entry(): void } // error[TK2300]: Duplicate identifier
 declare const duplicateKind: DuplicateKind;
 const duplicateKindWrong: string = duplicateKind.entry; // error[TK2322]: Type 'number' is not assignable to type 'string'
 
+// Callable syntax kind remains distinct from its function-shaped TypeId. Only
+// method+method declarations form overloads; every conflict recovers to the first.
+interface MethodThenCallableProperty {
+  entry(value: string): string;
+}
+interface MethodThenCallableProperty {
+  entry: (value: number) => number; // error[TK2717]: Subsequent property declarations must have the same type
+}
+declare const methodThenCallableProperty: MethodThenCallableProperty;
+const methodThenCallablePropertyString: string = methodThenCallableProperty.entry("value");
+methodThenCallableProperty.entry(1); // error[TK2345]: Argument of type 'number' is not assignable to parameter of type 'string'
+
+interface CallablePropertyThenMethod {
+  entry: (value: number) => number; // error[TK2300]: Duplicate identifier 'entry'
+}
+interface CallablePropertyThenMethod {
+  entry(value: string): string; // error[TK2300]: Duplicate identifier 'entry'
+}
+declare const callablePropertyThenMethod: CallablePropertyThenMethod;
+const callablePropertyThenMethodNumber: number = callablePropertyThenMethod.entry(1);
+callablePropertyThenMethod.entry("value"); // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'
+
+interface CallablePropertyConflict {
+  entry: (value: string) => string;
+}
+interface CallablePropertyConflict {
+  entry: (value: number) => number; // error[TK2717]: Subsequent property declarations must have the same type
+}
+declare const callablePropertyConflict: CallablePropertyConflict;
+const callablePropertyConflictString: string = callablePropertyConflict.entry("value");
+callablePropertyConflict.entry(1); // error[TK2345]: Argument of type 'number' is not assignable to parameter of type 'string'
+
 interface ModifierConflict { value: number } // error[TK2687]: All declarations of 'value' must have identical modifiers
 interface ModifierConflict { value?: number } // error[TK2687]: All declarations of 'value' must have identical modifiers | error[TK2717]: Subsequent property declarations must have the same type
 
