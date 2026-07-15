@@ -273,3 +273,48 @@ adding `42` or `44` only if a reproducible pinned-library audit contradicts the 
   complete interface publication, restricted value-side work to function/class augmentation, and
   made machine-valid surface/manifest ownership a closure gate. The plan now incorporates all three
   blockers.
+- **2026-07-15 — WU0 oracle and baseline.** Added the disabled, unregistered
+  `tests/cases/b43_namespaces_declaration_merging/` matrix (17 files). `tsc --version` is `6.0.3`;
+  `tsc --strict --noEmit --pretty false --lib es5 --module commonjs` over every fixture produced 87
+  diagnostics: all 85 ordinary `TK` markers match by code/line. The two additional `TS2567`s in the
+  enum/function/namespace chimera are not claimed as backlog-43 marker parity: its enum declaration
+  remains explicitly incomplete under backlog `42`, and exact duplicate-kind diagnostic ownership
+  is a WU0A/direct-test gate. The valid UMD `.d.ts` retains both
+  `decl/namespace-export/self` and `decl/export-assignment/self` under backlog `15`; local merged
+  member access is not accepted as proof of global UMD publication. Probes confirmed the non-obvious rules:
+  later interface blocks do not win identical overload selection (the first method/call/construct
+  literal return wins); ordinary namespace-before-function/class reports `TS2434`, but ambient
+  reverse order is clean; private members do not cross reopened namespace blocks; ambient namespace
+  members export by default; and legal `declare global` requires an external-module context.
+  Two separate legal global-augmentation blocks merge while a module-local same-name interface
+  stays isolated. A clean class+interface(+namespace) tsc probe was removed from required behavior
+  because architecture §4.1 does not approve class+interface composition; WU0A must decide its
+  conservative disposition.
+  Conflict probes pin `TS2300/2320/2374/2411/2413/2428/2687/2717` plus downstream wrong-type demands so
+  recovery cannot become `any`/error-permissive. Qualified probes pin
+  `TS2315/2344/2503/2694/2702/2707/2749` across namespace, type-only, and value-only slots.
+- **2026-07-15 — WU0 current-checker measurement.** The existing debug binary over the 17 focused
+  files exited incomplete for 15 and diagnostic-only for 2, emitting 108 diagnostics and 70
+  incomplete records; `cargo test conformance` remains green because the new corpus is deliberately
+  unregistered. The inventory has exactly five backlog-43 records:
+  `type-fill/module-declaration/self`, `annotation-lower/type-name/qualified-name`,
+  `decl/global-declaration/self`, `decl/module-declaration/self`, and
+  `decl/namespace-export/self`.
+- **2026-07-15 — WU0 official-suite measurement.** At pinned TypeScript SHA
+  `050880ce59e30b356b686bd3144efe24f875ebc8`, the committed scoreboard is 874 files, 339 IN / 535
+  OOS; the latest existing-binary report is 340 / 534 with 69 unsaved progress entries. The coarse
+  `syntax:module` bucket contains 117 files: 92 single-file identifier-namespace cases, one
+  `declare global`, 22 export-only backlog-15 cases, and two regex false positives; one additional
+  namespace case is multifile
+  (`conformance/classes/members/instanceAndStaticMembers/superInStaticMembers1.ts`). Simulating
+  removal of the broad gate yields only four newly-IN files—
+  `conformance/expressions/typeGuards/typeGuardsInExternalModule.ts`,
+  `conformance/types/intersection/intersectionMemberOfUnionNarrowsCorrectly.ts`,
+  `conformance/types/literal/stringMappingReduction.ts`, and
+  `conformance/types/tuple/contextualTypeTupleEnd.ts`—plus 70 unsupported results and secondary
+  gates. This is not a backlog-43 progress promise: WU7 must structurally split identifier
+  namespace/global/UMD syntax from external modules instead of deleting the broad regex.
+- **2026-07-15 — WU0 direct-test handoff.** Marker fixtures cannot prove stable `TypeId` identity,
+  same-span diagnostic ordering, or heritage-event attribution. WU0A/WU1-WU4 must add direct tests
+  for those properties, including conflicting recursive groups and a chimera receiver that cannot
+  become permissive, before the corpus is registered.

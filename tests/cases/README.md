@@ -61,12 +61,17 @@ EOF spans.
 
 | Code | Meaning |
 |---|---|
+| `TK1314` | `export as namespace` appears outside a module |
+| `TK1315` | `export as namespace` appears in a non-declaration source file |
+| `TK2300` | Duplicate identifier across incompatible merged members |
 | `TK2302` | Static members cannot reference class type parameters |
 | `TK2304` | Cannot find name (unresolved identifier) |
 | `TK2305` | Module has no exported member |
 | `TK2307` | Cannot find module |
 | `TK2313` | Type parameter has a circular constraint (`<T extends T>`) |
 | `TK2314` | Generic type requires a different number of type arguments |
+| `TK2315` | Type is not generic |
+| `TK2320` | Interface cannot simultaneously extend incompatible base types |
 | `TK2322` | Type X is not assignable to type Y (annotation/reassignment/return/property) |
 | `TK2339` | Property does not exist on type |
 | `TK2341` | Property is private (accessed outside its declaring class) |
@@ -80,18 +85,30 @@ EOF spans.
 | `TK2654` | Non-abstract class is missing implementations for members (two or more missing, aggregated) |
 | `TK2540` | Cannot assign to a read-only property |
 | `TK2353` | Object literal may only specify known properties (excess property) |
+| `TK2374` | Duplicate index signature |
 | `TK2391` | Function implementation is missing or not immediately following overload declarations |
 | `TK2394` | Overload signature is not compatible with its implementation signature |
+| `TK2411` | Property is incompatible with a string index signature |
+| `TK2413` | Numeric index type is not assignable to string index type |
+| `TK2428` | Merged declarations must have identical type parameters |
+| `TK2434` | Namespace declaration precedes the class or function it augments |
 | `TK2554` | Wrong number of arguments (arity) |
 | `TK2555` | Too few arguments for a rest/min-arity call |
 | `TK2558` | Wrong number of type arguments |
 | `TK2589` | Type instantiation is excessively deep and possibly infinite |
+| `TK2503` | Cannot find namespace |
+| `TK2669` | Global augmentation is outside an external or ambient module |
 | `TK2673` | Constructor of class is private (direct `new` outside the declaring class) |
 | `TK2674` | Constructor of class is protected (direct `new` outside the declaring class/subclasses) |
 | `TK2684` | The `this` context of a call is not assignable to the method's explicit receiver type |
+| `TK2687` | Merged property declarations must have identical modifiers |
+| `TK2694` | Namespace has no exported member |
+| `TK2702` | A type-only name is used as a namespace |
 | `TK2707` | Generic type requires between a minimum and maximum number of type arguments |
+| `TK2717` | Subsequent property declaration has an incompatible type |
 | `TK2741` | Property is missing in type but required |
 | `TK2744` | Type parameter defaults can only reference previously declared type parameters |
+| `TK2749` | A value is used as a type |
 | `TK2769` | No overload matches this call |
 
 ## Type display format (what the renderer must print)
@@ -237,6 +254,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b41_generic_methods/` | shipped B41 | generic method/call/construct signatures: persistent binders through outer substitution, calls, relation, overloads, inheritance, and cache order |
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
+| `b43_namespaces_declaration_merging/` | backlog `43` (disabled, unregistered) | namespace type containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global/UMD forms, and conservative chimera degradation |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 
@@ -322,6 +340,22 @@ too-wide union solely to make incompatible arguments fit. Markers are mostly
 code-only because the exact fixed target can be literal-, primitive-, or
 union-shaped depending on candidate priority and contextual use. The corpus keeps
 at most one mismatched argument per call, per the general call-marker rule above.
+
+`b43_namespaces_declaration_merging/` is the disabled WU0 oracle corpus for the
+namespace/declaration-space sprint. It covers merged property/method/call/construct/index and
+heritage surfaces, overload precedence and query order, generic constraint/default compatibility,
+recursive merge groups in opposite declaration orders, namespace syntax/reopening/visibility,
+qualified lookup through value/type/namespace slots, all approved keep-pairs, representative
+interface+constructor-variable coexistence, and ambient/global/UMD boundaries. The corpus pins
+strict `tsc 6.0.3 --strict --lib es5 --module commonjs` results. Ordinary
+namespace-before-function/class pairs report `TS2434`; only their ambient reverse-order forms are
+clean. Class+interface(+namespace), although accepted by tsc, is not in architecture §4.1's
+keep-list and remains a WU0A decision probe rather than required corpus behavior. The valid UMD
+`.d.ts` keeps both `export as namespace` and `export =` explicitly incomplete under backlog `15`;
+local access to its merged `Options` alone would not prove a global UMD export. The
+enum/function/namespace chimera keeps its enum surface explicitly incomplete under backlog `42`,
+pins the namespace-order diagnostic, and requires receiver-use errors so an `any`/error recovery
+cannot pass it. Exact `TS2567` ownership remains a WU0A/direct-test gate.
 
 ## Soundness-review corpora (sprint 2026-07-10)
 
