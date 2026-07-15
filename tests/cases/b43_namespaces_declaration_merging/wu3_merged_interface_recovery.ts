@@ -84,3 +84,22 @@ interface LaterInvalidConstraintDefault<T extends string = number> {} // error[T
 
 interface LaterCircularConstraint<T> {}
 interface LaterCircularConstraint<T extends T> {} // error[TK2313]: Type parameter 'T' has a circular constraint
+
+// Effective merged constraints are validated as one graph while every supplied
+// occurrence retains its own diagnostic owner.
+interface MergedConstraintCycleForward<T extends U, U> {} // error[TK2313]: Type parameter 'T' has a circular constraint
+interface MergedConstraintCycleForward<T, U extends T> {} // error[TK2313]: Type parameter 'U' has a circular constraint
+
+interface MergedConstraintCycleReverse<T, U extends T> {} // error[TK2313]: Type parameter 'U' has a circular constraint
+interface MergedConstraintCycleReverse<T extends U, U> {} // error[TK2313]: Type parameter 'T' has a circular constraint
+
+// Supplied defaults are checked against the effective first-supplied constraint,
+// even when the two pieces come from different reopenings.
+interface MergedDefaultBeforeConstraint<T = number> {} // error[TK2344]: Type 'number' does not satisfy the constraint 'string'
+interface MergedDefaultBeforeConstraint<T extends string> {}
+
+interface MergedConstraintBeforeDefault<T extends string> {}
+interface MergedConstraintBeforeDefault<T = number> {} // error[TK2344]: Type 'number' does not satisfy the constraint 'string'
+
+interface MergedMatchingConstraintDefault<T = string> {}
+interface MergedMatchingConstraintDefault<T extends string> {}
