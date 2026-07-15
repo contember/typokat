@@ -111,3 +111,23 @@ interface RepeatedInvalidDefaultForward<T = number> {} // error[TK2344]: Type 'n
 
 interface RepeatedInvalidDefaultReverse<T = number> {} // error[TK2344]: Type 'number' does not satisfy the constraint 'string'
 interface RepeatedInvalidDefaultReverse<T extends string = number> {} // error[TK2344]: Type 'number' does not satisfy the constraint 'string'
+
+// Only each parameter's first supplied constraint participates in the effective
+// merged graph. Later supplied roots remain identity metadata, not extra cycle owners.
+interface EffectiveCycleOccurrenceForward<
+  T extends U, // error[TK2313]: Type parameter 'T' has a circular constraint
+  U,
+> {}
+interface EffectiveCycleOccurrenceForward<
+  T extends T,
+  U extends T, // error[TK2313]: Type parameter 'U' has a circular constraint
+> {}
+
+interface EffectiveCycleOccurrenceReverse<
+  T extends T, // error[TK2313]: Type parameter 'T' has a circular constraint
+  U extends T,
+> {}
+interface EffectiveCycleOccurrenceReverse<
+  T extends U,
+  U,
+> {}
