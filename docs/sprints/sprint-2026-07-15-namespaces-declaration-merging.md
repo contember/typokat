@@ -207,6 +207,24 @@ instance members and namespace static/container members compose in either class/
   work, validation before SCC publication, order-dependent `TypeId` structure, permissive conflict
   recovery, or mutation of an already-published hash-consed type.
 
+**WU3 implementation decision (2026-07-15).** SCCs are a private construction algorithm, not a
+consumer-visible publication unit. Each SCC must still reach one complete terminal result before
+construction advances, but production lookup receives only one immutable `PublishedTypeGroups`
+registry after every group in the current phase is terminal `Ready(TypeId)` or typed `Unavailable`.
+This is a stronger atomicity boundary than ADR-0009 requires and follows the existing class
+construction precedent while avoiding a second per-SCC capability state machine. Prelude and user
+construction form exactly two immutable epochs: the published prelude registry is consumed
+read-only while the checker constructs a new prelude-plus-user registry; neither registry nor any
+published surface is mutated or republished.
+
+This choice is valid only while construction remains query-free and serial: no valid group may need
+a `SemanticQueryCoordinator` result from an earlier finalized SCC. Direct tests must prove terminal
+registry validation, construction/production capability separation, prelude-to-user identity
+preservation, order-independent recursive SCC completion, independent good-group publication beside
+a typed unavailable group, post-publication obligation evaluation with zero surface mutation, the
+WU3-to-WU4 class+interface stop, and successful WU2 qualified-leaf lowering. Reopen the architecture
+decision instead of adding a bridge if any of those proofs fails.
+
 ### WU4 — atomic keep-pairs and static/value augmentation (effort XL)
 
 - Implement interface+namespace type/container coexistence and composition.
