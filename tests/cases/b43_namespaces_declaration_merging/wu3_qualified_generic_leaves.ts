@@ -15,6 +15,7 @@ type QualifiedNestedGenericLeaf = Wu3QualifiedGenericLeaves.Nested.Item<string>;
 namespace Wu3QualifiedClassLeaves { // incomplete[decl/module-declaration/self]
   export class Generic<T> { value!: T }
   export class Constrained<T extends string> { value!: T }
+  export class Dependent<T, U extends T> { value!: U }
   export class Plain { value!: number }
 }
 
@@ -25,6 +26,10 @@ const qualifiedGenericClassWrong: number = qualifiedGenericClass.value; // error
 declare const qualifiedConstrainedClass: Wu3QualifiedClassLeaves.Constrained<number>; // error[TK2344]: Type 'number' does not satisfy the constraint 'string'
 const qualifiedConstrainedClassValue: number = qualifiedConstrainedClass.value;
 const qualifiedConstrainedClassWrong: string = qualifiedConstrainedClass.value; // error[TK2322]: Type 'number' is not assignable to type 'string'
+
+declare const qualifiedDependentClass: Wu3QualifiedClassLeaves.Dependent<string, number>; // error[TK2344]: Type 'number' does not satisfy the constraint 'string'
+const qualifiedDependentClassValue: number = qualifiedDependentClass.value;
+const qualifiedDependentClassWrong: string = qualifiedDependentClass.value; // error[TK2322]: Type 'number' is not assignable to type 'string'
 
 declare const qualifiedPlainClass: Wu3QualifiedClassLeaves.Plain;
 const qualifiedPlainClassValue: number = qualifiedPlainClass.value;
@@ -37,3 +42,10 @@ interface QualifiedNestedClassHeritage extends Wu3QualifiedClassLeaves.Plain {
 declare const qualifiedNestedClassHeritage: QualifiedNestedClassHeritage;
 const qualifiedNestedClassHeritageValue: number = qualifiedNestedClassHeritage.value;
 const qualifiedNestedClassHeritageWrong: string = qualifiedNestedClassHeritage.value; // error[TK2322]: Type 'number' is not assignable to type 'string'
+
+interface QualifiedConstrainedClassHeritage extends Wu3QualifiedClassLeaves.Constrained<number> { // error[TK2344]: Type 'number' does not satisfy the constraint 'string'
+  own: boolean;
+}
+declare const qualifiedConstrainedClassHeritage: QualifiedConstrainedClassHeritage;
+const qualifiedConstrainedClassHeritageValue: number = qualifiedConstrainedClassHeritage.value;
+const qualifiedConstrainedClassHeritageWrong: string = qualifiedConstrainedClassHeritage.value; // error[TK2322]: Type 'number' is not assignable to type 'string'
