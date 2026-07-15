@@ -44,10 +44,10 @@ declare namespace GenuineLocalControl {
   export { A as B };
   interface A { genuineLocal: true }
 }
-let genuineLocalAliasUse: GenuineLocalControl.B;
+let genuineLocalAliasUse: GenuineLocalControl.B; // incomplete[annotation-lower/type-name/qualified-name]: qualified type path classified; leaf lowering deferred to WU3
 
 declare namespace A {
   namespace N { export interface X {} }
   export { type N as TN };
 }
-type TypeOnlyNamespaceAlias = A.TN.X;
+type TypeOnlyNamespaceAlias = A.TN.X; // incomplete[annotation-lower/type-name/qualified-name]: qualified type path classified; leaf lowering deferred to WU3
