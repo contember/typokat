@@ -131,3 +131,12 @@ interface EffectiveCycleOccurrenceReverse<
   T extends U,
   U,
 > {}
+
+interface EffectiveSelfCycleFirst<T extends T> {} // error[TK2313]: Type parameter 'T' has a circular constraint
+interface EffectiveSelfCycleFirst<T extends string> {}
+
+interface EffectiveSelfCycleLater<T extends string> {} // error[TK2428]: All declarations of 'EffectiveSelfCycleLater' must have identical type parameters
+interface EffectiveSelfCycleLater<T extends T> {} // error[TK2428]: All declarations of 'EffectiveSelfCycleLater' must have identical type parameters
+
+interface EffectiveSelfCycleRepeated<T extends T> {} // error[TK2313]: Type parameter 'T' has a circular constraint
+interface EffectiveSelfCycleRepeated<T extends T> {}
