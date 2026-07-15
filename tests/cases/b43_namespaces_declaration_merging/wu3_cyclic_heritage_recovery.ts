@@ -102,6 +102,34 @@ type UnknownHeritageNeutral = unknown;
 type UnknownWrappedCycle = UnknownHeritageNeutral & UnknownWrappedSelf;
 interface UnknownWrappedSelf extends UnknownWrappedCycle {} // error[TK2310]: Type 'UnknownWrappedSelf' recursively references itself as a base type
 
+// Empty terminal sets do not imply valid object heritage. Aliased unknown and
+// primitive families retain TS2312 accounting instead of becoming false-clean.
+type UnknownOnlyHeritageAlias = unknown;
+interface UnknownOnlyHeritageDerived extends UnknownOnlyHeritageAlias {} // incomplete[interface/heritage/topology]
+
+type StringHeritageAlias = string;
+interface StringHeritageDerived extends StringHeritageAlias {} // incomplete[interface/heritage/topology]
+
+type StringLiteralHeritageAlias = "literal";
+interface StringLiteralHeritageDerived extends StringLiteralHeritageAlias {} // incomplete[interface/heritage/topology]
+
+interface NoncyclicHeritageTerminal { value: number }
+type StringIntersectionHeritageAlias = string & NoncyclicHeritageTerminal;
+interface StringIntersectionHeritageDerived extends StringIntersectionHeritageAlias {} // incomplete[interface/heritage/topology]
+
+type StringSelfIntersectionHeritageAlias = string & StringSelfIntersectionHeritageDerived;
+interface StringSelfIntersectionHeritageDerived extends StringSelfIntersectionHeritageAlias {} // error[TK2310]: Type 'StringSelfIntersectionHeritageDerived' recursively references itself as a base type | incomplete[interface/heritage/topology]
+
+// Valid empty/object-shaped controls remain accepted.
+type AnyOnlyHeritageAlias = any;
+interface AnyOnlyHeritageDerived extends AnyOnlyHeritageAlias {}
+
+type TypeLiteralHeritageAlias = { value: number };
+interface TypeLiteralHeritageDerived extends TypeLiteralHeritageAlias {}
+
+type ObjectHeritageAlias = object; // incomplete[annotation-lower/object-keyword/self]
+interface ObjectHeritageDerived extends ObjectHeritageAlias {}
+
 type PoisonedIntersectionAlias = PoisonedIntersectionSelf & MissingIntersectionBase; // error[TK2304]: Cannot find name 'MissingIntersectionBase'
 interface PoisonedIntersectionSelf extends PoisonedIntersectionAlias {}
 
