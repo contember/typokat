@@ -87,6 +87,21 @@ namespace QualifiedAliasCycle {
 type IntersectionAliasCycle = IntersectionAliasSelf & { marker: number };
 interface IntersectionAliasSelf extends IntersectionAliasCycle {} // error[TK2310]: Type 'IntersectionAliasSelf' recursively references itself as a base type
 
+// Alias-transparent intersection summaries preserve absorber kind. `any` erases
+// the recursive terminal, `never` remains an unsupported heritage form, and
+// `unknown` is neutral so the recursive terminal remains visible.
+type AnyHeritageAbsorber = any;
+type AnyWrappedCycle = AnyHeritageAbsorber & AnyWrappedSelf;
+interface AnyWrappedSelf extends AnyWrappedCycle {}
+
+type NeverHeritageAbsorber = never;
+type NeverWrappedCycle = NeverHeritageAbsorber & NeverWrappedSelf;
+interface NeverWrappedSelf extends NeverWrappedCycle {} // incomplete[interface/heritage/topology]
+
+type UnknownHeritageNeutral = unknown;
+type UnknownWrappedCycle = UnknownHeritageNeutral & UnknownWrappedSelf;
+interface UnknownWrappedSelf extends UnknownWrappedCycle {} // error[TK2310]: Type 'UnknownWrappedSelf' recursively references itself as a base type
+
 type PoisonedIntersectionAlias = PoisonedIntersectionSelf & MissingIntersectionBase; // error[TK2304]: Cannot find name 'MissingIntersectionBase'
 interface PoisonedIntersectionSelf extends PoisonedIntersectionAlias {}
 
