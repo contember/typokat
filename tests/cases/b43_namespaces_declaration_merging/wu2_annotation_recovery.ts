@@ -35,11 +35,10 @@ interface ResolvedPair<Left, Right> {
   left: Left;
   right: Right;
 }
-type ResolvedGenericArguments = ResolvedPair<Available.Good, MissingArguments.Second>; // incomplete[annotation-lower/type-name/qualified-name] | error[TK2503]: Cannot find namespace 'MissingArguments'
+type ResolvedGenericArguments = ResolvedPair<Available.Good, MissingArguments.Second>; // error[TK2503]: Cannot find namespace 'MissingArguments'
 
-// tsc additionally reports TS2314 for Array's arity. That arity check remains WU3-owned;
-// WU2 must still visit both unavailable arguments instead of short-circuiting on the first.
-type UnavailableGenericArguments = Array<MissingArguments.First, AlsoMissingArguments.Second>; // error[TK2503]: Cannot find namespace 'MissingArguments' | error[TK2503]: Cannot find namespace 'AlsoMissingArguments'
+// Arity and unavailable-argument diagnostics coexist; argument traversal must not short-circuit.
+type UnavailableGenericArguments = Array<MissingArguments.First, AlsoMissingArguments.Second>; // error[TK2314]: Generic type 'Array<T>' requires 1 type argument(s) | error[TK2503]: Cannot find namespace 'MissingArguments' | error[TK2503]: Cannot find namespace 'AlsoMissingArguments'
 
 type MappedIndexedObject<Source> = {
   [Key in keyof Source]: MissingMapped.Object[Key]; // error[TK2503]: Cannot find namespace 'MissingMapped'
