@@ -45,6 +45,26 @@ interface IndexedUnequalLeft { f<T extends { value: string; other: number }>(): 
 interface IndexedUnequalRight { f<U extends { value: string; other: number }>(): U["other"] }
 interface IndexedUnequal extends IndexedUnequalLeft, IndexedUnequalRight {} // error[TK2320]: cannot simultaneously extend types 'IndexedUnequalLeft' and 'IndexedUnequalRight'
 
+// Normalization collapses a deferred duplicate intersection member before identity.
+type DeferredIdentity<T> = T extends any ? T : never;
+interface IntersectionCollapsedLeft { f<T>(): string & DeferredIdentity<string> }
+interface IntersectionCollapsedRight { f<U>(): string }
+interface IntersectionCollapsedEqual extends IntersectionCollapsedLeft, IntersectionCollapsedRight {}
+interface IntersectionUnequalLeft { f<T>(): string & DeferredIdentity<string> }
+interface IntersectionUnequalRight { f<U>(): number }
+interface IntersectionUnequal extends IntersectionUnequalLeft, IntersectionUnequalRight {} // error[TK2320]: cannot simultaneously extend types 'IntersectionUnequalLeft' and 'IntersectionUnequalRight'
+
+// One diagnostic is coalesced only after the first semantic failure. The raw-different
+// `a` properties normalize equal; the later canonical `b` comparison must still report.
+interface PairSuppressionLeft { a: DeferredIdentity<string>; b: number }
+interface PairSuppressionRight { a: string; b: string }
+interface PairSuppressionConflict extends PairSuppressionLeft, PairSuppressionRight {} // error[TK2320]: cannot simultaneously extend types 'PairSuppressionLeft' and 'PairSuppressionRight'
+
+// Reversed source member order preserves the same canonical first-failed result.
+interface PairSuppressionReverseLeft { b: number; a: DeferredIdentity<string> }
+interface PairSuppressionReverseRight { b: string; a: string }
+interface PairSuppressionReverseConflict extends PairSuppressionReverseLeft, PairSuppressionReverseRight {} // error[TK2320]: cannot simultaneously extend types 'PairSuppressionReverseLeft' and 'PairSuppressionReverseRight'
+
 // Public class declaring origins do not make equal projected fields nominal.
 class PublicOriginLeft { value!: string }
 class PublicOriginRight { value!: string }
