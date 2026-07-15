@@ -23,6 +23,8 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-07-15-namespaces-declaration-merging.md`](sprints/sprint-2026-07-15-namespaces-declaration-merging.md) —
+  active; closing the sole remaining audited `lib.es5.d.ts` model prerequisite before backlog `14`.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
 
@@ -30,6 +32,10 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **Namespaces/declaration merging is active** —
+  [`sprint-2026-07-15-namespaces-declaration-merging.md`](sprints/sprint-2026-07-15-namespaces-declaration-merging.md)
+  closes backlog `43` through a spec-first multi-slot/merged-publication rollout and finishes with a
+  pinned ES5 readiness proof. Full library loading and the shared Store remain the following sprint.
 - **Semantic duplication/layering shipped 2026-07-14** (archived:
   [`archive/sprint-2026-07-13-semantic-duplication-layering.md`](archive/sprint-2026-07-13-semantic-duplication-layering.md)) —
   immutable complete `ClassInstance` applications, atomic declaration-SCC publication, retained
