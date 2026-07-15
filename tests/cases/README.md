@@ -257,7 +257,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b41_generic_methods/` | shipped B41 | generic method/call/construct signatures: persistent binders through outer substitution, calls, relation, overloads, inheritance, and cache order |
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
-| `b43_namespaces_declaration_merging/` | backlog `43` (disabled, unregistered) | namespace type containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global/UMD forms, and conservative chimera degradation |
+| `b43_namespaces_declaration_merging/` | backlog `43` (disabled, unregistered) | namespace type containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global/UMD forms, and an explicitly backlog-42-deferred typed-incomplete chimera |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 
@@ -359,10 +359,16 @@ headers; property/method/heritage conflicts with non-permissive recovery; instan
 signatures; namespace placement; and preservation of construction, capability separation, existing
 and namespace-added statics, nested namespace types, and private nominal origin. Omitted versus
 introduced constraints/defaults are legal and effective in either order; only conflicting supplied
-names/constraints/defaults or arities reject. Invalid groups may conservatively exhaust/reject at use sites instead of
-synthesizing tsc's multi-parameter recovery symbol, but must never become `any`/error-permissive.
-The valid UMD `.d.ts` keeps both `export as namespace` and `export =` explicitly incomplete under backlog `15`;
-local access to its merged `Options` alone would not prove a global UMD export. The
+names/constraints/defaults or arities reject. Every invalid merged generic group requires the
+complete typed `tsc` recovery surface at use sites. Recovery may not use `any`, the error type,
+`unknown`, synthesized `never`, a partial application vector, a dropped fragment, or whole-group
+exhaustion; each class/interface member and each oracle-distinct fragment-local parameter position
+must remain typed.
+The valid UMD `.d.ts` is the current `export =` form witness: it keeps both
+`export as namespace` and `export =` explicitly incomplete under backlog `15`; local access to its
+merged `Options` alone would not prove a global UMD export. `export as namespace` may also publish an
+ordinary named-export external-module surface, which backlog `15` must cover differentially before
+claiming UMD support. The
 enum/function/namespace chimera keeps its enum surface explicitly incomplete under backlog `42`,
 pins the namespace-order diagnostic, and requires receiver-use errors so an `any`/error recovery
 cannot pass it. Exact `TS2567` ownership remains a WU0A/direct-test gate.

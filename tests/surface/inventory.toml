@@ -1354,8 +1354,8 @@ surface = "namespace-export"
 slot = "self"
 oxc_variant = "ModuleDeclaration::TSNamespaceExportDeclaration"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/43-namespaces-declaration-merging.md"
-witness = "export as namespace not modeled"
+owner = "../../docs/backlog/15-modules-imports.md"
+witness = "../cases/b43_namespaces_declaration_merging/umd_export.d.ts"
 
 [[surface]]
 id = "decl/type-alias/self"

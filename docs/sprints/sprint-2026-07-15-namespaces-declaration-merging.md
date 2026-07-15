@@ -16,7 +16,7 @@ declaration identity/publication and shared-prelude storage. Enums (`42`) and
 `satisfies`/`as const` (`44`) remain release blockers but have zero uses in the pinned ES5 core and
 do not belong on this critical path.
 
-## Refs re-verified at HEAD (2026-07-15, `ebd79ac`)
+## Refs re-verified at HEAD (2026-07-15, `1836d37`)
 
 `✔` = confirmed live · `⚠` = drift/nuance caught.
 
@@ -69,9 +69,9 @@ do not belong on this critical path.
 | Namespace declarations | Identifier, nested, dotted, reopened, and ambient `declare namespace` forms bind into namespace scopes | Runtime emit/transformation is out of scope |
 | Qualified types | Resolve `A.B.C` segment by segment with correct shadowing, export visibility, type arguments, `TK2503`, and `TK2694` | String-literal external modules remain backlog `15` |
 | Cross-space coexistence | Value/type/namespace slots resolve independently; all 28 ES5 interface+`declare var` constructor pairs see the final merged interface | Coexistence is not misreported as interface merging |
-| Keep-pair merging | Interface+namespace, function+namespace, class+namespace, and the approved class+interface(+namespace) composition preserve their instance/type/static/container surfaces in every strict-tsc-legal order | Rare enum+namespace+function chimeras remain conservative and explicit |
+| Keep-pair merging | Interface+namespace, function+namespace, class+namespace, and the approved class+interface(+namespace) composition preserve their instance/type/static/container surfaces in every strict-tsc-legal order | Exact enum+namespace+function legality/recovery remains explicitly deferred to `42`; the interim receiver is typed incomplete and non-permissive |
 | Namespace visibility | Exported members form the reopened public namespace surface; non-exported members remain local to their declaration block | No accidental sharing of private block members across reopenings |
-| Global/UMD surface | Give the currently `43`-owned `declare global` and `export as namespace` inventory entries an implemented or precise non-`43` disposition | Do not absorb general package/module loading |
+| Global/UMD surface | In WU5, atomically link/publish legal `declare global` blocks into one compilation-global scope; implement `TK2669` and `TK1314`/`TK1315` context errors; keep valid `export as namespace` publication owned by `15`, with the current `export =` form as its WU0 witness | Keep WU1b global metadata disconnected, keep module locals isolated, and do not absorb valid UMD publication or general package/module loading; backlog `15` must cover both `export =` and ordinary named-export UMD surfaces |
 
 **Approved scope addendum (2026-07-15).** Backlog `43` includes full
 class+interface(+namespace) merging even though architecture §4.1's original keep-list did not name
@@ -91,7 +91,8 @@ instance members and namespace static/container members compose in either class/
   constraint/default compatibility; recursive and mutually recursive merges; namespace reopening;
   nested and dotted syntax; exported versus non-exported members; qualified type arguments;
   shadowing across all three slots; every approved keep-pair; interface+var constructor patterns;
-  ambient/global/UMD forms; missing root/member diagnostics; and explicit degraded chimeras.
+  ambient/global/UMD forms; missing root/member diagnostics; and explicitly backlog-42-deferred
+  chimeras with typed incomplete, non-permissive interim behavior.
 - **Acceptance.** The corpus is committed without production changes or registration. Expected
   codes, spans, order, and deliberate differences are recorded. The official-suite measurement
   names the exact candidate files and makes no unmeasured progress promise.
@@ -117,70 +118,130 @@ instance members and namespace static/container members compose in either class/
 - **Acceptance.** An ADR (or an explicit decision section here if no durable new decision is
   needed) is independently reviewed, indexed, and committed before WU1.
 
-### WU1 — namespace binding and ordered merge groups (effort L)
+### WU1a — lexical identity and ordered type-group substrate (effort M)
 
-- Activate the namespace slot and introduce namespace scopes without resolving types in the binder.
-- Retain every legal same-name declaration in source order instead of last-write replacement.
+- Give every source declaration a unique `DeclId` from one unified lexical identity space, exact AST
+  site, and lexical event owner. Distinguish it from dedicated value-storage identity and from
+  `TypeGroupId`.
+- Build one stable dormant `TypeGroupId` containing every admitted fragment in source order; never
+  retain only the last declaration or reconstruct order during checking.
+- Land metadata only. Do not switch `Symbol.ty`, production lookup, reservation, publication, or any
+  semantic consumer in WU1a.
+- Add binder-level direct tests for non-aliasing lexical/value-storage/group identities, distinct
+  declaration identity, shared group identity, exact AST ownership, source order, declaration/event
+  ticket ownership, and unchanged production `Symbol.ty` behavior.
+
+### WU1b — namespace binding and publication substrate (effort L)
+
+- Activate the namespace slot with one stable `NamespaceId`, one shared public scope, and a distinct
+  private block scope for each reopening, without resolving types in the binder.
 - Bind nested, dotted, reopened, exported, and ambient namespace forms; preserve distinct local
-  non-exported membership for each reopening block.
+  non-exported membership for each reopening block and ambient default exports.
 - Classify legal merging, cross-slot coexistence, illegal redeclaration, global augmentation, UMD
-  export, and string-literal external module forms according to WU0A.
-- Add binder-level tests for identity, scope parentage, ordering, both declaration orders, and
-  export visibility. Production gates stay green without registering the full WU0 corpus.
+  context errors, and deferred valid UMD/string-literal external-module forms according to WU0A.
+- Reserve one compilation-global scope plus typed augmentation/context records, including
+  `TK2669`, but keep them disconnected from production root lookup and publication until WU5. Do
+  not introduce a second ambient resolver or `Store`.
+- Add direct tests for namespace identity, public/private scope parentage, reopening isolation,
+  dotted/nested equivalence, dormant cross-file global records, legal external/ambient versus
+  illegal script context classification, both declaration orders, export visibility, and proof that
+  production lookup cannot see the WU1b global scope. Production gates stay green without
+  registering the full WU0 corpus.
 
-### WU2 — namespace-qualified type reservation and resolution (effort L)
+### WU2 — namespace-qualified reservation and path-lookup substrate (effort L)
 
 - Resolve `A.B.C` recursively through namespace public member tables and the final member's type
   slot, including generic application at the leaf.
 - Reserve namespace-contained type declarations before qualified references are lowered, so
   interfaces in namespaces and qualified heritage clauses do not depend on later publication.
-- Preserve lexical shadowing and cross-space parent lookup. A value-only or private member must not
-  satisfy a qualified type lookup.
+- Preserve lexical shadowing before the namespace root is selected. Every later path segment uses
+  the namespace public scope only, with no fallback to a parent namespace, module, global, value,
+  or type slot. A value-only or private member must not satisfy a qualified type lookup.
 - Emit strict-tsc-compatible `TK2503` for a missing namespace and `TK2694` for a missing exported
   member, with deterministic lexical event ownership.
-- Close `annotation-lower/type-name/qualified-name` only after nested, dotted, reopened, shadowed,
-  recursive, and unresolved controls pass.
+- Land public-path classification/reservation as the substrate. Successful type-bearing leaves do
+  not select a first/last group fragment or adapt back to the legacy type slot; production type
+  lowering closes only with WU3's atomic type-slot cutover.
 
-### WU3 — stable merged-interface publication (effort XL)
+### WU3 — atomic production type-slot and merged-interface publication (effort XL)
 
+- Atomically replace `Symbol.ty` and every type-space lookup/reservation/publication consumer with
+  `TypeGroupId`. Adapt all single-fragment aliases/classes/interfaces in the same cut; delete the
+  legacy winner path and forbid any `TypeGroupId -> DeclId` first/last adapter.
 - Reserve one semantic interface identity per legal merged symbol and lower all declarations into
-  one complete surface, including namespace-contained interfaces and qualified member/heritage
-  references enabled by WU2.
+  one immutable source-order recovery surface, including namespace-contained interfaces and
+  qualified member/heritage references enabled by WU2. No fragment owns an independently published
+  object identity.
 - Implement strict-tsc rules for generic parameters, heritage, properties, methods, overload
   groups, call/construct signatures, and index signatures across declaration blocks.
-- Preserve recursive and mutually recursive reserve/fill behavior; opposite declaration/check
+- Preallocate typed heritage/conflict/relation obligations and their lexical event owners during
+  non-query construction. Freeze every surface, publish the whole dependency SCC atomically behind
+  a final-state capability, and only then evaluate those obligations through
+  `SemanticQueryCoordinator`; their outcomes must never mutate the surface.
+- Preserve recursive and mutually recursive reserve/fill behavior; opposite declaration/check/SCC
   order must produce the same types and diagnostic event order.
 - Report cross-declaration conflicts without suppressing independent diagnostics. Keep
   same-declaration duplicate detection owned by backlog `18`.
-- Stop on partial publication, order-dependent `TypeId` structure, permissive conflict recovery, or
-  any need to mutate an already-published hash-consed type.
+- Cut the old last-declaration publication path over atomically: it may not coexist with the ordered
+  group path in production. Until WU4, class+interface(+namespace) groups return a directly tested,
+  explicit typed unsupported/non-permissive outcome with a preallocated owner; they never take the
+  old path or fabricate a surface. Stop on partial publication, construction-time query/relation
+  work, validation before SCC publication, order-dependent `TypeId` structure, permissive conflict
+  recovery, or mutation of an already-published hash-consed type.
 
-### WU4 — approved keep-pairs and static/value augmentation (effort XL)
+### WU4 — atomic keep-pairs and static/value augmentation (effort XL)
 
 - Implement interface+namespace type/container coexistence and composition.
 - Implement the approved class+interface merge in both declaration orders, including interface-added
   required/method/generic/recursive instance members and strict-tsc generic-header/property-conflict
   diagnostics. Preserve the class constructor/value, existing statics, private nominal origin, and
-  atomic class identity; a conflict must not recover to a permissive surface.
-- Attach function+namespace and class+namespace exported members to the value/static surface while
-  retaining callable rows, overload visibility, class construction capability, nominal metadata,
-  and atomic class publication.
+  atomic class identity; the class owns the only `ClassId`/`ClassInstance`, and attached interface
+  fragments have no independent object identity. Freeze one complete ordered effective group
+  application/recovery frame on the class and map every class/interface binder into it;
+  `ClassInstance` identity is `ClassId` plus every frame argument.
+- For function+namespace, reserve ordinary/overload callable rows plus exported namespace value
+  members in one draft, intern one immutable callable `ObjectType`, and publish it once to the symbol
+  and every participating declaration slot. Body completion reuses reserved rows and cannot
+  republish a bare `FunctionType`. Cover ordinary, overloaded, ambient, and reverse-order groups.
+- Attach class+namespace exported members to the static surface while retaining class construction
+  capability, nominal metadata, and atomic class publication.
 - Prove interface+`declare var` cross-slot lookup against representative ES5 constructor patterns;
   the declared value annotation must resolve the final merged interface independently of order.
 - Type-check only exported namespace members that augment an existing function/class value or
   static surface through existing member machinery. A standalone namespace remains a type
   container; do not add standalone namespace value/runtime semantics, JavaScript transformation,
   or emit.
-- Keep rare three-way enum/function/namespace chimeras conservative, diagnosed/incomplete, and
-  incapable of producing a permissive receiver.
+- Join every admitted interface instance member and namespace value/static member to its existing
+  class/function draft before the current freeze/SCC barrier. Cut all keep-pairs over atomically;
+  never attach a fragment after publication or retain parallel old/new production paths.
+- For admitted merged-group headers, non-query lowering makes a sole supplied constraint/default
+  effective and may produce `Ready(TypeId)`. If a default is unavailable, retain typed
+  `Unsupported(EventTicket)` plus the ADR-0008 declaration/default-use event protocol; do not query
+  during construction or build a partial application. Directly prove that applications differing
+  only in a fragment-local recovery argument have distinct application and projection identities.
+- Keep rare three-way enum/function/namespace chimeras typed incomplete and incapable of producing a
+  permissive receiver. `42` owns `TK2567` and exact three-way legality/recovery; this sprint owns
+  `TK2434` and the non-permissive function+namespace surface. Do not claim a degraded implementation.
 
 ### WU5 — ambient/global surface closure (effort L)
 
 - Implement `declare namespace` through the same namespace machinery.
-- Implement or precisely dispose `declare global` augmentation and `export as namespace` according
-  to WU0A and their current surface-inventory ownership.
+- Atomically link and publish WU1b's disconnected global scope/records as the one production
+  compilation global for every file. Implement cross-file `declare global` augmentation there,
+  with module-local same-name declarations remaining isolated and opposite input order producing
+  identical results; no partly linked state may land.
+- Implement `TK2669` for global augmentation outside an external or ambient module. Direct gates
+  cover legal external-module, legal ambient-module, and illegal script contexts plus exact lexical
+  ownership.
+- Implement `TK1314`/`TK1315` for invalid `export as namespace` contexts. Reassign
+  `decl/namespace-export/self` to backlog `15`, with the valid `export =` form of
+  `export as namespace` as its current witness; do not claim valid UMD global publication here.
+  Backlog `15` owns the general external-module export surface and must differentially cover both
+  this form and ordinary named exports.
 - Keep string-literal ambient external modules, package discovery, and general import/export
   semantics with backlog `15`; reassign inventory ownership explicitly if WU0A proves necessary.
+- Leave enum/function `TK2567` and exact enum+function+namespace legality with backlog `42`; retain
+  this sprint's `TK2434` ownership and non-permissive function+namespace behavior.
 - Audit every incomplete record owned by backlog `43`: each must be removed by supported behavior
   or retain a precise, machine-validated owner outside this criterion.
 
@@ -224,27 +285,33 @@ instance members and namespace static/container members compose in either class/
 1. Plan commit.
 2. WU0 spec-only commit.
 3. WU0A decision commit.
-4. WU1 binder boundary commit.
-5. WU2 qualified-reservation/resolution commit.
-6. WU3 merged-interface commit.
-7. WU4 keep-pair commit.
-8. WU5 ambient/global commit.
-9. WU6 readiness-proof commit.
-10. Adversarial fixes as atomic owner-specific commits, followed by the official ratchet and closure
+4. WU1a identity-substrate commit.
+5. WU1b namespace-binding-substrate commit.
+6. WU2 qualified-reservation/path-lookup substrate commit.
+7. WU3 atomic production type-slot/interface commit.
+8. WU4 atomic keep-pair commit.
+9. WU5 ambient/global and ownership commit.
+10. WU6 readiness-proof commit.
+11. Adversarial fixes as atomic owner-specific commits, followed by the official ratchet and closure
     commit.
 
-Because WU1-WU5 overlap binder/checker/type-store files, one implementation subagent owns the
+Because WU1a-WU5 overlap binder/checker/type-store files, one implementation subagent owns the
 serialized production path across those units. Read-only strict-tsc/official measurements may run
 in parallel. A different subagent owns the final adversarial review; the leader verifies every gate
 and makes all explicitly staged commits.
 
 ## Hard stop gates
 
-- Stop before production until WU0 is separately committed and WU0A is approved.
+- Stop before production until WU0 is separately committed and accepted ADR-0009 is committed.
 - Stop and request architectural approval if stable merging cannot fit multi-slot symbols without
   new module/data-flow boundaries, mutable published identities, or shared-prelude storage.
 - Stop on any false negative, source/check-order-dependent result, raw relation-boundary bypass,
-  partial publication, forbidden recovery type, or undocumented strict-tsc divergence.
+  construction-time semantic query, partial/mutable publication, forbidden recovery type, or
+  undocumented strict-tsc divergence. Last-declaration identity, one namespace scope, fragment
+  union/intersection, validation-before-interface-SCC-publication, mutation by a semantic
+  obligation, a winner adapter, special ambient/UMD paths, production global lookup before WU5,
+  bare-function republication after callable-object publication, and old/new publication
+  coexistence are rejected.
 - Stop the ES5 claim unless every audited `43` shape has no silent fallback and every residual has a
   concrete different owner.
 - Stop the official ratchet on any regression; progress is accepted only as measured evidence.
@@ -289,9 +356,11 @@ adding `42` or `44` only if a reproducible pinned-library audit contradicts the 
   diagnostics: all 184 ordinary `TK` markers match by code/line. The two additional `TS2567`s in the
   enum/function/namespace chimera are not claimed as backlog-43 marker parity: its enum declaration
   remains explicitly incomplete under backlog `42`, and exact duplicate-kind diagnostic ownership
-  is a WU0A/direct-test gate. The valid UMD `.d.ts` retains both
+  is a WU0A/direct-test gate. The valid UMD `.d.ts` is specifically the `export =` form and retains both
   `decl/namespace-export/self` and `decl/export-assignment/self` under backlog `15`; local merged
-  member access is not accepted as proof of global UMD publication. Probes confirmed the non-obvious rules:
+  member access is not accepted as proof of global UMD publication. `export as namespace` can also
+  publish an external module's ordinary named-export surface, so backlog `15` must add differential
+  coverage for both forms. Probes confirmed the non-obvious rules:
   later interface blocks do not win identical overload selection (the first method/call/construct
   literal return wins); ordinary namespace-before-function/class reports `TS2434`, but ambient
   reverse order is clean; private members do not cross reopened namespace blocks; ambient namespace
@@ -303,9 +372,10 @@ adding `42` or `44` only if a reproducible pinned-library audit contradicts the 
   members, namespace placement, instance call/construct signatures, capability separation, and
   non-permissive property/method/heritage conflict recovery. Omitted-vs-introduced constraints and
   defaults are legal in either order; only conflicting supplied names/constraints/defaults or
-  arities reject. Invalid groups may conservatively exhaust rather than synthesize tsc's
-  multi-parameter recovery, but cannot become permissive. Direct identity remains
-  a WU0A test obligation.
+  arities reject. Invalid groups must retain the complete typed tsc-compatible recovery surface,
+  including distinct fragment parameter positions after name/arity mismatch; they may never
+  substitute `any`, error, `unknown`, synthesized `never`, partial vectors, dropped fragments, or
+  whole-group exhaustion. Direct identity remains a WU0A test obligation.
   Conflict probes pin `TS2300/2320/2374/2411/2413/2428/2687/2717` plus downstream wrong-type demands so
   recovery cannot become `any`/error-permissive. Qualified probes pin
   `TS2315/2344/2503/2694/2702/2707/2749` across namespace, type-only, and value-only slots.
@@ -331,6 +401,27 @@ adding `42` or `44` only if a reproducible pinned-library audit contradicts the 
   gates. This is not a backlog-43 progress promise: WU7 must structurally split identifier
   namespace/global/UMD syntax from external modules instead of deleting the broad regex.
 - **2026-07-15 — WU0 direct-test handoff.** Marker fixtures cannot prove stable `TypeId` identity,
-  same-span diagnostic ordering, or heritage-event attribution. WU0A/WU1-WU4 must add direct tests
-  for those properties, including conflicting recursive groups and a chimera receiver that cannot
-  become permissive, before the corpus is registered.
+  same-span diagnostic ordering, heritage-event attribution, final-state capability isolation, or
+  absence of construction-time queries. WU0A/WU1a-WU5 must add direct tests for those properties,
+  including complete interface-SCC publication before coordinator validation, immutable outcomes,
+  fragment-local recovery arguments in application/projection identity, all four function+namespace
+  forms, the typed WU3-to-WU4 class+interface stop, disconnected WU1b global records, the atomic WU5
+  global link, `TK2669` context/ownership, and a chimera receiver that cannot become permissive,
+  before the corpus is registered.
+- **2026-07-15 — WU0A accepted architecture gate.** Accepted
+  [ADR-0009](../decisions/0009-ordered-declaration-groups-and-namespace-publication.md). Every source
+  declaration owns a unique unified lexical `DeclId`, distinct from value-storage identity and
+  stable ordered `TypeGroupId`; WU1a leaves `Symbol.ty` unchanged, and WU3 atomically switches every
+  type-space consumer. Namespaces own one public scope plus private reopening scopes, and qualified
+  lookup uses only the selected namespace's public path without fallback. Standalone interface
+  groups publish immutable source-order recovery surfaces dependency-SCC-at-a-time before
+  coordinator validation. Class+interface(+namespace) groups retain the class's sole `ClassId`,
+  extend `ClassInstance` identity across the complete effective group recovery frame, and join
+  interface/namespace fragments before the existing SCC/static freeze. Function+namespace groups
+  publish one callable object. Generic-header recovery remains fully typed and oracle-compatible,
+  with supported non-query defaults becoming effective. WU1b's global scope/records stay dormant;
+  WU5 atomically links the one compilation global and owns `TK2669`. Valid UMD publication over
+  either `export =` or named exports remains with `15` (the WU0 witness is the former), enum/function
+  `TK2567` plus exact three-way legality remains with `42`, and `43` retains `TK1314`/`TK1315`,
+  `TK2434`, and non-permissive function+namespace behavior. Production may now start at WU1a only
+  after this ADR is committed; WU3, WU4, and WU5 remain atomic cutovers.

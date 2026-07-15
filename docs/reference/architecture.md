@@ -140,7 +140,7 @@ class A {}
 ```
 
 These collapse into one name `A` carrying three different meanings. Hiding this under
-"degrade exotic combinations" (§9) is a dodge: merging is a *type-side* concern, and
+"sacrifice or vaguely degrade exotic combinations" is a dodge: merging is a *type-side* concern, and
 `namespace`+`interface` merges occur in `lib.d.ts` itself (`Symbol`, `globalThis`), so it
 can't all be sacrificed.
 
@@ -151,12 +151,38 @@ but a set of slots over **separate declaration spaces** — *value space*, *type
 multiplicity from the start. So: not an argument against scope graphs — an argument that
 the scope graph's node must be multi-slot by design.
 
-Which merges to keep correct vs degrade:
+The target model distinguishes one unified lexical `DeclId` per source occurrence, a dedicated
+value-storage identity, and a stable ordered `TypeGroupId`; none may stand in for another. Namespace
+identity is separate again: reopenings share one public scope but retain private block scopes.
+WU1a records the identity/group metadata dormantly without changing `Symbol.ty`; WU3 atomically
+switches the production type slot and every consumer, with no adapter that selects a winning
+fragment. Complete checker-private drafts publish once; a published type or class/static surface is
+never mutated to attach a later fragment. See
+[ADR-0009](../decisions/0009-ordered-declaration-groups-and-namespace-publication.md).
+
+Which merges to keep correct vs defer:
 
 - **Keep:** `interface`+`interface`, `namespace`(type container)+`interface`,
-  `function`+`namespace`, `class`+`namespace` (statics).
-- **Degrade (unsound but harmless):** the rare three-way `enum`+`namespace`+`function`
-  chimeras.
+  `function`+`namespace`, `class`+`namespace` (statics), and the approved
+  `class`+`interface`(+`namespace`) composition. In the last case the class owns the
+  `ClassId`/`ClassInstance` identity and attached interface instance members join its draft before
+  atomic class publication.
+- **Defer:** exact three-way `enum`+`namespace`+`function` legality and recovery to enum type-side
+  work. Namespace placement diagnostics and a non-permissive function+namespace surface remain
+  required meanwhile.
+
+A standalone namespace is deliberately a type container only. Exported namespace values augment
+an existing modeled function or class/static draft; they do not create a standalone namespace
+runtime/value object.
+
+Standalone interface groups freeze one immutable source-order recovery surface plus typed pending
+obligations, publish each dependency SCC atomically behind a final-state capability, and only then
+run heritage/conflict/relation obligations through `SemanticQueryCoordinator`. Outcomes fill
+preallocated lexical owners but never mutate the surface. Class-owned merged groups extend the
+immutable `ClassInstance` key to `ClassId` plus every argument in their effective group recovery
+frame, including fragment-local mismatch positions. Function+namespace groups likewise reserve
+their callable rows and exported value members first, then intern and publish one immutable callable
+`ObjectType`; body completion cannot replace it with a bare function row.
 
 ---
 
@@ -499,21 +525,25 @@ for Stage 2; computing it is shared work with incrementality (Phase 5).
 The cut runs between **type semantics** (keep, cheap) and **runtime/emit semantics**
 (sacrifice, expensive). Enum and namespace lie on *both* sides of that line at once.
 
-| Sacrifice hard | Degrade (unsound but harmless) | Keep correct (core) |
+| Sacrifice hard | Deferred type-checking coverage | Keep correct (core) |
 |---|---|---|
 | **JS emit** (all of it) | typed JS / `checkJs` | structural subtyping |
-| **enum runtime** (reverse map, IIFE, const-enum inlining) | three-way decl-merge chimeras | generics + constraints + `const` params |
-| **namespace value/runtime** + `import =`/`export =` | polymorphic `this` | control-flow narrowing |
+| **enum runtime** (reverse map, IIFE, const-enum inlining) | exact enum+function+namespace type-checking legality/recovery (→ `42`) | generics + constraints + `const` params |
+| **namespace runtime/emit** + `import =` | polymorphic `this` | control-flow narrowing |
 | JSDoc types in JS | variance exactly (→ more soundness) | conditional / mapped / `infer` |
-| legacy compiler flags | — | template literal types |
+| legacy compiler flags | — | `export =` semantic module export surfaces (→ `15`) |
 | | | inference engine |
 | | | `.d.ts` parsing + consumption |
 
 **Common-mistake correction:** enum *on the type side* (= union of its members, for
 narrowing in `switch`) and namespace *on the type side* (= named type container, `N.T`)
 belong to the **core**, not to the sacrifice column. Only their runtime/value side is
-sacrificed. Namespaces on the type side you don't even *get* to sacrifice — `lib.d.ts` and
-`@types` require them.
+sacrificed. A standalone namespace therefore remains a type-only container; value members are
+modeled only when augmenting an existing function/class value. `export =` runtime emit is covered by
+the general emit sacrifice, but type-checking its module export surface belongs to backlog `15`;
+`import =` may remain sacrificed. Exact enum+function+namespace type-side legality and recovery are
+deferred to backlog `42`, not accepted as a degraded implementation. Namespaces on the type side you
+don't even *get* to sacrifice — `lib.d.ts` and `@types` require them.
 
 ---
 

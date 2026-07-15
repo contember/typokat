@@ -32,6 +32,13 @@ complete root set. Typokat must construct a deterministic module graph, load eve
 wire default/namespace/star imports and re-exports across value/type/namespace spaces, handle guarded
 cycles, parse/bind/check `.d.ts`, and report every unresolved or unsupported branch explicitly.
 
+Valid UMD global publication is also part of this module boundary. In a declaration-file external
+module, `export as namespace N` globally aliases/publishes that external module's export surface.
+The surface may come from `export =` or ordinary named exports; local namespace/type lookup is not
+sufficient. Backlog `43` owns the `TK1314`/`TK1315` context diagnostics, while this item owns the
+valid publication semantics and both surface inventory entries. The current WU0 ownership witness
+is specifically the `export =` form, not the complete differential matrix.
+
 ## Approach / acceptance
 
 Extend the serial `check_project` path with a single explicit dependency boundary:
@@ -49,14 +56,17 @@ Extend the serial `check_project` path with a single explicit dependency boundar
   deterministic invocation/configuration, and conversion of results into project identities.
 - **Module semantics (typokat-owned):** construct the graph; load and parse resolved `.ts`/`.d.ts`
   files; bind default/namespace/star/type-only imports, export lists and re-exports; handle guarded
-  cycles; and check all files in the serial type universe. Resolution success alone is not semantic
-  import/export support.
+  cycles; implement `export =` and valid `export as namespace` publication over the external
+  module's export surface; and check all files in the serial type universe. Resolution success
+  alone is not semantic import/export support.
 - **Differential acceptance:** against pinned `tsc 6.0.3` with
   `moduleResolution: "bundler"`, fixtures cover local extension substitution, package and `@types`
   declarations, `exports`/`imports` plus `types`, path aliases, config inheritance/references, root
-  selection, missing targets, symlinks, and every admitted import/export form. Repeated runs are
-  byte-identical and no configured, resolved, unresolved, or unsupported file/specifier disappears
-  from project accounting.
+  selection, missing targets, symlinks, and every admitted import/export form. UMD fixtures must
+  differentially cover `export as namespace` with both an `export =` surface and an ordinary named-
+  export surface, proving the corresponding global alias and module-local isolation. Repeated runs
+  are byte-identical and no configured, resolved, unresolved, or unsupported file/specifier
+  disappears from project accounting.
 
 The dependency's behavior is part of the compatibility boundary, not assumed parity. Today,
 `resolve_dts` uses the tsconfig supplied through resolver options for `paths`, and
