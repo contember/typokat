@@ -12,11 +12,9 @@ function gen<T>(x: T): T[] { return [x]; }
 const xs: Array<number> = [];
 
 // `Array` is a recognized built-in, so a bare `Array` or a wrong type-argument count
-// is tsc's TS2314 ("Generic type 'Array<T>' requires 1 type argument(s)") — a DEFERRED
-// arity check, NOT "cannot find name". typokat emits no TK2304 here; the reference
-// degrades to the error type. (Documented divergence; see README.)
-type BareArray = Array;
-type WrongArity = Array<number, string>;
+// reports TK2314 rather than TK2304.
+type BareArray = Array; // error[TK2314]: Generic type 'Array<T>' requires 1 type argument
+type WrongArity = Array<number, string>; // error[TK2314]: Generic type 'Array<T>' requires 1 type argument
 
 // Declared interface / alias / class all resolve, in every position.
 interface Pt { x: number; }

@@ -10,8 +10,8 @@ namespace A { // incomplete[decl/module-declaration/self]
   export interface B {}
 }
 
-// INCOMPLETE: the public type-group leaf is classified but not lowered until WU3 (owner 43).
-type Q = A.B; // incomplete[annotation-lower/type-name/qualified-name]
+// WU3: the public type-group leaf resolves through the immutable registry.
+type Q = A.B;
 
 // INCOMPLETE: a type predicate return annotation is not lowered (owner 50).
 function isStr(x: unknown): x is string { // incomplete[annotation-lower/type-predicate/self]
