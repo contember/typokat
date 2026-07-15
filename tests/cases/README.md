@@ -108,6 +108,7 @@ EOF spans.
 | `TK2694` | Namespace has no exported member |
 | `TK2702` | A type-only name is used as a namespace |
 | `TK2707` | Generic type requires between a minimum and maximum number of type arguments |
+| `TK2713` | A type-only path segment is accessed as a namespace |
 | `TK2717` | Subsequent property declaration has an incompatible type |
 | `TK2741` | Property is missing in type but required |
 | `TK2744` | Type parameter defaults can only reference previously declared type parameters |
@@ -344,7 +345,7 @@ code-only because the exact fixed target can be literal-, primitive-, or
 union-shaped depending on candidate priority and contextual use. The corpus keeps
 at most one mismatched argument per call, per the general call-marker rule above.
 
-`b43_namespaces_declaration_merging/` is the disabled WU0 oracle corpus for the
+`b43_namespaces_declaration_merging/` is the disabled 25-file WU0/WU2 oracle corpus for the
 namespace/declaration-space sprint. It covers merged property/method/call/construct/index and
 heritage surfaces, overload precedence and query order, generic constraint/default compatibility,
 recursive merge groups in opposite declaration orders, namespace syntax/reopening/visibility,
@@ -364,6 +365,13 @@ complete typed `tsc` recovery surface at use sites. Recovery may not use `any`, 
 `unknown`, synthesized `never`, a partial application vector, a dropped fragment, or whole-group
 exhaustion; each class/interface member and each oracle-distinct fragment-local parameter position
 must remain typed.
+The WU2 spec addendum adds exact qualified-path topology and slot edges: alias/class roots used as
+namespaces (`TK2702`), a value-only root (`TK2503`), missing/value-only intermediates and a
+namespace-only leaf (`TK2694`), type/class-only intermediates (`TK2713`), and no parent fallback.
+Its ambient export-list fixture pins ordinary and explicit type-only export-specifier aliases whose
+targets occupy type space as public, value alias use as a type (`TK2749`), and both the original
+pre-list name and a post-list declaration as hidden (`TK2694`). These are WU2 classification
+expectations only; successful qualified leaf lowering and generic application stay with WU3.
 The valid UMD `.d.ts` is the current `export =` form witness: it keeps both
 `export as namespace` and `export =` explicitly incomplete under backlog `15`; local access to its
 merged `Options` alone would not prove a global UMD export. `export as namespace` may also publish an

@@ -150,18 +150,22 @@ instance members and namespace static/container members compose in either class/
 
 ### WU2 — namespace-qualified reservation and path-lookup substrate (effort L)
 
-- Resolve `A.B.C` recursively through namespace public member tables and the final member's type
-  slot, including generic application at the leaf.
+- Walk `A.B.C` recursively through namespace public member tables and classify the final member's
+  slot without lowering or applying the successful leaf.
 - Reserve namespace-contained type declarations before qualified references are lowered, so
   interfaces in namespaces and qualified heritage clauses do not depend on later publication.
 - Preserve lexical shadowing before the namespace root is selected. Every later path segment uses
   the namespace public scope only, with no fallback to a parent namespace, module, global, value,
   or type slot. A value-only or private member must not satisfy a qualified type lookup.
-- Emit strict-tsc-compatible `TK2503` for a missing namespace and `TK2694` for a missing exported
-  member, with deterministic lexical event ownership.
+- Emit strict-tsc-compatible topology/slot diagnostics `TK2503`, `TK2694`, `TK2702`, `TK2713`, and
+  `TK2749`, with deterministic lexical event ownership. This includes missing/value-only roots,
+  missing/value-only/private intermediates, type/class-only intermediate segments, namespace-only
+  leaves, and explicit proof that a failed child lookup never falls back to its parent.
 - Land public-path classification/reservation as the substrate. Successful type-bearing leaves do
   not select a first/last group fragment or adapt back to the legacy type slot; production type
-  lowering closes only with WU3's atomic type-slot cutover.
+  lowering closes only with WU3's atomic type-slot cutover. Successful qualified leaves, including
+  forward reopening, and leaf diagnostics `TK2315`, `TK2314`, `TK2707`, and `TK2344` therefore remain
+  WU3 work.
 
 ### WU3 — atomic production type-slot and merged-interface publication (effort XL)
 
@@ -351,9 +355,10 @@ adding `42` or `44` only if a reproducible pinned-library audit contradicts the 
   made machine-valid surface/manifest ownership a closure gate. The plan now incorporates all three
   blockers.
 - **2026-07-15 — WU0 oracle and baseline.** Added the disabled, unregistered
-  `tests/cases/b43_namespaces_declaration_merging/` matrix (23 files). `tsc --version` is `6.0.3`;
-  `tsc --strict --noEmit --pretty false --lib es5 --module commonjs` over every fixture produced 186
-  diagnostics: all 184 ordinary `TK` markers match by code/line. The two additional `TS2567`s in the
+  `tests/cases/b43_namespaces_declaration_merging/` matrix (25 files after the WU2 spec addendum;
+  23 files in the original WU0 commit). `tsc --version` is `6.0.3`; the original 23-file
+  `tsc --strict --noEmit --pretty false --lib es5 --module commonjs` run produced 186 diagnostics:
+  all 184 ordinary `TK` markers matched by code/line. The two additional `TS2567`s in the
   enum/function/namespace chimera are not claimed as backlog-43 marker parity: its enum declaration
   remains explicitly incomplete under backlog `42`, and exact duplicate-kind diagnostic ownership
   is a WU0A/direct-test gate. The valid UMD `.d.ts` is specifically the `export =` form and retains both
@@ -379,13 +384,28 @@ adding `42` or `44` only if a reproducible pinned-library audit contradicts the 
   Conflict probes pin `TS2300/2320/2374/2411/2413/2428/2687/2717` plus downstream wrong-type demands so
   recovery cannot become `any`/error-permissive. Qualified probes pin
   `TS2315/2344/2503/2694/2702/2707/2749` across namespace, type-only, and value-only slots.
-- **2026-07-15 — WU0 current-checker measurement.** The existing debug binary over the 23 focused
-  files exited incomplete for 19 and diagnostic-only for 4, emitting 183 diagnostics and 94
-  incomplete records; `cargo test conformance` remains green because the new corpus is deliberately
-  unregistered. The inventory has exactly five backlog-43 records:
+- **2026-07-15 — WU0 current-checker measurement (pre-addendum).** The existing debug binary over
+  the original 23 focused files exited incomplete for 19 and diagnostic-only for 4, emitting 183
+  diagnostics and 94 incomplete records; `cargo test conformance` remains green because the new
+  corpus is deliberately unregistered. The inventory has exactly five backlog-43 records:
   `type-fill/module-declaration/self`, `annotation-lower/type-name/qualified-name`,
   `decl/global-declaration/self`, `decl/module-declaration/self`, and
   `decl/namespace-export/self`.
+- **2026-07-15 — WU2 oracle addendum.** Added two disabled fixtures after independent WU1b review
+  exposed path-slot and ambient export-list edges missing from the original matrix. Pinned global
+  `tsc --version` reports `6.0.3` (the bench-local tool is `7.0.1-rc` and was not used as an oracle).
+  `wu2_topology_slot_edges.ts` exits `2` with exactly nine diagnostics: `TS2702` x2 at the alias and
+  class root spans, `TS2503` at the value-only root, `TS2694` x4 for missing/value-only
+  intermediates, no-parent-fallback, and a namespace-only leaf, plus `TS2713` x2. The two `TS2713`
+  diagnostics start on the terminal `Leaf` segments at lines/columns `23:47` and `24:49` and pin
+  the complete `Cannot access 'X.Leaf' ... X["Leaf"]` messages. WU2 claims successful forward-path
+  classification, but no successful leaf lowering or application. `wu2_ambient_export_alias_list.ts`
+  exits `2` with exactly `TS2749` at `17:18` for the public value alias and `TS2694` x2 at `18:39`
+  and `19:38` for the post-list declaration and original pre-list name; both an ordinary alias whose
+  target occupies type space and an explicit type-only export-specifier alias check clean. The
+  aggregate 25-file oracle exits `2` with 198 diagnostics: 196 ordinary marker-owned diagnostics
+  plus the two already documented backlog-42 `TS2567`s. `cargo test conformance` remains the
+  behavior-neutral gate because the corpus is still unregistered.
 - **2026-07-15 — WU0 official-suite measurement.** At pinned TypeScript SHA
   `050880ce59e30b356b686bd3144efe24f875ebc8`, the committed scoreboard is 874 files, 339 IN / 535
   OOS; the latest existing-binary report is 340 / 534 with 69 unsaved progress entries. The coarse
