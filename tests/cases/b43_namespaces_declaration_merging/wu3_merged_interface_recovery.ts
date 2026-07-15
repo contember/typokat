@@ -140,3 +140,9 @@ interface EffectiveSelfCycleLater<T extends T> {} // error[TK2428]: All declarat
 
 interface EffectiveSelfCycleRepeated<T extends T> {} // error[TK2313]: Type parameter 'T' has a circular constraint
 interface EffectiveSelfCycleRepeated<T extends T> {}
+
+interface RenamedInvalidDefault<T extends string = number> {} // error[TK2428]: All declarations of 'RenamedInvalidDefault' must have identical type parameters | error[TK2344]: Type 'number' does not satisfy the constraint 'string'
+interface RenamedInvalidDefault<U> {} // error[TK2428]: All declarations of 'RenamedInvalidDefault' must have identical type parameters
+
+interface RenamedCircularConstraint<T extends T> {} // error[TK2428]: All declarations of 'RenamedCircularConstraint' must have identical type parameters | error[TK2313]: Type parameter 'T' has a circular constraint
+interface RenamedCircularConstraint<U> {} // error[TK2428]: All declarations of 'RenamedCircularConstraint' must have identical type parameters
