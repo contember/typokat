@@ -345,7 +345,7 @@ code-only because the exact fixed target can be literal-, primitive-, or
 union-shaped depending on candidate priority and contextual use. The corpus keeps
 at most one mismatched argument per call, per the general call-marker rule above.
 
-`b43_namespaces_declaration_merging/` is the disabled 25-file WU0/WU2 oracle corpus for the
+`b43_namespaces_declaration_merging/` is the disabled 27-file WU0/WU2 oracle corpus for the
 namespace/declaration-space sprint. It covers merged property/method/call/construct/index and
 heritage surfaces, overload precedence and query order, generic constraint/default compatibility,
 recursive merge groups in opposite declaration orders, namespace syntax/reopening/visibility,
@@ -372,6 +372,16 @@ Its ambient export-list fixture pins ordinary and explicit type-only export-spec
 targets occupy type space as public, value alias use as a type (`TK2749`), and both the original
 pre-list name and a post-list declaration as hidden (`TK2694`). These are WU2 classification
 expectations only; successful qualified leaf lowering and generic application stay with WU3.
+The second WU2 addendum pins checker-local qualified roots only after lexical namespace lookup finds
+no namespace meaning. Callable and instance-class type parameters, an active conditional `infer`
+binder, a mapped key binder, and the builtin `Array` type then report `TK2702`; a class type
+parameter behind the static-member barrier reports `TK2503`. Clean same-name controls prove lexical
+namespaces beat callable parameters, `infer`/mapped binders, and the builtin `Array`. The measured
+independent `TK2694` routes are union, intersection, tuple, indexed access, conditional, mapped,
+template literal, function/constructor type, type-literal call/construct/method signature, and class
+constraint/field/method annotations. Named/default import coexistence is a project-shaped oracle
+recorded in the sprint rather than a single-file fixture. Reopening-private helper lookup is already
+pinned by `namespace_visibility.ts`; no duplicate fixture owns it.
 The valid UMD `.d.ts` is the current `export =` form witness: it keeps both
 `export as namespace` and `export =` explicitly incomplete under backlog `15`; local access to its
 merged `Options` alone would not prove a global UMD export. `export as namespace` may also publish an

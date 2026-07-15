@@ -157,6 +157,18 @@ instance members and namespace static/container members compose in either class/
 - Preserve lexical shadowing before the namespace root is selected. Every later path segment uses
   the namespace public scope only, with no fallback to a parent namespace, module, global, value,
   or type slot. A value-only or private member must not satisfy a qualified type lookup.
+- Only after lexical lookup finds no namespace meaning may root classification inspect checker-local
+  type sources. Callable and instance-class type-parameter frames, active conditional `infer`
+  binders, mapped key binders, and builtin type roots then report `TK2702`; a class type parameter
+  behind the static-member barrier reports `TK2503`. Same-name lexical namespaces take precedence.
+- When an admitted namespace slot coexists with a named or default import binding, root selection
+  chooses that namespace slot before the unresolved import endpoint is deferred. Namespace imports
+  and import-equals bindings remain rejected according to the WU1b import-form matrix.
+- Independently visit the measured qualified paths in union, intersection, tuple, indexed access,
+  conditional, mapped, template literal, function/constructor type, type-literal
+  call/construct/method signature, and class constraint/field/method annotation routes. One failed
+  child must not suppress its measured sibling. Reopening-private helper lexical lookup is already
+  pinned by `namespace_visibility.ts` and needs no duplicate fixture.
 - Emit strict-tsc-compatible topology/slot diagnostics `TK2503`, `TK2694`, `TK2702`, `TK2713`, and
   `TK2749`, with deterministic lexical event ownership. This includes missing/value-only roots,
   missing/value-only/private intermediates, type/class-only intermediate segments, namespace-only
@@ -355,7 +367,7 @@ adding `42` or `44` only if a reproducible pinned-library audit contradicts the 
   made machine-valid surface/manifest ownership a closure gate. The plan now incorporates all three
   blockers.
 - **2026-07-15 — WU0 oracle and baseline.** Added the disabled, unregistered
-  `tests/cases/b43_namespaces_declaration_merging/` matrix (25 files after the WU2 spec addendum;
+  `tests/cases/b43_namespaces_declaration_merging/` matrix (27 files after two WU2 spec addenda;
   23 files in the original WU0 commit). `tsc --version` is `6.0.3`; the original 23-file
   `tsc --strict --noEmit --pretty false --lib es5 --module commonjs` run produced 186 diagnostics:
   all 184 ordinary `TK` markers matched by code/line. The two additional `TS2567`s in the
@@ -406,6 +418,36 @@ adding `42` or `44` only if a reproducible pinned-library audit contradicts the 
   aggregate 25-file oracle exits `2` with 198 diagnostics: 196 ordinary marker-owned diagnostics
   plus the two already documented backlog-42 `TS2567`s. `cargo test conformance` remains the
   behavior-neutral gate because the corpus is still unregistered.
+- **2026-07-15 — WU2 checker-root/context oracle addendum.** Added two more disabled topology-only
+  fixtures. Pinned global `tsc 6.0.3 --strict --noEmit --pretty false --lib es5 --module commonjs`
+  reports six `TS2702`s and one `TS2503` in `wu2_checker_local_qualified_roots.ts`. The `TS2702`
+  roots are callable parameters at `2:58` and `5:22`, active conditional `infer InferT` at `8:67`, the
+  mapped key binder at `11:30`, builtin `Array` at `14:20`, and an instance-class parameter at
+  `17:19`; each exact message says the named root only refers to a type and is being used as a
+  namespace. The static class-member contrast reports `TS2503` at `21:17`; its exact message is
+  `Cannot find namespace 'StaticT'`. Four controls check clean: lexical namespaces named `T`, `U`,
+  and `K` win over a same-name callable parameter, active `infer` binder, and mapped key binder, while
+  `BuiltinHost.Array` wins over the builtin type root. The checker-local TypeOnlyRoot rule therefore
+  applies only after lexical namespace lookup finds no namespace meaning.
+  `wu2_qualified_contexts.ts` reports exactly 32 `TS2694`s,
+  with terminal-member starts at `4:23,37`; `5:30,51`; `6:24,38`; `7:31,47`;
+  `8:29,45,57,72`; `9:38,53`; `10:34,58`; `11:41,68`; `12:29,47`; `13:41,59`;
+  `14:50,73`; `16:22,52,75`; `19:41`; `20:21`; and `21:31,58,78`. The markers pin each exact
+  `Namespace 'N' has no exported member 'X'` message and prove independent visits only across the
+  enumerated union, intersection, tuple, indexed access, conditional, mapped, template literal,
+  function/constructor type, type-literal call/construct/method signature, and class annotation
+  routes. The aggregate 27-file oracle exits `2` with 237 diagnostics: 235 ordinary marker-owned
+  diagnostics plus the two existing backlog-42 `TS2567`s.
+- **2026-07-15 — WU2 import-root oracle.** A scratch two-file project checked with the same pinned
+  `tsc 6.0.3` command exits `0`: a named import plus same-name namespace exposes `NamedN.X`, and a
+  default import plus same-name namespace exposes `DefaultN.X`. The dependency exports
+  `const NamedN = 1` plus a default function; the consumer imports `DefaultN, { NamedN }`, declares
+  both same-name namespaces with exported `X` interfaces, and types object literals through both
+  qualified paths. These are root-selection witnesses, not import-endpoint or
+  successful-leaf-lowering claims: WU2 must prefer the admitted namespace slot before deferring the
+  import endpoint. The existing WU1b matrix remains authoritative for the rejected forms: namespace
+  import plus namespace and import-equals plus namespace report `TS2440`. Reopening-private helper
+  lexical behavior remains covered by `namespace_visibility.ts`; no new fixture duplicates it.
 - **2026-07-15 — WU0 official-suite measurement.** At pinned TypeScript SHA
   `050880ce59e30b356b686bd3144efe24f875ebc8`, the committed scoreboard is 874 files, 339 IN / 535
   OOS; the latest existing-binary report is 340 / 534 with 69 unsaved progress entries. The coarse
