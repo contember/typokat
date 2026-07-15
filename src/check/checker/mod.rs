@@ -6,6 +6,7 @@
 use crate::binder::bind::{ImportPlaceholder, ImportedSymbol, ProjectBinderBuilder};
 use crate::binder::bind_module_with_prelude;
 use crate::binder::declaration::{LegacyTypeStorageId, ValueStorageId};
+use crate::binder::namespace::CompilationUnit;
 use crate::binder::scope::ScopeId;
 use crate::binder::Binder;
 use crate::check::query::SemanticQueryCoordinator;
@@ -395,6 +396,7 @@ pub struct ProjectProgram<'ast> {
     pub(crate) module_ordinal: ModuleOrdinal,
     pub(crate) unit_slot: UnitSlot,
     pub program: &'ast Program<'ast>,
+    pub compilation_unit: CompilationUnit,
     pub imports: Vec<ProjectImport>,
 }
 
@@ -489,7 +491,8 @@ where
         let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
         for unit in units {
             let imports = imported_symbols(unit, &exports, &lexical_events, &mut external_effects);
-            let (scope, placeholders) = builder.add_module(unit.program, &imports);
+            let (scope, placeholders) =
+                builder.add_module(unit.program, &imports, unit.compilation_unit);
             let surface = collect_exports(
                 &builder,
                 scope,

@@ -3,6 +3,9 @@
 //! The driver owns the per-run allocator that backs the AST and the type
 //! `Interner`, keeping borrowed parser data inside the parse/check call.
 
+use crate::binder::namespace::{
+    CompilationUnit, ModuleBindingContext, OriginalModuleOrdinal, SourceFileKind, SourceUnitKey,
+};
 #[cfg(test)]
 use crate::check::checker::check_project_programs_with_binding_inspector;
 use crate::check::checker::events::{ModuleOrdinal, UnitSlot};
@@ -191,12 +194,11 @@ where
         return Vec::new();
     }
 
-    let source_type = SourceType::ts();
     let allocators: Vec<Allocator> = (0..inputs.len()).map(|_| Allocator::default()).collect();
     let parsed: Vec<_> = inputs
         .iter()
         .zip(&allocators)
-        .map(|(input, allocator)| Parser::new(allocator, &input.source, source_type).parse())
+        .map(|(input, allocator)| Parser::new(allocator, &input.source, SourceType::ts()).parse())
         .collect();
 
     let parse_errors: Vec<Vec<String>> = parsed
@@ -205,6 +207,7 @@ where
         .collect();
 
     let paths = normalized_input_paths(&inputs);
+    let source_keys = stable_source_keys(&paths);
     let path_to_index: BTreeMap<PathBuf, usize> = paths
         .iter()
         .cloned()
@@ -231,6 +234,16 @@ where
             module_ordinal: ModuleOrdinal::new(original),
             unit_slot: UnitSlot::new(unit_slot),
             program: &parsed[original].program,
+            compilation_unit: CompilationUnit {
+                source: source_keys[original],
+                original_module: OriginalModuleOrdinal(
+                    u32::try_from(original).expect("original module ordinal fits u32"),
+                ),
+                binding: ModuleBindingContext::for_program(
+                    &parsed[original].program,
+                    source_file_kind(&inputs[original].name),
+                ),
+            },
             imports: raw_imports[original]
                 .iter()
                 .map(|import| ProjectImport {
@@ -423,6 +436,35 @@ fn normalized_input_paths(inputs: &[FileInput]) -> Vec<PathBuf> {
             normalize_path(&absolute)
         })
         .collect()
+}
+
+fn stable_source_keys(paths: &[PathBuf]) -> Vec<SourceUnitKey> {
+    let mut ranked: Vec<_> = paths.iter().enumerate().collect();
+    ranked.sort_by_key(|(_, path)| (*path).clone());
+    let mut keys = vec![SourceUnitKey::SINGLE_SOURCE; paths.len()];
+    for (rank, (original, _)) in ranked.into_iter().enumerate() {
+        if let Some(key) = keys.get_mut(original) {
+            *key =
+                SourceUnitKey(u32::try_from(rank + 1).expect("project source path rank fits u32"));
+        }
+    }
+    keys
+}
+
+fn source_file_kind(name: &str) -> SourceFileKind {
+    if name.ends_with(".d.mts") {
+        SourceFileKind::DeclarationMts
+    } else if name.ends_with(".d.cts") {
+        SourceFileKind::DeclarationCts
+    } else if name.ends_with(".d.ts") {
+        SourceFileKind::DeclarationTs
+    } else if name.ends_with(".mts") {
+        SourceFileKind::ImplementationMts
+    } else if name.ends_with(".cts") {
+        SourceFileKind::ImplementationCts
+    } else {
+        SourceFileKind::ImplementationTs
+    }
 }
 
 fn resolve_local_import(importer_path: &Path, specifier: &str) -> Option<PathBuf> {
@@ -836,6 +878,11 @@ mod tests {
             assert_eq!(imports[1].value_storage, Some(remote_value));
             assert_eq!(symbol(use_scope, "first").value, Some(remote_value));
             assert_eq!(symbol(use_scope, "second").value, Some(remote_value));
+            assert_eq!(symbol(use_scope, "first").declarations, vec![imports[0].id]);
+            assert_eq!(
+                symbol(use_scope, "second").declarations,
+                vec![imports[1].id]
+            );
 
             let remote_type = symbol(dep_scope, "Both").ty.expect("exported type storage");
             assert_eq!(imports[2].value_storage, None);
@@ -907,5 +954,772 @@ mod tests {
             assert_eq!(first.output.parse_errors, second.output.parse_errors);
             assert_eq!(first.output.incomplete, second.output.incomplete);
         }
+    }
+
+    #[test]
+    fn project_namespace_metadata_uses_one_dormant_global_and_path_stable_projection() {
+        fn files(reverse_input: bool) -> Vec<FileInput> {
+            let a = FileInput {
+                name: "types/a.d.ts".into(),
+                source: "import type { Z } from './z.d.ts'; export {}; export as namespace UmdA; interface Shared { localA: true } declare global { interface Shared { globalA: true } namespace GlobalN { interface PrivateA {} export { PrivateA as AliasA }; export interface PublicA {} } } declare module 'pkg-a' { export {}; global { interface Shared { moduleA: true } } }"
+                    .into(),
+            };
+            let z = FileInput {
+                name: "types/z.d.ts".into(),
+                source: "import type {} from './a.d.ts'; export as namespace UmdZ; export interface Z {} interface Shared { localZ: true } declare global { interface Shared { globalZ: true } namespace GlobalN { interface PrivateZ {} export { PrivateZ as AliasZ }; export interface PublicZ {} } } declare module 'pkg-z' { export {}; global { interface Shared { moduleZ: true } } }"
+                    .into(),
+            };
+            if reverse_input {
+                vec![z, a]
+            } else {
+                vec![a, z]
+            }
+        }
+
+        fn inspect(
+            binder: &crate::binder::Binder,
+            reservations: &crate::check::checker::lexical_events::LexicalReservations,
+            scopes: &[crate::binder::scope::ScopeId],
+        ) -> Vec<String> {
+            use crate::binder::namespace::{
+                DeclarationOwner, DeferredModuleId, ExportContextOwner, GlobalAugmentationId,
+                GlobalOwner, NamespaceFragmentId, NamespaceId, NamespaceMemberOwner,
+                NamespaceOwner, SourceUnitKey,
+            };
+            use crate::binder::scope::{ScopeId, ScopeKind};
+            use crate::binder::symbol::SymbolId;
+
+            fn namespace_identity(binder: &crate::binder::Binder, id: NamespaceId) -> String {
+                let namespace = binder.namespaces.get(id).expect("namespace identity");
+                let fragments = namespace
+                    .fragments
+                    .iter()
+                    .filter_map(|fragment| binder.namespaces.fragment(*fragment))
+                    .map(|fragment| (fragment.source, fragment.source_start))
+                    .collect::<Vec<_>>();
+                format!("{}@{fragments:?}", namespace.name)
+            }
+
+            fn fragment_identity(
+                binder: &crate::binder::Binder,
+                id: NamespaceFragmentId,
+            ) -> String {
+                let fragment = binder.namespaces.fragment(id).expect("fragment identity");
+                format!(
+                    "{}#{:?}:{}",
+                    namespace_identity(binder, fragment.namespace),
+                    fragment.source,
+                    fragment.source_start
+                )
+            }
+
+            fn global_identity(binder: &crate::binder::Binder, id: GlobalAugmentationId) -> String {
+                let global = binder
+                    .namespaces
+                    .globals()
+                    .find(|global| global.id == id)
+                    .expect("global identity");
+                format!("{:?}:{}", global.source, global.diagnostic_span.start)
+            }
+
+            fn deferred_identity(binder: &crate::binder::Binder, id: DeferredModuleId) -> String {
+                let module = binder
+                    .namespaces
+                    .deferred_modules()
+                    .find(|module| module.id == id)
+                    .expect("deferred module identity");
+                format!(
+                    "{:?}:{}:{}",
+                    module.source, module.span.start, module.specifier
+                )
+            }
+
+            fn scope_identity(binder: &crate::binder::Binder, id: ScopeId) -> String {
+                if id == binder.prelude_module {
+                    return "prelude".to_string();
+                }
+                if id == binder.compilation_global {
+                    return "compilation-global".to_string();
+                }
+                if let Some(unit) = binder
+                    .namespaces
+                    .source_units()
+                    .find(|unit| unit.module == id)
+                {
+                    return format!("root:{:?}", unit.source);
+                }
+                for namespace in binder.namespaces.namespaces() {
+                    if namespace.public_scope == id {
+                        return format!("public:{}", namespace_identity(binder, namespace.id));
+                    }
+                    for fragment in &namespace.fragments {
+                        let fragment_record = binder
+                            .namespaces
+                            .fragment(*fragment)
+                            .expect("canonical namespace fragment");
+                        if fragment_record.private_scope == id {
+                            return format!("private:{}", fragment_identity(binder, *fragment));
+                        }
+                    }
+                }
+                panic!("scope outside the WU1b canonical projection")
+            }
+
+            fn namespace_owner_identity(
+                binder: &crate::binder::Binder,
+                owner: NamespaceOwner,
+            ) -> String {
+                match owner {
+                    NamespaceOwner::Lexical(scope) => scope_identity(binder, scope),
+                    NamespaceOwner::NamespacePublic(namespace) => {
+                        format!("public:{}", namespace_identity(binder, namespace))
+                    }
+                    NamespaceOwner::FragmentPrivate(fragment) => {
+                        format!("private:{}", fragment_identity(binder, fragment))
+                    }
+                    NamespaceOwner::CompilationGlobal => "compilation-global".to_string(),
+                }
+            }
+
+            fn declaration_owner_identity(
+                binder: &crate::binder::Binder,
+                owner: DeclarationOwner,
+            ) -> String {
+                match owner {
+                    DeclarationOwner::Lexical(scope) => scope_identity(binder, scope),
+                    DeclarationOwner::NamespacePublic(namespace) => {
+                        format!("public:{}", namespace_identity(binder, namespace))
+                    }
+                    DeclarationOwner::NamespacePrivate(fragment) => {
+                        format!("private:{}", fragment_identity(binder, fragment))
+                    }
+                    DeclarationOwner::CompilationGlobal => "compilation-global".to_string(),
+                    DeclarationOwner::DeferredAmbientModule(module) => {
+                        format!("deferred:{}", deferred_identity(binder, module))
+                    }
+                }
+            }
+
+            fn member_owner_identity(
+                binder: &crate::binder::Binder,
+                owner: NamespaceMemberOwner,
+            ) -> String {
+                match owner {
+                    NamespaceMemberOwner::Fragment(fragment) => {
+                        format!("fragment:{}", fragment_identity(binder, fragment))
+                    }
+                    NamespaceMemberOwner::GlobalAugmentation(global) => {
+                        format!("global:{}", global_identity(binder, global))
+                    }
+                    NamespaceMemberOwner::DeferredAmbientModule(module) => {
+                        format!("deferred:{}", deferred_identity(binder, module))
+                    }
+                }
+            }
+
+            fn global_owner_identity(binder: &crate::binder::Binder, owner: GlobalOwner) -> String {
+                match owner {
+                    GlobalOwner::Lexical(scope) => scope_identity(binder, scope),
+                    GlobalOwner::NamespaceFragment(fragment) => {
+                        format!("fragment:{}", fragment_identity(binder, fragment))
+                    }
+                    GlobalOwner::DeferredAmbientModule(module) => {
+                        format!("deferred:{}", deferred_identity(binder, module))
+                    }
+                }
+            }
+
+            fn export_owner_identity(
+                binder: &crate::binder::Binder,
+                owner: ExportContextOwner,
+            ) -> String {
+                match owner {
+                    ExportContextOwner::NamespaceFragment(fragment) => {
+                        format!("fragment:{}", fragment_identity(binder, fragment))
+                    }
+                    ExportContextOwner::GlobalAugmentation(global) => {
+                        format!("global:{}", global_identity(binder, global))
+                    }
+                    ExportContextOwner::DeferredAmbientModule(module) => {
+                        format!("deferred:{}", deferred_identity(binder, module))
+                    }
+                }
+            }
+
+            fn declaration_projection(
+                binder: &crate::binder::Binder,
+                id: crate::binder::declaration::DeclId,
+            ) -> String {
+                let declaration = binder.declarations.get(id).expect("projected declaration");
+                let source = binder
+                    .namespaces
+                    .source_units()
+                    .find(|unit| unit.module == declaration.site.module)
+                    .map(|unit| unit.source)
+                    .expect("declaration source identity");
+                let namespace = declaration
+                    .namespace
+                    .map(|namespace| namespace_identity(binder, namespace));
+                format!(
+                    "{source:?}:{:?}:{}:{}:scope={}:namespace={namespace:?}",
+                    declaration.kind,
+                    declaration.site.declaration_span.start,
+                    declaration.site.binding_span.start,
+                    declaration
+                        .site
+                        .scope
+                        .map(|scope| scope_identity(binder, scope))
+                        .unwrap_or_else(|| "none".to_string())
+                )
+            }
+
+            fn symbol_projection(binder: &crate::binder::Binder, id: SymbolId) -> String {
+                let symbol = binder.symbols.get(id).expect("projected symbol");
+                let declarations = symbol
+                    .declarations
+                    .iter()
+                    .map(|declaration| declaration_projection(binder, *declaration))
+                    .collect::<Vec<_>>();
+                let namespace = symbol
+                    .ns
+                    .map(|namespace| namespace_identity(binder, namespace));
+                format!(
+                    "{}:value={}:type={}:group={}:namespace={namespace:?}:functions={}:declarations={declarations:?}",
+                    symbol.name,
+                    symbol.value.is_some(),
+                    symbol.ty.is_some(),
+                    symbol.type_group.is_some(),
+                    symbol.function_values.len()
+                )
+            }
+
+            fn scope_symbols_projection(
+                binder: &crate::binder::Binder,
+                scope: ScopeId,
+            ) -> Vec<String> {
+                let scope = binder.graph.get(scope).expect("projected scope");
+                let mut symbols = scope.symbols.iter().collect::<Vec<_>>();
+                // Scope storage is a hash map, not a canonical iterator contract.
+                symbols.sort_by(|left, right| left.0.cmp(right.0));
+                symbols
+                    .into_iter()
+                    .map(|(name, symbol)| format!("{name}={}", symbol_projection(binder, *symbol)))
+                    .collect()
+            }
+
+            fn member_projection(
+                binder: &crate::binder::Binder,
+                id: crate::binder::namespace::NamespaceMemberId,
+            ) -> String {
+                let member = binder.namespaces.member(id).expect("projected member");
+                let export_context = member.export_context.and_then(|id| {
+                    binder
+                        .namespaces
+                        .export_contexts()
+                        .find(|context| context.id == id)
+                        .map(|context| (context.source, context.span.start))
+                });
+                format!(
+                    "owner={}:target={}:declaration={:?}:symbol={:?}:local-symbol={:?}:name={:?}:local={:?}:exported={:?}:decl={}:spec={:?}:binding={}:source={:?}:module={:?}:type-only={}/{}:alias={:?}/{:?}/{:?}:export-context={export_context:?}:syntax={:?}:spaces={:?}:kind={:?}:publication={:?}",
+                    member_owner_identity(binder, member.owner),
+                    declaration_owner_identity(binder, member.target),
+                    member
+                        .declaration
+                        .map(|declaration| declaration_projection(binder, declaration)),
+                    member.symbol.map(|symbol| symbol_projection(binder, symbol)),
+                    member
+                        .local_symbol
+                        .map(|symbol| symbol_projection(binder, symbol)),
+                    member.name,
+                    member.local_name,
+                    member.exported_name,
+                    member.declaration_span.start,
+                    member.specifier_span.map(|span| span.start),
+                    member.binding_span.start,
+                    member.source,
+                    member.module_specifier,
+                    member.outer_type_only,
+                    member.specifier_type_only,
+                    member.alias_context,
+                    member.alias_resolution,
+                    member.alias_space_intent,
+                    member.syntax,
+                    member.spaces,
+                    member.kind,
+                    member.publication,
+                )
+            }
+
+            assert_eq!(scopes.len(), 2);
+            let global = binder
+                .graph
+                .get(binder.compilation_global)
+                .expect("one compilation-global scope");
+            assert_eq!(global.kind, ScopeKind::CompilationGlobal);
+            assert_eq!(global.parent, Some(binder.prelude_module));
+            assert_eq!(global.symbols.len(), 2);
+            for name in ["Shared", "GlobalN"] {
+                let symbol = global
+                    .lookup_local(name)
+                    .and_then(|symbol| binder.symbols.get(symbol))
+                    .expect("dormant global anchor");
+                assert_eq!(symbol.value, None);
+                assert_eq!(symbol.ty, None);
+                assert_eq!(symbol.type_group, None);
+            }
+            assert!(scopes.iter().all(|scope| binder
+                .graph
+                .get(*scope)
+                .is_some_and(|scope| scope.parent == Some(binder.prelude_module))));
+            assert!(binder
+                .namespaces
+                .globals()
+                .all(|record| record.target_scope == binder.compilation_global));
+
+            let global_group = binder
+                .namespaces
+                .merges()
+                .find(|record| {
+                    record.owner == DeclarationOwner::CompilationGlobal && record.name == "Shared"
+                })
+                .expect("cross-file dormant global group");
+            assert_eq!(
+                global_group
+                    .declarations
+                    .iter()
+                    .map(|declaration| declaration.source)
+                    .collect::<Vec<_>>(),
+                vec![
+                    SourceUnitKey(1),
+                    SourceUnitKey(1),
+                    SourceUnitKey(2),
+                    SourceUnitKey(2),
+                ]
+            );
+            let source_keys: Vec<_> = binder
+                .namespaces
+                .source_units()
+                .map(|unit| unit.source)
+                .collect();
+            assert!(source_keys.contains(&SourceUnitKey(1)));
+            assert!(source_keys.contains(&SourceUnitKey(2)));
+            assert!(binder
+                .namespaces
+                .source_units()
+                .all(|unit| unit.context.declaration_file() && unit.context.external_module));
+            assert_eq!(binder.namespaces.globals().count(), 4);
+            assert_eq!(binder.namespaces.deferred_modules().count(), 2);
+            assert_eq!(binder.namespaces.umd_exports().count(), 2);
+
+            let local_symbols: Vec<_> = scopes
+                .iter()
+                .map(|scope| {
+                    binder
+                        .graph
+                        .get(*scope)
+                        .and_then(|scope| scope.lookup_local("Shared"))
+                        .expect("module-local Shared")
+                })
+                .collect();
+            assert_ne!(local_symbols[0], local_symbols[1]);
+            assert!(local_symbols.iter().all(|symbol| binder
+                .symbols
+                .get(*symbol)
+                .is_some_and(|symbol| symbol.ty.is_some() && symbol.ns.is_none())));
+
+            for declaration in binder.declarations.iter().filter(|declaration| {
+                matches!(
+                    declaration.kind,
+                    crate::binder::declaration::DeclarationKind::Namespace
+                        | crate::binder::declaration::DeclarationKind::Global
+                )
+            }) {
+                assert!(reservations.declaration_owner(declaration.id).is_some());
+                assert!(reservations
+                    .declaration_reservation(declaration.id)
+                    .is_some());
+            }
+
+            let mut projection = Vec::new();
+            for (index, unit) in binder.namespaces.source_units().enumerate() {
+                projection.push(format!(
+                    "source[{index}]:{:?}:scope={}:kind={:?}:external={}",
+                    unit.source,
+                    scope_identity(binder, unit.module),
+                    unit.context.source_file_kind,
+                    unit.context.external_module
+                ));
+            }
+            for (index, record) in binder.namespaces.merges().enumerate() {
+                let declarations = record
+                    .declarations
+                    .iter()
+                    .map(|participant| {
+                        format!(
+                            "declaration={}:kind={:?}:source={:?}:span={}:ambient={}:spaces={:?}:syntax={:?}:fragment={:?}:instance={:?}",
+                            declaration_projection(binder, participant.declaration),
+                            participant.kind,
+                            participant.source,
+                            participant.span.start,
+                            participant.ambient,
+                            participant.spaces,
+                            participant.syntax,
+                            participant
+                                .namespace_fragment
+                                .map(|fragment| fragment_identity(binder, fragment)),
+                            participant.namespace_instance,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let placement_issues = record
+                    .placement_issues
+                    .iter()
+                    .map(|issue| {
+                        format!(
+                            "{:?}:{}:{}",
+                            issue.kind,
+                            declaration_projection(binder, issue.owner),
+                            issue.span.start
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                projection.push(format!(
+                    "merge[{index}]:owner={}:name={}:classification={:?}:declarations={declarations:?}:placement={placement_issues:?}",
+                    declaration_owner_identity(binder, record.owner),
+                    record.name,
+                    record.classification
+                ));
+            }
+            for (index, record) in binder.namespaces.globals().enumerate() {
+                let members = record
+                    .members
+                    .iter()
+                    .map(|member| member_projection(binder, *member))
+                    .collect::<Vec<_>>();
+                projection.push(format!(
+                    "global[{index}]:identity={}:declaration={}:module={}:owner={}:body={}:target={}:placement={:?}:issues={:?}:declared={}:members={members:?}",
+                    global_identity(binder, record.id),
+                    declaration_projection(binder, record.declaration),
+                    scope_identity(binder, record.module),
+                    global_owner_identity(binder, record.owner),
+                    record.body_span.start,
+                    scope_identity(binder, record.target_scope),
+                    record.placement,
+                    record.issues,
+                    record.declared,
+                ));
+            }
+            for (index, module) in binder.namespaces.deferred_modules().enumerate() {
+                projection.push(format!(
+                    "deferred[{index}]:identity={}:declaration={}:module={}:owner={}:kind={:?}",
+                    deferred_identity(binder, module.id),
+                    declaration_projection(binder, module.declaration),
+                    scope_identity(binder, module.module),
+                    declaration_owner_identity(binder, module.owner),
+                    module.kind
+                ));
+            }
+            for (index, child) in binder.namespaces.deferred_children().enumerate() {
+                projection.push(format!(
+                    "child[{index}]:module={}:declaration={:?}:kind={:?}:name={:?}:span={}:binding={:?}:source={:?}",
+                    deferred_identity(binder, child.module),
+                    child
+                        .declaration
+                        .map(|declaration| declaration_projection(binder, declaration)),
+                    child.kind,
+                    child.name,
+                    child.span.start,
+                    child.binding_span.map(|span| span.start),
+                    child.source,
+                ));
+            }
+            for (index, export) in binder.namespaces.umd_exports().enumerate() {
+                projection.push(format!(
+                    "umd[{index}]:declaration={}:source={:?}:module={}:owner={}:name={}:span={}:context={:?}",
+                    declaration_projection(binder, export.declaration),
+                    export.source,
+                    scope_identity(binder, export.module),
+                    declaration_owner_identity(binder, export.owner),
+                    export.name,
+                    export.span.start,
+                    export.context
+                ));
+            }
+            for (index, context) in binder.namespaces.export_contexts().enumerate() {
+                let members = context
+                    .members
+                    .iter()
+                    .map(|member| member_projection(binder, *member))
+                    .collect::<Vec<_>>();
+                projection.push(format!(
+                    "export[{index}]:source={:?}:span={}:owner={}:kind={:?}:syntax={:?}:resolution={:?}:module-specifier={}:members={members:?}",
+                    context.source,
+                    context.span.start,
+                    export_owner_identity(binder, context.owner),
+                    context.kind,
+                    context.syntax,
+                    context.resolution,
+                    context.has_module_specifier
+                ));
+            }
+            for (index, namespace) in binder.namespaces.namespaces().enumerate() {
+                let fragments = namespace
+                    .fragments
+                    .iter()
+                    .map(|fragment| {
+                        let fragment_record = binder
+                            .namespaces
+                            .fragment(*fragment)
+                            .expect("projected namespace fragment");
+                        let members = fragment_record
+                            .members
+                            .iter()
+                            .map(|member| member_projection(binder, *member))
+                            .collect::<Vec<_>>();
+                        format!(
+                            "identity={}:declaration={}:module={}:private={}:parent={}:public={}:ambient={}:publication={:?}:instance={:?}:members={members:?}",
+                            fragment_identity(binder, *fragment),
+                            declaration_projection(binder, fragment_record.declaration),
+                            scope_identity(binder, fragment_record.module),
+                            scope_identity(binder, fragment_record.private_scope),
+                            scope_identity(binder, fragment_record.lexical_parent),
+                            scope_identity(binder, fragment_record.public_scope),
+                            fragment_record.ambient,
+                            fragment_record.publication,
+                            fragment_record.instance_state,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                projection.push(format!(
+                    "namespace[{index}]:identity={}:owner={}:name={}:public={}:symbol={}:fragments={fragments:?}",
+                    namespace_identity(binder, namespace.id),
+                    namespace_owner_identity(binder, namespace.owner),
+                    namespace.name,
+                    scope_identity(binder, namespace.public_scope),
+                    symbol_projection(binder, namespace.symbol),
+                ));
+            }
+            for (index, unit) in binder.namespaces.source_units().enumerate() {
+                projection.push(format!(
+                    "root-symbols[{index}]:{:?}:{:?}",
+                    unit.source,
+                    scope_symbols_projection(binder, unit.module)
+                ));
+            }
+            projection.push(format!(
+                "global-symbols:{:?}",
+                scope_symbols_projection(binder, binder.compilation_global)
+            ));
+            for (index, namespace) in binder.namespaces.namespaces().enumerate() {
+                projection.push(format!(
+                    "public-symbols[{index}]:{}:{:?}",
+                    namespace_identity(binder, namespace.id),
+                    scope_symbols_projection(binder, namespace.public_scope)
+                ));
+                for (fragment_index, fragment) in namespace.fragments.iter().enumerate() {
+                    let fragment_record = binder
+                        .namespaces
+                        .fragment(*fragment)
+                        .expect("projected private symbol scope");
+                    projection.push(format!(
+                        "private-symbols[{index}:{fragment_index}]:{}:{:?}",
+                        fragment_identity(binder, *fragment),
+                        scope_symbols_projection(binder, fragment_record.private_scope)
+                    ));
+                }
+            }
+            projection
+        }
+
+        fn run(reverse: bool) -> (Vec<FileReport>, Vec<String>) {
+            use std::cell::RefCell;
+            let projection = RefCell::new(Vec::new());
+            let reports = check_project_inner_with_binding_inspector(
+                files(reverse),
+                |binder, reservations, scopes| {
+                    *projection.borrow_mut() = inspect(binder, reservations, scopes);
+                },
+            );
+            (reports, projection.into_inner())
+        }
+
+        let (first, first_projection) = run(false);
+        let (second, second_projection) = run(true);
+        assert_eq!(first_projection, second_projection);
+        for name in ["types/a.d.ts", "types/z.d.ts"] {
+            let left = first
+                .iter()
+                .find(|report| report.name == name)
+                .expect("first report");
+            let right = second
+                .iter()
+                .find(|report| report.name == name)
+                .expect("second report");
+            assert_eq!(debug_diags(&left.output), debug_diags(&right.output));
+            assert_eq!(left.output.parse_errors, right.output.parse_errors);
+            assert_eq!(left.output.incomplete, right.output.incomplete);
+        }
+    }
+
+    #[test]
+    fn namespace_only_root_stays_invisible_to_production_resolution() {
+        use crate::diagnostics::DiagnosticCode;
+
+        let source = "namespace Dormant {} let typed: Dormant; Dormant;";
+        let output = check_source(source);
+        assert!(output.parse_errors.is_empty());
+        assert_eq!(output.incomplete.len(), 1);
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.code, diagnostic.span))
+                .collect::<Vec<_>>(),
+            vec![
+                (DiagnosticCode::TK2304, Span::new(32, 39)),
+                (DiagnosticCode::TK2304, Span::new(41, 48)),
+            ]
+        );
+    }
+
+    #[test]
+    fn project_filename_matrix_keeps_parser_goal_and_binding_context_separate() {
+        use crate::binder::namespace::SourceFileKind;
+        use std::cell::RefCell;
+
+        let contexts = RefCell::new(Vec::new());
+        let reports = check_project_inner_with_binding_inspector(
+            vec![
+                FileInput {
+                    name: "a.ts".into(),
+                    source: "const value = 1;".into(),
+                },
+                FileInput {
+                    name: "b.d.ts".into(),
+                    source: "declare const value: number;".into(),
+                },
+                FileInput {
+                    name: "c.mts".into(),
+                    source: "const value = 1;".into(),
+                },
+                FileInput {
+                    name: "d.cts".into(),
+                    source: "const value = 1;".into(),
+                },
+                FileInput {
+                    name: "e.d.mts".into(),
+                    source: "declare const value: number;".into(),
+                },
+                FileInput {
+                    name: "f.d.cts".into(),
+                    source: "declare const value: number;".into(),
+                },
+            ],
+            |binder, _, _| {
+                *contexts.borrow_mut() = binder
+                    .namespaces
+                    .source_units()
+                    .map(|unit| (unit.context.source_file_kind, unit.context.external_module))
+                    .collect();
+            },
+        );
+        assert_eq!(
+            contexts.into_inner(),
+            vec![
+                (SourceFileKind::ImplementationTs, false),
+                (SourceFileKind::DeclarationTs, false),
+                (SourceFileKind::ImplementationMts, true),
+                (SourceFileKind::ImplementationCts, true),
+                (SourceFileKind::DeclarationMts, true),
+                (SourceFileKind::DeclarationCts, true),
+            ]
+        );
+        assert!(reports
+            .iter()
+            .all(|report| report.output.parse_errors.is_empty()));
+    }
+
+    #[test]
+    fn implementation_mts_and_cts_drive_global_and_umd_context_without_parser_goal_changes() {
+        use crate::binder::namespace::{GlobalIssue, GlobalPlacement, SourceFileKind, UmdContext};
+        use std::cell::RefCell;
+
+        let metadata = RefCell::new(Vec::new());
+        let source = |name: &str| FileInput {
+            name: name.into(),
+            source: format!(
+                "global {{ interface FileGlobal {{}} }} export as namespace {};",
+                name.replace('.', "_")
+            ),
+        };
+        let reports = check_project_inner_with_binding_inspector(
+            vec![
+                source("a.ts"),
+                source("b.mts"),
+                source("c.cts"),
+                source("d.d.mts"),
+            ],
+            |binder, _, _| {
+                *metadata.borrow_mut() = binder
+                    .namespaces
+                    .source_units()
+                    .map(|unit| {
+                        let global = binder
+                            .namespaces
+                            .globals()
+                            .find(|global| global.source == unit.source)
+                            .expect("one global per source");
+                        let umd = binder
+                            .namespaces
+                            .umd_exports()
+                            .find(|export| export.source == unit.source)
+                            .expect("one UMD export per source");
+                        (
+                            unit.context.source_file_kind,
+                            unit.context.external_module,
+                            global.placement,
+                            global.issues.clone(),
+                            umd.context,
+                        )
+                    })
+                    .collect();
+            },
+        );
+        assert_eq!(
+            metadata.into_inner(),
+            vec![
+                (
+                    SourceFileKind::ImplementationTs,
+                    false,
+                    GlobalPlacement::DirectScript,
+                    vec![GlobalIssue::FutureTk2669, GlobalIssue::FutureTk2670],
+                    UmdContext::FutureTk1314NonExternal,
+                ),
+                (
+                    SourceFileKind::ImplementationMts,
+                    true,
+                    GlobalPlacement::DirectExternalModule,
+                    vec![GlobalIssue::FutureTk2670],
+                    UmdContext::FutureTk1315Implementation,
+                ),
+                (
+                    SourceFileKind::ImplementationCts,
+                    true,
+                    GlobalPlacement::DirectExternalModule,
+                    vec![GlobalIssue::FutureTk2670],
+                    UmdContext::FutureTk1315Implementation,
+                ),
+                (
+                    SourceFileKind::DeclarationMts,
+                    true,
+                    GlobalPlacement::DirectExternalModule,
+                    Vec::new(),
+                    UmdContext::DeferredValidBacklog15,
+                ),
+            ]
+        );
+        assert!(reports
+            .iter()
+            .all(|report| report.output.parse_errors.is_empty()));
     }
 }

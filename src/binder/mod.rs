@@ -5,6 +5,7 @@
 
 pub mod bind;
 pub mod declaration;
+pub mod namespace;
 pub mod scope;
 pub mod symbol;
 

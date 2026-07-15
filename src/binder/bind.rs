@@ -7,6 +7,9 @@ use crate::binder::declaration::{
     source_declaration_occurrences, DeclId, DeclarationKind, DeclarationSite, DeclarationTable,
     LegacyTypeStorageId, TypeFragmentKind, TypeGroupFragment, TypeGroupTable, ValueStorageId,
 };
+use crate::binder::namespace::{
+    bind_namespace_metadata, CompilationUnit, NamespaceTable, SourceUnitKey,
+};
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
 use crate::span::Span;
@@ -27,6 +30,8 @@ pub struct Binder {
     pub declarations: DeclarationTable,
     /// Dormant ordered same-name type groups; production lookup ignores these in WU1a.
     pub type_groups: TypeGroupTable,
+    /// Dormant WU1b namespace/global/merge metadata.
+    pub namespaces: NamespaceTable,
     /// The **user** module scope. M28: its parent is [`Binder::prelude_module`], so a
     /// user reference falls through to the prelude names and a user declaration
     /// shadows them by ordinary innermost-first resolution (no duplicate-name
@@ -35,6 +40,8 @@ pub struct Binder {
     /// The **prelude** root scope (M28) — the compilation unit holding the built-in
     /// utility aliases, bound BEFORE the user program. Its parent is `None`.
     pub prelude_module: ScopeId,
+    /// One empty project-wide dormant global-augmentation target.
+    pub compilation_global: ScopeId,
     /// Number of value storage slots (`ValueStorageId`s run
     /// `0..decl_count`). Includes variable bindings, function declaration names,
     /// and function parameters.
@@ -180,23 +187,26 @@ pub(crate) struct ImportPlaceholder {
     pub(crate) ty: Option<LegacyTypeStorageId>,
 }
 
-struct BindState {
-    graph: ScopeGraph,
-    symbols: SymbolTable,
-    declarations: DeclarationTable,
-    type_groups: TypeGroupTable,
-    declarations_by_site: FxHashMap<(ScopeId, u32, DeclarationKind), DeclId>,
+pub(crate) struct BindState {
+    pub(crate) graph: ScopeGraph,
+    pub(crate) symbols: SymbolTable,
+    pub(crate) declarations: DeclarationTable,
+    pub(crate) type_groups: TypeGroupTable,
+    pub(crate) namespaces: NamespaceTable,
+    pub(crate) declarations_by_site: FxHashMap<(ScopeId, u32, DeclarationKind), DeclId>,
+    /// Stable source ownership for every module scope, including the prelude.
+    module_sources: FxHashMap<ScopeId, SourceUnitKey>,
     fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     fn_decl_ids: FxHashMap<(ScopeId, u32), ValueStorageId>,
     /// Per-block lexical scopes (M7), keyed by `(module scope, block span start)`.
     block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     /// The module scope currently being bound — the disambiguating half of the
     /// scope-map keys (backlog 58). Set before each module's body is walked.
-    current_module: ScopeId,
+    pub(crate) current_module: ScopeId,
     /// Running checker storage counter for value declarations.
-    next_value_storage: u32,
+    pub(crate) next_value_storage: u32,
     /// Running checker storage counter for the legacy type path.
-    next_legacy_type_storage: u32,
+    pub(crate) next_legacy_type_storage: u32,
 }
 
 impl BindState {
@@ -221,13 +231,13 @@ impl BindState {
         }
     }
 
-    fn source_decl_at(&self, span_start: u32, kind: DeclarationKind) -> Option<DeclId> {
+    pub(crate) fn source_decl_at(&self, span_start: u32, kind: DeclarationKind) -> Option<DeclId> {
         self.declarations_by_site
             .get(&(self.current_module, span_start, kind))
             .copied()
     }
 
-    fn attach_declaration_scope(
+    pub(crate) fn attach_declaration_scope(
         &mut self,
         span_start: u32,
         kind: DeclarationKind,
@@ -277,6 +287,31 @@ impl BindState {
             .expect("fresh lexical declaration exists")
             .value_storage = Some(storage);
     }
+
+    pub(crate) fn attach_symbol_declaration(&mut self, symbol: SymbolId, declaration: DeclId) {
+        let source_key = |id: DeclId| {
+            self.declarations
+                .get(id)
+                .map(|declaration| {
+                    (
+                        self.module_sources
+                            .get(&declaration.site.module)
+                            .copied()
+                            .unwrap_or(SourceUnitKey(u32::MAX)),
+                        declaration.site.declaration_span.start,
+                        declaration.site.binding_span.start,
+                        declaration.id.0,
+                    )
+                })
+                .unwrap_or((SourceUnitKey(u32::MAX), u32::MAX, u32::MAX, u32::MAX))
+        };
+        if let Some(row) = self.symbols.get_mut(symbol) {
+            if !row.declarations.contains(&declaration) {
+                row.declarations.push(declaration);
+                row.declarations.sort_by_key(|id| source_key(*id));
+            }
+        }
+    }
 }
 
 /// Build the scope graph and symbol table for the **prelude + user** pair (M28).
@@ -285,7 +320,8 @@ impl BindState {
 /// top-level type names before bodies for the checker's reserve-then-fill pass.
 pub fn bind_module_with_prelude(prelude: &Program<'_>, program: &Program<'_>) -> Binder {
     let mut builder = ProjectBinderBuilder::new(prelude);
-    let (module, _) = builder.add_module(program, &[]);
+    let unit = CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, program);
+    let (module, _) = builder.add_module(program, &[], unit);
     builder.finish(module)
 }
 
@@ -293,6 +329,7 @@ pub fn bind_module_with_prelude(prelude: &Program<'_>, program: &Program<'_>) ->
 pub(crate) struct ProjectBinderBuilder {
     state: BindState,
     prelude_module: ScopeId,
+    compilation_global: ScopeId,
 }
 
 impl ProjectBinderBuilder {
@@ -303,7 +340,9 @@ impl ProjectBinderBuilder {
             symbols: SymbolTable::new(),
             declarations: DeclarationTable::default(),
             type_groups: TypeGroupTable::default(),
+            namespaces: NamespaceTable::default(),
             declarations_by_site: FxHashMap::default(),
+            module_sources: FxHashMap::default(),
             fn_scopes: FxHashMap::default(),
             fn_decl_ids: FxHashMap::default(),
             block_scopes: FxHashMap::default(),
@@ -314,12 +353,20 @@ impl ProjectBinderBuilder {
 
         let prelude_module = state.graph.push(Scope::new(ScopeKind::Module, None));
         state.current_module = prelude_module;
+        state
+            .module_sources
+            .insert(prelude_module, SourceUnitKey::PRELUDE);
         state.record_source_declarations(prelude);
         bind_statements(&mut state, prelude_module, &prelude.body);
+        let compilation_global = state.graph.push(Scope::new(
+            ScopeKind::CompilationGlobal,
+            Some(prelude_module),
+        ));
 
         ProjectBinderBuilder {
             state,
             prelude_module,
+            compilation_global,
         }
     }
 
@@ -329,18 +376,27 @@ impl ProjectBinderBuilder {
         &mut self,
         program: &Program<'_>,
         imports: &[ImportedSymbol],
+        unit: CompilationUnit,
     ) -> (ScopeId, Vec<ImportPlaceholder>) {
         let module = self
             .state
             .graph
             .push(Scope::new(ScopeKind::Module, Some(self.prelude_module)));
         self.state.current_module = module;
+        self.state.module_sources.insert(module, unit.source);
         self.state.record_source_declarations(program);
         let mut placeholders = Vec::new();
         for import in imports {
             placeholders.push(declare_import(&mut self.state, module, import));
         }
         bind_statements(&mut self.state, module, &program.body);
+        bind_namespace_metadata(
+            &mut self.state,
+            module,
+            program,
+            unit,
+            self.compilation_global,
+        );
         (module, placeholders)
     }
 
@@ -350,8 +406,10 @@ impl ProjectBinderBuilder {
             symbols: self.state.symbols,
             declarations: self.state.declarations,
             type_groups: self.state.type_groups,
+            namespaces: self.state.namespaces,
             module,
             prelude_module: self.prelude_module,
+            compilation_global: self.compilation_global,
             decl_count: self.state.next_value_storage,
             type_decl_count: self.state.next_legacy_type_storage,
             fn_scopes: self.state.fn_scopes,
@@ -608,14 +666,14 @@ fn bind_try(state: &mut BindState, parent: ScopeId, try_stmt: &TryStatement<'_>)
                 catch_scope,
             );
             if let Some((name, binding_start)) = binding_name_and_start(&param.pattern) {
-                let (_, storage) = bind_source_value(
+                let (declaration, storage) = bind_source_value(
                     state,
                     catch_scope,
                     name,
                     binding_start,
                     DeclarationKind::CatchParameter,
                 );
-                declare_value(state, catch_scope, name, storage);
+                declare_value(state, catch_scope, name, storage, declaration);
             }
         }
         bind_block(state, catch_scope, &handler.body);
@@ -751,14 +809,14 @@ fn bind_declarator(
     };
     state.attach_pattern_scope(&declarator.id, DeclarationKind::Variable, declaration_scope);
     if let Some((name, binding_start)) = binding_name_and_start(&declarator.id) {
-        let (_, storage) = bind_source_value(
+        let (declaration, storage) = bind_source_value(
             state,
             declaration_scope,
             name,
             binding_start,
             DeclarationKind::Variable,
         );
-        declare_value(state, declaration_scope, name, storage);
+        declare_value(state, declaration_scope, name, storage, declaration);
     }
     if let Some(init) = &declarator.init {
         bind_expression(state, scope, init);
@@ -769,8 +827,7 @@ fn bind_declarator(
 /// bind the function itself (its own scope + parameters + body).
 fn bind_function_declaration(state: &mut BindState, scope: ScopeId, func: &Function<'_>) {
     if let Some(id) = &func.id {
-        state.attach_declaration_scope(id.span.start, DeclarationKind::Function, scope);
-        let (_, storage) = bind_source_value(
+        let (declaration, storage) = bind_source_value(
             state,
             scope,
             id.name.as_str(),
@@ -780,7 +837,7 @@ fn bind_function_declaration(state: &mut BindState, scope: ScopeId, func: &Funct
         state
             .fn_decl_ids
             .insert((state.current_module, func.span.start), storage);
-        declare_function_value(state, scope, id.name.as_str(), storage);
+        declare_function_value(state, scope, id.name.as_str(), storage, declaration);
     }
     bind_function(state, scope, func);
 }
@@ -793,7 +850,7 @@ fn bind_class_declaration(state: &mut BindState, scope: ScopeId, class: &Class<'
             state.attach_declaration_scope(id.span.start, DeclarationKind::Class, scope);
         let storage = state.fresh_value_storage();
         state.attach_value_storage(declaration, storage);
-        declare_value(state, scope, id.name.as_str(), storage);
+        declare_value(state, scope, id.name.as_str(), storage, declaration);
     }
     bind_class(state, scope, class);
 }
@@ -876,27 +933,27 @@ fn bind_parameters(state: &mut BindState, fn_scope: ScopeId, params: &FormalPara
     for param in &params.items {
         state.attach_pattern_scope(&param.pattern, DeclarationKind::Parameter, fn_scope);
         if let Some((name, binding_start)) = binding_name_and_start(&param.pattern) {
-            let (_, storage) = bind_source_value(
+            let (declaration, storage) = bind_source_value(
                 state,
                 fn_scope,
                 name,
                 binding_start,
                 DeclarationKind::Parameter,
             );
-            declare_value(state, fn_scope, name, storage);
+            declare_value(state, fn_scope, name, storage, declaration);
         }
     }
     if let Some(rest) = &params.rest {
         state.attach_pattern_scope(&rest.rest.argument, DeclarationKind::Parameter, fn_scope);
         if let Some((name, binding_start)) = binding_name_and_start(&rest.rest.argument) {
-            let (_, storage) = bind_source_value(
+            let (declaration, storage) = bind_source_value(
                 state,
                 fn_scope,
                 name,
                 binding_start,
                 DeclarationKind::Parameter,
             );
-            declare_value(state, fn_scope, name, storage);
+            declare_value(state, fn_scope, name, storage, declaration);
         }
     }
 }
@@ -985,17 +1042,25 @@ fn bind_source_value(
 /// symbol if the name is already present (so the multi-slot symbol carries the
 /// value slot under the same id — architecture §4.1). Redeclaration in the same
 /// space (`TK2451`) is deferred (mvp-plan); the later binding wins.
-fn declare_value(state: &mut BindState, scope: ScopeId, name: &str, storage: ValueStorageId) {
+fn declare_value(
+    state: &mut BindState,
+    scope: ScopeId,
+    name: &str,
+    storage: ValueStorageId,
+    declaration: DeclId,
+) {
     if let Some(existing) = state.graph.get(scope).and_then(|s| s.lookup_local(name)) {
         if let Some(symbol) = state.symbols.get_mut(existing) {
             symbol.value = Some(storage);
         }
+        state.attach_symbol_declaration(existing, declaration);
         return;
     }
     let mut symbol = Symbol::new(name);
     symbol.value = Some(storage);
     let symbol_id: SymbolId = state.symbols.push(symbol);
     state.graph.declare(scope, name, symbol_id);
+    state.attach_symbol_declaration(symbol_id, declaration);
 }
 
 fn declare_function_value(
@@ -1003,12 +1068,14 @@ fn declare_function_value(
     scope: ScopeId,
     name: &str,
     storage: ValueStorageId,
+    declaration: DeclId,
 ) {
     if let Some(existing) = state.graph.get(scope).and_then(|s| s.lookup_local(name)) {
         if let Some(symbol) = state.symbols.get_mut(existing) {
             symbol.value = Some(storage);
             symbol.function_values.push(storage);
         }
+        state.attach_symbol_declaration(existing, declaration);
         return;
     }
     let mut symbol = Symbol::new(name);
@@ -1016,6 +1083,7 @@ fn declare_function_value(
     symbol.function_values.push(storage);
     let symbol_id: SymbolId = state.symbols.push(symbol);
     state.graph.declare(scope, name, symbol_id);
+    state.attach_symbol_declaration(symbol_id, declaration);
 }
 
 /// Retain one source fragment in its stable group while preserving last-wins
@@ -1066,6 +1134,7 @@ fn declare_type(
             .expect("resolved symbol exists");
         symbol.ty = Some(storage);
         symbol.type_group = Some(group);
+        state.attach_symbol_declaration(existing, declaration);
         return;
     }
     let group = state.type_groups.push(name);
@@ -1092,6 +1161,7 @@ fn declare_type(
     symbol.type_group = Some(group);
     let symbol_id: SymbolId = state.symbols.push(symbol);
     state.graph.declare(scope, name, symbol_id);
+    state.attach_symbol_declaration(symbol_id, declaration);
 }
 
 fn declare_import(
@@ -1133,6 +1203,7 @@ fn declare_import(
             symbol.ty = type_decl;
             symbol.blocks_value_lookup = import.value_barrier;
         }
+        state.attach_symbol_declaration(existing, declaration);
         return ImportPlaceholder {
             value: value_placeholder,
             ty: type_placeholder,
@@ -1144,6 +1215,7 @@ fn declare_import(
     symbol.blocks_value_lookup = import.value_barrier;
     let symbol_id: SymbolId = state.symbols.push(symbol);
     state.graph.declare(scope, &import.name, symbol_id);
+    state.attach_symbol_declaration(symbol_id, declaration);
     ImportPlaceholder {
         value: value_placeholder,
         ty: type_placeholder,
@@ -1256,6 +1328,13 @@ mod tests {
                 .legacy_type_storage
                 .expect("class type storage identity"),
         );
+        let class_symbol = binder
+            .graph
+            .get(binder.module)
+            .and_then(|scope| scope.lookup_local("Both"))
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .expect("class symbol");
+        assert_eq!(class_symbol.declarations, vec![class.id]);
     }
 
     #[test]
@@ -1460,9 +1539,25 @@ mod tests {
         }
         assert_eq!(declaration("caughtLeaf").site.scope, Some(catch_scope));
 
-        for name in ["Unsupported", "hidden", "global", "GlobalShape"] {
-            assert_eq!(declaration(name).site.scope, None);
-        }
+        let namespace = declaration("Unsupported")
+            .namespace
+            .and_then(|namespace| binder.namespaces.get(namespace))
+            .expect("dormant namespace metadata");
+        let fragment = namespace
+            .fragments
+            .first()
+            .and_then(|fragment| binder.namespaces.fragment(*fragment))
+            .expect("namespace fragment");
+        assert_eq!(declaration("Unsupported").site.scope, Some(binder.module));
+        assert_eq!(
+            declaration("hidden").site.scope,
+            Some(fragment.private_scope)
+        );
+        assert_eq!(declaration("global").site.scope, Some(binder.module));
+        assert_eq!(
+            declaration("GlobalShape").site.scope,
+            Some(binder.compilation_global)
+        );
         assert_eq!(declaration("Unsupported").kind, DeclarationKind::Namespace);
         assert_eq!(declaration("global").kind, DeclarationKind::Global);
     }

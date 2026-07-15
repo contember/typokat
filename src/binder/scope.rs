@@ -27,6 +27,12 @@ pub enum ScopeKind {
     /// A lexical block `{ … }`.
     #[allow(dead_code)] // Kept for lexical block scopes recorded by the binder.
     Block,
+    /// Dormant shared namespace publication overlay with unreachable symbol anchors.
+    NamespacePublic,
+    /// Dormant lexical context for one namespace reopening.
+    NamespacePrivate,
+    /// Dormant project-wide augmentation target, disconnected from production lookup.
+    CompilationGlobal,
 }
 
 /// One node in the scope graph: a parent link plus the names declared directly
@@ -135,7 +141,13 @@ impl ScopeGraph {
         let mut current = Some(scope);
         while let Some(id) = current {
             let current_scope = self.get(id)?;
-            if matches!(current_scope.kind, ScopeKind::Function | ScopeKind::Module) {
+            if matches!(
+                current_scope.kind,
+                ScopeKind::Function
+                    | ScopeKind::Module
+                    | ScopeKind::NamespacePrivate
+                    | ScopeKind::CompilationGlobal
+            ) {
                 return Some(id);
             }
             current = current_scope.parent;

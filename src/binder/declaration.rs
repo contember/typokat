@@ -1,5 +1,6 @@
 //! Source declaration identities and dormant type-group metadata.
 
+use crate::binder::namespace::NamespaceId;
 use crate::binder::scope::ScopeId;
 use crate::span::Span;
 use oxc_ast::ast::{Program, TSModuleDeclarationName};
@@ -221,6 +222,8 @@ pub struct LexicalDeclaration {
     pub value_storage: Option<ValueStorageId>,
     pub legacy_type_storage: Option<LegacyTypeStorageId>,
     pub type_group: Option<TypeGroupId>,
+    /// Dormant exact namespace identity for namespace headers.
+    pub namespace: Option<NamespaceId>,
 }
 
 /// Dense declaration table indexed only by unified lexical [`DeclId`].
@@ -241,6 +244,7 @@ impl DeclarationTable {
             value_storage: None,
             legacy_type_storage: None,
             type_group: None,
+            namespace: None,
         });
         id
     }

@@ -4,6 +4,7 @@
 //! represented directly in the scope graph instead of by a parallel model.
 
 use crate::binder::declaration::{DeclId, LegacyTypeStorageId, TypeGroupId, ValueStorageId};
+use crate::binder::namespace::NamespaceId;
 
 /// Index of a symbol within the binder's [`SymbolTable`].
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -40,8 +41,11 @@ pub struct Symbol {
     /// Dormant ordered type declaration group; production consumers ignore it in WU1a.
     pub type_group: Option<TypeGroupId>,
     /// Namespace-space declaration (`namespace`/module).
-    /// TODO(post-MVP): filled by the namespace binder.
-    pub ns: Option<DeclId>,
+    /// Dormant until the namespace publication cutover.
+    pub ns: Option<NamespaceId>,
+    /// Ordered source declarations contributing to this lexical symbol.
+    /// Production lookup ignores this dormant classifier input.
+    pub declarations: Vec<DeclId>,
 }
 
 impl Symbol {
@@ -55,6 +59,7 @@ impl Symbol {
             ty: None,
             type_group: None,
             ns: None,
+            declarations: Vec::new(),
         }
     }
 }
