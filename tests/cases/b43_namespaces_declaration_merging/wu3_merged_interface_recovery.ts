@@ -103,3 +103,11 @@ interface MergedConstraintBeforeDefault<T = number> {} // error[TK2344]: Type 'n
 
 interface MergedMatchingConstraintDefault<T = string> {}
 interface MergedMatchingConstraintDefault<T extends string> {}
+
+// Every explicitly supplied default is validated at its own occurrence, even
+// when recovery metadata selects only the first supplied value.
+interface RepeatedInvalidDefaultForward<T extends string = number> {} // error[TK2344]: Type 'number' does not satisfy the constraint 'string'
+interface RepeatedInvalidDefaultForward<T = number> {} // error[TK2344]: Type 'number' does not satisfy the constraint 'string'
+
+interface RepeatedInvalidDefaultReverse<T = number> {} // error[TK2344]: Type 'number' does not satisfy the constraint 'string'
+interface RepeatedInvalidDefaultReverse<T extends string = number> {} // error[TK2344]: Type 'number' does not satisfy the constraint 'string'
