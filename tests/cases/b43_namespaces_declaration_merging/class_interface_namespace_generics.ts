@@ -110,3 +110,42 @@ interface ArityClassHeader<T, U> { // error[TK2428]: All declarations of 'ArityC
 declare const arityRecovery: ArityClassHeader<string, number>;
 const arityValueWrong: boolean = arityRecovery.value; // error[TK2322]: Type 'string' is not assignable to type 'boolean'
 const arityExtraWrong: boolean = arityRecovery.extra; // error[TK2322]: Type 'number' is not assignable to type 'boolean'
+
+class ClassFirstRefDefault<T, U = T> {
+  constructor(readonly own: T) {}
+}
+interface ClassFirstRefDefault<T, U = T> {
+  added: U;
+}
+const classFirstRefDefault = new ClassFirstRefDefault<string>("class-first");
+const classFirstRefDefaultOwn: string = classFirstRefDefault.own;
+const classFirstRefDefaultAdded: string = classFirstRefDefault.added;
+const classFirstRefDefaultOwnWrong: number = classFirstRefDefault.own; // error[TK2322]: Type 'string' is not assignable to type 'number'
+const classFirstRefDefaultAddedWrong: number = classFirstRefDefault.added; // error[TK2322]: Type 'string' is not assignable to type 'number'
+
+interface InterfaceFirstRefDefault<T, U = T> {
+  added: U;
+}
+class InterfaceFirstRefDefault<T, U = T> {
+  constructor(readonly own: T) {}
+}
+const interfaceFirstRefDefault = new InterfaceFirstRefDefault<string>("interface-first");
+const interfaceFirstRefDefaultOwn: string = interfaceFirstRefDefault.own;
+const interfaceFirstRefDefaultAdded: string = interfaceFirstRefDefault.added;
+const interfaceFirstRefDefaultOwnWrong: number = interfaceFirstRefDefault.own; // error[TK2322]: Type 'string' is not assignable to type 'number'
+const interfaceFirstRefDefaultAddedWrong: number = interfaceFirstRefDefault.added; // error[TK2322]: Type 'string' is not assignable to type 'number'
+
+class ChainedRefDefault<T, U = T, V = U> {
+  constructor(readonly own: T) {}
+}
+interface ChainedRefDefault<T, U = T, V = U> {
+  added: U;
+  chained: V;
+}
+const chainedRefDefault = new ChainedRefDefault<string>("chained");
+const chainedRefDefaultOwn: string = chainedRefDefault.own;
+const chainedRefDefaultAdded: string = chainedRefDefault.added;
+const chainedRefDefaultFinal: string = chainedRefDefault.chained;
+const chainedRefDefaultOwnWrong: number = chainedRefDefault.own; // error[TK2322]: Type 'string' is not assignable to type 'number'
+const chainedRefDefaultAddedWrong: number = chainedRefDefault.added; // error[TK2322]: Type 'string' is not assignable to type 'number'
+const chainedRefDefaultFinalWrong: number = chainedRefDefault.chained; // error[TK2322]: Type 'string' is not assignable to type 'number'
