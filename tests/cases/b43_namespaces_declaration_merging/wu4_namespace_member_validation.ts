@@ -1,5 +1,5 @@
 // WU4 adversarial HOLD — tsc 6.0.3 --strict --noEmit --lib es5 --module commonjs:
-// TS2394, TS2391 x3, TS2769 x4, TS2339 x2, and TS2322 x11 below.
+// TS2394, TS2391 x3, TS2769 x4, TS2339 x3, and TS2322 x14 below.
 
 function Wu4PrivateVariableOwner(): void {}
 namespace Wu4PrivateVariableOwner {
@@ -16,6 +16,21 @@ namespace Wu4PrivateFunctionOwner {
   }
 }
 Wu4PrivateFunctionOwner.hiddenFunction; // error[TK2339]: Property 'hiddenFunction' does not exist
+
+function Wu4PrivateClassOwner(): void {}
+namespace Wu4PrivateClassOwner {
+  export const tag: string = "private-class";
+  class HiddenClass {
+    field: number = "bad"; // error[TK2322]: Type 'string' is not assignable to type 'number'
+
+    method(): number {
+      return "bad"; // error[TK2322]: Type 'string' is not assignable to type 'number'
+    }
+  }
+}
+const wu4PrivateClassTag: string = Wu4PrivateClassOwner.tag;
+const wu4PrivateClassTagWrong: number = Wu4PrivateClassOwner.tag; // error[TK2322]: Type 'string' is not assignable to type 'number'
+Wu4PrivateClassOwner.HiddenClass; // error[TK2339]: Property 'HiddenClass' does not exist
 
 function Wu4NamespaceOverloadOwner(): void {}
 namespace Wu4NamespaceOverloadOwner {

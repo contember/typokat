@@ -194,3 +194,23 @@ const interfaceFirstIntersectionValue: number = new InterfaceFirstIntersectionHe
 const interfaceFirstIntersectionOther: boolean = new InterfaceFirstIntersectionHeritage().other;
 const interfaceFirstIntersectionValueWrong: string = new InterfaceFirstIntersectionHeritage().value; // error[TK2322]: Type 'number' is not assignable to type 'string'
 const interfaceFirstIntersectionOtherWrong: number = new InterfaceFirstIntersectionHeritage().other; // error[TK2322]: Type 'boolean' is not assignable to type 'number'
+
+class ClassFirstSetterPropertyConflict {
+  set value(next: number) {}
+}
+interface ClassFirstSetterPropertyConflict {
+  value: string; // error[TK2717]: Subsequent property declarations must have the same type
+}
+declare const classFirstSetterPropertyConflict: ClassFirstSetterPropertyConflict;
+const classFirstSetterPropertyNumber: number = classFirstSetterPropertyConflict.value;
+const classFirstSetterPropertyWrong: string = classFirstSetterPropertyConflict.value; // error[TK2322]: Type 'number' is not assignable to type 'string'
+
+interface InterfaceFirstSetterPropertyConflict {
+  value: string; // error[TK2300]: Duplicate identifier 'value'
+}
+class InterfaceFirstSetterPropertyConflict {
+  set value(next: number) {} // error[TK2300]: Duplicate identifier 'value'
+}
+declare const interfaceFirstSetterPropertyConflict: InterfaceFirstSetterPropertyConflict;
+const interfaceFirstSetterPropertyString: string = interfaceFirstSetterPropertyConflict.value;
+const interfaceFirstSetterPropertyWrong: number = interfaceFirstSetterPropertyConflict.value; // error[TK2322]: Type 'string' is not assignable to type 'number'
