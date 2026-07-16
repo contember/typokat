@@ -338,9 +338,9 @@ exact `expr-infer/{as,type}-assertion/compatibility` outcomes owned by backlog `
 `assertion_compatibility_deferred_targets.ts` pins the conservative syntax-only fallback for
 assertions nested in arrow, function, and class scopes on otherwise deferred assignment targets;
 class expressions retain their existing independent owner.
-`static_member_assignment_nested_base.ts` independently owns static-member writes whose base
-contains one of those unreserved scopes, while retaining additive assertion and class-expression
-records.
+`assignment_expression_nested_scope_target.ts` independently owns the same boundary across every
+representable assignment target, including destructuring children, while retaining additive
+assertion and class-expression records and exactly-once RHS traversal.
 `update_expression_nested_scope_target.ts` pins the analogous target-wide prefix/postfix boundary
 across every representable `SimpleAssignmentTarget` family without weakening ordinary update-
 operand traversal.
@@ -787,7 +787,7 @@ wildcard/`None`/skip that drops the position.
 | `class_heritage.ts` | WU5/WU7 | generic extends arguments are supported/traversed; nested unsupported syntax keeps its owner; implements remains record-only | `annotation-lower/type-query/typeof`, `class/implements-clause/self` | TS2304 |
 | `assertion_compatibility.ts` | WU7 | assertions publish their asserted type but do not validate source/target overlap | `expr-infer/{as,type}-assertion/compatibility` | TS2352 ×2 |
 | `assertion_compatibility_deferred_targets.ts` | WU7 review | deferred assignment targets find assertions across nested arrow/function/class syntax without entering those scopes semantically | `expr-infer/{as,type}-assertion/compatibility` ×6 | TS2352 ×3; valid controls clean |
-| `static_member_assignment_nested_base.ts` | WU7 review | a static-member assignment base containing an unreserved arrow/function/class scope keeps a target owner plus additive assertion/class owners | `expr-infer/static-member-assignment/base`, `expr-infer/{as,type}-assertion/compatibility`, `expr-infer/class-expression/self` | TS2322, TS2540, TS2352; valid controls clean |
+| `assignment_expression_nested_scope_target.ts` | WU7 review | static/computed/private/wrapper and array/object destructuring targets containing an unreserved arrow/function/class keep one target-wide owner plus additive assertion/class owners and one RHS walk | `expr-infer/assignment-expression/nested-scope-target`, `expr-infer/{as,type}-assertion/compatibility`, `expr-infer/class-expression/self` | TS2304 ×2, TS2352; other controls clean |
 | `update_expression_nested_scope_target.ts` | WU7 review | prefix/postfix updates across static/computed/private/wrapper targets keep one target-wide owner for an unreserved arrow/function/class plus additive assertion/class owners | `expr-infer/update-expression/nested-scope-target`, `expr-infer/{as,type}-assertion/compatibility`, `expr-infer/class-expression/self` | TS2352 ×4; other controls clean |
 | `type_param_default.ts` | WU5 | record-only: type-parameter defaults never lowered (WU7-E F3; ledger `constraints/type-parameter-defaults`) | `annotation-lower/type-parameter-default/self` | TS2304 |
 | `supported_annotations.ts` | WU5 (control) | keyof/mapped/conditional/template/readonly stay clean — no record | — | clean |

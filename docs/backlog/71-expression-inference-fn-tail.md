@@ -22,10 +22,11 @@ WU4-A adversarial review (all verified pre-existing at that sprint's HEAD).
 - **Tagged templates and iteration targets are incomplete** — tagged-template operands and
   assignment targets in `for-in`/`for-of` need structural traversal before their semantic rules
   can be checked.
-- **Static-member assignment bases with nested lexical scopes are incomplete** — assignment-LHS
-  reservation does not allocate callable/class body owners. Such a base cannot safely enter an
-  arrow, function, or class expression to check the member write, so the skipped target needs its
-  own record while assertion and class-expression records remain independent and additive.
+- **Assignment targets containing nested lexical scopes are incomplete target-wide** — assignment-
+  LHS reservation does not allocate callable/class body owners in static/computed/private members,
+  assertion/`satisfies`/non-null wrappers, or array/object destructuring children (including
+  defaults, rest, and computed keys). The whole target needs one owner while assertion and
+  class-expression records remain independent and additive.
 - **Update targets have the same nested-scope boundary across every representable target family** —
   prefix/postfix update reservation does not allocate callable/class owners in static or computed
   member bases, computed keys, private-field objects, or assertion/`satisfies`/non-null wrappers.
@@ -42,10 +43,10 @@ traversal, and the missing iteration-target obligations, reusing the existing op
 machinery. Acceptance: a
 conformance corpus pinning each family against
 `tsc 6.0.3 --strict`; controls prove no over-reports on well-typed operands.
-Until assignment-LHS lexical reservation is implemented, a static-member target whose base
-contains a nested arrow/function/class records `expr-infer/static-member-assignment/base`, walks
-assertion syntax without entering the nested scope, preserves the existing class-expression
-record, and checks the RHS exactly once. Assertion records never substitute for the target record.
+Until assignment-LHS lexical reservation is implemented, any assignment target containing a nested
+arrow/function/class records `expr-infer/assignment-expression/nested-scope-target`, walks assertion
+syntax without entering the nested scope, preserves the existing class-expression record, and
+checks the RHS exactly once. Assertion records never substitute for the target record.
 The analogous update target records `expr-infer/update-expression/nested-scope-target`; prefix and
 postfix forms and all representable `SimpleAssignmentTarget` families share that identity, while
 assertion/class-expression records remain additive.

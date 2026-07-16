@@ -20,28 +20,28 @@ declare let deferredSink: unknown;
 
 // Incompatible assertions in an arrow body, a function body used as a destructuring default,
 // and a class-expression field all retain their assertion-specific owner.
-deferredKeyed[String(<T extends DeferredAssertionSource>(local: T) =>
+deferredKeyed[String(<T extends DeferredAssertionSource>(local: T) => // incomplete[expr-infer/assignment-expression/nested-scope-target]
   local as DeferredAssertionTarget // incomplete[expr-infer/as-assertion/compatibility]
 )] = 1;
 
-[deferredSink = function(local: DeferredAssertionSource) {
+[deferredSink = function(local: DeferredAssertionSource) { // incomplete[expr-infer/assignment-expression/nested-scope-target]
   return <DeferredAssertionTarget>local; // incomplete[expr-infer/type-assertion/compatibility]
 }] = [1];
 
-deferredKeyed[String(class { // incomplete[expr-infer/class-expression/self]
+deferredKeyed[String(class { // incomplete[expr-infer/assignment-expression/nested-scope-target] | incomplete[expr-infer/class-expression/self]
   field = deferredSource as DeferredAssertionTarget; // incomplete[expr-infer/as-assertion/compatibility]
 })] = 1;
 
 // Conservative controls: compatibility is not inferred through the nested scope even when the
 // source and asserted types are identical.
-deferredKeyed[String((local: DeferredAssertionSource) =>
+deferredKeyed[String((local: DeferredAssertionSource) => // incomplete[expr-infer/assignment-expression/nested-scope-target]
   local as DeferredAssertionSource // incomplete[expr-infer/as-assertion/compatibility]
 )] = 1;
 
-[deferredSink = function(local: DeferredAssertionSource) {
+[deferredSink = function(local: DeferredAssertionSource) { // incomplete[expr-infer/assignment-expression/nested-scope-target]
   return <DeferredAssertionSource>local; // incomplete[expr-infer/type-assertion/compatibility]
 }] = [1];
 
-deferredKeyed[String(class { // incomplete[expr-infer/class-expression/self]
+deferredKeyed[String(class { // incomplete[expr-infer/assignment-expression/nested-scope-target] | incomplete[expr-infer/class-expression/self]
   field = deferredSource as DeferredAssertionSource; // incomplete[expr-infer/as-assertion/compatibility]
 })] = 1;
