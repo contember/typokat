@@ -1,6 +1,7 @@
 //! Flow-graph construction for expressions, assignments, and function boundaries
 //! (extracted from flowgraph.rs).
 
+use crate::binder::bind::{ResolvedValueKind, ValueResolution};
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::flow::{FlowNode, FlowNodeId};
@@ -182,7 +183,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// Resolve an assignment-target name to its narrowable value symbol, or `None`
     /// for an unresolvable / non-value binding.
     fn assignable_symbol(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
-        self.binder.resolve_value(scope, name)
+        match self.binder.resolve_value_binding(scope, name) {
+            ValueResolution::Resolved {
+                symbol,
+                kind: ResolvedValueKind::Ordinary,
+            } => Some(symbol),
+            ValueResolution::Resolved {
+                kind: ResolvedValueKind::StandaloneNamespace { .. },
+                ..
+            }
+            | ValueResolution::TypeOnlyNamespace { .. }
+            | ValueResolution::Missing => None,
+        }
     }
 
     /// Emit a reset-to-declared assignment node for `symbol` (the value changed in a

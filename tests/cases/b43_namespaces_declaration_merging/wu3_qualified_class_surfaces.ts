@@ -1,5 +1,5 @@
 // tsc 6.0.3 --strict --noEmit: TS2315, TS2314, TS2707, TS2344 x5, TS2322 x12, and TS2345 x3 below.
-declare namespace Wu3QualifiedClassSurfaces { // incomplete[decl/module-declaration/self]
+declare namespace Wu3QualifiedClassSurfaces {
   interface Contract { kind: "contract" }
   type Alias<T> = { value: T };
   type Pair<T, U> = { left: T; right: U };

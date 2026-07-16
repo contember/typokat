@@ -413,9 +413,8 @@ ordinary and ambient class+namespace publication in both orders; and the standal
 boundary, inferred function+namespace publication boundaries, namespace member validation, and the
 explicit namespace-payload incomplete ledger. Function/class augmentation must
 retain callable/construct, static/tag, and nested-type surfaces, with `TK2434` only on ordinary
-reverse-order pairs. The standalone namespace retains only
-`decl/module-declaration/self` for its unclaimed value surface while exported interface/type members
-remain usable; it makes no standalone namespace value-receiver claim.
+reverse-order pairs. The standalone namespace's exported value now instantiates and publishes its
+value receiver through WU6A, while exported interface/type members remain usable.
 Forward-demand and inferred-return cycles remain precise backlog-76 incomplete records, while
 post-body, annotated-recursive, and declared-overload surfaces require non-permissive witnesses.
 
@@ -430,25 +429,22 @@ both fixtures non-permissive under error/`any` recovery.
 The durable WU6 proof is
 [`tests/fixtures/lib-es5-6.0.3/readiness.toml`](../fixtures/lib-es5-6.0.3/readiness.toml).
 All 28 interface/value pairs, repeated `Date`/`Number`/`String` interfaces, local `Array` heritage,
-and the `Intl` type container are represented. Its current result remains **NO-GO**: the sole
-owner-43 ES5 start blocker is the standalone `Intl` value receiver,
-`decl/module-declaration/self`. The same raw run records four `TK2430`s (two canonical apparent-
-`Function` results owned by `14`, two surplus-cardinality results owned by `63`) and 188 explicit
-incomplete outcomes: 179 owned by `75`, eight type predicates owned by `50`, and the one `Intl`
-value boundary owned by `43`. Those counts are exact accounting, not a broad allowlist or a claim
-that full standard-library loading has started.
+and the `Intl` type container are represented. The frozen pre-WU6A manifest records **NO-GO** with
+four `TK2430`s and 188 explicit incomplete outcomes: 179 owned by `75`, eight type predicates owned
+by `50`, and the standalone `Intl` value receiver owned by `43`. WU6A removes exactly that owner-43
+outcome, so the deliberately unchanged readiness gate now reports 187 actual versus 188 pinned;
+accepting that baseline delta remains a separate change. These counts are exact accounting, not a
+broad allowlist or a claim that full standard-library loading has started.
 
-The disabled WU6A addendum specifies standalone instantiated namespace values under ADR-0010. Its
-six `wu6a_*.ts` flat fixtures pin ordinary and ambient/reopened roots as first-class aliases,
+The WU6A addendum specifies standalone instantiated namespace values under ADR-0010. Five enabled
+`wu6a_*.ts` flat fixtures pin ordinary and ambient/reopened roots as first-class aliases,
 arguments, and returns; static and computed reads; function calls and class construction through
 members; nested/dotted bottom-up values; private/missing members; namespace-body traversal; and the
 exact `const`-readonly versus `let`/`var`/function/class/nested-property mutability matrix. Root
 assignment and update forms require `TK2631`; a non-callable/non-constructable namespace root
-requires `TK2349`/`TK2351` (backlogs `19`/`75` while deferred). Pure ordinary and ambient type-only
+requires `TK2349`/`TK2351`. Pure ordinary and ambient type-only
 namespaces allocate no value storage or empty object: every alias/read/member/call/`new` value demand
-pins future exact `TK2708`, while qualified type use remains clean. The current `TK2304` result is a
-sound diagnostic-code boundary, not permission to manufacture a receiver; WU6A's acceptance target
-is the strict-tsc code.
+pins exact `TK2708`, while qualified type use remains clean.
 
 Two ordinary instantiated namespaces in `wu6a_first_class_values.ts` intentionally publish equal
 structural shapes and clean member reads. The implementation direct gate must prove distinct
@@ -479,24 +475,95 @@ later direct gate must either support private `using` or assign it one concrete 
 `Unavailable` owner before publishing `Ready`, and must prove the private binding cannot leak. Any
 future admitted `await using` or exported using form requires the same owner decision first.
 
-The disabled `wu6a_project_forward/` and `wu6a_project_reverse/` projects contain the same reopened
+The enabled `wu6a_project_forward/` and `wu6a_project_reverse/` projects contain the same reopened
 namespace declarations and semantic demands in opposite source/input order. The marker oracle pins
-the same `TK2322`; implementation direct tests additionally compare the stable `ValueStorageId`,
-structural `TypeId`, terminal publication, and exact EventStore replay tuple
-`(original_module_ordinal, source_start, event_ordinal, record_ordinal)` without deduplication,
-truncation, suppression, or completion-order drift. Existing `wu4_function_namespace_matrix.ts`,
+the same `TK2322`; direct gates additionally pin source-key-stable `ValueStorageId` allocation,
+distinct storage for equal structural `TypeId`s, atomic terminal publication, and query-free
+construction. The checker-wide EventStore suite independently pins the exact replay tuple
+`(original_module_ordinal, source_start, event_ordinal, record_ordinal)`. Existing
+`wu4_function_namespace_matrix.ts`,
 `wu4_class_namespace_matrix.ts`, `keep_pairs_forward.ts`, and `keep_pairs_reverse.ts` remain the
 function/class owner controls; WU6A does not duplicate them.
 Across the six flat fixtures and both project orders, the pinned tsc oracle has exactly 33
 diagnostics: `TS2322` x5, `TS2339` x2, `TS2345` x4, `TS2349`, `TS2351`, `TS2448`, `TS2451` x2,
 `TS2454`, `TS2540` x2, `TS2631` x4, and `TS2708` x10.
+The enabled five-flat/two-project subset owns 29 of them; the remaining four stay in the disabled
+unavailable ledger.
 
-The directory contains 58 flat fixtures. Seven older fixtures plus all six WU6A flat fixtures remain
-outside the admitted slice, so the whole directory stays disabled; the conformance harness gates
-the other 45 flat fixtures
-explicitly through
-`ENABLED_FIXTURES`, plus both two-file WU5 projects through `ENABLED_PROJECT_FIXTURES`. Neither WU6A
-project is registered. WU6 adds
+The second WU6A adversarial addendum is the `wu6a_review_*` corpus. Six flat fixtures and both
+forward/reverse two-file projects are enabled after their direct terminal gates passed. The
+`wu6a_review_using_legality.ts` parser-boundary ledger remains disabled. Together, all seven flat
+fixtures plus the two projects pin 23 strict TypeScript 6.0.3 diagnostics:
+
+- `wu6a_review_root_provenance.ts` pins `TS2349` x3 and `TS2351` x3 through direct parentheses,
+  aliases, and chained aliases. Explicit `const`/`let`/`var` annotations to `any` erase namespace
+  provenance and remain callable/constructable controls.
+- `wu6a_review_type_only_fallthrough.ts` pins `TS2349` and `TS2351` on an outer number shadowed only
+  in type/namespace space. The bare read is clean and no value demand may report `TK2708`.
+- `wu6a_review_nested_owner_merges.ts` pins `TS2322` x2 while nested legal
+  function+namespace/class+namespace owners retain call/construct identity and mutable `.tag`
+  properties.
+- `wu6a_review_class_dependencies.ts` keeps annotated and lexically shadowed static initializers
+  clean. Only the genuine unannotated root dependency carries
+  `decl/class-declaration/namespace-payload-static-cycle` under owner `76`, alongside the class
+  surface's legitimate `class/property-definition/initializer-inference`; a direct inspector proves
+  the whole root terminal is `Unavailable` with no published storage type.
+- `wu6a_review_ambient_export_alias.ts` is the exact support target for an ambient export alias:
+  `TS2322` and `TS2339` prove the aliased public property type and private original spelling. If
+  support is rejected, the whole root must instead be exactly unavailable under backlog `15`; an
+  empty or prefix `Ready` object is never an alternative.
+- `wu6a_review_using_legality.ts` pins private valid `using` as body-only/no-public-leak plus
+  `TS2339`. Parsed namespace `await using` and ambient `using` are checker-owned as `TK2852` and
+  `TK1545`; direct terminal tests cover both together with the valid private form. Oxc currently
+  panics before producing a checker AST for `export using` and `export await using`, so `TK1491`
+  and `TK1495` remain future parser-diagnostic translation gates and keep this combined fixture
+  disabled. TypeScript also emits the ambient-initializer companion `TS1254`; that marker stays
+  pinned in the disabled oracle rather than receiving an invented incomplete owner.
+- `wu6a_review_qualified_missing_child.ts` pins `TS2694`; a direct inspector must prove that the
+  surviving `good` member cannot publish a partial root or satisfy the structural downstream
+  control.
+- `wu6a_review_cross_space_forward/` and `wu6a_review_cross_space_reverse/` each pin `TS2322` x2.
+  Cross-file interface+namespace and type-alias+namespace companions share one root in both input
+  orders. The direct gate compares the root `SymbolId`, namespace-owned `ValueStorageId`, structural
+  `TypeId`, and terminal state. It also inspects the actual post-finish `CheckerRecord` replay for
+  four diagnostics, pinning exact tuples `(original_module_ordinal, source_start, event_ordinal,
+  record_ordinal)` at both primary ordinal `0` and deferred ordinal `1`; the returned reports prove
+  no replay suppression, deduplication, truncation, or hidden incomplete.
+
+The second-review addendum adds five more disabled-at-authoring fixtures. Four are now enabled:
+
+- `wu6a_review_alias_dependencies.ts` pins nested namespace and private callable export-alias
+  dependencies, a writable ambient-const alias control matching tsc, and function-before-alias
+  provenance with `TS2349`/`TS2351`.
+- `wu6a_review_attached_const.ts` pins `TS2540` x2 for direct const properties attached to function
+  and class owners, with mutable `let` controls.
+- `wu6a_review_body_traversal.ts` pins `TS2304` plus `TS2322` x6 through block, loop, switch,
+  try/finally, and expression-statement bodies inside a consumed standalone namespace fragment.
+- `wu6a_review_static_cycle_events.ts` pins two exact static-cycle owners and their class-initializer
+  records, plus an initializer-only ordinary-function/block-shadow control.
+
+`wu6a_review_duplicate_legality.ts` remains disabled: typokat now withholds the root and emits its
+exact backlog-18 incomplete for the third value declaration, but checker support for tsc's three
+companion `TS2300` diagnostics is outside WU6A. No marker is hidden to enable it prematurely.
+
+`wu6a_review_private_unsupported_declarations.ts` is the enabled soundness-review witness for
+consumed standalone namespace bodies. Strict tsc keeps the private enum and `import =` alias off the
+public value payload while the exported `ready` property remains usable. Typokat retains the exact
+`decl/enum-declaration/self` and `decl/import-equals/self` completeness owners when it consumes that
+fragment; publishing `Ready` may not silently discard either private declaration.
+
+The project-order gate retains the existing module-local isolation and function/class owner controls
+in `wu5_global_augmentation_forward/`, `wu5_global_augmentation_reverse/`,
+`wu4_function_namespace_matrix.ts`, `wu4_class_namespace_matrix.ts`, `keep_pairs_forward.ts`, and
+`keep_pairs_reverse.ts`; the adversarial addendum does not replace or weaken them. Ambient export
+alias resolution, private-`using` non-leakage, unavailable-root publication, and event replay each
+retain direct checker/binder inspection in addition to marker parity.
+
+The directory contains 71 flat fixtures. Seven older fixtures, the WU6A unavailable ledger,
+`wu6a_review_using_legality.ts`, and `wu6a_review_duplicate_legality.ts` remain outside the admitted
+slice, so the whole directory stays disabled; the conformance harness gates the other 61 flat fixtures explicitly through
+`ENABLED_FIXTURES`, plus both two-file WU5 projects, both two-file WU6A projects, and both
+`wu6a_review_cross_space_*` projects through `ENABLED_PROJECT_FIXTURES`. WU6 adds
 `wu6_ambient_namespace_body_lookup.ts` and `wu6_local_array_heritage.ts`. WU5 adds
 `global_augmentation.ts`, `global_missing_declare_negative.ts`,
 `global_script_negative.ts`, `global_value_publication_deferred.ts`, `umd_export.d.ts`,

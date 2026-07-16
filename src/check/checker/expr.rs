@@ -5,6 +5,7 @@ use super::classes::body::BodyMemberLookup;
 use super::context::*;
 use super::decls::value_decl_id;
 use super::function_groups::FunctionGroupDemand;
+use crate::binder::bind::{ResolvedValueKind, ValueResolution};
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::flow::FlowNodeId;
@@ -106,8 +107,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 if ident.name.as_str() == "undefined" {
                     return Some((well_known.undefined, span));
                 }
-                match self.binder.resolve_value(scope, ident.name.as_str()) {
-                    Some(symbol_id) => match self.function_groups.demand(symbol_id) {
+                match self
+                    .binder
+                    .resolve_value_binding(scope, ident.name.as_str())
+                {
+                    ValueResolution::TypeOnlyNamespace { .. } => {
+                        self.emit_diagnostic(Diagnostic::cannot_use_namespace_as_value(
+                            span,
+                            ident.name.as_str(),
+                        ));
+                        Some((well_known.error, span))
+                    }
+                    ValueResolution::Resolved {
+                        symbol: symbol_id, ..
+                    } => match self.function_groups.demand(symbol_id) {
                         FunctionGroupDemand::Ready(ty) | FunctionGroupDemand::PrivateSelf(ty) => {
                             Some((ty, span))
                         }
@@ -127,7 +140,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                             span,
                         )),
                     },
-                    None => {
+                    ValueResolution::Missing => {
                         self.emit_diagnostic(Diagnostic::cannot_find_name(
                             span,
                             ident.name.as_str(),
@@ -356,15 +369,26 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 if ident.name.as_str() == "undefined" {
                     return;
                 }
-                if self
+                match self
                     .binder
-                    .resolve_value(scope, ident.name.as_str())
-                    .is_none()
+                    .resolve_value_binding(scope, ident.name.as_str())
                 {
-                    self.emit_diagnostic(Diagnostic::cannot_find_name(
-                        Span::from_oxc(ident.span),
-                        ident.name.as_str(),
-                    ));
+                    ValueResolution::Resolved {
+                        kind: ResolvedValueKind::StandaloneNamespace { .. },
+                        ..
+                    } => {
+                        self.emit_diagnostic(Diagnostic::cannot_assign_namespace(
+                            Span::from_oxc(ident.span),
+                            ident.name.as_str(),
+                        ));
+                    }
+                    ValueResolution::Resolved { .. } => {}
+                    ValueResolution::TypeOnlyNamespace { .. } | ValueResolution::Missing => {
+                        self.emit_diagnostic(Diagnostic::cannot_find_name(
+                            Span::from_oxc(ident.span),
+                            ident.name.as_str(),
+                        ));
+                    }
                 }
             }
             SimpleAssignmentTarget::StaticMemberExpression(member) => {

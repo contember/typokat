@@ -11,6 +11,8 @@ use crate::binder::namespace::{
     UmdContext,
 };
 use crate::binder::scope::ScopeId;
+#[cfg(test)]
+use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
 use crate::check::query::SemanticQueryCoordinator;
 use crate::check::query::SemanticQueryState;
@@ -307,7 +309,7 @@ fn emit_test_incomplete(pass: &mut Pass<'_, '_>) {
 
 /// Check a parsed program and return the diagnostics plus incomplete surfaces it produces.
 pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>) -> CheckResult {
-    check_program_inner(interner, program, |_, _, _| {})
+    check_program_inner(interner, program, |_, _, _, _, _| {})
 }
 
 #[cfg(test)]
@@ -319,7 +321,27 @@ fn check_program_with_publication_inspector<'ast, F>(
 where
     F: FnOnce(&Binder, &type_groups::PublishedTypeEnvironment, &Interner),
 {
-    check_program_inner(interner, program, inspect)
+    check_program_inner(interner, program, |binder, published, interner, _, _| {
+        inspect(binder, published, interner)
+    })
+}
+
+#[cfg(test)]
+fn check_program_with_namespace_value_inspector<'ast, F>(
+    interner: &mut Interner,
+    program: &'ast Program<'ast>,
+    inspect: F,
+) -> CheckResult
+where
+    F: FnOnce(&Binder, &namespace_values::NamespaceValueRegistry, &DeclTypes, &Interner),
+{
+    check_program_inner(
+        interner,
+        program,
+        |binder, _, interner, decl_types, namespace_values| {
+            inspect(binder, namespace_values, decl_types, interner)
+        },
+    )
 }
 
 fn check_program_inner<'ast, F>(
@@ -328,7 +350,13 @@ fn check_program_inner<'ast, F>(
     inspect: F,
 ) -> CheckResult
 where
-    F: FnOnce(&Binder, &type_groups::PublishedTypeEnvironment, &Interner),
+    F: FnOnce(
+        &Binder,
+        &type_groups::PublishedTypeEnvironment,
+        &Interner,
+        &DeclTypes,
+        &namespace_values::NamespaceValueRegistry,
+    ),
 {
     let module_ordinal = ModuleOrdinal::new(0);
     let unit_slot = UnitSlot::new(0);
@@ -408,11 +436,20 @@ where
     // Phase 0: fill named type declarations before walking values.
     pass.fill_type_decls(binder.module);
     pass.prepare_attached_namespace_values(binder.module, &program.body);
+    pass.prepare_standalone_namespace_values(binder.module, &program.body);
     pass.publish_class_surfaces(&[(module_ordinal, binder.module)]);
+    pass.finalize_standalone_namespace_values();
+    pass.precompute_standalone_namespace_value_aliases(&[(binder.module, program.body.as_slice())]);
     pass.fill_pending_interfaces_range(binder.module, 0, pass.type_decls.len());
     pass.publish_type_groups();
     pass.validate_published_class_surfaces();
-    inspect(&binder, pass.type_environment.published(), pass.interner);
+    inspect(
+        &binder,
+        pass.type_environment.published(),
+        pass.interner,
+        &pass.decl_types,
+        &pass.namespace_values,
+    );
 
     // Phase 0.5: build complete flow graphs before narrowed reads are resolved.
     pass.build_flow_graph(binder.module, &program.body);
@@ -481,7 +518,13 @@ pub fn check_project_programs<'ast>(
     interner: &mut Interner,
     units: &[ProjectProgram<'ast>],
 ) -> Vec<CheckResult> {
-    check_project_programs_inner(interner, units, |_, _, _| {})
+    check_project_programs_inner(
+        interner,
+        units,
+        |_, _, _| {},
+        |_, _, _, _, _, _, _| {},
+        |_| {},
+    )
 }
 
 #[cfg(test)]
@@ -493,16 +536,132 @@ pub(crate) fn check_project_programs_with_binding_inspector<'ast, F>(
 where
     F: FnOnce(&Binder, &LexicalReservations, &[ScopeId]),
 {
-    check_project_programs_inner(interner, units, inspect)
+    check_project_programs_inner(interner, units, inspect, |_, _, _, _, _, _, _| {}, |_| {})
 }
 
-fn check_project_programs_inner<'ast, F>(
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ProjectNamespaceRootInspection {
+    pub(crate) name: String,
+    pub(crate) symbol: SymbolId,
+    pub(crate) terminal: &'static str,
+    pub(crate) namespace_storage: Option<ValueStorageId>,
+    pub(crate) terminal_storage: Option<ValueStorageId>,
+    pub(crate) ty: Option<TypeId>,
+    pub(crate) published: Option<TypeId>,
+}
+
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ProjectReplayRecordInspection {
+    Diagnostic(String),
+    Incomplete(String),
+}
+
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ProjectReplayInspection {
+    pub(crate) key: events::EventKey,
+    pub(crate) record: ProjectReplayRecordInspection,
+}
+
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ProjectNamespaceValueInspection {
+    pub(crate) roots: Vec<ProjectNamespaceRootInspection>,
+    pub(crate) replay: Vec<ProjectReplayInspection>,
+}
+
+#[cfg(test)]
+pub(crate) fn check_project_programs_with_namespace_value_inspector<'ast, F>(
     interner: &mut Interner,
     units: &[ProjectProgram<'ast>],
     inspect: F,
 ) -> Vec<CheckResult>
 where
+    F: FnOnce(&ProjectNamespaceValueInspection),
+{
+    let roots = std::cell::RefCell::new(Vec::new());
+    check_project_programs_inner(
+        interner,
+        units,
+        |_, _, _| {},
+        |binder, registry, decl_types, _, _, _, _| {
+            let mut inspected = binder
+                .namespaces
+                .namespaces()
+                .map(|namespace| {
+                    let (terminal, storage, ty) = match registry.standalone_terminal(namespace.id) {
+                        Some(namespace_values::StandaloneNamespaceTerminal::Planned) => {
+                            ("planned", None, None)
+                        }
+                        Some(namespace_values::StandaloneNamespaceTerminal::Ready {
+                            storage,
+                            ty,
+                        }) => ("ready", Some(storage), Some(ty)),
+                        Some(namespace_values::StandaloneNamespaceTerminal::Unavailable {
+                            ..
+                        }) => ("unavailable", None, None),
+                        None => ("absent", None, None),
+                    };
+                    ProjectNamespaceRootInspection {
+                        name: namespace.name.clone(),
+                        symbol: namespace.symbol,
+                        terminal,
+                        namespace_storage: binder.namespaces.standalone_value_storage(namespace.id),
+                        terminal_storage: storage,
+                        ty,
+                        published: storage.and_then(|storage| decl_types.get(storage)),
+                    }
+                })
+                .collect::<Vec<_>>();
+            inspected.sort_by(|left, right| left.name.cmp(&right.name));
+            *roots.borrow_mut() = inspected;
+        },
+        |records| {
+            let replay = records
+                .iter()
+                .map(|(key, record)| ProjectReplayInspection {
+                    key: *key,
+                    record: match record {
+                        events::CheckerRecord::Diagnostic(diagnostic) => {
+                            ProjectReplayRecordInspection::Diagnostic(
+                                diagnostic.code.as_str().to_owned(),
+                            )
+                        }
+                        events::CheckerRecord::Incomplete(incomplete) => {
+                            ProjectReplayRecordInspection::Incomplete(incomplete.id.clone())
+                        }
+                    },
+                })
+                .collect();
+            inspect(&ProjectNamespaceValueInspection {
+                roots: std::mem::take(&mut *roots.borrow_mut()),
+                replay,
+            });
+        },
+    )
+}
+
+fn check_project_programs_inner<'ast, F, G, H>(
+    interner: &mut Interner,
+    units: &[ProjectProgram<'ast>],
+    inspect_bindings: F,
+    inspect_namespace_values: G,
+    inspect_replay: H,
+) -> Vec<CheckResult>
+where
     F: FnOnce(&Binder, &LexicalReservations, &[ScopeId]),
+    G: FnOnce(
+        &Binder,
+        &namespace_values::NamespaceValueRegistry,
+        &DeclTypes,
+        &Interner,
+        &LexicalReservations,
+        &EventStore,
+        &[ScopeId],
+    ),
+    H: FnOnce(&[(events::EventKey, events::CheckerRecord)]),
 {
     let mut event_store = EventStore::default();
     let mut lexical_events = LexicalReservations::default();
@@ -531,6 +690,11 @@ where
         },
     ) = bootstrap_trusted_prelude(interner, |prelude| {
         let mut builder = ProjectBinderBuilder::new(prelude);
+        builder.reserve_script_namespace_roots(
+            units
+                .iter()
+                .map(|unit| (unit.program, unit.compilation_unit)),
+        );
         let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
         for unit in units {
             let imports = imported_symbols(unit, &exports, &lexical_events, &mut external_effects);
@@ -600,7 +764,7 @@ where
         unreserved_user_groups.is_empty(),
         "every user type group has one construction draft: {unreserved_user_groups:?}"
     );
-    inspect(&binder, &lexical_events, &module_scopes);
+    inspect_bindings(&binder, &lexical_events, &module_scopes);
     enqueue_local_ambient_export_alias_diagnostics(&binder, &lexical_events, &mut external_effects);
     enqueue_namespace_placement_diagnostics(&binder, &lexical_events, &mut external_effects);
     enqueue_ambient_context_diagnostics(&binder, &lexical_events, &mut external_effects);
@@ -647,16 +811,35 @@ where
         pass.prepare_attached_namespace_values(scope, &unit.program.body);
     }
 
+    let standalone_modules = module_scopes
+        .iter()
+        .copied()
+        .zip(units.iter())
+        .map(|(scope, unit)| (scope, unit.program.body.as_slice()))
+        .collect::<Vec<_>>();
+    pass.prepare_project_standalone_namespace_values(&standalone_modules);
+
     let publication_scopes: Vec<(ModuleOrdinal, ScopeId)> = units
         .iter()
         .zip(module_scopes.iter().copied())
         .map(|(unit, scope)| (unit.module_ordinal, scope))
         .collect();
     pass.publish_class_surfaces(&publication_scopes);
+    pass.finalize_standalone_namespace_values();
+    pass.precompute_standalone_namespace_value_aliases(&standalone_modules);
 
     pass.fill_pending_interfaces_range(binder.module, user_type_start, pass.type_decls.len());
     pass.publish_type_groups();
     pass.validate_published_class_surfaces();
+    inspect_namespace_values(
+        &binder,
+        &pass.namespace_values,
+        &pass.decl_types,
+        pass.interner,
+        &pass.lexical_events,
+        &pass.event_store,
+        &module_scopes,
+    );
 
     for (scope, unit) in module_scopes.iter().copied().zip(units) {
         pass.current_module = scope;
@@ -667,7 +850,7 @@ where
         emit_test_incomplete(&mut pass);
     }
 
-    let mut records = finish_event_effects(&mut pass);
+    let mut records = finish_event_effects_with_inspector(&mut pass, inspect_replay);
     units
         .iter()
         .map(|unit| {
@@ -1228,6 +1411,16 @@ fn consume_interface_relation_decision(
 fn finish_event_effects(
     pass: &mut Pass<'_, '_>,
 ) -> BTreeMap<ModuleOrdinal, (Vec<Diagnostic>, Vec<IncompleteSurface>)> {
+    finish_event_effects_with_inspector(pass, |_| {})
+}
+
+fn finish_event_effects_with_inspector<F>(
+    pass: &mut Pass<'_, '_>,
+    inspect: F,
+) -> BTreeMap<ModuleOrdinal, (Vec<Diagnostic>, Vec<IncompleteSurface>)>
+where
+    F: FnOnce(&[(events::EventKey, events::CheckerRecord)]),
+{
     let pending = std::mem::take(&mut pass.pending_effects);
     for mut effects in pending {
         let mut reported_heritage_pairs = BTreeSet::new();
@@ -1444,6 +1637,7 @@ fn finish_event_effects(
     let records = std::mem::take(&mut pass.event_store)
         .finish()
         .expect("all lexically preallocated record owners must be completed");
+    inspect(&records);
     for (key, record) in records {
         let channels = by_module.entry(key.module_ordinal).or_default();
         match record {
@@ -1694,6 +1888,7 @@ fn build_pass_with_reporting<'a, 'ast>(
         next_type_param,
         class_parents: FxHashMap::default(),
         class_value_aliases: FxHashMap::default(),
+        standalone_namespace_value_aliases: FxHashMap::default(),
         class_names: FxHashMap::default(),
         decl_types,
         function_groups: function_groups::FunctionGroupRegistry::default(),

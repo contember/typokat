@@ -10,7 +10,7 @@ use super::function_groups::{
     FunctionNamespacePayload,
 };
 use super::lexical_events::LexicalOwnerPhase;
-use crate::binder::declaration::ValueStorageId;
+use crate::binder::declaration::{DeclarationKind, ValueStorageId};
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::query::SemanticQueryCoordinator;
@@ -26,10 +26,127 @@ use oxc_ast::ast::{
     TSModuleDeclarationBody, TryStatement, VariableDeclaration, VariableDeclarationKind,
     VariableDeclarator,
 };
+use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
 
+fn parenthesized_identifier<'expr, 'ast>(
+    expression: &'expr Expression<'ast>,
+) -> Option<&'expr oxc_ast::ast::IdentifierReference<'ast>> {
+    match expression {
+        Expression::Identifier(identifier) => Some(identifier),
+        Expression::ParenthesizedExpression(parenthesized) => {
+            parenthesized_identifier(&parenthesized.expression)
+        }
+        _ => None,
+    }
+}
+
+struct NamespaceAliasCandidateCollector<'a> {
+    binder: &'a crate::binder::Binder,
+    module: ScopeId,
+    candidates: Vec<(ValueStorageId, ValueStorageId)>,
+}
+
+impl<'ast> Visit<'ast> for NamespaceAliasCandidateCollector<'_> {
+    fn visit_variable_declaration(&mut self, declaration: &VariableDeclaration<'ast>) {
+        if declaration.kind.is_const() {
+            for declarator in &declaration.declarations {
+                if declarator.type_annotation.is_some() {
+                    continue;
+                }
+                let BindingPattern::BindingIdentifier(alias) = &declarator.id else {
+                    continue;
+                };
+                let Some(source) = declarator.init.as_ref().and_then(parenthesized_identifier)
+                else {
+                    continue;
+                };
+                let Some(alias_declaration) = self.binder.declarations.iter().find(|candidate| {
+                    candidate.kind == DeclarationKind::Variable
+                        && candidate.site.module == self.module
+                        && candidate.site.binding_span.start == alias.span.start
+                }) else {
+                    continue;
+                };
+                let (Some(alias_storage), Some(scope)) = (
+                    alias_declaration.value_storage,
+                    alias_declaration.site.scope,
+                ) else {
+                    continue;
+                };
+                let Some(source_storage) = self
+                    .binder
+                    .resolve_value(scope, source.name.as_str())
+                    .and_then(|symbol| self.binder.symbols.get(symbol))
+                    .and_then(|symbol| symbol.value)
+                else {
+                    continue;
+                };
+                self.candidates.push((alias_storage, source_storage));
+            }
+        }
+        walk::walk_variable_declaration(self, declaration);
+    }
+}
+
 impl<'a, 'ast> Pass<'a, 'ast> {
+    pub(in crate::check::checker) fn precompute_standalone_namespace_value_aliases(
+        &mut self,
+        modules: &[(ScopeId, &'ast [Statement<'ast>])],
+    ) {
+        let mut candidates = Vec::new();
+        for (module, statements) in modules {
+            let mut collector = NamespaceAliasCandidateCollector {
+                binder: self.binder,
+                module: *module,
+                candidates: Vec::new(),
+            };
+            for statement in *statements {
+                collector.visit_statement(statement);
+            }
+            candidates.extend(collector.candidates);
+        }
+
+        let mut remaining = candidates;
+        loop {
+            let mut next = Vec::new();
+            let mut progressed = false;
+            for (alias, source) in remaining {
+                let root = self
+                    .binder
+                    .standalone_namespace_for_storage(source)
+                    .map(|_| source)
+                    .or_else(|| {
+                        self.standalone_namespace_value_aliases
+                            .get(&source)
+                            .copied()
+                    });
+                let Some(root) = root else {
+                    next.push((alias, source));
+                    continue;
+                };
+                let Some(namespace) = self.binder.standalone_namespace_for_storage(root) else {
+                    continue;
+                };
+                if matches!(
+                    self.namespace_values.standalone_terminal(namespace),
+                    Some(super::namespace_values::StandaloneNamespaceTerminal::Ready {
+                        storage,
+                        ..
+                    }) if storage == root
+                ) {
+                    self.standalone_namespace_value_aliases.insert(alias, root);
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                break;
+            }
+            remaining = next;
+        }
+    }
+
     /// Install the namespace-side half of an admitted function merge before its
     /// statement list reserves callable rows. The namespace lane owns lowering;
     /// this API accepts only its frozen, identity-neutral value payload.

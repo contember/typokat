@@ -463,6 +463,9 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// One-step `const Alias = Class` origins. `infer_new` uses this only to retain
     /// the direct class's abstract and constructor-accessibility facts.
     pub(in crate::check::checker) class_value_aliases: FxHashMap<ValueStorageId, ValueStorageId>,
+    /// Const aliases that retain a standalone namespace root's completeness provenance.
+    pub(in crate::check::checker) standalone_namespace_value_aliases:
+        FxHashMap<ValueStorageId, ValueStorageId>,
     /// Display name by stable [`ClassId`].
     /// Lets constructor-access diagnostics name the declaring class, which may be
     /// an inherited base, while keeping [`ClassInfo`] `Copy`.

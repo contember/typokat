@@ -4113,6 +4113,9 @@ fn walk_type_decl_namespace<'ast>(
     declaration: &'ast TSModuleDeclaration<'ast>,
     visit: &mut impl FnMut(ScopeId, u32, TopTypeDecl<'ast>),
 ) {
+    let scope = binder
+        .namespace_fragment_private_scope(module, declaration.span.start)
+        .unwrap_or(scope);
     match &declaration.body {
         Some(TSModuleDeclarationBody::TSModuleBlock(block)) => {
             walk_type_decl_statements(binder, module, scope, &block.body, visit);

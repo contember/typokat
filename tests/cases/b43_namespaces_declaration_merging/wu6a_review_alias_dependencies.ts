@@ -1,4 +1,4 @@
-// Disabled WU6A second-review oracle: tsc 6.0.3 --strict --noEmit --pretty false --lib es5
+// Initially disabled WU6A second-review oracle: tsc 6.0.3 --strict --noEmit --pretty false --lib es5
 // --module commonjs. Namespace/private-callable alias dependencies must stage before root
 // publication, while simple const provenance is known before an earlier function body is checked.
 

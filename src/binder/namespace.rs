@@ -726,6 +726,9 @@ pub(crate) struct AttachedNamespaceValueMember<'a> {
     pub(crate) value_storage: Option<ValueStorageId>,
     pub(crate) symbol: Option<SymbolId>,
     pub(crate) kind: MergeDeclarationKind,
+    pub(crate) variable_kind: Option<VariableKind>,
+    pub(crate) publication: NamespacePublication,
+    pub(crate) ambient: bool,
 }
 
 /// Frozen binder view of all namespace fragments attached to one same-name group.
@@ -737,6 +740,34 @@ pub(crate) struct NamespaceValueAttachment<'a> {
     pub(crate) disposition: NamespaceValueAttachmentDisposition,
     pub(crate) fragments: Vec<&'a NamespaceFragment>,
     pub(crate) members: Vec<AttachedNamespaceValueMember<'a>>,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) struct StandaloneNamespaceValueMember<'a> {
+    pub(crate) member: NamespaceMemberId,
+    pub(crate) declaration: Option<DeclId>,
+    pub(crate) name: Option<&'a str>,
+    pub(crate) source: SourceUnitKey,
+    pub(crate) site: Option<DeclarationSite>,
+    pub(crate) declaration_span: Span,
+    pub(crate) local_span: Option<Span>,
+    pub(crate) original_module: OriginalModuleOrdinal,
+    pub(crate) value_storage: Option<ValueStorageId>,
+    pub(crate) alias_target_storage: Option<ValueStorageId>,
+    pub(crate) ambient: bool,
+    pub(crate) child_namespace: Option<NamespaceId>,
+    pub(crate) kind: MergeDeclarationKind,
+    pub(crate) publication: NamespacePublication,
+    pub(crate) spaces: DeclarationSpaces,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct StandaloneNamespaceValueAttachment<'a> {
+    pub(crate) namespace: NamespaceId,
+    pub(crate) storage: ValueStorageId,
+    pub(crate) symbol: SymbolId,
+    pub(crate) fragments: Vec<&'a NamespaceFragment>,
+    pub(crate) members: Vec<StandaloneNamespaceValueMember<'a>>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -784,6 +815,7 @@ pub struct NamespaceTable {
     canonical_umd_exports: Vec<usize>,
     canonical_export_contexts: Vec<ExportContextId>,
     compilation_global: Option<ScopeId>,
+    script_namespace_root: Option<ScopeId>,
 }
 
 impl NamespaceTable {
@@ -870,6 +902,14 @@ impl NamespaceTable {
         let compilation_global = self
             .compilation_global
             .expect("compilation-global scope allocated");
+        let script_namespace_root = self
+            .script_namespace_root
+            .expect("script namespace root scope allocated");
+        let script_root = graph
+            .get(script_namespace_root)
+            .expect("script namespace root scope exists");
+        assert_eq!(script_root.kind, ScopeKind::ScriptNamespaceRoot);
+        assert_eq!(script_root.parent, Some(compilation_global));
         let mut unsafe_names = rustc_hash::FxHashSet::default();
         for record in self
             .merges
@@ -950,7 +990,7 @@ impl NamespaceTable {
                 .get_mut(unit.module)
                 .expect("user module scope exists");
             assert_eq!(module.kind, ScopeKind::Module);
-            module.parent = Some(compilation_global);
+            module.parent = Some(script_namespace_root);
         }
     }
 
@@ -1210,6 +1250,25 @@ impl NamespaceTable {
             .collect()
     }
 
+    fn is_admitted_instantiated_standalone(&self, record: &MergeRecord) -> bool {
+        !matches!(
+            record.owner,
+            DeclarationOwner::CompilationGlobal | DeclarationOwner::DeferredAmbientModule(_)
+        ) && record.classification.disposition == MergeDisposition::Admitted
+            && namespace_value_attachment_disposition(record)
+                == Some(NamespaceValueAttachmentDisposition::TypeContainerOnly)
+            && record.declarations.iter().any(|participant| {
+                participant.kind == MergeDeclarationKind::Namespace
+                    && participant.namespace_instance == Some(NamespaceInstanceState::Instantiated)
+            })
+            && record
+                .declarations
+                .iter()
+                .filter_map(|participant| participant.namespace_fragment)
+                .filter_map(|fragment| self.fragment(fragment))
+                .all(|fragment| !self.has_compilation_global_ancestor(fragment.namespace))
+    }
+
     fn standalone_merge_record(&self, id: NamespaceId) -> Option<&MergeRecord> {
         let namespace = self.get(id)?;
         let owner = match namespace.owner {
@@ -1262,6 +1321,46 @@ pub(super) fn allocate_dormant_namespace_value_storages(state: &mut BindState) {
             slot.replace(storage).is_none(),
             "namespace storage is stable"
         );
+        let symbol = state
+            .namespaces
+            .get(namespace)
+            .expect("namespace storage owner exists")
+            .symbol;
+        let root = state
+            .symbols
+            .get_mut(symbol)
+            .expect("namespace root symbol exists");
+        assert!(
+            root.value.replace(storage).is_none(),
+            "standalone root is dormant"
+        );
+    }
+
+    let type_only = state
+        .namespaces
+        .canonical_namespaces
+        .iter()
+        .copied()
+        .filter(|namespace| {
+            state.namespaces.aggregate_instance_state(*namespace)
+                == Some(NamespaceInstanceState::NonInstantiated)
+                && state
+                    .namespaces
+                    .standalone_merge_record(*namespace)
+                    .is_some_and(|record| {
+                        record.classification.disposition == MergeDisposition::Admitted
+                            && namespace_value_attachment_disposition(record)
+                                == Some(NamespaceValueAttachmentDisposition::TypeContainerOnly)
+                    })
+        })
+        .filter_map(|namespace| state.namespaces.get(namespace).map(|root| root.symbol))
+        .collect::<Vec<_>>();
+    for symbol in type_only {
+        state
+            .symbols
+            .get_mut(symbol)
+            .expect("type-only namespace root exists")
+            .blocks_value_lookup = true;
     }
 }
 
@@ -1275,6 +1374,108 @@ struct QualifiedSymbolView {
 }
 
 impl Binder {
+    pub(crate) fn namespace_fragment_private_scope(
+        &self,
+        module: ScopeId,
+        source_start: u32,
+    ) -> Option<ScopeId> {
+        self.namespaces
+            .fragments
+            .iter()
+            .find(|fragment| fragment.module == module && fragment.source_start == source_start)
+            .map(|fragment| fragment.private_scope)
+    }
+
+    pub(crate) fn standalone_namespace_for_storage(
+        &self,
+        storage: ValueStorageId,
+    ) -> Option<NamespaceId> {
+        self.namespaces
+            .standalone_value_storages
+            .iter()
+            .position(|candidate| *candidate == Some(storage))
+            .map(|index| NamespaceId(u32::try_from(index).expect("namespace index fits u32")))
+    }
+
+    pub(crate) fn standalone_namespace_value_attachments(
+        &self,
+    ) -> Vec<StandaloneNamespaceValueAttachment<'_>> {
+        self.namespaces
+            .canonical_namespaces
+            .iter()
+            .filter_map(|namespace| {
+                let storage = self.namespaces.standalone_value_storage(*namespace)?;
+                let root = self.namespaces.get(*namespace)?;
+                let fragments = root
+                    .fragments
+                    .iter()
+                    .filter_map(|fragment| self.namespaces.fragment(*fragment))
+                    .collect::<Vec<_>>();
+                let mut members = fragments
+                    .iter()
+                    .flat_map(|fragment| fragment.members.iter())
+                    .filter_map(|member| self.namespaces.member(*member))
+                    .map(|member| {
+                        let declaration = member.declaration;
+                        let lexical = declaration.and_then(|id| self.declarations.get(id));
+                        let child_namespace = member
+                            .symbol
+                            .and_then(|symbol| self.symbols.get(symbol))
+                            .and_then(|symbol| symbol.ns);
+                        StandaloneNamespaceValueMember {
+                            member: member.id,
+                            declaration,
+                            name: member.name.as_deref(),
+                            source: member.source,
+                            site: lexical.map(|declaration| declaration.site),
+                            declaration_span: member.declaration_span,
+                            local_span: member.local_span,
+                            original_module: member.original_module,
+                            value_storage: lexical
+                                .and_then(|declaration| declaration.value_storage)
+                                .or_else(|| {
+                                    member
+                                        .symbol
+                                        .and_then(|symbol| self.symbols.get(symbol))
+                                        .and_then(|symbol| symbol.value)
+                                }),
+                            alias_target_storage: member
+                                .local_symbol
+                                .and_then(|symbol| self.symbols.get(symbol))
+                                .and_then(|symbol| symbol.value),
+                            ambient: fragments.iter().any(|fragment| {
+                                fragment.members.contains(&member.id) && fragment.ambient
+                            }),
+                            child_namespace,
+                            kind: member.kind,
+                            publication: member.publication,
+                            spaces: member.spaces,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                members.sort_by_key(|member| {
+                    (
+                        member.source,
+                        member
+                            .site
+                            .map_or(u32::MAX, |site| site.declaration_span.start),
+                        member
+                            .declaration
+                            .map_or(u32::MAX, |declaration| declaration.0),
+                        member.member.0,
+                    )
+                });
+                Some(StandaloneNamespaceValueAttachment {
+                    namespace: *namespace,
+                    storage,
+                    symbol: root.symbol,
+                    fragments,
+                    members,
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn global_augmentation_scope(
         &self,
         module: ScopeId,
@@ -1390,6 +1591,14 @@ impl Binder {
                     value_storage: lexical.value_storage,
                     symbol: member.symbol,
                     kind: member.kind,
+                    variable_kind: match member.syntax {
+                        DeclarationSyntaxFacts::Variable(kind) => Some(kind),
+                        _ => None,
+                    },
+                    publication: member.publication,
+                    ambient: fragments
+                        .iter()
+                        .any(|fragment| fragment.members.contains(&member.id) && fragment.ambient),
                 })
             })
             .collect::<Vec<_>>();
@@ -2161,6 +2370,7 @@ pub(crate) fn bind_namespace_metadata(
     program: &Program<'_>,
     unit: CompilationUnit,
     compilation_global: ScopeId,
+    script_namespace_root: ScopeId,
 ) {
     state.namespaces.source_units.push(SourceUnitRecord {
         source: unit.source,
@@ -2169,6 +2379,7 @@ pub(crate) fn bind_namespace_metadata(
         context: unit.binding,
     });
     state.namespaces.compilation_global = Some(compilation_global);
+    state.namespaces.script_namespace_root = Some(script_namespace_root);
     let context = WalkContext {
         owner: DeclarationOwner::Lexical(module),
         lexical_scope: module,
@@ -2199,17 +2410,20 @@ struct NamespaceValueBindingTarget {
 fn bind_namespace_value_attachment_members(state: &mut BindState, program: &Program<'_>) {
     let mut targets = Vec::new();
     for record in &state.namespaces.merges {
-        if !matches!(
+        let attached = matches!(
             namespace_value_attachment_disposition(record),
             Some(
                 NamespaceValueAttachmentDisposition::AdmittedFunction
                     | NamespaceValueAttachmentDisposition::AdmittedClass
                     | NamespaceValueAttachmentDisposition::DeferredFunctionBacklog42
             )
-        ) || matches!(
-            record.owner,
-            DeclarationOwner::CompilationGlobal | DeclarationOwner::DeferredAmbientModule(_)
-        ) {
+        );
+        if (!attached && !state.namespaces.is_admitted_instantiated_standalone(record))
+            || matches!(
+                record.owner,
+                DeclarationOwner::CompilationGlobal | DeclarationOwner::DeferredAmbientModule(_)
+            )
+        {
             continue;
         }
         for fragment in record
@@ -2769,6 +2983,22 @@ fn walk_statement(
                 context: umd_context,
             });
         }
+        Statement::BlockStatement(_)
+        | Statement::IfStatement(_)
+        | Statement::SwitchStatement(_)
+        | Statement::WhileStatement(_)
+        | Statement::LabeledStatement(_)
+        | Statement::ForStatement(_)
+        | Statement::ForInStatement(_)
+        | Statement::ForOfStatement(_)
+        | Statement::DoWhileStatement(_)
+        | Statement::ThrowStatement(_)
+        | Statement::TryStatement(_)
+        | Statement::ExpressionStatement(_)
+            if context.namespace.is_some() =>
+        {
+            super::bind::bind_statement(state, context.lexical_scope, statement)
+        }
         _ => {}
     }
 }
@@ -3073,9 +3303,28 @@ fn bind_module_declaration(
     } else {
         context.publication(explicit)
     };
-    let Some(owner) = context.namespace_owner(publication) else {
+    let Some(mut owner) = context.namespace_owner(publication) else {
         return;
     };
+    if context.direct_top_level
+        && !unit.binding.external_module
+        && matches!(owner, NamespaceOwner::Lexical(scope) if scope == context.lexical_scope)
+    {
+        let occupied_local = state
+            .graph
+            .get(context.lexical_scope)
+            .and_then(|scope| scope.lookup_local(identifier.name.as_str()))
+            .and_then(|symbol| state.symbols.get(symbol))
+            .is_some_and(|symbol| symbol.value.is_some());
+        if !occupied_local {
+            owner = NamespaceOwner::Lexical(
+                state
+                    .namespaces
+                    .script_namespace_root
+                    .expect("script namespace root scope allocated"),
+            );
+        }
+    }
     let declaration_id = state.attach_declaration_scope(
         identifier.span.start,
         DeclarationKind::Namespace,
@@ -4603,8 +4852,17 @@ enum ClassChimera {}
         assert!(class_attachment.members[0].value_storage.is_some());
 
         for name in ["Standalone", "TypeOnly"] {
+            let namespace = binder
+                .namespaces
+                .namespaces()
+                .find(|namespace| namespace.name == name)
+                .expect("type-container namespace identity");
+            let owner_scope = match namespace.owner {
+                NamespaceOwner::Lexical(scope) => scope,
+                _ => panic!("fixture root is lexical"),
+            };
             let attachment = binder
-                .namespace_value_attachment(binder.module, name)
+                .namespace_value_attachment(owner_scope, name)
                 .expect("type-container namespace");
             assert_eq!(
                 attachment.disposition,
@@ -4623,7 +4881,7 @@ enum ClassChimera {}
                         && &source[declaration.site.binding_span.range()] == "dormant"
                 })
                 .expect("dormant value declaration");
-            assert_eq!(dormant.value_storage, None, "{name}");
+            assert!(dormant.value_storage.is_some(), "{name}");
         }
 
         let chimera = binder
@@ -5014,7 +5272,7 @@ function Reverse(): void {}
                     .expect("private scope");
                 assert_eq!(scope.kind, ScopeKind::NamespacePrivate);
                 assert_eq!(scope.parent, Some(binder.module));
-                assert_eq!(scope.symbols.len(), 1);
+                assert!(!scope.symbols.is_empty());
                 assert_eq!(
                     binder.graph.var_scope(fragment.private_scope),
                     Some(fragment.private_scope)
@@ -5028,7 +5286,7 @@ function Reverse(): void {}
         assert_eq!(
             binder
                 .graph
-                .get(binder.module)
+                .get(binder.script_namespace_root)
                 .and_then(|scope| scope.lookup_local("N")),
             Some(namespace.symbol)
         );
@@ -5037,20 +5295,26 @@ function Reverse(): void {}
             .get(namespace.symbol)
             .expect("root namespace symbol");
         assert_eq!(root_symbol.ns, Some(namespace.id));
-        assert_eq!(root_symbol.value, None);
+        assert_eq!(
+            root_symbol.value,
+            binder.namespaces.standalone_value_storage(namespace.id)
+        );
         assert_eq!(root_symbol.ty, None);
         assert_eq!(root_symbol.declarations.len(), 3);
-        assert_eq!(binder.resolve_value(binder.module, "N"), None);
+        assert_eq!(
+            binder.resolve_value(binder.module, "N"),
+            Some(namespace.symbol)
+        );
         assert_eq!(binder.resolve_type(binder.module, "N"), None);
 
-        assert_eq!(binder.decl_count, 1);
+        assert_eq!(binder.decl_count, 5);
         assert_eq!(
             binder.namespaces.aggregate_instance_state(namespace.id),
             Some(NamespaceInstanceState::Instantiated)
         );
         assert_eq!(
             binder.namespaces.standalone_value_storage(namespace.id),
-            Some(ValueStorageId(0))
+            Some(ValueStorageId(4))
         );
         assert!(binder.type_groups.is_empty());
         for name in ["publicOne", "privateOne", "privateTwo", "privateThree"] {
@@ -5059,7 +5323,7 @@ function Reverse(): void {}
                 .iter()
                 .find(|declaration| &source[declaration.site.binding_span.range()] == name)
                 .expect("body declaration");
-            assert_eq!(declaration.value_storage, None);
+            assert!(declaration.value_storage.is_some());
             assert_eq!(declaration.type_group, None);
             assert!(private_scopes.contains(&declaration.site.scope.expect("private context")));
         }
@@ -5084,17 +5348,28 @@ function Reverse(): void {}
             .expect("one compilation-global scope");
         assert_eq!(global.kind, ScopeKind::CompilationGlobal);
         assert_eq!(global.parent, Some(binder.prelude_module));
-        assert!(global.symbols.is_empty());
+        assert_eq!(global.lookup_local("N"), None);
+        let script_root = binder
+            .graph
+            .get(binder.script_namespace_root)
+            .expect("one script namespace root scope");
+        assert_eq!(script_root.kind, ScopeKind::ScriptNamespaceRoot);
+        assert_eq!(script_root.parent, Some(binder.compilation_global));
+        assert_eq!(script_root.lookup_local("N"), Some(namespace.symbol));
         assert_eq!(
             binder.graph.var_scope(binder.compilation_global),
             Some(binder.compilation_global)
+        );
+        assert_eq!(
+            binder.graph.var_scope(binder.script_namespace_root),
+            Some(binder.script_namespace_root)
         );
         assert_eq!(
             binder
                 .graph
                 .get(binder.module)
                 .and_then(|scope| scope.parent),
-            Some(binder.compilation_global)
+            Some(binder.script_namespace_root)
         );
     }
 
@@ -5232,8 +5507,8 @@ declare global {
                     .symbols
                     .get(namespace.symbol)
                     .and_then(|symbol| symbol.value),
-                None,
-                "{name} root symbol stays dormant"
+                binder.namespaces.standalone_value_storage(namespace.id),
+                "{name} root symbol uses its namespace-owned storage"
             );
         }
         assert!(binder
@@ -5335,6 +5610,255 @@ declare global {
         }
 
         assert_eq!(storage_map(false), storage_map(true));
+    }
+
+    #[test]
+    fn script_namespace_root_shares_only_script_roots_and_isolates_other_owners() {
+        fn bind_project(sources: &[(&str, SourceUnitKey)]) -> (Binder, Vec<ScopeId>) {
+            let prelude_allocator = Allocator::default();
+            let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+            let allocators = sources
+                .iter()
+                .map(|_| Allocator::default())
+                .collect::<Vec<_>>();
+            let parsed = sources
+                .iter()
+                .zip(&allocators)
+                .map(|((source, _), allocator)| {
+                    let parsed = Parser::new(allocator, source, SourceType::ts()).parse();
+                    assert!(!parsed.panicked, "parse failed: {source}");
+                    parsed
+                })
+                .collect::<Vec<_>>();
+            let mut builder = ProjectBinderBuilder::new(&prelude.program);
+            let mut modules = Vec::new();
+            for (original_module, ((_, source), parsed)) in sources.iter().zip(&parsed).enumerate()
+            {
+                let unit = CompilationUnit {
+                    source: *source,
+                    original_module: OriginalModuleOrdinal(
+                        u32::try_from(original_module).expect("project module count fits u32"),
+                    ),
+                    binding: ModuleBindingContext::for_program(
+                        &parsed.program,
+                        SourceFileKind::ImplementationTs,
+                    ),
+                };
+                let (module, _) = builder.add_module(&parsed.program, &[], unit);
+                modules.push(module);
+            }
+            let binder = builder.finish(*modules.last().expect("one project module"));
+            (binder, modules)
+        }
+
+        fn shared_script_projection(reverse: bool) -> (ValueStorageId, Vec<SourceUnitKey>) {
+            let first = (
+                "namespace Shared { export const first: number = 1; }",
+                SourceUnitKey(10),
+            );
+            let second = (
+                "namespace Shared { export const second: string = \"second\"; }",
+                SourceUnitKey(20),
+            );
+            let sources = if reverse {
+                [second, first]
+            } else {
+                [first, second]
+            };
+            let (binder, _) = bind_project(&sources);
+            let matches = binder
+                .namespaces
+                .namespaces()
+                .filter(|namespace| namespace.name == "Shared")
+                .collect::<Vec<_>>();
+            assert_eq!(matches.len(), 1, "script reopenings share one identity");
+            let namespace = matches[0];
+            assert_eq!(
+                namespace.owner,
+                NamespaceOwner::Lexical(binder.script_namespace_root)
+            );
+            let public = binder
+                .graph
+                .get(namespace.public_scope)
+                .expect("shared script namespace surface");
+            assert!(public.lookup_local("first").is_some());
+            assert!(public.lookup_local("second").is_some());
+            (
+                binder
+                    .namespaces
+                    .standalone_value_storage(namespace.id)
+                    .expect("shared script root storage"),
+                namespace
+                    .fragments
+                    .iter()
+                    .filter_map(|fragment| binder.namespaces.fragment(*fragment))
+                    .map(|fragment| fragment.source)
+                    .collect(),
+            )
+        }
+
+        let forward = shared_script_projection(false);
+        let reverse = shared_script_projection(true);
+        assert_eq!(forward, reverse);
+        assert_eq!(forward.1, [SourceUnitKey(10), SourceUnitKey(20)]);
+
+        let sources = [
+            (
+                "namespace Shared { export const scriptOnly: number = 1; }",
+                SourceUnitKey(10),
+            ),
+            (
+                "export {}; namespace Shared { export const moduleOne: number = 1; }",
+                SourceUnitKey(20),
+            ),
+            (
+                "export {}; namespace Shared { export const moduleTwo: number = 2; }",
+                SourceUnitKey(30),
+            ),
+            (
+                "export {}; declare global { namespace Shared { interface GlobalOnly {} } }",
+                SourceUnitKey(40),
+            ),
+            (
+                "function FunctionPair(): void {} namespace FunctionPair { export const tag: number = 1; } class ClassPair {} namespace ClassPair { export const tag: number = 1; }",
+                SourceUnitKey(50),
+            ),
+            (
+                "export {}; declare global { namespace Blocked { const value: number; } }",
+                SourceUnitKey(60),
+            ),
+        ];
+        let (binder, modules) = bind_project(&sources);
+        assert!(modules.iter().all(|module| binder
+            .graph
+            .get(*module)
+            .is_some_and(|scope| scope.parent == Some(binder.script_namespace_root))));
+        let script_root = binder
+            .graph
+            .get(binder.script_namespace_root)
+            .expect("script namespace root");
+        let compilation_global = binder
+            .graph
+            .get(binder.compilation_global)
+            .expect("compilation global");
+        let prelude = binder
+            .graph
+            .get(binder.prelude_module)
+            .expect("prelude module");
+        assert_eq!(script_root.kind, ScopeKind::ScriptNamespaceRoot);
+        assert_eq!(script_root.parent, Some(binder.compilation_global));
+        assert_eq!(compilation_global.parent, Some(binder.prelude_module));
+        assert_eq!(prelude.parent, None);
+
+        let script = binder
+            .namespaces
+            .namespaces()
+            .find(|namespace| {
+                namespace.name == "Shared"
+                    && namespace.owner == NamespaceOwner::Lexical(binder.script_namespace_root)
+            })
+            .expect("script Shared");
+        let module_one = binder
+            .namespaces
+            .namespaces()
+            .find(|namespace| {
+                namespace.name == "Shared" && namespace.owner == NamespaceOwner::Lexical(modules[1])
+            })
+            .expect("first module-local Shared");
+        let module_two = binder
+            .namespaces
+            .namespaces()
+            .find(|namespace| {
+                namespace.name == "Shared" && namespace.owner == NamespaceOwner::Lexical(modules[2])
+            })
+            .expect("second module-local Shared");
+        let global = binder
+            .namespaces
+            .namespaces()
+            .find(|namespace| {
+                namespace.name == "Shared" && namespace.owner == NamespaceOwner::CompilationGlobal
+            })
+            .expect("declare-global Shared");
+        let identities = [script.id, module_one.id, module_two.id, global.id];
+        assert!(identities
+            .iter()
+            .enumerate()
+            .all(|(index, identity)| identities[index + 1..]
+                .iter()
+                .all(|other| identity != other)));
+        let storages = [script, module_one, module_two].map(|namespace| {
+            binder
+                .namespaces
+                .standalone_value_storage(namespace.id)
+                .expect("instantiated standalone owner")
+        });
+        assert_ne!(storages[0], storages[1]);
+        assert_ne!(storages[0], storages[2]);
+        assert_ne!(storages[1], storages[2]);
+        assert_eq!(binder.namespaces.standalone_value_storage(global.id), None);
+        assert_eq!(script_root.lookup_local("Shared"), Some(script.symbol));
+        assert_eq!(
+            compilation_global.lookup_local("Shared"),
+            Some(global.symbol)
+        );
+        assert_eq!(
+            binder
+                .graph
+                .get(modules[1])
+                .and_then(|scope| scope.lookup_local("Shared")),
+            Some(module_one.symbol)
+        );
+        assert_eq!(
+            binder
+                .graph
+                .get(modules[2])
+                .and_then(|scope| scope.lookup_local("Shared")),
+            Some(module_two.symbol)
+        );
+        for (namespace, own, foreign) in [
+            (script, "scriptOnly", "GlobalOnly"),
+            (global, "GlobalOnly", "scriptOnly"),
+        ] {
+            let public = binder
+                .graph
+                .get(namespace.public_scope)
+                .expect("isolated namespace surface");
+            assert!(public.lookup_local(own).is_some());
+            assert_eq!(public.lookup_local(foreign), None);
+        }
+
+        for name in ["FunctionPair", "ClassPair"] {
+            let namespace = binder
+                .namespaces
+                .namespaces()
+                .find(|namespace| namespace.name == name)
+                .unwrap_or_else(|| panic!("{name} namespace"));
+            assert_eq!(namespace.owner, NamespaceOwner::Lexical(modules[4]));
+            assert_eq!(
+                binder.namespaces.standalone_value_storage(namespace.id),
+                None
+            );
+            assert_eq!(script_root.lookup_local(name), None);
+        }
+
+        assert_eq!(script_root.lookup_local("Blocked"), None);
+        assert_eq!(compilation_global.lookup_local("Blocked"), None);
+        let blocked_global = binder
+            .namespaces
+            .globals()
+            .find(|global| global.source == SourceUnitKey(60))
+            .expect("blocked global augmentation");
+        let blocker = binder
+            .graph
+            .get(blocked_global.overlay_scope)
+            .and_then(|scope| scope.lookup_local("Blocked"))
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .expect("global blocker");
+        assert!(
+            blocker.blocks_value_lookup
+                && blocker.blocks_type_lookup
+                && blocker.blocks_namespace_lookup
+        );
     }
 
     #[test]
@@ -6376,12 +6900,15 @@ namespace Visibility {
             .graph
             .get(namespace.public_scope)
             .is_some_and(|scope| scope.parent.is_none())));
-        assert!(binder.graph.get(binder.module).is_some_and(|scope| {
-            scope.lookup_local("A").is_some()
-                && ["B", "C"]
-                    .iter()
-                    .all(|name| scope.lookup_local(name).is_none())
-        }));
+        assert!(binder
+            .graph
+            .get(binder.script_namespace_root)
+            .is_some_and(|scope| {
+                scope.lookup_local("A").is_some()
+                    && ["B", "C"]
+                        .iter()
+                        .all(|name| scope.lookup_local(name).is_none())
+            }));
     }
 
     #[test]
@@ -6855,44 +7382,57 @@ namespace Visibility {
     fn rich_namespace_and_global_bodies_inventory_exact_declarations_without_storage() {
         let source = "interface Existing {} namespace Existing { export const { a, nested: { b } } = value; export function f(param: number): void {} export class C {} export type T = number; export interface I {} export enum E {} export namespace Child {} export { a as alias }; } declare global { const [g]: number[]; function gf(arg: number): void; class GC {} type GT = number; interface GI {} enum GE {} namespace GN {} }";
         let binder = bind(source, false);
-        assert_eq!(binder.decl_count, 1);
+        assert_eq!(binder.decl_count, 4);
         assert_eq!(binder.type_groups.len(), 4);
 
-        let existing_symbol = binder
+        let existing_type_symbol = binder
             .graph
             .get(binder.module)
             .and_then(|scope| scope.lookup_local("Existing"))
             .and_then(|symbol| binder.symbols.get(symbol))
-            .expect("interface plus namespace symbol");
-        assert!(existing_symbol.ty.is_some());
-        assert!(existing_symbol.ns.is_some());
-        assert_eq!(existing_symbol.value, None);
-        assert_eq!(existing_symbol.declarations.len(), 2);
-        assert!(existing_symbol.declarations.windows(2).all(|pair| binder
-            .declarations
-            .get(pair[0])
-            .zip(binder.declarations.get(pair[1]))
-            .is_some_and(|(left, right)| left.site.declaration_span.start
-                < right.site.declaration_span.start)));
+            .expect("same-file interface symbol");
+        assert!(existing_type_symbol.ty.is_some());
+        assert!(existing_type_symbol.ns.is_none());
+        assert!(existing_type_symbol.value.is_none());
+        assert_eq!(existing_type_symbol.declarations.len(), 1);
+
+        let existing_namespace_symbol = binder
+            .graph
+            .get(binder.script_namespace_root)
+            .and_then(|scope| scope.lookup_local("Existing"))
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .expect("script-root namespace symbol");
+        assert!(existing_namespace_symbol.ns.is_some());
+        assert_eq!(
+            existing_namespace_symbol.value,
+            existing_namespace_symbol
+                .ns
+                .and_then(|namespace| binder.namespaces.standalone_value_storage(namespace))
+        );
+        assert_eq!(existing_namespace_symbol.declarations.len(), 1);
 
         for declaration in binder.declarations.iter().filter(|declaration| {
             declaration.kind != DeclarationKind::Interface
                 || &source[declaration.site.binding_span.range()] != "Existing"
         }) {
-            assert_eq!(declaration.value_storage, None);
             let name = &source[declaration.site.binding_span.range()];
+            if matches!(name, "f" | "C" | "param") {
+                assert!(declaration.value_storage.is_some(), "{name}");
+            } else {
+                assert_eq!(declaration.value_storage, None, "{name}");
+            }
             if matches!(name, "C" | "T" | "I") {
                 assert!(declaration.type_group.is_some());
             } else {
                 assert_eq!(declaration.type_group, None);
             }
-            if matches!(name, "param" | "arg") {
+            if name == "arg" {
                 assert_eq!(declaration.site.scope, None);
             } else {
                 assert!(declaration.site.scope.is_some());
             }
         }
-        let namespace = existing_symbol
+        let namespace = existing_namespace_symbol
             .ns
             .and_then(|namespace| binder.namespaces.get(namespace))
             .expect("Existing namespace");
@@ -6916,7 +7456,11 @@ namespace Visibility {
                 .iter()
                 .find(|declaration| &source[declaration.site.binding_span.range()] == name)
                 .expect("descendant declaration");
-            assert_eq!(declaration.site.scope, None);
+            if name == "param" {
+                assert!(declaration.site.scope.is_some());
+            } else {
+                assert_eq!(declaration.site.scope, None);
+            }
         }
         for name in ["g", "gf", "GC", "GT", "GI", "GE", "GN"] {
             let declaration = binder
@@ -7255,7 +7799,13 @@ declare global {
         assert!(global.issues.is_empty());
 
         let module = binder.graph.get(binder.module).expect("module scope");
-        assert_eq!(module.parent, Some(binder.compilation_global));
+        assert_eq!(module.parent, Some(binder.script_namespace_root));
+        let script_root = binder
+            .graph
+            .get(binder.script_namespace_root)
+            .expect("script namespace root");
+        assert_eq!(script_root.kind, ScopeKind::ScriptNamespaceRoot);
+        assert_eq!(script_root.parent, Some(binder.compilation_global));
         let compilation_global = binder
             .graph
             .get(binder.compilation_global)
@@ -7275,6 +7825,7 @@ declare global {
             "TypeSpace",
             "UsesDeferredRoot",
         ] {
+            assert_eq!(script_root.lookup_local(name), None, "{name}");
             let canonical = compilation_global
                 .lookup_local(name)
                 .unwrap_or_else(|| panic!("published global {name}"));

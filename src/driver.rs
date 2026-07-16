@@ -6,9 +6,12 @@
 use crate::binder::namespace::{
     CompilationUnit, ModuleBindingContext, OriginalModuleOrdinal, SourceFileKind, SourceUnitKey,
 };
-#[cfg(test)]
-use crate::check::checker::check_project_programs_with_binding_inspector;
 use crate::check::checker::events::{ModuleOrdinal, UnitSlot};
+#[cfg(test)]
+use crate::check::checker::{
+    check_project_programs_with_binding_inspector,
+    check_project_programs_with_namespace_value_inspector,
+};
 use crate::check::{
     check_program, check_project_programs, CheckResult, ProjectImport, ProjectImportSource,
     ProjectProgram,
@@ -183,6 +186,19 @@ where
 {
     check_project_inner_with_checker(inputs, |interner, units| {
         check_project_programs_with_binding_inspector(interner, units, inspect)
+    })
+}
+
+#[cfg(test)]
+fn check_project_inner_with_namespace_value_inspector<F>(
+    inputs: Vec<FileInput>,
+    inspect: F,
+) -> Vec<FileReport>
+where
+    F: FnOnce(&crate::check::checker::ProjectNamespaceValueInspection),
+{
+    check_project_inner_with_checker(inputs, |interner, units| {
+        check_project_programs_with_namespace_value_inspector(interner, units, inspect)
     })
 }
 
@@ -1270,7 +1286,14 @@ mod tests {
             assert!(scopes.iter().all(|scope| binder
                 .graph
                 .get(*scope)
-                .is_some_and(|scope| scope.parent == Some(binder.compilation_global))));
+                .is_some_and(|scope| scope.parent == Some(binder.script_namespace_root))));
+            assert!(binder
+                .graph
+                .get(binder.script_namespace_root)
+                .is_some_and(|scope| {
+                    scope.kind == ScopeKind::ScriptNamespaceRoot
+                        && scope.parent == Some(binder.compilation_global)
+                }));
             assert!(binder
                 .namespaces
                 .globals()
@@ -1561,6 +1584,215 @@ mod tests {
     }
 
     #[test]
+    fn project_standalone_namespace_roots_and_event_keys_are_input_order_stable() {
+        use std::cell::RefCell;
+
+        let types = "interface Wu6aCrossInterface { interfaceSide: number; }\n\
+                     type Wu6aCrossAlias = { aliasSide: string };\n\
+                     const interfaceValue: number = Wu6aCrossInterface.value;\n\
+                     const aliasValue: string = Wu6aCrossAlias.value;\n\
+                     const interfaceWrong: string = Wu6aCrossInterface.value;\n\
+                     Wu6aCrossInterface();\n\
+                     const aliasWrong: number = Wu6aCrossAlias.value;\n\
+                     new Wu6aCrossAlias();";
+        let values = "namespace Wu6aCrossInterface { export const value: number = 1; }\n\
+                      namespace Wu6aCrossAlias { export const value: string = \"value\"; }";
+
+        #[derive(Debug, PartialEq, Eq)]
+        struct RootProjection {
+            name: String,
+            symbol: crate::binder::symbol::SymbolId,
+            namespace_storage: Option<crate::binder::declaration::ValueStorageId>,
+            terminal_storage: Option<crate::binder::declaration::ValueStorageId>,
+            terminal: &'static str,
+            ty: Option<crate::types::store::TypeId>,
+            published: Option<crate::types::store::TypeId>,
+        }
+
+        type ReplayProjection = (usize, u32, usize, usize, String);
+
+        fn run(
+            types: &str,
+            values: &str,
+            reverse: bool,
+        ) -> (Vec<FileReport>, Vec<RootProjection>, Vec<ReplayProjection>) {
+            let inputs = if reverse {
+                vec![
+                    FileInput {
+                        name: "values.ts".into(),
+                        source: values.into(),
+                    },
+                    FileInput {
+                        name: "types.ts".into(),
+                        source: types.into(),
+                    },
+                ]
+            } else {
+                vec![
+                    FileInput {
+                        name: "types.ts".into(),
+                        source: types.into(),
+                    },
+                    FileInput {
+                        name: "values.ts".into(),
+                        source: values.into(),
+                    },
+                ]
+            };
+            let roots = RefCell::new(Vec::new());
+            let replay = RefCell::new(Vec::new());
+            let reports =
+                check_project_inner_with_namespace_value_inspector(inputs, |inspection| {
+                    *roots.borrow_mut() = inspection
+                        .roots
+                        .iter()
+                        .filter(|root| root.name.starts_with("Wu6aCross"))
+                        .map(|root| RootProjection {
+                            name: root.name.clone(),
+                            symbol: root.symbol,
+                            namespace_storage: root.namespace_storage,
+                            terminal_storage: root.terminal_storage,
+                            terminal: root.terminal,
+                            ty: root.ty,
+                            published: root.published,
+                        })
+                        .collect();
+                    *replay.borrow_mut() = inspection
+                        .replay
+                        .iter()
+                        .map(|record| {
+                            let kind = match &record.record {
+                                crate::check::checker::ProjectReplayRecordInspection::Diagnostic(
+                                    code,
+                                ) => format!("diagnostic:{code}"),
+                                crate::check::checker::ProjectReplayRecordInspection::Incomplete(
+                                    id,
+                                ) => format!("incomplete:{id}"),
+                            };
+                            (
+                                record.key.module_ordinal.index(),
+                                record.key.source_start,
+                                record.key.event_ordinal,
+                                record.key.record_ordinal,
+                                kind,
+                            )
+                        })
+                        .collect();
+                });
+            (reports, roots.into_inner(), replay.into_inner())
+        }
+
+        let (forward_reports, forward, forward_replay) = run(types, values, false);
+        let (reverse_reports, reverse, reverse_replay) = run(types, values, true);
+        for reports in [&forward_reports, &reverse_reports] {
+            assert!(reports
+                .iter()
+                .all(|report| report.output.parse_errors.is_empty()));
+            assert!(reports
+                .iter()
+                .all(|report| report.output.incomplete.is_empty()));
+            assert_eq!(
+                reports
+                    .iter()
+                    .flat_map(|report| codes(&report.output))
+                    .collect::<Vec<_>>(),
+                ["TK2322", "TK2349", "TK2322", "TK2351"]
+            );
+        }
+
+        assert_eq!(forward.len(), 2);
+        assert_eq!(reverse.len(), 2);
+        for (left, right) in forward.iter().zip(&reverse) {
+            assert_eq!(left.name, right.name);
+            assert_eq!(
+                left.symbol, right.symbol,
+                "root SymbolId is input-order stable"
+            );
+            assert_eq!(left.terminal, "ready");
+            assert_eq!(right.terminal, "ready");
+            assert_eq!(left.namespace_storage, left.terminal_storage);
+            assert_eq!(right.namespace_storage, right.terminal_storage);
+            assert_eq!(
+                left.namespace_storage, right.namespace_storage,
+                "namespace-owned ValueStorageId is input-order stable"
+            );
+            assert_eq!(left.ty, left.published, "forward root publishes atomically");
+            assert_eq!(
+                right.ty, right.published,
+                "reverse root publishes atomically"
+            );
+            assert_eq!(left.ty, right.ty, "root TypeId is input-order stable");
+        }
+        let replay = |module| {
+            vec![
+                (module, 213, 15, 1, "diagnostic:TK2322".to_owned()),
+                (module, 264, 16, 0, "diagnostic:TK2349".to_owned()),
+                (module, 292, 18, 1, "diagnostic:TK2322".to_owned()),
+                (module, 335, 19, 0, "diagnostic:TK2351".to_owned()),
+            ]
+        };
+        assert_eq!(forward_replay, replay(0));
+        assert_eq!(reverse_replay, replay(1));
+    }
+
+    #[test]
+    fn unavailable_namespace_export_alias_replays_at_exact_local_owner() {
+        use std::cell::RefCell;
+
+        let source = "declare namespace ExactAliasOwner {\n\
+                      enum Hidden { A }\n\
+                      export { Hidden as PublicHidden };\n\
+                      }";
+        let local_start = source
+            .find("Hidden as PublicHidden")
+            .expect("alias local spelling");
+        let local_start = u32::try_from(local_start).expect("source offset fits u32");
+        let local_span = Span::new(local_start, local_start + 6);
+        let replay = RefCell::new(Vec::new());
+        let reports = check_project_inner_with_namespace_value_inspector(
+            vec![FileInput {
+                name: "alias.ts".into(),
+                source: source.into(),
+            }],
+            |inspection| {
+                *replay.borrow_mut() = inspection
+                    .replay
+                    .iter()
+                    .filter_map(|record| match &record.record {
+                        crate::check::checker::ProjectReplayRecordInspection::Incomplete(id)
+                            if id == "decl/export-specifier/namespace-payload-unavailable" =>
+                        {
+                            Some((
+                                record.key.module_ordinal.index(),
+                                record.key.source_start,
+                                record.key.event_ordinal,
+                                record.key.record_ordinal,
+                            ))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+            },
+        );
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].output.parse_errors.is_empty());
+        assert!(reports[0].output.diagnostics.is_empty());
+        assert_eq!(
+            reports[0]
+                .output
+                .incomplete
+                .iter()
+                .filter(|incomplete| {
+                    incomplete.id == "decl/export-specifier/namespace-payload-unavailable"
+                })
+                .map(|incomplete| incomplete.span)
+                .collect::<Vec<_>>(),
+            [local_span]
+        );
+        assert_eq!(replay.into_inner(), [(0, local_start, 2, 0)]);
+    }
+
+    #[test]
     fn namespace_only_root_stays_invisible_to_production_resolution() {
         use crate::diagnostics::DiagnosticCode;
 
@@ -1576,7 +1808,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 (DiagnosticCode::TK2304, Span::new(32, 39)),
-                (DiagnosticCode::TK2304, Span::new(41, 48)),
+                (DiagnosticCode::TK2708, Span::new(41, 48)),
             ]
         );
     }

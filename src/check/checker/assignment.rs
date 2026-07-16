@@ -4,6 +4,7 @@ use super::calls::intrinsic_id;
 use super::classes::body::BodyMemberLookup;
 use super::context::*;
 use super::expr::contextual_literal_target;
+use crate::binder::bind::{ResolvedValueKind, ValueResolution};
 use crate::binder::declaration::ValueStorageId;
 use crate::binder::scope::ScopeId;
 use crate::binder::Binder;
@@ -64,9 +65,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // whether a type obligation is collected below.
         let value = rhs.map(|(ty, _)| (ty, assign_span));
 
-        let symbol_id = match self.binder.resolve_value(scope, target.name.as_str()) {
-            Some(symbol_id) => symbol_id,
-            None => {
+        let symbol_id = match self
+            .binder
+            .resolve_value_binding(scope, target.name.as_str())
+        {
+            ValueResolution::Resolved {
+                kind: ResolvedValueKind::StandaloneNamespace { .. },
+                ..
+            } => {
+                self.emit_diagnostic(Diagnostic::cannot_assign_namespace(
+                    Span::from_oxc(target.span),
+                    target.name.as_str(),
+                ));
+                return value;
+            }
+            ValueResolution::Resolved { symbol, .. } => symbol,
+            ValueResolution::TypeOnlyNamespace { .. } | ValueResolution::Missing => {
                 self.emit_diagnostic(Diagnostic::cannot_find_name(
                     Span::from_oxc(target.span),
                     target.name.as_str(),

@@ -516,6 +516,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .filter(|demand| !matches!(demand, FunctionGroupDemand::NotGroup)),
             _ => None,
         };
+        let direct_standalone = self.complete_standalone_namespace_value(scope, callee);
         let mut function_group_blocked = false;
         let (inferred_callee, call_receiver) =
             match direct_function_group {
@@ -610,7 +611,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let callee_ty = self.own_type_demand(outcome, call_span)?;
         let signatures = self.callable_signatures(callee_ty);
         if signatures.is_empty() {
-            if self.provably_non_callable(callee_ty) {
+            if direct_standalone || self.provably_non_callable(callee_ty) {
                 self.emit_diagnostic(Diagnostic::expression_is_not_callable(call_span));
             }
             return Some((wk.error, call_span));
@@ -1669,6 +1670,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> Option<(TypeId, Span)> {
         let wk = self.interner.well_known();
         let new_span = Span::from_oxc(new_expr.span);
+        let direct_standalone = self.complete_standalone_namespace_value(scope, &new_expr.callee);
 
         // Resolve a direct class identifier, parenthesized class callee, or one-step
         // `const Alias = Class` before callee inference. Keep the class declaration
@@ -1760,6 +1762,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                             return None;
                         }
                     }
+                }
+                if direct_standalone || self.provably_non_callable(callee_ty) {
+                    self.emit_diagnostic(Diagnostic::expression_is_not_constructable(new_span));
                 }
             }
             return Some((wk.error, new_span));
@@ -2908,6 +2913,47 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.check_statement_list(scope, &body.statements, declared_ret, &mut inferred);
 
         inferred.unwrap_or(void_ty)
+    }
+
+    fn complete_standalone_namespace_value(
+        &self,
+        scope: ScopeId,
+        expression: &Expression<'_>,
+    ) -> bool {
+        let Some(name) = direct_identifier_name(expression) else {
+            return false;
+        };
+        let Some(value) = value_decl_id(self.binder, scope, name) else {
+            return false;
+        };
+        let root = self
+            .binder
+            .standalone_namespace_for_storage(value)
+            .map(|_| value)
+            .or_else(|| self.standalone_namespace_value_aliases.get(&value).copied());
+        let Some(root) = root else {
+            return false;
+        };
+        let Some(namespace) = self.binder.standalone_namespace_for_storage(root) else {
+            return false;
+        };
+        matches!(
+            self.namespace_values.standalone_terminal(namespace),
+            Some(super::namespace_values::StandaloneNamespaceTerminal::Ready {
+                storage,
+                ..
+            }) if storage == root
+        )
+    }
+}
+
+fn direct_identifier_name<'a>(expression: &'a Expression<'_>) -> Option<&'a str> {
+    match expression {
+        Expression::Identifier(identifier) => Some(identifier.name.as_str()),
+        Expression::ParenthesizedExpression(parenthesized) => {
+            direct_identifier_name(&parenthesized.expression)
+        }
+        _ => None,
     }
 }
 

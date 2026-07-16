@@ -1,4 +1,4 @@
-// Disabled WU6A second-review oracle: tsc 6.0.3 --strict --noEmit --pretty false --lib es5
+// Initially disabled WU6A second-review oracle: tsc 6.0.3 --strict --noEmit --pretty false --lib es5
 // --module commonjs. Every genuine static-root cycle retains its exact owner; an ordinary function
 // expression with a block-local same-name binding must not fabricate another cycle event.
 

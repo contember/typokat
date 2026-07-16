@@ -27,6 +27,7 @@ pub enum DiagnosticCode {
     TK1314,
     /// `export as namespace` appears in a non-declaration source file.
     TK1315,
+    TK1545,
     TK2300,
     /// Static member references its containing class's type parameter.
     TK2302,
@@ -59,6 +60,8 @@ pub enum DiagnosticCode {
     TK2345,
     /// A value with a known non-callable type is invoked.
     TK2349,
+    /// A direct standalone namespace root is used as a constructor.
+    TK2351,
     /// Object literal may only specify known properties (excess property).
     TK2353,
     /// Function implementation is missing or not immediately following the declaration.
@@ -93,6 +96,8 @@ pub enum DiagnosticCode {
     /// Non-abstract class is missing implementations for two or more inherited
     /// abstract members (aggregated) — backlog 06.
     TK2654,
+    /// A namespace binding is not an assignable variable.
+    TK2631,
     /// An ambient export list references an alias output instead of a local declaration.
     TK2661,
     /// A global augmentation appears outside an external or ambient module.
@@ -118,6 +123,8 @@ pub enum DiagnosticCode {
     TK2707,
     /// A type-only path segment is accessed as a namespace.
     TK2713,
+    /// A pure type-only namespace is used in value position.
+    TK2708,
     TK2717,
     /// Cannot assign to a read-only property — M14.
     TK2540,
@@ -139,6 +146,7 @@ pub enum DiagnosticCode {
     TK2749,
     /// No overload matches this call.
     TK2769,
+    TK2852,
 }
 
 impl DiagnosticCode {
@@ -147,6 +155,7 @@ impl DiagnosticCode {
         match self {
             DiagnosticCode::TK1314 => "TK1314",
             DiagnosticCode::TK1315 => "TK1315",
+            DiagnosticCode::TK1545 => "TK1545",
             DiagnosticCode::TK2300 => "TK2300",
             DiagnosticCode::TK2302 => "TK2302",
             DiagnosticCode::TK2304 => "TK2304",
@@ -163,6 +172,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2344 => "TK2344",
             DiagnosticCode::TK2345 => "TK2345",
             DiagnosticCode::TK2349 => "TK2349",
+            DiagnosticCode::TK2351 => "TK2351",
             DiagnosticCode::TK2456 => "TK2456",
             DiagnosticCode::TK2353 => "TK2353",
             DiagnosticCode::TK2385 => "TK2385",
@@ -181,6 +191,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2511 => "TK2511",
             DiagnosticCode::TK2515 => "TK2515",
             DiagnosticCode::TK2654 => "TK2654",
+            DiagnosticCode::TK2631 => "TK2631",
             DiagnosticCode::TK2661 => "TK2661",
             DiagnosticCode::TK2669 => "TK2669",
             DiagnosticCode::TK2670 => "TK2670",
@@ -193,6 +204,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2706 => "TK2706",
             DiagnosticCode::TK2707 => "TK2707",
             DiagnosticCode::TK2713 => "TK2713",
+            DiagnosticCode::TK2708 => "TK2708",
             DiagnosticCode::TK2717 => "TK2717",
             DiagnosticCode::TK2540 => "TK2540",
             DiagnosticCode::TK2554 => "TK2554",
@@ -204,6 +216,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2744 => "TK2744",
             DiagnosticCode::TK2749 => "TK2749",
             DiagnosticCode::TK2769 => "TK2769",
+            DiagnosticCode::TK2852 => "TK2852",
         }
     }
 }
@@ -947,6 +960,57 @@ impl Diagnostic {
             code: DiagnosticCode::TK2349,
             severity: Severity::Error,
             message: "This expression is not callable".to_string(),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    pub fn expression_is_not_constructable(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2351,
+            severity: Severity::Error,
+            message: "This expression is not constructable".to_string(),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    pub fn cannot_assign_namespace(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2631,
+            severity: Severity::Error,
+            message: format!("Cannot assign to '{name}' because it is a namespace"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    pub fn cannot_use_namespace_as_value(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2708,
+            severity: Severity::Error,
+            message: format!("Cannot use namespace '{name}' as a value"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    pub fn ambient_using_not_allowed(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK1545,
+            severity: Severity::Error,
+            message: "'using' declarations are not allowed in ambient contexts.".to_string(),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    pub fn namespace_await_using_not_allowed(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2852,
+            severity: Severity::Error,
+            message: "'await using' statements are only allowed within async functions and at the top levels of modules."
+                .to_string(),
             span,
             elaboration: Vec::new(),
         }

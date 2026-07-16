@@ -34,6 +34,8 @@ pub enum ScopeKind {
     NamespacePrivate,
     /// Legal project-wide type-side augmentation surface.
     CompilationGlobal,
+    /// Shared owner for top-level namespace declarations in script files.
+    ScriptNamespaceRoot,
     /// Lexical view for one `declare global` body.
     GlobalOverlay,
 }
@@ -170,6 +172,7 @@ impl ScopeGraph {
                     | ScopeKind::Module
                     | ScopeKind::NamespacePrivate
                     | ScopeKind::CompilationGlobal
+                    | ScopeKind::ScriptNamespaceRoot
                     | ScopeKind::GlobalOverlay
             ) {
                 return Some(id);

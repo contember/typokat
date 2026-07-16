@@ -3,7 +3,7 @@
 // Each owner stays explicitly typed so only its attached namespace payload reaches a boundary.
 
 function Wu4PayloadVariableOwner(): void {}
-namespace Wu4PayloadVariableOwner { // incomplete[decl/module-declaration/self]
+namespace Wu4PayloadVariableOwner {
   export const inferredValue = Wu4PayloadVariableSource(); // incomplete[decl/variable-declaration/namespace-payload-inferred-initializer]
 }
 function Wu4PayloadVariableSource(): number {
@@ -12,44 +12,44 @@ function Wu4PayloadVariableSource(): number {
 
 declare const wu4PayloadAnnotationSource: number;
 function Wu4PayloadAnnotationOwner(): void {}
-namespace Wu4PayloadAnnotationOwner { // incomplete[decl/module-declaration/self]
+namespace Wu4PayloadAnnotationOwner {
   export const annotatedValue: typeof wu4PayloadAnnotationSource = 1; // incomplete[annotation-lower/type-query/typeof]
 }
 
 function Wu4PayloadFunctionOwner(): void {}
-namespace Wu4PayloadFunctionOwner { // incomplete[decl/module-declaration/self]
+namespace Wu4PayloadFunctionOwner {
   export function inferredReturn(value: number) { // incomplete[decl/function-declaration/namespace-payload-inferred-return]
     return value;
   }
 }
 
 function Wu4PayloadClassOwner(): void {}
-namespace Wu4PayloadClassOwner { // incomplete[decl/module-declaration/self]
+namespace Wu4PayloadClassOwner {
   export class ExportedClass { // incomplete[decl/class-declaration/namespace-payload-static-cycle]
     static value: number = 1;
   }
 }
 
 function Wu4PayloadEnumOwner(): void {}
-namespace Wu4PayloadEnumOwner { // incomplete[decl/module-declaration/self]
+namespace Wu4PayloadEnumOwner {
   export enum Mode { // incomplete[decl/enum-declaration/namespace-payload-unavailable]
     One,
   }
 }
 
 function Wu4PayloadImportOwner(): void {}
-namespace Wu4PayloadImportOwner { // incomplete[decl/module-declaration/self]
+namespace Wu4PayloadImportOwner {
   export import ForwardedOwner = Wu4PayloadVariableOwner; // incomplete[decl/import-equals/namespace-payload-unavailable]
 }
 
 function Wu4PayloadDuplicateOwner(): void {}
-namespace Wu4PayloadDuplicateOwner { // incomplete[decl/module-declaration/self]
+namespace Wu4PayloadDuplicateOwner {
   export const duplicate: number = 1;
   export const duplicate: string = "two"; // incomplete[decl/variable-declaration/namespace-payload-duplicate-value]
 }
 
 function Wu4PayloadFunctionDuplicateOwner(): void {}
-namespace Wu4PayloadFunctionDuplicateOwner { // incomplete[decl/module-declaration/self]
+namespace Wu4PayloadFunctionDuplicateOwner {
   export const duplicate: number = 1;
   export function duplicate(): number { // incomplete[decl/function-declaration/namespace-payload-duplicate-value]
     return 1;
@@ -59,7 +59,7 @@ namespace Wu4PayloadFunctionDuplicateOwner { // incomplete[decl/module-declarati
 class Wu4PayloadClassDuplicateOwner {
   static existing: number = 1;
 }
-namespace Wu4PayloadClassDuplicateOwner { // incomplete[decl/module-declaration/self]
+namespace Wu4PayloadClassDuplicateOwner {
   export const duplicate: number = 1;
   export class duplicate { // incomplete[decl/class-declaration/namespace-payload-duplicate-value]
     value: number = 1;

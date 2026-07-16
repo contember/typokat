@@ -1,4 +1,4 @@
-// Disabled WU6A second-review oracle: tsc 6.0.3 --strict --noEmit --pretty false --lib es5
+// Initially disabled WU6A second-review oracle: tsc 6.0.3 --strict --noEmit --pretty false --lib es5
 // --module commonjs. Attached namespace payloads retain direct const readonly metadata while
 // let remains mutable for both function and class owners.
 

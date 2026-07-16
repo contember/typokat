@@ -198,6 +198,16 @@ const ENABLED_PROJECT_FIXTURES: &[(&str, &str)] = &[
         "b43_namespaces_declaration_merging",
         "wu5_global_augmentation_reverse",
     ),
+    ("b43_namespaces_declaration_merging", "wu6a_project_forward"),
+    ("b43_namespaces_declaration_merging", "wu6a_project_reverse"),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_review_cross_space_forward",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_review_cross_space_reverse",
+    ),
 ];
 
 /// Flat fixtures that are enabled before their containing corpus can run in
@@ -371,6 +381,67 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
     (
         "b43_namespaces_declaration_merging",
         "wu6_local_array_heritage.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_first_class_values.ts",
+    ),
+    ("b43_namespaces_declaration_merging", "wu6a_mutability.ts"),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_nested_dotted_values.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_review_ambient_export_alias.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_review_alias_dependencies.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_review_attached_const.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_review_body_traversal.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_review_class_dependencies.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_review_nested_owner_merges.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_review_private_unsupported_declarations.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_review_qualified_missing_child.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_review_root_provenance.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_review_static_cycle_events.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_review_type_only_fallthrough.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_root_operations.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6a_type_only_negative.ts",
     ),
 ];
 

@@ -9,7 +9,7 @@ use crate::binder::declaration::{
 };
 use crate::binder::namespace::{
     allocate_dormant_namespace_value_storages, bind_namespace_metadata, CompilationUnit,
-    NamespaceTable, SourceUnitKey,
+    NamespaceId, NamespaceInstanceState, NamespaceTable, SourceUnitKey,
 };
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
@@ -17,8 +17,8 @@ use crate::span::Span;
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, BlockStatement, Class, ClassElement, Declaration,
     Expression, ForStatement, ForStatementInit, ForStatementLeft, FormalParameters, Function,
-    FunctionBody, FunctionType, Program, Statement, SwitchStatement, TryStatement,
-    VariableDeclarationKind, VariableDeclarator,
+    FunctionBody, FunctionType, Program, Statement, SwitchStatement, TSModuleDeclarationName,
+    TryStatement, VariableDeclarationKind, VariableDeclarator,
 };
 use rustc_hash::FxHashMap;
 
@@ -33,14 +33,16 @@ pub struct Binder {
     pub type_groups: TypeGroupTable,
     /// Namespace/global/merge metadata and admitted attached value-member identities.
     pub namespaces: NamespaceTable,
-    /// The last **user** module scope. Its parent is [`Binder::compilation_global`],
-    /// which in turn falls through to [`Binder::prelude_module`].
+    /// The last **user** module scope. Its parent is [`Binder::script_namespace_root`],
+    /// then [`Binder::compilation_global`] and [`Binder::prelude_module`].
     pub module: ScopeId,
     /// The **prelude** root scope (M28) — the compilation unit holding the built-in
     /// utility aliases, bound BEFORE the user program. Its parent is `None`.
     pub prelude_module: ScopeId,
     /// The legal project-wide type-side global surface.
     pub compilation_global: ScopeId,
+    /// Shared identity owner for direct top-level namespaces in script files.
+    pub script_namespace_root: ScopeId,
     /// Number of value storage slots (`ValueStorageId`s run
     /// `0..decl_count`). Includes variable bindings, function declaration names,
     /// function parameters, and dormant standalone namespace slots.
@@ -58,11 +60,39 @@ pub struct Binder {
     pub block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) enum ResolvedValueKind {
+    Ordinary,
+    StandaloneNamespace {
+        namespace: NamespaceId,
+        storage: ValueStorageId,
+    },
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) enum ValueResolution {
+    Resolved {
+        symbol: SymbolId,
+        kind: ResolvedValueKind,
+    },
+    TypeOnlyNamespace {
+        namespace: NamespaceId,
+    },
+    Missing,
+}
+
 impl Binder {
-    /// Resolve a value-space binding, skipping same-named type-only symbols while
-    /// walking parents.
+    /// Resolve a value binding and its namespace provenance in one scope walk.
+    pub(crate) fn resolve_value_binding(&self, scope: ScopeId, name: &str) -> ValueResolution {
+        resolve_value_binding(&self.graph, &self.symbols, &self.namespaces, scope, name)
+    }
+
+    /// Resolve only the ordinary symbol projection of [`Binder::resolve_value_binding`].
     pub(crate) fn resolve_value(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
-        resolve_value_symbol(&self.graph, &self.symbols, scope, name)
+        match self.resolve_value_binding(scope, name) {
+            ValueResolution::Resolved { symbol, .. } => Some(symbol),
+            ValueResolution::TypeOnlyNamespace { .. } | ValueResolution::Missing => None,
+        }
     }
 
     /// Resolve a type-space binding, skipping same-named value-only symbols while
@@ -72,39 +102,59 @@ impl Binder {
     }
 }
 
-fn resolve_value_symbol(
+fn resolve_value_binding(
     graph: &ScopeGraph,
     symbols: &SymbolTable,
+    namespaces: &NamespaceTable,
     scope: ScopeId,
     name: &str,
-) -> Option<SymbolId> {
+) -> ValueResolution {
     let mut current = Some(scope);
+    let mut type_only_namespace = None;
     while let Some(id) = current {
-        let current_scope = graph.get(id)?;
-        if let Some(symbol_id) = current_scope.lookup_local(name) {
-            let symbol = symbols.get(symbol_id)?;
-            if symbol.value.is_some() {
-                return Some(symbol_id);
+        let Some(current_scope) = graph.get(id) else {
+            return ValueResolution::Missing;
+        };
+        for lookup in [Some(id), current_scope.namespace_public] {
+            let Some(symbol_id) = lookup
+                .and_then(|scope| graph.get(scope))
+                .and_then(|scope| scope.lookup_local(name))
+            else {
+                continue;
+            };
+            let Some(symbol) = symbols.get(symbol_id) else {
+                return ValueResolution::Missing;
+            };
+            if let Some(storage) = symbol.value {
+                let kind = symbol
+                    .ns
+                    .filter(|namespace| {
+                        namespaces.standalone_value_storage(*namespace) == Some(storage)
+                    })
+                    .map_or(ResolvedValueKind::Ordinary, |namespace| {
+                        ResolvedValueKind::StandaloneNamespace { namespace, storage }
+                    });
+                return ValueResolution::Resolved {
+                    symbol: symbol_id,
+                    kind,
+                };
             }
             if symbol.blocks_value_lookup {
-                return None;
-            }
-        }
-        if let Some(public) = current_scope.namespace_public {
-            let public_scope = graph.get(public)?;
-            if let Some(symbol_id) = public_scope.lookup_local(name) {
-                let symbol = symbols.get(symbol_id)?;
-                if symbol.value.is_some() {
-                    return Some(symbol_id);
+                if let Some(namespace) = symbol.ns.filter(|namespace| {
+                    namespaces.aggregate_instance_state(*namespace)
+                        == Some(NamespaceInstanceState::NonInstantiated)
+                }) {
+                    type_only_namespace.get_or_insert(namespace);
+                    continue;
                 }
-                if symbol.blocks_value_lookup {
-                    return None;
-                }
+                return ValueResolution::Missing;
             }
         }
         current = current_scope.parent;
     }
-    None
+    type_only_namespace.map_or(ValueResolution::Missing, |namespace| {
+        ValueResolution::TypeOnlyNamespace { namespace }
+    })
 }
 
 fn resolve_type_symbol(
@@ -336,6 +386,7 @@ pub(crate) struct ProjectBinderBuilder {
     state: BindState,
     prelude_module: ScopeId,
     compilation_global: ScopeId,
+    script_namespace_root: ScopeId,
     prelude_type_group_count: u32,
 }
 
@@ -370,12 +421,80 @@ impl ProjectBinderBuilder {
             ScopeKind::CompilationGlobal,
             Some(prelude_module),
         ));
+        let script_namespace_root = state.graph.push(Scope::new(
+            ScopeKind::ScriptNamespaceRoot,
+            Some(compilation_global),
+        ));
 
         ProjectBinderBuilder {
             state,
             prelude_module,
             compilation_global,
+            script_namespace_root,
             prelude_type_group_count,
+        }
+    }
+
+    pub(crate) fn reserve_script_namespace_roots<'ast>(
+        &mut self,
+        units: impl IntoIterator<Item = (&'ast Program<'ast>, CompilationUnit)>,
+    ) {
+        let mut roots = Vec::new();
+        for (program, unit) in units {
+            if unit.binding.external_module {
+                continue;
+            }
+            let mut occupied_values = rustc_hash::FxHashSet::default();
+            for statement in &program.body {
+                match statement {
+                    Statement::VariableDeclaration(declaration) => {
+                        for declarator in &declaration.declarations {
+                            for identifier in declarator.id.get_binding_identifiers() {
+                                occupied_values.insert(identifier.name.to_string());
+                            }
+                        }
+                    }
+                    Statement::FunctionDeclaration(function) => {
+                        if let Some(identifier) = &function.id {
+                            occupied_values.insert(identifier.name.to_string());
+                        }
+                    }
+                    Statement::ClassDeclaration(class) => {
+                        if let Some(identifier) = &class.id {
+                            occupied_values.insert(identifier.name.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            for statement in &program.body {
+                let Statement::TSModuleDeclaration(namespace) = statement else {
+                    continue;
+                };
+                let TSModuleDeclarationName::Identifier(identifier) = &namespace.id else {
+                    continue;
+                };
+                if !occupied_values.contains(identifier.name.as_str()) {
+                    roots.push((unit.source, identifier.name.to_string()));
+                }
+            }
+        }
+        roots.sort_by(|left, right| left.1.cmp(&right.1).then(left.0.cmp(&right.0)));
+        roots.dedup_by(|left, right| left.1 == right.1);
+        for (_, name) in roots {
+            if self
+                .state
+                .graph
+                .get(self.script_namespace_root)
+                .and_then(|scope| scope.lookup_local(&name))
+                .is_some()
+            {
+                continue;
+            }
+            let symbol = self.state.symbols.push(Symbol::new(name.clone()));
+            self.state
+                .graph
+                .declare(self.script_namespace_root, &name, symbol);
         }
     }
 
@@ -405,6 +524,7 @@ impl ProjectBinderBuilder {
             program,
             unit,
             self.compilation_global,
+            self.script_namespace_root,
         );
         (module, placeholders)
     }
@@ -423,6 +543,7 @@ impl ProjectBinderBuilder {
             module,
             prelude_module: self.prelude_module,
             compilation_global: self.compilation_global,
+            script_namespace_root: self.script_namespace_root,
             decl_count: self.state.next_value_storage,
             prelude_type_group_count: self.prelude_type_group_count,
             fn_scopes: self.state.fn_scopes,
@@ -585,7 +706,7 @@ fn bind_statements(state: &mut BindState, scope: ScopeId, statements: &[Statemen
 
 /// Bind one statement into `scope` (declarations) and recurse into its
 /// expressions/bodies for nested functions.
-fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
+pub(super) fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
     match stmt {
         Statement::VariableDeclaration(decl) => {
             for declarator in &decl.declarations {
@@ -1288,6 +1409,77 @@ mod tests {
         let parsed = Parser::new(&alloc, src, SourceType::ts()).parse();
         assert!(!parsed.panicked, "parse failed: {src}");
         bind_module_with_prelude(&prelude.program, &parsed.program)
+    }
+
+    #[test]
+    fn value_resolution_reports_namespace_provenance_without_a_second_scope_walk() {
+        let binder = bind(
+            r#"
+const Outer = 1;
+namespace Container {
+    namespace Outer { export interface Shape {} }
+    const witness = Outer;
+}
+namespace OnlyType { export interface Shape {} }
+namespace Standalone { export const value = 1; }
+"#,
+        );
+        let namespace = |name: &str| {
+            binder
+                .namespaces
+                .namespaces()
+                .find(|namespace| namespace.name == name)
+                .unwrap_or_else(|| panic!("{name} namespace"))
+        };
+
+        let standalone = namespace("Standalone");
+        let storage = binder
+            .namespaces
+            .standalone_value_storage(standalone.id)
+            .expect("instantiated namespace storage");
+        assert_eq!(
+            binder.resolve_value_binding(binder.module, "Standalone"),
+            ValueResolution::Resolved {
+                symbol: standalone.symbol,
+                kind: ResolvedValueKind::StandaloneNamespace {
+                    namespace: standalone.id,
+                    storage,
+                },
+            }
+        );
+
+        let only_type = namespace("OnlyType");
+        assert_eq!(
+            binder.resolve_value_binding(binder.module, "OnlyType"),
+            ValueResolution::TypeOnlyNamespace {
+                namespace: only_type.id,
+            }
+        );
+        assert_eq!(binder.resolve_value(binder.module, "OnlyType"), None);
+
+        let outer_symbol = binder
+            .graph
+            .get(binder.module)
+            .and_then(|scope| scope.lookup_local("Outer"))
+            .expect("outer value symbol");
+        let container_scope = namespace("Container")
+            .fragments
+            .first()
+            .and_then(|fragment| binder.namespaces.fragment(*fragment))
+            .map(|fragment| fragment.private_scope)
+            .expect("container private scope");
+        assert_eq!(
+            binder.resolve_value_binding(container_scope, "Outer"),
+            ValueResolution::Resolved {
+                symbol: outer_symbol,
+                kind: ResolvedValueKind::Ordinary,
+            },
+            "an inner type-only namespace must not hide an outer value"
+        );
+        assert_eq!(
+            binder.resolve_value_binding(container_scope, "Missing"),
+            ValueResolution::Missing
+        );
     }
 
     #[test]

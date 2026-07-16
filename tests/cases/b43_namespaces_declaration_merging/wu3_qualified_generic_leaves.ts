@@ -12,7 +12,7 @@ type QualifiedWrongArityLeaf = Wu3QualifiedGenericLeaves.Box<1, 2>; // error[TK2
 type QualifiedConstraintLeaf = Wu3QualifiedGenericLeaves.Box<string>; // error[TK2344]: Type 'string' does not satisfy the constraint 'number'
 type QualifiedNestedGenericLeaf = Wu3QualifiedGenericLeaves.Nested.Item<string>;
 
-namespace Wu3QualifiedClassLeaves { // incomplete[decl/module-declaration/self]
+namespace Wu3QualifiedClassLeaves {
   export class Generic<T> { value!: T }
   export class Constrained<T extends string> { value!: T }
   export class Dependent<T, U extends T> { value!: U }

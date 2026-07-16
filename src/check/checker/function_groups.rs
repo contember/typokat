@@ -226,6 +226,18 @@ impl FunctionGroupRegistry {
         }
     }
 
+    pub(in crate::check::checker) fn namespace_payload_for_value(
+        &self,
+        value: ValueStorageId,
+    ) -> Option<&[PropertyType]> {
+        let symbol = self.by_value.get(&value)?;
+        let draft = self.groups.get(symbol)?;
+        match &draft.namespace_payload {
+            NamespacePayloadState::Ready(properties) => Some(properties),
+            NamespacePayloadState::Missing | NamespacePayloadState::Unavailable => None,
+        }
+    }
+
     /// Add one externally visible row. Overload implementations never call this.
     pub(in crate::check::checker) fn reserve_public_row(
         &mut self,

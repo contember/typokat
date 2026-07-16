@@ -578,6 +578,131 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .is_none()
     }
 
+    pub(in crate::check::checker) fn lower_namespace_type_surface(
+        &mut self,
+        scope: ScopeId,
+        annotation: &TSType<'_>,
+        owner: RecordTicket,
+    ) -> (
+        Result<TypeId, SurfaceTypeFailure<RecordTicket>>,
+        Vec<SurfaceTypeFailure<RecordTicket>>,
+    ) {
+        let error = self.interner.well_known().error;
+        let type_decls = self.type_decls.clone();
+        let type_resolved = self.type_resolved.clone();
+        let (result, child_failures, application_checks) = {
+            let mut resolver = Resolver {
+                binder: self.binder,
+                scope,
+                declarations: &type_decls,
+                resolved: &type_resolved,
+                reservations: &self.lexical_events,
+                module: self.current_module_ordinal,
+                fallback: owner,
+                error,
+                qualified_outer_type_parameters_visible: true,
+                application_checks: Vec::new(),
+            };
+            let mut factory = SurfaceTypeFactory::new(self.interner);
+            let (result, child_failures) = lower_type(&mut factory, &mut resolver, annotation, &[]);
+            (result, child_failures, resolver.application_checks)
+        };
+        self.stage_namespace_surface_application_checks(application_checks);
+        (result, child_failures)
+    }
+
+    pub(in crate::check::checker) fn lower_namespace_callable_surface(
+        &mut self,
+        scope: ScopeId,
+        function: &oxc_ast::ast::Function<'_>,
+        owner: RecordTicket,
+    ) -> (
+        LoweredCallableSyntax<RecordTicket>,
+        Vec<SurfaceTypeFailure<RecordTicket>>,
+    ) {
+        let error = self.interner.well_known().error;
+        let type_decls = self.type_decls.clone();
+        let type_resolved = self.type_resolved.clone();
+        let (result, child_failures, application_checks) = {
+            let mut resolver = Resolver {
+                binder: self.binder,
+                scope,
+                declarations: &type_decls,
+                resolved: &type_resolved,
+                reservations: &self.lexical_events,
+                module: self.current_module_ordinal,
+                fallback: owner,
+                error,
+                qualified_outer_type_parameters_visible: true,
+                application_checks: Vec::new(),
+            };
+            let mut factory = SurfaceTypeFactory::new(self.interner);
+            let (result, child_failures) =
+                lower_callable(&mut factory, &mut resolver, function, &[]);
+            (result, child_failures, resolver.application_checks)
+        };
+        self.stage_namespace_surface_application_checks(application_checks);
+        (result, child_failures)
+    }
+
+    fn stage_namespace_surface_application_checks(
+        &mut self,
+        application_checks: Vec<StagedClassApplicationCheck>,
+    ) {
+        for check in application_checks {
+            let substitutions = check
+                .parameters
+                .iter()
+                .copied()
+                .zip(check.arguments.iter().copied())
+                .collect();
+            let checks = check
+                .parameters
+                .iter()
+                .zip(&check.arguments)
+                .zip(&check.explicit_spans)
+                .map(|((&parameter, &argument), &span)| {
+                    (
+                        self.interner.store().type_param_constraint(parameter),
+                        argument,
+                        span,
+                    )
+                })
+                .collect();
+            self.effect_stack
+                .last_mut()
+                .expect("namespace surface constraint requires a lexical owner")
+                .constraint_checks
+                .push(ConstraintCheckObligation {
+                    checks,
+                    substitutions,
+                });
+        }
+    }
+
+    pub(in crate::check::checker) fn record_namespace_surface_failure(
+        &mut self,
+        failure: SurfaceTypeFailure<RecordTicket>,
+        owner: RecordTicket,
+        span: CheckSpan,
+    ) {
+        let (record_owner, record) = own_surface_failure(
+            failure,
+            owner,
+            owner,
+            span,
+            "annotation-lower/type-syntax/unsupported",
+            "namespace member type syntax could not be lowered",
+        );
+        let Some(record) = record else {
+            return;
+        };
+        self.with_ticket_effects(record_owner, |pass| match record.record {
+            CheckerRecord::Diagnostic(diagnostic) => pass.emit_diagnostic(diagnostic),
+            CheckerRecord::Incomplete(incomplete) => pass.emit_incomplete(incomplete),
+        });
+    }
+
     pub(in crate::check::checker) fn publish_class_surfaces(
         &mut self,
         _scopes: &[(ModuleOrdinal, ScopeId)],
