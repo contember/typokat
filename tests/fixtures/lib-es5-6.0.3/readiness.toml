@@ -1,0 +1,256 @@
+schema = 1
+target = "typescript-6.0.3-lib-es5-model-readiness"
+conclusion = "NO-GO"
+decision_target = "../../../docs/backlog/14-libdts-loading.md"
+reason = "The raw artifact still has one backlog-43 architecture stop and exact non-43 residuals."
+witness_marker_grammar = "// witness[ID] oracle[TSdddd] typokat[TKdddd] [owner[relative-path]]"
+
+[artifact]
+path = "tests/fixtures/lib-es5-6.0.3/lib.es5.d.ts"
+typescript_version = "6.0.3"
+upstream_revision = "050880ce59e30b356b686bd3144efe24f875ebc8"
+npm_package_path = "lib/lib.es5.d.ts"
+upstream_git_blob = "496166ca309c28ab7e07ea0154a406f26b6cf26a"
+sha256 = "bcd24271a113971ba9eb71ff8cb01bc6b0f872a85c23fdbe5d93065b375933cd"
+bytes = 218972
+lines = 4599
+
+[synthetic_source]
+artifact_path = "tests/fixtures/lib-es5-6.0.3/lib.es5.d.ts"
+witness_path = "tests/fixtures/lib-es5-6.0.3/semantic-witnesses.ts"
+separator = "one additional LF"
+witness_sha256 = "0ed155e0b4152852d8d9b5792f8ffcf16d996f2a63d9ea2e75159c115338db02"
+witness_bytes = 10599
+witness_lines = 141
+sha256 = "cef7200c40e40b6bc9085cf0903b84b851d76de425d513b81930ad9e3caecb5e"
+bytes = 229572
+lines = 4741
+
+[measurements.raw_typokat]
+checker_revision = "d2470a3"
+command = "target/debug/typokat check --format compact tests/fixtures/lib-es5-6.0.3/lib.es5.d.ts"
+exit_code = 3
+parse_errors = 0
+diagnostics = 4
+incompletes = 188
+
+[measurements.synthetic_typokat]
+checker_revision = "d2470a3"
+command = "target/debug/typokat check --format compact $COMBINED"
+exit_code = 3
+parse_errors = 0
+diagnostics = 70
+incompletes = 188
+artifact_diagnostics = 4
+witness_diagnostics = 66
+tk2304 = 1
+tk2322 = 65
+tk2430 = 4
+
+[measurements.tsc_oracle]
+typescript_version = "6.0.3"
+explicit_command = "tsc --strict --noEmit --pretty false --noLib tests/fixtures/lib-es5-6.0.3/lib.es5.d.ts tests/fixtures/lib-es5-6.0.3/semantic-witnesses.ts"
+synthetic_command = "tsc --strict --noEmit --pretty false --noLib $COMBINED"
+explicit_exit_code = 2
+synthetic_exit_code = 2
+explicit_diagnostics = 66
+synthetic_diagnostics = 66
+ts2322 = 66
+
+[pair_set]
+count = 28
+names = [
+  "Array",
+  "ArrayBuffer",
+  "Boolean",
+  "DataView",
+  "Date",
+  "Error",
+  "EvalError",
+  "Float32Array",
+  "Float64Array",
+  "Function",
+  "Int16Array",
+  "Int32Array",
+  "Int8Array",
+  "JSON",
+  "Math",
+  "Number",
+  "Object",
+  "RangeError",
+  "ReferenceError",
+  "RegExp",
+  "String",
+  "SyntaxError",
+  "TypeError",
+  "URIError",
+  "Uint16Array",
+  "Uint32Array",
+  "Uint8Array",
+  "Uint8ClampedArray",
+]
+
+[deep_witness_set]
+count = 10
+ids = [
+  "deep.Array.element",
+  "deep.Date.member",
+  "deep.Intl.type",
+  "deep.Intl.value",
+  "deep.Number.member",
+  "deep.Object.member",
+  "deep.String.member",
+  "deep.repeat.Date",
+  "deep.repeat.Number",
+  "deep.repeat.String",
+]
+
+[witness]
+"deep.Array.element" = { oracle = "TS2322", typokat = "TK2322" }
+"deep.Date.member" = { oracle = "TS2322", typokat = "TK2322" }
+"deep.Intl.type" = { oracle = "TS2322", typokat = "TK2322" }
+"deep.Intl.value" = { oracle = "TS2322", typokat = "TK2304", owner = "../../../docs/backlog/43-namespaces-declaration-merging.md" }
+"deep.Number.member" = { oracle = "TS2322", typokat = "TK2322" }
+"deep.Object.member" = { oracle = "TS2322", typokat = "TK2322" }
+"deep.String.member" = { oracle = "TS2322", typokat = "TK2322" }
+"deep.repeat.Date" = { oracle = "TS2322", typokat = "TK2322" }
+"deep.repeat.Number" = { oracle = "TS2322", typokat = "TK2322" }
+"deep.repeat.String" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Array.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Array.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.ArrayBuffer.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.ArrayBuffer.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Boolean.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Boolean.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.DataView.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.DataView.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Date.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Date.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Error.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Error.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.EvalError.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.EvalError.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Float32Array.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Float32Array.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Float64Array.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Float64Array.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Function.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Function.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Int16Array.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Int16Array.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Int32Array.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Int32Array.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Int8Array.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Int8Array.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.JSON.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.JSON.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Math.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Math.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Number.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Number.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Object.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Object.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.RangeError.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.RangeError.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.ReferenceError.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.ReferenceError.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.RegExp.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.RegExp.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.String.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.String.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.SyntaxError.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.SyntaxError.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.TypeError.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.TypeError.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.URIError.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.URIError.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Uint16Array.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Uint16Array.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Uint32Array.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Uint32Array.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Uint8Array.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Uint8Array.value" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Uint8ClampedArray.type" = { oracle = "TS2322", typokat = "TK2322" }
+"pair.Uint8ClampedArray.value" = { oracle = "TS2322", typokat = "TK2322" }
+
+[[residual]]
+id = "annotation-bigint-keyword"
+outcome = "incomplete"
+surface = "annotation-lower/bigint-keyword/self"
+count = 1
+owner = "../../../docs/backlog/75-scope-surface-tail.md"
+witness = "lib.es5.d.ts:226:92"
+actual_cause = "The bigint keyword type is not modeled."
+
+[[residual]]
+id = "annotation-intrinsic-keyword"
+outcome = "incomplete"
+surface = "annotation-lower/intrinsic-keyword/self"
+count = 5
+owner = "../../../docs/backlog/75-scope-surface-tail.md"
+witness = "lib.es5.d.ts:1658:36"
+actual_cause = "Intrinsic keyword declarations are not modeled."
+
+[[residual]]
+id = "annotation-object-keyword"
+outcome = "incomplete"
+surface = "annotation-lower/object-keyword/self"
+count = 6
+owner = "../../../docs/backlog/75-scope-surface-tail.md"
+witness = "lib.es5.d.ts:186:15"
+actual_cause = "The object keyword type is not modeled."
+
+[[residual]]
+id = "annotation-symbol-keyword"
+outcome = "incomplete"
+surface = "annotation-lower/symbol-keyword/self"
+count = 3
+owner = "../../../docs/backlog/75-scope-surface-tail.md"
+witness = "lib.es5.d.ts:103:16"
+actual_cause = "The symbol keyword type is not modeled."
+
+[[residual]]
+id = "annotation-this-type"
+outcome = "incomplete"
+surface = "annotation-lower/this-type/self"
+count = 164
+owner = "../../../docs/backlog/75-scope-surface-tail.md"
+witness = "lib.es5.d.ts:1020:47"
+actual_cause = "Polymorphic this type annotations are not modeled."
+
+[[residual]]
+id = "annotation-type-predicate"
+outcome = "incomplete"
+surface = "annotation-lower/type-predicate/self"
+count = 8
+owner = "../../../docs/backlog/50-type-predicates-assertions.md"
+witness = "lib.es5.d.ts:1243:85"
+actual_cause = "Type predicate annotations are not lowered."
+
+[[residual]]
+id = "callable-heritage-canonical"
+outcome = "diagnostic"
+code = "TK2430"
+count = 2
+owner = "../../../docs/backlog/14-libdts-loading.md"
+witnesses = ["lib.es5.d.ts:329:11", "lib.es5.d.ts:366:11"]
+actual_cause = "Apparent Function compatibility rejects the canonical CallableFunction and NewableFunction generic overload surfaces."
+
+[[residual]]
+id = "callable-heritage-cardinality"
+outcome = "diagnostic"
+code = "TK2430"
+count = 2
+owner = "../../../docs/backlog/63-review-parity-tail.md"
+witnesses = ["lib.es5.d.ts:329:11", "lib.es5.d.ts:366:11"]
+actual_cause = "Heritage checking emits one surplus TK2430 per failing interface instead of one canonical diagnostic per interface/base edge."
+
+[[residual]]
+id = "standalone-namespace-value"
+outcome = "incomplete"
+surface = "decl/module-declaration/self"
+count = 1
+owner = "../../../docs/backlog/43-namespaces-declaration-merging.md"
+witnesses = ["lib.es5.d.ts:4416:1", "deep.Intl.value"]
+architecture_stop = true
+actual_cause = "The checker publishes the ambient namespace type container but no standalone namespace value metadata or qualified receiver; emit and runtime initialization are not involved."
