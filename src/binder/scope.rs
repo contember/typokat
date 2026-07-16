@@ -1,7 +1,8 @@
 //! The scope graph (architecture §4).
 //!
-//! Name resolution is a tree of scopes with parent-walk lookup, leaving room for
-//! later incrementality and per-unit parallel checking.
+//! Name resolution follows lexical parents plus the shared public edge owned by
+//! each namespace fragment, leaving room for later incrementality and per-unit
+//! parallel checking.
 
 use crate::binder::symbol::SymbolId;
 use rustc_hash::FxHashMap;
@@ -27,9 +28,9 @@ pub enum ScopeKind {
     /// A lexical block `{ … }`.
     #[allow(dead_code)] // Kept for lexical block scopes recorded by the binder.
     Block,
-    /// Dormant shared namespace publication overlay with unreachable symbol anchors.
+    /// Shared namespace publication surface for every reopening.
     NamespacePublic,
-    /// Dormant lexical context for one namespace reopening.
+    /// Lexical context for one namespace reopening.
     NamespacePrivate,
     /// Legal project-wide type-side augmentation surface.
     CompilationGlobal,
@@ -37,11 +38,13 @@ pub enum ScopeKind {
     GlobalOverlay,
 }
 
-/// One node in the scope graph: a parent link plus the names declared directly
-/// in this scope. Resolution walks `parent` until a name is found.
+/// One node in the scope graph: a lexical parent, an optional namespace-public
+/// edge, and the names declared directly in this scope.
 #[derive(Debug)]
 pub struct Scope {
     pub parent: Option<ScopeId>,
+    /// Shared public namespace surface consulted before the lexical parent.
+    pub namespace_public: Option<ScopeId>,
     pub kind: ScopeKind,
     pub symbols: FxHashMap<String, SymbolId>,
 }
@@ -50,9 +53,15 @@ impl Scope {
     pub fn new(kind: ScopeKind, parent: Option<ScopeId>) -> Self {
         Scope {
             parent,
+            namespace_public: None,
             kind,
             symbols: FxHashMap::default(),
         }
+    }
+
+    pub fn with_namespace_public(mut self, namespace_public: ScopeId) -> Self {
+        self.namespace_public = Some(namespace_public);
+        self
     }
 
     /// The symbol declared directly in this scope under `name`, if any (no
@@ -103,13 +112,18 @@ impl ScopeGraph {
         }
     }
 
-    /// Resolve `name` by walking parent links; the caller reports `TK2304` on `None`.
+    /// Resolve `name` through local, namespace-public, then lexical-parent scopes.
     pub fn resolve(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
         let mut current = Some(scope);
         while let Some(id) = current {
             let s = self.get(id)?;
             if let Some(symbol) = s.lookup_local(name) {
                 return Some(symbol);
+            }
+            if let Some(public) = s.namespace_public {
+                if let Some(symbol) = self.get(public)?.lookup_local(name) {
+                    return Some(symbol);
+                }
             }
             current = s.parent;
         }
@@ -129,6 +143,13 @@ impl ScopeGraph {
             if let Some(symbol) = s.lookup_local(name) {
                 if accept(symbol) {
                     return Some(symbol);
+                }
+            }
+            if let Some(public) = s.namespace_public {
+                if let Some(symbol) = self.get(public)?.lookup_local(name) {
+                    if accept(symbol) {
+                        return Some(symbol);
+                    }
                 }
             }
             current = s.parent;

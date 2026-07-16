@@ -89,6 +89,18 @@ fn resolve_value_symbol(
                 return None;
             }
         }
+        if let Some(public) = current_scope.namespace_public {
+            let public_scope = graph.get(public)?;
+            if let Some(symbol_id) = public_scope.lookup_local(name) {
+                let symbol = symbols.get(symbol_id)?;
+                if symbol.value.is_some() {
+                    return Some(symbol_id);
+                }
+                if symbol.blocks_value_lookup {
+                    return None;
+                }
+            }
+        }
         current = current_scope.parent;
     }
     None
@@ -107,6 +119,15 @@ fn resolve_type_symbol(
             let symbol = symbols.get(symbol_id)?;
             if symbol.ty.is_some() || symbol.blocks_type_lookup {
                 return Some(symbol_id);
+            }
+        }
+        if let Some(public) = current_scope.namespace_public {
+            let public_scope = graph.get(public)?;
+            if let Some(symbol_id) = public_scope.lookup_local(name) {
+                let symbol = symbols.get(symbol_id)?;
+                if symbol.ty.is_some() || symbol.blocks_type_lookup {
+                    return Some(symbol_id);
+                }
             }
         }
         current = current_scope.parent;

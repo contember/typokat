@@ -2990,10 +2990,10 @@ fn bind_module_declaration(
         .get(namespace)
         .expect("namespace exists")
         .public_scope;
-    let private_scope = state.graph.push(Scope::new(
-        ScopeKind::NamespacePrivate,
-        Some(context.lexical_scope),
-    ));
+    let private_scope = state.graph.push(
+        Scope::new(ScopeKind::NamespacePrivate, Some(context.lexical_scope))
+            .with_namespace_public(public_scope),
+    );
     let fragment = NamespaceFragmentId(
         u32::try_from(state.namespaces.fragments.len()).expect("namespace fragment count fits u32"),
     );
@@ -4980,6 +4980,267 @@ function Reverse(): void {}
                 .and_then(|scope| scope.parent),
             Some(binder.compilation_global)
         );
+    }
+
+    #[test]
+    fn namespace_private_lookup_orders_local_public_and_lexical_in_both_source_orders() {
+        fn assert_lookup(source: &str) {
+            let binder = bind(source, false);
+
+            let namespace = binder
+                .namespaces
+                .namespaces()
+                .find(|namespace| namespace.name == "N")
+                .expect("N namespace");
+            let public_shared = binder
+                .graph
+                .get(namespace.public_scope)
+                .and_then(|scope| scope.lookup_local("Shared"))
+                .expect("shared public type");
+            let lexical_shared = binder
+                .graph
+                .get(binder.module)
+                .and_then(|scope| scope.lookup_local("Shared"))
+                .expect("lexical shared symbol");
+            assert_ne!(public_shared, lexical_shared);
+
+            let provider_scope = namespace
+                .fragments
+                .iter()
+                .filter_map(|fragment| binder.namespaces.fragment(*fragment))
+                .find_map(|fragment| {
+                    binder
+                        .graph
+                        .get(fragment.private_scope)
+                        .and_then(|scope| scope.lookup_local("OnlyProvider"))
+                        .map(|_| fragment.private_scope)
+                })
+                .expect("provider private scope");
+            let consumer_scope = namespace
+                .fragments
+                .iter()
+                .filter_map(|fragment| binder.namespaces.fragment(*fragment))
+                .find_map(|fragment| {
+                    binder
+                        .graph
+                        .get(fragment.private_scope)
+                        .and_then(|scope| scope.lookup_local("ConsumerLocal"))
+                        .map(|_| fragment.private_scope)
+                })
+                .expect("consumer private scope");
+            assert_ne!(provider_scope, consumer_scope);
+            for scope in [provider_scope, consumer_scope] {
+                let scope = binder.graph.get(scope).expect("namespace private scope");
+                assert_eq!(scope.parent, Some(binder.module));
+                assert_eq!(scope.namespace_public, Some(namespace.public_scope));
+            }
+
+            assert_eq!(
+                binder.resolve_type(provider_scope, "Shared"),
+                Some(public_shared)
+            );
+            assert_eq!(
+                binder.resolve_type(consumer_scope, "Shared"),
+                Some(public_shared)
+            );
+            assert_eq!(
+                binder.resolve_value(consumer_scope, "Shared"),
+                Some(lexical_shared),
+                "a public type-only symbol does not block lexical value lookup"
+            );
+            assert_eq!(
+                binder.graph.resolve(consumer_scope, "Shared"),
+                Some(public_shared)
+            );
+
+            let private_provider = binder
+                .graph
+                .get(provider_scope)
+                .and_then(|scope| scope.lookup_local("OnlyProvider"))
+                .expect("provider private symbol");
+            let lexical_provider = binder
+                .graph
+                .get(binder.module)
+                .and_then(|scope| scope.lookup_local("OnlyProvider"))
+                .expect("lexical provider fallback");
+            assert_ne!(private_provider, lexical_provider);
+            assert_eq!(
+                binder.resolve_type(provider_scope, "OnlyProvider"),
+                Some(private_provider)
+            );
+            assert_eq!(
+                binder.resolve_type(consumer_scope, "OnlyProvider"),
+                Some(lexical_provider),
+                "another fragment's private symbol must remain invisible"
+            );
+
+            let shared_group = binder
+                .symbols
+                .get(public_shared)
+                .and_then(|symbol| symbol.ty)
+                .expect("shared public group");
+            assert_eq!(
+                binder.resolve_qualified_type_path(binder.module, &["N", "Shared"]),
+                QualifiedTypePathResolution::TypeGroup(shared_group)
+            );
+            assert_eq!(
+                binder.resolve_qualified_type_path(binder.module, &["N", "OnlyProvider"]),
+                QualifiedTypePathResolution::MissingMember { segment: 1 },
+                "qualified lookup cannot enter private scopes or fall back to the module"
+            );
+
+            let value_namespace = binder
+                .namespaces
+                .namespaces()
+                .find(|namespace| namespace.name == "F")
+                .expect("F namespace");
+            let public_value = binder
+                .graph
+                .get(value_namespace.public_scope)
+                .and_then(|scope| scope.lookup_local("SharedValue"))
+                .expect("shared public value");
+            let lexical_value_type = binder
+                .graph
+                .get(binder.module)
+                .and_then(|scope| scope.lookup_local("SharedValue"))
+                .expect("lexical value type");
+            let value_provider_scope = value_namespace
+                .fragments
+                .iter()
+                .filter_map(|fragment| binder.namespaces.fragment(*fragment))
+                .find_map(|fragment| {
+                    binder
+                        .graph
+                        .get(fragment.private_scope)
+                        .and_then(|scope| scope.lookup_local("ValueFallback"))
+                        .map(|_| fragment.private_scope)
+                })
+                .expect("value provider scope");
+            let value_consumer_scope = value_namespace
+                .fragments
+                .iter()
+                .filter_map(|fragment| binder.namespaces.fragment(*fragment))
+                .find_map(|fragment| {
+                    binder
+                        .graph
+                        .get(fragment.private_scope)
+                        .and_then(|scope| scope.lookup_local("ConsumerValue"))
+                        .map(|_| fragment.private_scope)
+                })
+                .expect("value consumer scope");
+            let provider_shared_value = binder
+                .resolve_value(value_provider_scope, "SharedValue")
+                .expect("provider-local exported value binding");
+            assert_eq!(
+                binder
+                    .symbols
+                    .get(provider_shared_value)
+                    .and_then(|symbol| symbol.value),
+                binder
+                    .symbols
+                    .get(public_value)
+                    .and_then(|symbol| symbol.value),
+                "the declaration fragment's local binding and public symbol share storage"
+            );
+            assert_eq!(
+                binder.resolve_value(value_consumer_scope, "SharedValue"),
+                Some(public_value)
+            );
+            assert_eq!(
+                binder.resolve_type(value_consumer_scope, "SharedValue"),
+                Some(lexical_value_type),
+                "a public value-only symbol does not block lexical type lookup"
+            );
+            assert_eq!(
+                binder.resolve_type(value_provider_scope, "SharedValue"),
+                Some(lexical_value_type),
+                "the provider's local value binding does not block lexical type lookup"
+            );
+            let private_value_fallback = binder
+                .graph
+                .get(value_provider_scope)
+                .and_then(|scope| scope.lookup_local("ValueFallback"))
+                .expect("private value fallback");
+            let lexical_value_fallback = binder
+                .graph
+                .get(binder.module)
+                .and_then(|scope| scope.lookup_local("ValueFallback"))
+                .expect("lexical value fallback");
+            assert_eq!(
+                binder.resolve_value(value_provider_scope, "ValueFallback"),
+                Some(private_value_fallback)
+            );
+            assert_eq!(
+                binder.resolve_value(value_consumer_scope, "ValueFallback"),
+                Some(lexical_value_fallback)
+            );
+
+            let ambient = binder
+                .namespaces
+                .namespaces()
+                .find(|namespace| namespace.name == "AmbientN")
+                .expect("ambient namespace");
+            let ambient_item = binder
+                .graph
+                .get(ambient.public_scope)
+                .and_then(|scope| scope.lookup_local("Item"))
+                .expect("ambient-default public item");
+            let box_scope = binder
+                .graph
+                .get(ambient.public_scope)
+                .and_then(|scope| scope.lookup_local("Box"))
+                .and_then(|symbol| binder.symbols.get(symbol))
+                .and_then(|symbol| symbol.ty)
+                .and_then(|group| binder.type_groups.get(group))
+                .and_then(|group| group.fragments.first())
+                .map(|fragment| fragment.scope)
+                .expect("ambient box fragment scope");
+            assert_eq!(binder.resolve_type(box_scope, "Item"), Some(ambient_item));
+        }
+
+        let provider_first = r#"
+interface Shared {}
+const Shared = 0;
+interface OnlyProvider {}
+interface SharedValue {}
+const ValueFallback = 0;
+namespace N {
+    export interface Shared { public: true }
+    interface OnlyProvider { private: true }
+}
+namespace N {
+    interface ConsumerLocal {}
+    export interface Consumer { shared: Shared; fallback: OnlyProvider }
+}
+function F(): void {}
+namespace F { export const SharedValue = 1; const ValueFallback = 1; }
+namespace F { const ConsumerValue = 2; }
+declare namespace AmbientN { interface Item { value: number } }
+declare namespace AmbientN { interface Box { item: Item } }
+"#;
+        let consumer_first = r#"
+interface Shared {}
+const Shared = 0;
+interface OnlyProvider {}
+interface SharedValue {}
+const ValueFallback = 0;
+namespace N {
+    interface ConsumerLocal {}
+    export interface Consumer { shared: Shared; fallback: OnlyProvider }
+}
+namespace N {
+    export interface Shared { public: true }
+    interface OnlyProvider { private: true }
+}
+function F(): void {}
+namespace F { const ConsumerValue = 2; }
+namespace F { export const SharedValue = 1; const ValueFallback = 1; }
+declare namespace AmbientN { interface Box { item: Item } }
+declare namespace AmbientN { interface Item { value: number } }
+"#;
+
+        assert_lookup(provider_first);
+        assert_lookup(consumer_first);
     }
 
     #[test]

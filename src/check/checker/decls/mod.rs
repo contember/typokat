@@ -3061,7 +3061,9 @@ fn topology_segments_group(
     segments: &[&str],
 ) -> Result<TypeGroupId, HeritageTypePlan> {
     match segments {
-        ["Array"] => Err(HeritageTypePlan::Opaque(BTreeSet::new())),
+        ["Array"] => type_decl_id(binder, scope, "Array")
+            .filter(|group| group.0 >= binder.prelude_type_group_count)
+            .ok_or_else(|| HeritageTypePlan::Opaque(BTreeSet::new())),
         [name] => type_decl_id(binder, scope, name).ok_or_else(|| {
             if binder.resolve_type(scope, name).is_some()
                 || binder.resolve_value(scope, name).is_some()
@@ -4403,4 +4405,45 @@ pub(in crate::check::checker) fn value_decl_id(
 ) -> Option<crate::binder::declaration::ValueStorageId> {
     let symbol_id = binder.resolve_value(scope, name)?;
     binder.symbols.get(symbol_id).and_then(|s| s.value)
+}
+
+#[cfg(test)]
+mod topology_tests {
+    use super::*;
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_span::SourceType;
+
+    fn bind(prelude_source: &str, user_source: &str) -> Binder {
+        let prelude_allocator = Allocator::default();
+        let user_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, prelude_source, SourceType::ts()).parse();
+        let user = Parser::new(&user_allocator, user_source, SourceType::ts()).parse();
+        assert!(!prelude.panicked && !user.panicked);
+        crate::binder::bind_module_with_prelude(&prelude.program, &user.program)
+    }
+
+    #[test]
+    fn source_array_group_wins_before_builtin_opaque_fallback() {
+        let source = bind(
+            "interface Array<T> { preludeElement: T }",
+            "interface Array<T> { sourceElement: T }",
+        );
+        let source_group =
+            type_decl_id(&source, source.module, "Array").expect("source Array group");
+        assert!(source_group.0 >= source.prelude_type_group_count);
+        assert_eq!(
+            topology_segments_group(&source, source.module, &["Array"]),
+            Ok(source_group)
+        );
+
+        let builtin = bind("interface Array<T> { preludeElement: T }", "");
+        let builtin_group =
+            type_decl_id(&builtin, builtin.module, "Array").expect("prelude Array group");
+        assert!(builtin_group.0 < builtin.prelude_type_group_count);
+        assert_eq!(
+            topology_segments_group(&builtin, builtin.module, &["Array"]),
+            Err(HeritageTypePlan::Opaque(BTreeSet::new()))
+        );
+    }
 }

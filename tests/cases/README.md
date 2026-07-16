@@ -422,8 +422,8 @@ also be a real heritage group: `interface X extends Array<string>` inherits its 
 members instead of taking the builtin-array opaque fallback. Semantic wrong-type witnesses keep
 both fixtures non-permissive under error/`any` recovery.
 
-The full directory remains disabled because nine flat fixtures are still outside the
-admitted slice. The conformance harness gates 43 flat fixtures explicitly through
+The full directory remains disabled because seven older flat fixtures are still outside the
+admitted slice. The conformance harness gates 45 flat fixtures explicitly through
 `ENABLED_FIXTURES`, plus both two-file WU5 projects through `ENABLED_PROJECT_FIXTURES`. WU5 adds
 `global_augmentation.ts`, `global_missing_declare_negative.ts`,
 `global_script_negative.ts`, `global_value_publication_deferred.ts`, `umd_export.d.ts`,

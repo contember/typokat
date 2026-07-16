@@ -364,6 +364,14 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
         "b43_namespaces_declaration_merging",
         "wu4_standalone_namespace_boundary.ts",
     ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6_ambient_namespace_body_lookup.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu6_local_array_heritage.ts",
+    ),
 ];
 
 /// An expectation parsed from a single inline marker.
