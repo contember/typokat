@@ -34,7 +34,7 @@ classFirstConstructed.existing; // error[TK2576]: Property 'existing' does not e
 const classFirstMissingRequired: ClassFirstMerge = { // error[TK2741]
   own: 1,
   method: () => "ok",
-  generic: <T>(value: T) => value,
+  generic<T>(value: T) { return value; },
   recursive: classFirstConstructed,
 };
 
@@ -73,6 +73,6 @@ interfaceFirstConstructed.existing; // error[TK2576]: Property 'existing' does n
 const interfaceFirstMissingRequired: InterfaceFirstMerge = { // error[TK2741]
   own: 2,
   method: () => "ok",
-  generic: <T>(value: T) => value,
+  generic<T>(value: T) { return value; },
   recursive: interfaceFirstConstructed,
 };
