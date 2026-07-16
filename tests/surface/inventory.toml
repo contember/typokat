@@ -445,6 +445,16 @@ owner = "shipped"
 witness = "../cases/sr_wu1_expressions"
 
 [[surface]]
+id = "expr-infer/static-member-assignment/base"
+role = "expr-infer"
+surface = "static-member-assignment"
+slot = "base"
+oxc_variant = "AssignmentTarget::StaticMemberExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/71-expression-inference-fn-tail.md"
+witness = "../cases/b73_surface_accounting/static_member_assignment_nested_base.ts"
+
+[[surface]]
 id = "expr-infer/await-expression/self"
 role = "expr-infer"
 surface = "await-expression"

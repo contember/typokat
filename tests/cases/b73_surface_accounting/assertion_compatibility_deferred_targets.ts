@@ -28,7 +28,7 @@ deferredKeyed[String(<T extends DeferredAssertionSource>(local: T) =>
   return <DeferredAssertionTarget>local; // incomplete[expr-infer/type-assertion/compatibility]
 }] = [1];
 
-deferredKeyed[String(class {
+deferredKeyed[String(class { // incomplete[expr-infer/class-expression/self]
   field = deferredSource as DeferredAssertionTarget; // incomplete[expr-infer/as-assertion/compatibility]
 })] = 1;
 
@@ -42,6 +42,6 @@ deferredKeyed[String((local: DeferredAssertionSource) =>
   return <DeferredAssertionSource>local; // incomplete[expr-infer/type-assertion/compatibility]
 }] = [1];
 
-deferredKeyed[String(class {
+deferredKeyed[String(class { // incomplete[expr-infer/class-expression/self]
   field = deferredSource as DeferredAssertionSource; // incomplete[expr-infer/as-assertion/compatibility]
 })] = 1;

@@ -22,6 +22,10 @@ WU4-A adversarial review (all verified pre-existing at that sprint's HEAD).
 - **Tagged templates and iteration targets are incomplete** — tagged-template operands and
   assignment targets in `for-in`/`for-of` need structural traversal before their semantic rules
   can be checked.
+- **Static-member assignment bases with nested lexical scopes are incomplete** — assignment-LHS
+  reservation does not allocate callable/class body owners. Such a base cannot safely enter an
+  arrow, function, or class expression to check the member write, so the skipped target needs its
+  own record while assertion and class-expression records remain independent and additive.
 - **`for-of` over a non-iterable / `for-in` over a non-object are undiagnosed**
   (tsc TS2488/TS2407) — the element type falls back to the error type (no cascade,
   but no diagnostic either). Needs at least a structural iterability check; full
@@ -34,6 +38,10 @@ traversal, and the missing iteration-target obligations, reusing the existing op
 machinery. Acceptance: a
 conformance corpus pinning each family against
 `tsc 6.0.3 --strict`; controls prove no over-reports on well-typed operands.
+Until assignment-LHS lexical reservation is implemented, a static-member target whose base
+contains a nested arrow/function/class records `expr-infer/static-member-assignment/base`, walks
+assertion syntax without entering the nested scope, preserves the existing class-expression
+record, and checks the RHS exactly once. Assertion records never substitute for the target record.
 Operator *result typing* fidelity (TK2362/2365 families) stays owned by backlog `45` —
 this item only stops the silent skips.
 

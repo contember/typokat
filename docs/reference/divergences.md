@@ -229,6 +229,11 @@ and validated the same way.
   reports `TK2304` where tsc reports `TS2539` — same verdict, different code.
   Surfaced by WU1's nested-assignment checking; owner backlog `47`.
   <!-- div: id=names/undefined-assignment-target dir=cosmetic scope=s-name-resolution owner=../backlog/47-definite-assignment.md witness=../../tests/cases/sr_wu1_expressions/nested_assignments.ts -->
+- **Static-member writes with a nested callable/class base are explicitly incomplete
+  (under-report).** Assignment-LHS reservation has no nested lexical owners, so typokat records
+  `expr-infer/static-member-assignment/base` instead of entering the scope with an incorrect binder
+  or silently dropping member-write assignability, readonly, and access checks.
+  <!-- div: id=assignments/static-member-nested-scope-base dir=under scope=s-assignability owner=../backlog/71-expression-inference-fn-tail.md witness=../../tests/cases/b73_surface_accounting/static_member_assignment_nested_base.ts -->
 - **Assignment into an explicit `any` narrows it (over-report).** `let s: any;
   s = 5; s.foo` reports `TK2339` where tsc keeps `s` as `any` (assignment narrowing
   applies only to implicit evolving `any`). Safe direction; batched in backlog `63`.
