@@ -47,3 +47,16 @@ const mutualClassHeritageBOwn: string = new MutualClassHeritageB().ownB;
 const mutualClassHeritageBInherited: number = new MutualClassHeritageB().ownA;
 const mutualClassHeritageBOwnWrong: number = new MutualClassHeritageB().ownB; // error[TK2322]: Type 'string' is not assignable to type 'number'
 const mutualClassHeritageBInheritedWrong: string = new MutualClassHeritageB().ownA; // error[TK2322]: Type 'number' is not assignable to type 'string'
+
+class MixedHardSoftCycleB { // error[TK2310]: recursively references itself as a base type
+  b: string = "b";
+}
+interface MixedHardSoftCycleB extends MixedHardSoftCycleA {} // error[TK2310]: recursively references itself as a base type
+class MixedHardSoftCycleA extends MixedHardSoftCycleB { // error[TK2310]: recursively references itself as a base type
+  a: number = 1;
+}
+
+const mixedHardSoftCycleAOwn: number = new MixedHardSoftCycleA().a;
+const mixedHardSoftCycleAOwnWrong: string = new MixedHardSoftCycleA().a; // error[TK2322]: Type 'number' is not assignable to type 'string'
+const mixedHardSoftCycleBOwn: string = new MixedHardSoftCycleB().b;
+const mixedHardSoftCycleBOwnWrong: number = new MixedHardSoftCycleB().b; // error[TK2322]: Type 'string' is not assignable to type 'number'

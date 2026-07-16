@@ -1,5 +1,5 @@
 // WU4 adversarial HOLD — tsc 6.0.3 --strict --noEmit --lib es5 --module commonjs:
-// TS2394, TS2391, TS2769 x3, TS2339 x2, and TS2322 x8 below.
+// TS2394, TS2391 x3, TS2769 x4, TS2339 x2, and TS2322 x11 below.
 
 function Wu4PrivateVariableOwner(): void {}
 namespace Wu4PrivateVariableOwner {
@@ -52,3 +52,26 @@ const wu4ValidString: string = Wu4NamespaceOverloadOwner.valid("one");
 Wu4NamespaceOverloadOwner.valid(true); // error[TK2769]
 const wu4ValidNumberWrong: string = Wu4NamespaceOverloadOwner.valid(1); // error[TK2322]: Type 'number' is not assignable to type 'string'
 const wu4ValidStringWrong: number = Wu4NamespaceOverloadOwner.valid("one"); // error[TK2322]: Type 'string' is not assignable to type 'number'
+
+function Wu4SingletonSignatureOwner(): void {}
+namespace Wu4SingletonSignatureOwner {
+  export function singleton(value: number): number; // error[TK2391]
+}
+const wu4SingletonNumber: number = Wu4SingletonSignatureOwner.singleton(1);
+const wu4SingletonNumberWrong: string = Wu4SingletonSignatureOwner.singleton(1); // error[TK2322]: Type 'number' is not assignable to type 'string'
+
+function Wu4SplitSignatureOwner(): void {}
+namespace Wu4SplitSignatureOwner {
+  export function split(value: number): number; // error[TK2391]
+}
+namespace Wu4SplitSignatureOwner {
+  export function split(value: string): string;
+  export function split(value: number | string): number | string {
+    return value;
+  }
+}
+const wu4SplitNumber: number = Wu4SplitSignatureOwner.split(1);
+const wu4SplitString: string = Wu4SplitSignatureOwner.split("one");
+Wu4SplitSignatureOwner.split(true); // error[TK2769]
+const wu4SplitNumberWrong: string = Wu4SplitSignatureOwner.split(1); // error[TK2322]: Type 'number' is not assignable to type 'string'
+const wu4SplitStringWrong: number = Wu4SplitSignatureOwner.split("one"); // error[TK2322]: Type 'string' is not assignable to type 'number'
