@@ -1,5 +1,5 @@
 // WU4 — tsc 6.0.3 --strict --noEmit --lib es5 --module commonjs:
-// TS7023, TS2769, and TS2322 x9 below. Typokat keeps the forward-demand and
+// TS7023 x3, TS2769, and TS2322 x9 below. Typokat keeps the forward-demand and
 // inferred-cycle boundaries explicitly incomplete under backlog 76.
 
 function Wu4InferredAfterBody() {
@@ -26,6 +26,42 @@ const wu4PendingAfterBodyReturn: number = Wu4PendingBeforeBody();
 const wu4PendingAfterBodyTag: string = Wu4PendingBeforeBody.tag;
 const wu4PendingAfterBodyReturnWrong: string = Wu4PendingBeforeBody(); // error[TK2322]: Type 'number' is not assignable to type 'string'
 const wu4PendingAfterBodyTagWrong: number = Wu4PendingBeforeBody.tag; // error[TK2322]: Type 'string' is not assignable to type 'number'
+
+const wu4PendingIdentifier = Wu4PendingIdentifier; // incomplete[expr-infer/identifier/function-group-pending]
+function Wu4PendingIdentifier() {
+  return 1;
+}
+namespace Wu4PendingIdentifier {
+  export const tag: string = "pending-identifier";
+}
+const wu4PendingIdentifierReturn: number = Wu4PendingIdentifier();
+const wu4PendingIdentifierTag: string = Wu4PendingIdentifier.tag;
+
+function Wu4InferredDependency() { // incomplete[decl/function-declaration/inferred-return-dependency]
+  return Wu4InferredDependencyTarget();
+}
+namespace Wu4InferredDependency {
+  export const tag: string = "dependency";
+}
+function Wu4InferredDependencyTarget() {
+  return 1;
+}
+namespace Wu4InferredDependencyTarget {
+  export const tag: string = "dependency-target";
+}
+
+function Wu4MutualDependencyA() { // incomplete[decl/function-declaration/inferred-return-dependency]
+  return Wu4MutualDependencyB();
+}
+namespace Wu4MutualDependencyA {
+  export const tag: string = "mutual-a";
+}
+function Wu4MutualDependencyB() { // incomplete[decl/function-declaration/inferred-return-dependency]
+  return Wu4MutualDependencyA();
+}
+namespace Wu4MutualDependencyB {
+  export const tag: string = "mutual-b";
+}
 
 // TS 6 infers `never` for an unconditional self-call; two recursive branches retain TS7023.
 function Wu4InferredRecursive(toggle: boolean) { // incomplete[decl/function-declaration/inferred-return-cycle]
