@@ -18,13 +18,13 @@ profiles deferred. The one goal is to preserve the **type model** faithfully; wh
 <p>
   <img alt="Rust" src="https://img.shields.io/badge/built%20with-Rust-000?logo=rust">
   <img alt="Milestones" src="https://img.shields.io/badge/milestones-M0--M33-2ea44f">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-478%20unit%20%2B%20320%20fixtures-blue">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-631%20unit%20%2B%20369%20fixtures-blue">
   <img alt="Clippy" src="https://img.shields.io/badge/clippy-clean-brightgreen">
 </p>
 
-By the numbers: **57,063 lines of Rust** (53,791 nonblank), **478 passing unit tests**
-(plus 6 ignored release measurements), and a **320-file enabled conformance corpus** with
-1,129 expected diagnostics plus 111 explicit incomplete-surface markers. `clippy -D warnings` is
+By the numbers: **83,195 lines of Rust** (78,888 nonblank), **631 passing unit tests**
+(plus 6 ignored release measurements), and a **369-file enabled conformance corpus** with
+1,814 expected diagnostic markers plus 166 explicit incomplete-surface markers. `clippy -D warnings` is
 clean, and **every milestone is cross-checked against real `tsc 6.0.3 --strict`**.
 
 ## Quick start
@@ -60,7 +60,7 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 | **Generics** | type parameters, instantiation, **type-argument inference** from call arguments, **constraints** (`extends` — apparent types, declaration + call-site `TK2344`/`TK2345`, circularity `TK2313`), persistent generic free/member/call/construct signatures |
 | **Type-level evaluation** | conditional types (**distribution**, `infer` incl. tuple/function rest capture and anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, **the ten standard utility types as built-ins** plus a bounded `console`/numeric-`Math` ambient prelude + the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
 | **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract` (incl. **abstract-member completeness**); **generic classes**; **override compatibility** (tsc's base-keyed method bivariance); **constructor accessibility** on `new`; immutable complete class applications, dependency-first SCC publication, poison propagation, and bounded demand-driven projection |
-| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, rest elements, contextual typing), contextual fresh object/array/tuple literals, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), local relative modules with named imports/exports |
+| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, rest elements, contextual typing), contextual fresh object/array/tuple literals, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), type-side namespaces/reopenings/qualified lookup and declaration merging, local relative modules with named imports/exports |
 | **Reporting** | nested reason chains (`Types of property 'x' are incompatible …`) |
 
 ### Diagnostics
@@ -153,9 +153,11 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   `keyof` over unions/`never`/template-literal key sources plus two tsc-parity conditional
   edges are documented divergences (backlog `26`, `27`, `35`–`37`). (A bytecode VM is a
   deferred, profiling-gated refactor — see `docs/decisions/0001-…`.)
-- **Remaining type-model gaps** — enums, namespaces + declaration merging, and `satisfies`/
-  `as const` are not modeled yet. Generic methods, explicit `this` parameters, contextual
-  `ThisType<T>`, and object call/construct signatures are modeled persistently, but generic/
+- **Remaining type-model gaps** — enums, the standalone namespace **value receiver**, and
+  `satisfies`/`as const` are not modeled yet. Type-side namespaces, reopenings, qualified lookup,
+  declaration merging, and local `Array` heritage are modeled. Generic methods, explicit `this`
+  parameters, contextual `ThisType<T>`, and object call/construct signatures are modeled
+  persistently, but generic/
   deferred indexed access (`T[K]`), optional methods, member-path narrowing, and library loading
   remain separate gaps. The remaining
   model-completeness track is in [`docs/backlog/`](./docs/backlog/README.md) and is the prerequisite for full
@@ -175,8 +177,10 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   namespace / star imports, re-exports from another module, CommonJS, ambient modules, cyclic module
   graphs, and parallel cross-file type identity. An **unresolved type name** in type position is
   `TK2304` (M22); still deferred there (distinct tsc codes): a value used as a type (`TS2749`), type
-  args on a type parameter (`TS2315`), a wrong type-argument count such as bare `Array` (`TS2314`),
-  and qualified names `A.B` (`TS2503`). (Backlog `14`, `15`, `43`, `52`.)
+  args on a type parameter (`TS2315`) and a wrong type-argument count such as bare `Array`
+  (`TS2314`). Qualified namespace types `A.B` are modeled; diagnosed ambient export-alias endpoint
+  recovery and standalone namespace values remain narrow backlog-`43` boundaries. (Backlog `14`,
+  `15`, `43`, `52`.)
 - **Incomplete checking is a first-class outcome (2026-07-10 accounting sprint).** The consumed
   OXC AST surface is classified in a machine-validated inventory (`tests/surface/`), and an
   unsupported in-scope construct now reports `incomplete[<surface-id>]` with exit `3` instead of
@@ -187,8 +191,11 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   `75`. The pinned real-project preview gate (`72`) remains required but **paused**: no screened
   public project met its multi-file, minimal-graph, zero-threshold witness contract. Do not resume
   `72`, add a project-specific shim, or expand the prelude merely to manufacture that witness; the
-  next recommended model/lib work is namespaces and declaration merging (`43`), followed by full
-  `lib.d.ts` loading (`14`) and Bundler module resolution (`15`). A clean result on an arbitrary
+  immediate model/lib step is resolving backlog `43`'s standalone namespace value architecture
+  stop, pinned by the current **NO-GO**
+  [`lib.es5.d.ts` readiness manifest](./tests/fixtures/lib-es5-6.0.3/readiness.toml). Full
+  `lib.d.ts` loading (`14`) may start only after that stop closes; Bundler module resolution (`15`)
+  follows on the scale ladder. A clean result on an arbitrary
   npm/Bun/Node project is not yet a completeness claim.
 - Remaining `tsc` divergences are logged in
   [`docs/reference/divergences.md`](./docs/reference/divergences.md): known under-report families

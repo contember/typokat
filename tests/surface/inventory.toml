@@ -110,9 +110,9 @@ role = "type-fill"
 surface = "module-declaration"
 slot = "self"
 oxc_variant = "Declaration::TSModuleDeclaration"
-disposition = "unsupported-in"
-owner = "../../docs/backlog/43-namespaces-declaration-merging.md"
-witness = "namespace type-side fill not implemented"
+disposition = "supported"
+owner = "shipped"
+witness = "../fixtures/lib-es5-6.0.3/readiness.toml"
 
 # ------------------------------------------------------------------------------
 # role: stmt-check
@@ -1117,7 +1117,7 @@ slot = "qualified-name"
 oxc_variant = "TSTypeName::QualifiedName"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/43-namespaces-declaration-merging.md"
-witness = "qualified type path classified; leaf lowering deferred to WU3"
+witness = "../cases/b43_namespaces_declaration_merging/wu2_ambient_export_alias_list.ts"
 
 [[surface]]
 id = "annotation-lower/type-name/qualified-import-alias"
@@ -1365,7 +1365,7 @@ slot = "self"
 oxc_variant = "Declaration::TSModuleDeclaration"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/43-namespaces-declaration-merging.md"
-witness = "namespace/module declaration type side not modeled"
+witness = "../fixtures/lib-es5-6.0.3/readiness.toml"
 
 [[surface]]
 id = "decl/namespace-export/self"

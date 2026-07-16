@@ -69,13 +69,13 @@ and validated the same way.
   (tsc `TS2749` — the name resolves in the value space); type arguments applied to a
   type parameter (tsc `TS2315`); a wrong **type-argument count** on a recognized type
   such as bare/over-applied `Array` (tsc `TS2314` — `Array` is a known built-in, not
-  "cannot find name"); **qualified** type names (`A.B` — needs namespaces). M29
+  "cannot find name"). Qualified namespace type paths are modeled; the remaining
+  diagnosed ambient export-alias endpoint recovery is recorded separately below. M29
   temporarily maps a type-only import/export used as a value to `TK2304` instead of
   tsc's `TS2693`.
   <!-- div: id=names/value-used-as-type dir=under scope=s-value-type-space owner=../backlog/52-type-reference-tail.md witness=../../tests/cases/m22_unresolved_type/positions.ts -->
   <!-- div: id=names/type-args-on-type-param dir=under scope=a-type-argument-arity owner=../backlog/52-type-reference-tail.md witness=../../tests/cases/m24_generic_constraints/constraint_check_explicit.ts -->
   <!-- div: id=names/type-arg-count-on-builtin dir=under scope=a-type-argument-arity owner=../backlog/52-type-reference-tail.md witness=../../tests/cases/m22_unresolved_type/generics.ts -->
-  <!-- div: id=names/qualified-type-name dir=under scope=b-namespaces owner=../backlog/43-namespaces-declaration-merging.md witness=../../tests/cases/m22_unresolved_type/positions.ts -->
   <!-- div: id=names/type-only-import-as-value-code dir=cosmetic scope=s-value-type-space owner=../backlog/52-type-reference-tail.md witness=../../tests/cases/sr_wu2_export_space/type_only_export_leak/a.ts -->
 - **Multiple mismatched arguments (over-report).** On a call/`new` with several
   mismatched arguments, typokat reports a `TK2345` for **each**, whereas tsc stops at
@@ -91,6 +91,20 @@ and validated the same way.
   (under-report).** After `TK2661` rejects an alias-only local name, typokat keeps the
   exported endpoint unavailable and omits tsc's follow-on `TS2694` at each use.
   <!-- div: id=namespaces/ambient-alias-use-cascade dir=under scope=b-namespaces owner=../backlog/43-namespaces-declaration-merging.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu2_ambient_export_alias_list.ts -->
+- **The pinned ES5 `CallableFunction` and `NewableFunction` heritage edges
+  over-report.** typokat emits one canonical `TK2430` for each interface where tsc is
+  clean because apparent `Function` compatibility does not yet admit their generic
+  overload surfaces. Backlog `14` owns the two compatibility results.
+  <!-- div: id=lib-es5/callable-heritage-compatibility dir=over scope=s-assignability owner=../backlog/14-libdts-loading.md witness=../../tests/fixtures/lib-es5-6.0.3/readiness.toml -->
+- **The same two ES5 heritage edges each emit one surplus `TK2430`
+  (over-report).** The extra diagnostic per interface is a cardinality/parity issue
+  distinct from the canonical compatibility result and remains backlog `63` work.
+  <!-- div: id=lib-es5/callable-heritage-cardinality dir=over scope=s-assignability owner=../backlog/63-review-parity-tail.md witness=../../tests/fixtures/lib-es5-6.0.3/readiness.toml -->
+- **The pinned ES5 annotation tail is explicitly incomplete (over-report).** The raw
+  artifact records 179 backlog-`75` outcomes: polymorphic `this` ×164, `object` ×6,
+  `intrinsic` ×5, `symbol` ×3, and `bigint` ×1. These are non-permissive incomplete
+  results rather than silent fallback, but tsc accepts the declarations.
+  <!-- div: id=lib-es5/annotation-surface-tail dir=over scope=b-semantic-candidate-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/fixtures/lib-es5-6.0.3/readiness.toml -->
 - **Qualified enum endpoints remain unavailable (under-report).** Until enum types
   land, `E.Member` records
   `annotation-lower/type-name/qualified-enum` instead of guessing a type. Withholding
@@ -189,9 +203,11 @@ and validated the same way.
   <!-- div: id=namespaces/attached-duplicate-class dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_namespace_payload_incomplete_ledger.ts -->
 - **A standalone namespace value surface is unavailable (over-report).** typokat
   publishes the namespace's exported type members but records
-  `decl/module-declaration/self` for its runtime value surface; tsc publishes both.
-  Backlog `43` owns this remaining namespace boundary.
-  <!-- div: id=namespaces/standalone-value-surface dir=over scope=b-namespaces owner=../backlog/43-namespaces-declaration-merging.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_standalone_namespace_boundary.ts -->
+  `decl/module-declaration/self` for its value receiver; tsc publishes both. The pinned
+  ES5 proof isolates exactly one backlog-`43` instance at `declare namespace Intl`:
+  the `Intl` type path works, while the value witness reports `TK2304` instead of tsc's
+  `TS2322`. This is the sole owner-43 ES5 start blocker, not a runtime-emit claim.
+  <!-- div: id=namespaces/standalone-value-surface dir=over scope=b-namespaces owner=../backlog/43-namespaces-declaration-merging.md witness=../../tests/fixtures/lib-es5-6.0.3/readiness.toml -->
 - **A type depending on a deferred global value namespace is unavailable
   (cosmetic).** typokat records the exact backlog-82 global-augmentation incomplete
   outcome and withholds the dependent type instead of guessing from a same-named
@@ -254,10 +270,16 @@ flow-node CFG (M23), the single narrowing model.
   reads as `string | null` — over-report, safe direction); assignment narrowing starts at the
   first real assignment.
   <!-- div: id=narrowing/declaration-initializer dir=over scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/m23_unstructured_narrowing -->
-- **Deferred:** assertion functions / type predicates (`x is T`), `for`/`for-of`/`do-while`
-  loop forms, and narrowing seen by a **closure** over a never-reassigned binding (tsc narrows;
-  typokat keeps the function-boundary reset — over-report, safe direction). Member-path narrowing
-  (`x.a`) — narrowing is symbol-keyed. (Backlog `50`/`51`.)
+- **Type-predicate and assertion signatures are explicitly incomplete
+  (over-report).** The pinned ES5 artifact contains eight type-predicate annotations,
+  each recorded as `annotation-lower/type-predicate/self` where tsc accepts the
+  signature. Lowering predicate/assertion signature identity and its flow effect remains
+  backlog `50`.
+  <!-- div: id=narrowing/type-predicate-annotations dir=over scope=a-type-predicates owner=../backlog/50-type-predicates-assertions.md witness=../../tests/fixtures/lib-es5-6.0.3/readiness.toml -->
+- **Deferred:** `for`/`for-of`/`do-while` loop narrowing and narrowing seen by a
+  **closure** over a never-reassigned binding (tsc narrows; typokat keeps the
+  function-boundary reset — over-report, safe direction). Member-path narrowing
+  (`x.a`) remains symbol-keyed. Backlog `51` owns these flow forms.
   <!-- div: id=narrowing/deferred-forms dir=over scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/m23_unstructured_narrowing -->
 - **Accepted official-suite over-reports** (safe direction, recorded in the scoreboard;
   independently audited — matched never drops, fn never rises): walking `while` bodies / ternary

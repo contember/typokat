@@ -378,8 +378,8 @@ namespaces (`TK2702`), a value-only root (`TK2503`), missing/value-only intermed
 namespace-only leaf (`TK2694`), type/class-only intermediates (`TK2713`), and no parent fallback.
 Its ambient export-list fixture pins ordinary and explicit type-only export-specifier aliases whose
 targets occupy type space as public, value alias use as a type (`TK2749`), and both the original
-pre-list name and a post-list declaration as hidden (`TK2694`). These are WU2 classification
-expectations only; successful qualified leaf lowering and generic application stay with WU3.
+pre-list name and a post-list declaration as hidden (`TK2694`). These began as WU2 classification
+expectations; WU3 subsequently shipped successful qualified leaf lowering and generic application.
 The second WU2 addendum pins checker-local qualified roots only after lexical namespace lookup finds
 no namespace meaning. Callable and instance-class type parameters, an active conditional `infer`
 binder, a mapped key binder, and the builtin `Array` type then report `TK2702`; a class type
@@ -390,8 +390,8 @@ template literal, function/constructor type, type-literal call/construct/method 
 constraint/field/method annotations. Named/default import coexistence is a project-shaped oracle
 recorded in the sprint rather than a single-file fixture. Reopening-private helper lookup is already
 pinned by `namespace_visibility.ts`; no duplicate fixture owns it. Three mixed-order controls require
-a later missing-root `TK2503` to survive an earlier WU3-successful qualified endpoint or a
-backlog-42-deferred enum endpoint; they claim no semantic leaf lowering.
+a later missing-root `TK2503` to survive an earlier successful qualified endpoint or a
+backlog-42-deferred enum endpoint.
 The valid UMD `.d.ts` is the current `export =` form witness: it keeps both
 `export as namespace` and `export =` explicitly incomplete under backlog `15`; local access to its
 merged `Options` alone would not prove a global UMD export. `export as namespace` may also publish an
@@ -422,9 +422,22 @@ also be a real heritage group: `interface X extends Array<string>` inherits its 
 members instead of taking the builtin-array opaque fallback. Semantic wrong-type witnesses keep
 both fixtures non-permissive under error/`any` recovery.
 
-The full directory remains disabled because seven older flat fixtures are still outside the
-admitted slice. The conformance harness gates 45 flat fixtures explicitly through
-`ENABLED_FIXTURES`, plus both two-file WU5 projects through `ENABLED_PROJECT_FIXTURES`. WU5 adds
+The durable WU6 proof is
+[`tests/fixtures/lib-es5-6.0.3/readiness.toml`](../fixtures/lib-es5-6.0.3/readiness.toml).
+All 28 interface/value pairs, repeated `Date`/`Number`/`String` interfaces, local `Array` heritage,
+and the `Intl` type container are represented. Its current result remains **NO-GO**: the sole
+owner-43 ES5 start blocker is the standalone `Intl` value receiver,
+`decl/module-declaration/self`. The same raw run records four `TK2430`s (two canonical apparent-
+`Function` results owned by `14`, two surplus-cardinality results owned by `63`) and 188 explicit
+incomplete outcomes: 179 owned by `75`, eight type predicates owned by `50`, and the one `Intl`
+value boundary owned by `43`. Those counts are exact accounting, not a broad allowlist or a claim
+that full standard-library loading has started.
+
+The directory contains 52 flat fixtures. Seven older fixtures remain outside the admitted slice,
+so the whole directory stays disabled; the conformance harness gates the other 45 flat fixtures
+explicitly through
+`ENABLED_FIXTURES`, plus both two-file WU5 projects through `ENABLED_PROJECT_FIXTURES`. WU6 adds
+`wu6_ambient_namespace_body_lookup.ts` and `wu6_local_array_heritage.ts`. WU5 adds
 `global_augmentation.ts`, `global_missing_declare_negative.ts`,
 `global_script_negative.ts`, `global_value_publication_deferred.ts`, `umd_export.d.ts`,
 `umd_export_negatives.ts`, and `umd_export_nonmodule.ts`; its project fixtures are
