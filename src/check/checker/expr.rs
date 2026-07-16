@@ -94,12 +94,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 &assertion.expression,
                 &assertion.type_annotation,
                 Span::from_oxc(assertion.span),
+                AssertionSyntax::As,
             ),
             Expression::TSTypeAssertion(assertion) => self.infer_assertion(
                 scope,
                 &assertion.expression,
                 &assertion.type_annotation,
                 Span::from_oxc(assertion.span),
+                AssertionSyntax::Angle,
             ),
             Expression::Identifier(ident) => {
                 let span = Span::from_oxc(ident.span);
@@ -364,6 +366,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
     /// Visit only an update expression's target; operator compatibility stays deferred.
     fn infer_update_target(&mut self, scope: ScopeId, target: &SimpleAssignmentTarget<'_>) {
+        if super::assignment::update_target_contains_nested_scope(target) {
+            self.record_incomplete(
+                "expr-infer/update-expression/nested-scope-target",
+                Span::from_oxc(target.span()),
+                "update target has an unreserved nested scope",
+            );
+            self.walk_update_target_assertions_syntax_only(scope, target);
+            return;
+        }
         match target {
             SimpleAssignmentTarget::AssignmentTargetIdentifier(ident) => {
                 if ident.name.as_str() == "undefined" {
@@ -405,8 +416,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 );
             }
             SimpleAssignmentTarget::TSAsExpression(assertion) => {
-                self.infer_expr(scope, &assertion.expression);
-                self.lower_annotation(scope, &assertion.type_annotation);
+                self.infer_assertion(
+                    scope,
+                    &assertion.expression,
+                    &assertion.type_annotation,
+                    Span::from_oxc(assertion.span),
+                    AssertionSyntax::As,
+                );
             }
             SimpleAssignmentTarget::TSSatisfiesExpression(satisfies) => {
                 self.infer_expr(scope, &satisfies.expression);
@@ -426,8 +442,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 );
             }
             SimpleAssignmentTarget::TSTypeAssertion(assertion) => {
-                self.infer_expr(scope, &assertion.expression);
-                self.lower_annotation(scope, &assertion.type_annotation);
+                self.infer_assertion(
+                    scope,
+                    &assertion.expression,
+                    &assertion.type_annotation,
+                    Span::from_oxc(assertion.span),
+                    AssertionSyntax::Angle,
+                );
             }
         }
     }
@@ -448,12 +469,22 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 self.infer_chain_expression(scope, &paren.expression);
             }
             Expression::TSAsExpression(assertion) => {
-                self.infer_chain_expression(scope, &assertion.expression);
-                self.lower_annotation(scope, &assertion.type_annotation);
+                self.infer_assertion(
+                    scope,
+                    &assertion.expression,
+                    &assertion.type_annotation,
+                    Span::from_oxc(assertion.span),
+                    AssertionSyntax::As,
+                );
             }
             Expression::TSTypeAssertion(assertion) => {
-                self.infer_chain_expression(scope, &assertion.expression);
-                self.lower_annotation(scope, &assertion.type_annotation);
+                self.infer_assertion(
+                    scope,
+                    &assertion.expression,
+                    &assertion.type_annotation,
+                    Span::from_oxc(assertion.span),
+                    AssertionSyntax::Angle,
+                );
             }
             Expression::TSSatisfiesExpression(satisfies) => {
                 self.infer_chain_expression(scope, &satisfies.expression);
@@ -556,12 +587,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
     /// Infer a TypeScript assertion (`expr as T` / `<T>expr`). The source expression is
     /// still walked for nested diagnostics; the value type is the asserted type.
-    fn infer_assertion(
+    pub(in crate::check::checker) fn infer_assertion(
         &mut self,
         scope: ScopeId,
         expression: &Expression<'_>,
         type_annotation: &TSType<'_>,
         span: Span,
+        syntax: AssertionSyntax,
     ) -> Option<(TypeId, Span)> {
         let source = self.infer_expr(scope, expression);
         if is_const_assertion_type(type_annotation) {
@@ -570,6 +602,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let asserted = self
             .lower_annotation(scope, type_annotation)
             .unwrap_or_else(|| self.interner.well_known().error);
+        if let Some((source, _)) = source {
+            let error = self.interner.well_known().error;
+            if source != error && asserted != error {
+                self.schedule_assertion_compatibility(AssertionCompatibilityObligation {
+                    source,
+                    asserted,
+                    span,
+                    syntax,
+                });
+            }
+        }
         Some((asserted, span))
     }
 

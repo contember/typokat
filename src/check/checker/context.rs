@@ -60,6 +60,36 @@ pub(in crate::check::checker) struct AssignObligation {
     pub(in crate::check::checker) kind: ObligationKind,
 }
 
+/// The assertion spelling determines the stable incomplete-surface identity.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub(in crate::check::checker) enum AssertionSyntax {
+    As,
+    Angle,
+}
+
+impl AssertionSyntax {
+    pub(in crate::check::checker) const fn incomplete_id(self) -> &'static str {
+        match self {
+            Self::As => "expr-infer/as-assertion/compatibility",
+            Self::Angle => "expr-infer/type-assertion/compatibility",
+        }
+    }
+}
+
+/// One assertion whose source/target overlap proof waits for semantic replay.
+pub(in crate::check::checker) struct AssertionCompatibilityObligation {
+    pub(in crate::check::checker) source: TypeId,
+    pub(in crate::check::checker) asserted: TypeId,
+    pub(in crate::check::checker) span: Span,
+    pub(in crate::check::checker) syntax: AssertionSyntax,
+}
+
+/// Relation work retains one scheduling order within its lexical effect owner.
+pub(in crate::check::checker) enum DeferredRelationObligation {
+    Assign(AssignObligation),
+    AssertionCompatibility(AssertionCompatibilityObligation),
+}
+
 /// One generic application whose constraint relation is intentionally delayed
 /// until the complete class and type-group registries are immutable.
 pub(in crate::check::checker) struct ConstraintCheckObligation {
@@ -113,7 +143,7 @@ pub(in crate::check::checker) struct OverrideCheck {
 /// children remain local until the selected child merges into its parent.
 pub(in crate::check::checker) struct CheckerEffects {
     pub(in crate::check::checker) records: CandidateEffects,
-    pub(in crate::check::checker) obligations: Vec<AssignObligation>,
+    pub(in crate::check::checker) obligations: Vec<DeferredRelationObligation>,
     pub(in crate::check::checker) constraint_checks: Vec<ConstraintCheckObligation>,
     pub(in crate::check::checker) interface_relations: Vec<InterfaceRelationObligation>,
     pub(in crate::check::checker) override_checks: Vec<OverrideCheck>,

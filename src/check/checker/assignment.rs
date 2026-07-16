@@ -16,8 +16,10 @@ use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
 use oxc_ast::ast::{
     AssignmentExpression, AssignmentOperator, AssignmentTarget, BindingPattern, Expression,
-    ObjectPropertyKind, StaticMemberExpression, VariableDeclarationKind,
+    ObjectPropertyKind, SimpleAssignmentTarget, StaticMemberExpression, TSAsExpression,
+    TSTypeAssertion, VariableDeclarationKind,
 };
+use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
 
 struct MemberAssignmentTarget {
@@ -26,6 +28,175 @@ struct MemberAssignmentTarget {
     readonly: bool,
     is_accessor: bool,
     declaring_class: Option<ClassId>,
+}
+
+/// Find only assertion expressions embedded in an otherwise deferred assignment target.
+struct AssignmentTargetAssertionWalker<'pass, 'a, 'ast> {
+    pass: &'pass mut Pass<'a, 'ast>,
+    scope: ScopeId,
+    syntax_only_depth: u32,
+}
+
+#[derive(Default)]
+struct NestedAssignmentTargetScopeFinder {
+    found: bool,
+}
+
+impl<'node> Visit<'node> for NestedAssignmentTargetScopeFinder {
+    fn visit_expression(&mut self, expression: &Expression<'node>) {
+        if matches!(
+            expression,
+            Expression::ArrowFunctionExpression(_)
+                | Expression::ClassExpression(_)
+                | Expression::FunctionExpression(_)
+        ) {
+            self.found = true;
+            return;
+        }
+        walk::walk_expression(self, expression);
+    }
+}
+
+#[derive(Copy, Clone)]
+enum AssertionTargetWalkMode {
+    Semantic,
+    SyntaxOnly,
+}
+
+fn assignment_target_contains_nested_scope(target: &AssignmentTarget<'_>) -> bool {
+    let mut finder = NestedAssignmentTargetScopeFinder::default();
+    finder.visit_assignment_target(target);
+    finder.found
+}
+
+pub(in crate::check::checker) fn update_target_contains_nested_scope(
+    target: &SimpleAssignmentTarget<'_>,
+) -> bool {
+    let mut finder = NestedAssignmentTargetScopeFinder::default();
+    finder.visit_simple_assignment_target(target);
+    finder.found
+}
+
+impl<'node, 'a, 'ast> Visit<'node> for AssignmentTargetAssertionWalker<'_, 'a, 'ast> {
+    fn visit_expression(&mut self, expression: &Expression<'node>) {
+        if self.syntax_only_depth > 0 {
+            if let Expression::ClassExpression(class) = expression {
+                self.pass.record_incomplete(
+                    "expr-infer/class-expression/self",
+                    Span::from_oxc(class.span),
+                    "class expression not modeled",
+                );
+            }
+            walk::walk_expression(self, expression);
+            return;
+        }
+        match expression {
+            // Assignment LHS prewalk reserves neither callable owners nor child binder scopes.
+            Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
+                self.syntax_only_depth += 1;
+                walk::walk_expression(self, expression);
+                self.syntax_only_depth -= 1;
+            }
+            Expression::ClassExpression(class) => {
+                self.pass.record_incomplete(
+                    "expr-infer/class-expression/self",
+                    Span::from_oxc(class.span),
+                    "class expression not modeled",
+                );
+                self.syntax_only_depth += 1;
+                walk::walk_expression(self, expression);
+                self.syntax_only_depth -= 1;
+            }
+            _ => walk::walk_expression(self, expression),
+        }
+    }
+
+    fn visit_assignment_target(&mut self, target: &AssignmentTarget<'node>) {
+        match target {
+            AssignmentTarget::AssignmentTargetIdentifier(_)
+            | AssignmentTarget::TSAsExpression(_)
+            | AssignmentTarget::TSSatisfiesExpression(_)
+            | AssignmentTarget::TSNonNullExpression(_)
+            | AssignmentTarget::TSTypeAssertion(_)
+            | AssignmentTarget::ComputedMemberExpression(_)
+            | AssignmentTarget::StaticMemberExpression(_)
+            | AssignmentTarget::PrivateFieldExpression(_) => {
+                self.visit_simple_assignment_target(target.to_simple_assignment_target());
+            }
+            AssignmentTarget::ArrayAssignmentTarget(array) => {
+                walk::walk_array_assignment_target(self, array);
+            }
+            AssignmentTarget::ObjectAssignmentTarget(object) => {
+                walk::walk_object_assignment_target(self, object);
+            }
+        }
+    }
+
+    fn visit_simple_assignment_target(&mut self, target: &SimpleAssignmentTarget<'node>) {
+        match target {
+            SimpleAssignmentTarget::AssignmentTargetIdentifier(_) => {}
+            SimpleAssignmentTarget::TSAsExpression(assertion) => {
+                self.visit_ts_as_expression(assertion);
+            }
+            SimpleAssignmentTarget::TSSatisfiesExpression(satisfies) => {
+                self.visit_expression(&satisfies.expression);
+            }
+            SimpleAssignmentTarget::TSNonNullExpression(non_null) => {
+                self.visit_expression(&non_null.expression);
+            }
+            SimpleAssignmentTarget::TSTypeAssertion(assertion) => {
+                self.visit_ts_type_assertion(assertion);
+            }
+            SimpleAssignmentTarget::ComputedMemberExpression(member) => {
+                self.visit_expression(&member.object);
+                self.visit_expression(&member.expression);
+            }
+            SimpleAssignmentTarget::StaticMemberExpression(member) => {
+                self.visit_expression(&member.object);
+            }
+            SimpleAssignmentTarget::PrivateFieldExpression(member) => {
+                self.visit_expression(&member.object);
+            }
+        }
+    }
+
+    fn visit_ts_as_expression(&mut self, assertion: &TSAsExpression<'node>) {
+        if self.syntax_only_depth > 0 {
+            self.visit_expression(&assertion.expression);
+            self.pass.record_incomplete(
+                AssertionSyntax::As.incomplete_id(),
+                Span::from_oxc(assertion.span),
+                "assertion compatibility deferred with assignment-target nested scope",
+            );
+            return;
+        }
+        self.pass.infer_assertion(
+            self.scope,
+            &assertion.expression,
+            &assertion.type_annotation,
+            Span::from_oxc(assertion.span),
+            AssertionSyntax::As,
+        );
+    }
+
+    fn visit_ts_type_assertion(&mut self, assertion: &TSTypeAssertion<'node>) {
+        if self.syntax_only_depth > 0 {
+            self.visit_expression(&assertion.expression);
+            self.pass.record_incomplete(
+                AssertionSyntax::Angle.incomplete_id(),
+                Span::from_oxc(assertion.span),
+                "assertion compatibility deferred with assignment-target nested scope",
+            );
+            return;
+        }
+        self.pass.infer_assertion(
+            self.scope,
+            &assertion.expression,
+            &assertion.type_annotation,
+            Span::from_oxc(assertion.span),
+            AssertionSyntax::Angle,
+        );
+    }
 }
 
 impl<'a, 'ast> Pass<'a, 'ast> {
@@ -40,6 +211,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         assign: &AssignmentExpression<'_>,
     ) -> Option<(TypeId, Span)> {
         let assign_span = Span::from_oxc(assign.span);
+        if assignment_target_contains_nested_scope(&assign.left) {
+            self.record_incomplete(
+                "expr-infer/assignment-expression/nested-scope-target",
+                Span::from_oxc(assign.left.span()),
+                "assignment target has an unreserved nested scope",
+            );
+            self.walk_assignment_target_assertions(
+                scope,
+                &assign.left,
+                AssertionTargetWalkMode::SyntaxOnly,
+            );
+            let rhs = self.infer_expr(scope, &assign.right);
+            return rhs.map(|(ty, _)| (ty, assign_span));
+        }
         let target = match &assign.left {
             AssignmentTarget::AssignmentTargetIdentifier(target) => target,
             // M14: a **static member** target (`this.prop = …`, `obj.prop = …`) is now
@@ -49,10 +234,21 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             AssignmentTarget::StaticMemberExpression(member) => {
                 return self.check_member_assignment(scope, member, assign);
             }
-            // Computed/destructuring targets stay deferred. Still walk the RHS so
-            // nested checks and unresolved-name diagnostics fire, but collect no
-            // obligation.
-            _ => {
+            // These targets remain otherwise deferred; visit only embedded assertions, then walk
+            // the RHS once. Identifier/static-member targets retain their dedicated diagnostics.
+            AssignmentTarget::TSAsExpression(_)
+            | AssignmentTarget::TSTypeAssertion(_)
+            | AssignmentTarget::ComputedMemberExpression(_)
+            | AssignmentTarget::PrivateFieldExpression(_)
+            | AssignmentTarget::TSSatisfiesExpression(_)
+            | AssignmentTarget::TSNonNullExpression(_)
+            | AssignmentTarget::ArrayAssignmentTarget(_)
+            | AssignmentTarget::ObjectAssignmentTarget(_) => {
+                self.walk_assignment_target_assertions(
+                    scope,
+                    &assign.left,
+                    AssertionTargetWalkMode::Semantic,
+                );
                 let rhs = self.infer_expr(scope, &assign.right);
                 return rhs.map(|(ty, _)| (ty, assign_span));
             }
@@ -134,6 +330,36 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
 
         value
+    }
+
+    fn walk_assignment_target_assertions(
+        &mut self,
+        scope: ScopeId,
+        target: &AssignmentTarget<'_>,
+        mode: AssertionTargetWalkMode,
+    ) {
+        let mut walker = AssignmentTargetAssertionWalker {
+            pass: self,
+            scope,
+            syntax_only_depth: match mode {
+                AssertionTargetWalkMode::Semantic => 0,
+                AssertionTargetWalkMode::SyntaxOnly => 1,
+            },
+        };
+        walker.visit_assignment_target(target);
+    }
+
+    pub(in crate::check::checker) fn walk_update_target_assertions_syntax_only(
+        &mut self,
+        scope: ScopeId,
+        target: &SimpleAssignmentTarget<'_>,
+    ) {
+        let mut walker = AssignmentTargetAssertionWalker {
+            pass: self,
+            scope,
+            syntax_only_depth: 1,
+        };
+        walker.visit_simple_assignment_target(target);
     }
 
     /// Check M14 member assignment, returning the assignment's value (the RHS type +

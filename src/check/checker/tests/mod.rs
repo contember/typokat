@@ -1,6 +1,7 @@
 //! Checker test modules (extracted from the former checker.rs tail).
 mod accessor_abstract;
 mod array;
+mod assertions;
 mod calls_measure;
 mod classes;
 mod generic_class;

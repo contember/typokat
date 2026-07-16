@@ -50,9 +50,9 @@ mod statements;
 mod type_groups;
 
 use context::{
-    AssignObligation, CheckerEffects, ClassFillState, ConstructionDrafts, DeclTypes,
-    InterfaceRelationKind, InterfaceRelationObligation, InterfaceRelationReport, OverrideCheck,
-    Pass, TypeDecl,
+    AssertionCompatibilityObligation, AssignObligation, CheckerEffects, ClassFillState,
+    ConstructionDrafts, DeclTypes, DeferredRelationObligation, InterfaceRelationKind,
+    InterfaceRelationObligation, InterfaceRelationReport, OverrideCheck, Pass, TypeDecl,
 };
 use decls::{reserve_type_decls, type_decl_id, value_decl_id, walk_type_decls, TopTypeDecl};
 use events::{CandidateEffects, EventStore, ModuleOrdinal, RecordTicket, UnitSlot};
@@ -1387,6 +1387,19 @@ fn attach_class_bindings(
     );
 }
 
+fn consume_relation_exhaustion(
+    pass: &mut Pass<'_, '_>,
+    effects: CheckerEffects,
+    exhaustion: Exhaustion,
+    span: Span,
+) -> CheckerEffects {
+    pass.effect_stack.push(effects);
+    let _: Option<TypeId> = pass.own_type_demand(DemandOutcome::Exhausted(exhaustion), span);
+    pass.effect_stack
+        .pop()
+        .expect("relation exhaustion lexical effect frame")
+}
+
 fn consume_interface_relation_decision(
     pass: &mut Pass<'_, '_>,
     effects: CheckerEffects,
@@ -1395,16 +1408,10 @@ fn consume_interface_relation_decision(
 ) -> (CheckerEffects, Option<bool>) {
     match decision {
         Ok(failed) => (effects, Some(failed)),
-        Err(exhaustion) => {
-            pass.effect_stack.push(effects);
-            let _: Option<TypeId> =
-                pass.own_type_demand(DemandOutcome::Exhausted(exhaustion), span);
-            let effects = pass
-                .effect_stack
-                .pop()
-                .expect("interface relation exhaustion lexical effect frame");
-            (effects, None)
-        }
+        Err(exhaustion) => (
+            consume_relation_exhaustion(pass, effects, exhaustion, span),
+            None,
+        ),
     }
 }
 
@@ -1510,40 +1517,93 @@ where
             }
         }
         for obligation in std::mem::take(&mut effects.obligations) {
-            let outcome = SemanticQueryCoordinator::new(
-                pass.interner,
-                pass.type_environment.published().classes(),
-                &mut pass.semantic_queries,
-                &mut pass.next_type_param,
-            )
-            .is_assignable(obligation.src, obligation.tgt);
-            match outcome {
-                RelationOutcome::Yes => {}
-                RelationOutcome::No(chain) => {
-                    effects.records.diagnostic(emit_obligation_failure(
-                        pass.interner.store(),
-                        &obligation,
-                        chain.head(),
-                    ));
+            match obligation {
+                DeferredRelationObligation::Assign(obligation) => {
+                    let outcome = SemanticQueryCoordinator::new(
+                        pass.interner,
+                        pass.type_environment.published().classes(),
+                        &mut pass.semantic_queries,
+                        &mut pass.next_type_param,
+                    )
+                    .is_assignable(obligation.src, obligation.tgt);
+                    match outcome {
+                        RelationOutcome::Yes => {}
+                        RelationOutcome::No(chain) => {
+                            effects.records.diagnostic(emit_obligation_failure(
+                                pass.interner.store(),
+                                &obligation,
+                                chain.head(),
+                            ));
+                        }
+                        RelationOutcome::Exhausted(Exhaustion::ClassProjectionBudget) => {
+                            effects.records.diagnostic(emit_exhausted_obligation(
+                                pass.interner.store(),
+                                &obligation,
+                            ));
+                            effects.records.incomplete(IncompleteSurface::new(
+                                "relation/class-projection-budget",
+                                obligation.src_span,
+                                "class projection budget exhausted",
+                            ));
+                        }
+                        RelationOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
+                        | RelationOutcome::Exhausted(Exhaustion::ClassHeritagePoison { .. })
+                        | RelationOutcome::Exhausted(Exhaustion::ClassInitializerPoison {
+                            ..
+                        })
+                        | RelationOutcome::Exhausted(Exhaustion::ClassSurfacePoison { .. })
+                        | RelationOutcome::Exhausted(Exhaustion::ClassApplicationArguments(_))
+                        | RelationOutcome::Exhausted(Exhaustion::EvaluationBudget)
+                        | RelationOutcome::Exhausted(Exhaustion::EvaluationCycle { .. }) => {}
+                    }
                 }
-                RelationOutcome::Exhausted(Exhaustion::ClassProjectionBudget) => {
-                    effects.records.diagnostic(emit_exhausted_obligation(
-                        pass.interner.store(),
-                        &obligation,
-                    ));
-                    effects.records.incomplete(IncompleteSurface::new(
-                        "relation/class-projection-budget",
-                        obligation.src_span,
-                        "class projection budget exhausted",
-                    ));
+                DeferredRelationObligation::AssertionCompatibility(obligation) => {
+                    let source_to_asserted = SemanticQueryCoordinator::new(
+                        pass.interner,
+                        pass.type_environment.published().classes(),
+                        &mut pass.semantic_queries,
+                        &mut pass.next_type_param,
+                    )
+                    .is_assignable(obligation.source, obligation.asserted);
+                    if matches!(&source_to_asserted, RelationOutcome::Yes) {
+                        continue;
+                    }
+                    let asserted_to_source = SemanticQueryCoordinator::new(
+                        pass.interner,
+                        pass.type_environment.published().classes(),
+                        &mut pass.semantic_queries,
+                        &mut pass.next_type_param,
+                    )
+                    .is_assignable(obligation.asserted, obligation.source);
+                    if matches!(&asserted_to_source, RelationOutcome::Yes) {
+                        continue;
+                    }
+                    let outcomes = [source_to_asserted, asserted_to_source];
+                    if outcomes
+                        .iter()
+                        .all(|outcome| matches!(outcome, RelationOutcome::No(_)))
+                    {
+                        effects.records.incomplete(IncompleteSurface::new(
+                            obligation.syntax.incomplete_id(),
+                            obligation.span,
+                            "assertion source/target compatibility not validated",
+                        ));
+                        continue;
+                    }
+                    let mut exhaustions = Vec::new();
+                    for outcome in outcomes {
+                        let RelationOutcome::Exhausted(exhaustion) = outcome else {
+                            continue;
+                        };
+                        if !exhaustions.contains(&exhaustion) {
+                            exhaustions.push(exhaustion);
+                        }
+                    }
+                    for exhaustion in exhaustions {
+                        effects =
+                            consume_relation_exhaustion(pass, effects, exhaustion, obligation.span);
+                    }
                 }
-                RelationOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
-                | RelationOutcome::Exhausted(Exhaustion::ClassHeritagePoison { .. })
-                | RelationOutcome::Exhausted(Exhaustion::ClassInitializerPoison { .. })
-                | RelationOutcome::Exhausted(Exhaustion::ClassSurfacePoison { .. })
-                | RelationOutcome::Exhausted(Exhaustion::ClassApplicationArguments(_))
-                | RelationOutcome::Exhausted(Exhaustion::EvaluationBudget)
-                | RelationOutcome::Exhausted(Exhaustion::EvaluationCycle { .. }) => {}
             }
         }
         for check in std::mem::take(&mut effects.override_checks) {
@@ -1762,7 +1822,20 @@ impl Pass<'_, '_> {
             .last_mut()
             .expect("obligation requires a lexical owner")
             .obligations
-            .push(obligation);
+            .push(DeferredRelationObligation::Assign(obligation));
+    }
+
+    pub(in crate::check::checker) fn schedule_assertion_compatibility(
+        &mut self,
+        obligation: AssertionCompatibilityObligation,
+    ) {
+        self.effect_stack
+            .last_mut()
+            .expect("assertion compatibility requires a lexical owner")
+            .obligations
+            .push(DeferredRelationObligation::AssertionCompatibility(
+                obligation,
+            ));
     }
 
     pub(in crate::check::checker) fn schedule_override(&mut self, check: OverrideCheck) {
