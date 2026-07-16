@@ -1,5 +1,5 @@
 // WU4 incomplete ledger — tsc 6.0.3 --strict --noEmit --lib es5 --module commonjs:
-// TS2451 x2 below; all other cases are clean.
+// TS2300 x2 and TS2451 x4 below; all other cases are clean.
 // Each owner stays explicitly typed so only its attached namespace payload reaches a boundary.
 
 function Wu4PayloadVariableOwner(): void {}
@@ -46,4 +46,22 @@ function Wu4PayloadDuplicateOwner(): void {}
 namespace Wu4PayloadDuplicateOwner { // incomplete[decl/module-declaration/self]
   export const duplicate: number = 1;
   export const duplicate: string = "two"; // incomplete[decl/variable-declaration/namespace-payload-duplicate-value]
+}
+
+function Wu4PayloadFunctionDuplicateOwner(): void {}
+namespace Wu4PayloadFunctionDuplicateOwner { // incomplete[decl/module-declaration/self]
+  export const duplicate: number = 1;
+  export function duplicate(): number { // incomplete[decl/function-declaration/namespace-payload-duplicate-value]
+    return 1;
+  }
+}
+
+class Wu4PayloadClassDuplicateOwner {
+  static existing: number = 1;
+}
+namespace Wu4PayloadClassDuplicateOwner { // incomplete[decl/module-declaration/self]
+  export const duplicate: number = 1;
+  export class duplicate { // incomplete[decl/class-declaration/namespace-payload-duplicate-value]
+    value: number = 1;
+  }
 }
