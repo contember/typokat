@@ -3884,7 +3884,10 @@ fn walk_type_decl_statement<'ast>(
             walk_type_decl_namespace(binder, module, scope, namespace, visit)
         }
         Statement::TSGlobalDeclaration(global) => {
-            walk_type_decl_statements(binder, module, scope, &global.body.body, visit)
+            let global_scope = binder
+                .global_augmentation_scope(module, global.global_span.start)
+                .unwrap_or(scope);
+            walk_type_decl_statements(binder, module, global_scope, &global.body.body, visit)
         }
         Statement::FunctionDeclaration(function) => {
             walk_type_decl_function(binder, module, function, visit);
@@ -3935,7 +3938,16 @@ fn walk_type_decl_statement<'ast>(
                     walk_type_decl_namespace(binder, module, scope, namespace, visit)
                 }
                 Declaration::TSGlobalDeclaration(global) => {
-                    walk_type_decl_statements(binder, module, scope, &global.body.body, visit)
+                    let global_scope = binder
+                        .global_augmentation_scope(module, global.global_span.start)
+                        .unwrap_or(scope);
+                    walk_type_decl_statements(
+                        binder,
+                        module,
+                        global_scope,
+                        &global.body.body,
+                        visit,
+                    )
                 }
                 Declaration::FunctionDeclaration(function) => {
                     walk_type_decl_function(binder, module, function, visit);

@@ -32,15 +32,13 @@ pub struct Binder {
     pub type_groups: TypeGroupTable,
     /// Namespace/global/merge metadata and admitted attached value-member identities.
     pub namespaces: NamespaceTable,
-    /// The **user** module scope. M28: its parent is [`Binder::prelude_module`], so a
-    /// user reference falls through to the prelude names and a user declaration
-    /// shadows them by ordinary innermost-first resolution (no duplicate-name
-    /// diagnostics — the two units are distinct scopes).
+    /// The last **user** module scope. Its parent is [`Binder::compilation_global`],
+    /// which in turn falls through to [`Binder::prelude_module`].
     pub module: ScopeId,
     /// The **prelude** root scope (M28) — the compilation unit holding the built-in
     /// utility aliases, bound BEFORE the user program. Its parent is `None`.
     pub prelude_module: ScopeId,
-    /// One empty project-wide dormant global-augmentation target.
+    /// The legal project-wide type-side global surface.
     pub compilation_global: ScopeId,
     /// Number of value storage slots (`ValueStorageId`s run
     /// `0..decl_count`). Includes variable bindings, function declaration names,
@@ -389,7 +387,10 @@ impl ProjectBinderBuilder {
         (module, placeholders)
     }
 
-    pub(crate) fn finish(self, module: ScopeId) -> Binder {
+    pub(crate) fn finish(mut self, module: ScopeId) -> Binder {
+        self.state
+            .namespaces
+            .finalize_global_scopes(&mut self.state.graph, &mut self.state.symbols);
         Binder {
             graph: self.state.graph,
             symbols: self.state.symbols,
@@ -1552,10 +1553,13 @@ mod tests {
             Some(fragment.private_scope)
         );
         assert_eq!(declaration("global").site.scope, Some(binder.module));
-        assert_eq!(
-            declaration("GlobalShape").site.scope,
-            Some(binder.compilation_global)
-        );
+        let global_overlay = binder
+            .namespaces
+            .globals()
+            .next()
+            .expect("global augmentation")
+            .overlay_scope;
+        assert_eq!(declaration("GlobalShape").site.scope, Some(global_overlay));
         assert_eq!(declaration("Unsupported").kind, DeclarationKind::Namespace);
         assert_eq!(declaration("global").kind, DeclarationKind::Global);
     }

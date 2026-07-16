@@ -42,8 +42,9 @@ pub struct Symbol {
     pub owns_type_group: bool,
     /// An unavailable import must hide matching type slots in parent scopes.
     pub blocks_type_lookup: bool,
+    /// An unavailable namespace root must hide matching parent namespace slots.
+    pub blocks_namespace_lookup: bool,
     /// Namespace-space declaration (`namespace`/module).
-    /// Dormant until the namespace publication cutover.
     pub ns: Option<NamespaceId>,
     /// Ordered source declarations contributing to this lexical symbol.
     /// Production lookup ignores this dormant classifier input.
@@ -61,6 +62,7 @@ impl Symbol {
             ty: None,
             owns_type_group: false,
             blocks_type_lookup: false,
+            blocks_namespace_lookup: false,
             ns: None,
             declarations: Vec::new(),
         }

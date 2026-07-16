@@ -82,6 +82,11 @@ and validated the same way.
   the first. Fixtures keep at most one mismatched argument per call so the corpus
   matches both.
   <!-- div: id=calls/multiple-mismatched-arguments dir=over scope=s-call-arguments owner=design-oos witness=../../tests/cases/m3_functions -->
+- **A fresh literal with both a wrong known property and an excess property
+  over-reports.** typokat preserves the independent assignability and freshness
+  diagnostics (`TK2322` plus `TK2353`), while tsc 6.0.3 gives the known-property
+  mismatch precedence and reports only `TS2322`.
+  <!-- div: id=objects/wrong-known-and-excess dir=over scope=s-excess-property owner=design-oos witness=../../tests/cases/m30_contextual_literals/excess_properties.ts -->
 - **Diagnosed ambient export-alias endpoints suppress qualified-use cascades
   (under-report).** After `TK2661` rejects an alias-only local name, typokat keeps the
   exported endpoint unavailable and omits tsc's follow-on `TS2694` at each use.
@@ -187,6 +192,13 @@ and validated the same way.
   `decl/module-declaration/self` for its runtime value surface; tsc publishes both.
   Backlog `43` owns this remaining namespace boundary.
   <!-- div: id=namespaces/standalone-value-surface dir=over scope=b-namespaces owner=../backlog/43-namespaces-declaration-merging.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_standalone_namespace_boundary.ts -->
+- **A type depending on a deferred global value namespace is unavailable
+  (cosmetic).** typokat records the exact backlog-82 global-augmentation incomplete
+  outcome and withholds the dependent type instead of guessing from a same-named
+  module-local namespace. Both downstream demands reject with `TK2339`; tsc reports
+  `TS2322` for the known global property mismatch and `TS2339` for the module-local
+  property, so only the first code differs.
+  <!-- div: id=namespaces/deferred-global-value-dependency dir=cosmetic scope=b-namespaces owner=../backlog/82-declare-global-value-space.md witness=../../tests/cases/b43_namespaces_declaration_merging/global_value_publication_deferred.ts -->
 - **`undefined` in assignment-target position (cosmetic).** typokat resolves
   `undefined` as a value read but not as an assignment target, so `undefined = null`
   reports `TK2304` where tsc reports `TS2539` — same verdict, different code.

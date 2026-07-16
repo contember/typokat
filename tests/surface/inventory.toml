@@ -1324,8 +1324,8 @@ surface = "global-declaration"
 slot = "self"
 oxc_variant = "Declaration::TSGlobalDeclaration"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/43-namespaces-declaration-merging.md"
-witness = "global augmentation not modeled"
+owner = "../../docs/backlog/82-declare-global-value-space.md"
+witness = "../cases/b43_namespaces_declaration_merging/global_value_publication_deferred.ts"
 
 [[surface]]
 id = "decl/import-declaration/self"

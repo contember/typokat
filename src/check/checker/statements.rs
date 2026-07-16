@@ -266,13 +266,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 );
             }
             Statement::TSModuleDeclaration(_) => {}
-            Statement::TSGlobalDeclaration(_) => {
+            Statement::TSGlobalDeclaration(global)
+                if self.binder.global_augmentation_requires_incomplete(
+                    self.current_module,
+                    global.global_span.start,
+                ) =>
+            {
                 self.record_incomplete(
                     "decl/global-declaration/self",
                     Span::from_oxc(stmt.span()),
-                    "global augmentation not modeled",
+                    "global augmentation value publication not modeled",
                 );
             }
+            Statement::TSGlobalDeclaration(_) => {}
             Statement::TSImportEqualsDeclaration(_) => {
                 self.record_incomplete(
                     "decl/import-equals/self",
@@ -301,13 +307,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     "export = not modeled",
                 );
             }
-            Statement::TSNamespaceExportDeclaration(_) => {
+            Statement::TSNamespaceExportDeclaration(export)
+                if self
+                    .binder
+                    .umd_export_requires_incomplete(self.current_module, export.span.start) =>
+            {
                 self.record_incomplete(
                     "decl/namespace-export/self",
                     Span::from_oxc(stmt.span()),
                     "export as namespace not modeled",
                 );
             }
+            Statement::TSNamespaceExportDeclaration(_) => {}
             // Remaining forms carry no in-scope child the statement checker hides:
             // supported-elsewhere (`import`, type-alias, interface), design-OOS
             // (`with`/`debugger`/`;`), and the flow-owned `break`/`continue`.
@@ -378,13 +389,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 );
             }
             Declaration::TSModuleDeclaration(_) => {}
-            Declaration::TSGlobalDeclaration(_) => {
+            Declaration::TSGlobalDeclaration(global)
+                if self.binder.global_augmentation_requires_incomplete(
+                    self.current_module,
+                    global.global_span.start,
+                ) =>
+            {
                 self.record_incomplete(
                     "decl/global-declaration/self",
                     Span::from_oxc(decl.span()),
-                    "global augmentation not modeled",
+                    "global augmentation value publication not modeled",
                 );
             }
+            Declaration::TSGlobalDeclaration(_) => {}
             Declaration::TSImportEqualsDeclaration(_) => {
                 self.record_incomplete(
                     "decl/import-equals/self",
@@ -642,12 +659,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // Both sides present: the initializer must be assignable to the annotation (primary
         // span = the initializer), and a fresh object literal gets an excess-property check.
         if let (Some(ann), Some((init_ty, init_span))) = (annotation, initializer) {
-            self.schedule_obligation(AssignObligation {
-                src: init_ty,
-                tgt: ann,
-                src_span: init_span,
-                kind: ObligationKind::Assignment,
-            });
             match self.check_excess_properties_for_target(init, ann) {
                 DemandOutcome::Ready(diagnostics) => {
                     for diagnostic in diagnostics {
@@ -658,6 +669,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     self.own_type_demand(DemandOutcome::Exhausted(exhaustion), init_span);
                 }
             }
+            self.schedule_obligation(AssignObligation {
+                src: init_ty,
+                tgt: ann,
+                src_span: init_span,
+                kind: ObligationKind::Assignment,
+            });
         }
 
         initializer

@@ -21,7 +21,7 @@ declare global {
 }
 
 const moduleLocalOk: WU0Global = { moduleOnly: true };
-const moduleLocalWrong: WU0Global = { value: 1, label: "not local" }; // error[TK2353]
+const moduleLocalWrong: WU0Global = { moduleOnly: true, value: 1 }; // error[TK2353]
 declare const globalConsumer: WU0GlobalConsumer;
 const globalValue: number = globalConsumer.target.value;
 const globalLabel: string = globalConsumer.target.label;

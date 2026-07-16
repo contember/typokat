@@ -175,6 +175,16 @@ A standalone namespace is deliberately a type container only. Exported namespace
 an existing modeled function or class/static draft; they do not create a standalone namespace
 runtime/value object.
 
+Legal `declare global` blocks reuse the same identities through one project-wide compilation
+scope. Each block has a lexical overlay whose parent is its originating module; canonical global
+symbols are installed in that overlay before module-local fallthrough, so global fragments can
+capture module-local helper types without merging those helpers globally. Invalid `TK2669`/
+`TK2670` blocks bind under quarantined overlay-owned identities. After binding is complete, every
+user module links through the legal compilation-global scope and then the prelude. Only interfaces,
+type aliases, and non-instantiated namespaces publish in this cut; variables, functions, complete
+class type/value pairs, and value-bearing namespace groups remain backlog `82` and keep the explicit
+incomplete channel.
+
 Standalone interface groups freeze one immutable source-order recovery surface plus typed pending
 obligations, publish each dependency SCC atomically behind a final-state capability, and only then
 run heritage/conflict/relation obligations through `SemanticQueryCoordinator`. Outcomes fill

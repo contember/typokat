@@ -188,6 +188,18 @@ const PROJECT_DIRS: &[&str] = &[
     "sr_semantic_duplication_project",
 ];
 
+/// Selected project fixtures enabled before their mixed flat/project corpus closes.
+const ENABLED_PROJECT_FIXTURES: &[(&str, &str)] = &[
+    (
+        "b43_namespaces_declaration_merging",
+        "wu5_global_augmentation_forward",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu5_global_augmentation_reverse",
+    ),
+];
+
 /// Flat fixtures that are enabled before their containing corpus can run in
 /// full. Keep this list path-sorted so execution and failure aggregation stay
 /// deterministic.
@@ -219,6 +231,22 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
     ("b43_namespaces_declaration_merging", "degraded_chimera.ts"),
     (
         "b43_namespaces_declaration_merging",
+        "global_augmentation.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "global_missing_declare_negative.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "global_script_negative.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "global_value_publication_deferred.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
         "interface_conflicts.ts",
     ),
     ("b43_namespaces_declaration_merging", "interface_members.ts"),
@@ -239,6 +267,15 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
         "keep_pairs_reverse.ts",
     ),
     ("b43_namespaces_declaration_merging", "namespace_forms.ts"),
+    ("b43_namespaces_declaration_merging", "umd_export.d.ts"),
+    (
+        "b43_namespaces_declaration_merging",
+        "umd_export_negatives.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "umd_export_nonmodule.ts",
+    ),
     (
         "b43_namespaces_declaration_merging",
         "wu2_annotation_recovery.ts",
@@ -405,6 +442,20 @@ fn conformance() {
         }
     }
 
+    for (dir, project) in ENABLED_PROJECT_FIXTURES {
+        let project = cases_root.join(dir).join(project);
+        assert!(
+            project.is_dir(),
+            "project fixture not found: {}",
+            project.display()
+        );
+        let fixtures = discover_ts_files_recursive(&project);
+        files_checked += fixtures.len();
+        if let Err(project_failures) = run_project_fixture(&project, fixtures) {
+            failures.extend(project_failures);
+        }
+    }
+
     assert!(files_checked > 0, "no fixtures were checked");
 
     if !failures.is_empty() {
@@ -422,7 +473,21 @@ fn run_fixture(path: &Path) -> Result<(), Vec<String>> {
     let source = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("cannot read fixture {}: {e}", path.display()));
 
-    let output = check_source(&source);
+    let output = if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.contains(".d."))
+    {
+        check_project(vec![FileInput {
+            name: path.display().to_string(),
+            source: source.clone(),
+        }])
+        .pop()
+        .expect("one-file declaration project report")
+        .output
+    } else {
+        check_source(&source)
+    };
     compare_fixture_output(path, &source, &output)
 }
 

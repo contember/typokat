@@ -3,6 +3,7 @@
 type Shape = { kind: "circle"; radius: number };
 
 const decl: Shape = ({ kind: "circle", radius: 1, extra: 1 }); // error[TK2353]
+const wrongKnownAndExcess: Shape = ({ kind: "square", radius: 1, extra: 1 }); // error[TK2322] | error[TK2353]
 
 let s: Shape;
 s = ({ kind: "circle", radius: 1, extra: 1 }); // error[TK2353]

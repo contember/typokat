@@ -215,6 +215,9 @@ interfaces, and classes; simple `export { x as y }` lists; one serial type
 universe. (The full out-of-scope list is in the modules section of the divergence
 ledger.)
 
+Flat `.d.ts`/`.d.mts`/`.d.cts` fixtures run through the same one-file project
+path so their filename-derived declaration context is preserved.
+
 ## Bug-fix / backlog corpora
 
 Fixes to **already-shipped** milestones get their own dir rather than extending an
@@ -349,8 +352,9 @@ code-only because the exact fixed target can be literal-, primitive-, or
 union-shaped depending on candidate priority and contextual use. The corpus keeps
 at most one mismatched argument per call, per the general call-marker rule above.
 
-`b43_namespaces_declaration_merging/` is the 46-file WU0-WU4 oracle corpus for the
-namespace/declaration-space sprint. It covers merged property/method/call/construct/index and
+`b43_namespaces_declaration_merging/` contains 50 flat fixtures plus two WU5 project
+fixtures with four source files (54 source files total) for the namespace/declaration-space
+sprint. It covers merged property/method/call/construct/index and
 heritage surfaces, overload precedence and query order, generic constraint/default compatibility,
 recursive merge groups in opposite declaration orders, namespace syntax/reopening/visibility,
 qualified lookup through value/type/namespace slots, all approved keep-pairs, representative
@@ -410,12 +414,17 @@ remain usable; it makes no standalone namespace value-receiver claim.
 Forward-demand and inferred-return cycles remain precise backlog-76 incomplete records, while
 post-body, annotated-recursive, and declared-overload surfaces require non-permissive witnesses.
 
-The full directory remains disabled while WU5-owned fixtures are red. The conformance harness
-instead gates a 36-file WU3/WU4 slice explicitly through `ENABLED_FIXTURES`. WU4 adds
+The full directory remains disabled because seven older flat fixtures are still outside the
+admitted slice. The conformance harness gates 43 flat fixtures explicitly through
+`ENABLED_FIXTURES`, plus both two-file WU5 projects through `ENABLED_PROJECT_FIXTURES`. WU5 adds
+`global_augmentation.ts`, `global_missing_declare_negative.ts`,
+`global_script_negative.ts`, `global_value_publication_deferred.ts`, `umd_export.d.ts`,
+`umd_export_negatives.ts`, and `umd_export_nonmodule.ts`; its project fixtures are
+`wu5_global_augmentation_forward/` and `wu5_global_augmentation_reverse/`. WU4 adds
 `class_interface_conflicts.ts`, `class_interface_namespace_generics.ts`,
 `class_interface_namespace_nominal.ts`, `class_interface_namespace_order_matrix.ts`,
 `class_interface_namespace_orders.ts`, `class_interface_recursion.ts`, `degraded_chimera.ts`,
-`interface_var_constructors.ts`, `keep_pairs_forward.ts`, `keep_pairs_reverse.ts`, and the five
+`interface_var_constructors.ts`, `keep_pairs_forward.ts`, `keep_pairs_reverse.ts`, and the seven
 `wu4_*` focused fixtures above. The earlier WU3 slice remains:
 `interface_conflicts.ts`, `interface_members.ts`, `interface_recursion.ts`, `namespace_forms.ts`,
 `wu2_annotation_recovery.ts`, `wu2_checker_local_qualified_roots.ts`,

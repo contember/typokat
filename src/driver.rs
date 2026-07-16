@@ -944,7 +944,7 @@ mod tests {
     }
 
     #[test]
-    fn project_namespace_metadata_uses_one_dormant_global_and_path_stable_projection() {
+    fn project_namespace_metadata_uses_one_canonical_global_and_path_stable_projection() {
         fn files(reverse_input: bool) -> Vec<FileInput> {
             let a = FileInput {
                 name: "types/a.d.ts".into(),
@@ -1027,6 +1027,16 @@ mod tests {
                 }
                 if id == binder.compilation_global {
                     return "compilation-global".to_string();
+                }
+                if let Some(global) = binder
+                    .namespaces
+                    .globals()
+                    .find(|global| global.overlay_scope == id)
+                {
+                    return format!(
+                        "global-overlay:{:?}:{}",
+                        global.source, global.diagnostic_span.start
+                    );
                 }
                 if let Some(unit) = binder
                     .namespaces
@@ -1249,18 +1259,26 @@ mod tests {
                 let symbol = global
                     .lookup_local(name)
                     .and_then(|symbol| binder.symbols.get(symbol))
-                    .expect("dormant global anchor");
+                    .expect("published global anchor");
                 assert_eq!(symbol.value, None);
-                assert_eq!(symbol.ty, None);
+                if name == "Shared" {
+                    assert!(symbol.ty.is_some());
+                } else {
+                    assert!(symbol.ns.is_some());
+                }
             }
             assert!(scopes.iter().all(|scope| binder
                 .graph
                 .get(*scope)
-                .is_some_and(|scope| scope.parent == Some(binder.prelude_module))));
+                .is_some_and(|scope| scope.parent == Some(binder.compilation_global))));
             assert!(binder
                 .namespaces
                 .globals()
-                .all(|record| record.target_scope == binder.compilation_global));
+                .all(|record| if record.issues.is_empty() {
+                    record.target_scope == binder.compilation_global
+                } else {
+                    record.target_scope == record.overlay_scope
+                }));
 
             let global_group = binder
                 .namespaces
@@ -1275,12 +1293,7 @@ mod tests {
                     .iter()
                     .map(|declaration| declaration.source)
                     .collect::<Vec<_>>(),
-                vec![
-                    SourceUnitKey(1),
-                    SourceUnitKey(1),
-                    SourceUnitKey(2),
-                    SourceUnitKey(2),
-                ]
+                vec![SourceUnitKey(1), SourceUnitKey(2)]
             );
             let source_keys: Vec<_> = binder
                 .namespaces
@@ -1616,8 +1629,8 @@ mod tests {
                 (SourceFileKind::DeclarationTs, false),
                 (SourceFileKind::ImplementationMts, true),
                 (SourceFileKind::ImplementationCts, true),
-                (SourceFileKind::DeclarationMts, true),
-                (SourceFileKind::DeclarationCts, true),
+                (SourceFileKind::DeclarationMts, false),
+                (SourceFileKind::DeclarationCts, false),
             ]
         );
         assert!(reports
@@ -1626,7 +1639,7 @@ mod tests {
     }
 
     #[test]
-    fn implementation_mts_and_cts_drive_global_and_umd_context_without_parser_goal_changes() {
+    fn extension_implied_external_context_excludes_declaration_mts_and_cts() {
         use crate::binder::namespace::{GlobalIssue, GlobalPlacement, SourceFileKind, UmdContext};
         use std::cell::RefCell;
 
@@ -1644,6 +1657,7 @@ mod tests {
                 source("b.mts"),
                 source("c.cts"),
                 source("d.d.mts"),
+                source("e.d.cts"),
             ],
             |binder, _, _| {
                 *metadata.borrow_mut() = binder
@@ -1697,15 +1711,241 @@ mod tests {
                 ),
                 (
                     SourceFileKind::DeclarationMts,
-                    true,
-                    GlobalPlacement::DirectExternalModule,
-                    Vec::new(),
-                    UmdContext::DeferredValidBacklog15,
+                    false,
+                    GlobalPlacement::DirectScript,
+                    vec![GlobalIssue::FutureTk2669],
+                    UmdContext::FutureTk1314NonExternal,
+                ),
+                (
+                    SourceFileKind::DeclarationCts,
+                    false,
+                    GlobalPlacement::DirectScript,
+                    vec![GlobalIssue::FutureTk2669],
+                    UmdContext::FutureTk1314NonExternal,
                 ),
             ]
         );
         assert!(reports
             .iter()
             .all(|report| report.output.parse_errors.is_empty()));
+    }
+
+    #[test]
+    fn global_and_umd_context_diagnostics_keep_exact_event_order_and_source_kind() {
+        use crate::diagnostics::DiagnosticCode;
+
+        let check = |name: &str, source: &str| {
+            check_project(vec![FileInput {
+                name: name.into(),
+                source: source.into(),
+            }])
+            .pop()
+            .expect("one project report")
+            .output
+        };
+
+        let script = check("script.ts", "global { interface Invalid {} }");
+        assert_eq!(
+            script
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.code, diagnostic.span))
+                .collect::<Vec<_>>(),
+            vec![
+                (DiagnosticCode::TK2669, Span::new(0, 6)),
+                (DiagnosticCode::TK2670, Span::new(0, 6)),
+            ]
+        );
+        assert!(script.incomplete.is_empty());
+
+        let implementation = check(
+            "implementation.ts",
+            "export as namespace Invalid; export {};",
+        );
+        assert_eq!(
+            implementation
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>(),
+            [DiagnosticCode::TK1315]
+        );
+        assert!(implementation.incomplete.is_empty());
+
+        let non_module = check("non-module.ts", "export as namespace Invalid;");
+        assert_eq!(
+            non_module
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>(),
+            [DiagnosticCode::TK1314]
+        );
+        assert!(non_module.incomplete.is_empty());
+
+        for declaration_extension in ["invalid.d.mts", "invalid.d.cts"] {
+            let quarantined = check(
+                declaration_extension,
+                "declare global { interface Hidden {} } declare const leak: Hidden;",
+            );
+            assert_eq!(
+                quarantined
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.code)
+                    .collect::<Vec<_>>(),
+                [DiagnosticCode::TK2669, DiagnosticCode::TK2304],
+                "{declaration_extension}"
+            );
+            assert!(quarantined.incomplete.is_empty(), "{declaration_extension}");
+
+            let umd = check(
+                declaration_extension,
+                "export as namespace InvalidDeclarationModule;",
+            );
+            assert_eq!(
+                umd.diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.code)
+                    .collect::<Vec<_>>(),
+                [DiagnosticCode::TK1314],
+                "{declaration_extension}"
+            );
+            assert!(umd.incomplete.is_empty(), "{declaration_extension}");
+
+            let syntactic_module = check(
+                declaration_extension,
+                "export {}; declare global { interface Visible {} } declare const visible: Visible;",
+            );
+            assert!(
+                syntactic_module.diagnostics.is_empty(),
+                "{declaration_extension}: {:?}",
+                syntactic_module.diagnostics
+            );
+            assert!(
+                syntactic_module.incomplete.is_empty(),
+                "{declaration_extension}"
+            );
+        }
+
+        let declaration = check(
+            "valid.d.ts",
+            "export as namespace Valid; export = Valid; declare function Valid(): void;",
+        );
+        assert!(declaration.diagnostics.is_empty());
+        assert_eq!(
+            declaration
+                .incomplete
+                .iter()
+                .map(|surface| surface.id.as_str())
+                .collect::<Vec<_>>(),
+            ["decl/namespace-export/self", "decl/export-assignment/self"]
+        );
+    }
+
+    #[test]
+    fn mixed_global_block_publishes_independent_types_without_partial_class_pair() {
+        use crate::diagnostics::DiagnosticCode;
+
+        let output = check_source(
+            r#"
+export {};
+class DeferredPair { local = 1 }
+declare global {
+    interface PublishedGlobal { value: number }
+    interface DeferredPair { global: string }
+    class DeferredPair { global: string }
+}
+const local = new DeferredPair();
+const localValue: number = local.local;
+const globalLeak = local.global;
+declare const published: PublishedGlobal;
+const publishedWrong: boolean = published.value;
+"#,
+        );
+
+        assert!(output.parse_errors.is_empty());
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>(),
+            [DiagnosticCode::TK2339, DiagnosticCode::TK2322]
+        );
+        assert_eq!(
+            output
+                .incomplete
+                .iter()
+                .map(|surface| surface.id.as_str())
+                .collect::<Vec<_>>(),
+            ["decl/global-declaration/self"]
+        );
+    }
+
+    #[test]
+    fn global_namespace_incomplete_is_owned_by_the_originating_value_fragment() {
+        let type_only = FileInput {
+            name: "type-only.ts".into(),
+            source: "export {}; declare global { namespace SplitGlobal { interface TypeOnly { value: number } } }".into(),
+        };
+        let value_bearing = FileInput {
+            name: "value-bearing.ts".into(),
+            source:
+                "export {}; declare global { namespace SplitGlobal { const runtime: number; } }"
+                    .into(),
+        };
+
+        for reverse in [false, true] {
+            let inputs = if reverse {
+                vec![
+                    FileInput {
+                        name: value_bearing.name.clone(),
+                        source: value_bearing.source.clone(),
+                    },
+                    FileInput {
+                        name: type_only.name.clone(),
+                        source: type_only.source.clone(),
+                    },
+                ]
+            } else {
+                vec![
+                    FileInput {
+                        name: type_only.name.clone(),
+                        source: type_only.source.clone(),
+                    },
+                    FileInput {
+                        name: value_bearing.name.clone(),
+                        source: value_bearing.source.clone(),
+                    },
+                ]
+            };
+            let reports = check_project(inputs);
+            assert!(reports.iter().all(|report| {
+                report.output.parse_errors.is_empty() && report.output.diagnostics.is_empty()
+            }));
+            let type_report = reports
+                .iter()
+                .find(|report| report.name == "type-only.ts")
+                .expect("type-only report");
+            assert!(
+                type_report.output.incomplete.is_empty(),
+                "reverse={reverse}"
+            );
+            let value_report = reports
+                .iter()
+                .find(|report| report.name == "value-bearing.ts")
+                .expect("value-bearing report");
+            assert_eq!(
+                value_report
+                    .output
+                    .incomplete
+                    .iter()
+                    .map(|surface| surface.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["decl/global-declaration/self"],
+                "reverse={reverse}"
+            );
+        }
     }
 }

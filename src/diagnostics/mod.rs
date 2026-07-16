@@ -23,6 +23,10 @@ use crate::span::Span;
 /// listed; later milestones add variants.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum DiagnosticCode {
+    /// `export as namespace` appears outside an external module.
+    TK1314,
+    /// `export as namespace` appears in a non-declaration source file.
+    TK1315,
     TK2300,
     /// Static member references its containing class's type parameter.
     TK2302,
@@ -91,6 +95,10 @@ pub enum DiagnosticCode {
     TK2654,
     /// An ambient export list references an alias output instead of a local declaration.
     TK2661,
+    /// A global augmentation appears outside an external or ambient module.
+    TK2669,
+    /// A global augmentation is missing `declare` outside an ambient context.
+    TK2670,
     /// Constructor of class is private (constructed outside its declaring class) —
     /// backlog 20.
     TK2673,
@@ -137,6 +145,8 @@ impl DiagnosticCode {
     /// The rendered code string, e.g. `"TK2322"`.
     pub fn as_str(self) -> &'static str {
         match self {
+            DiagnosticCode::TK1314 => "TK1314",
+            DiagnosticCode::TK1315 => "TK1315",
             DiagnosticCode::TK2300 => "TK2300",
             DiagnosticCode::TK2302 => "TK2302",
             DiagnosticCode::TK2304 => "TK2304",
@@ -172,6 +182,8 @@ impl DiagnosticCode {
             DiagnosticCode::TK2515 => "TK2515",
             DiagnosticCode::TK2654 => "TK2654",
             DiagnosticCode::TK2661 => "TK2661",
+            DiagnosticCode::TK2669 => "TK2669",
+            DiagnosticCode::TK2670 => "TK2670",
             DiagnosticCode::TK2673 => "TK2673",
             DiagnosticCode::TK2674 => "TK2674",
             DiagnosticCode::TK2684 => "TK2684",
@@ -336,6 +348,38 @@ impl Diagnostic {
             span,
             elaboration: Vec::new(),
         }
+    }
+
+    pub fn global_module_export_requires_module(span: Span) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK1314,
+            span,
+            "Global module exports may only appear in module files.".to_string(),
+        )
+    }
+
+    pub fn global_module_export_requires_declaration_file(span: Span) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK1315,
+            span,
+            "Global module exports may only appear in declaration files.".to_string(),
+        )
+    }
+
+    pub fn global_augmentation_requires_module(span: Span) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK2669,
+            span,
+            "Augmentations for the global scope can only be directly nested in external modules or ambient module declarations.".to_string(),
+        )
+    }
+
+    pub fn global_augmentation_requires_declare(span: Span) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK2670,
+            span,
+            "Augmentations for the global scope should have 'declare' modifier unless they appear in already ambient context.".to_string(),
+        )
     }
 
     pub fn merged_interface_type_parameters(span: Span, name: &str) -> Self {

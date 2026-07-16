@@ -7,7 +7,8 @@ use crate::binder::bind::{ImportPlaceholder, ImportedSymbol, ProjectBinderBuilde
 use crate::binder::bind_module_with_prelude;
 use crate::binder::declaration::{TypeGroupId, ValueStorageId};
 use crate::binder::namespace::{
-    CompilationUnit, LocalAmbientExportAliasFailureKind, PlacementIssueKind,
+    CompilationUnit, GlobalIssue, LocalAmbientExportAliasFailureKind, PlacementIssueKind,
+    UmdContext,
 };
 use crate::binder::scope::ScopeId;
 use crate::binder::Binder;
@@ -383,6 +384,7 @@ where
     let mut external_effects = BTreeMap::new();
     enqueue_local_ambient_export_alias_diagnostics(&binder, &lexical_events, &mut external_effects);
     enqueue_namespace_placement_diagnostics(&binder, &lexical_events, &mut external_effects);
+    enqueue_ambient_context_diagnostics(&binder, &lexical_events, &mut external_effects);
     let mut pass = build_pass_with_reporting(
         interner,
         &binder,
@@ -601,6 +603,7 @@ where
     inspect(&binder, &lexical_events, &module_scopes);
     enqueue_local_ambient_export_alias_diagnostics(&binder, &lexical_events, &mut external_effects);
     enqueue_namespace_placement_diagnostics(&binder, &lexical_events, &mut external_effects);
+    enqueue_ambient_context_diagnostics(&binder, &lexical_events, &mut external_effects);
 
     for placeholders in &module_placeholders {
         for placeholder in placeholders {
@@ -991,6 +994,69 @@ fn enqueue_namespace_placement_diagnostics(
                 Diagnostic::namespace_precedes_class_or_function(issue.span)
             }
         };
+        effects
+            .entry(owner.ticket)
+            .or_insert_with(|| CandidateEffects::new(owner.ticket))
+            .diagnostic(diagnostic);
+    }
+}
+
+fn enqueue_ambient_context_diagnostics(
+    binder: &Binder,
+    reservations: &LexicalReservations,
+    effects: &mut BTreeMap<RecordTicket, CandidateEffects>,
+) {
+    for global in binder.namespaces.globals() {
+        let owner = reservations
+            .declaration_owner(global.declaration)
+            .expect("global context issue must keep its declaration owner");
+        let source = reservations
+            .declaration_source(global.declaration)
+            .expect("global context issue must keep its source site");
+        let expected_module = ModuleOrdinal::new(
+            usize::try_from(global.original_module.0)
+                .expect("original module ordinal fits checker ownership"),
+        );
+        assert_eq!(source.module_ordinal, expected_module);
+        let candidate = effects
+            .entry(owner.ticket)
+            .or_insert_with(|| CandidateEffects::new(owner.ticket));
+        for issue in &global.issues {
+            candidate.diagnostic(match issue {
+                GlobalIssue::FutureTk2669 => {
+                    Diagnostic::global_augmentation_requires_module(global.diagnostic_span)
+                }
+                GlobalIssue::FutureTk2670 => {
+                    Diagnostic::global_augmentation_requires_declare(global.diagnostic_span)
+                }
+            });
+        }
+    }
+
+    for export in binder.namespaces.umd_exports() {
+        let diagnostic = match export.context {
+            UmdContext::FutureTk1314NonExternal => Some(
+                Diagnostic::global_module_export_requires_module(export.span),
+            ),
+            UmdContext::FutureTk1315Implementation => Some(
+                Diagnostic::global_module_export_requires_declaration_file(export.span),
+            ),
+            UmdContext::FutureTk1316Nested | UmdContext::DeferredValidBacklog15 => None,
+        };
+        let Some(diagnostic) = diagnostic else {
+            continue;
+        };
+        let owner = reservations
+            .declaration_owner(export.declaration)
+            .expect("UMD context issue must keep its declaration owner");
+        let source = reservations
+            .declaration_source(export.declaration)
+            .expect("UMD context issue must keep its source site");
+        let expected_module = ModuleOrdinal::new(
+            usize::try_from(export.original_module.0)
+                .expect("original module ordinal fits checker ownership"),
+        );
+        assert_eq!(source.module_ordinal, expected_module);
         effects
             .entry(owner.ticket)
             .or_insert_with(|| CandidateEffects::new(owner.ticket))

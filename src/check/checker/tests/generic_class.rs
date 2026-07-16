@@ -319,10 +319,16 @@ class Shape {
 const ok: Shape = { x: 1 };
 const wrong: Shape = { x: \"s\" }; // TK2322
 const excess: Shape = { x: 1, y: 2 }; // TK2353
+const wrongAndExcess: Shape = { x: \"s\", y: 2 }; // TK2322 + TK2353
 ";
     assert_eq!(
         diags(src),
-        vec![(5, "TK2322".to_string()), (6, "TK2353".to_string())]
+        vec![
+            (5, "TK2322".to_string()),
+            (6, "TK2353".to_string()),
+            (7, "TK2322".to_string()),
+            (7, "TK2353".to_string()),
+        ]
     );
 }
 

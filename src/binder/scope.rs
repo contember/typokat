@@ -31,8 +31,10 @@ pub enum ScopeKind {
     NamespacePublic,
     /// Dormant lexical context for one namespace reopening.
     NamespacePrivate,
-    /// Dormant project-wide augmentation target, disconnected from production lookup.
+    /// Legal project-wide type-side augmentation surface.
     CompilationGlobal,
+    /// Lexical view for one `declare global` body.
+    GlobalOverlay,
 }
 
 /// One node in the scope graph: a parent link plus the names declared directly
@@ -147,6 +149,7 @@ impl ScopeGraph {
                     | ScopeKind::Module
                     | ScopeKind::NamespacePrivate
                     | ScopeKind::CompilationGlobal
+                    | ScopeKind::GlobalOverlay
             ) {
                 return Some(id);
             }

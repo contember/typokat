@@ -10,8 +10,8 @@ use crate::binder::bind::{
 use crate::binder::declaration::{
     DeclId, DeclarationKind, DeclarationSite, TypeFragmentKind, TypeGroupId, ValueStorageId,
 };
-use crate::binder::scope::{Scope, ScopeId, ScopeKind};
-use crate::binder::symbol::{Symbol, SymbolId};
+use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
+use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
 use crate::span::Span;
 use oxc_ast::ast::{
     Declaration, ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName, Program,
@@ -108,13 +108,7 @@ impl SourceFileKind {
     }
 
     fn implies_external_module(self) -> bool {
-        matches!(
-            self,
-            Self::ImplementationMts
-                | Self::ImplementationCts
-                | Self::DeclarationMts
-                | Self::DeclarationCts
-        )
+        matches!(self, Self::ImplementationMts | Self::ImplementationCts)
     }
 }
 
@@ -492,6 +486,7 @@ pub struct GlobalAugmentation {
     pub body_span: Span,
     pub diagnostic_span: Span,
     pub target_scope: ScopeId,
+    pub overlay_scope: ScopeId,
     pub placement: GlobalPlacement,
     pub issues: Vec<GlobalIssue>,
     pub declared: bool,
@@ -763,7 +758,7 @@ struct MergeKey {
     name: String,
 }
 
-/// All WU1b data. No production resolver or checker reads this table.
+/// Canonical namespace, merge, ambient, and global publication metadata.
 #[derive(Default)]
 pub struct NamespaceTable {
     namespaces: Vec<Namespace>,
@@ -849,6 +844,95 @@ impl NamespaceTable {
         self.canonical_globals
             .iter()
             .filter_map(|id| self.globals.get(id.index()))
+    }
+
+    /// Freeze legal global publication, then connect every user module in one cutover.
+    pub(crate) fn finalize_global_scopes(&self, graph: &mut ScopeGraph, symbols: &mut SymbolTable) {
+        let compilation_global = self
+            .compilation_global
+            .expect("compilation-global scope allocated");
+        let mut unsafe_names = rustc_hash::FxHashSet::default();
+        for record in self
+            .merges
+            .iter()
+            .filter(|record| record.owner == DeclarationOwner::CompilationGlobal)
+        {
+            let safe = record
+                .declarations
+                .iter()
+                .all(|participant| match participant.kind {
+                    MergeDeclarationKind::Interface | MergeDeclarationKind::TypeAlias => true,
+                    MergeDeclarationKind::Namespace => {
+                        participant.namespace_instance
+                            == Some(NamespaceInstanceState::NonInstantiated)
+                    }
+                    _ => false,
+                });
+            if !safe {
+                unsafe_names.insert(record.name.clone());
+            }
+        }
+
+        let (safe_symbols, blocked_names) = {
+            let global = graph
+                .get_mut(compilation_global)
+                .expect("compilation-global scope exists");
+            let mut blocked_names = Vec::new();
+            for name in unsafe_names {
+                if global.symbols.remove(&name).is_some() {
+                    blocked_names.push(name);
+                }
+            }
+            (
+                global
+                    .symbols
+                    .iter()
+                    .map(|(name, symbol)| (name.clone(), *symbol))
+                    .collect::<Vec<_>>(),
+                blocked_names,
+            )
+        };
+
+        // Prevent deferred globals from falling through to module-local names.
+        let blocked_symbols = blocked_names
+            .into_iter()
+            .map(|name| {
+                let mut symbol = Symbol::new(name.clone());
+                symbol.blocks_type_lookup = true;
+                symbol.blocks_value_lookup = true;
+                symbol.blocks_namespace_lookup = true;
+                (name, symbols.push(symbol))
+            })
+            .collect::<Vec<_>>();
+
+        for global in self
+            .globals
+            .iter()
+            .filter(|global| global.issues.is_empty())
+        {
+            for (name, symbol) in &safe_symbols {
+                let replaced = graph.declare(global.overlay_scope, name.clone(), *symbol);
+                assert!(
+                    replaced.is_none(),
+                    "global overlay is populated only at freeze"
+                );
+            }
+            for (name, symbol) in &blocked_symbols {
+                let replaced = graph.declare(global.overlay_scope, name.clone(), *symbol);
+                assert!(
+                    replaced.is_none(),
+                    "global overlay blockers are frozen once"
+                );
+            }
+        }
+
+        for unit in &self.source_units {
+            let module = graph
+                .get_mut(unit.module)
+                .expect("user module scope exists");
+            assert_eq!(module.kind, ScopeKind::Module);
+            module.parent = Some(compilation_global);
+        }
     }
 
     pub fn deferred_modules(&self) -> impl Iterator<Item = &DeferredAmbientModule> {
@@ -1088,6 +1172,66 @@ struct QualifiedSymbolView {
 }
 
 impl Binder {
+    pub(crate) fn global_augmentation_scope(
+        &self,
+        module: ScopeId,
+        binding_start: u32,
+    ) -> Option<ScopeId> {
+        self.namespaces
+            .globals
+            .iter()
+            .find(|global| global.module == module && global.diagnostic_span.start == binding_start)
+            .map(|global| global.overlay_scope)
+    }
+
+    pub(crate) fn global_augmentation_requires_incomplete(
+        &self,
+        module: ScopeId,
+        binding_start: u32,
+    ) -> bool {
+        let Some(global) = self.namespaces.globals.iter().find(|global| {
+            global.module == module && global.diagnostic_span.start == binding_start
+        }) else {
+            return false;
+        };
+        if !global.issues.is_empty() {
+            return false;
+        }
+        global.members.iter().any(|member| {
+            let Some(member) = self.namespaces.member(*member) else {
+                return true;
+            };
+            match member.kind {
+                MergeDeclarationKind::Interface | MergeDeclarationKind::TypeAlias => false,
+                MergeDeclarationKind::Namespace => {
+                    let fragment = member
+                        .declaration
+                        .and_then(|declaration| {
+                            self.namespaces
+                                .merges
+                                .iter()
+                                .flat_map(|record| &record.declarations)
+                                .find(|participant| participant.declaration == declaration)
+                        })
+                        .and_then(|participant| participant.namespace_fragment)
+                        .and_then(|fragment| self.namespaces.fragment(fragment));
+                    fragment.is_none_or(|fragment| {
+                        fragment.instance_state == NamespaceInstanceState::Instantiated
+                    })
+                }
+                _ => true,
+            }
+        })
+    }
+
+    pub(crate) fn umd_export_requires_incomplete(&self, module: ScopeId, span_start: u32) -> bool {
+        self.namespaces.umd_exports.iter().any(|export| {
+            export.module == module
+                && export.span.start == span_start
+                && export.context == UmdContext::DeferredValidBacklog15
+        })
+    }
+
     /// Return the frozen namespace-side input for one lexical value owner.
     /// Only admitted owners and the exact backlog-42 callable recovery expose members.
     pub(crate) fn namespace_value_attachment(
@@ -1244,6 +1388,13 @@ impl Binder {
             let root_deferred = root_merge.and_then(Self::merge_deferred_reason);
             let root_symbol = scope_record.lookup_local(root_name);
             if let Some(symbol) = root_symbol {
+                if self
+                    .symbols
+                    .get(symbol)
+                    .is_some_and(|symbol| symbol.blocks_namespace_lookup)
+                {
+                    return QualifiedTypePathResolution::Unavailable { segment: 0 };
+                }
                 let view = self.qualified_symbol_view(owning_namespace, symbol, &mut Vec::new());
                 if view.unavailable {
                     return QualifiedTypePathResolution::Unavailable { segment: 0 };
@@ -2743,7 +2894,13 @@ fn bind_named_declaration_with_syntax(
         source,
     );
     set_placement_syntax(state, declaration, syntax);
-    if context.namespace.is_some() {
+    let legal_global_type = context.global.is_some()
+        && owner == DeclarationOwner::CompilationGlobal
+        && matches!(
+            merge_kind,
+            MergeDeclarationKind::TypeAlias | MergeDeclarationKind::Interface
+        );
+    if context.namespace.is_some() || legal_global_type {
         let fragment_kind = match merge_kind {
             MergeDeclarationKind::TypeAlias => Some(TypeFragmentKind::TypeAlias),
             MergeDeclarationKind::Interface => Some(TypeFragmentKind::Interface),
@@ -3723,12 +3880,14 @@ fn bind_global(
     {
         issues.push(GlobalIssue::FutureTk2669);
     }
-    if !declaration.declare
-        && !unit.binding.declaration_file()
-        && placement != GlobalPlacement::DeferredAmbientModule
-    {
+    if !declaration.declare && !context.ambient {
         issues.push(GlobalIssue::FutureTk2670);
     }
+    let overlay_scope = state.graph.push(Scope::new(
+        ScopeKind::GlobalOverlay,
+        Some(context.lexical_scope),
+    ));
+    let legal = issues.is_empty();
     let id = GlobalAugmentationId(
         u32::try_from(state.namespaces.globals.len()).expect("global count fits u32"),
     );
@@ -3741,15 +3900,24 @@ fn bind_global(
         owner,
         body_span: Span::from_oxc(declaration.body.span),
         diagnostic_span: Span::from_oxc(declaration.global_span),
-        target_scope: compilation_global,
+        target_scope: if legal {
+            compilation_global
+        } else {
+            overlay_scope
+        },
+        overlay_scope,
         placement,
         issues,
         declared: declaration.declare,
         members: Vec::new(),
     });
     let global_body = WalkContext {
-        owner: DeclarationOwner::CompilationGlobal,
-        lexical_scope: compilation_global,
+        owner: if legal {
+            DeclarationOwner::CompilationGlobal
+        } else {
+            DeclarationOwner::Lexical(overlay_scope)
+        },
+        lexical_scope: overlay_scope,
         namespace: None,
         global: Some(id),
         deferred_module: None,
@@ -4797,7 +4965,7 @@ function Reverse(): void {}
         let global = binder
             .graph
             .get(binder.compilation_global)
-            .expect("one dormant global scope");
+            .expect("one compilation-global scope");
         assert_eq!(global.kind, ScopeKind::CompilationGlobal);
         assert_eq!(global.parent, Some(binder.prelude_module));
         assert!(global.symbols.is_empty());
@@ -4810,7 +4978,7 @@ function Reverse(): void {}
                 .graph
                 .get(binder.module)
                 .and_then(|scope| scope.parent),
-            Some(binder.prelude_module)
+            Some(binder.compilation_global)
         );
     }
 
@@ -5058,7 +5226,7 @@ function Reverse(): void {}
                 .find(|namespace| {
                     namespace.owner == NamespaceOwner::CompilationGlobal && namespace.name == "N"
                 })
-                .expect("shared dormant global namespace");
+                .expect("shared compilation-global namespace");
             let group = binder
                 .graph
                 .get(namespace.public_scope)
@@ -6037,8 +6205,16 @@ namespace Visibility {
         assert!(!context("", SourceFileKind::DeclarationTs).external_module);
         assert!(context("", SourceFileKind::ImplementationMts).external_module);
         assert!(context("", SourceFileKind::ImplementationCts).external_module);
-        assert!(context("", SourceFileKind::DeclarationMts).external_module);
-        assert!(context("", SourceFileKind::DeclarationCts).external_module);
+        assert!(!context("", SourceFileKind::DeclarationMts).external_module);
+        assert!(!context("", SourceFileKind::DeclarationCts).external_module);
+        for kind in [
+            SourceFileKind::DeclarationTs,
+            SourceFileKind::DeclarationMts,
+            SourceFileKind::DeclarationCts,
+        ] {
+            assert!(context("export {};", kind).external_module);
+            assert!(context("import {} from 'x';", kind).external_module);
+        }
 
         let missing_declare = bind("export {}; global { interface X {} }", false);
         let global = missing_declare.namespaces.globals().next().expect("global");
@@ -6132,7 +6308,13 @@ namespace Visibility {
                 .iter()
                 .find(|declaration| &source[declaration.site.binding_span.range()] == name)
                 .expect("global body declaration");
-            assert_eq!(declaration.site.scope, Some(binder.compilation_global));
+            let overlay = binder
+                .namespaces
+                .globals()
+                .next()
+                .expect("global augmentation")
+                .overlay_scope;
+            assert_eq!(declaration.site.scope, Some(overlay));
         }
         let alias = binder
             .namespaces
@@ -6230,7 +6412,10 @@ namespace Visibility {
 
     #[test]
     fn globals_string_modules_and_umd_exports_record_additive_context() {
-        let script = bind("global { interface ScriptGlobal {} }", false);
+        let script = bind(
+            "global { interface ScriptGlobal {} namespace ScriptSpace { interface Nested {} } }",
+            false,
+        );
         let script_global = script.namespaces.globals().next().expect("script global");
         assert_eq!(script_global.placement, GlobalPlacement::DirectScript);
         assert_eq!(
@@ -6240,7 +6425,18 @@ namespace Visibility {
         assert!(script
             .graph
             .get(script.compilation_global)
-            .is_some_and(|scope| scope.lookup_local("ScriptGlobal").is_some()));
+            .is_some_and(|scope| scope.lookup_local("ScriptGlobal").is_none()));
+        assert!(script
+            .graph
+            .get(script_global.overlay_scope)
+            .is_some_and(|scope| {
+                scope.lookup_local("ScriptGlobal").is_none()
+                    && scope.lookup_local("ScriptSpace").is_some()
+            }));
+        assert!(script
+            .graph
+            .get(script.compilation_global)
+            .is_some_and(|scope| scope.lookup_local("ScriptSpace").is_none()));
         let declared_script = bind("declare global { interface X {} }", false);
         assert_eq!(
             declared_script
@@ -6248,6 +6444,19 @@ namespace Visibility {
                 .globals()
                 .next()
                 .expect("declared script global")
+                .issues,
+            vec![GlobalIssue::FutureTk2669]
+        );
+        let nested_ambient = bind(
+            "declare namespace N { global { interface NestedAmbient {} } }",
+            false,
+        );
+        assert_eq!(
+            nested_ambient
+                .namespaces
+                .globals()
+                .next()
+                .expect("nested ambient global")
                 .issues,
             vec![GlobalIssue::FutureTk2669]
         );
@@ -6405,6 +6614,101 @@ namespace Visibility {
                 .context,
             UmdContext::FutureTk1314NonExternal
         );
+    }
+
+    #[test]
+    fn legal_global_overlays_publish_only_complete_type_side_names_before_module_link() {
+        let source = r#"
+export {};
+interface Captured { local: boolean }
+namespace DeferredRoot { export interface DeferredLeaf { moduleOnly: number } }
+declare global {
+    interface Captured { global: number }
+    interface UsesCaptured { value: Captured }
+    type GlobalAlias = UsesCaptured;
+    namespace TypeSpace { interface Item { value: string } }
+    interface DeferredPair { typeOnly: number }
+    class DeferredPair { value: number }
+    namespace ValueSpace { interface Item { value: number } const value: number; }
+    namespace DeferredRoot { export class DeferredLeaf { globalOnly: string } }
+    interface UsesDeferredRoot { value: DeferredRoot.DeferredLeaf }
+}
+"#;
+        let binder = bind(source, false);
+        let global = binder.namespaces.globals().next().expect("legal global");
+        assert!(global.issues.is_empty());
+
+        let module = binder.graph.get(binder.module).expect("module scope");
+        assert_eq!(module.parent, Some(binder.compilation_global));
+        let compilation_global = binder
+            .graph
+            .get(binder.compilation_global)
+            .expect("compilation global");
+        assert_eq!(compilation_global.parent, Some(binder.prelude_module));
+        let overlay = binder
+            .graph
+            .get(global.overlay_scope)
+            .expect("global overlay");
+        assert_eq!(overlay.kind, ScopeKind::GlobalOverlay);
+        assert_eq!(overlay.parent, Some(binder.module));
+
+        for name in [
+            "Captured",
+            "UsesCaptured",
+            "GlobalAlias",
+            "TypeSpace",
+            "UsesDeferredRoot",
+        ] {
+            let canonical = compilation_global
+                .lookup_local(name)
+                .unwrap_or_else(|| panic!("published global {name}"));
+            assert_eq!(overlay.lookup_local(name), Some(canonical));
+        }
+        for name in ["DeferredPair", "ValueSpace", "DeferredRoot"] {
+            assert_eq!(compilation_global.lookup_local(name), None, "{name}");
+            let blocker = overlay
+                .lookup_local(name)
+                .and_then(|symbol| binder.symbols.get(symbol))
+                .unwrap_or_else(|| panic!("blocked global {name}"));
+            assert!(
+                blocker.blocks_type_lookup
+                    && blocker.blocks_value_lookup
+                    && blocker.blocks_namespace_lookup
+            );
+            assert!(blocker.ty.is_none() && blocker.value.is_none() && blocker.ns.is_none());
+        }
+
+        let module_captured = module.lookup_local("Captured").expect("module local");
+        let global_captured = compilation_global
+            .lookup_local("Captured")
+            .expect("global captured");
+        assert_ne!(module_captured, global_captured);
+        assert_eq!(
+            binder.resolve_type(global.overlay_scope, "Captured"),
+            Some(global_captured)
+        );
+        assert_eq!(
+            binder.resolve_type(binder.module, "Captured"),
+            Some(module_captured)
+        );
+        assert_eq!(
+            binder.resolve_qualified_type_path(
+                global.overlay_scope,
+                &["DeferredRoot", "DeferredLeaf"]
+            ),
+            QualifiedTypePathResolution::Unavailable { segment: 0 }
+        );
+
+        let uses_group = compilation_global
+            .lookup_local("UsesCaptured")
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .and_then(|symbol| symbol.ty)
+            .and_then(|group| binder.type_groups.get(group))
+            .expect("global interface group");
+        assert!(uses_group
+            .fragments
+            .iter()
+            .all(|fragment| fragment.scope == global.overlay_scope));
     }
 
     #[test]
