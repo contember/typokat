@@ -220,6 +220,20 @@ pub(in crate::check::checker) struct InterfaceFragment<'ast> {
     pub(in crate::check::checker) extends: &'ast [TSInterfaceHeritage<'ast>],
 }
 
+/// One exact type-parameter identity retained from a class/interface header.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) struct NamedTypeParamBinding {
+    pub(in crate::check::checker) name: String,
+    pub(in crate::check::checker) id: TypeParamId,
+}
+
+/// Query-free reservation facts for one exact class/interface declaration header.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) struct HeaderFragmentBinding {
+    pub(in crate::check::checker) declaration: DeclId,
+    pub(in crate::check::checker) parameters: Vec<NamedTypeParamBinding>,
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) enum TypeParameterMetadataState {
     Absent,
@@ -302,8 +316,14 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
     },
     /// A class/interface group is a typed non-permissive stop until WU4.
     UnsupportedClassInterface {
+        /// The sole class declaration owns the nominal identity for the future cutover.
         declaration: DeclId,
+        class_id: ClassId,
+        /// The class fragment's lexical parameter vector; external recovery remains unavailable.
         params: Vec<TypeParamId>,
+        /// Every class/interface fragment in canonical source order, including conflicting
+        /// renamed and excess parameter binders.
+        header_fragments: Vec<HeaderFragmentBinding>,
     },
     /// Any other unsupported multi-kind group has no permissive semantic surface.
     Unavailable { declaration: DeclId },

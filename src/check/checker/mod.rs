@@ -1037,6 +1037,7 @@ fn attach_class_bindings(
     program: &Program<'_>,
     declarations: &[TypeDecl<'_>],
 ) {
+    let mut reserved_class_owners = BTreeMap::new();
     walk_type_decls(
         binder,
         scope,
@@ -1051,7 +1052,7 @@ fn attach_class_bindings(
             let Some(site) = reservations.class_at(module_ordinal, class.span.start) else {
                 return;
             };
-            let Some((type_decl, _, _)) = decls::exact_type_fragment_at(
+            let Some((type_decl, exact_declaration, _)) = decls::exact_type_fragment_at(
                 binder,
                 scope,
                 crate::binder::declaration::TypeFragmentKind::Class,
@@ -1060,17 +1061,40 @@ fn attach_class_bindings(
                 return;
             };
             let value_decl = value_decl_id(binder, declaration_scope, name);
-            let Some(TypeDecl::Class {
-                class_id, params, ..
-            }) = declarations.get(type_decl.index())
-            else {
+            let Some(type_declaration) = declarations.get(type_decl.index()) else {
                 return;
             };
+            let (class_id, params, publishable) = match type_declaration {
+                TypeDecl::Class {
+                    class_id, params, ..
+                } => (*class_id, params, true),
+                TypeDecl::UnsupportedClassInterface {
+                    declaration,
+                    class_id,
+                    params,
+                    ..
+                } => {
+                    debug_assert_eq!(
+                        *declaration, exact_declaration,
+                        "typed-stop class keeps its exact fragment"
+                    );
+                    (*class_id, params, false)
+                }
+                _ => return,
+            };
+            let previous = reserved_class_owners.insert(class_id, type_decl);
+            debug_assert!(
+                previous.is_none(),
+                "one source class owns each reserved nominal identity"
+            );
+            if !publishable {
+                return;
+            }
             reservations
                 .attach_class_binding(
                     site,
                     ClassBinding {
-                        class_id: *class_id,
+                        class_id,
                         type_decl,
                         value_decl,
                         header_type_params: params.clone(),

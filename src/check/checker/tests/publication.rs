@@ -1,5 +1,6 @@
 use super::super::check_program_with_publication_inspector;
-use crate::check::checker::context::{CheckerEffects, DeclTypes};
+use crate::binder::declaration::{DeclId, TypeFragmentKind};
+use crate::check::checker::context::{CheckerEffects, DeclTypes, HeaderFragmentBinding, TypeDecl};
 use crate::check::checker::events::{CheckerRecord, ModuleOrdinal};
 use crate::check::checker::type_groups::{
     InterfaceAlternativeKind, PublishedTypeGroupSurface, PublishedTypeGroupTerminal,
@@ -8,13 +9,81 @@ use crate::check::checker::type_groups::{
 use crate::class_semantics::Exhaustion;
 use crate::diagnostics::DiagnosticCode;
 use crate::span::Span;
-use crate::types::repr::{LiteralValue, TypeParamId, TypeTag};
+use crate::types::repr::{ClassId, LiteralValue, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use rustc_hash::FxHashSet;
+
+#[derive(Debug)]
+struct ReservedClassInterfaceHeaders {
+    bound_fragments: Vec<(DeclId, TypeFragmentKind)>,
+    class_declaration: DeclId,
+    class_id: ClassId,
+    class_params: Vec<TypeParamId>,
+    headers: Vec<HeaderFragmentBinding>,
+    next_type_param: u32,
+    next_class_id: u32,
+}
+
+fn reserve_class_interface_headers(source: &str) -> ReservedClassInterfaceHeaders {
+    let prelude_allocator = Allocator::default();
+    let user_allocator = Allocator::default();
+    let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+    let user = Parser::new(&user_allocator, source, SourceType::ts()).parse();
+    assert!(user.diagnostics.is_empty(), "{:?}", user.diagnostics);
+    let binder = crate::binder::bind_module_with_prelude(&prelude.program, &user.program);
+    let group = binder
+        .graph
+        .get(binder.module)
+        .and_then(|scope| scope.lookup_local("Mixed"))
+        .and_then(|symbol| binder.symbols.get(symbol))
+        .and_then(|symbol| symbol.ty)
+        .expect("Mixed type group");
+    let bound_fragments = binder
+        .type_groups
+        .get(group)
+        .expect("Mixed group metadata")
+        .fragments
+        .iter()
+        .map(|fragment| (fragment.declaration, fragment.kind))
+        .collect();
+    let mut interner = Interner::with_intrinsics();
+    let mut declarations = Vec::new();
+    let mut resolved = vec![None; binder.type_groups.len()];
+    let mut next_type_param = 0;
+    let mut next_class_id = 0;
+    crate::check::checker::decls::reserve_type_decls(
+        &mut interner,
+        &binder,
+        binder.module,
+        &user.program,
+        &mut next_type_param,
+        &mut next_class_id,
+        &mut declarations,
+        &mut resolved,
+    );
+    let TypeDecl::UnsupportedClassInterface {
+        declaration,
+        class_id,
+        params,
+        header_fragments,
+    } = declarations.get(group.index()).expect("Mixed reservation")
+    else {
+        panic!("Mixed remains the class/interface typed stop")
+    };
+    ReservedClassInterfaceHeaders {
+        bound_fragments,
+        class_declaration: *declaration,
+        class_id: *class_id,
+        class_params: params.clone(),
+        headers: header_fragments.clone(),
+        next_type_param,
+        next_class_id,
+    }
+}
 
 #[test]
 fn interface_relation_exhaustion_stays_with_its_lexical_owner_without_failure_diagnostic() {
@@ -787,6 +856,145 @@ interface Merged { value: 202 }
         },
     );
     assert_eq!(result.diagnostics.len(), 1);
+}
+
+#[test]
+fn class_first_typed_stop_reserves_exact_interface_recovery_headers() {
+    let reserved = reserve_class_interface_headers(
+        "class Mixed<T, U> {} interface Mixed<T, Renamed, Extra> {} interface Mixed<T, U> {}",
+    );
+
+    assert_eq!(reserved.next_class_id, 1);
+    assert_eq!(reserved.class_id, ClassId(0));
+    assert_eq!(
+        reserved
+            .headers
+            .iter()
+            .map(|header| header.declaration)
+            .collect::<Vec<_>>(),
+        reserved
+            .bound_fragments
+            .iter()
+            .map(|(declaration, _)| *declaration)
+            .collect::<Vec<_>>()
+    );
+    let class_index = reserved
+        .bound_fragments
+        .iter()
+        .position(|(_, kind)| *kind == TypeFragmentKind::Class)
+        .expect("sole class fragment");
+    assert_eq!(
+        reserved.class_declaration,
+        reserved.headers[class_index].declaration
+    );
+    assert_eq!(
+        reserved.class_params,
+        reserved.headers[class_index]
+            .parameters
+            .iter()
+            .map(|parameter| parameter.id)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        reserved
+            .headers
+            .iter()
+            .map(|header| {
+                header
+                    .parameters
+                    .iter()
+                    .map(|parameter| parameter.name.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>(),
+        [
+            vec!["T", "U"],
+            vec!["T", "Renamed", "Extra"],
+            vec!["T", "U"],
+        ]
+    );
+    let class = &reserved.headers[0].parameters;
+    let renamed = &reserved.headers[1].parameters;
+    let repeated = &reserved.headers[2].parameters;
+    assert_eq!(renamed[0].id, class[0].id);
+    assert_eq!(repeated[0].id, class[0].id);
+    assert_eq!(repeated[1].id, class[1].id);
+    assert_ne!(renamed[1].id, class[1].id);
+    assert!(
+        [class[0].id, class[1].id, renamed[1].id]
+            .into_iter()
+            .all(|existing| renamed[2].id != existing),
+        "the excess Extra slot owns one fresh identity"
+    );
+    assert_eq!(reserved.next_type_param, 4);
+}
+
+#[test]
+fn interface_first_typed_stop_preserves_headers_when_reserving_the_class() {
+    let reserved = reserve_class_interface_headers(
+        "interface Mixed<T, Renamed> {} class Mixed<T, U, V> {} interface Mixed<T, U> {}",
+    );
+
+    assert_eq!(reserved.next_class_id, 1);
+    assert_eq!(reserved.class_id, ClassId(0));
+    assert_eq!(
+        reserved
+            .headers
+            .iter()
+            .map(|header| header.declaration)
+            .collect::<Vec<_>>(),
+        reserved
+            .bound_fragments
+            .iter()
+            .map(|(declaration, _)| *declaration)
+            .collect::<Vec<_>>()
+    );
+    let class_index = reserved
+        .bound_fragments
+        .iter()
+        .position(|(_, kind)| *kind == TypeFragmentKind::Class)
+        .expect("sole class fragment");
+    assert_eq!(class_index, 1);
+    assert_eq!(
+        reserved.class_declaration,
+        reserved.headers[class_index].declaration
+    );
+    assert_eq!(
+        reserved.class_params,
+        reserved.headers[class_index]
+            .parameters
+            .iter()
+            .map(|parameter| parameter.id)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        reserved
+            .headers
+            .iter()
+            .map(|header| {
+                header
+                    .parameters
+                    .iter()
+                    .map(|parameter| parameter.name.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>(),
+        [vec!["T", "Renamed"], vec!["T", "U", "V"], vec!["T", "U"],]
+    );
+    let first = &reserved.headers[0].parameters;
+    let class = &reserved.headers[1].parameters;
+    let repeated = &reserved.headers[2].parameters;
+    assert_eq!(class[0].id, first[0].id);
+    assert_ne!(class[1].id, first[1].id);
+    assert_eq!(repeated[0].id, class[0].id);
+    assert_eq!(repeated[1].id, class[1].id);
+    assert!(
+        [first[0].id, first[1].id, class[1].id]
+            .into_iter()
+            .all(|existing| class[2].id != existing),
+        "the class-only V slot owns one fresh identity"
+    );
+    assert_eq!(reserved.next_type_param, 4);
 }
 
 #[test]

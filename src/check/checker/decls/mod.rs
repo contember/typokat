@@ -2476,19 +2476,49 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                         }
                         Some(TypeDecl::Class {
                             declaration: class_declaration,
+                            class_id,
                             params,
+                            param_decl,
                             ..
                         }) => {
+                            let mut header_fragments = vec![header_fragment_binding(
+                                *class_declaration,
+                                *param_decl,
+                                params,
+                            )];
+                            let interface_header = recover_header_fragment_binding(
+                                declaration,
+                                fragment.param_decl,
+                                &header_fragments,
+                                next_type_param,
+                            );
+                            fragment.params = header_parameter_ids(&interface_header);
+                            header_fragments.push(interface_header);
+                            sort_header_fragment_bindings(binder, group, &mut header_fragments);
                             let replacement = TypeDecl::UnsupportedClassInterface {
                                 declaration: *class_declaration,
+                                class_id: *class_id,
                                 params: params.clone(),
+                                header_fragments,
                             };
                             *decls.get_mut(group.index()).expect("type group slot") = replacement;
                             if let Some(slot) = resolved.get_mut(group.index()) {
                                 *slot = None;
                             }
                         }
-                        Some(TypeDecl::UnsupportedClassInterface { .. }) => {}
+                        Some(TypeDecl::UnsupportedClassInterface {
+                            header_fragments, ..
+                        }) => {
+                            let interface_header = recover_header_fragment_binding(
+                                declaration,
+                                fragment.param_decl,
+                                header_fragments,
+                                next_type_param,
+                            );
+                            fragment.params = header_parameter_ids(&interface_header);
+                            header_fragments.push(interface_header);
+                            sort_header_fragment_bindings(binder, group, header_fragments);
+                        }
                         Some(TypeDecl::Resolved { .. }) => {
                             let reserved = interner.reserve_object();
                             if let Some(slot) = resolved.get_mut(group.index()) {
@@ -2660,36 +2690,65 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                             None => (None, None, _walk_scope),
                         };
                         if let (Some(group), Some(declaration)) = (group, declaration) {
-                            // M16: allocate one id per declared type parameter (in source order),
-                            // paired with their names later when the class body is lowered with the
-                            // parameter frame in scope — exactly like an interface.
-                            let params = alloc_type_param_ids(
-                                class.type_parameters.as_deref(),
-                                next_type_param,
-                            );
                             ensure_type_group_slot(decls, group.index());
-                            let class_decl = TypeDecl::Class {
-                                declaration,
-                                scope,
-                                class_id,
-                                params: params.clone(),
-                                param_decl: class.type_parameters.as_deref(),
-                                class,
-                            };
                             match decls.get(group.index()) {
-                                Some(TypeDecl::Interface { .. }) => {
+                                Some(TypeDecl::Interface { fragments, .. }) => {
+                                    let mut header_fragments = fragments
+                                        .iter()
+                                        .map(|fragment| {
+                                            header_fragment_binding(
+                                                fragment.declaration,
+                                                fragment.param_decl,
+                                                &fragment.params,
+                                            )
+                                        })
+                                        .collect::<Vec<_>>();
+                                    let class_header = recover_header_fragment_binding(
+                                        declaration,
+                                        class.type_parameters.as_deref(),
+                                        &header_fragments,
+                                        next_type_param,
+                                    );
+                                    let params = header_parameter_ids(&class_header);
+                                    header_fragments.push(class_header);
+                                    sort_header_fragment_bindings(
+                                        binder,
+                                        group,
+                                        &mut header_fragments,
+                                    );
                                     decls[group.index()] = TypeDecl::UnsupportedClassInterface {
                                         declaration,
+                                        class_id,
                                         params,
+                                        header_fragments,
                                     };
                                     if let Some(slot) = resolved.get_mut(group.index()) {
                                         *slot = None;
                                     }
                                 }
                                 Some(TypeDecl::Resolved { .. }) => {
-                                    decls[group.index()] = class_decl
+                                    // M16: allocate one id per declared type parameter (in source
+                                    // order), paired with names when the class body is lowered.
+                                    let params = alloc_type_param_ids(
+                                        class.type_parameters.as_deref(),
+                                        next_type_param,
+                                    );
+                                    decls[group.index()] = TypeDecl::Class {
+                                        declaration,
+                                        scope,
+                                        class_id,
+                                        params,
+                                        param_decl: class.type_parameters.as_deref(),
+                                        class,
+                                    };
                                 }
                                 Some(_) => {
+                                    // Preserve reservation monotonicity for rejected duplicate
+                                    // class/type compositions even though their surface is absent.
+                                    let _ = alloc_type_param_ids(
+                                        class.type_parameters.as_deref(),
+                                        next_type_param,
+                                    );
                                     decls[group.index()] = TypeDecl::Unavailable { declaration };
                                     if let Some(slot) = resolved.get_mut(group.index()) {
                                         *slot = None;
@@ -3275,6 +3334,100 @@ fn recover_interface_fragment_params(
             }
         })
         .collect()
+}
+
+fn header_fragment_binding(
+    declaration: crate::binder::declaration::DeclId,
+    param_decl: Option<&TSTypeParameterDeclaration<'_>>,
+    ids: &[TypeParamId],
+) -> HeaderFragmentBinding {
+    let parameters = param_decl
+        .map(|declaration| declaration.params.as_slice())
+        .unwrap_or_default();
+    assert_eq!(
+        parameters.len(),
+        ids.len(),
+        "one reserved identity per class/interface header parameter"
+    );
+    HeaderFragmentBinding {
+        declaration,
+        parameters: parameters
+            .iter()
+            .zip(ids)
+            .map(|(parameter, &id)| NamedTypeParamBinding {
+                name: parameter.name.name.to_string(),
+                id,
+            })
+            .collect(),
+    }
+}
+
+fn recover_header_fragment_binding(
+    declaration: crate::binder::declaration::DeclId,
+    param_decl: Option<&TSTypeParameterDeclaration<'_>>,
+    existing: &[HeaderFragmentBinding],
+    next_type_param: &mut u32,
+) -> HeaderFragmentBinding {
+    let mut slots = BTreeMap::new();
+    for fragment in existing {
+        for (index, parameter) in fragment.parameters.iter().enumerate() {
+            let key = (index, parameter.name.clone());
+            if let Some(previous) = slots.insert(key, parameter.id) {
+                assert_eq!(
+                    previous, parameter.id,
+                    "matching class/interface recovery slots share one identity"
+                );
+            }
+        }
+    }
+    let parameters = param_decl
+        .map(|declaration| declaration.params.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(index, parameter)| {
+            let name = parameter.name.name.to_string();
+            let id = slots
+                .get(&(index, name.clone()))
+                .copied()
+                .unwrap_or_else(|| {
+                    let id = TypeParamId(*next_type_param);
+                    *next_type_param += 1;
+                    id
+                });
+            NamedTypeParamBinding { name, id }
+        })
+        .collect();
+    HeaderFragmentBinding {
+        declaration,
+        parameters,
+    }
+}
+
+fn header_parameter_ids(binding: &HeaderFragmentBinding) -> Vec<TypeParamId> {
+    binding
+        .parameters
+        .iter()
+        .map(|parameter| parameter.id)
+        .collect()
+}
+
+fn sort_header_fragment_bindings(
+    binder: &Binder,
+    group: TypeGroupId,
+    fragments: &mut [HeaderFragmentBinding],
+) {
+    let bound = binder
+        .type_groups
+        .get(group)
+        .expect("header fragment group is reserved by the binder");
+    fragments.sort_by_key(|fragment| {
+        bound
+            .fragments
+            .iter()
+            .position(|candidate| candidate.declaration == fragment.declaration)
+            .expect("header fragment declaration belongs to its reserved type group")
+    });
 }
 
 /// The legacy type-storage id a name resolves to from `scope` (binder type slot), if
