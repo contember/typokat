@@ -133,3 +133,69 @@ interface IncompatibleOptionalPrefixRequiredSuffix extends SingleStringTarget { 
 interface CompatibleOptionalPrefixPureRest extends SingleStringTarget {
   callable: (first?: unknown, ...rest: unknown[]) => number;
 }
+
+// A target tuple rest with both a stable prefix and a moving required suffix
+// still exposes at least two arguments. A finite source that consumes one
+// argument cannot accept the aggregate tail, while ignoring every argument or
+// accepting a pure rest remains valid.
+interface PrefixAndMovingSuffixTarget {
+  callable: (...args: [unknown, ...unknown[], unknown]) => number;
+}
+
+interface IncompatibleFiniteConsumedPrefixAndSuffix extends PrefixAndMovingSuffixTarget { // error[TK2430]: Interface 'IncompatibleFiniteConsumedPrefixAndSuffix' incorrectly extends interface 'PrefixAndMovingSuffixTarget'
+  callable: (value: unknown) => number;
+}
+
+interface CompatibleIgnorePrefixAndSuffix extends PrefixAndMovingSuffixTarget {
+  callable: () => number;
+}
+
+interface CompatiblePureRestAgainstPrefixAndSuffix extends PrefixAndMovingSuffixTarget {
+  callable: (...args: unknown[]) => number;
+}
+
+interface CompatibleOptionalPrefixRestAgainstPrefixAndSuffix extends PrefixAndMovingSuffixTarget {
+  callable: (first?: unknown, ...rest: unknown[]) => number;
+}
+
+// Conversely, a source moving suffix cannot promise a final argument after a
+// target fixed prefix plus pure rest. The same source is valid against one
+// fixed argument, and a pure source rest accepts the variadic target.
+interface FixedPrefixAndPureRestTarget {
+  callable: (value: unknown, ...rest: unknown[]) => number;
+}
+
+interface IncompatibleMovingSourceSuffixAgainstFixedRest extends FixedPrefixAndPureRestTarget { // error[TK2430]: Interface 'IncompatibleMovingSourceSuffixAgainstFixedRest' incorrectly extends interface 'FixedPrefixAndPureRestTarget'
+  callable: (...args: [...unknown[], unknown]) => number;
+}
+
+interface CompatiblePureSourceRestAgainstFixedRest extends FixedPrefixAndPureRestTarget {
+  callable: (...args: unknown[]) => number;
+}
+
+interface FixedSingleUnknownTarget {
+  callable: (value: unknown) => number;
+}
+
+interface CompatibleMovingSourceSuffixAgainstFixedSingle extends FixedSingleUnknownTarget {
+  callable: (...args: [...unknown[], unknown]) => number;
+}
+
+// Strict tsc accepts both assignments below. typokat intentionally keeps these
+// two pre-existing safe over-reports until the callable-rest parity tail owned
+// by backlog 63 is addressed.
+interface ZeroArityTarget {
+  callable: () => number;
+}
+
+interface ConservativeMovingSuffixAgainstZero extends ZeroArityTarget { // error[TK2430]: Interface 'ConservativeMovingSuffixAgainstZero' incorrectly extends interface 'ZeroArityTarget'
+  callable: (...args: [...unknown[], unknown]) => number;
+}
+
+interface OptionalSingleUnknownTarget {
+  callable: (value?: unknown) => number;
+}
+
+interface ConservativeRequiredRestAgainstOptional extends OptionalSingleUnknownTarget { // error[TK2430]: Interface 'ConservativeRequiredRestAgainstOptional' incorrectly extends interface 'OptionalSingleUnknownTarget'
+  callable: (value: unknown, ...rest: unknown[]) => number;
+}
