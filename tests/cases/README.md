@@ -94,6 +94,7 @@ EOF spans.
 | `TK2374` | Duplicate index signature |
 | `TK2391` | Function implementation is missing or not immediately following overload declarations |
 | `TK2394` | Overload signature is not compatible with its implementation signature |
+| `TK2397` | Declaration name conflicts with built-in global identifier (disabled backlog-14 acceptance; WU3 owns production) |
 | `TK2411` | Property is incompatible with a string index signature |
 | `TK2413` | Numeric index type is not assignable to string index type |
 | `TK2428` | Merged declarations must have identical type parameters |
@@ -271,6 +272,8 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
 | `b43_namespaces_declaration_merging/` | shipped namespace sprint (65 flat fixtures + 6 projects enabled) | namespace type/value containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global boundaries, and explicitly owned deferred UMD/enum tails |
+| `b14_full_lib_loading/` | backlog `14` WU0A (disabled) | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
+| `b14_full_lib_loading_project/` | backlog `14` WU0A (disabled, project-shaped) | fast external-module routing, collision/private-rebuild order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 

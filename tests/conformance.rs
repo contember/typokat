@@ -172,6 +172,11 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b73_expression_shape_tail", true),
     // Backlog 74 declaration-hoisting parity. Enabled after WU1 and WU2 land.
     ("b74_declaration_hoisting", true),
+    // Backlog 14 full TypeScript 6.0.3 default-library loading. WU0A commits both
+    // corpora disabled; later loader/routing implementations enable them only after
+    // their separate RED specs and hard feasibility gates pass.
+    ("b14_full_lib_loading", false),
+    ("b14_full_lib_loading_project", false),
 ];
 
 /// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`
@@ -186,6 +191,9 @@ const PROJECT_DIRS: &[&str] = &[
     // Soundness-review WU2 type-only export/value separation (finding 4).
     "sr_wu2_export_space",
     "sr_semantic_duplication_project",
+    // Backlog 14 collision/preflight routing matrix. The corpus remains skipped
+    // while its MILESTONE_DIRS entry is false; do not add individual enablement.
+    "b14_full_lib_loading_project",
 ];
 
 /// Selected project fixtures enabled before their mixed flat/project corpus closes.

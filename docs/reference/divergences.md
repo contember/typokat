@@ -121,6 +121,15 @@ and validated the same way.
   `Date`, and `Iterable` in files that tsc checks with a library. Typokat reports `TK2304` or an
   honest host-heritage incomplete; backlog `14` owns loading those declarations.
   <!-- div: id=lib/official-newly-reached-globals dir=over scope=design-oos owner=../backlog/14-libdts-loading.md witness=../../tooling/official-suite/scoreboard.txt -->
+- **Library-local iterator constructor name is normalized (cosmetic).** In an external module,
+  `IteratorObjectConstructor` is correctly absent from the global type space. TypeScript 6.0.3
+  reports suggestion-bearing `TS2552`; typokat reports the ordinary unresolved-name `TK2304`.
+  Both reject. This pins name visibility only and does not claim terminal iterator semantics.
+  <!-- div: id=lib/iterator-object-constructor-name-code dir=cosmetic scope=s-value-type-space owner=../backlog/14-libdts-loading.md witness=../../tests/cases/b14_full_lib_loading/iterator_library_local_nonleak.ts -->
+- **Absent `globalThis` property code is normalized (cosmetic).** In the cross-project isolation
+  witness, TypeScript 6.0.3 reports `TS7017` for each unknown property on `typeof globalThis`;
+  typokat uses its ordinary missing-member `TK2339`. Both reject the same leaked-property demand.
+  <!-- div: id=lib/global-this-missing-property-code dir=cosmetic scope=s-value-type-space owner=../backlog/14-libdts-loading.md witness=../../tests/cases/b14_full_lib_loading_project/zz_shared_base_isolation/00_check.ts -->
 - **Qualified enum endpoints remain unavailable (under-report).** Until enum types
   land, `E.Member` records
   `annotation-lower/type-name/qualified-enum` instead of guessing a type. Withholding
