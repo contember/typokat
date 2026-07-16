@@ -86,6 +86,23 @@ and validated the same way.
   (under-report).** After `TK2661` rejects an alias-only local name, typokat keeps the
   exported endpoint unavailable and omits tsc's follow-on `TS2694` at each use.
   <!-- div: id=namespaces/ambient-alias-use-cascade dir=under scope=b-namespaces owner=../backlog/43-namespaces-declaration-merging.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu2_ambient_export_alias_list.ts -->
+- **Qualified enum endpoints remain unavailable (under-report).** Until enum types
+  land, `E.Member` records
+  `annotation-lower/type-name/qualified-enum` instead of guessing a type. Withholding
+  the enclosing callable is non-permissive, but it suppresses tsc's downstream
+  `TS2322` recovery diagnostic.
+  <!-- div: id=enums/qualified-endpoint-unavailable dir=under scope=b-enums owner=../backlog/42-enums-type-side.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu2_annotation_recovery.ts -->
+- **Enum/function/namespace diagnostics remain deferred (under-report).** The
+  three-way recovery keeps the enum declaration explicitly incomplete and preserves
+  namespace placement plus typed receiver-use errors, but does not yet emit tsc's
+  `TS2567` at the enum/function declarations. Exact legality and recovery belong to
+  backlog `42`.
+  <!-- div: id=enums/function-namespace-ts2567 dir=under scope=b-enums owner=../backlog/42-enums-type-side.md witness=../../tests/cases/b43_namespaces_declaration_merging/degraded_chimera.ts -->
+- **An exported enum in an attached namespace is unavailable (over-report).** The
+  exact enum member records `decl/enum-declaration/namespace-payload-unavailable`
+  and withholds the owner value where tsc publishes the member. Backlog `42` owns
+  the enum value/type surface.
+  <!-- div: id=enums/attached-namespace-payload dir=over scope=b-enums owner=../backlog/42-enums-type-side.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_namespace_payload_incomplete_ledger.ts -->
 - **Unannotated forward `var` value types are unresolved (under-report).** The
   declaration-hoisting sprint shipped name hoisting and explicit-annotation reservation, but a later
   unannotated initializer still does not type an earlier read/write. Moving value
@@ -100,6 +117,76 @@ and validated the same way.
   result-consuming forward call can report `TK2322`. Exact demand-driven declaration
   types and TS7022/TS7023 cycles belong to backlog `76`.
   <!-- div: id=hoisting/unannotated-forward-return dir=over scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/b74_declaration_hoisting/unannotated_forward_returns.ts -->
+- **A forward call of an unannotated function/namespace merge is incomplete
+  (over-report).** The merged callable cannot publish until its body-inferred return
+  is final, so an earlier direct call records
+  `expr-infer/call-expression/function-group-pending` where tsc resolves the return
+  on demand and stays clean. Backlog `76` owns the lazy declaration query.
+  <!-- div: id=namespaces/function-merge-forward-call dir=over scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_function_namespace_inferred_boundary.ts -->
+- **An inferred-return cycle in a function/namespace merge lacks `TS7023`
+  (under-report).** typokat records
+  `decl/function-declaration/inferred-return-cycle` and withholds the callable instead
+  of emitting the implicit-any cycle diagnostic. The incomplete outcome is
+  non-permissive; exact demand resolution and the diagnostic remain backlog `76`/`48`
+  work, with `76` owning this boundary.
+  <!-- div: id=namespaces/function-merge-inferred-return-cycle dir=under scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_function_namespace_inferred_boundary.ts -->
+- **A forward identifier demand of an unannotated function/namespace merge is
+  incomplete (over-report).** A non-call reference before body completion records
+  `expr-infer/identifier/function-group-pending`; tsc resolves the declaration type
+  on demand and stays clean.
+  <!-- div: id=namespaces/function-merge-forward-identifier dir=over scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_function_namespace_inferred_boundary.ts -->
+- **An acyclic inferred-return dependency between function/namespace merges is
+  incomplete (over-report).** The source declaration records
+  `decl/function-declaration/inferred-return-dependency` instead of demanding the
+  later declaration's return; tsc resolves the chain and stays clean.
+  <!-- div: id=namespaces/function-merge-inferred-return-dependency dir=over scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_function_namespace_inferred_boundary.ts -->
+- **Mutual inferred-return dependencies lack `TS7023` (under-report).** The same
+  dependency record safely withholds both callable surfaces, but typokat does not yet
+  emit tsc's implicit-any cycle diagnostic at either declaration.
+  <!-- div: id=namespaces/function-merge-mutual-return-cycle dir=under scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_function_namespace_inferred_boundary.ts -->
+- **An attached namespace variable with an inferred initializer is unavailable
+  (over-report).** An exported variable whose initializer is outside the query-free
+  literal subset records
+  `decl/variable-declaration/namespace-payload-inferred-initializer`; tsc infers and
+  publishes it. Lazy value resolution belongs to backlog `76`.
+  <!-- div: id=namespaces/attached-inferred-initializer dir=over scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_namespace_payload_incomplete_ledger.ts -->
+- **An attached namespace function with an inferred return is unavailable
+  (over-report).** The exported function records
+  `decl/function-declaration/namespace-payload-inferred-return`; tsc infers its body
+  return and publishes it. Lazy value resolution belongs to backlog `76`.
+  <!-- div: id=namespaces/attached-inferred-function-return dir=over scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_namespace_payload_incomplete_ledger.ts -->
+- **An exported class in an attached namespace is unavailable (over-report).** Its
+  exact declaration records `decl/class-declaration/namespace-payload-static-cycle`
+  because the owner static surface cannot yet depend on the nested class publication;
+  tsc publishes the class value. This remains backlog-`43` WU4 work.
+  <!-- div: id=namespaces/attached-class-static-cycle dir=over scope=b-namespaces owner=../backlog/43-namespaces-declaration-merging.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_namespace_payload_incomplete_ledger.ts -->
+- **An attached namespace import-equals value is unavailable (over-report).** The
+  exact alias declaration records `decl/import-equals/namespace-payload-unavailable`
+  and withholds the owner value where tsc publishes the forwarded member. Backlog
+  `15` owns import/export semantics.
+  <!-- div: id=namespaces/attached-import-equals-payload dir=over scope=b-namespaces owner=../backlog/15-modules-imports.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_namespace_payload_incomplete_ledger.ts -->
+- **A later duplicate attached value lacks `TS2451` (under-report).** typokat attaches
+  `decl/variable-declaration/namespace-payload-duplicate-value` to the exact later
+  declaration and withholds the owner surface, but does not emit tsc's duplicate
+  block-scoped-variable diagnostics. Backlog `18` owns them.
+  <!-- div: id=namespaces/attached-duplicate-value-tk2451 dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_namespace_payload_incomplete_ledger.ts -->
+- **A later attached function that duplicates another value lacks the duplicate-name
+  diagnostics (under-report).** The exact function declaration records
+  `decl/function-declaration/namespace-payload-duplicate-value` and withholds the owner
+  surface, but typokat does not emit tsc's `TS2300`/`TS2451` family. Backlog `18`
+  owns it.
+  <!-- div: id=namespaces/attached-duplicate-function dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_namespace_payload_incomplete_ledger.ts -->
+- **A later attached class that duplicates another value lacks the duplicate-name
+  diagnostics (under-report).** The exact class declaration records
+  `decl/class-declaration/namespace-payload-duplicate-value` and withholds the owner
+  surface, but typokat does not emit tsc's `TS2300`/`TS2451` family. Backlog `18`
+  owns it.
+  <!-- div: id=namespaces/attached-duplicate-class dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_namespace_payload_incomplete_ledger.ts -->
+- **A standalone namespace value surface is unavailable (over-report).** typokat
+  publishes the namespace's exported type members but records
+  `decl/module-declaration/self` for its runtime value surface; tsc publishes both.
+  Backlog `43` owns this remaining namespace boundary.
+  <!-- div: id=namespaces/standalone-value-surface dir=over scope=b-namespaces owner=../backlog/43-namespaces-declaration-merging.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_standalone_namespace_boundary.ts -->
 - **`undefined` in assignment-target position (cosmetic).** typokat resolves
   `undefined` as a value read but not as an assignment target, so `undefined = null`
   reports `TK2304` where tsc reports `TS2539` — same verdict, different code.

@@ -44,7 +44,6 @@ pub(in crate::check::checker) enum PublishedTypeParameterDefault {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) enum TypeGroupUnavailableCause {
-    UnsupportedClassInterface,
     UnsupportedComposition,
 }
 
@@ -490,31 +489,38 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             TypeDecl::Class {
                 class_id,
                 params,
+                recovery_names,
+                recovery_defaults,
+                conflict_alternatives,
                 param_decl,
+                interfaces,
                 ..
             } => PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
                 name,
                 surface: PublishedTypeGroupSurface::Class(*class_id),
                 parameters: params.clone(),
-                parameter_names: parameter_names(*param_decl),
-                parameter_defaults: param_decl
-                    .iter()
-                    .flat_map(|declaration| declaration.params.iter())
-                    .map(|parameter| {
-                        if parameter.default.is_some() {
-                            PublishedTypeParameterDefault::Unsupported
-                        } else {
-                            PublishedTypeParameterDefault::Absent
-                        }
-                    })
-                    .collect(),
-                conflict_alternatives: Vec::new(),
+                parameter_names: if interfaces.is_empty() {
+                    parameter_names(*param_decl)
+                } else {
+                    recovery_names.clone()
+                },
+                parameter_defaults: if interfaces.is_empty() {
+                    param_decl
+                        .iter()
+                        .flat_map(|declaration| declaration.params.iter())
+                        .map(|parameter| {
+                            if parameter.default.is_some() {
+                                PublishedTypeParameterDefault::Unsupported
+                            } else {
+                                PublishedTypeParameterDefault::Absent
+                            }
+                        })
+                        .collect()
+                } else {
+                    recovery_defaults.clone()
+                },
+                conflict_alternatives: conflict_alternatives.clone(),
             }),
-            TypeDecl::UnsupportedClassInterface { .. } => {
-                PublishedTypeGroupTerminal::Unavailable(PublishedTypeGroupUnavailable {
-                    cause: TypeGroupUnavailableCause::UnsupportedClassInterface,
-                })
-            }
             TypeDecl::Unavailable { .. } => {
                 PublishedTypeGroupTerminal::Unavailable(PublishedTypeGroupUnavailable {
                     cause: TypeGroupUnavailableCause::UnsupportedComposition,

@@ -30,7 +30,7 @@ pub struct Binder {
     pub declarations: DeclarationTable,
     /// Ordered same-name type groups used by every production type-space lookup.
     pub type_groups: TypeGroupTable,
-    /// Dormant WU1b namespace/global/merge metadata.
+    /// Namespace/global/merge metadata and admitted attached value-member identities.
     pub namespaces: NamespaceTable,
     /// The **user** module scope. M28: its parent is [`Binder::prelude_module`], so a
     /// user reference falls through to the prelude names and a user declaration
@@ -798,7 +798,7 @@ fn bind_for_in_of(
 
 /// Bind a variable declarator: a `var` name targets its nearest function/module,
 /// while the initializer remains in the original lexical scope.
-fn bind_declarator(
+pub(super) fn bind_declarator(
     state: &mut BindState,
     scope: ScopeId,
     kind: VariableDeclarationKind,
@@ -827,7 +827,11 @@ fn bind_declarator(
 
 /// Bind a function declaration: declare its name (value space) in `scope`, then
 /// bind the function itself (its own scope + parameters + body).
-fn bind_function_declaration(state: &mut BindState, scope: ScopeId, func: &Function<'_>) {
+pub(super) fn bind_function_declaration(
+    state: &mut BindState,
+    scope: ScopeId,
+    func: &Function<'_>,
+) {
     if let Some(id) = &func.id {
         let (declaration, storage) = bind_source_value(
             state,
@@ -846,7 +850,7 @@ fn bind_function_declaration(state: &mut BindState, scope: ScopeId, func: &Funct
 
 /// Bind a class declaration: declare the constructor-side value name, then bind
 /// the body. Anonymous class bodies are still walked for nested scopes.
-fn bind_class_declaration(state: &mut BindState, scope: ScopeId, class: &Class<'_>) {
+pub(super) fn bind_class_declaration(state: &mut BindState, scope: ScopeId, class: &Class<'_>) {
     if let Some(id) = &class.id {
         let declaration =
             state.attach_declaration_scope(id.span.start, DeclarationKind::Class, scope);

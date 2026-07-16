@@ -246,14 +246,26 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         heritage: &TSInterfaceHeritage<'_>,
     ) -> Option<ObjectType> {
         let base_ty = self.resolve_heritage_type(scope, heritage)?;
-        if let Some(object) = self.interner.store().object_type(base_ty).cloned() {
+        self.project_interface_heritage_type(base_ty)
+    }
+
+    fn project_interface_heritage_type(&mut self, ty: TypeId) -> Option<ObjectType> {
+        if let Some(object) = self.interner.store().object_type(ty).cloned() {
             return Some(object);
         }
-        let application = self
+        if let Some(members) = self
             .interner
             .store()
-            .class_instance_type(base_ty)
-            .cloned()?;
+            .intersection_members(ty)
+            .map(<[_]>::to_vec)
+        {
+            let objects = members
+                .into_iter()
+                .map(|member| self.project_interface_heritage_type(member))
+                .collect::<Option<Vec<_>>>()?;
+            return Some(merge_intersection_objects(self.interner, objects));
+        }
+        let application = self.interner.store().class_instance_type(ty).cloned()?;
         let crate::class_semantics::DemandOutcome::Ready(surface) = self
             .staged_published_classes
             .as_ref()
@@ -277,7 +289,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// reference resolves through `type_resolved`; a generic base (`extends Base<T>`)
     /// instantiates its template with the lowered arguments. Non-identifier bases (out of
     /// subset) yield `None`.
-    fn resolve_heritage_type(
+    pub(super) fn resolve_heritage_type(
         &mut self,
         scope: ScopeId,
         heritage: &TSInterfaceHeritage<'_>,
@@ -563,6 +575,88 @@ pub(super) fn merge_object_members_first(primary: ObjectType, fallback: ObjectTy
         properties,
         string_index: primary.string_index.or(fallback.string_index),
         number_index: primary.number_index.or(fallback.number_index),
+        call_signatures,
+        construct_signatures,
+    }
+}
+
+/// Materialize the apparent object of an intersection without a semantic query.
+/// This is the construction-time counterpart of `intersection_apparent_object`:
+/// duplicate member/index types intersect and every distinct member is retained.
+pub(super) fn merge_intersection_objects(
+    interner: &mut Interner,
+    objects: Vec<ObjectType>,
+) -> ObjectType {
+    struct PropertyAccumulator {
+        base: PropertyType,
+        types: Vec<TypeId>,
+        write_types: Vec<TypeId>,
+        has_write_type: bool,
+        all_optional: bool,
+        any_readonly: bool,
+        any_accessor: bool,
+    }
+
+    let mut order = Vec::new();
+    let mut properties: BTreeMap<String, PropertyAccumulator> = BTreeMap::new();
+    let mut string_indices = Vec::new();
+    let mut number_indices = Vec::new();
+    let mut call_signatures = Vec::new();
+    let mut construct_signatures = Vec::new();
+    for object in objects {
+        for property in object.properties {
+            let write_type = property.write_ty.unwrap_or(property.ty);
+            if let Some(existing) = properties.get_mut(&property.name) {
+                existing.types.push(property.ty);
+                existing.write_types.push(write_type);
+                existing.has_write_type |= property.write_ty.is_some();
+                existing.all_optional &= property.optional;
+                existing.any_readonly |= property.readonly;
+                existing.any_accessor |= property.is_accessor;
+            } else {
+                order.push(property.name.clone());
+                properties.insert(
+                    property.name.clone(),
+                    PropertyAccumulator {
+                        all_optional: property.optional,
+                        any_readonly: property.readonly,
+                        any_accessor: property.is_accessor,
+                        types: vec![property.ty],
+                        write_types: vec![write_type],
+                        has_write_type: property.write_ty.is_some(),
+                        base: property,
+                    },
+                );
+            }
+        }
+        string_indices.extend(object.string_index);
+        number_indices.extend(object.number_index);
+        call_signatures.extend(object.call_signatures);
+        construct_signatures.extend(object.construct_signatures);
+    }
+
+    let properties = order
+        .into_iter()
+        .filter_map(|name| {
+            let accumulator = properties.remove(&name)?;
+            let ty = interner.intersection(accumulator.types);
+            let write_ty = accumulator
+                .has_write_type
+                .then(|| interner.intersection(accumulator.write_types));
+            Some(PropertyType {
+                ty,
+                write_ty,
+                optional: accumulator.all_optional,
+                readonly: accumulator.any_readonly,
+                is_accessor: accumulator.any_accessor,
+                ..accumulator.base
+            })
+        })
+        .collect();
+    ObjectType {
+        properties,
+        string_index: (!string_indices.is_empty()).then(|| interner.intersection(string_indices)),
+        number_index: (!number_indices.is_empty()).then(|| interner.intersection(number_indices)),
         call_signatures,
         construct_signatures,
     }

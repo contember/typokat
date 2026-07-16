@@ -6,7 +6,9 @@
 use crate::binder::bind::{ImportPlaceholder, ImportedSymbol, ProjectBinderBuilder};
 use crate::binder::bind_module_with_prelude;
 use crate::binder::declaration::{TypeGroupId, ValueStorageId};
-use crate::binder::namespace::{CompilationUnit, LocalAmbientExportAliasFailureKind};
+use crate::binder::namespace::{
+    CompilationUnit, LocalAmbientExportAliasFailureKind, PlacementIssueKind,
+};
 use crate::binder::scope::ScopeId;
 use crate::binder::Binder;
 use crate::check::query::SemanticQueryCoordinator;
@@ -36,8 +38,10 @@ pub(in crate::check) mod eval;
 pub(crate) mod events;
 mod expr;
 mod flowgraph;
+mod function_groups;
 mod indexed_access;
 pub(crate) mod lexical_events;
+mod namespace_values;
 mod narrowing;
 mod statements;
 mod type_groups;
@@ -378,6 +382,7 @@ where
         .expect("one callable binder reservation pass");
     let mut external_effects = BTreeMap::new();
     enqueue_local_ambient_export_alias_diagnostics(&binder, &lexical_events, &mut external_effects);
+    enqueue_namespace_placement_diagnostics(&binder, &lexical_events, &mut external_effects);
     let mut pass = build_pass_with_reporting(
         interner,
         &binder,
@@ -400,6 +405,7 @@ where
 
     // Phase 0: fill named type declarations before walking values.
     pass.fill_type_decls(binder.module);
+    pass.prepare_attached_namespace_values(binder.module, &program.body);
     pass.publish_class_surfaces(&[(module_ordinal, binder.module)]);
     pass.fill_pending_interfaces_range(binder.module, 0, pass.type_decls.len());
     pass.publish_type_groups();
@@ -594,6 +600,7 @@ where
     );
     inspect(&binder, &lexical_events, &module_scopes);
     enqueue_local_ambient_export_alias_diagnostics(&binder, &lexical_events, &mut external_effects);
+    enqueue_namespace_placement_diagnostics(&binder, &lexical_events, &mut external_effects);
 
     for placeholders in &module_placeholders {
         for placeholder in placeholders {
@@ -629,6 +636,13 @@ where
     }
 
     pass.fill_type_decls_range(binder.module, user_type_start, pass.type_decls.len());
+
+    for (scope, unit) in module_scopes.iter().copied().zip(units.iter()) {
+        pass.current_module = scope;
+        pass.current_module_ordinal = unit.module_ordinal;
+        pass.current_unit_slot = unit.unit_slot;
+        pass.prepare_attached_namespace_values(scope, &unit.program.body);
+    }
 
     let publication_scopes: Vec<(ModuleOrdinal, ScopeId)> = units
         .iter()
@@ -952,6 +966,38 @@ fn enqueue_local_ambient_export_alias_diagnostics(
     }
 }
 
+fn enqueue_namespace_placement_diagnostics(
+    binder: &Binder,
+    reservations: &LexicalReservations,
+    effects: &mut BTreeMap<RecordTicket, CandidateEffects>,
+) {
+    for issue in binder.namespaces.placement_issues() {
+        let owner = reservations
+            .declaration_owner(issue.owner)
+            .expect("namespace placement issue must keep its declaration owner");
+        let source = reservations
+            .declaration_source(issue.owner)
+            .expect("namespace placement issue must keep its source site");
+        let expected_module = ModuleOrdinal::new(
+            usize::try_from(issue.original_module.0)
+                .expect("original module ordinal fits checker ownership"),
+        );
+        assert_eq!(
+            source.module_ordinal, expected_module,
+            "namespace placement issue must remain in its original module"
+        );
+        let diagnostic = match issue.kind {
+            PlacementIssueKind::FutureTk2434 => {
+                Diagnostic::namespace_precedes_class_or_function(issue.span)
+            }
+        };
+        effects
+            .entry(owner.ticket)
+            .or_insert_with(|| CandidateEffects::new(owner.ticket))
+            .diagnostic(diagnostic);
+    }
+}
+
 fn module_export_name<'ast>(name: &'ast ModuleExportName<'ast>) -> Option<&'ast str> {
     match name {
         ModuleExportName::IdentifierName(id) => Some(id.name.as_str()),
@@ -1052,7 +1098,7 @@ fn attach_class_bindings(
             let Some(site) = reservations.class_at(module_ordinal, class.span.start) else {
                 return;
             };
-            let Some((type_decl, exact_declaration, _)) = decls::exact_type_fragment_at(
+            let Some((type_decl, _, _)) = decls::exact_type_fragment_at(
                 binder,
                 scope,
                 crate::binder::declaration::TypeFragmentKind::Class,
@@ -1064,22 +1110,12 @@ fn attach_class_bindings(
             let Some(type_declaration) = declarations.get(type_decl.index()) else {
                 return;
             };
-            let (class_id, params, publishable) = match type_declaration {
+            let (class_id, lexical_params) = match type_declaration {
                 TypeDecl::Class {
-                    class_id, params, ..
-                } => (*class_id, params, true),
-                TypeDecl::UnsupportedClassInterface {
-                    declaration,
                     class_id,
-                    params,
+                    class_params,
                     ..
-                } => {
-                    debug_assert_eq!(
-                        *declaration, exact_declaration,
-                        "typed-stop class keeps its exact fragment"
-                    );
-                    (*class_id, params, false)
-                }
+                } => (*class_id, class_params),
                 _ => return,
             };
             let previous = reserved_class_owners.insert(class_id, type_decl);
@@ -1087,9 +1123,6 @@ fn attach_class_bindings(
                 previous.is_none(),
                 "one source class owns each reserved nominal identity"
             );
-            if !publishable {
-                return;
-            }
             reservations
                 .attach_class_binding(
                     site,
@@ -1097,7 +1130,7 @@ fn attach_class_bindings(
                         class_id,
                         type_decl,
                         value_decl,
-                        header_type_params: params.clone(),
+                        header_type_params: lexical_params.clone(),
                     },
                 )
                 .expect("one class binding attachment per lexical class site");
@@ -1597,6 +1630,9 @@ fn build_pass_with_reporting<'a, 'ast>(
         class_value_aliases: FxHashMap::default(),
         class_names: FxHashMap::default(),
         decl_types,
+        function_groups: function_groups::FunctionGroupRegistry::default(),
+        class_namespace_payloads: BTreeMap::new(),
+        namespace_values: namespace_values::NamespaceValueRegistry::default(),
         var_annotation_surfaces: FxHashMap::default(),
         var_value_type_states: FxHashMap::default(),
         // M23 flow-graph state. Slots 0/1 are the UNREACHABLE/START sentinels the
@@ -1633,12 +1669,7 @@ fn build_pass_with_reporting<'a, 'ast>(
         .type_decls
         .iter()
         .enumerate()
-        .filter(|(_, declaration)| {
-            matches!(
-                declaration,
-                TypeDecl::UnsupportedClassInterface { .. } | TypeDecl::Unavailable { .. }
-            )
-        })
+        .filter(|(_, declaration)| matches!(declaration, TypeDecl::Unavailable { .. }))
         .map(|(index, _)| TypeGroupId(u32::try_from(index).expect("type group index fits u32")))
         .collect();
     for group in terminal_groups {

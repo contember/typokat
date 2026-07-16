@@ -53,10 +53,14 @@ pub enum DiagnosticCode {
     TK2456,
     /// Argument type is not assignable to the parameter type (call argument).
     TK2345,
+    /// A value with a known non-callable type is invoked.
+    TK2349,
     /// Object literal may only specify known properties (excess property).
     TK2353,
     /// Function implementation is missing or not immediately following the declaration.
     TK2391,
+    /// Overload signatures disagree on public/private/protected accessibility.
+    TK2385,
     /// Overload signature is not compatible with its implementation signature.
     TK2394,
     TK2374,
@@ -68,9 +72,13 @@ pub enum DiagnosticCode {
     TK2428,
     /// An interface's complete surface is incompatible with one extended base.
     TK2430,
+    /// A runtime namespace precedes the class or function it augments.
+    TK2434,
     /// Property is protected (accessed outside the class and its subclasses) —
     /// M13.
     TK2445,
+    /// Cannot redeclare a block-scoped variable.
+    TK2451,
     /// Cannot find namespace.
     TK2503,
     /// Cannot create an instance of an abstract class — M15.
@@ -111,6 +119,8 @@ pub enum DiagnosticCode {
     TK2555,
     /// Wrong number of explicit type arguments.
     TK2558,
+    /// A static class member is accessed through an instance.
+    TK2576,
     /// Type instantiation is excessively deep and possibly infinite — M25.
     TK2589,
     /// Property is missing in type but required.
@@ -142,8 +152,10 @@ impl DiagnosticCode {
             DiagnosticCode::TK2341 => "TK2341",
             DiagnosticCode::TK2344 => "TK2344",
             DiagnosticCode::TK2345 => "TK2345",
+            DiagnosticCode::TK2349 => "TK2349",
             DiagnosticCode::TK2456 => "TK2456",
             DiagnosticCode::TK2353 => "TK2353",
+            DiagnosticCode::TK2385 => "TK2385",
             DiagnosticCode::TK2391 => "TK2391",
             DiagnosticCode::TK2394 => "TK2394",
             DiagnosticCode::TK2374 => "TK2374",
@@ -152,7 +164,9 @@ impl DiagnosticCode {
             DiagnosticCode::TK2416 => "TK2416",
             DiagnosticCode::TK2428 => "TK2428",
             DiagnosticCode::TK2430 => "TK2430",
+            DiagnosticCode::TK2434 => "TK2434",
             DiagnosticCode::TK2445 => "TK2445",
+            DiagnosticCode::TK2451 => "TK2451",
             DiagnosticCode::TK2503 => "TK2503",
             DiagnosticCode::TK2511 => "TK2511",
             DiagnosticCode::TK2515 => "TK2515",
@@ -172,6 +186,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2554 => "TK2554",
             DiagnosticCode::TK2555 => "TK2555",
             DiagnosticCode::TK2558 => "TK2558",
+            DiagnosticCode::TK2576 => "TK2576",
             DiagnosticCode::TK2589 => "TK2589",
             DiagnosticCode::TK2741 => "TK2741",
             DiagnosticCode::TK2744 => "TK2744",
@@ -339,6 +354,14 @@ impl Diagnostic {
         )
     }
 
+    pub fn cannot_redeclare_block_scoped_variable(span: Span, name: &str) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK2451,
+            span,
+            format!("Cannot redeclare block-scoped variable '{name}'."),
+        )
+    }
+
     pub fn subsequent_property_type(span: Span, name: &str) -> Self {
         Self::declaration_merge(
             DiagnosticCode::TK2717,
@@ -352,6 +375,14 @@ impl Diagnostic {
             DiagnosticCode::TK2687,
             span,
             format!("All declarations of '{name}' must have identical modifiers."),
+        )
+    }
+
+    pub fn overload_signatures_same_accessibility(span: Span) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK2385,
+            span,
+            "Overload signatures must all be public, private or protected.".to_string(),
         )
     }
 
@@ -397,6 +428,14 @@ impl Diagnostic {
             DiagnosticCode::TK2430,
             span,
             format!("Interface '{derived}' incorrectly extends interface '{base}'."),
+        )
+    }
+
+    pub fn namespace_precedes_class_or_function(span: Span) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK2434,
+            span,
+            "A namespace declaration cannot be located prior to a class or function with which it is merged".to_string(),
         )
     }
 
@@ -563,6 +602,31 @@ impl Diagnostic {
             code: DiagnosticCode::TK2339,
             severity: Severity::Error,
             message: format!("Property '{name}' does not exist on type '{tgt}'"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct TK2339 against a declaration's stable source name instead of a
+    /// structural renderer fallback.
+    pub fn property_does_not_exist_on_named_type(span: Span, name: &str, target: &str) -> Self {
+        Self::property_does_not_exist(span, name, target)
+    }
+
+    /// Construct TK2339 for the static/value side of a named declaration.
+    pub fn property_does_not_exist_on_named_value(span: Span, name: &str, target: &str) -> Self {
+        Self::property_does_not_exist(span, name, &format!("typeof {target}"))
+    }
+
+    /// Construct a `TK2576` when a published static member is read through an
+    /// instance of the same class.
+    pub fn static_property_accessed_on_instance(span: Span, name: &str, class: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2576,
+            severity: Severity::Error,
+            message: format!(
+                "Property '{name}' does not exist on type '{class}'. Did you mean to access the static member '{class}.{name}' instead?"
+            ),
             span,
             elaboration: Vec::new(),
         }
@@ -832,6 +896,18 @@ impl Diagnostic {
         }
     }
 
+    /// Construct a `TK2349` for a value whose represented type proves it has no
+    /// call signatures.
+    pub fn expression_is_not_callable(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2349,
+            severity: Severity::Error,
+            message: "This expression is not callable".to_string(),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
     /// Construct a `TK2554` arity error: a call passed `got` arguments but the
     /// callee expects `expected`. The primary span is the call expression.
     pub fn wrong_argument_count(span: Span, expected: usize, got: usize) -> Self {
@@ -1051,6 +1127,42 @@ mod qualified_name_tests {
         assert_eq!(DiagnosticCode::TK2702.as_str(), "TK2702");
         assert_eq!(DiagnosticCode::TK2713.as_str(), "TK2713");
         assert_eq!(DiagnosticCode::TK2749.as_str(), "TK2749");
+    }
+
+    #[test]
+    fn namespace_placement_diagnostic_matches_tsc() {
+        let span = Span::new(3, 12);
+        assert_diagnostic(
+            Diagnostic::namespace_precedes_class_or_function(span),
+            DiagnosticCode::TK2434,
+            "A namespace declaration cannot be located prior to a class or function with which it is merged",
+            span,
+        );
+        assert_eq!(DiagnosticCode::TK2434.as_str(), "TK2434");
+    }
+
+    #[test]
+    fn block_scoped_redeclaration_diagnostic_matches_tsc() {
+        let span = Span::new(5, 10);
+        assert_diagnostic(
+            Diagnostic::cannot_redeclare_block_scoped_variable(span, "value"),
+            DiagnosticCode::TK2451,
+            "Cannot redeclare block-scoped variable 'value'.",
+            span,
+        );
+        assert_eq!(DiagnosticCode::TK2451.as_str(), "TK2451");
+    }
+
+    #[test]
+    fn overload_accessibility_diagnostic_matches_tsc() {
+        let span = Span::new(13, 27);
+        assert_diagnostic(
+            Diagnostic::overload_signatures_same_accessibility(span),
+            DiagnosticCode::TK2385,
+            "Overload signatures must all be public, private or protected.",
+            span,
+        );
+        assert_eq!(DiagnosticCode::TK2385.as_str(), "TK2385");
     }
 
     #[test]

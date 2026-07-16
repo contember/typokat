@@ -3,13 +3,14 @@
 //! obligation, declaration, class, and flow bookkeeping visible within the tree.
 
 use crate::binder::declaration::{DeclId, TypeGroupId, ValueStorageId};
+use crate::binder::namespace::SourceUnitKey;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
 use crate::check::flow::{FlowNode, FlowNodeId};
 use crate::check::query::SemanticQueryState;
 use crate::span::Span;
-use crate::types::repr::{ClassId, TypeParamId, Visibility};
+use crate::types::repr::{ClassId, PropertyType, TypeParamId, Visibility};
 use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_ast::ast::{Class, TSInterfaceHeritage, TSType, TSTypeParameterDeclaration};
@@ -23,7 +24,9 @@ use super::classes::publication::StagedClassValidation;
 use super::classes::retained::RetainedClassCallable;
 use super::events::{CandidateEffects, RecordTicket};
 use super::events::{EventId, EventStore, ModuleOrdinal, UnitSlot};
+use super::function_groups::FunctionGroupRegistry;
 use super::lexical_events::{CallableTickets, LexicalReservations};
+use super::namespace_values::NamespaceValueRegistry;
 use super::type_groups::{
     InterfaceTypedAlternative, PublishedTypeParameterDefault, TypeEnvironmentState,
     TypeGroupConstruction,
@@ -310,19 +313,20 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
         declaration: DeclId,
         scope: ScopeId,
         class_id: ClassId,
+        /// Complete application/recovery frame for the merged type group.
         params: Vec<TypeParamId>,
+        /// Exact lexical binders declared by the class header.
+        class_params: Vec<TypeParamId>,
+        recovery_names: Vec<String>,
+        recovery_defaults: Vec<PublishedTypeParameterDefault>,
+        param_slots: BTreeMap<(usize, String), TypeParamId>,
+        conflict_alternatives: Vec<InterfaceTypedAlternative>,
+        parameter_descriptors: Option<TypeGroupParameterDescriptors>,
         param_decl: Option<&'ast TSTypeParameterDeclaration<'ast>>,
         class: &'ast Class<'ast>,
-    },
-    /// A class/interface group is a typed non-permissive stop until WU4.
-    UnsupportedClassInterface {
-        /// The sole class declaration owns the nominal identity for the future cutover.
-        declaration: DeclId,
-        class_id: ClassId,
-        /// The class fragment's lexical parameter vector; external recovery remains unavailable.
-        params: Vec<TypeParamId>,
-        /// Every class/interface fragment in canonical source order, including conflicting
-        /// renamed and excess parameter binders.
+        /// Interface declarations owned by this class surface, in source order.
+        interfaces: Vec<InterfaceFragment<'ast>>,
+        /// Exact class/interface header binders, in source order.
         header_fragments: Vec<HeaderFragmentBinding>,
     },
     /// Any other unsupported multi-kind group has no permissive semantic surface.
@@ -352,6 +356,24 @@ pub(in crate::check::checker) struct PublishedClassNewMetadata {
     pub(in crate::check::checker) ctor_visibility: Visibility,
     pub(in crate::check::checker) ctor_declaring_class: ClassId,
     pub(in crate::check::checker) has_source_overloads: bool,
+}
+
+/// Total binder order for one exported value attached to a class namespace.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(in crate::check::checker) struct ClassNamespacePropertySourceOrder {
+    pub(in crate::check::checker) source: SourceUnitKey,
+    pub(in crate::check::checker) source_start: u32,
+    pub(in crate::check::checker) declaration_ordinal: u32,
+}
+
+/// One class-attached namespace property and its exact diagnostic provenance.
+#[derive(Clone, Debug)]
+pub(in crate::check::checker) struct ClassNamespacePropertyPayload {
+    pub(in crate::check::checker) property: PropertyType,
+    pub(in crate::check::checker) declaration: DeclId,
+    pub(in crate::check::checker) owner_span: Span,
+    pub(in crate::check::checker) source_order: ClassNamespacePropertySourceOrder,
+    pub(in crate::check::checker) owner: RecordTicket,
 }
 
 /// A class's fill progress, tracked per [`TypeDecl`] index.
@@ -446,6 +468,13 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     /// an inherited base, while keeping [`ClassInfo`] `Copy`.
     pub(in crate::check::checker) class_names: FxHashMap<ClassId, String>,
     pub(in crate::check::checker) decl_types: DeclTypes,
+    /// Construction and single-publication state for admitted function/namespace groups.
+    pub(in crate::check::checker) function_groups: FunctionGroupRegistry,
+    /// Immutable namespace value surfaces awaiting their exact class-owned draft.
+    pub(in crate::check::checker) class_namespace_payloads:
+        BTreeMap<TypeGroupId, Vec<ClassNamespacePropertyPayload>>,
+    /// Prepared attached-namespace members consumed exactly once at their source sites.
+    pub(in crate::check::checker) namespace_values: NamespaceValueRegistry,
     /// Explicit `var` annotations reserved across one function/module hoist
     /// container, keyed by their own `(module, declarator span)` source site.
     pub(in crate::check::checker) var_annotation_surfaces:

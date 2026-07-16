@@ -4,9 +4,10 @@ use crate::check::checker::context::{CheckerEffects, DeclTypes, HeaderFragmentBi
 use crate::check::checker::events::{CheckerRecord, ModuleOrdinal};
 use crate::check::checker::type_groups::{
     InterfaceAlternativeKind, PublishedTypeGroupSurface, PublishedTypeGroupTerminal,
-    PublishedTypeParameterDefault, TypeGroupUnavailableCause,
+    PublishedTypeParameterDefault,
 };
-use crate::class_semantics::Exhaustion;
+use crate::check::query::{SemanticQueryCoordinator, SemanticQueryState};
+use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::DiagnosticCode;
 use crate::span::Span;
 use crate::types::repr::{ClassId, LiteralValue, TypeParamId, TypeTag};
@@ -65,20 +66,23 @@ fn reserve_class_interface_headers(source: &str) -> ReservedClassInterfaceHeader
         &mut declarations,
         &mut resolved,
     );
-    let TypeDecl::UnsupportedClassInterface {
+    let TypeDecl::Class {
         declaration,
         class_id,
-        params,
+        class_params,
         header_fragments,
+        interfaces,
+        ..
     } = declarations.get(group.index()).expect("Mixed reservation")
     else {
-        panic!("Mixed remains the class/interface typed stop")
+        panic!("Mixed is retained by its class-owned draft")
     };
+    assert!(!interfaces.is_empty(), "mixed draft retains interface AST");
     ReservedClassInterfaceHeaders {
         bound_fragments,
         class_declaration: *declaration,
         class_id: *class_id,
-        class_params: params.clone(),
+        class_params: class_params.clone(),
         headers: header_fragments.clone(),
         next_type_param,
         next_class_id,
@@ -534,10 +538,22 @@ interface Independent<Only = number> { value: Only }
                 .and_then(|symbol| binder.symbols.get(symbol))
                 .and_then(|symbol| symbol.ty)
                 .expect("mixed group");
-            assert!(matches!(
-                environment.groups().get(mixed),
-                Some(PublishedTypeGroupTerminal::Unavailable(_))
-            ));
+            let Some(PublishedTypeGroupTerminal::Ready(mixed)) = environment.groups().get(mixed)
+            else {
+                panic!("mixed class/interface group is published")
+            };
+            let PublishedTypeGroupSurface::Class(class) = mixed.surface else {
+                panic!("mixed group keeps its class identity")
+            };
+            let crate::class_semantics::DemandOutcome::Ready(surface) =
+                environment.classes().published_class(class)
+            else {
+                panic!("mixed class surface is ready")
+            };
+            assert!(interner
+                .store()
+                .object_type(surface.instance_template())
+                .is_some_and(|object| object.property("unavailable").is_some()));
             let independent = published_group(binder, environment, "Independent");
             assert_eq!(independent.parameter_names, ["Only"]);
             assert_eq!(
@@ -859,7 +875,7 @@ interface Merged { value: 202 }
 }
 
 #[test]
-fn class_first_typed_stop_reserves_exact_interface_recovery_headers() {
+fn class_first_owned_draft_reserves_exact_interface_recovery_headers() {
     let reserved = reserve_class_interface_headers(
         "class Mixed<T, U> {} interface Mixed<T, Renamed, Extra> {} interface Mixed<T, U> {}",
     );
@@ -930,7 +946,7 @@ fn class_first_typed_stop_reserves_exact_interface_recovery_headers() {
 }
 
 #[test]
-fn interface_first_typed_stop_preserves_headers_when_reserving_the_class() {
+fn interface_first_owned_draft_preserves_headers_when_reserving_the_class() {
     let reserved = reserve_class_interface_headers(
         "interface Mixed<T, Renamed> {} class Mixed<T, U, V> {} interface Mixed<T, U> {}",
     );
@@ -998,7 +1014,7 @@ fn interface_first_typed_stop_preserves_headers_when_reserving_the_class() {
 }
 
 #[test]
-fn class_interface_merges_are_typed_unavailable_in_both_orders() {
+fn class_interface_merges_publish_the_class_surface_in_both_orders() {
     for source in [
         "class Mixed {} interface Mixed { value: number }",
         "interface Mixed { value: number } class Mixed {}",
@@ -1019,21 +1035,111 @@ fn class_interface_merges_are_typed_unavailable_in_both_orders() {
                     .and_then(|symbol| binder.symbols.get(symbol))
                     .and_then(|symbol| symbol.ty)
                     .expect("class-interface type group");
-                assert_eq!(
-                    environment.groups().get(group),
-                    Some(&PublishedTypeGroupTerminal::Unavailable(
-                        crate::check::checker::type_groups::PublishedTypeGroupUnavailable {
-                            cause: TypeGroupUnavailableCause::UnsupportedClassInterface,
-                        }
-                    ))
-                );
+                let Some(PublishedTypeGroupTerminal::Ready(published)) =
+                    environment.groups().get(group)
+                else {
+                    panic!("class/interface group publishes one ready class terminal")
+                };
+                assert!(matches!(
+                    published.surface,
+                    PublishedTypeGroupSurface::Class(_)
+                ));
             },
         );
     }
 }
 
 #[test]
-fn found_unavailable_groups_poison_class_surfaces_without_missing_name_records() {
+fn class_interface_recovery_arguments_keep_distinct_applications_and_projections() {
+    let source = "\
+class Mixed<T> { own: T }
+interface Mixed<U> { added: U }
+";
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    let mut interner = Interner::with_intrinsics();
+    let mut captured = None;
+
+    let result = check_program_with_publication_inspector(
+        &mut interner,
+        &parsed.program,
+        |binder, environment, interner| {
+            let published = published_group(binder, environment, "Mixed");
+            let PublishedTypeGroupSurface::Class(class) = published.surface else {
+                panic!("Mixed preserves its class endpoint")
+            };
+            assert_eq!(published.parameters.len(), 2);
+            captured = Some((
+                class,
+                published.parameters.clone(),
+                environment.classes().clone(),
+                interner.store().len(),
+            ));
+        },
+    );
+
+    let (class, parameters, classes, publication_type_count) =
+        captured.expect("publication inspector ran");
+    let wk = interner.well_known();
+    let left = interner.intern_class_instance(class, vec![wk.string, wk.number]);
+    let right = interner.intern_class_instance(class, vec![wk.number, wk.string]);
+    assert_ne!(
+        left, right,
+        "different recovery vectors keep distinct identities"
+    );
+    assert!(
+        left.index() >= publication_type_count && right.index() >= publication_type_count,
+        "the test applications are post-publication identities"
+    );
+    let mut query_state = SemanticQueryState::default();
+    let mut next_type_param = parameters
+        .iter()
+        .map(|parameter| parameter.0)
+        .max()
+        .map_or(0, |parameter| parameter + 1);
+    let mut coordinator = SemanticQueryCoordinator::new(
+        &mut interner,
+        &classes,
+        &mut query_state,
+        &mut next_type_param,
+    );
+    let DemandOutcome::Ready(left_projection) = coordinator.demand(left) else {
+        panic!("left recovery application projects")
+    };
+    let DemandOutcome::Ready(right_projection) = coordinator.demand(right) else {
+        panic!("right recovery application projects")
+    };
+    assert_ne!(
+        left_projection, right_projection,
+        "different nominal applications project independently"
+    );
+    let left_object = interner
+        .store()
+        .object_type(left_projection)
+        .expect("left projection is structural");
+    assert_eq!(left_object.property("own").unwrap().ty, wk.string);
+    assert_eq!(left_object.property("added").unwrap().ty, wk.number);
+    let right_object = interner
+        .store()
+        .object_type(right_projection)
+        .expect("right projection is structural");
+    assert_eq!(right_object.property("own").unwrap().ty, wk.number);
+    assert_eq!(right_object.property("added").unwrap().ty, wk.string);
+
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>(),
+        [DiagnosticCode::TK2428, DiagnosticCode::TK2428]
+    );
+    assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
+}
+
+#[test]
+fn class_interface_groups_remain_usable_from_other_class_surfaces() {
     let mut missing_name_cases = Vec::new();
     let mut obsolete_incomplete_cases = Vec::new();
     for source in [
@@ -1055,9 +1161,7 @@ fn found_unavailable_groups_poison_class_surfaces_without_missing_name_records()
                 };
                 assert!(matches!(
                     environment.classes().published_class(class),
-                    crate::class_semantics::DemandOutcome::Exhausted(
-                        Exhaustion::ClassSurfacePoison { .. }
-                    )
+                    crate::class_semantics::DemandOutcome::Ready(_)
                 ));
             },
         );
@@ -1079,6 +1183,66 @@ fn found_unavailable_groups_poison_class_surfaces_without_missing_name_records()
         missing_name_cases.is_empty() && obsolete_incomplete_cases.is_empty(),
         "found unavailable failures: missing names {missing_name_cases:?}; obsolete WU2 incompletes {obsolete_incomplete_cases:?}"
     );
+}
+
+#[test]
+fn class_owned_interface_cycle_publishes_asymmetric_ready_surfaces() {
+    let source = "\
+class A { ownA: number = 1; }
+interface A extends B {}
+class B { ownB: string = \"b\"; }
+interface B extends A {}
+";
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    let mut interner = Interner::with_intrinsics();
+
+    let result = check_program_with_publication_inspector(
+        &mut interner,
+        &parsed.program,
+        |binder, environment, interner| {
+            let a = published_group(binder, environment, "A");
+            let b = published_group(binder, environment, "B");
+            let PublishedTypeGroupSurface::Class(a_class) = a.surface else {
+                panic!("A keeps its class identity")
+            };
+            let PublishedTypeGroupSurface::Class(b_class) = b.surface else {
+                panic!("B keeps its class identity")
+            };
+            let DemandOutcome::Ready(a_surface) = environment.classes().published_class(a_class)
+            else {
+                panic!("A publishes a recovered surface")
+            };
+            let DemandOutcome::Ready(b_surface) = environment.classes().published_class(b_class)
+            else {
+                panic!("B publishes a recovered surface")
+            };
+            let a_object = interner
+                .store()
+                .object_type(a_surface.instance_template())
+                .expect("A instance object");
+            assert!(a_object.property("ownA").is_some());
+            assert!(a_object.property("ownB").is_none());
+            let b_object = interner
+                .store()
+                .object_type(b_surface.instance_template())
+                .expect("B instance object");
+            assert!(b_object.property("ownA").is_some());
+            assert!(b_object.property("ownB").is_some());
+            assert_published_types_are_owner_closed(interner.store(), a);
+            assert_published_types_are_owner_closed(interner.store(), b);
+        },
+    );
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == DiagnosticCode::TK2310)
+            .count(),
+        4
+    );
+    assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
 }
 
 #[test]

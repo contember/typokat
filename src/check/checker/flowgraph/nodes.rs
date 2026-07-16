@@ -87,6 +87,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// `START`) and the reset target for a `None` assignment. Mirrors the pre-M23
     /// `resolve_identifier_type` fallback.
     pub(in crate::check::checker) fn declared_type(&self, symbol: SymbolId) -> TypeId {
+        debug_assert!(
+            !self.function_groups.requires_demand_intercept(symbol),
+            "unpublished function groups must not enter durable flow resolution"
+        );
         self.binder
             .symbols
             .get(symbol)

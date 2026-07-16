@@ -1,16 +1,18 @@
 //! decls module (extracted from checker/mod.rs).
 
+use super::classes::construction::HeritageDependency;
 use super::context::*;
 use super::lexical_events::InterfaceOccurrenceKind;
 use super::type_groups::{
     InterfaceAlternativeKind, InterfaceTypedAlternative, PublishedTypeParameterDefault,
 };
-use crate::binder::declaration::TypeGroupId;
+use crate::binder::declaration::{TypeGroupFragment, TypeGroupId};
+use crate::binder::namespace::SourceUnitKey;
 use crate::binder::scope::ScopeId;
 use crate::binder::Binder;
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
-use crate::types::repr::{ClassId, TypeParamId, TypeTag};
+use crate::types::repr::{ClassId, TypeParamId, TypeTag, Visibility};
 use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_ast::ast::{
@@ -131,6 +133,25 @@ struct InterfaceHeritageTopology {
         rustc_hash::FxHashMap<(crate::binder::declaration::DeclId, u32), InterfaceHeritagePlan>,
 }
 
+#[derive(Clone)]
+pub(in crate::check::checker) struct PreparedClassInstanceHeritage {
+    pub(in crate::check::checker) base_name: String,
+    pub(in crate::check::checker) dependency: HeritageDependency<super::events::RecordTicket>,
+    pub(in crate::check::checker) span: Span,
+}
+
+#[derive(Clone)]
+pub(in crate::check::checker) struct PreparedClassInterfaceFragment<'ast> {
+    pub(in crate::check::checker) fragment: InterfaceFragment<'ast>,
+    pub(in crate::check::checker) object: crate::types::repr::ObjectType,
+    pub(in crate::check::checker) method_names: BTreeSet<String>,
+    pub(in crate::check::checker) heritage_surfaces: Vec<(String, crate::types::repr::ObjectType)>,
+    pub(in crate::check::checker) instance_heritage: Vec<PreparedClassInstanceHeritage>,
+}
+
+pub(in crate::check::checker) type PreparedClassInterfaceGroups<'ast> =
+    BTreeMap<TypeGroupId, Vec<PreparedClassInterfaceFragment<'ast>>>;
+
 impl InterfaceHeritageTopology {
     fn plan(
         &self,
@@ -145,8 +166,59 @@ impl InterfaceHeritageTopology {
 }
 
 impl<'a, 'ast> Pass<'a, 'ast> {
+    fn merged_header_owner(
+        &self,
+        index: usize,
+        declaration: crate::binder::declaration::DeclId,
+        source_start: u32,
+    ) -> super::events::RecordTicket {
+        if matches!(
+            self.type_decls.get(index),
+            Some(TypeDecl::Class {
+                declaration: class_declaration,
+                ..
+            }) if *class_declaration == declaration
+        ) {
+            return self
+                .lexical_events
+                .declaration_owner(declaration)
+                .expect("class header has one exact declaration owner")
+                .ticket;
+        }
+        self.lexical_events
+            .interface_occurrence_owner(declaration, InterfaceOccurrenceKind::Header, source_start)
+            .expect("interface header has one exact preallocated owner")
+    }
+
+    fn class_interface_header_fragments(&self, index: usize) -> Vec<InterfaceFragment<'ast>> {
+        let Some(TypeDecl::Class {
+            declaration,
+            scope,
+            class_params,
+            param_decl,
+            interfaces,
+            ..
+        }) = self.type_decls.get(index)
+        else {
+            return Vec::new();
+        };
+        let mut fragments = interfaces.clone();
+        fragments.push(InterfaceFragment {
+            declaration: *declaration,
+            scope: *scope,
+            param_decl: *param_decl,
+            params: class_params.clone(),
+            members: &[],
+            extends: &[],
+        });
+        let group = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
+        sort_interface_fragments(self.binder, group, &mut fragments);
+        fragments
+    }
+
     fn lower_type_group_parameter_metadata(&mut self, index: usize) {
-        let (scope, param_decl, params, interface_declaration) = match self.type_decls.get(index) {
+        let class_fragments = self.class_interface_header_fragments(index);
+        let (scope, param_decl, params, header_declaration) = match self.type_decls.get(index) {
             Some(TypeDecl::Interface {
                 declaration,
                 scope,
@@ -154,6 +226,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 params,
                 ..
             }) => (*scope, *param_decl, params.clone(), Some(*declaration)),
+            Some(TypeDecl::Class { interfaces, .. }) if !interfaces.is_empty() => {
+                let canonical = class_fragments
+                    .first()
+                    .expect("merged class group has one canonical header");
+                (
+                    canonical.scope,
+                    canonical.param_decl,
+                    canonical.params.clone(),
+                    Some(canonical.declaration),
+                )
+            }
             Some(TypeDecl::Alias {
                 scope,
                 param_decl,
@@ -163,8 +246,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             _ => return,
         };
         let group = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
+        let metadata_params = params.clone();
         let frame = self.build_type_param_frame(param_decl, &params);
-        let validate_locally = interface_declaration.is_none();
+        let validate_locally = header_declaration.is_none();
         let lower = |pass: &mut Self| {
             pass.with_type_params(frame, |pass| {
                 pass.lower_type_group_parameter_descriptors(
@@ -175,21 +259,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 )
             })
         };
-        let descriptors = if let Some(declaration) = interface_declaration {
+        let descriptors = if let Some(declaration) = header_declaration {
             let header_span = self
                 .binder
                 .declarations
                 .get(declaration)
                 .map(|declaration| declaration.site.binding_span)
                 .unwrap_or(Span::new(0, 0));
-            let owner = self
-                .lexical_events
-                .interface_occurrence_owner(
-                    declaration,
-                    InterfaceOccurrenceKind::Header,
-                    header_span.start,
-                )
-                .expect("interface header has one exact preallocated owner");
+            let owner = self.merged_header_owner(index, declaration, header_span.start);
             self.with_ticket_effects(owner, lower)
         } else {
             self.with_type_decl_effects(group, lower)
@@ -238,6 +315,40 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
                 *parameter_descriptors = Some(descriptors);
             }
+            Some(TypeDecl::Class {
+                params: recovery_params,
+                recovery_defaults,
+                parameter_descriptors,
+                ..
+            }) => {
+                let parameter_defaults =
+                    descriptors
+                        .defaults
+                        .iter()
+                        .copied()
+                        .map(|default| match default {
+                            TypeParameterMetadataState::Absent => {
+                                PublishedTypeParameterDefault::Absent
+                            }
+                            TypeParameterMetadataState::Ready(default) => {
+                                PublishedTypeParameterDefault::Ready(default)
+                            }
+                            TypeParameterMetadataState::Poisoned
+                            | TypeParameterMetadataState::Unsupported => {
+                                PublishedTypeParameterDefault::Unsupported
+                            }
+                        });
+                for (&parameter, default) in metadata_params.iter().zip(parameter_defaults) {
+                    let recovery_index = recovery_params
+                        .iter()
+                        .position(|candidate| *candidate == parameter)
+                        .expect("canonical class parameter is a recovery parameter");
+                    if recovery_defaults[recovery_index] == PublishedTypeParameterDefault::Absent {
+                        recovery_defaults[recovery_index] = default;
+                    }
+                }
+                *parameter_descriptors = Some(descriptors);
+            }
             Some(TypeDecl::Alias {
                 defaults: target, ..
             }) => *target = lowered_defaults,
@@ -254,7 +365,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Some(TypeDecl::Interface { declaration, .. })
             | Some(TypeDecl::Alias { declaration, .. })
             | Some(TypeDecl::Class { declaration, .. })
-            | Some(TypeDecl::UnsupportedClassInterface { declaration, .. })
             | Some(TypeDecl::Unavailable { declaration }) => *declaration,
             Some(TypeDecl::Resolved { .. }) | None => {
                 panic!("published prelude groups must not re-enter private construction")
@@ -470,6 +580,683 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let _ = scope;
         self.construct_pending_interface_sccs(start, end);
         self.building_template = building_template;
+    }
+
+    fn collect_class_interface_heritage_type(
+        &self,
+        ty: TypeId,
+        objects: &mut Vec<crate::types::repr::ObjectType>,
+        classes: &mut Vec<PreparedClassInstanceHeritage>,
+        owner: super::events::RecordTicket,
+        base_name: &str,
+        span: Span,
+    ) -> bool {
+        if let Some(object) = self.interner.store().object_type(ty).cloned() {
+            objects.push(object);
+            return true;
+        }
+        if let Some(members) = self.interner.store().intersection_members(ty) {
+            return members.iter().copied().all(|member| {
+                self.collect_class_interface_heritage_type(
+                    member, objects, classes, owner, base_name, span,
+                )
+            });
+        }
+        if let Some(application) = self.interner.store().class_instance_type(ty) {
+            classes.push(PreparedClassInstanceHeritage {
+                base_name: base_name.to_string(),
+                dependency: HeritageDependency {
+                    target: application.class,
+                    identity_root: ty,
+                    owner,
+                },
+                span,
+            });
+            return true;
+        }
+        let well_known = self.interner.well_known();
+        ty == well_known.any || ty == well_known.unknown || ty == well_known.error
+    }
+
+    fn report_cyclic_class_interface_heritage(&mut self, topology: &InterfaceHeritageTopology) {
+        for component in class_interface_heritage_sccs(self.binder, &self.type_decls, topology) {
+            if !class_interface_component_has_cycle(&self.type_decls, &component, topology)
+                || !class_interface_component_has_soft_edge(&self.type_decls, &component, topology)
+            {
+                continue;
+            }
+            let component_set: BTreeSet<usize> = component.iter().copied().collect();
+            for index in component {
+                let Some(TypeDecl::Class {
+                    declaration,
+                    recovery_names,
+                    interfaces,
+                    ..
+                }) = self.type_decls.get(index)
+                else {
+                    continue;
+                };
+                let declaration = *declaration;
+                let recovery_names = recovery_names.clone();
+                let interfaces = interfaces.clone();
+                let name = self
+                    .binder
+                    .type_groups
+                    .get(TypeGroupId(
+                        u32::try_from(index).expect("type group index fits u32"),
+                    ))
+                    .map(|group| group.name.clone())
+                    .unwrap_or_else(|| "<class>".to_string());
+                let class_display = if recovery_names.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}<{}>", name, recovery_names.join(", "))
+                };
+                let class_span = self
+                    .binder
+                    .declarations
+                    .get(declaration)
+                    .map(|declaration| declaration.site.binding_span)
+                    .unwrap_or(Span::new(0, 0));
+                let class_owner = self.merged_header_owner(index, declaration, class_span.start);
+                self.with_ticket_effects(class_owner, |pass| {
+                    pass.emit_diagnostic(Diagnostic::circular_interface_heritage(
+                        class_span,
+                        &class_display,
+                    ));
+                });
+
+                for fragment in interfaces {
+                    let participates = fragment.extends.iter().any(|heritage| {
+                        topology
+                            .plan(fragment.declaration, heritage)
+                            .terminals()
+                            .is_some_and(|terminals| {
+                                terminals
+                                    .iter()
+                                    .any(|group| component_set.contains(&group.index()))
+                            })
+                    });
+                    if !participates {
+                        continue;
+                    }
+                    let parameter_names = fragment
+                        .param_decl
+                        .iter()
+                        .flat_map(|declaration| declaration.params.iter())
+                        .map(|parameter| parameter.name.name.as_str())
+                        .collect::<Vec<_>>();
+                    let display = if parameter_names.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}<{}>", name, parameter_names.join(", "))
+                    };
+                    let span = self
+                        .binder
+                        .declarations
+                        .get(fragment.declaration)
+                        .map(|declaration| declaration.site.binding_span)
+                        .unwrap_or(Span::new(0, 0));
+                    let owner = self.merged_header_owner(index, fragment.declaration, span.start);
+                    self.with_ticket_effects(owner, |pass| {
+                        pass.emit_diagnostic(Diagnostic::circular_interface_heritage(
+                            span, &display,
+                        ));
+                    });
+                }
+            }
+        }
+    }
+
+    /// Lower class-owned interface fragments while every type surface is still private.
+    /// The returned objects are merged into their class instance before publication.
+    pub(in crate::check::checker) fn prepare_class_interface_groups(
+        &mut self,
+    ) -> PreparedClassInterfaceGroups<'ast> {
+        let groups = self
+            .type_decls
+            .iter()
+            .enumerate()
+            .filter_map(|(index, declaration)| match declaration {
+                TypeDecl::Class { interfaces, .. } if !interfaces.is_empty() => Some(index),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let topology = interface_heritage_topology(self.binder, &self.type_decls);
+        self.report_cyclic_class_interface_heritage(&topology);
+        let building_template = std::mem::replace(&mut self.building_template, true);
+        let mut prepared = BTreeMap::new();
+        for index in groups {
+            let headers = self.class_interface_header_fragments(index);
+            self.validate_interface_group_headers(index, &headers);
+            let interfaces = match &self.type_decls[index] {
+                TypeDecl::Class { interfaces, .. } => interfaces.clone(),
+                _ => unreachable!("prepared group remains class-owned"),
+            };
+            let mut lowered = Vec::with_capacity(interfaces.len());
+            let mut conflict_inputs = Vec::with_capacity(interfaces.len());
+            for fragment in interfaces {
+                let frame = self.build_type_param_frame(fragment.param_decl, &fragment.params);
+                let own = self.with_type_params(frame.clone(), |pass| {
+                    pass.lower_interface_declaration_members(
+                        fragment.declaration,
+                        fragment.scope,
+                        fragment.members,
+                    )
+                });
+                conflict_inputs.push((fragment.clone(), own.clone()));
+
+                let mut heritage_surfaces = Vec::new();
+                let mut instance_heritage = Vec::new();
+                for heritage in fragment.extends {
+                    let heritage_span = Span::from_oxc(heritage.span);
+                    let owner = self
+                        .lexical_events
+                        .interface_occurrence_owner(
+                            fragment.declaration,
+                            InterfaceOccurrenceKind::Heritage,
+                            heritage_span.start,
+                        )
+                        .expect("interface heritage has one exact preallocated owner");
+                    let plan = topology.plan(fragment.declaration, heritage);
+                    let resolved = self.with_ticket_effects(owner, |pass| {
+                        pass.with_type_params(frame.clone(), |pass| match plan {
+                            InterfaceHeritagePlan::Complete(_) => {
+                                pass.ensure_heritage_base_filled(fragment.scope, heritage);
+                                pass.resolve_heritage_type(fragment.scope, heritage)
+                            }
+                            InterfaceHeritagePlan::Poisoned => {
+                                pass.diagnose_poisoned_interface_heritage(fragment.scope, heritage);
+                                None
+                            }
+                            InterfaceHeritagePlan::Opaque(_) => {
+                                pass.record_opaque_interface_heritage(fragment.scope, heritage);
+                                None
+                            }
+                        })
+                    });
+                    if let Some(resolved) = resolved {
+                        let base_name = heritage_display_name(heritage);
+                        let mut objects = Vec::new();
+                        let mut classes = Vec::new();
+                        if self.collect_class_interface_heritage_type(
+                            resolved,
+                            &mut objects,
+                            &mut classes,
+                            owner,
+                            &base_name,
+                            heritage_span,
+                        ) {
+                            if !objects.is_empty() {
+                                let object =
+                                    interface::merge_intersection_objects(self.interner, objects);
+                                heritage_surfaces.push((base_name, object));
+                            }
+                            instance_heritage.extend(classes);
+                        } else {
+                            self.with_ticket_effects(owner, |pass| {
+                                pass.record_opaque_interface_heritage(fragment.scope, heritage);
+                            });
+                        }
+                    }
+                }
+                let method_names = interface_method_names(fragment.members);
+                lowered.push(PreparedClassInterfaceFragment {
+                    fragment,
+                    object: own,
+                    method_names,
+                    heritage_surfaces,
+                    instance_heritage,
+                });
+            }
+            let alternatives = self.validate_interface_fragment_conflicts(&conflict_inputs);
+            let TypeDecl::Class {
+                conflict_alternatives,
+                ..
+            } = &mut self.type_decls[index]
+            else {
+                unreachable!()
+            };
+            *conflict_alternatives = alternatives;
+            prepared.insert(
+                TypeGroupId(u32::try_from(index).expect("type group index fits u32")),
+                lowered,
+            );
+        }
+        self.building_template = building_template;
+        prepared
+    }
+
+    pub(in crate::check::checker) fn validate_class_interface_member_conflicts(
+        &mut self,
+        group: TypeGroupId,
+        class_object: &crate::types::repr::ObjectType,
+        heritage_own: &crate::types::repr::ObjectType,
+        interfaces: &[PreparedClassInterfaceFragment<'ast>],
+    ) {
+        #[derive(Copy, Clone, PartialEq, Eq)]
+        enum DeclarationKind {
+            Property,
+            Method,
+            Getter,
+            Setter,
+        }
+        #[derive(Copy, Clone, PartialEq, Eq)]
+        enum DeclarationOrigin {
+            Class,
+            Interface,
+        }
+        #[derive(Clone)]
+        struct Member {
+            name: String,
+            declaration_kind: DeclarationKind,
+            declaration_origin: DeclarationOrigin,
+            ty: TypeId,
+            write_ty: Option<TypeId>,
+            accessor_is_paired: bool,
+            optional: bool,
+            readonly: bool,
+            visibility: Visibility,
+            owner: super::events::RecordTicket,
+            span: Span,
+            order: (SourceUnitKey, u32, u32),
+        }
+
+        impl Member {
+            fn is_property_declaration(&self) -> bool {
+                self.declaration_kind != DeclarationKind::Method
+            }
+
+            fn conflicts_as_later_duplicate(&self, first: &Self) -> bool {
+                self.declaration_kind == DeclarationKind::Method
+                    || (self.declaration_kind == DeclarationKind::Setter
+                        && !self.accessor_is_paired)
+                    || (first.declaration_origin == DeclarationOrigin::Interface
+                        && first.declaration_kind == DeclarationKind::Property
+                        && self.accessor_is_paired
+                        && matches!(
+                            self.declaration_kind,
+                            DeclarationKind::Getter | DeclarationKind::Setter
+                        ))
+            }
+
+            fn comparison_ty(&self) -> TypeId {
+                if self.declaration_kind == DeclarationKind::Setter && !self.accessor_is_paired {
+                    self.write_ty.unwrap_or(self.ty)
+                } else {
+                    self.ty
+                }
+            }
+        }
+
+        let Some(TypeDecl::Class {
+            declaration,
+            class_id,
+            class,
+            ..
+        }) = self.type_decls.get(group.index())
+        else {
+            return;
+        };
+        let class_id = *class_id;
+        let declaration = *declaration;
+        let class = *class;
+        let group_fragments = self
+            .binder
+            .type_groups
+            .get(group)
+            .map(|group| group.fragments.as_slice())
+            .unwrap_or_default();
+        let fragment_source = |declaration| {
+            group_fragments
+                .iter()
+                .find(|fragment: &&TypeGroupFragment| fragment.declaration == declaration)
+                .map_or(SourceUnitKey::SINGLE_SOURCE, |fragment| fragment.source)
+        };
+        let class_source = fragment_source(declaration);
+        let Some(reservation) = self.lexical_events.classes().iter().find(|reservation| {
+            reservation
+                .binding
+                .as_ref()
+                .is_some_and(|binding| binding.class_id == class_id)
+        }) else {
+            return;
+        };
+        let mut accessor_kinds = BTreeMap::new();
+        for element in &class.body.body {
+            let oxc_ast::ast::ClassElement::MethodDefinition(method) = element else {
+                continue;
+            };
+            if method.r#static || method.computed {
+                continue;
+            }
+            let Some(name) = method.key.static_name().map(|name| name.into_owned()) else {
+                continue;
+            };
+            let kinds = accessor_kinds.entry(name).or_insert((false, false));
+            match method.kind {
+                oxc_ast::ast::MethodDefinitionKind::Get => kinds.0 = true,
+                oxc_ast::ast::MethodDefinitionKind::Set => kinds.1 = true,
+                oxc_ast::ast::MethodDefinitionKind::Method
+                | oxc_ast::ast::MethodDefinitionKind::Constructor => {}
+            }
+        }
+        let paired_accessors = accessor_kinds
+            .into_iter()
+            .filter_map(|(name, (getter, setter))| (getter && setter).then_some(name))
+            .collect::<BTreeSet<_>>();
+        let mut members = Vec::new();
+        for (index, element) in class.body.body.iter().enumerate() {
+            let owner = reservation
+                .members
+                .get(index)
+                .and_then(|member| self.lexical_events.member(*member))
+                .map_or(reservation.tickets.immediate, |member| {
+                    member.tickets.immediate
+                });
+            match element {
+                oxc_ast::ast::ClassElement::PropertyDefinition(property)
+                    if !property.r#static && !property.computed =>
+                {
+                    let Some(name) = property.key.static_name().map(|name| name.into_owned())
+                    else {
+                        continue;
+                    };
+                    let Some(surface) = class_object.property(&name) else {
+                        continue;
+                    };
+                    members.push(Member {
+                        name,
+                        declaration_kind: DeclarationKind::Property,
+                        declaration_origin: DeclarationOrigin::Class,
+                        ty: surface.ty,
+                        write_ty: surface.write_ty,
+                        accessor_is_paired: false,
+                        optional: property.optional,
+                        readonly: property.readonly,
+                        visibility: surface.visibility,
+                        owner,
+                        span: Span::from_oxc(property.span),
+                        order: (class_source, property.span.start, declaration.0),
+                    });
+                }
+                oxc_ast::ast::ClassElement::MethodDefinition(method)
+                    if !method.r#static
+                        && !method.computed
+                        && matches!(
+                            method.kind,
+                            oxc_ast::ast::MethodDefinitionKind::Method
+                                | oxc_ast::ast::MethodDefinitionKind::Get
+                                | oxc_ast::ast::MethodDefinitionKind::Set
+                        ) =>
+                {
+                    let Some(name) = method.key.static_name().map(|name| name.into_owned()) else {
+                        continue;
+                    };
+                    let Some(surface) = class_object.property(&name) else {
+                        continue;
+                    };
+                    let accessor_is_paired = paired_accessors.contains(&name);
+                    members.push(Member {
+                        name,
+                        declaration_kind: match method.kind {
+                            oxc_ast::ast::MethodDefinitionKind::Method => DeclarationKind::Method,
+                            oxc_ast::ast::MethodDefinitionKind::Get => DeclarationKind::Getter,
+                            oxc_ast::ast::MethodDefinitionKind::Set => DeclarationKind::Setter,
+                            oxc_ast::ast::MethodDefinitionKind::Constructor => unreachable!(),
+                        },
+                        declaration_origin: DeclarationOrigin::Class,
+                        ty: surface.ty,
+                        write_ty: surface.write_ty,
+                        accessor_is_paired,
+                        optional: false,
+                        // Accessors and interface properties merge as property declarations;
+                        // accessor mutability does not constitute a TS declaration modifier.
+                        readonly: false,
+                        visibility: surface.visibility,
+                        owner,
+                        span: Span::from_oxc(method.span),
+                        order: (class_source, method.span.start, declaration.0),
+                    });
+                }
+                _ => {}
+            }
+        }
+        for prepared in interfaces {
+            for signature in prepared.fragment.members {
+                let (name, declaration_kind, optional, readonly, span) = match signature {
+                    oxc_ast::ast::TSSignature::TSPropertySignature(signature)
+                        if !signature.computed =>
+                    {
+                        let Some(name) = signature.key.static_name().map(|name| name.into_owned())
+                        else {
+                            continue;
+                        };
+                        (
+                            name,
+                            DeclarationKind::Property,
+                            signature.optional,
+                            signature.readonly,
+                            Span::from_oxc(signature.span),
+                        )
+                    }
+                    oxc_ast::ast::TSSignature::TSMethodSignature(signature)
+                        if !signature.computed =>
+                    {
+                        let Some(name) = signature.key.static_name().map(|name| name.into_owned())
+                        else {
+                            continue;
+                        };
+                        (
+                            name,
+                            DeclarationKind::Method,
+                            signature.optional,
+                            false,
+                            Span::from_oxc(signature.span),
+                        )
+                    }
+                    _ => continue,
+                };
+                let Some(surface) = prepared.object.property(&name) else {
+                    continue;
+                };
+                let owner = self
+                    .lexical_events
+                    .interface_occurrence_owner(
+                        prepared.fragment.declaration,
+                        InterfaceOccurrenceKind::Member,
+                        span.start,
+                    )
+                    .expect("attached interface member has one exact owner");
+                members.push(Member {
+                    name,
+                    declaration_kind,
+                    declaration_origin: DeclarationOrigin::Interface,
+                    ty: surface.ty,
+                    write_ty: surface.write_ty,
+                    accessor_is_paired: false,
+                    optional,
+                    readonly,
+                    visibility: Visibility::Public,
+                    owner,
+                    span,
+                    order: (
+                        fragment_source(prepared.fragment.declaration),
+                        span.start,
+                        prepared.fragment.declaration.0,
+                    ),
+                });
+            }
+        }
+        members.sort_by_key(|member| (member.order, member.span.end));
+        let mut by_name: BTreeMap<String, Vec<Member>> = BTreeMap::new();
+        let mut modifier_reports = BTreeSet::new();
+        let mut duplicate_reports = BTreeSet::new();
+        let mut accessibility_reports = BTreeSet::new();
+        for member in members {
+            let Some(first) = by_name
+                .get(&member.name)
+                .and_then(|occurrences| occurrences.first())
+                .cloned()
+            else {
+                by_name.entry(member.name.clone()).or_default().push(member);
+                continue;
+            };
+            if first.is_property_declaration() && member.conflicts_as_later_duplicate(&first) {
+                for conflict in [&first, &member] {
+                    if duplicate_reports.insert((
+                        conflict.name.clone(),
+                        conflict.order,
+                        conflict.span.end,
+                    )) {
+                        self.with_ticket_effects(conflict.owner, |pass| {
+                            pass.emit_diagnostic(Diagnostic::duplicate_identifier(
+                                conflict.span,
+                                &conflict.name,
+                            ));
+                        });
+                    }
+                }
+            } else if first.declaration_kind == DeclarationKind::Method
+                && member.declaration_kind == DeclarationKind::Method
+            {
+                if first.visibility != member.visibility
+                    && accessibility_reports.insert((
+                        member.name.clone(),
+                        member.order,
+                        member.span.end,
+                    ))
+                {
+                    self.with_ticket_effects(member.owner, |pass| {
+                        pass.emit_diagnostic(Diagnostic::overload_signatures_same_accessibility(
+                            member.span,
+                        ));
+                    });
+                }
+            } else {
+                if first.is_property_declaration()
+                    && member.is_property_declaration()
+                    && (first.optional != member.optional
+                        || first.readonly != member.readonly
+                        || first.visibility != member.visibility)
+                {
+                    for conflict in [&first, &member] {
+                        if modifier_reports.insert((
+                            conflict.name.clone(),
+                            conflict.order,
+                            conflict.span.end,
+                        )) {
+                            self.with_ticket_effects(conflict.owner, |pass| {
+                                pass.emit_diagnostic(Diagnostic::identical_property_modifiers(
+                                    conflict.span,
+                                    &conflict.name,
+                                ));
+                            });
+                        }
+                    }
+                }
+                let first_ty = first.comparison_ty();
+                let member_ty = member.comparison_ty();
+                if first_ty != member_ty {
+                    let source = self.interner.intern_object(crate::types::repr::ObjectType {
+                        properties: vec![crate::types::repr::PropertyType::public(
+                            member.name.clone(),
+                            first_ty,
+                        )],
+                        ..Default::default()
+                    });
+                    let target = self.interner.intern_object(crate::types::repr::ObjectType {
+                        properties: vec![crate::types::repr::PropertyType::public(
+                            member.name.clone(),
+                            member_ty,
+                        )],
+                        ..Default::default()
+                    });
+                    self.with_ticket_effects(member.owner, |pass| {
+                        pass.schedule_interface_relation(InterfaceRelationObligation {
+                            source,
+                            target,
+                            span: member.span,
+                            kind: InterfaceRelationKind::MergedProperty {
+                                name: member.name.clone(),
+                            },
+                            report: InterfaceRelationReport::Always,
+                        });
+                    });
+                }
+            }
+            by_name.entry(member.name.clone()).or_default().push(member);
+        }
+
+        let derived_name = self
+            .binder
+            .type_groups
+            .get(group)
+            .map(|group| group.name.clone())
+            .unwrap_or_else(|| "<class>".to_string());
+        for prepared in interfaces {
+            for (base_name, base) in &prepared.heritage_surfaces {
+                self.validate_class_interface_heritage_surface(
+                    group,
+                    heritage_own,
+                    prepared,
+                    &derived_name,
+                    base_name,
+                    base,
+                );
+            }
+        }
+    }
+
+    pub(in crate::check::checker) fn validate_class_interface_heritage_surface(
+        &mut self,
+        group: TypeGroupId,
+        class_object: &crate::types::repr::ObjectType,
+        prepared: &PreparedClassInterfaceFragment<'ast>,
+        derived_name: &str,
+        base_name: &str,
+        base: &crate::types::repr::ObjectType,
+    ) {
+        let span = self
+            .binder
+            .declarations
+            .get(prepared.fragment.declaration)
+            .map(|declaration| declaration.site.binding_span)
+            .unwrap_or(Span::new(0, 0));
+        let owner =
+            self.merged_header_owner(group.index(), prepared.fragment.declaration, span.start);
+        for class_property in &class_object.properties {
+            let Some(base_property) = base.property(&class_property.name) else {
+                continue;
+            };
+            if class_property.ty == base_property.ty
+                && class_property.write_ty == base_property.write_ty
+                && class_property.optional == base_property.optional
+                && class_property.readonly == base_property.readonly
+            {
+                continue;
+            }
+            let source = self.interner.intern_object(crate::types::repr::ObjectType {
+                properties: vec![class_property.clone()],
+                ..Default::default()
+            });
+            let target = self.interner.intern_object(crate::types::repr::ObjectType {
+                properties: vec![base_property.clone()],
+                ..Default::default()
+            });
+            self.with_ticket_effects(owner, |pass| {
+                pass.schedule_interface_relation(InterfaceRelationObligation {
+                    source,
+                    target,
+                    span,
+                    kind: InterfaceRelationKind::HeritageMember {
+                        derived: derived_name.to_string(),
+                        base: base_name.to_string(),
+                    },
+                    report: InterfaceRelationReport::Always,
+                });
+            });
+        }
     }
 
     /// Construct ready interface components privately. Every member and heritage
@@ -844,10 +1631,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             TypeDecl::Interface {
                 parameter_descriptors,
                 ..
+            }
+            | TypeDecl::Class {
+                parameter_descriptors,
+                ..
             } => parameter_descriptors
                 .clone()
-                .expect("canonical interface descriptors lower before group validation"),
-            _ => unreachable!("interface header validation owns an interface draft"),
+                .expect("canonical merged-header descriptors lower before group validation"),
+            _ => unreachable!("header validation owns an interface or class draft"),
         };
         let mut shapes = Vec::with_capacity(fragments.len());
         shapes.push(
@@ -882,14 +1673,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .get(fragment.declaration)
                 .map(|declaration| declaration.site.binding_span)
                 .unwrap_or(Span::new(0, 0));
-            let owner = self
-                .lexical_events
-                .interface_occurrence_owner(
-                    fragment.declaration,
-                    InterfaceOccurrenceKind::Header,
-                    header_span.start,
-                )
-                .expect("interface header has one exact preallocated owner");
+            let owner = self.merged_header_owner(index, fragment.declaration, header_span.start);
             let shape = self.with_ticket_effects(owner, |pass| {
                 pass.with_type_params(frame, |pass| {
                     let descriptors = pass.lower_interface_fragment_parameter_descriptors(
@@ -941,13 +1725,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             );
             shapes.push(shape);
         }
-        let TypeDecl::Interface {
-            recovery_params,
-            recovery_defaults,
-            ..
-        } = &mut self.type_decls[index]
-        else {
-            unreachable!("interface header validation owns an interface draft")
+        let (recovery_params, recovery_defaults) = match &mut self.type_decls[index] {
+            TypeDecl::Interface {
+                recovery_params,
+                recovery_defaults,
+                ..
+            } => (recovery_params, recovery_defaults),
+            TypeDecl::Class {
+                params,
+                recovery_defaults,
+                ..
+            } => (params, recovery_defaults),
+            _ => unreachable!("header validation owns an interface or class draft"),
         };
         for (parameter, default) in supplied_defaults {
             let recovery_index = recovery_params
@@ -994,14 +1783,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     .get(declaration)
                     .map(|declaration| declaration.site.binding_span)
                     .unwrap_or(Span::new(0, 0));
-                let owner = self
-                    .lexical_events
-                    .interface_occurrence_owner(
-                        declaration,
-                        InterfaceOccurrenceKind::Header,
-                        span.start,
-                    )
-                    .expect("merged interface header has one exact preallocated owner");
+                let owner = self.merged_header_owner(index, declaration, span.start);
                 self.with_ticket_effects(owner, |pass| {
                     pass.emit_diagnostic(
                         crate::diagnostics::Diagnostic::merged_interface_type_parameters(
@@ -1062,14 +1844,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .get(fragment.declaration)
                 .map(|declaration| declaration.site.binding_span)
                 .unwrap_or(Span::new(0, 0));
-            let owner = self
-                .lexical_events
-                .interface_occurrence_owner(
-                    fragment.declaration,
-                    InterfaceOccurrenceKind::Header,
-                    header_span.start,
-                )
-                .expect("interface header has one exact preallocated owner");
+            let owner = self.merged_header_owner(index, fragment.declaration, header_span.start);
             let parameters = fragment
                 .param_decl
                 .iter()
@@ -1192,14 +1967,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     .get(declaration)
                     .map(|declaration| declaration.site.binding_span)
                     .unwrap_or(Span::new(0, 0));
-                let owner = self
-                    .lexical_events
-                    .interface_occurrence_owner(
-                        declaration,
-                        InterfaceOccurrenceKind::Header,
-                        span.start,
-                    )
-                    .expect("merged interface header has one exact preallocated owner");
+                let owner = self.merged_header_owner(index, declaration, span.start);
                 self.with_ticket_effects(owner, |pass| {
                     pass.emit_diagnostic(
                         crate::diagnostics::Diagnostic::merged_interface_type_parameters(
@@ -1221,14 +1989,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 .get(declaration)
                 .map(|declaration| declaration.site.binding_span)
                 .unwrap_or(Span::new(0, 0));
-            let owner = self
-                .lexical_events
-                .interface_occurrence_owner(
-                    declaration,
-                    InterfaceOccurrenceKind::Header,
-                    span.start,
-                )
-                .expect("merged interface header has one exact preallocated owner");
+            let owner = self.merged_header_owner(index, declaration, span.start);
             self.with_ticket_effects(owner, |pass| {
                 for &(source, target) in &identity_pairs {
                     pass.schedule_interface_relation(InterfaceRelationObligation {
@@ -1960,8 +2721,10 @@ fn interface_heritage_topology(
 ) -> InterfaceHeritageTopology {
     let mut topology = InterfaceHeritageTopology::default();
     for declaration in declarations {
-        let TypeDecl::Interface { fragments, .. } = declaration else {
-            continue;
+        let fragments = match declaration {
+            TypeDecl::Interface { fragments, .. } => fragments,
+            TypeDecl::Class { interfaces, .. } => interfaces,
+            _ => continue,
         };
         for fragment in fragments {
             let symbols = fragment
@@ -2152,9 +2915,6 @@ fn plan_heritage_group_application(
         ),
         TypeDecl::Alias {
             params, param_decl, ..
-        }
-        | TypeDecl::Class {
-            params, param_decl, ..
         } => {
             let required = param_decl
                 .map(|parameters| {
@@ -2167,9 +2927,32 @@ fn plan_heritage_group_application(
                 .unwrap_or(params.len());
             (params.len(), required)
         }
-        TypeDecl::UnsupportedClassInterface { params, .. } | TypeDecl::Resolved { params } => {
-            (params.len(), params.len())
+        TypeDecl::Class {
+            params,
+            param_decl,
+            recovery_defaults,
+            interfaces,
+            ..
+        } => {
+            let required = if interfaces.is_empty() {
+                param_decl
+                    .map(|parameters| {
+                        parameters
+                            .params
+                            .iter()
+                            .rposition(|parameter| parameter.default.is_none())
+                            .map_or(0, |index| index + 1)
+                    })
+                    .unwrap_or(params.len())
+            } else {
+                recovery_defaults
+                    .iter()
+                    .rposition(|default| *default == PublishedTypeParameterDefault::Absent)
+                    .map_or(0, |index| index + 1)
+            };
+            (params.len(), required)
         }
+        TypeDecl::Resolved { params } => (params.len(), params.len()),
         TypeDecl::Unavailable { .. } => (0, 0),
     };
     let actual_count = arguments.map_or(0, |arguments| arguments.params.len());
@@ -2234,9 +3017,9 @@ fn plan_heritage_group_application(
             plan
         }
         TypeDecl::Class { .. } => HeritageTypePlan::complete(BTreeSet::from([group])),
-        TypeDecl::UnsupportedClassInterface { .. }
-        | TypeDecl::Unavailable { .. }
-        | TypeDecl::Resolved { .. } => HeritageTypePlan::complete(BTreeSet::new()),
+        TypeDecl::Unavailable { .. } | TypeDecl::Resolved { .. } => {
+            HeritageTypePlan::complete(BTreeSet::new())
+        }
     }
 }
 
@@ -2359,6 +3142,149 @@ fn interface_sccs(
         .collect()
 }
 
+fn class_interface_heritage_sccs(
+    binder: &Binder,
+    declarations: &[TypeDecl<'_>],
+    topology: &InterfaceHeritageTopology,
+) -> Vec<Vec<usize>> {
+    let nodes: BTreeSet<TypeGroupId> = declarations
+        .iter()
+        .enumerate()
+        .filter(|(_, declaration)| matches!(declaration, TypeDecl::Class { .. }))
+        .map(|(index, _)| TypeGroupId(u32::try_from(index).expect("type group index fits u32")))
+        .collect();
+    let graph: BTreeMap<TypeGroupId, BTreeSet<TypeGroupId>> = nodes
+        .iter()
+        .copied()
+        .map(|group| {
+            let dependencies = match declarations.get(group.index()) {
+                Some(TypeDecl::Class { interfaces, .. }) => {
+                    let mut dependencies = interfaces
+                        .iter()
+                        .flat_map(|fragment| {
+                            fragment.extends.iter().filter_map(|heritage| {
+                                topology
+                                    .plan(fragment.declaration, heritage)
+                                    .terminals()
+                                    .cloned()
+                            })
+                        })
+                        .flatten()
+                        .filter(|dependency| nodes.contains(dependency))
+                        .collect::<BTreeSet<_>>();
+                    dependencies.extend(
+                        class_heritage_topology_terminals(binder, declarations, group)
+                            .into_iter()
+                            .flatten()
+                            .filter(|dependency| nodes.contains(dependency)),
+                    );
+                    dependencies
+                }
+                _ => BTreeSet::new(),
+            };
+            (group, dependencies)
+        })
+        .collect();
+    super::classes::construction::dependency_first_sccs(&graph)
+        .into_iter()
+        .map(|component| component.into_iter().map(TypeGroupId::index).collect())
+        .collect()
+}
+
+fn class_heritage_topology_terminals(
+    binder: &Binder,
+    declarations: &[TypeDecl<'_>],
+    group: TypeGroupId,
+) -> Option<BTreeSet<TypeGroupId>> {
+    let TypeDecl::Class {
+        scope,
+        class,
+        param_decl,
+        ..
+    } = declarations.get(group.index())?
+    else {
+        return None;
+    };
+    let heritage = class.super_class.as_ref()?;
+    let mut segments = Vec::new();
+    if !flatten_heritage_segments(heritage, &mut segments) {
+        return None;
+    }
+    let target = topology_segments_group(binder, *scope, &segments).ok()?;
+    let symbols = param_decl
+        .iter()
+        .flat_map(|parameters| parameters.params.iter())
+        .map(|parameter| {
+            (
+                parameter.name.name.to_string(),
+                HeritageTypePlan::absorber(IntersectionAbsorber::Unknown),
+            )
+        })
+        .collect();
+    plan_heritage_group_application(
+        binder,
+        declarations,
+        *scope,
+        target,
+        class.super_type_arguments.as_deref(),
+        &symbols,
+        &mut BTreeSet::new(),
+    )
+    .into_topology_plan()
+    .terminals()
+    .cloned()
+}
+
+fn class_interface_component_has_cycle(
+    declarations: &[TypeDecl<'_>],
+    component: &[usize],
+    topology: &InterfaceHeritageTopology,
+) -> bool {
+    if component.len() > 1 {
+        return true;
+    }
+    let Some(&index) = component.first() else {
+        return false;
+    };
+    let group = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
+    let Some(TypeDecl::Class { interfaces, .. }) = declarations.get(index) else {
+        return false;
+    };
+    interfaces.iter().any(|fragment| {
+        fragment.extends.iter().any(|heritage| {
+            topology
+                .plan(fragment.declaration, heritage)
+                .terminals()
+                .is_some_and(|terminals| terminals.contains(&group))
+        })
+    })
+}
+
+fn class_interface_component_has_soft_edge(
+    declarations: &[TypeDecl<'_>],
+    component: &[usize],
+    topology: &InterfaceHeritageTopology,
+) -> bool {
+    let members: BTreeSet<usize> = component.iter().copied().collect();
+    component.iter().copied().any(|index| {
+        let Some(TypeDecl::Class { interfaces, .. }) = declarations.get(index) else {
+            return false;
+        };
+        interfaces.iter().any(|fragment| {
+            fragment.extends.iter().any(|heritage| {
+                topology
+                    .plan(fragment.declaration, heritage)
+                    .terminals()
+                    .is_some_and(|terminals| {
+                        terminals
+                            .iter()
+                            .any(|target| members.contains(&target.index()))
+                    })
+            })
+        })
+    })
+}
+
 fn interface_component_has_cycle(
     declarations: &[TypeDecl<'_>],
     component: &[usize],
@@ -2475,49 +3401,30 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                             sort_interface_fragments(binder, group, fragments);
                         }
                         Some(TypeDecl::Class {
-                            declaration: class_declaration,
-                            class_id,
                             params,
-                            param_decl,
+                            recovery_names,
+                            recovery_defaults,
+                            param_slots,
+                            interfaces,
+                            header_fragments,
                             ..
                         }) => {
-                            let mut header_fragments = vec![header_fragment_binding(
-                                *class_declaration,
-                                *param_decl,
+                            fragment.params = recover_interface_fragment_params(
+                                param_slots,
                                 params,
-                            )];
-                            let interface_header = recover_header_fragment_binding(
-                                declaration,
+                                recovery_names,
+                                recovery_defaults,
                                 fragment.param_decl,
-                                &header_fragments,
                                 next_type_param,
                             );
-                            fragment.params = header_parameter_ids(&interface_header);
-                            header_fragments.push(interface_header);
-                            sort_header_fragment_bindings(binder, group, &mut header_fragments);
-                            let replacement = TypeDecl::UnsupportedClassInterface {
-                                declaration: *class_declaration,
-                                class_id: *class_id,
-                                params: params.clone(),
-                                header_fragments,
-                            };
-                            *decls.get_mut(group.index()).expect("type group slot") = replacement;
-                            if let Some(slot) = resolved.get_mut(group.index()) {
-                                *slot = None;
-                            }
-                        }
-                        Some(TypeDecl::UnsupportedClassInterface {
-                            header_fragments, ..
-                        }) => {
-                            let interface_header = recover_header_fragment_binding(
+                            header_fragments.push(header_fragment_binding(
                                 declaration,
                                 fragment.param_decl,
-                                header_fragments,
-                                next_type_param,
-                            );
-                            fragment.params = header_parameter_ids(&interface_header);
-                            header_fragments.push(interface_header);
+                                &fragment.params,
+                            ));
                             sort_header_fragment_bindings(binder, group, header_fragments);
+                            interfaces.push(fragment);
+                            sort_interface_fragments(binder, group, interfaces);
                         }
                         Some(TypeDecl::Resolved { .. }) => {
                             let reserved = interner.reserve_object();
@@ -2692,7 +3599,16 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                         if let (Some(group), Some(declaration)) = (group, declaration) {
                             ensure_type_group_slot(decls, group.index());
                             match decls.get(group.index()) {
-                                Some(TypeDecl::Interface { fragments, .. }) => {
+                                Some(TypeDecl::Interface {
+                                    recovery_params,
+                                    recovery_names,
+                                    recovery_defaults,
+                                    param_slots,
+                                    conflict_alternatives,
+                                    parameter_descriptors,
+                                    fragments,
+                                    ..
+                                }) => {
                                     let mut header_fragments = fragments
                                         .iter()
                                         .map(|fragment| {
@@ -2703,28 +3619,45 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                                             )
                                         })
                                         .collect::<Vec<_>>();
-                                    let class_header = recover_header_fragment_binding(
-                                        declaration,
+                                    let mut params = recovery_params.clone();
+                                    let mut recovery_names = recovery_names.clone();
+                                    let mut recovery_defaults = recovery_defaults.clone();
+                                    let mut param_slots = param_slots.clone();
+                                    let class_params = recover_interface_fragment_params(
+                                        &mut param_slots,
+                                        &mut params,
+                                        &mut recovery_names,
+                                        &mut recovery_defaults,
                                         class.type_parameters.as_deref(),
-                                        &header_fragments,
                                         next_type_param,
                                     );
-                                    let params = header_parameter_ids(&class_header);
+                                    let class_header = header_fragment_binding(
+                                        declaration,
+                                        class.type_parameters.as_deref(),
+                                        &class_params,
+                                    );
                                     header_fragments.push(class_header);
                                     sort_header_fragment_bindings(
                                         binder,
                                         group,
                                         &mut header_fragments,
                                     );
-                                    decls[group.index()] = TypeDecl::UnsupportedClassInterface {
+                                    decls[group.index()] = TypeDecl::Class {
                                         declaration,
+                                        scope,
                                         class_id,
                                         params,
+                                        class_params,
+                                        recovery_names,
+                                        recovery_defaults,
+                                        param_slots,
+                                        conflict_alternatives: conflict_alternatives.clone(),
+                                        parameter_descriptors: parameter_descriptors.clone(),
+                                        param_decl: class.type_parameters.as_deref(),
+                                        class,
+                                        interfaces: fragments.clone(),
                                         header_fragments,
                                     };
-                                    if let Some(slot) = resolved.get_mut(group.index()) {
-                                        *slot = None;
-                                    }
                                 }
                                 Some(TypeDecl::Resolved { .. }) => {
                                     // M16: allocate one id per declared type parameter (in source
@@ -2733,10 +3666,43 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                                         class.type_parameters.as_deref(),
                                         next_type_param,
                                     );
+                                    let param_slots = class
+                                        .type_parameters
+                                        .as_deref()
+                                        .into_iter()
+                                        .flat_map(|declaration| declaration.params.iter())
+                                        .enumerate()
+                                        .zip(params.iter().copied())
+                                        .map(|((index, parameter), id)| {
+                                            ((index, parameter.name.name.to_string()), id)
+                                        })
+                                        .collect();
+                                    let recovery_names = class
+                                        .type_parameters
+                                        .as_deref()
+                                        .into_iter()
+                                        .flat_map(|declaration| declaration.params.iter())
+                                        .map(|parameter| parameter.name.name.to_string())
+                                        .collect();
                                     decls[group.index()] = TypeDecl::Class {
                                         declaration,
                                         scope,
                                         class_id,
+                                        class_params: params.clone(),
+                                        recovery_defaults: vec![
+                                            PublishedTypeParameterDefault::Absent;
+                                            params.len()
+                                        ],
+                                        recovery_names,
+                                        param_slots,
+                                        conflict_alternatives: Vec::new(),
+                                        parameter_descriptors: None,
+                                        header_fragments: vec![header_fragment_binding(
+                                            declaration,
+                                            class.type_parameters.as_deref(),
+                                            &params,
+                                        )],
+                                        interfaces: Vec::new(),
                                         params,
                                         param_decl: class.type_parameters.as_deref(),
                                         class,
@@ -2811,6 +3777,30 @@ fn sort_interface_fragments(
             .position(|candidate| candidate.declaration == fragment.declaration)
             .unwrap_or(usize::MAX)
     });
+}
+
+fn interface_method_names(members: &[oxc_ast::ast::TSSignature<'_>]) -> BTreeSet<String> {
+    let mut seen = BTreeSet::new();
+    members
+        .iter()
+        .filter_map(|member| match member {
+            oxc_ast::ast::TSSignature::TSPropertySignature(signature) if !signature.computed => {
+                signature
+                    .key
+                    .static_name()
+                    .map(|name| (name.into_owned(), false))
+            }
+            oxc_ast::ast::TSSignature::TSMethodSignature(signature) if !signature.computed => {
+                signature
+                    .key
+                    .static_name()
+                    .map(|name| (name.into_owned(), true))
+            }
+            _ => None,
+        })
+        .filter_map(|(name, method)| seen.insert(name.clone()).then_some((name, method)))
+        .filter_map(|(name, method)| method.then_some(name))
+        .collect()
 }
 
 #[derive(Copy, Clone)]
@@ -3360,56 +4350,6 @@ fn header_fragment_binding(
             })
             .collect(),
     }
-}
-
-fn recover_header_fragment_binding(
-    declaration: crate::binder::declaration::DeclId,
-    param_decl: Option<&TSTypeParameterDeclaration<'_>>,
-    existing: &[HeaderFragmentBinding],
-    next_type_param: &mut u32,
-) -> HeaderFragmentBinding {
-    let mut slots = BTreeMap::new();
-    for fragment in existing {
-        for (index, parameter) in fragment.parameters.iter().enumerate() {
-            let key = (index, parameter.name.clone());
-            if let Some(previous) = slots.insert(key, parameter.id) {
-                assert_eq!(
-                    previous, parameter.id,
-                    "matching class/interface recovery slots share one identity"
-                );
-            }
-        }
-    }
-    let parameters = param_decl
-        .map(|declaration| declaration.params.as_slice())
-        .unwrap_or_default()
-        .iter()
-        .enumerate()
-        .map(|(index, parameter)| {
-            let name = parameter.name.name.to_string();
-            let id = slots
-                .get(&(index, name.clone()))
-                .copied()
-                .unwrap_or_else(|| {
-                    let id = TypeParamId(*next_type_param);
-                    *next_type_param += 1;
-                    id
-                });
-            NamedTypeParamBinding { name, id }
-        })
-        .collect();
-    HeaderFragmentBinding {
-        declaration,
-        parameters,
-    }
-}
-
-fn header_parameter_ids(binding: &HeaderFragmentBinding) -> Vec<TypeParamId> {
-    binding
-        .parameters
-        .iter()
-        .map(|parameter| parameter.id)
-        .collect()
 }
 
 fn sort_header_fragment_bindings(

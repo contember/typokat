@@ -692,3 +692,283 @@ class C {
     missing.sort();
     assert_eq!(missing, ["Missing", "missingDefault"]);
 }
+
+#[test]
+fn class_interface_groups_publish_one_composed_instance_in_both_orders() {
+    let src = "\
+class ClassFirst { own: number; }
+interface ClassFirst { added: string; recursive: ClassFirst; }
+const classFirst = new ClassFirst();
+const classFirstWrong: number = classFirst.added;
+const classFirstRecursiveWrong: number = classFirst.recursive.added;
+
+interface InterfaceFirst { added: string; recursive: InterfaceFirst; }
+class InterfaceFirst { own: number; }
+const interfaceFirst = new InterfaceFirst();
+const interfaceFirstWrong: number = interfaceFirst.added;
+const interfaceFirstRecursiveWrong: number = interfaceFirst.recursive.added;
+";
+    assert_eq!(
+        diags(src),
+        vec![
+            (4, "TK2322".to_string()),
+            (5, "TK2322".to_string()),
+            (10, "TK2322".to_string()),
+            (11, "TK2322".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn class_first_setter_interface_conflict_keeps_the_setter_type() {
+    let src = "\
+class Mixed {
+  set value(next: number) {}
+}
+interface Mixed {
+  value: string;
+}
+declare const mixed: Mixed;
+const value: number = mixed.value;
+const wrong: string = mixed.value;
+";
+    assert_eq!(
+        diags(src),
+        vec![(5, "TK2717".to_string()), (9, "TK2322".to_string())]
+    );
+}
+
+#[test]
+fn interface_first_setter_conflict_keeps_the_interface_type() {
+    let src = "\
+interface Mixed {
+  value: string;
+}
+class Mixed {
+  set value(next: number) {}
+}
+declare const mixed: Mixed;
+const value: string = mixed.value;
+const wrong: number = mixed.value;
+";
+    assert_eq!(
+        diags(src),
+        vec![
+            (2, "TK2300".to_string()),
+            (5, "TK2300".to_string()),
+            (9, "TK2322".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn paired_accessor_interface_merge_keeps_distinct_read_and_write_types() {
+    let src = "\
+class Mixed {
+  get value(): number { return 1; }
+  set value(next: string) {}
+}
+interface Mixed {
+  value: number;
+}
+declare const mixed: Mixed;
+const value: number = mixed.value;
+const wrong: string = mixed.value;
+mixed.value = \"next\";
+";
+    assert_eq!(diags(src), vec![(10, "TK2322".to_string())]);
+}
+
+#[test]
+fn interface_first_accessor_pair_reports_every_occurrence_and_keeps_interface_type() {
+    let src = "\
+interface Mixed {
+  value: string;
+}
+class Mixed {
+  get value(): number { return 1; }
+  set value(next: number) {}
+}
+declare const mixed: Mixed;
+const value: string = mixed.value;
+const wrong: number = mixed.value;
+";
+    assert_eq!(
+        diags(src),
+        vec![
+            (2, "TK2300".to_string()),
+            (5, "TK2300".to_string()),
+            (6, "TK2300".to_string()),
+            (10, "TK2322".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn class_first_static_accessor_namespace_collision_reports_every_occurrence() {
+    let src = "\
+class Mixed {
+  static get value(): number { return 1; }
+  static set value(next: number) {}
+}
+namespace Mixed {
+  export const value: string = \"namespace\";
+}
+const value: number = Mixed.value;
+const wrong: string = Mixed.value;
+";
+    assert_eq!(
+        diags(src),
+        vec![
+            (2, "TK2300".to_string()),
+            (3, "TK2300".to_string()),
+            (6, "TK2300".to_string()),
+            (9, "TK2322".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn namespace_first_static_accessor_collision_uses_block_scoped_diagnostics() {
+    let src = "\
+namespace Mixed {
+  export const value: string = \"namespace\";
+}
+class Mixed {
+  static get value(): number { return 1; }
+  static set value(next: number) {}
+}
+const value: string = Mixed.value;
+const wrong: number = Mixed.value;
+";
+    assert_eq!(
+        diags(src),
+        vec![
+            (1, "TK2434".to_string()),
+            (2, "TK2451".to_string()),
+            (5, "TK2451".to_string()),
+            (6, "TK2451".to_string()),
+            (9, "TK2322".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn class_interface_recovery_frame_keeps_fragment_local_binders() {
+    let src = "\
+class Mixed<T> { own: T; }
+interface Mixed<U> { added: U; }
+declare const mixed: Mixed<string, number>;
+const ownWrong: boolean = mixed.own;
+const addedWrong: boolean = mixed.added;
+";
+    assert_eq!(
+        diags(src),
+        vec![
+            (1, "TK2428".to_string()),
+            (2, "TK2428".to_string()),
+            (4, "TK2322".to_string()),
+            (5, "TK2322".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn class_owned_interface_heritage_follows_aliases_without_static_inheritance() {
+    let src = "\
+class Base { inherited: number = 1; static baseStatic: string = \"s\"; }
+type BaseAlias = Base;
+class Derived {}
+interface Derived extends BaseAlias {}
+const inherited: number = new Derived().inherited;
+const wrong: string = new Derived().inherited;
+Derived.baseStatic;
+";
+    assert_eq!(
+        diags(src),
+        vec![(6, "TK2322".to_string()), (7, "TK2339".to_string())]
+    );
+    let output = check_source(src);
+    assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+}
+
+#[test]
+fn class_owned_composite_heritage_validates_projected_class_members_after_publication() {
+    let src = "\
+class Base { value: string = \"base\"; static baseStatic: number = 1; }
+type Composite = Base & { other: boolean };
+class Derived { value: number = 1; }
+interface Derived extends Composite {}
+const valueWrong: string = new Derived().value;
+const otherWrong: number = new Derived().other;
+Derived.baseStatic;
+";
+    assert_eq!(
+        diags(src),
+        vec![
+            (4, "TK2430".to_string()),
+            (5, "TK2322".to_string()),
+            (6, "TK2322".to_string()),
+            (7, "TK2339".to_string()),
+        ]
+    );
+    let output = check_source(src);
+    assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+}
+
+#[test]
+fn class_interface_recovery_arity_uses_the_last_required_parameter() {
+    let src = "\
+class Mixed<T = string> {}
+interface Mixed<U> {}
+type TooShort = Mixed<number>;
+type Exact = Mixed<number, string>;
+";
+    assert_eq!(
+        diags(src),
+        vec![
+            (1, "TK2428".to_string()),
+            (2, "TK2428".to_string()),
+            (3, "TK2314".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn class_interface_composition_preserves_private_nominal_origin() {
+    let src = "\
+class Owned {
+  private identity: number;
+  own: number;
+}
+interface Owned { added: string; recursive: Owned; }
+class Foreign {
+  private identity: number;
+  own: number;
+  added: string;
+  recursive: Owned;
+}
+const owned = new Owned();
+const addedWrong: number = owned.added;
+const nominalWrong: Owned = new Foreign();
+";
+    assert_eq!(
+        diags(src),
+        vec![(13, "TK2322".to_string()), (14, "TK2322".to_string())]
+    );
+}
+
+#[test]
+fn class_bodies_see_the_prepublication_interface_composition() {
+    let src = "\
+class ComposedBody {
+  read(): string { return this.added; }
+}
+interface ComposedBody { added: string; }
+const value: string = new ComposedBody().read();
+";
+    let out = check_source(src);
+    assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+    assert!(out.diagnostics.is_empty(), "{:?}", diags(src));
+    assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+}

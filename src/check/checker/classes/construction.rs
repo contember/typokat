@@ -85,6 +85,17 @@ impl<Ticket> DraftClassTypeParameter<Ticket> {
         }
     }
 
+    pub(in crate::check::checker) fn merged(
+        id: TypeParamId,
+        constraint: Option<TypeId>,
+        default: ClassTypeParameterDefault<Ticket>,
+    ) -> Self {
+        Self {
+            application: ClassTypeParameter { id, default },
+            constraint,
+        }
+    }
+
     pub(in crate::check::checker) fn application(&self) -> &ClassTypeParameter<Ticket> {
         &self.application
     }
@@ -99,6 +110,15 @@ pub(in crate::check::checker) struct HeritageDependency<Ticket> {
     pub target: ClassId,
     pub identity_root: TypeId,
     pub owner: Ticket,
+}
+
+/// Stable source order for asymmetric recovery inside an invalid soft-heritage SCC.
+/// It deliberately does not depend on dependency scheduling or `ClassId` allocation.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(in crate::check::checker) struct ClassRecoveryOrder {
+    pub original_module: usize,
+    pub binding_start: u32,
+    pub declaration_ordinal: u32,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -146,12 +166,14 @@ pub(in crate::check::checker) enum PendingSurfaceObligation<Ticket> {
 #[derive(Clone, Debug)]
 pub(in crate::check::checker) struct ClassDraft<Ticket> {
     pub class: ClassId,
+    pub recovery_order: ClassRecoveryOrder,
     pub type_parameters: Vec<DraftClassTypeParameter<Ticket>>,
     pub instance_template: TypeId,
     pub static_template: TypeId,
     pub constructor_template: Option<TypeId>,
     pub ordinary_identity_roots: Vec<TypeId>,
     pub heritage: Option<HeritageDependency<Ticket>>,
+    pub instance_heritage: Vec<HeritageDependency<Ticket>>,
     pub initializer_origins: Vec<InitializerPoisonOrigin<Ticket>>,
     pub heritage_surface_origins: Vec<HeritageSurfacePoisonOrigin<Ticket>>,
     pub surface_origins: Vec<SurfacePoisonOrigin<Ticket>>,
@@ -208,6 +230,11 @@ impl<Ticket: Copy> ClassDraft<Ticket> {
         if let Some(heritage) = self.heritage {
             roots.push(heritage.identity_root);
         }
+        roots.extend(
+            self.instance_heritage
+                .iter()
+                .map(|heritage| heritage.identity_root),
+        );
         roots
     }
 }
@@ -221,6 +248,7 @@ pub(in crate::check::checker) struct ClassSurfaceLowerer<Ticket> {
 impl<Ticket: Copy> ClassSurfaceLowerer<Ticket> {
     pub(in crate::check::checker) fn new(
         class: ClassId,
+        recovery_order: ClassRecoveryOrder,
         type_parameters: Vec<DraftClassTypeParameter<Ticket>>,
         instance_template: TypeId,
         static_template: TypeId,
@@ -229,12 +257,14 @@ impl<Ticket: Copy> ClassSurfaceLowerer<Ticket> {
         ClassSurfaceLowerer {
             draft: ClassDraft {
                 class,
+                recovery_order,
                 type_parameters,
                 instance_template,
                 static_template,
                 constructor_template,
                 ordinary_identity_roots: Vec::new(),
                 heritage: None,
+                instance_heritage: Vec::new(),
                 initializer_origins: Vec::new(),
                 heritage_surface_origins: Vec::new(),
                 surface_origins: Vec::new(),
@@ -257,6 +287,13 @@ impl<Ticket: Copy> ClassSurfaceLowerer<Ticket> {
         }
         self.draft.heritage = Some(heritage);
         true
+    }
+
+    pub(in crate::check::checker) fn add_instance_heritage(
+        &mut self,
+        heritage: HeritageDependency<Ticket>,
+    ) {
+        self.draft.instance_heritage.push(heritage);
     }
 
     pub(in crate::check::checker) fn unsupported_initializer(&mut self, owner: Ticket) {
@@ -337,6 +374,12 @@ impl ClassGraph {
             if let Some(heritage) = draft.heritage {
                 edges.heritage.insert(heritage.target);
             }
+            edges.heritage.extend(
+                draft
+                    .instance_heritage
+                    .iter()
+                    .map(|heritage| heritage.target),
+            );
             if let Some(target) = edges
                 .ordinary
                 .union(&edges.heritage)
@@ -450,12 +493,15 @@ impl<Ticket: Copy> ClassConstruction<Ticket> {
         for classes in &components {
             let component: BTreeSet<ClassId> = classes.iter().copied().collect();
             let mut heritage_cycle = false;
-            for class in classes {
+            let construction_order = heritage_construction_order(classes, &self.drafts)?;
+            let recoverable_mixed_cycle =
+                has_recoverable_mixed_heritage_cycle(classes, &self.drafts)?;
+            for class in &construction_order {
                 let Some(draft) = self.drafts.get(class) else {
                     return Err(ClassPublicationError::InvalidFinalRegistry);
                 };
-                if let Some(heritage) = draft.heritage {
-                    if component.contains(&heritage.target) {
+                if let Some(heritage) = &draft.heritage {
+                    if component.contains(&heritage.target) && !recoverable_mixed_cycle {
                         heritage_cycle = true;
                         obligations.push(PendingSurfaceObligation::HeritageCycle {
                             derived: *class,
@@ -472,7 +518,7 @@ impl<Ticket: Copy> ClassConstruction<Ticket> {
                     let Some(draft) = self.drafts.get(class) else {
                         return Err(ClassPublicationError::InvalidFinalRegistry);
                     };
-                    if let Some(heritage) = draft.heritage {
+                    for heritage in draft.heritage.iter().chain(&draft.instance_heritage) {
                         if states.get(&heritage.target) == Some(&ClassConstructionState::Poisoned) {
                             poisoned_base = true;
                             obligations.push(PendingSurfaceObligation::PoisonedBase {
@@ -485,7 +531,7 @@ impl<Ticket: Copy> ClassConstruction<Ticket> {
                 }
             }
 
-            for class in classes {
+            for class in &construction_order {
                 let Some(draft) = self.drafts.get(class) else {
                     return Err(ClassPublicationError::InvalidFinalRegistry);
                 };
@@ -523,45 +569,86 @@ impl<Ticket: Copy> ClassConstruction<Ticket> {
                     states.insert(*class, ClassConstructionState::Poisoned);
                     poison.insert(*class, cause);
                 } else {
-                    let (instance_template, static_template, inherited_constructor) =
+                    let (mut instance_template, static_template, inherited_constructor) =
                         if let Some(heritage) = draft.heritage {
-                            let Some(base) = surfaces.get(&heritage.target).cloned() else {
-                                return Err(ClassPublicationError::InvalidFinalRegistry);
-                            };
-                            let Some(application) = interner
-                                .store()
-                                .class_instance_type(heritage.identity_root)
-                                .cloned()
-                            else {
-                                return Err(ClassPublicationError::InvalidFinalRegistry);
-                            };
-                            let substitutions: FxHashMap<TypeParamId, TypeId> = base
-                                .type_params()
-                                .iter()
-                                .copied()
-                                .zip(application.args.iter().copied())
-                                .collect();
-                            let base_instance =
-                                substitute(interner, base.instance_template(), &substitutions);
-                            let instance = merge_heritage_instance(
-                                interner,
-                                base_instance,
-                                draft.instance_template,
-                            )?;
-                            let base_static =
-                                substitute(interner, base.static_template(), &substitutions);
-                            let static_side = merge_heritage_instance(
-                                interner,
-                                base_static,
-                                draft.static_template,
-                            )?;
-                            let constructor = base.constructor_template().map(|constructor| {
-                                substitute(interner, constructor, &substitutions)
-                            });
-                            (instance, static_side, constructor)
+                            match surfaces.get(&heritage.target).cloned() {
+                                Some(base) => {
+                                    let Some(application) = interner
+                                        .store()
+                                        .class_instance_type(heritage.identity_root)
+                                        .cloned()
+                                    else {
+                                        return Err(ClassPublicationError::InvalidFinalRegistry);
+                                    };
+                                    let substitutions: FxHashMap<TypeParamId, TypeId> = base
+                                        .type_params()
+                                        .iter()
+                                        .copied()
+                                        .zip(application.args.iter().copied())
+                                        .collect();
+                                    let base_instance = substitute(
+                                        interner,
+                                        base.instance_template(),
+                                        &substitutions,
+                                    );
+                                    let instance = merge_heritage_instance(
+                                        interner,
+                                        base_instance,
+                                        draft.instance_template,
+                                    )?;
+                                    let base_static = substitute(
+                                        interner,
+                                        base.static_template(),
+                                        &substitutions,
+                                    );
+                                    let static_side = merge_heritage_instance(
+                                        interner,
+                                        base_static,
+                                        draft.static_template,
+                                    )?;
+                                    let constructor =
+                                        base.constructor_template().map(|constructor| {
+                                            substitute(interner, constructor, &substitutions)
+                                        });
+                                    (instance, static_side, constructor)
+                                }
+                                None if component.contains(&heritage.target) => {
+                                    (draft.instance_template, draft.static_template, None)
+                                }
+                                None => return Err(ClassPublicationError::InvalidFinalRegistry),
+                            }
                         } else {
                             (draft.instance_template, draft.static_template, None)
                         };
+                    for heritage in &draft.instance_heritage {
+                        let Some(base) = surfaces.get(&heritage.target).cloned() else {
+                            if component.contains(&heritage.target) {
+                                // Invalid interface-heritage SCCs recover in stable source
+                                // order: forward edges are cut, already published back-edges
+                                // retain their instance members. Static/constructor sides stay
+                                // outside this soft heritage channel.
+                                continue;
+                            }
+                            return Err(ClassPublicationError::InvalidFinalRegistry);
+                        };
+                        let Some(application) = interner
+                            .store()
+                            .class_instance_type(heritage.identity_root)
+                            .cloned()
+                        else {
+                            return Err(ClassPublicationError::InvalidFinalRegistry);
+                        };
+                        let substitutions: FxHashMap<TypeParamId, TypeId> = base
+                            .type_params()
+                            .iter()
+                            .copied()
+                            .zip(application.args.iter().copied())
+                            .collect();
+                        let base_instance =
+                            substitute(interner, base.instance_template(), &substitutions);
+                        instance_template =
+                            merge_heritage_instance(interner, base_instance, instance_template)?;
+                    }
                     if let Some(constructor) = inherited_constructor {
                         heritage_constructors.insert(*class, constructor);
                     }
@@ -804,6 +891,217 @@ fn walk_identity(
     }
 }
 
+fn has_recoverable_mixed_heritage_cycle<Ticket: Copy>(
+    classes: &[ClassId],
+    drafts: &BTreeMap<ClassId, ClassDraft<Ticket>>,
+) -> Result<bool, ClassPublicationError> {
+    let members: BTreeSet<ClassId> = classes.iter().copied().collect();
+    let combined: BTreeMap<ClassId, BTreeSet<ClassId>> = classes
+        .iter()
+        .copied()
+        .map(|class| {
+            let draft = drafts
+                .get(&class)
+                .ok_or(ClassPublicationError::InvalidFinalRegistry)?;
+            let dependencies = draft
+                .heritage
+                .iter()
+                .chain(&draft.instance_heritage)
+                .map(|heritage| heritage.target)
+                .filter(|target| members.contains(target))
+                .collect();
+            Ok((class, dependencies))
+        })
+        .collect::<Result<_, _>>()?;
+    let components = dependency_first_sccs(&combined);
+    let mut component_of = BTreeMap::new();
+    for (index, component) in components.iter().enumerate() {
+        for class in component {
+            component_of.insert(*class, index);
+        }
+    }
+    let mut recoverable = BTreeSet::new();
+    for (index, component) in components.iter().enumerate() {
+        let component_members: BTreeSet<ClassId> = component.iter().copied().collect();
+        let combined_cycle = component.len() > 1
+            || component.first().is_some_and(|class| {
+                combined
+                    .get(class)
+                    .is_some_and(|dependencies| dependencies.contains(class))
+            });
+        if !combined_cycle {
+            continue;
+        }
+        let mut has_hard = false;
+        let mut has_soft = false;
+        let hard_graph: BTreeMap<ClassId, BTreeSet<ClassId>> = component
+            .iter()
+            .copied()
+            .map(|class| {
+                let draft = drafts
+                    .get(&class)
+                    .ok_or(ClassPublicationError::InvalidFinalRegistry)?;
+                let hard = draft
+                    .heritage
+                    .iter()
+                    .map(|heritage| heritage.target)
+                    .filter(|target| component_members.contains(target))
+                    .collect::<BTreeSet<_>>();
+                has_hard |= !hard.is_empty();
+                has_soft |= draft
+                    .instance_heritage
+                    .iter()
+                    .any(|heritage| component_members.contains(&heritage.target));
+                Ok((class, hard))
+            })
+            .collect::<Result<_, _>>()?;
+        let hard_cycle = dependency_first_sccs(&hard_graph)
+            .into_iter()
+            .any(|hard_component| {
+                hard_component.len() > 1
+                    || hard_component.first().is_some_and(|class| {
+                        hard_graph
+                            .get(class)
+                            .is_some_and(|dependencies| dependencies.contains(class))
+                    })
+            });
+        if has_hard && has_soft && !hard_cycle {
+            recoverable.insert(index);
+        }
+    }
+
+    let mut internal_hard_edges = 0usize;
+    for class in classes {
+        let draft = drafts
+            .get(class)
+            .ok_or(ClassPublicationError::InvalidFinalRegistry)?;
+        if let Some(heritage) = &draft.heritage {
+            if !members.contains(&heritage.target) {
+                continue;
+            }
+            internal_hard_edges += 1;
+            let source_component = component_of.get(class).copied();
+            let target_component = component_of.get(&heritage.target).copied();
+            if source_component != target_component
+                || !source_component.is_some_and(|index| recoverable.contains(&index))
+            {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(internal_hard_edges > 0)
+}
+
+fn heritage_construction_order<Ticket: Copy>(
+    classes: &[ClassId],
+    drafts: &BTreeMap<ClassId, ClassDraft<Ticket>>,
+) -> Result<Vec<ClassId>, ClassPublicationError> {
+    let members: BTreeSet<ClassId> = classes.iter().copied().collect();
+    let heritage_graph: BTreeMap<ClassId, BTreeSet<ClassId>> = classes
+        .iter()
+        .copied()
+        .map(|class| {
+            let draft = drafts
+                .get(&class)
+                .ok_or(ClassPublicationError::InvalidFinalRegistry)?;
+            let dependencies = draft
+                .heritage
+                .iter()
+                .chain(&draft.instance_heritage)
+                .map(|heritage| heritage.target)
+                .filter(|target| members.contains(target))
+                .collect();
+            Ok((class, dependencies))
+        })
+        .collect::<Result<_, _>>()?;
+    let heritage_components = dependency_first_sccs(&heritage_graph);
+    let mut component_of = BTreeMap::new();
+    let mut cyclic_components = BTreeSet::new();
+    for (component_index, component) in heritage_components.iter().enumerate() {
+        for class in component {
+            component_of.insert(*class, component_index);
+        }
+        let cyclic = component.len() > 1
+            || component.first().is_some_and(|class| {
+                heritage_graph
+                    .get(class)
+                    .is_some_and(|dependencies| dependencies.contains(class))
+            });
+        if cyclic {
+            cyclic_components.insert(component_index);
+        }
+    }
+
+    let mut dependencies: BTreeMap<ClassId, BTreeSet<ClassId>> = BTreeMap::new();
+    let mut dependents: BTreeMap<ClassId, BTreeSet<ClassId>> = classes
+        .iter()
+        .copied()
+        .map(|class| (class, BTreeSet::new()))
+        .collect();
+    for class in classes {
+        let draft = drafts
+            .get(class)
+            .ok_or(ClassPublicationError::InvalidFinalRegistry)?;
+        let class_component = component_of.get(class).copied();
+        let retained = heritage_graph
+            .get(class)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|target| {
+                let target_component = component_of.get(target).copied();
+                if class_component != target_component
+                    || !class_component.is_some_and(|index| cyclic_components.contains(&index))
+                {
+                    return true;
+                }
+                drafts
+                    .get(target)
+                    .is_some_and(|base| base.recovery_order < draft.recovery_order)
+            })
+            .collect::<BTreeSet<_>>();
+        for target in &retained {
+            dependents.entry(*target).or_default().insert(*class);
+        }
+        dependencies.insert(*class, retained);
+    }
+
+    let mut ready: BTreeSet<(ClassRecoveryOrder, ClassId)> = dependencies
+        .iter()
+        .filter(|(_, dependencies)| dependencies.is_empty())
+        .map(|(class, _)| {
+            (
+                drafts
+                    .get(class)
+                    .expect("construction-order class has one draft")
+                    .recovery_order,
+                *class,
+            )
+        })
+        .collect();
+    let mut order = Vec::with_capacity(classes.len());
+    while let Some((recovery_order, class)) = ready.iter().next().copied() {
+        ready.remove(&(recovery_order, class));
+        order.push(class);
+        for dependent in dependents.get(&class).into_iter().flatten() {
+            let Some(pending) = dependencies.get_mut(dependent) else {
+                return Err(ClassPublicationError::InvalidFinalRegistry);
+            };
+            pending.remove(&class);
+            if pending.is_empty() {
+                let draft = drafts
+                    .get(dependent)
+                    .ok_or(ClassPublicationError::InvalidFinalRegistry)?;
+                ready.insert((draft.recovery_order, *dependent));
+            }
+        }
+    }
+    if order.len() != classes.len() {
+        return Err(ClassPublicationError::InvalidFinalRegistry);
+    }
+    Ok(order)
+}
+
 pub(in crate::check::checker) fn dependency_first_sccs<Node: Copy + Ord>(
     graph: &BTreeMap<Node, BTreeSet<Node>>,
 ) -> Vec<Vec<Node>> {
@@ -916,6 +1214,11 @@ mod tests {
     fn draft(class: u32, template: TypeId, binder: u32) -> ClassSurfaceLowerer<u32> {
         ClassSurfaceLowerer::new(
             ClassId(class),
+            ClassRecoveryOrder {
+                original_module: 0,
+                binding_start: class,
+                declaration_ordinal: class,
+            },
             vec![DraftClassTypeParameter::source(
                 TypeParamId(binder),
                 None,
@@ -1113,12 +1416,338 @@ mod tests {
     }
 
     #[test]
+    fn instance_heritage_composes_only_the_substituted_instance_surface() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let base_instance = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("inherited", wk.number)],
+            ..Default::default()
+        });
+        let base_static = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("baseStatic", wk.string)],
+            ..Default::default()
+        });
+        let base_constructor = interner.intern_function(FunctionType {
+            type_params: Vec::new(),
+            receiver: None,
+            params: Vec::new(),
+            ret: wk.number,
+        });
+        let own_instance = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("own", wk.boolean)],
+            ..Default::default()
+        });
+        let own_static = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("ownStatic", wk.boolean)],
+            ..Default::default()
+        });
+        let base_application = interner.intern_class_instance(ClassId(1), Vec::new());
+        let base = ClassSurfaceLowerer::new(
+            ClassId(1),
+            ClassRecoveryOrder {
+                original_module: 0,
+                binding_start: 1,
+                declaration_ordinal: 1,
+            },
+            Vec::new(),
+            base_instance,
+            base_static,
+            Some(base_constructor),
+        );
+        let mut derived = ClassSurfaceLowerer::new(
+            ClassId(2),
+            ClassRecoveryOrder {
+                original_module: 0,
+                binding_start: 2,
+                declaration_ordinal: 2,
+            },
+            Vec::new(),
+            own_instance,
+            own_static,
+            None,
+        );
+        derived.add_instance_heritage(HeritageDependency {
+            target: ClassId(1),
+            identity_root: base_application,
+            owner: 17,
+        });
+        let mut construction = ClassConstruction::default();
+        construction.register(derived.finish()).unwrap();
+        construction.register(base.finish()).unwrap();
+
+        let publication = construction.finish(&mut interner).unwrap();
+        assert_eq!(
+            publication.dependency_first_sccs,
+            [vec![ClassId(1)], vec![ClassId(2)]]
+        );
+        let DemandOutcome::Ready(derived) = publication.published.published_class(ClassId(2))
+        else {
+            panic!("instance heritage publishes its dependent class")
+        };
+        let instance = interner
+            .store()
+            .object_type(derived.instance_template())
+            .expect("composed instance object");
+        assert!(instance.property("inherited").is_some());
+        assert!(instance.property("own").is_some());
+        let static_side = interner
+            .store()
+            .object_type(derived.static_template())
+            .expect("direct static object");
+        assert!(static_side.property("ownStatic").is_some());
+        assert!(static_side.property("baseStatic").is_none());
+        assert_ne!(derived.constructor_template(), Some(base_constructor));
+        assert!(!publication.heritage_constructors.contains_key(&ClassId(2)));
+    }
+
+    #[test]
+    fn instance_heritage_cycle_recovers_by_explicit_source_order() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let first_instance = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("ownA", wk.number)],
+            ..Default::default()
+        });
+        let second_instance = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("ownB", wk.string)],
+            ..Default::default()
+        });
+        let first_static = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("staticA", wk.number)],
+            ..Default::default()
+        });
+        let second_static = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("staticB", wk.string)],
+            ..Default::default()
+        });
+        let first_application = interner.intern_class_instance(ClassId(1), Vec::new());
+        let second_application = interner.intern_class_instance(ClassId(2), Vec::new());
+        let mut first = ClassSurfaceLowerer::new(
+            ClassId(1),
+            ClassRecoveryOrder {
+                original_module: 0,
+                binding_start: 10,
+                declaration_ordinal: 1,
+            },
+            Vec::new(),
+            first_instance,
+            first_static,
+            None,
+        );
+        first.add_instance_heritage(HeritageDependency {
+            target: ClassId(2),
+            identity_root: second_application,
+            owner: 10,
+        });
+        let mut second = ClassSurfaceLowerer::new(
+            ClassId(2),
+            ClassRecoveryOrder {
+                original_module: 0,
+                binding_start: 20,
+                declaration_ordinal: 2,
+            },
+            Vec::new(),
+            second_instance,
+            second_static,
+            None,
+        );
+        second.add_instance_heritage(HeritageDependency {
+            target: ClassId(1),
+            identity_root: first_application,
+            owner: 20,
+        });
+        let mut construction = ClassConstruction::default();
+        construction.register(second.finish()).unwrap();
+        construction.register(first.finish()).unwrap();
+
+        let publication = construction.finish(&mut interner).unwrap();
+        let DemandOutcome::Ready(first) = publication.published.published_class(ClassId(1)) else {
+            panic!("first recovery class is published")
+        };
+        let DemandOutcome::Ready(second) = publication.published.published_class(ClassId(2)) else {
+            panic!("second recovery class is published")
+        };
+        let first_instance = interner
+            .store()
+            .object_type(first.instance_template())
+            .expect("first recovered instance object");
+        assert!(first_instance.property("ownA").is_some());
+        assert!(first_instance.property("ownB").is_none());
+        let second_instance = interner
+            .store()
+            .object_type(second.instance_template())
+            .expect("second recovered instance object");
+        assert!(second_instance.property("ownA").is_some());
+        assert!(second_instance.property("ownB").is_some());
+        let first_static = interner
+            .store()
+            .object_type(first.static_template())
+            .expect("first recovered static object");
+        assert!(first_static.property("staticB").is_none());
+        let second_static = interner
+            .store()
+            .object_type(second.static_template())
+            .expect("second recovered static object");
+        assert!(second_static.property("staticA").is_none());
+        assert!(publication.heritage_constructors.is_empty());
+        assert!(publication.obligations.iter().all(|obligation| !matches!(
+            obligation,
+            PendingSurfaceObligation::HeritageCycle { .. }
+                | PendingSurfaceObligation::PoisonedBase { .. }
+        )));
+    }
+
+    #[test]
+    fn mixed_hard_soft_cycle_recovers_without_downgrading_the_hard_edge() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let b_instance = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("b", wk.string)],
+            ..Default::default()
+        });
+        let a_instance = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("a", wk.number)],
+            ..Default::default()
+        });
+        let b_static = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("staticB", wk.string)],
+            ..Default::default()
+        });
+        let a_static = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("staticA", wk.number)],
+            ..Default::default()
+        });
+        let b_application = interner.intern_class_instance(ClassId(1), Vec::new());
+        let a_application = interner.intern_class_instance(ClassId(2), Vec::new());
+        let mut b = ClassSurfaceLowerer::new(
+            ClassId(1),
+            ClassRecoveryOrder {
+                original_module: 0,
+                binding_start: 10,
+                declaration_ordinal: 1,
+            },
+            Vec::new(),
+            b_instance,
+            b_static,
+            None,
+        );
+        b.add_instance_heritage(HeritageDependency {
+            target: ClassId(2),
+            identity_root: a_application,
+            owner: 10,
+        });
+        let mut a = ClassSurfaceLowerer::new(
+            ClassId(2),
+            ClassRecoveryOrder {
+                original_module: 0,
+                binding_start: 20,
+                declaration_ordinal: 2,
+            },
+            Vec::new(),
+            a_instance,
+            a_static,
+            None,
+        );
+        assert!(a.set_heritage(HeritageDependency {
+            target: ClassId(1),
+            identity_root: b_application,
+            owner: 20,
+        }));
+        let mut construction = ClassConstruction::default();
+        construction.register(a.finish()).unwrap();
+        construction.register(b.finish()).unwrap();
+
+        let publication = construction.finish(&mut interner).unwrap();
+        let DemandOutcome::Ready(b) = publication.published.published_class(ClassId(1)) else {
+            panic!("mixed-cycle B is published")
+        };
+        let DemandOutcome::Ready(a) = publication.published.published_class(ClassId(2)) else {
+            panic!("mixed-cycle A is published")
+        };
+        let b_instance = interner
+            .store()
+            .object_type(b.instance_template())
+            .expect("B instance object");
+        assert!(b_instance.property("b").is_some());
+        assert!(b_instance.property("a").is_none());
+        let a_instance = interner
+            .store()
+            .object_type(a.instance_template())
+            .expect("A instance object");
+        assert!(a_instance.property("a").is_some());
+        assert!(a_instance.property("b").is_some());
+        let b_static = interner
+            .store()
+            .object_type(b.static_template())
+            .expect("B static object");
+        assert!(b_static.property("staticA").is_none());
+        let a_static = interner
+            .store()
+            .object_type(a.static_template())
+            .expect("A static object");
+        assert!(a_static.property("staticB").is_some());
+        assert!(!publication.heritage_constructors.contains_key(&ClassId(1)));
+        assert!(publication.obligations.iter().all(|obligation| !matches!(
+            obligation,
+            PendingSurfaceObligation::HeritageCycle { .. }
+                | PendingSurfaceObligation::PoisonedBase { .. }
+        )));
+    }
+
+    #[test]
+    fn pure_hard_heritage_cycle_remains_poisoned() {
+        let mut interner = Interner::with_intrinsics();
+        let empty = interner.intern_object(ObjectType::default());
+        let first_application = interner.intern_class_instance(ClassId(1), Vec::new());
+        let second_application = interner.intern_class_instance(ClassId(2), Vec::new());
+        let mut first = draft(1, empty, 1);
+        assert!(first.set_heritage(HeritageDependency {
+            target: ClassId(2),
+            identity_root: second_application,
+            owner: 10,
+        }));
+        let mut second = draft(2, empty, 2);
+        assert!(second.set_heritage(HeritageDependency {
+            target: ClassId(1),
+            identity_root: first_application,
+            owner: 20,
+        }));
+        let mut construction = ClassConstruction::default();
+        construction.register(second.finish()).unwrap();
+        construction.register(first.finish()).unwrap();
+
+        let publication = construction.finish(&mut interner).unwrap();
+        for class in [ClassId(1), ClassId(2)] {
+            assert!(matches!(
+                publication.published.require(class),
+                DemandOutcome::Exhausted(Exhaustion::ClassHeritagePoison { .. })
+            ));
+        }
+        assert_eq!(
+            publication
+                .obligations
+                .iter()
+                .filter(|obligation| matches!(
+                    obligation,
+                    PendingSurfaceObligation::HeritageCycle { .. }
+                ))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn source_defaults_remain_unsupported_declaration_obligations() {
         let mut interner = Interner::with_intrinsics();
         let empty = interner.intern_object(ObjectType::default());
         let class = ClassId(1);
         let lowerer = ClassSurfaceLowerer::new(
             class,
+            ClassRecoveryOrder {
+                original_module: 0,
+                binding_start: 1,
+                declaration_ordinal: 1,
+            },
             vec![DraftClassTypeParameter::source(
                 TypeParamId(4),
                 None,

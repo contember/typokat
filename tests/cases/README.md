@@ -80,6 +80,7 @@ EOF spans.
 | `TK2345` | Argument type not assignable to parameter type |
 | `TK2349` | Expression is not callable |
 | `TK2445` | Property is protected (accessed outside the class and its subclasses) |
+| `TK2451` | Cannot redeclare a block-scoped variable |
 | `TK2456` | Type alias circularly references itself |
 | `TK2416` | Property in derived type not assignable to the same property in base type (override compatibility) |
 | `TK2511` | Cannot create an instance of an abstract class |
@@ -396,10 +397,11 @@ pins the namespace-order diagnostic, and requires receiver-use errors so an `any
 cannot pass it. Exact `TS2567` ownership remains a WU0A/direct-test gate.
 Direct merged-class identity/publication remains a WU0A test because marker fixtures observe only
 downstream surfaces and diagnostics.
-The staged WU4 addendum adds five disabled focused fixtures: type-only interface+namespace pairs in
+The WU4 addendum adds seven focused fixtures: type-only interface+namespace pairs in
 both orders; ordinary, overloaded, reverse-order, and ambient function+namespace publication;
 ordinary and ambient class+namespace publication in both orders; and the standalone-namespace
-boundary plus inferred function+namespace publication boundaries. Function/class augmentation must
+boundary, inferred function+namespace publication boundaries, namespace member validation, and the
+explicit namespace-payload incomplete ledger. Function/class augmentation must
 retain callable/construct, static/tag, and nested-type surfaces, with `TK2434` only on ordinary
 reverse-order pairs. The standalone namespace retains only
 `decl/module-declaration/self` for its unclaimed value surface while exported interface/type members
@@ -407,8 +409,13 @@ remain usable; it makes no standalone namespace value-receiver claim.
 Forward-demand and inferred-return cycles remain precise backlog-76 incomplete records, while
 post-body, annotated-recursive, and declared-overload surfaces require non-permissive witnesses.
 
-The full directory remains disabled while WU4/WU5-owned fixtures are red. The conformance harness
-instead gates this 19-file WU3 slice explicitly through `ENABLED_FIXTURES`:
+The full directory remains disabled while WU5-owned fixtures are red. The conformance harness
+instead gates a 36-file WU3/WU4 slice explicitly through `ENABLED_FIXTURES`. WU4 adds
+`class_interface_conflicts.ts`, `class_interface_namespace_generics.ts`,
+`class_interface_namespace_nominal.ts`, `class_interface_namespace_order_matrix.ts`,
+`class_interface_namespace_orders.ts`, `class_interface_recursion.ts`, `degraded_chimera.ts`,
+`interface_var_constructors.ts`, `keep_pairs_forward.ts`, `keep_pairs_reverse.ts`, and the five
+`wu4_*` focused fixtures above. The earlier WU3 slice remains:
 `interface_conflicts.ts`, `interface_members.ts`, `interface_recursion.ts`, `namespace_forms.ts`,
 `wu2_annotation_recovery.ts`, `wu2_checker_local_qualified_roots.ts`,
 `wu2_interface_traversal.ts`, `wu2_qualified_contexts.ts`,
@@ -450,7 +457,7 @@ leaves whose classification belongs to WU2 but whose lowering closes only with W
 retains their earlier diagnostics and incomplete records unchanged.
 
 Three mixed WU2/WU3 fixtures remain outside this gate because their namespace surfaces cross into
-WU4/WU5 value/static or ambient publication: `qualified_diagnostics.ts`,
+WU5 ambient/global or broader qualified value/static publication: `qualified_diagnostics.ts`,
 `wu2_ambient_export_alias_list.ts`, and `wu2_topology_slot_edges.ts`. The selected type-only WU3
 fixtures cover qualified generic-leaf arity/constraint checks and nested generic lowering,
 qualified leaves through exported type-alias chains, and qualified forward-reopening leaf lowering.

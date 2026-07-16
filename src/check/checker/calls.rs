@@ -10,6 +10,7 @@ use super::decls::alloc_type_param_ids;
 use super::decls::value_decl_id;
 use super::eval::{contains_deferred_argument, contains_deferred_keyof};
 use super::expr::contextual_literal_target;
+use super::function_groups::FunctionGroupDemand;
 use crate::binder::declaration::ValueStorageId;
 use crate::binder::scope::ScopeId;
 use crate::check::infer;
@@ -507,46 +508,77 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         while let Expression::ParenthesizedExpression(paren) = callee {
             callee = &paren.expression;
         }
-        let (inferred_callee, call_receiver) = match callee {
-            Expression::StaticMemberExpression(member) => {
-                let inferred_receiver = self.infer_expr(scope, &member.object);
-                let inferred_callee = match self.demand_class_value_surface(scope, &member.object) {
-                    Some(DemandOutcome::Exhausted(exhaustion)) => {
-                        self.own_type_demand(
-                            DemandOutcome::Exhausted(exhaustion),
-                            Span::from_oxc(member.property.span),
-                        );
-                        None
-                    }
-                    Some(DemandOutcome::Ready(())) | None => {
-                        inferred_receiver.and_then(|(receiver, _)| {
-                            self.infer_member_access_from_base(receiver, member)
-                        })
-                    }
-                };
-                (inferred_callee, inferred_receiver)
-            }
-            Expression::ComputedMemberExpression(member) => {
-                let inferred_receiver = self.infer_expr(scope, &member.object);
-                let inferred_callee = match self.demand_class_value_surface(scope, &member.object) {
-                    Some(DemandOutcome::Exhausted(exhaustion)) => {
-                        self.infer_expr(scope, &member.expression);
-                        self.own_type_demand(
-                            DemandOutcome::Exhausted(exhaustion),
-                            Span::from_oxc(member.span),
-                        );
-                        None
-                    }
-                    Some(DemandOutcome::Ready(())) | None => {
-                        inferred_receiver.and_then(|(receiver, _)| {
-                            self.infer_element_access_from_base(scope, receiver, member)
-                        })
-                    }
-                };
-                (inferred_callee, inferred_receiver)
-            }
-            _ => (self.infer_expr(scope, &call.callee), None),
+        let direct_function_group = match callee {
+            Expression::Identifier(identifier) => self
+                .binder
+                .resolve_value(scope, identifier.name.as_str())
+                .map(|symbol| self.function_groups.demand(symbol))
+                .filter(|demand| !matches!(demand, FunctionGroupDemand::NotGroup)),
+            _ => None,
         };
+        let mut function_group_blocked = false;
+        let (inferred_callee, call_receiver) =
+            match direct_function_group {
+                Some(FunctionGroupDemand::Ready(ty) | FunctionGroupDemand::PrivateSelf(ty)) => {
+                    (Some((ty, Span::from_oxc(callee.span()))), None)
+                }
+                Some(FunctionGroupDemand::Pending { report_use }) => {
+                    if report_use {
+                        self.record_incomplete(
+                            "expr-infer/call-expression/function-group-pending",
+                            call_span,
+                            "merged function callable waits for body return inference",
+                        );
+                    }
+                    function_group_blocked = true;
+                    (None, None)
+                }
+                Some(FunctionGroupDemand::Unavailable) => {
+                    function_group_blocked = true;
+                    (None, None)
+                }
+                Some(FunctionGroupDemand::NotGroup) => unreachable!(),
+                None => match callee {
+                    Expression::StaticMemberExpression(member) => {
+                        let inferred_receiver = self.infer_expr(scope, &member.object);
+                        let inferred_callee =
+                            match self.demand_class_value_surface(scope, &member.object) {
+                                Some(DemandOutcome::Exhausted(exhaustion)) => {
+                                    self.own_type_demand(
+                                        DemandOutcome::Exhausted(exhaustion),
+                                        Span::from_oxc(member.property.span),
+                                    );
+                                    None
+                                }
+                                Some(DemandOutcome::Ready(())) | None => inferred_receiver
+                                    .and_then(|(receiver, _)| {
+                                        self.infer_member_access_from_base(scope, receiver, member)
+                                    }),
+                            };
+                        (inferred_callee, inferred_receiver)
+                    }
+                    Expression::ComputedMemberExpression(member) => {
+                        let inferred_receiver = self.infer_expr(scope, &member.object);
+                        let inferred_callee =
+                            match self.demand_class_value_surface(scope, &member.object) {
+                                Some(DemandOutcome::Exhausted(exhaustion)) => {
+                                    self.infer_expr(scope, &member.expression);
+                                    self.own_type_demand(
+                                        DemandOutcome::Exhausted(exhaustion),
+                                        Span::from_oxc(member.span),
+                                    );
+                                    None
+                                }
+                                Some(DemandOutcome::Ready(())) | None => inferred_receiver
+                                    .and_then(|(receiver, _)| {
+                                        self.infer_element_access_from_base(scope, receiver, member)
+                                    }),
+                            };
+                        (inferred_callee, inferred_receiver)
+                    }
+                    _ => (self.infer_expr(scope, &call.callee), None),
+                },
+            };
 
         // Infer arguments up front and build `arg_fresh` in the same loop so M24
         // clamp provenance stays index-aligned with skipped out-of-subset args.
@@ -569,12 +601,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
 
         let Some((callee_ty, _)) = inferred_callee else {
+            if function_group_blocked {
+                return None;
+            }
             return Some((wk.error, call_span));
         };
         let outcome = self.evaluate_type(callee_ty);
         let callee_ty = self.own_type_demand(outcome, call_span)?;
         let signatures = self.callable_signatures(callee_ty);
         if signatures.is_empty() {
+            if self.provably_non_callable(callee_ty) {
+                self.emit_diagnostic(Diagnostic::expression_is_not_callable(call_span));
+            }
             return Some((wk.error, call_span));
         }
 
@@ -631,6 +669,26 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 object.call_signatures.clone()
             }
             _ => Vec::new(),
+        }
+    }
+
+    /// Keep TK2349 on types whose represented shape is conclusive. Deferred and
+    /// structural types may have dropped unsupported signatures, so they stay silent.
+    fn provably_non_callable(&self, callee_ty: TypeId) -> bool {
+        match self.interner.store().tag(callee_ty) {
+            TypeTag::Literal => true,
+            TypeTag::Intrinsic => matches!(
+                self.interner.store().intrinsic_kind(callee_ty),
+                Some(
+                    IntrinsicKind::Boolean
+                        | IntrinsicKind::Number
+                        | IntrinsicKind::String
+                        | IntrinsicKind::Null
+                        | IntrinsicKind::Undefined
+                        | IntrinsicKind::Void
+                )
+            ),
+            _ => false,
         }
     }
 
@@ -1654,7 +1712,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // preserve the previous no-diagnostic/error-type behavior.
         let Some((decl_id, info)) = class_resolved else {
             if let Some((callee_ty, _)) = inferred_callee {
-                let signatures = self.construct_signatures(callee_ty);
+                let signatures = match self.construct_signatures(callee_ty) {
+                    DemandOutcome::Ready(signatures) => signatures,
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        self.own_type_demand(DemandOutcome::Exhausted(exhaustion), new_span);
+                        return None;
+                    }
+                };
                 if !signatures.is_empty() {
                     match self.select_construct_candidate(
                         scope,
@@ -1895,15 +1959,20 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     }
 
     /// Construct signatures after apparent-type resolution.
-    fn construct_signatures(&mut self, callee_ty: TypeId) -> Vec<TypeId> {
-        let callee_ty = self.apparent_type(callee_ty);
+    fn construct_signatures(&mut self, callee_ty: TypeId) -> DemandOutcome<Vec<TypeId>> {
+        let callee_ty = match self.demand_structural_apparent_type(callee_ty) {
+            DemandOutcome::Ready(callee_ty) => callee_ty,
+            DemandOutcome::Exhausted(exhaustion) => {
+                return DemandOutcome::Exhausted(exhaustion);
+            }
+        };
         if self.interner.store().tag(callee_ty) != TypeTag::Object {
-            return Vec::new();
+            return DemandOutcome::Ready(Vec::new());
         }
         let Some(object) = self.interner.store().object_type(callee_ty) else {
-            return Vec::new();
+            return DemandOutcome::Ready(Vec::new());
         };
-        object.construct_signatures.clone()
+        DemandOutcome::Ready(object.construct_signatures.clone())
     }
 
     fn select_construct_candidate(

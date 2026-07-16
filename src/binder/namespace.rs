@@ -1,10 +1,15 @@
-//! Dormant namespace, merge, global-augmentation, and UMD context metadata.
+//! Namespace, merge, global-augmentation, and UMD context metadata.
 //!
-//! WU1b deliberately inventories source topology without binding namespace/global
-//! bodies into production scopes or allocating checker storage.
+//! The base inventory remains independent of checker storage. Admitted class/function
+//! augmentations selectively reuse the ordinary value binder for exported members.
 
-use crate::binder::bind::{declare_type, BindState, Binder};
-use crate::binder::declaration::{DeclId, DeclarationKind, TypeFragmentKind, TypeGroupId};
+use crate::binder::bind::{
+    bind_class_declaration, bind_declarator, bind_function_declaration, declare_type, BindState,
+    Binder,
+};
+use crate::binder::declaration::{
+    DeclId, DeclarationKind, DeclarationSite, TypeFragmentKind, TypeGroupId, ValueStorageId,
+};
 use crate::binder::scope::{Scope, ScopeId, ScopeKind};
 use crate::binder::symbol::{Symbol, SymbolId};
 use crate::span::Span;
@@ -670,6 +675,8 @@ pub enum PlacementIssueKind {
 pub struct PlacementIssue {
     pub kind: PlacementIssueKind,
     pub owner: DeclId,
+    pub source: SourceUnitKey,
+    pub original_module: OriginalModuleOrdinal,
     pub span: Span,
 }
 
@@ -695,6 +702,45 @@ pub struct MergeRecord {
     pub declarations: Vec<MergeParticipant>,
     pub classification: MergeClassification,
     pub placement_issues: Vec<PlacementIssue>,
+}
+
+/// Whole-group decision consumed by the class/function namespace lanes.
+///
+/// The decision is intentionally derived from the aggregate classification, never
+/// from one apparently legal pair. The exact enum/function/namespace chimera keeps
+/// its callable recovery separate from admitted publication.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) enum NamespaceValueAttachmentDisposition {
+    AdmittedFunction,
+    AdmittedClass,
+    DeferredFunctionBacklog42,
+    TypeContainerOnly,
+    Rejected(MergeDisposition),
+}
+
+/// One exported namespace value declaration exposed to an owner draft or typed recovery.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) struct AttachedNamespaceValueMember<'a> {
+    pub(crate) member: NamespaceMemberId,
+    pub(crate) declaration: DeclId,
+    pub(crate) name: &'a str,
+    pub(crate) source: SourceUnitKey,
+    pub(crate) scope: ScopeId,
+    pub(crate) site: DeclarationSite,
+    pub(crate) value_storage: Option<ValueStorageId>,
+    pub(crate) symbol: Option<SymbolId>,
+    pub(crate) kind: MergeDeclarationKind,
+}
+
+/// Frozen binder view of all namespace fragments attached to one same-name group.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct NamespaceValueAttachment<'a> {
+    pub(crate) owner: DeclarationOwner,
+    pub(crate) name: &'a str,
+    pub(crate) symbol: SymbolId,
+    pub(crate) disposition: NamespaceValueAttachmentDisposition,
+    pub(crate) fragments: Vec<&'a NamespaceFragment>,
+    pub(crate) members: Vec<AttachedNamespaceValueMember<'a>>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -773,6 +819,24 @@ impl NamespaceTable {
 
     pub fn merges(&self) -> impl Iterator<Item = &MergeRecord> {
         self.merges.iter()
+    }
+
+    /// Exact source-ordered placement outcomes ready for checker emission.
+    pub(crate) fn placement_issues(&self) -> impl Iterator<Item = &PlacementIssue> {
+        let mut issues = self
+            .merges
+            .iter()
+            .flat_map(|record| record.placement_issues.iter())
+            .collect::<Vec<_>>();
+        issues.sort_by_key(|issue| {
+            (
+                issue.source,
+                issue.original_module,
+                issue.span.start,
+                issue.owner.0,
+            )
+        });
+        issues.into_iter()
     }
 
     pub fn source_units(&self) -> impl Iterator<Item = &SourceUnitRecord> {
@@ -1024,6 +1088,81 @@ struct QualifiedSymbolView {
 }
 
 impl Binder {
+    /// Return the frozen namespace-side input for one lexical value owner.
+    /// Only admitted owners and the exact backlog-42 callable recovery expose members.
+    pub(crate) fn namespace_value_attachment(
+        &self,
+        scope: ScopeId,
+        name: &str,
+    ) -> Option<NamespaceValueAttachment<'_>> {
+        let record = self.namespaces.merges.iter().find(|record| {
+            record.name == name && self.declaration_owner_scope(record.owner) == Some(scope)
+        })?;
+        let disposition = namespace_value_attachment_disposition(record)?;
+        let namespace = record.declarations.iter().find_map(|participant| {
+            participant
+                .namespace_fragment
+                .and_then(|fragment| self.namespaces.fragment(fragment))
+                .map(|fragment| fragment.namespace)
+        })?;
+        let symbol = self.namespaces.get(namespace)?.symbol;
+        let exposes_members = matches!(
+            disposition,
+            NamespaceValueAttachmentDisposition::AdmittedFunction
+                | NamespaceValueAttachmentDisposition::AdmittedClass
+                | NamespaceValueAttachmentDisposition::DeferredFunctionBacklog42
+        );
+        let fragments = if exposes_members {
+            record
+                .declarations
+                .iter()
+                .filter_map(|participant| participant.namespace_fragment)
+                .filter_map(|fragment| self.namespaces.fragment(fragment))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let mut members = fragments
+            .iter()
+            .flat_map(|fragment| fragment.members.iter())
+            .filter_map(|member| self.namespaces.member(*member))
+            .filter(|member| {
+                member.spaces.value && !matches!(member.publication, NamespacePublication::Private)
+            })
+            .filter_map(|member| {
+                let declaration = member.declaration?;
+                let lexical = self.declarations.get(declaration)?;
+                let name = member.name.as_deref()?;
+                Some(AttachedNamespaceValueMember {
+                    member: member.id,
+                    declaration,
+                    name,
+                    source: member.source,
+                    scope: lexical.site.scope?,
+                    site: lexical.site,
+                    value_storage: lexical.value_storage,
+                    symbol: member.symbol,
+                    kind: member.kind,
+                })
+            })
+            .collect::<Vec<_>>();
+        members.sort_by_key(|member| {
+            (
+                member.source,
+                member.site.declaration_span.start,
+                member.declaration.0,
+            )
+        });
+        Some(NamespaceValueAttachment {
+            owner: record.owner,
+            name: &record.name,
+            symbol,
+            disposition,
+            fragments,
+            members,
+        })
+    }
+
     pub(crate) fn local_ambient_export_alias_failures(
         &self,
     ) -> Vec<LocalAmbientExportAliasFailure> {
@@ -1240,6 +1379,22 @@ impl Binder {
         })
     }
 
+    fn declaration_owner_scope(&self, owner: DeclarationOwner) -> Option<ScopeId> {
+        match owner {
+            DeclarationOwner::Lexical(scope) => Some(scope),
+            DeclarationOwner::NamespacePublic(namespace) => self
+                .namespaces
+                .get(namespace)
+                .map(|namespace| namespace.public_scope),
+            DeclarationOwner::NamespacePrivate(fragment) => self
+                .namespaces
+                .fragment(fragment)
+                .map(|fragment| fragment.private_scope),
+            DeclarationOwner::CompilationGlobal => Some(self.compilation_global),
+            DeclarationOwner::DeferredAmbientModule(_) => None,
+        }
+    }
+
     fn root_merge_record(&self, scope: ScopeId, name: &str) -> Option<&MergeRecord> {
         self.namespaces
             .merges
@@ -1375,6 +1530,66 @@ fn join_instance_state(
             NamespaceInstanceState::Instantiated
         }
         _ => NamespaceInstanceState::NonInstantiated,
+    }
+}
+
+fn namespace_value_attachment_disposition(
+    record: &MergeRecord,
+) -> Option<NamespaceValueAttachmentDisposition> {
+    let has_namespace = record
+        .declarations
+        .iter()
+        .any(|participant| participant.kind == MergeDeclarationKind::Namespace);
+    if !has_namespace {
+        return None;
+    }
+    let has_function = record
+        .classification
+        .compositions
+        .iter()
+        .any(|composition| {
+            composition.kind == MergeCompositionKind::FunctionNamespace
+                && composition.disposition == MergeDisposition::Admitted
+        });
+    let has_enum = record
+        .declarations
+        .iter()
+        .any(|participant| participant.kind == MergeDeclarationKind::Enum);
+    let only_enum_function_namespace = record.declarations.iter().all(|participant| {
+        matches!(
+            participant.kind,
+            MergeDeclarationKind::Enum
+                | MergeDeclarationKind::Function
+                | MergeDeclarationKind::Namespace
+        )
+    });
+    if record.classification.disposition == MergeDisposition::DeferredBacklog42
+        && has_function
+        && has_enum
+        && only_enum_function_namespace
+    {
+        return Some(NamespaceValueAttachmentDisposition::DeferredFunctionBacklog42);
+    }
+    if record.classification.disposition != MergeDisposition::Admitted {
+        return Some(NamespaceValueAttachmentDisposition::Rejected(
+            record.classification.disposition,
+        ));
+    }
+    let has_class = record
+        .classification
+        .compositions
+        .iter()
+        .any(|composition| {
+            composition.kind == MergeCompositionKind::ClassNamespace
+                && composition.disposition == MergeDisposition::Admitted
+        });
+    match (has_function, has_class) {
+        (true, false) => Some(NamespaceValueAttachmentDisposition::AdmittedFunction),
+        (false, true) => Some(NamespaceValueAttachmentDisposition::AdmittedClass),
+        (false, false) => Some(NamespaceValueAttachmentDisposition::TypeContainerOnly),
+        (true, true) => Some(NamespaceValueAttachmentDisposition::Rejected(
+            MergeDisposition::RejectedRedeclaration,
+        )),
     }
 }
 
@@ -1583,13 +1798,13 @@ fn classify_group(declarations: &[MergeParticipant]) -> MergeClassification {
 }
 
 fn placement_issues(declarations: &[MergeParticipant]) -> Vec<PlacementIssue> {
-    let first_value = declarations.iter().find(|item| {
+    let last_value = declarations.iter().rfind(|item| {
         matches!(
             item.kind,
             MergeDeclarationKind::Function | MergeDeclarationKind::Class
         ) && !item.ambient
     });
-    let Some(first_value) = first_value else {
+    let Some(last_value) = last_value else {
         return Vec::new();
     };
     declarations
@@ -1598,11 +1813,13 @@ fn placement_issues(declarations: &[MergeParticipant]) -> Vec<PlacementIssue> {
             item.kind == MergeDeclarationKind::Namespace
                 && !item.ambient
                 && item.namespace_instance == Some(NamespaceInstanceState::Instantiated)
-                && (item.source, item.span.start) < (first_value.source, first_value.span.start)
+                && (item.source, item.span.start) < (last_value.source, last_value.span.start)
         })
         .map(|item| PlacementIssue {
             kind: PlacementIssueKind::FutureTk2434,
             owner: item.declaration,
+            source: item.source,
+            original_module: item.original_module,
             span: item.binding_span,
         })
         .collect()
@@ -1682,7 +1899,8 @@ impl WalkContext {
     }
 }
 
-/// Run the WU1b metadata inventory after ordinary binding and prove storage dormancy.
+/// Bind namespace topology after ordinary declarations, then activate only value
+/// members that can attach to an admitted class/function draft.
 pub(crate) fn bind_namespace_metadata(
     state: &mut BindState,
     module: ScopeId,
@@ -1690,7 +1908,6 @@ pub(crate) fn bind_namespace_metadata(
     unit: CompilationUnit,
     compilation_global: ScopeId,
 ) {
-    let storage_snapshot = state.next_value_storage;
     state.namespaces.source_units.push(SourceUnitRecord {
         source: unit.source,
         original_module: unit.original_module,
@@ -1712,10 +1929,257 @@ pub(crate) fn bind_namespace_metadata(
     walk_statements(state, &program.body, context, unit, compilation_global);
     resolve_local_ambient_export_alias_targets(state);
     state.namespaces.classify();
-    assert_eq!(
-        storage_snapshot, state.next_value_storage,
-        "namespace metadata must not allocate checker storage"
-    );
+    bind_namespace_value_attachment_members(state, program);
+}
+
+#[derive(Clone)]
+struct NamespaceValueBindingTarget {
+    member: NamespaceMemberId,
+    declaration: DeclId,
+    name: String,
+    scope: ScopeId,
+    kind: MergeDeclarationKind,
+    public_symbol: Option<SymbolId>,
+}
+
+fn bind_namespace_value_attachment_members(state: &mut BindState, program: &Program<'_>) {
+    let mut targets = Vec::new();
+    for record in &state.namespaces.merges {
+        if !matches!(
+            namespace_value_attachment_disposition(record),
+            Some(
+                NamespaceValueAttachmentDisposition::AdmittedFunction
+                    | NamespaceValueAttachmentDisposition::AdmittedClass
+                    | NamespaceValueAttachmentDisposition::DeferredFunctionBacklog42
+            )
+        ) || matches!(
+            record.owner,
+            DeclarationOwner::CompilationGlobal | DeclarationOwner::DeferredAmbientModule(_)
+        ) {
+            continue;
+        }
+        for fragment in record
+            .declarations
+            .iter()
+            .filter_map(|participant| participant.namespace_fragment)
+            .filter_map(|fragment| state.namespaces.fragment(fragment))
+        {
+            for member in fragment
+                .members
+                .iter()
+                .filter_map(|member| state.namespaces.member(*member))
+                .filter(|member| {
+                    member.spaces.value
+                        && matches!(
+                            member.kind,
+                            MergeDeclarationKind::Variable
+                                | MergeDeclarationKind::Function
+                                | MergeDeclarationKind::Class
+                        )
+                })
+            {
+                let (Some(declaration), Some(name)) = (member.declaration, member.name.as_ref())
+                else {
+                    continue;
+                };
+                let public_symbol = if matches!(member.publication, NamespacePublication::Private) {
+                    None
+                } else {
+                    let Some(symbol) = member.symbol else {
+                        continue;
+                    };
+                    Some(symbol)
+                };
+                let Some(scope) = state
+                    .declarations
+                    .get(declaration)
+                    .and_then(|declaration| declaration.site.scope)
+                else {
+                    continue;
+                };
+                targets.push(NamespaceValueBindingTarget {
+                    member: member.id,
+                    declaration,
+                    name: name.clone(),
+                    scope,
+                    kind: member.kind,
+                    public_symbol,
+                });
+            }
+        }
+    }
+    targets.sort_by_key(|target| {
+        state
+            .declarations
+            .get(target.declaration)
+            .map(|declaration| {
+                (
+                    declaration.site.declaration_span.start,
+                    target.declaration.0,
+                )
+            })
+            .unwrap_or((u32::MAX, u32::MAX))
+    });
+    targets.dedup_by_key(|target| target.declaration);
+    let scopes = targets
+        .iter()
+        .map(|target| (target.declaration, target.scope))
+        .collect::<FxHashMap<_, _>>();
+    bind_selected_namespace_value_statements(state, &program.body, &scopes);
+
+    for target in targets {
+        let storage = state
+            .declarations
+            .get(target.declaration)
+            .and_then(|declaration| declaration.value_storage);
+        let local_symbol = state
+            .graph
+            .get(target.scope)
+            .and_then(|scope| scope.lookup_local(&target.name));
+        if let Some(member) = state.namespaces.members.get_mut(target.member.index()) {
+            member.local_symbol = local_symbol;
+        }
+        let Some(symbol) = target.public_symbol else {
+            continue;
+        };
+        let Some(storage) = storage else {
+            continue;
+        };
+        if let Some(symbol) = state.symbols.get_mut(symbol) {
+            symbol.value = Some(storage);
+            if target.kind == MergeDeclarationKind::Function
+                && !symbol.function_values.contains(&storage)
+            {
+                symbol.function_values.push(storage);
+            }
+        }
+    }
+}
+
+fn bind_selected_namespace_value_statements(
+    state: &mut BindState,
+    statements: &[Statement<'_>],
+    scopes: &FxHashMap<DeclId, ScopeId>,
+) {
+    for statement in statements {
+        match statement {
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(declaration) = &export.declaration {
+                    bind_selected_namespace_value_declaration(state, declaration, scopes);
+                }
+            }
+            Statement::VariableDeclaration(declaration) => {
+                bind_selected_namespace_variable(state, declaration, scopes)
+            }
+            Statement::FunctionDeclaration(function) => {
+                let selected = function.id.as_ref().and_then(|identifier| {
+                    state
+                        .source_decl_at(identifier.span.start, DeclarationKind::Function)
+                        .and_then(|declaration| {
+                            scopes
+                                .get(&declaration)
+                                .copied()
+                                .map(|scope| (declaration, scope))
+                        })
+                });
+                if let Some((_, scope)) = selected {
+                    bind_function_declaration(state, scope, function);
+                }
+            }
+            Statement::ClassDeclaration(class) => {
+                let selected = class.id.as_ref().and_then(|identifier| {
+                    state
+                        .source_decl_at(identifier.span.start, DeclarationKind::Class)
+                        .and_then(|declaration| {
+                            scopes
+                                .get(&declaration)
+                                .copied()
+                                .map(|scope| (declaration, scope))
+                        })
+                });
+                if let Some((_, scope)) = selected {
+                    bind_class_declaration(state, scope, class);
+                }
+            }
+            Statement::TSModuleDeclaration(declaration) => {
+                bind_selected_namespace_module_body(state, declaration, scopes)
+            }
+            _ => {}
+        }
+    }
+}
+
+fn bind_selected_namespace_value_declaration(
+    state: &mut BindState,
+    declaration: &Declaration<'_>,
+    scopes: &FxHashMap<DeclId, ScopeId>,
+) {
+    match declaration {
+        Declaration::VariableDeclaration(declaration) => {
+            bind_selected_namespace_variable(state, declaration, scopes)
+        }
+        Declaration::FunctionDeclaration(function) => {
+            let scope = function.id.as_ref().and_then(|identifier| {
+                state
+                    .source_decl_at(identifier.span.start, DeclarationKind::Function)
+                    .and_then(|declaration| scopes.get(&declaration).copied())
+            });
+            if let Some(scope) = scope {
+                bind_function_declaration(state, scope, function);
+            }
+        }
+        Declaration::ClassDeclaration(class) => {
+            let scope = class.id.as_ref().and_then(|identifier| {
+                state
+                    .source_decl_at(identifier.span.start, DeclarationKind::Class)
+                    .and_then(|declaration| scopes.get(&declaration).copied())
+            });
+            if let Some(scope) = scope {
+                bind_class_declaration(state, scope, class);
+            }
+        }
+        Declaration::TSModuleDeclaration(declaration) => {
+            bind_selected_namespace_module_body(state, declaration, scopes)
+        }
+        _ => {}
+    }
+}
+
+fn bind_selected_namespace_variable(
+    state: &mut BindState,
+    declaration: &oxc_ast::ast::VariableDeclaration<'_>,
+    scopes: &FxHashMap<DeclId, ScopeId>,
+) {
+    for declarator in &declaration.declarations {
+        let scope = declarator
+            .id
+            .get_binding_identifiers()
+            .into_iter()
+            .find_map(|identifier| {
+                state
+                    .source_decl_at(identifier.span.start, DeclarationKind::Variable)
+                    .and_then(|declaration| scopes.get(&declaration).copied())
+            });
+        if let Some(scope) = scope {
+            bind_declarator(state, scope, declaration.kind, declarator);
+        }
+    }
+}
+
+fn bind_selected_namespace_module_body(
+    state: &mut BindState,
+    declaration: &TSModuleDeclaration<'_>,
+    scopes: &FxHashMap<DeclId, ScopeId>,
+) {
+    match &declaration.body {
+        Some(TSModuleDeclarationBody::TSModuleBlock(block)) => {
+            bind_selected_namespace_value_statements(state, &block.body, scopes)
+        }
+        Some(TSModuleDeclarationBody::TSModuleDeclaration(nested)) => {
+            bind_selected_namespace_module_body(state, nested, scopes)
+        }
+        None => {}
+    }
 }
 
 fn resolve_local_ambient_export_alias_targets(state: &mut BindState) {
@@ -3654,6 +4118,20 @@ mod tests {
     use oxc_span::SourceType;
 
     fn bind(source: &str, declaration_file: bool) -> Binder {
+        bind_unit(
+            source,
+            declaration_file,
+            SourceUnitKey::SINGLE_SOURCE,
+            OriginalModuleOrdinal(0),
+        )
+    }
+
+    fn bind_unit(
+        source: &str,
+        declaration_file: bool,
+        source_key: SourceUnitKey,
+        original_module: OriginalModuleOrdinal,
+    ) -> Binder {
         let prelude_allocator = Allocator::default();
         let source_allocator = Allocator::default();
         let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
@@ -3661,8 +4139,8 @@ mod tests {
         assert!(!parsed.panicked, "parse failed: {source}");
         let mut builder = ProjectBinderBuilder::new(&prelude.program);
         let unit = CompilationUnit {
-            source: SourceUnitKey::SINGLE_SOURCE,
-            original_module: OriginalModuleOrdinal(0),
+            source: source_key,
+            original_module,
             binding: ModuleBindingContext::for_program(
                 &parsed.program,
                 if declaration_file {
@@ -3683,6 +4161,546 @@ mod tests {
             .iter()
             .find(|record| record.name == name)
             .expect("merge record")
+    }
+
+    #[test]
+    fn attached_namespace_value_view_is_whole_group_ordered_and_storage_truthful() {
+        let source = r#"
+function F(): void {}
+namespace F { export const first = 1; const hidden = 0; }
+namespace F {
+    export function make(functionParam: number): number { return functionParam; }
+    export class Box { method(methodParam: string): void {} }
+    export const second = 2;
+}
+class C {}
+namespace C { export const classTag = 1; }
+namespace Standalone { export const dormant = 1; }
+interface TypeOnly {}
+namespace TypeOnly { export const dormant = 1; }
+function Chimera(): void {}
+namespace Chimera { export const tag = 1; }
+enum Chimera { EnumOnly }
+namespace Chimera {
+    export function helper(value: number): number { return value; }
+    export class Helper { method(value: string): void {} }
+}
+function ClassChimera(): void {}
+class ClassChimera {}
+namespace ClassChimera { export const rejected = 1; }
+enum ClassChimera {}
+"#;
+        let binder = bind(source, false);
+
+        let attachment = binder
+            .namespace_value_attachment(binder.module, "F")
+            .expect("function namespace attachment");
+        assert_eq!(
+            attachment.disposition,
+            NamespaceValueAttachmentDisposition::AdmittedFunction
+        );
+        assert_eq!(attachment.owner, DeclarationOwner::Lexical(binder.module));
+        assert_eq!(attachment.name, "F");
+        assert_eq!(attachment.fragments.len(), 2);
+        assert!(attachment
+            .fragments
+            .windows(2)
+            .all(|pair| pair[0].source_start < pair[1].source_start));
+        assert_eq!(
+            attachment
+                .members
+                .iter()
+                .map(|member| member.name)
+                .collect::<Vec<_>>(),
+            ["first", "make", "Box", "second"]
+        );
+        assert!(attachment.members.windows(2).all(|pair| {
+            (
+                pair[0].source,
+                pair[0].site.declaration_span.start,
+                pair[0].declaration.0,
+            ) < (
+                pair[1].source,
+                pair[1].site.declaration_span.start,
+                pair[1].declaration.0,
+            )
+        }));
+
+        for attached in &attachment.members {
+            let declaration = binder
+                .declarations
+                .get(attached.declaration)
+                .expect("attached declaration");
+            assert_eq!(attached.site, declaration.site);
+            assert_eq!(
+                attached.scope,
+                declaration.site.scope.expect("lexical scope")
+            );
+            assert_eq!(attached.source, SourceUnitKey::SINGLE_SOURCE);
+            let storage = attached.value_storage.expect("real value storage");
+            assert_eq!(declaration.value_storage, Some(storage));
+
+            let member = binder
+                .namespaces
+                .member(attached.member)
+                .expect("namespace member");
+            assert_eq!(member.declaration, Some(attached.declaration));
+            assert_eq!(member.symbol, attached.symbol);
+            let public_symbol = attached
+                .symbol
+                .and_then(|symbol| binder.symbols.get(symbol))
+                .expect("public member symbol");
+            assert_eq!(public_symbol.value, Some(storage));
+            let local_symbol = member
+                .local_symbol
+                .and_then(|symbol| binder.symbols.get(symbol))
+                .expect("private lexical symbol");
+            assert_eq!(local_symbol.value, Some(storage));
+            assert_ne!(member.local_symbol, member.symbol);
+        }
+
+        let make = attachment
+            .members
+            .iter()
+            .find(|member| member.name == "make")
+            .expect("make member");
+        let make_symbol = make
+            .symbol
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .expect("make symbol");
+        assert_eq!(
+            make_symbol.function_values,
+            [make.value_storage.expect("make storage")]
+        );
+        let make_scope = binder
+            .fn_scopes
+            .get(&(binder.module, make.site.declaration_span.start))
+            .copied()
+            .expect("attached function bound through the ordinary function binder");
+        assert_eq!(
+            binder.graph.get(make_scope).and_then(|scope| scope.parent),
+            Some(make.scope)
+        );
+        let function_param = binder
+            .declarations
+            .iter()
+            .find(|declaration| &source[declaration.site.binding_span.range()] == "functionParam")
+            .expect("attached function parameter");
+        assert_eq!(function_param.site.scope, Some(make_scope));
+        assert!(function_param.value_storage.is_some());
+
+        let box_member = attachment
+            .members
+            .iter()
+            .find(|member| member.name == "Box")
+            .expect("Box member");
+        let method_param = binder
+            .declarations
+            .iter()
+            .find(|declaration| &source[declaration.site.binding_span.range()] == "methodParam")
+            .expect("attached class method parameter");
+        let method_scope = method_param.site.scope.expect("method function scope");
+        assert_eq!(
+            binder
+                .graph
+                .get(method_scope)
+                .and_then(|scope| scope.parent),
+            Some(box_member.scope)
+        );
+        assert!(method_param.value_storage.is_some());
+
+        let class_attachment = binder
+            .namespace_value_attachment(binder.module, "C")
+            .expect("class namespace attachment");
+        assert_eq!(
+            class_attachment.disposition,
+            NamespaceValueAttachmentDisposition::AdmittedClass
+        );
+        assert_eq!(
+            class_attachment
+                .members
+                .iter()
+                .map(|member| member.name)
+                .collect::<Vec<_>>(),
+            ["classTag"]
+        );
+        assert!(class_attachment.members[0].value_storage.is_some());
+
+        for name in ["Standalone", "TypeOnly"] {
+            let attachment = binder
+                .namespace_value_attachment(binder.module, name)
+                .expect("type-container namespace");
+            assert_eq!(
+                attachment.disposition,
+                NamespaceValueAttachmentDisposition::TypeContainerOnly,
+                "{name}"
+            );
+            assert!(attachment.fragments.is_empty(), "{name}");
+            assert!(attachment.members.is_empty(), "{name}");
+            let owner_start = u32::try_from(source.find(name).expect("owner source start"))
+                .expect("source offset fits u32");
+            let dormant = binder
+                .declarations
+                .iter()
+                .find(|declaration| {
+                    declaration.site.declaration_span.start > owner_start
+                        && &source[declaration.site.binding_span.range()] == "dormant"
+                })
+                .expect("dormant value declaration");
+            assert_eq!(dormant.value_storage, None, "{name}");
+        }
+
+        let chimera = binder
+            .namespace_value_attachment(binder.module, "Chimera")
+            .expect("deferred callable recovery");
+        assert_eq!(
+            chimera.disposition,
+            NamespaceValueAttachmentDisposition::DeferredFunctionBacklog42
+        );
+        assert_eq!(
+            merge(&binder, "Chimera").classification.disposition,
+            MergeDisposition::DeferredBacklog42
+        );
+        assert_eq!(chimera.fragments.len(), 2);
+        assert!(chimera
+            .fragments
+            .windows(2)
+            .all(|pair| pair[0].source_start < pair[1].source_start));
+        assert_eq!(
+            chimera
+                .members
+                .iter()
+                .map(|member| (member.name, member.kind))
+                .collect::<Vec<_>>(),
+            [
+                ("tag", MergeDeclarationKind::Variable),
+                ("helper", MergeDeclarationKind::Function),
+                ("Helper", MergeDeclarationKind::Class),
+            ]
+        );
+        assert!(chimera.members.windows(2).all(|pair| {
+            (
+                pair[0].source,
+                pair[0].site.declaration_span.start,
+                pair[0].declaration.0,
+            ) < (
+                pair[1].source,
+                pair[1].site.declaration_span.start,
+                pair[1].declaration.0,
+            )
+        }));
+        for attached in &chimera.members {
+            let storage = attached
+                .value_storage
+                .expect("deferred namespace member storage");
+            assert_eq!(
+                binder
+                    .declarations
+                    .get(attached.declaration)
+                    .and_then(|declaration| declaration.value_storage),
+                Some(storage)
+            );
+            let member = binder
+                .namespaces
+                .member(attached.member)
+                .expect("deferred namespace member");
+            assert_eq!(
+                member
+                    .symbol
+                    .and_then(|symbol| binder.symbols.get(symbol))
+                    .and_then(|symbol| symbol.value),
+                Some(storage)
+            );
+            assert_eq!(
+                member
+                    .local_symbol
+                    .and_then(|symbol| binder.symbols.get(symbol))
+                    .and_then(|symbol| symbol.value),
+                Some(storage)
+            );
+        }
+        let tag = chimera.members.first().expect("exact deferred tag member");
+        assert_eq!(&source[tag.site.binding_span.range()], "tag");
+
+        let enum_participant = merge(&binder, "Chimera")
+            .declarations
+            .iter()
+            .find(|participant| participant.kind == MergeDeclarationKind::Enum)
+            .expect("enum participant remains owned by backlog 42");
+        let enum_declaration = binder
+            .declarations
+            .get(enum_participant.declaration)
+            .expect("enum declaration identity");
+        assert_eq!(enum_declaration.kind, DeclarationKind::Enum);
+        assert_eq!(enum_declaration.site.module, binder.module);
+        assert_eq!(enum_declaration.value_storage, None);
+        assert_eq!(enum_declaration.type_group, None);
+        assert_eq!(
+            merge(&binder, "Chimera").owner,
+            DeclarationOwner::Lexical(binder.module)
+        );
+        assert!(chimera
+            .members
+            .iter()
+            .all(|member| member.declaration != enum_participant.declaration));
+        assert!(!chimera
+            .members
+            .iter()
+            .any(|member| member.name == "EnumOnly" || member.kind == MergeDeclarationKind::Enum));
+
+        let class_chimera = binder
+            .namespace_value_attachment(binder.module, "ClassChimera")
+            .expect("class backlog-42 group");
+        assert_eq!(
+            class_chimera.disposition,
+            NamespaceValueAttachmentDisposition::Rejected(MergeDisposition::DeferredBacklog42)
+        );
+        assert!(merge(&binder, "ClassChimera")
+            .classification
+            .compositions
+            .iter()
+            .any(|composition| {
+                composition.kind == MergeCompositionKind::FunctionNamespace
+                    && composition.disposition == MergeDisposition::Admitted
+            }));
+        assert!(class_chimera.fragments.is_empty());
+        assert!(class_chimera.members.is_empty());
+        let rejected = binder
+            .declarations
+            .iter()
+            .find(|declaration| &source[declaration.site.binding_span.range()] == "rejected")
+            .expect("class chimera namespace member");
+        assert_eq!(rejected.value_storage, None);
+    }
+
+    #[test]
+    fn attached_namespace_private_values_bind_only_in_fragment_private_scopes() {
+        let source = r#"
+function F(): void {}
+namespace F {
+    export const functionTag = 1;
+    const hiddenVariableF = 1;
+    function hiddenFunctionF(functionParamF: number): number {
+        const functionLocalF = functionParamF;
+        return functionLocalF;
+    }
+    class HiddenClassF {
+        method(methodParamF: number): number {
+            const methodLocalF = methodParamF;
+            return methodLocalF;
+        }
+    }
+}
+
+class C {}
+namespace C {
+    export const classTag = 1;
+    const hiddenVariableC = 1;
+    function hiddenFunctionC(functionParamC: number): number {
+        const functionLocalC = functionParamC;
+        return functionLocalC;
+    }
+    class HiddenClassC {
+        method(methodParamC: number): number {
+            const methodLocalC = methodParamC;
+            return methodLocalC;
+        }
+    }
+}
+"#;
+        let binder = bind(source, false);
+
+        for (owner, tag, private_names, descendant_names) in [
+            (
+                "F",
+                "functionTag",
+                ["hiddenVariableF", "hiddenFunctionF", "HiddenClassF"],
+                [
+                    "functionParamF",
+                    "functionLocalF",
+                    "methodParamF",
+                    "methodLocalF",
+                ],
+            ),
+            (
+                "C",
+                "classTag",
+                ["hiddenVariableC", "hiddenFunctionC", "HiddenClassC"],
+                [
+                    "functionParamC",
+                    "functionLocalC",
+                    "methodParamC",
+                    "methodLocalC",
+                ],
+            ),
+        ] {
+            let attachment = binder
+                .namespace_value_attachment(binder.module, owner)
+                .expect("admitted attachment");
+            assert_eq!(
+                attachment
+                    .members
+                    .iter()
+                    .map(|member| member.name)
+                    .collect::<Vec<_>>(),
+                [tag]
+            );
+            let fragment = attachment.fragments.first().expect("one fragment");
+            let public_scope = binder
+                .namespaces
+                .get(fragment.namespace)
+                .expect("namespace")
+                .public_scope;
+
+            for name in private_names {
+                assert!(binder
+                    .graph
+                    .get(public_scope)
+                    .and_then(|scope| scope.lookup_local(name))
+                    .is_none());
+                let private_symbol = binder
+                    .graph
+                    .get(fragment.private_scope)
+                    .and_then(|scope| scope.lookup_local(name))
+                    .expect("private local symbol");
+                let storage = binder
+                    .symbols
+                    .get(private_symbol)
+                    .and_then(|symbol| symbol.value)
+                    .expect("private local storage");
+                let declaration = binder
+                    .declarations
+                    .iter()
+                    .find(|declaration| &source[declaration.site.binding_span.range()] == name)
+                    .expect("private declaration");
+                assert_eq!(declaration.site.scope, Some(fragment.private_scope));
+                assert_eq!(declaration.value_storage, Some(storage));
+                let member = fragment
+                    .members
+                    .iter()
+                    .filter_map(|member| binder.namespaces.member(*member))
+                    .find(|member| member.name.as_deref() == Some(name))
+                    .expect("private namespace member");
+                assert_eq!(member.publication, NamespacePublication::Private);
+                assert_eq!(member.symbol, Some(private_symbol));
+                assert_eq!(member.local_symbol, Some(private_symbol));
+            }
+
+            for name in descendant_names {
+                let declaration = binder
+                    .declarations
+                    .iter()
+                    .find(|declaration| &source[declaration.site.binding_span.range()] == name)
+                    .expect("private descendant declaration");
+                let scope = declaration.site.scope.expect("private descendant scope");
+                assert_eq!(
+                    binder.graph.get(scope).and_then(|scope| scope.parent),
+                    Some(fragment.private_scope)
+                );
+                assert!(declaration.value_storage.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn placement_view_retains_recovery_and_ambient_default_exports() {
+        let source = r#"
+namespace LateIssue {}
+namespace F { export const first = 1; }
+function F(): void {}
+namespace C { export const second = 2; }
+class C {}
+namespace LateIssue { export const third = 3; }
+function LateIssue(): void {}
+declare namespace Ambient { const implicit: number; }
+declare function Ambient(): void;
+"#;
+        let binder = bind_unit(source, false, SourceUnitKey(17), OriginalModuleOrdinal(5));
+        let issues = binder.namespaces.placement_issues().collect::<Vec<_>>();
+        assert_eq!(issues.len(), 3);
+        assert!(issues
+            .iter()
+            .all(|issue| issue.kind == PlacementIssueKind::FutureTk2434));
+        assert!(issues.iter().all(|issue| {
+            issue.source == SourceUnitKey(17)
+                && issue.original_module == OriginalModuleOrdinal(5)
+                && binder
+                    .declarations
+                    .get(issue.owner)
+                    .is_some_and(|declaration| declaration.site.binding_span == issue.span)
+        }));
+        assert_eq!(
+            issues
+                .iter()
+                .map(|issue| &source[issue.span.range()])
+                .collect::<Vec<_>>(),
+            ["F", "C", "LateIssue"]
+        );
+        assert!(issues
+            .windows(2)
+            .all(|pair| pair[0].span.start < pair[1].span.start));
+
+        for (name, disposition) in [
+            ("F", NamespaceValueAttachmentDisposition::AdmittedFunction),
+            ("C", NamespaceValueAttachmentDisposition::AdmittedClass),
+            (
+                "LateIssue",
+                NamespaceValueAttachmentDisposition::AdmittedFunction,
+            ),
+            (
+                "Ambient",
+                NamespaceValueAttachmentDisposition::AdmittedFunction,
+            ),
+        ] {
+            let attachment = binder
+                .namespace_value_attachment(binder.module, name)
+                .expect("recovery attachment");
+            assert_eq!(attachment.disposition, disposition, "{name}");
+            assert_eq!(attachment.members.len(), 1, "{name}");
+            assert!(attachment.members[0].value_storage.is_some(), "{name}");
+        }
+        let ambient = binder
+            .namespaces
+            .members()
+            .find(|member| member.name.as_deref() == Some("implicit"))
+            .expect("ambient default member");
+        assert_eq!(ambient.publication, NamespacePublication::AmbientDefault);
+    }
+
+    #[test]
+    fn placement_requires_instantiated_namespaces_to_follow_ordinary_value_sequences() {
+        let source = r#"
+function Interposed(value: number): number;
+namespace Interposed { export const tag: string = "tag"; }
+function Interposed(value: number): number { return value; }
+
+function Consecutive(value: number): number;
+function Consecutive(value: number): number { return value; }
+namespace Consecutive { export const tag: string = "tag"; }
+
+class ClassFirst {}
+namespace ClassFirst { export const tag: string = "tag"; }
+
+declare function Ambient(value: number): number;
+declare namespace Ambient { const first: string; }
+declare function Ambient(value: string): string;
+declare namespace Ambient { const second: string; }
+
+namespace Reverse { export const tag: string = "tag"; }
+function Reverse(): void {}
+"#;
+        let binder = bind(source, false);
+
+        let interposed = &merge(&binder, "Interposed").placement_issues;
+        assert_eq!(interposed.len(), 1);
+        assert_eq!(&source[interposed[0].span.range()], "Interposed");
+        assert!(merge(&binder, "Consecutive").placement_issues.is_empty());
+        assert!(merge(&binder, "ClassFirst").placement_issues.is_empty());
+        assert!(merge(&binder, "Ambient").placement_issues.is_empty());
+
+        let reverse = &merge(&binder, "Reverse").placement_issues;
+        assert_eq!(reverse.len(), 1);
+        assert_eq!(&source[reverse[0].span.range()], "Reverse");
     }
 
     #[test]

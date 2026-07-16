@@ -3,9 +3,9 @@ use crate::binder::declaration::TypeGroupId;
 use crate::binder::namespace::QualifiedTypePathResolution;
 use crate::binder::scope::ScopeId;
 use crate::check::checker::classes::application::{
-    build_class_application, complete_class_arguments, ClassApplicationKind,
-    ClassApplicationRequest, ClassTypeParameter, ClassTypeParameterDefault, ExplicitClassArgument,
-    SourceClassArguments,
+    build_class_application, complete_class_arguments, required_type_argument_count,
+    ClassApplicationKind, ClassApplicationRequest, ClassTypeParameter, ClassTypeParameterDefault,
+    ExplicitClassArgument, SourceClassArguments,
 };
 use crate::check::checker::classes::surface_types::SurfaceTypeFactory;
 use crate::check::checker::type_groups::{
@@ -648,10 +648,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> bool {
         let actual = arguments.map_or(0, |arguments| arguments.params.len());
         let expected_max = parameters.len();
-        let expected_min = defaults
-            .iter()
-            .rposition(|default| *default == PublishedTypeParameterDefault::Absent)
-            .map_or(0, |index| index + 1);
+        let expected_min = required_type_argument_count(defaults, |default| {
+            *default != PublishedTypeParameterDefault::Absent
+        });
         let diagnostic = if expected_max == 0 && actual > 0 {
             Some(Diagnostic::type_is_not_generic(span, reference_name))
         } else if actual < expected_min || actual > expected_max {
@@ -713,26 +712,41 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             let Some(TypeDecl::Class {
                 class_id,
                 params,
+                recovery_defaults,
+                recovery_names,
                 param_decl,
+                interfaces,
                 ..
             }) = self.type_decls.get(decl_id.index())
             else {
                 return None;
             };
-            let defaults: Vec<bool> = (0..params.len())
-                .map(|index| {
+            let defaults: Vec<bool> = if interfaces.is_empty() {
+                param_decl
+                    .iter()
+                    .flat_map(|declaration| declaration.params.iter())
+                    .map(|parameter| parameter.default.is_some())
+                    .collect()
+            } else {
+                recovery_defaults
+                    .iter()
+                    .map(|default| *default != PublishedTypeParameterDefault::Absent)
+                    .collect()
+            };
+            (
+                *class_id,
+                params.clone(),
+                defaults,
+                if interfaces.is_empty() {
                     param_decl
-                        .and_then(|declaration| declaration.params.get(index))
-                        .and_then(|parameter| parameter.default.as_ref())
-                        .is_some()
-                })
-                .collect();
-            let parameter_names = param_decl
-                .iter()
-                .flat_map(|declaration| declaration.params.iter())
-                .map(|parameter| parameter.name.name.to_string())
-                .collect::<Vec<_>>();
-            (*class_id, params.clone(), defaults, parameter_names)
+                        .iter()
+                        .flat_map(|declaration| declaration.params.iter())
+                        .map(|parameter| parameter.name.name.to_string())
+                        .collect()
+                } else {
+                    recovery_names.clone()
+                },
+            )
         };
         self.resolve_class_endpoint(
             scope,
@@ -759,10 +773,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         arguments: Option<&TSTypeParameterInstantiation<'_>>,
     ) -> Option<TypeId> {
         let expected_max = params.len();
-        let expected_min = defaults
-            .iter()
-            .position(|has_default| *has_default)
-            .unwrap_or(expected_max);
+        let expected_min = required_type_argument_count(defaults, |has_default| *has_default);
 
         let mut lowered = Vec::new();
         if let Some(arguments) = arguments {
@@ -842,13 +853,17 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     },
                 })
                 .collect::<Vec<_>>();
-            return match complete_class_arguments(ClassApplicationRequest {
-                class: class_id,
-                parameters: &parameters,
-                source_arguments: SourceClassArguments::Explicit(&explicit),
-                inferred: &[],
-                kind: ClassApplicationKind::TypeReference,
-            }) {
+            let completed = complete_class_arguments(
+                &mut SurfaceTypeFactory::new(self.interner),
+                ClassApplicationRequest {
+                    class: class_id,
+                    parameters: &parameters,
+                    source_arguments: SourceClassArguments::Explicit(&explicit),
+                    inferred: &[],
+                    kind: ClassApplicationKind::TypeReference,
+                },
+            );
+            return match completed {
                 DemandOutcome::Ready(arguments) => {
                     Some(self.interner.intern_class_instance(class_id, arguments))
                 }
@@ -1090,11 +1105,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     }
 
     fn type_decl_defaults(&self, decl_id: TypeGroupId) -> Vec<PublishedTypeParameterDefault> {
-        if let Some(TypeDecl::Interface {
-            recovery_defaults, ..
-        }) = self.type_decls.get(decl_id.index())
-        {
-            return recovery_defaults.clone();
+        match self.type_decls.get(decl_id.index()) {
+            Some(TypeDecl::Interface {
+                recovery_defaults, ..
+            }) => return recovery_defaults.clone(),
+            Some(TypeDecl::Class {
+                recovery_defaults,
+                interfaces,
+                ..
+            }) if !interfaces.is_empty() => return recovery_defaults.clone(),
+            _ => {}
         }
         let (param_decl, lowered) = match self.type_decls.get(decl_id.index()) {
             Some(TypeDecl::Alias {
@@ -1123,6 +1143,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn type_decl_parameter_names(&self, decl_id: TypeGroupId) -> Vec<String> {
         match self.type_decls.get(decl_id.index()) {
             Some(TypeDecl::Interface { recovery_names, .. }) => recovery_names.clone(),
+            Some(TypeDecl::Class {
+                recovery_names,
+                interfaces,
+                ..
+            }) if !interfaces.is_empty() => recovery_names.clone(),
             Some(TypeDecl::Alias { .. }) => Vec::new(),
             _ => Vec::new(),
         }
@@ -1147,7 +1172,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             // M16: a generic class carries its type-parameter ids just like an interface,
             // so `Box<number>` used as a type instantiates the class's instance template.
             | Some(TypeDecl::Class { params, .. })
-            | Some(TypeDecl::UnsupportedClassInterface { params, .. })
             // M28: a prelude declaration resolved in the prelude pass keeps only its
             // ordered parameter ids — exactly what instantiation needs.
             | Some(TypeDecl::Resolved { params }) => params.clone(),

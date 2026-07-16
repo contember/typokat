@@ -4,6 +4,7 @@ use super::calls::widen;
 use super::classes::body::BodyMemberLookup;
 use super::context::*;
 use super::decls::value_decl_id;
+use super::function_groups::FunctionGroupDemand;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::flow::FlowNodeId;
@@ -106,10 +107,26 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     return Some((well_known.undefined, span));
                 }
                 match self.binder.resolve_value(scope, ident.name.as_str()) {
-                    Some(symbol_id) => Some((
-                        self.resolve_identifier_type(symbol_id, ident.span.start),
-                        span,
-                    )),
+                    Some(symbol_id) => match self.function_groups.demand(symbol_id) {
+                        FunctionGroupDemand::Ready(ty) | FunctionGroupDemand::PrivateSelf(ty) => {
+                            Some((ty, span))
+                        }
+                        FunctionGroupDemand::Pending { report_use } => {
+                            if report_use {
+                                self.record_incomplete(
+                                    "expr-infer/identifier/function-group-pending",
+                                    span,
+                                    "merged function value waits for body return inference",
+                                );
+                            }
+                            None
+                        }
+                        FunctionGroupDemand::Unavailable => None,
+                        FunctionGroupDemand::NotGroup => Some((
+                            self.resolve_identifier_type(symbol_id, ident.span.start),
+                            span,
+                        )),
+                    },
                     None => {
                         self.emit_diagnostic(Diagnostic::cannot_find_name(
                             span,
@@ -1377,7 +1394,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             );
             return None;
         }
-        self.infer_member_access_from_base(base_ty, member)
+        self.infer_member_access_from_base(scope, base_ty, member)
     }
 
     /// Demand publication for an explicit class value before consuming its static
@@ -1427,6 +1444,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// path to preserve the object type as the explicit receiver source.
     pub(in crate::check::checker) fn infer_member_access_from_base(
         &mut self,
+        scope: ScopeId,
         base_ty: TypeId,
         member: &StaticMemberExpression<'_>,
     ) -> Option<(TypeId, Span)> {
@@ -1539,16 +1557,119 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 if let Some(value) = string_index_value {
                     return Some((value, prop_span));
                 }
-                // Not on the type. For a class value base, this also covers
-                // `C.instanceMember`; for an instance base, `instance.staticMember` —
-                // both are `TK2339`, since each member lives on the other side.
-                let tgt = render_type(self.interner.store(), base_ty, /* widen */ false);
-                self.emit_diagnostic(Diagnostic::property_does_not_exist(
-                    prop_span, prop_name, &tgt,
-                ));
+                match self.class_instance_static_member_owner(base_ty, prop_name) {
+                    DemandOutcome::Ready(Some(class)) => {
+                        self.emit_diagnostic(Diagnostic::static_property_accessed_on_instance(
+                            prop_span, prop_name, &class,
+                        ));
+                        return Some((wk.error, prop_span));
+                    }
+                    DemandOutcome::Ready(None) => {}
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        self.own_type_demand(DemandOutcome::Exhausted(exhaustion), prop_span);
+                        return None;
+                    }
+                }
+                // Named class instances and class/function value receivers retain
+                // their source declaration spelling in TK2339.
+                if let Some(class) = self.class_instance_name(base_ty) {
+                    self.emit_diagnostic(Diagnostic::property_does_not_exist_on_named_type(
+                        prop_span, prop_name, &class,
+                    ));
+                } else if let Some(value) =
+                    self.named_class_or_function_value(scope, &member.object)
+                {
+                    self.emit_diagnostic(Diagnostic::property_does_not_exist_on_named_value(
+                        prop_span, prop_name, &value,
+                    ));
+                } else {
+                    let tgt = render_type(self.interner.store(), base_ty, /* widen */ false);
+                    self.emit_diagnostic(Diagnostic::property_does_not_exist(
+                        prop_span, prop_name, &tgt,
+                    ));
+                }
                 Some((wk.error, prop_span))
             }
         }
+    }
+
+    fn class_instance_name(&self, ty: TypeId) -> Option<String> {
+        let application = self.interner.store().class_instance_type(ty)?;
+        self.class_names.get(&application.class).cloned()
+    }
+
+    /// Return the source receiver name only after proving that it denotes a
+    /// published class value or one of the function/namespace drafts.
+    fn named_class_or_function_value(
+        &self,
+        scope: ScopeId,
+        expression: &Expression<'_>,
+    ) -> Option<String> {
+        let identifier = match expression {
+            Expression::ParenthesizedExpression(parenthesized) => {
+                return self.named_class_or_function_value(scope, &parenthesized.expression);
+            }
+            Expression::Identifier(identifier) => identifier,
+            _ => return None,
+        };
+        let symbol = self.binder.resolve_value(scope, identifier.name.as_str())?;
+        if self.function_groups.contains_symbol(symbol) {
+            return Some(identifier.name.to_string());
+        }
+        let value_decl = value_decl_id(self.binder, scope, identifier.name.as_str())?;
+        let class_decl = self
+            .class_value_aliases
+            .get(&value_decl)
+            .copied()
+            .unwrap_or(value_decl);
+        let binding = self
+            .lexical_events
+            .classes()
+            .iter()
+            .filter_map(|reservation| reservation.binding.as_ref())
+            .find(|binding| binding.value_decl == Some(class_decl))?;
+        if value_decl != class_decl && !binding.header_type_params.is_empty() {
+            return None;
+        }
+        Some(identifier.name.to_string())
+    }
+
+    /// Recognize the one cross-side lookup with a dedicated tsc diagnostic. The
+    /// check is deliberately limited to the same class's published static surface.
+    fn class_instance_static_member_owner(
+        &self,
+        base_ty: TypeId,
+        property: &str,
+    ) -> DemandOutcome<Option<String>> {
+        let Some(application) = self.interner.store().class_instance_type(base_ty) else {
+            return DemandOutcome::Ready(None);
+        };
+        let surface = match self
+            .type_environment
+            .published()
+            .classes()
+            .published_class(application.class)
+        {
+            DemandOutcome::Ready(surface) => surface,
+            DemandOutcome::Exhausted(exhaustion) => {
+                return DemandOutcome::Exhausted(exhaustion);
+            }
+        };
+        let has_static_property = self
+            .interner
+            .store()
+            .object_type(surface.static_template())
+            .and_then(|object| object.property(property))
+            .is_some();
+        if !has_static_property {
+            return DemandOutcome::Ready(None);
+        }
+        let class = self
+            .class_names
+            .get(&application.class)
+            .cloned()
+            .unwrap_or_else(|| render_type(self.interner.store(), base_ty, false));
+        DemandOutcome::Ready(Some(class))
     }
 
     /// Resolve `union.prop` by requiring the property on every member and unioning

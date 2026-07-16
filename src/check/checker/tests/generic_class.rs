@@ -339,13 +339,7 @@ const bad: string = new Derived().value;
     let out = check_source(src);
     assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
     assert_eq!(diags(src), vec![(6, "TK2322".to_string())]);
-    assert_eq!(
-        out.incomplete
-            .iter()
-            .map(|record| record.id.as_str())
-            .collect::<Vec<_>>(),
-        ["class/class-heritage/type-arguments"]
-    );
+    assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
 }
 
 #[test]
@@ -364,11 +358,5 @@ new Derived().inherited;
         diags(src),
         vec![(5, "TK2694".to_string()), (5, "TK2694".to_string())]
     );
-    assert_eq!(
-        out.incomplete
-            .iter()
-            .map(|record| record.id.as_str())
-            .collect::<Vec<_>>(),
-        ["class/class-heritage/type-arguments"]
-    );
+    assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
 }

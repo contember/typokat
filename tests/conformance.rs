@@ -194,12 +194,49 @@ const PROJECT_DIRS: &[&str] = &[
 const ENABLED_FIXTURES: &[(&str, &str)] = &[
     (
         "b43_namespaces_declaration_merging",
+        "class_interface_conflicts.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "class_interface_namespace_generics.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "class_interface_namespace_nominal.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "class_interface_namespace_order_matrix.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "class_interface_namespace_orders.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "class_interface_recursion.ts",
+    ),
+    ("b43_namespaces_declaration_merging", "degraded_chimera.ts"),
+    (
+        "b43_namespaces_declaration_merging",
         "interface_conflicts.ts",
     ),
     ("b43_namespaces_declaration_merging", "interface_members.ts"),
     (
         "b43_namespaces_declaration_merging",
         "interface_recursion.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "interface_var_constructors.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "keep_pairs_forward.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "keep_pairs_reverse.ts",
     ),
     ("b43_namespaces_declaration_merging", "namespace_forms.ts"),
     (
@@ -261,6 +298,34 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
     (
         "b43_namespaces_declaration_merging",
         "wu3_unavailable_header_metadata.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu4_class_namespace_matrix.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu4_function_namespace_inferred_boundary.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu4_function_namespace_matrix.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu4_interface_namespace_type_only.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu4_namespace_member_validation.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu4_namespace_payload_incomplete_ledger.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu4_standalone_namespace_boundary.ts",
     ),
 ];
 

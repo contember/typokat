@@ -83,20 +83,34 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .and_then(|binding| self.class_application_parameters.get(&binding.class_id))
             .cloned()
             .unwrap_or_default();
-        let type_params: Vec<TypeParamId> = descriptors
+        let application_type_params: Vec<TypeParamId> = descriptors
             .iter()
             .map(|descriptor| descriptor.application().id)
             .collect();
-        let parameter_types: Vec<TypeId> = class
-            .type_parameters
-            .as_deref()
-            .into_iter()
-            .flat_map(|declaration| declaration.params.iter())
-            .zip(type_params.iter().copied())
-            .map(|(parameter, id)| {
-                self.interner
-                    .intern_type_param(id, parameter.name.name.as_str())
+        let class_type_params = binding
+            .as_ref()
+            .map(|binding| binding.header_type_params.clone())
+            .unwrap_or_default();
+        let recovery_names = binding
+            .as_ref()
+            .and_then(|binding| {
+                self.type_environment
+                    .published()
+                    .groups()
+                    .get(binding.type_decl)
             })
+            .and_then(|terminal| match terminal {
+                super::super::type_groups::PublishedTypeGroupTerminal::Ready(group) => {
+                    Some(group.parameter_names.clone())
+                }
+                super::super::type_groups::PublishedTypeGroupTerminal::Unavailable(_) => None,
+            })
+            .unwrap_or_default();
+        let parameter_types: Vec<TypeId> = application_type_params
+            .iter()
+            .copied()
+            .zip(recovery_names.iter())
+            .map(|(id, name)| self.interner.intern_type_param(id, name))
             .collect();
         if let Some(binding) = binding.as_ref() {
             self.current_class = Some(binding.class_id);
@@ -131,7 +145,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let body_member_view = published_templates.is_none().then_some(body_view).flatten();
 
         // Rebuild the class type-parameter frame so body annotations resolve to template ids.
-        let frame = self.build_type_param_frame(class.type_parameters.as_deref(), &type_params);
+        let frame =
+            self.build_type_param_frame(class.type_parameters.as_deref(), &class_type_params);
 
         // Member bodies share the class type-parameter frame.
         self.with_type_params(frame, |pass| {
@@ -143,7 +158,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     static_side: static_this,
                     member_view: body_member_view,
                 },
-                &type_params,
+                &class_type_params,
                 &retained,
             )
         });

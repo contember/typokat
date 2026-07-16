@@ -685,7 +685,7 @@ where
                     inferred: &[],
                     kind: ClassApplicationKind::TypeReference,
                 };
-                match complete_class_arguments(request) {
+                match complete_class_arguments(self.factory, request) {
                     DemandOutcome::Ready(arguments) => {
                         let parameter_ids = parameters
                             .iter()

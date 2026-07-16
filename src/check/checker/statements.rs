@@ -5,6 +5,10 @@ use super::assignment::declared_from_init;
 use super::calls::{widen, FunctionReservation};
 use super::context::*;
 use super::decls::value_decl_id;
+use super::function_groups::{
+    FunctionGroupBodyCompletion, FunctionGroupIdentity, FunctionGroupUnavailableCause,
+    FunctionNamespacePayload,
+};
 use super::lexical_events::LexicalOwnerPhase;
 use crate::binder::declaration::ValueStorageId;
 use crate::binder::scope::ScopeId;
@@ -14,7 +18,7 @@ use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::{Reason, RelationOutcome};
 use crate::span::Span;
-use crate::types::repr::ObjectType;
+use crate::types::repr::{FunctionType, ObjectType};
 use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
     BindingPattern, BlockStatement, Declaration, Expression, ForInStatement, ForOfStatement,
@@ -26,6 +30,32 @@ use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
 
 impl<'a, 'ast> Pass<'a, 'ast> {
+    /// Install the namespace-side half of an admitted function merge before its
+    /// statement list reserves callable rows. The namespace lane owns lowering;
+    /// this API accepts only its frozen, identity-neutral value payload.
+    pub(in crate::check::checker) fn install_function_namespace_payload(
+        &mut self,
+        scope: ScopeId,
+        name: &str,
+        payload: FunctionNamespacePayload,
+    ) -> bool {
+        let Some(identity) =
+            super::function_groups::FunctionGroupRegistry::function_namespace_identity(
+                self.binder,
+                scope,
+                name,
+            )
+        else {
+            return false;
+        };
+        let symbol = identity.symbol;
+        self.function_groups.register(identity);
+        self.function_groups
+            .install_namespace_payload(symbol, payload);
+        self.publish_ready_function_group(symbol);
+        true
+    }
+
     /// Check a list of statements in `scope` at the **module top level** (no enclosing
     /// function, so no return context). Each statement flows through the unified
     /// statement walker with an empty return context.
@@ -226,7 +256,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 );
             }
             Statement::TSModuleDeclaration(declaration)
-                if !module_declaration_is_type_only(declaration) =>
+                if !self.check_prepared_namespace_declaration(declaration)
+                    && !module_declaration_is_type_only(declaration) =>
             {
                 self.record_incomplete(
                     "decl/module-declaration/self",
@@ -234,6 +265,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     "namespace/module declaration has an unmodeled value surface",
                 );
             }
+            Statement::TSModuleDeclaration(_) => {}
             Statement::TSGlobalDeclaration(_) => {
                 self.record_incomplete(
                     "decl/global-declaration/self",
@@ -336,7 +368,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 );
             }
             Declaration::TSModuleDeclaration(declaration)
-                if !module_declaration_is_type_only(declaration) =>
+                if !self.check_prepared_namespace_declaration(declaration)
+                    && !module_declaration_is_type_only(declaration) =>
             {
                 self.record_incomplete(
                     "decl/module-declaration/self",
@@ -344,6 +377,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     "namespace/module declaration has an unmodeled value surface",
                 );
             }
+            Declaration::TSModuleDeclaration(_) => {}
             Declaration::TSGlobalDeclaration(_) => {
                 self.record_incomplete(
                     "decl/global-declaration/self",
@@ -1022,25 +1056,133 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let mut index = 0;
         while index < statements.len() {
             if let Some((name, end)) = function_overload_group(statements, index) {
+                let group = self.register_function_group(scope, name);
                 for stmt in &statements[index..end] {
                     let Some(func) = function_decl_from_statement(stmt) else {
                         continue;
                     };
                     self.reserve_function_surface(scope, func, surfaces, false);
                 }
-                self.publish_reserved_overload_group(
-                    scope,
-                    &statements[index..end],
-                    name,
-                    surfaces,
-                );
+                if let Some(group) = group {
+                    let symbol = group.symbol;
+                    self.reserve_function_group_overload_rows(
+                        group,
+                        &statements[index..end],
+                        surfaces,
+                    );
+                    self.publish_ready_function_group(symbol);
+                } else {
+                    self.publish_reserved_overload_group(
+                        scope,
+                        &statements[index..end],
+                        name,
+                        surfaces,
+                    );
+                }
                 index = end;
                 continue;
             }
             if let Some(func) = function_decl_from_statement(&statements[index]) {
-                self.reserve_function_surface(scope, func, surfaces, true);
+                let group = func
+                    .id
+                    .as_ref()
+                    .and_then(|id| self.register_function_group(scope, id.name.as_str()));
+                self.reserve_function_surface(scope, func, surfaces, group.is_none());
+                if let Some(group) = group {
+                    self.reserve_ordinary_function_group_row(group, func, surfaces);
+                }
             }
             index += 1;
+        }
+    }
+
+    fn register_function_group(
+        &mut self,
+        scope: ScopeId,
+        name: &str,
+    ) -> Option<FunctionGroupIdentity> {
+        let identity = super::function_groups::FunctionGroupRegistry::function_namespace_identity(
+            self.binder,
+            scope,
+            name,
+        )?;
+        self.function_groups.register(identity.clone());
+        Some(identity)
+    }
+
+    fn reserve_ordinary_function_group_row(
+        &mut self,
+        group: FunctionGroupIdentity,
+        func: &Function<'_>,
+        surfaces: &FxHashMap<u32, FunctionReservation>,
+    ) {
+        let Some(declaration) = self.function_decl_id(func) else {
+            return;
+        };
+        match surfaces.get(&func.span.start) {
+            Some(FunctionReservation::Ready(surface))
+                if func.body.is_some() && surface.declared_return.is_none() =>
+            {
+                self.function_groups
+                    .wait_for_body(group.symbol, declaration);
+            }
+            Some(FunctionReservation::Ready(surface)) => {
+                self.function_groups.reserve_public_row(
+                    group.symbol,
+                    declaration,
+                    surface.function_ty,
+                );
+                self.publish_ready_function_group(group.symbol);
+            }
+            Some(FunctionReservation::Unavailable(surface)) => {
+                self.function_groups.mark_unavailable(
+                    group.symbol,
+                    FunctionGroupUnavailableCause::Signature,
+                    surface.tickets.map(|tickets| tickets.incomplete),
+                );
+            }
+            None => {}
+        }
+    }
+
+    fn reserve_function_group_overload_rows(
+        &mut self,
+        group: FunctionGroupIdentity,
+        statements: &[Statement<'_>],
+        surfaces: &FxHashMap<u32, FunctionReservation>,
+    ) {
+        for func in statements.iter().filter_map(function_decl_from_statement) {
+            let Some(declaration) = self.function_decl_id(func) else {
+                continue;
+            };
+            match surfaces.get(&func.span.start) {
+                Some(FunctionReservation::Ready(surface)) if func.body.is_none() => {
+                    self.function_groups.reserve_public_row(
+                        group.symbol,
+                        declaration,
+                        surface.function_ty,
+                    );
+                }
+                Some(FunctionReservation::Ready(_)) => {
+                    // The implementation row is validation-only.
+                    self.function_groups
+                        .reserve_validation_only(group.symbol, declaration);
+                }
+                Some(FunctionReservation::Unavailable(_)) if func.body.is_some() => {
+                    // An overload implementation never contributes a public row.
+                    self.function_groups
+                        .reserve_validation_only(group.symbol, declaration);
+                }
+                Some(FunctionReservation::Unavailable(surface)) => {
+                    self.function_groups.mark_unavailable(
+                        group.symbol,
+                        FunctionGroupUnavailableCause::Signature,
+                        surface.tickets.map(|tickets| tickets.incomplete),
+                    );
+                    return;
+                }
+                None => return,
+            }
         }
     }
 
@@ -1076,6 +1218,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         surfaces: &mut FxHashMap<u32, FunctionReservation>,
         publish_value: bool,
     ) -> bool {
+        let declaration = self.function_decl_id(func);
+        let function_group =
+            declaration.and_then(|declaration| self.function_groups.symbol_for_value(declaration));
         let Some(surface) = surfaces.remove(&func.span.start) else {
             // Defensive fallback for an AST shape outside the shared statement-list
             // walker (for example a labeled declaration).
@@ -1084,6 +1229,62 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         };
         match surface {
             FunctionReservation::Ready(mut surface) => {
+                if let (Some(symbol), Some(declaration)) = (function_group, declaration) {
+                    if self.function_groups.is_waiting_for(symbol, declaration) {
+                        let private_self = pure_self_recursive_name(func).map(|_| {
+                            self.interner.intern_function(FunctionType {
+                                type_params: surface.generic_params.clone(),
+                                receiver: surface.receiver,
+                                params: surface.params.clone(),
+                                ret: self.interner.well_known().never,
+                            })
+                        });
+                        let owner = surface.tickets.map(|tickets| tickets.incomplete);
+                        self.function_groups
+                            .begin_body(symbol, declaration, owner, private_self);
+                        let function_ty = self.fill_reserved_function(scope, func, &surface);
+                        surface.function_ty = function_ty;
+                        match self
+                            .function_groups
+                            .finish_body(symbol, declaration, function_ty)
+                        {
+                            FunctionGroupBodyCompletion::Ready => {
+                                self.publish_ready_function_group(symbol);
+                            }
+                            FunctionGroupBodyCompletion::Unavailable { cause, owner } => {
+                                let id = match cause {
+                                    FunctionGroupUnavailableCause::InferredReturnCycle => {
+                                        "decl/function-declaration/inferred-return-cycle"
+                                    }
+                                    FunctionGroupUnavailableCause::InferredReturnDependency => {
+                                        "decl/function-declaration/inferred-return-dependency"
+                                    }
+                                    FunctionGroupUnavailableCause::Signature
+                                    | FunctionGroupUnavailableCause::NamespacePayload => {
+                                        unreachable!("body completion owns only inference failures")
+                                    }
+                                };
+                                let emit = |pass: &mut Self| {
+                                    pass.record_incomplete(
+                                        id,
+                                        Span::from_oxc(func.span),
+                                        "merged function return inference did not reach a final callable surface",
+                                    );
+                                };
+                                match owner {
+                                    Some(owner) => self.with_ticket_effects(owner, emit),
+                                    None => emit(self),
+                                }
+                            }
+                        }
+                    } else {
+                        // Annotated public rows and overload implementations are
+                        // already terminal at reservation. Their bodies validate only.
+                        surface.function_ty = self.fill_reserved_function(scope, func, &surface);
+                    }
+                    surfaces.insert(func.span.start, FunctionReservation::Ready(surface));
+                    return true;
+                }
                 let function_ty = self.fill_reserved_function(scope, func, &surface);
                 surface.function_ty = function_ty;
                 if publish_value {
@@ -1119,6 +1320,30 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 self.decl_types.set(decl_id, function_ty);
             }
         }
+    }
+
+    fn publish_ready_function_group(&mut self, symbol: SymbolId) {
+        let Some(publication) = self.function_groups.publication_plan(symbol) else {
+            return;
+        };
+        assert_eq!(publication.symbol, symbol);
+        for declaration in &publication.participants {
+            assert!(
+                self.decl_types.get(*declaration).is_none(),
+                "function group participant was published before the atomic object"
+            );
+        }
+        let ty = self.interner.intern_object(ObjectType {
+            properties: publication.properties,
+            call_signatures: publication.call_signatures,
+            ..Default::default()
+        });
+        for declaration in publication.participants {
+            self.decl_types.set(declaration, ty);
+        }
+        self.flow_memo
+            .retain(|(_, memo_symbol), _| *memo_symbol != symbol);
+        self.function_groups.mark_published(symbol, ty);
     }
 
     /// Publish a callable type into one declaration sharing `symbol_id`, evicting
@@ -1184,7 +1409,14 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// behaviorally equivalent without introducing a second declaration model.
     fn check_function_declaration(&mut self, scope: ScopeId, func: &Function<'_>) {
         let mut surfaces = FxHashMap::default();
-        self.reserve_function_surface(scope, func, &mut surfaces, true);
+        let group = func
+            .id
+            .as_ref()
+            .and_then(|id| self.register_function_group(scope, id.name.as_str()));
+        self.reserve_function_surface(scope, func, &mut surfaces, group.is_none());
+        if let Some(group) = group {
+            self.reserve_ordinary_function_group_row(group, func, &surfaces);
+        }
         if !self.fill_reserved_function_body(scope, func, &mut surfaces, true) {
             return;
         }
@@ -1246,6 +1478,52 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         name: &str,
         surfaces: &mut FxHashMap<u32, FunctionReservation>,
     ) {
+        self.finalize_function_declaration_group_with_publication(
+            scope, statements, name, surfaces, true, false,
+        );
+    }
+
+    /// Validate already-reserved namespace function rows without republishing them.
+    pub(in crate::check::checker) fn validate_reserved_namespace_function_group(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+        surfaces: &mut FxHashMap<u32, FunctionReservation>,
+        ambient: bool,
+    ) -> bool {
+        let Some(first) = statements.first().and_then(function_decl_from_statement) else {
+            return false;
+        };
+        let Some(name) = first.id.as_ref().map(|id| id.name.as_str()) else {
+            return false;
+        };
+        if statements.iter().any(|statement| {
+            function_decl_from_statement(statement)
+                .and_then(|function| function.id.as_ref())
+                .map(|id| id.name.as_str())
+                != Some(name)
+        }) {
+            return false;
+        }
+        self.finalize_function_declaration_group_with_publication(
+            scope, statements, name, surfaces, false, ambient,
+        );
+        true
+    }
+
+    fn finalize_function_declaration_group_with_publication(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+        name: &str,
+        surfaces: &mut FxHashMap<u32, FunctionReservation>,
+        publish_value: bool,
+        ambient: bool,
+    ) {
+        let function_group = self
+            .binder
+            .resolve_value(scope, name)
+            .filter(|symbol| self.function_groups.contains_symbol(*symbol));
         let mut signatures = Vec::new();
         let mut implementation: Option<(TypeId, ValueStorageId)> = None;
         let mut unavailable = false;
@@ -1283,6 +1561,53 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         }
 
+        if !publish_value {
+            if !ambient
+                && implementation.is_none()
+                && statements
+                    .iter()
+                    .filter_map(function_decl_from_statement)
+                    .any(|func| !func.declare)
+            {
+                if let Some((_, span, ticket)) = signatures.last() {
+                    match ticket {
+                        Some(ticket) => self.with_ticket_effects(*ticket, |pass| {
+                            pass.emit_diagnostic(Diagnostic::overload_missing_implementation(
+                                *span,
+                            ));
+                        }),
+                        None => {
+                            self.emit_diagnostic(Diagnostic::overload_missing_implementation(*span))
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        if function_group.is_some() {
+            if implementation.is_none()
+                && statements
+                    .iter()
+                    .filter_map(function_decl_from_statement)
+                    .any(|func| !func.declare)
+            {
+                if let Some((_, span, ticket)) = signatures.last() {
+                    match ticket {
+                        Some(ticket) => self.with_ticket_effects(*ticket, |pass| {
+                            pass.emit_diagnostic(Diagnostic::overload_missing_implementation(
+                                *span,
+                            ));
+                        }),
+                        None => {
+                            self.emit_diagnostic(Diagnostic::overload_missing_implementation(*span))
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
         if unavailable {
             return;
         }
@@ -1298,7 +1623,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         let Some((implementation_ty, implementation_decl)) = implementation else {
             if let Some(overload_ty) = overload_ty {
-                if let Some((_, span, ticket)) = signatures.first() {
+                if let Some((_, span, ticket)) = signatures.last() {
                     if statements
                         .iter()
                         .filter_map(function_decl_from_statement)
@@ -1465,7 +1790,7 @@ fn variable_declaration_symbol_id(
     binder.resolve_value(declaration_scope, identifier.name.as_str())
 }
 
-fn function_overload_group<'stmt>(
+pub(in crate::check::checker) fn function_overload_group<'stmt>(
     statements: &'stmt [Statement<'_>],
     index: usize,
 ) -> Option<(&'stmt str, usize)> {
@@ -1485,7 +1810,7 @@ fn function_overload_group<'stmt>(
     }
 }
 
-fn function_decl_from_statement<'stmt, 'ast>(
+pub(in crate::check::checker) fn function_decl_from_statement<'stmt, 'ast>(
     stmt: &'stmt Statement<'ast>,
 ) -> Option<&'stmt Function<'ast>> {
     match stmt {
@@ -1496,6 +1821,31 @@ fn function_decl_from_statement<'stmt, 'ast>(
         },
         _ => None,
     }
+}
+
+/// Recognize only the exact unconditional recursion that TypeScript settles as
+/// `never`. Broader recursive control flow remains a terminal inference cycle.
+fn pure_self_recursive_name<'ast>(func: &Function<'ast>) -> Option<&'ast str> {
+    let name = func.id.as_ref()?.name.as_str();
+    let body = func.body.as_ref()?;
+    let [Statement::ReturnStatement(ret)] = body.statements.as_slice() else {
+        return None;
+    };
+    let mut returned = ret.argument.as_ref()?;
+    while let Expression::ParenthesizedExpression(paren) = returned {
+        returned = &paren.expression;
+    }
+    let Expression::CallExpression(call) = returned else {
+        return None;
+    };
+    let mut callee = &call.callee;
+    while let Expression::ParenthesizedExpression(paren) = callee {
+        callee = &paren.expression;
+    }
+    let Expression::Identifier(identifier) = callee else {
+        return None;
+    };
+    (identifier.name.as_str() == name).then_some(name)
 }
 
 /// Map a relation failure to `TK2741`/`TK2322`/`TK2345`. M6 keeps a flat headline

@@ -130,8 +130,8 @@ const b: Secret = { x: 1 };
 }
 
 /// Static/instance partition: a static member lives on the class value (the
-/// static side) and an instance member on instances; cross-access is `TK2339` in
-/// both directions, and a static field's type is checked on the class value.
+/// static side) and an instance member on instances. Instance-to-static access is
+/// `TK2576`; the reverse direction remains `TK2339`.
 #[test]
 fn static_and_instance_member_partition() {
     let src = "\
@@ -155,10 +155,21 @@ const z = Counter.value;
         diags(src),
         vec![
             (11, "TK2322".to_string()),
-            (14, "TK2339".to_string()),
+            (14, "TK2576".to_string()),
             (15, "TK2339".to_string())
         ]
     );
+}
+
+#[test]
+fn composed_class_instance_keeps_static_member_hint() {
+    let src = "\
+class Composed { static retained: number; own: number; }
+interface Composed { added: string; }
+declare const composed: Composed;
+composed.retained;
+";
+    assert_eq!(diags(src), vec![(4, "TK2576".to_string())]);
 }
 
 /// A `private`/`protected` member accessed where there is **no class context**

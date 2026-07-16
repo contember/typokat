@@ -6,6 +6,7 @@ use crate::types::repr::{
 };
 use crate::types::store::{Store, TypeId};
 use crate::types::{Interner, WellKnown};
+use rustc_hash::FxHashMap;
 
 /// Deliberately exposes only immutable-node construction. It has no evaluator,
 /// projector, relation engine, checker pass, or name-resolution callback.
@@ -95,6 +96,14 @@ impl<'a> SurfaceTypeFactory<'a> {
         arguments: Vec<(TypeParamId, TypeId)>,
     ) -> TypeId {
         self.interner.intern_instantiation(base, arguments)
+    }
+
+    pub(in crate::check::checker) fn substitute(
+        &mut self,
+        ty: TypeId,
+        substitutions: &FxHashMap<TypeParamId, TypeId>,
+    ) -> TypeId {
+        crate::types::substitute(self.interner, ty, substitutions)
     }
 
     pub(in crate::check::checker) fn intern_mapped(&mut self, mapped: MappedType) -> TypeId {
