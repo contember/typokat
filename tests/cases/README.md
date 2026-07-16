@@ -352,8 +352,8 @@ code-only because the exact fixed target can be literal-, primitive-, or
 union-shaped depending on candidate priority and contextual use. The corpus keeps
 at most one mismatched argument per call, per the general call-marker rule above.
 
-`b43_namespaces_declaration_merging/` contains 50 flat fixtures plus two WU5 project
-fixtures with four source files (54 source files total) for the namespace/declaration-space
+`b43_namespaces_declaration_merging/` contains 52 flat fixtures plus two WU5 project
+fixtures with four source files (56 source files total) for the namespace/declaration-space
 sprint. It covers merged property/method/call/construct/index and
 heritage surfaces, overload precedence and query order, generic constraint/default compatibility,
 recursive merge groups in opposite declaration orders, namespace syntax/reopening/visibility,
@@ -414,7 +414,15 @@ remain usable; it makes no standalone namespace value-receiver claim.
 Forward-demand and inferred-return cycles remain precise backlog-76 incomplete records, while
 post-body, annotated-recursive, and declared-overload surfaces require non-permissive witnesses.
 
-The full directory remains disabled because seven older flat fixtures are still outside the
+The WU6 hard-stop addendum pins two residuals found by checking the authoritative TypeScript 6.0.3
+`lib.es5.d.ts`. Ambient public members must resolve unqualified from interface bodies in the same
+block and across reopenings in both source orders. Ordinary namespace fragments retain their own
+private overlays while sharing only exported members. A locally declared global `Array<T>` must
+also be a real heritage group: `interface X extends Array<string>` inherits its locally merged
+members instead of taking the builtin-array opaque fallback. Semantic wrong-type witnesses keep
+both fixtures non-permissive under error/`any` recovery.
+
+The full directory remains disabled because nine flat fixtures are still outside the
 admitted slice. The conformance harness gates 43 flat fixtures explicitly through
 `ENABLED_FIXTURES`, plus both two-file WU5 projects through `ENABLED_PROJECT_FIXTURES`. WU5 adds
 `global_augmentation.ts`, `global_missing_declare_negative.ts`,
