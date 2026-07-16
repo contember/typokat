@@ -31,3 +31,23 @@ wu7NamedRestCall("a", "bad"); // error[TK2345]: Argument of type 'string' is not
 wu7PlainRestCall("a", "bad"); // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'
 
 type Wu7NamedOptional = [value?: string]; // incomplete[annotation-lower/tuple-optional-element/self]
+
+// tsc 6.0.3 reports TS2574 for each non-array rest element below. TK2574 is not
+// claimed here; owner75 records the sound lowering boundary instead.
+type Wu7PlainNonArrayRest = [string, ...number]; // incomplete[annotation-lower/tuple-rest-element/non-array]
+type Wu7NamedNonArrayRest = [first: string, ...rest: number]; // incomplete[annotation-lower/tuple-rest-element/non-array]
+
+// Controls: array, fixed-tuple, and constrained-generic rest containers are valid.
+type Wu7PlainArrayRestControl = [string, ...number[]];
+type Wu7NamedArrayRestControl = [first: string, ...rest: number[]];
+type Wu7PlainTupleRestControl = [string, ...[number, boolean]];
+type Wu7NamedTupleRestControl = [first: string, ...rest: [number, boolean]];
+type Wu7PlainGenericRestControl<T extends unknown[]> = [string, ...T];
+type Wu7NamedGenericRestControl<T extends unknown[]> = [first: string, ...rest: T];
+
+const wu7PlainArrayRestControl: Wu7PlainArrayRestControl = ["ok", 1, 2];
+const wu7NamedArrayRestControl: Wu7NamedArrayRestControl = ["ok", 1, 2];
+const wu7PlainTupleRestControl: Wu7PlainTupleRestControl = ["ok", 1, true];
+const wu7NamedTupleRestControl: Wu7NamedTupleRestControl = ["ok", 1, true];
+const wu7PlainGenericRestControl: Wu7PlainGenericRestControl<[number, boolean]> = ["ok", 1, true];
+const wu7NamedGenericRestControl: Wu7NamedGenericRestControl<[number, boolean]> = ["ok", 1, true];
