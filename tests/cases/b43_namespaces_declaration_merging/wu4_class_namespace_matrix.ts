@@ -1,6 +1,6 @@
 // WU4 — tsc 6.0.3 --strict --noEmit --lib es5 --module commonjs:
-// TS2434, TS2345 x4, and TS2322 x16 below. Explicit field and private annotations
-// keep initializer inference and nominal-origin construction outside this fixture's scope.
+// TS2300 x4, TS2434 x2, TS2345 x4, and TS2322 x18 below. Explicit field, static,
+// namespace-value, and private annotations keep unrelated inference outside this fixture's scope.
 
 class Wu4ForwardClass {
   static existing: number = 1;
@@ -103,3 +103,21 @@ const wu4AmbientReverseClassInstanceWrong: string = wu4AmbientReverseClassInstan
 const wu4AmbientReverseClassStaticWrong: string = Wu4AmbientReverseClass.existing; // error[TK2322]: Type 'number' is not assignable to type 'string'
 const wu4AmbientReverseClassTagWrong: number = Wu4AmbientReverseClass.tag; // error[TK2322]: Type 'string' is not assignable to type 'number'
 const wu4AmbientReverseClassOptionsWrong: number = wu4AmbientReverseClassOptions.enabled; // error[TK2322]: Type 'boolean' is not assignable to type 'number'
+
+class Wu4ForwardStaticCollision {
+  static collision(): number { return 1; } // error[TK2300]: Duplicate identifier 'collision'
+}
+namespace Wu4ForwardStaticCollision {
+  export function collision(): string { return "namespace"; } // error[TK2300]: Duplicate identifier 'collision'
+}
+const wu4ForwardStaticCollision: number = Wu4ForwardStaticCollision.collision();
+const wu4ForwardStaticCollisionWrong: string = Wu4ForwardStaticCollision.collision(); // error[TK2322]: Type 'number' is not assignable to type 'string'
+
+namespace Wu4ReverseStaticCollision { // error[TK2434]: A namespace declaration cannot be located prior to a class or function with which it is merged
+  export function collision(): string { return "namespace"; } // error[TK2300]: Duplicate identifier 'collision'
+}
+class Wu4ReverseStaticCollision {
+  static collision(): number { return 1; } // error[TK2300]: Duplicate identifier 'collision'
+}
+const wu4ReverseStaticCollision: string = Wu4ReverseStaticCollision.collision();
+const wu4ReverseStaticCollisionWrong: number = Wu4ReverseStaticCollision.collision(); // error[TK2322]: Type 'string' is not assignable to type 'number'
