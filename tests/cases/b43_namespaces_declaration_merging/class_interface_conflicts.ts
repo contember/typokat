@@ -214,3 +214,14 @@ class InterfaceFirstSetterPropertyConflict {
 declare const interfaceFirstSetterPropertyConflict: InterfaceFirstSetterPropertyConflict;
 const interfaceFirstSetterPropertyString: string = interfaceFirstSetterPropertyConflict.value;
 const interfaceFirstSetterPropertyWrong: number = interfaceFirstSetterPropertyConflict.value; // error[TK2322]: Type 'string' is not assignable to type 'number'
+
+interface InterfaceFirstAccessorPairConflict {
+  value: string; // error[TK2300]: Duplicate identifier 'value'
+}
+class InterfaceFirstAccessorPairConflict {
+  get value(): number { return 1; } // error[TK2300]: Duplicate identifier 'value'
+  set value(next: number) {} // error[TK2300]: Duplicate identifier 'value'
+}
+declare const interfaceFirstAccessorPairConflict: InterfaceFirstAccessorPairConflict;
+const interfaceFirstAccessorPairString: string = interfaceFirstAccessorPairConflict.value;
+const interfaceFirstAccessorPairWrong: number = interfaceFirstAccessorPairConflict.value; // error[TK2322]: Type 'string' is not assignable to type 'number'

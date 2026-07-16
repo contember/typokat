@@ -1,5 +1,5 @@
 // WU4 adversarial HOLD — tsc 6.0.3 --strict --noEmit --lib es5 --module commonjs:
-// TS2394, TS2391 x3, TS2769 x4, TS2339 x3, and TS2322 x14 below.
+// TS2394, TS2391 x4, TS2434, TS2769 x5, TS2339 x3, and TS2322 x16 below.
 
 function Wu4PrivateVariableOwner(): void {}
 namespace Wu4PrivateVariableOwner {
@@ -90,3 +90,16 @@ const wu4SplitString: string = Wu4SplitSignatureOwner.split("one");
 Wu4SplitSignatureOwner.split(true); // error[TK2769]
 const wu4SplitNumberWrong: string = Wu4SplitSignatureOwner.split(1); // error[TK2322]: Type 'number' is not assignable to type 'string'
 const wu4SplitStringWrong: number = Wu4SplitSignatureOwner.split("one"); // error[TK2322]: Type 'string' is not assignable to type 'number'
+
+function Wu4NonConsecutiveOwner(value: number): number; // error[TK2391]
+namespace Wu4NonConsecutiveOwner { // error[TK2434]: A namespace declaration cannot be located prior to a class or function with which it is merged
+  export const tag: string = "non-consecutive";
+}
+function Wu4NonConsecutiveOwner(value: number): number {
+  return value;
+}
+const wu4NonConsecutiveNumber: number = Wu4NonConsecutiveOwner(1);
+const wu4NonConsecutiveTag: string = Wu4NonConsecutiveOwner.tag;
+Wu4NonConsecutiveOwner("bad"); // error[TK2769]
+const wu4NonConsecutiveNumberWrong: string = Wu4NonConsecutiveOwner(1); // error[TK2322]: Type 'number' is not assignable to type 'string'
+const wu4NonConsecutiveTagWrong: number = Wu4NonConsecutiveOwner.tag; // error[TK2322]: Type 'string' is not assignable to type 'number'
