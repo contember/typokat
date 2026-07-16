@@ -1,5 +1,5 @@
 // WU4 — tsc 6.0.3 --strict --noEmit --lib es5 --module commonjs:
-// TS2300 x4, TS2434 x2, TS2345 x4, TS2322 x18, and TS2339 below. Explicit field,
+// TS2300 x5, TS2434 x2, TS2345 x4, TS2322 x20, and TS2339 below. Explicit field,
 // static, namespace-value, and private annotations keep unrelated inference outside this fixture's scope.
 
 class Wu4ForwardClass {
@@ -123,3 +123,13 @@ class Wu4ReverseStaticCollision {
 }
 const wu4ReverseStaticCollision: string = Wu4ReverseStaticCollision.collision();
 const wu4ReverseStaticCollisionWrong: number = Wu4ReverseStaticCollision.collision(); // error[TK2322]: Type 'string' is not assignable to type 'number'
+
+class Wu4PrototypeCollision {
+  instance: number = 1;
+}
+namespace Wu4PrototypeCollision {
+  export const prototype: string = "namespace"; // error[TK2300]: Duplicate identifier 'prototype'
+}
+const wu4PrototypeCollision: Wu4PrototypeCollision = Wu4PrototypeCollision.prototype;
+const wu4PrototypeCollisionWrong: string = Wu4PrototypeCollision.prototype; // error[TK2322]: Type 'Wu4PrototypeCollision' is not assignable to type 'string'
+const wu4PrototypeInstanceWrong: string = Wu4PrototypeCollision.prototype.instance; // error[TK2322]: Type 'number' is not assignable to type 'string'

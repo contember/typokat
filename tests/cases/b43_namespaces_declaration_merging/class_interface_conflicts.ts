@@ -118,3 +118,57 @@ interface InterfaceFirstHeritageBase { value: string }
 class InterfaceFirstHeritageCollision { value = 1; }
 declare const interfaceFirstHeritageCollision: InterfaceFirstHeritageCollision;
 const interfaceFirstHeritageWrong: boolean = interfaceFirstHeritageCollision.value; // error[TK2322]: Type 'number' is not assignable to type 'boolean'
+
+class PrivatePropertyAccessibilityConflict {
+  private value: number = 1; // error[TK2687]: All declarations of 'value' must have identical modifiers
+}
+interface PrivatePropertyAccessibilityConflict {
+  value: number; // error[TK2687]: All declarations of 'value' must have identical modifiers
+}
+declare const privatePropertyAccessibilityConflict: PrivatePropertyAccessibilityConflict;
+privatePropertyAccessibilityConflict.value; // error[TK2341]: Property 'value' is private
+
+class ProtectedPropertyAccessibilityConflict {
+  protected value: number = 1; // error[TK2687]: All declarations of 'value' must have identical modifiers
+}
+interface ProtectedPropertyAccessibilityConflict {
+  value: number; // error[TK2687]: All declarations of 'value' must have identical modifiers
+}
+declare const protectedPropertyAccessibilityConflict: ProtectedPropertyAccessibilityConflict;
+protectedPropertyAccessibilityConflict.value; // error[TK2445]: Property 'value' is protected
+
+class PrivateMethodAccessibilityConflict {
+  private method(value: number): number { return value; }
+}
+interface PrivateMethodAccessibilityConflict {
+  method(value: number): number; // error[TK2385]: Overload signatures must all be public, private or protected
+}
+declare const privateMethodAccessibilityConflict: PrivateMethodAccessibilityConflict;
+privateMethodAccessibilityConflict.method(1); // error[TK2341]: Property 'method' is private
+
+class ProtectedMethodAccessibilityConflict {
+  protected method(value: number): number { return value; }
+}
+interface ProtectedMethodAccessibilityConflict {
+  method(value: number): number; // error[TK2385]: Overload signatures must all be public, private or protected
+}
+declare const protectedMethodAccessibilityConflict: ProtectedMethodAccessibilityConflict;
+protectedMethodAccessibilityConflict.method(1); // error[TK2445]: Property 'method' is protected
+
+class GetterPropertyTypeConflict {
+  get value(): number { return 1; }
+}
+interface GetterPropertyTypeConflict {
+  value: string; // error[TK2717]: Subsequent property declarations must have the same type
+}
+declare const getterPropertyTypeConflict: GetterPropertyTypeConflict;
+const getterPropertyTypeConflictNumber: number = getterPropertyTypeConflict.value;
+const getterPropertyTypeConflictWrong: string = getterPropertyTypeConflict.value; // error[TK2322]: Type 'number' is not assignable to type 'string'
+
+class ClassOwnedHeritageBase {
+  inherited: number = 1;
+}
+class ClassOwnedHeritage {}
+interface ClassOwnedHeritage extends ClassOwnedHeritageBase {}
+const classOwnedHeritageNumber: number = new ClassOwnedHeritage().inherited;
+const classOwnedHeritageWrong: string = new ClassOwnedHeritage().inherited; // error[TK2322]: Type 'number' is not assignable to type 'string'
