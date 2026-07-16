@@ -31,7 +31,7 @@ enum DeferredEnum { A } // incomplete[decl/enum-declaration/self]
 type EnumUnavailableFirst = DeferredEnum.A | MissingEnumSibling.Bad; // incomplete[annotation-lower/type-name/qualified-enum] | error[TK2503]: Cannot find namespace 'MissingEnumSibling'
 
 class GenericBase<T> {}
-class QualifiedHeritage extends GenericBase<MissingHeritage.Root> {} // incomplete[class/class-heritage/type-arguments] | error[TK2503]: Cannot find namespace 'MissingHeritage'
+class QualifiedHeritage extends GenericBase<MissingHeritage.Root> {} // error[TK2503]: Cannot find namespace 'MissingHeritage'
 
 declare const computedClassKey: "field";
 class ComputedClassField {

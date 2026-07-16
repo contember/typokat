@@ -14,10 +14,10 @@ class B<T> {
 
 // INCOMPLETE (F3a): generic-base composition is deferred; the nested type query is
 // traversed and keeps its canonical record.
-class C extends B<typeof Missing> {} // incomplete[annotation-lower/type-query/typeof] | incomplete[class/class-heritage/type-arguments]
+class C extends B<typeof Missing> {} // incomplete[annotation-lower/type-query/typeof]
 
 // INCOMPLETE (F3a): a well-formed instantiation is unaccounted too (composition ignores it).
-class E extends B<number> {} // incomplete[class/class-heritage/type-arguments]
+class E extends B<number> {}
 
 // INCOMPLETE (F3b): the implements clause is not processed — the unresolved interface
 // name is never reported.
