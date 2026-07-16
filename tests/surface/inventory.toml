@@ -1616,6 +1616,12 @@ owner = "shipped"
 witness = "../cases/sr_semantic_duplication/class_initializer_unsupported.ts"
 
 [[incomplete]]
+id = "class/property-definition/implicit-any"
+context = "class property without an annotation or initializer has implicit any type"
+owner = "shipped"
+witness = "../cases/b73_surface_accounting/class_implicit_any.ts"
+
+[[incomplete]]
 id = "annotation-lower/type-reference/class-default-argument"
 context = "class type-parameter default unavailable at application"
 owner = "shipped"

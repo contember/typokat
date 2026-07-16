@@ -25,6 +25,10 @@ type must stay clean), implicit-any variables (`let x;` used before any assignme
 a type), array/object/default destructuring binding patterns and elements, element access with an uncheckable key (the
 TK7053 vs TK2536 split per tsc). Cross-check tsc 6.0.3 --strict.
 
+Until `TK7008` ships, a class property with neither an annotation nor an initializer records
+`incomplete[class/property-definition/implicit-any]` and poisons the class surface. It must not be
+omitted and leave an empty, permissive relation target.
+
 ## Touch points
 
 `src/check/checker/decls.rs` (param/var lowering), `src/check/checker/expr.rs` (element
