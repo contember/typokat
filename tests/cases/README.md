@@ -335,6 +335,8 @@ itself (`TS2352`) is deliberately out of scope, so every cast in this corpus is
 valid and the expected errors come from the surrounding target relation. The separate
 `b73_surface_accounting/assertion_compatibility.ts` fixture pins that missing validation with
 exact `expr-infer/{as,type}-assertion/compatibility` outcomes owned by backlog `75`.
+`assertion_compatibility_deferred_targets.ts` pins the conservative syntax-only fallback for
+assertions nested in arrow, function, and class scopes on otherwise deferred assignment targets.
 
 `b54_labeled_statements/` pins labels as transparent statement wrappers for
 ordinary checking, plus the flow-sensitive edges that make labels observable:
@@ -777,6 +779,7 @@ wildcard/`None`/skip that drops the position.
 | `class_members.ts` | WU5 | `collect_class_own_members` records static-block/accessor/index-sig/computed method + property keys (WU7-E F2) | `class/{static-block,accessor-property,class-index-signature}/self`, `class/{method,property}-definition/computed-key` | (member skip) |
 | `class_heritage.ts` | WU5/WU7 | generic extends arguments are supported/traversed; nested unsupported syntax keeps its owner; implements remains record-only | `annotation-lower/type-query/typeof`, `class/implements-clause/self` | TS2304 |
 | `assertion_compatibility.ts` | WU7 | assertions publish their asserted type but do not validate source/target overlap | `expr-infer/{as,type}-assertion/compatibility` | TS2352 ×2 |
+| `assertion_compatibility_deferred_targets.ts` | WU7 review | deferred assignment targets find assertions across nested arrow/function/class syntax without entering those scopes semantically | `expr-infer/{as,type}-assertion/compatibility` ×6 | TS2352 ×3; valid controls clean |
 | `type_param_default.ts` | WU5 | record-only: type-parameter defaults never lowered (WU7-E F3; ledger `constraints/type-parameter-defaults`) | `annotation-lower/type-parameter-default/self` | TS2304 |
 | `supported_annotations.ts` | WU5 (control) | keyof/mapped/conditional/template/readonly stay clean — no record | — | clean |
 
