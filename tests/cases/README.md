@@ -332,7 +332,9 @@ sources: the asserted type, not the untyped/out-of-subset fallback, must flow in
 declaration initializers, reassignments, and call arguments; the asserted expression
 is still walked so nested diagnostics such as `TK2304` are not lost. Cast validity
 itself (`TS2352`) is deliberately out of scope, so every cast in this corpus is
-valid and the expected errors come from the surrounding target relation.
+valid and the expected errors come from the surrounding target relation. The separate
+`b73_surface_accounting/assertion_compatibility.ts` fixture pins that missing validation with
+exact `expr-infer/{as,type}-assertion/compatibility` outcomes owned by backlog `75`.
 
 `b54_labeled_statements/` pins labels as transparent statement wrappers for
 ordinary checking, plus the flow-sensitive edges that make labels observable:
@@ -774,6 +776,7 @@ wildcard/`None`/skip that drops the position.
 | `signature_computed_key.ts` | WU5 | object/interface member collection records the computed key (property AND method signatures — WU7-E F1) | `signature/{property,method}-signature/computed-key` | TS1170/TS2304 |
 | `class_members.ts` | WU5 | `collect_class_own_members` records static-block/accessor/index-sig/computed method + property keys (WU7-E F2) | `class/{static-block,accessor-property,class-index-signature}/self`, `class/{method,property}-definition/computed-key` | (member skip) |
 | `class_heritage.ts` | WU5 | record-only: extends type arguments + implements clause never processed (WU7-E F3) | `class/class-heritage/type-arguments`, `class/implements-clause/self` | TS2304 |
+| `assertion_compatibility.ts` | WU7 | assertions publish their asserted type but do not validate source/target overlap | `expr-infer/{as,type}-assertion/compatibility` | TS2352 ×2 |
 | `type_param_default.ts` | WU5 | record-only: type-parameter defaults never lowered (WU7-E F3; ledger `constraints/type-parameter-defaults`) | `annotation-lower/type-parameter-default/self` | TS2304 |
 | `supported_annotations.ts` | WU5 (control) | keyof/mapped/conditional/template/readonly stay clean — no record | — | clean |
 

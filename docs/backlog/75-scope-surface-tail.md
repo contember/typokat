@@ -32,6 +32,7 @@ The currently unowned tail includes:
   (`TK7027`), delete-operand checking (`TK2790`), decorators, and computed/symbol properties;
 - deferred model shapes without an exact dedicated diagnostic: type-parameter defaults, optional
   tuple elements, and generic/deferred `T[K]` outside mapped templates;
+- assertion source/target overlap validation (`TK2352`);
 - exception/catch flow, async/generator expression semantics, bigint/symbol/object/unique and
   literal-type forms, private expressions, and class static blocks, auto-accessors, and index
   signatures; polymorphic `this` type annotations/qualified `this` type names (distinct from the

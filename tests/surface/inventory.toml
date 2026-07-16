@@ -415,6 +415,16 @@ owner = "shipped"
 witness = "../cases/m3_functions"
 
 [[surface]]
+id = "expr-infer/as-assertion/compatibility"
+role = "expr-infer"
+surface = "as-assertion"
+slot = "compatibility"
+oxc_variant = "Expression::TSAsExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "../cases/b73_surface_accounting/assertion_compatibility.ts"
+
+[[surface]]
 id = "expr-infer/as-assertion/self"
 role = "expr-infer"
 surface = "as-assertion"
@@ -774,6 +784,16 @@ oxc_variant = "Expression::ThisExpression"
 disposition = "supported"
 owner = "shipped"
 witness = "../cases/m11_classes"
+
+[[surface]]
+id = "expr-infer/type-assertion/compatibility"
+role = "expr-infer"
+surface = "type-assertion"
+slot = "compatibility"
+oxc_variant = "Expression::TSTypeAssertion"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "../cases/b73_surface_accounting/assertion_compatibility.ts"
 
 [[surface]]
 id = "expr-infer/type-assertion/self"
