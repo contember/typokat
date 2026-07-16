@@ -52,11 +52,48 @@ const wu7NamedTupleRestControl: Wu7NamedTupleRestControl = ["ok", 1, true];
 const wu7PlainGenericRestControl: Wu7PlainGenericRestControl<[number, boolean]> = ["ok", 1, true];
 const wu7NamedGenericRestControl: Wu7NamedGenericRestControl<[number, boolean]> = ["ok", 1, true];
 
-// A direct infer rest is valid only in a conditional extends clause and only
-// when its own constraint is array-like. tsc reports TS2574 for the first case;
-// owner75 withholds the tuple until that diagnostic is modeled.
-type Wu7ConstrainedInferNonArray<T> = T extends [...infer R extends number] ? R : never; // incomplete[annotation-lower/tuple-rest-element/non-array]
-type Wu7ConstrainedInferArrayControl<T> = T extends [...infer R extends readonly unknown[]] ? R : never;
+// Constrained infer is not modeled yet. Every constraint is withheld at the
+// infer declaration, including constraints which happen to be array-like.
+type Wu7ConstrainedInferDirect<T> = T extends infer R extends string ? R : never; // incomplete[annotation-lower/infer-type/constraint]
+type Wu7ConstrainedInferNonArray<T> = T extends [...infer R extends number] ? R : never; // incomplete[annotation-lower/infer-type/constraint]
+type Wu7ConstrainedInferArray<T> = T extends [...infer R extends readonly unknown[]] ? R : never; // incomplete[annotation-lower/infer-type/constraint]
+
+// tsc selects the false branch and reports TS2322 on the following declaration.
+// Typokat withholds the alias at the constraint instead of publishing the
+// unconstrained number-tuple capture.
+type Wu7ConstrainedInferFalseClean<T> = T extends [...infer R extends string[]] ? R : "fallback"; // incomplete[annotation-lower/infer-type/constraint]
+const wu7ConstrainedInferFalseClean: Wu7ConstrainedInferFalseClean<[number]> = [1];
+
+// A declaration becomes a reference only in the true branch. It is not visible
+// to a sibling type inside the same extends pattern, on either lowering path.
+type Wu7InferSameExtendsOrdinary<T> = T extends [infer R, R] ? R : never; // error[TK2304]: Cannot find name 'R'
+declare class Wu7InferSameExtendsClass<T> {
+  value: T extends [infer R, R] ? R : never; // error[TK2304]: Cannot find name 'R'
+}
+
+// The conditional binder shadows an outer class parameter in its true branch.
+declare class Wu7InferClassShadow<R> {
+  value: string extends infer R ? R : never;
+}
+declare const wu7InferClassShadow: Wu7InferClassShadow<number>;
+const wu7InferClassShadowOk: string = wu7InferClassShadow.value;
+const wu7InferClassShadowBad: number = wu7InferClassShadow.value; // error[TK2322]: Type 'string' is not assignable to type 'number'
+
+// An active infer binder is never generic, even when a lexical generic alias has
+// the same name. Type arguments must not bypass infer-name resolution.
+type Wu7InferAppliedR<T> = T;
+type Wu7InferAppliedOrdinary<T> = T extends infer Wu7InferAppliedR ? Wu7InferAppliedR<number> : never; // error[TK2315]: Type 'Wu7InferAppliedR' is not generic
+declare class Wu7InferAppliedClass<T> {
+  value: T extends infer Wu7InferAppliedR ? Wu7InferAppliedR<number> : never; // error[TK2315]: Type 'Wu7InferAppliedR' is not generic
+}
+
+// Bare and parenthesized infer-rest declarations are both valid and preserve the
+// precise captured tuple in the true branch.
+type Wu7BareInferRestControl<T> = T extends [...infer R] ? R : never;
+type Wu7ParenthesizedInferRest<T> = T extends [...(infer R)] ? R : never;
+const wu7BareInferRestControl: Wu7BareInferRestControl<[string, number]> = ["ok", 1];
+const wu7ParenthesizedInferRestOk: Wu7ParenthesizedInferRest<[string, number]> = ["ok", 1];
+const wu7ParenthesizedInferRestBad: Wu7ParenthesizedInferRest<[string, number]> = ["ok", "bad"]; // error[TK2322]: Type 'string' is not assignable to type 'number'
 
 // tsc reports TS1338 for declaring infer in a conditional true branch. This is
 // a separate infer-placement validation gap; the tuple-rest boundary must still
