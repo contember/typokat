@@ -73,10 +73,15 @@ needs Python 3 and the binary.
 2. **Gating ("discover").** Each test lands in exactly one bucket:
    - `multifile` — more than one `@filename` unit (modules / cross-file).
    - `syntax:<feature>` — uses a checking feature typokat doesn't model and that
-     wouldn't self-report (`enum`, decorators, `namespace`/`import`/`export`,
+     wouldn't self-report (`enum`, decorators, external-module syntax,
      `satisfies`, `as const`, user-defined type predicates/assertions, or
-     `instanceof` narrowing).
-     Heuristic regex — see `OUT_OF_SCOPE_SYNTAX`.
+     `instanceof` narrowing). The module gate must distinguish top-level
+     import/export, `export as namespace`, `require`, reference directives, and
+     string-literal external modules from identifier `namespace N` / `module N`
+     declarations. Identifier namespaces — including nested, dotted, ambient, and
+     namespace-body exports — proceed to the checker. Module-like text in comments
+     and strings does not trigger the gate. See `syntax_bucket` and
+     `OUT_OF_SCOPE_SYNTAX`.
    - `unsupported` — typokat exited **3** (incomplete): it recorded an in-scope
      surface it does not yet check (an `incomplete[<id>]` record; the first-class
      incomplete outcome, WU2). Demoted to OOS but, unlike other buckets, it **keeps
@@ -194,12 +199,15 @@ python3 -m unittest test_tsofficial -v
 - `PINNED_SHA` — the TS commit (currently the `v6.0.3` tag, matching the tsc the
   checker was validated against). Bump it deliberately; baselines move with it.
 - `DEFAULT_DIRS` — the curated conformance subtrees fetched by default.
-- `OUT_OF_SCOPE_SYNTAX` — the syntax-bucket heuristics.
+- `syntax_bucket` / `OUT_OF_SCOPE_SYNTAX` — the structural module classifier and
+  the remaining syntax-bucket heuristics.
 
 ## Limitations (v1, honest)
 
-- Syntax bucketing is regex-heuristic; a few tests may be mis-bucketed. The
-  `unresolved` and `parse-error` self-gates catch most real out-of-scope cases.
+- Most syntax buckets remain regex-heuristic, so a few tests may be mis-bucketed.
+  The module bucket has the stricter structural contract above because identifier
+  namespaces are supported while external modules are not. The `unresolved` and
+  `parse-error` self-gates catch most other real out-of-scope cases.
 - `parse-error` is a whole-file gate. A mixed official file can stay out of scope
   when it contains parser-level syntax diagnostics even if other cases in that
   file use constructs typokat now models. Promote those by adding focused
