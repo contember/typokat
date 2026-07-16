@@ -42,3 +42,7 @@ codespan-reporting = "0.13.1"
 # parse→bind→check pipeline runs on its own worker. The oxc AST is `!Send + !Sync`
 # (pinned to its parsing thread), so the per-file pipeline is the unit of work.
 rayon = "1.12.0"
+
+[dev-dependencies]
+sha2 = "0.10.9"
+toml = "0.8.23"
