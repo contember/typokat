@@ -409,6 +409,13 @@ state changes remain deferred until the implementation and repeated readiness pr
 - Remove the official-suite namespace syntax prefilter only when the measured newly admitted set has
   zero regression. Newly exposed non-`43` gaps must stay explicitly OOS/owned; never change the
   scoreboard merely to hide a failure.
+- **2026-07-16 gate result — NO.** The retained coarse classifier has 117 `syntax:module` rows. A
+  structural split would leave 27 in that bucket and expose 90 files: 29 move to existing secondary
+  syntax gates, 32 become `OOS:unsupported`, 27 become IN (only 12 exact; 103 false negatives and
+  24 false positives), one parse-fails, and `callSignatureAssignabilityInInheritance3.ts` aborts
+  with a checker stack overflow. The attempted classifier and its future-facing harness contract
+  were removed without changing the scoreboard; this prefilter stays until a later measured set
+  satisfies the zero-regression gate.
 - On PASS, require `tests/surface/inventory.toml` and `completion-1.0.toml` validation with no stale
   backlog `43` owner: every reassigned surface must name a real active owner and witness, and the
   manifest dependency graph must remain machine-valid. Only then mark
