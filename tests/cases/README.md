@@ -79,8 +79,11 @@ EOF spans.
 | `TK2344` | Type argument does not satisfy the type parameter's constraint |
 | `TK2345` | Argument type not assignable to parameter type |
 | `TK2349` | Expression is not callable |
+| `TK2351` | Expression is not constructable |
 | `TK2445` | Property is protected (accessed outside the class and its subclasses) |
+| `TK2448` | Block-scoped variable is used before its declaration |
 | `TK2451` | Cannot redeclare a block-scoped variable |
+| `TK2454` | Variable is used before being assigned |
 | `TK2456` | Type alias circularly references itself |
 | `TK2416` | Property in derived type not assignable to the same property in base type (override compatibility) |
 | `TK2511` | Cannot create an instance of an abstract class |
@@ -101,6 +104,7 @@ EOF spans.
 | `TK2558` | Wrong number of type arguments |
 | `TK2576` | Static class member is accessed on an instance |
 | `TK2589` | Type instantiation is excessively deep and possibly infinite |
+| `TK2631` | Cannot assign to a namespace binding |
 | `TK2503` | Cannot find namespace |
 | `TK2669` | Global augmentation is outside an external or ambient module |
 | `TK2670` | Global augmentation is missing `declare` outside an ambient context |
@@ -112,6 +116,7 @@ EOF spans.
 | `TK2702` | A type-only name is used as a namespace |
 | `TK2706` | Required type parameters may not follow optional type parameters |
 | `TK2707` | Generic type requires between a minimum and maximum number of type arguments |
+| `TK2708` | Cannot use a type-only namespace as a value |
 | `TK2713` | A type-only path segment is accessed as a namespace |
 | `TK2717` | Subsequent property declaration has an incompatible type |
 | `TK2741` | Property is missing in type but required |
@@ -352,8 +357,8 @@ code-only because the exact fixed target can be literal-, primitive-, or
 union-shaped depending on candidate priority and contextual use. The corpus keeps
 at most one mismatched argument per call, per the general call-marker rule above.
 
-`b43_namespaces_declaration_merging/` contains 52 flat fixtures plus two WU5 project
-fixtures with four source files (56 source files total) for the namespace/declaration-space
+`b43_namespaces_declaration_merging/` contains 58 flat fixtures plus four project
+fixtures with eight source files (66 source files total) for the namespace/declaration-space
 sprint. It covers merged property/method/call/construct/index and
 heritage surfaces, overload precedence and query order, generic constraint/default compatibility,
 recursive merge groups in opposite declaration orders, namespace syntax/reopening/visibility,
@@ -433,10 +438,65 @@ incomplete outcomes: 179 owned by `75`, eight type predicates owned by `50`, and
 value boundary owned by `43`. Those counts are exact accounting, not a broad allowlist or a claim
 that full standard-library loading has started.
 
-The directory contains 52 flat fixtures. Seven older fixtures remain outside the admitted slice,
-so the whole directory stays disabled; the conformance harness gates the other 45 flat fixtures
+The disabled WU6A addendum specifies standalone instantiated namespace values under ADR-0010. Its
+six `wu6a_*.ts` flat fixtures pin ordinary and ambient/reopened roots as first-class aliases,
+arguments, and returns; static and computed reads; function calls and class construction through
+members; nested/dotted bottom-up values; private/missing members; namespace-body traversal; and the
+exact `const`-readonly versus `let`/`var`/function/class/nested-property mutability matrix. Root
+assignment and update forms require `TK2631`; a non-callable/non-constructable namespace root
+requires `TK2349`/`TK2351` (backlogs `19`/`75` while deferred). Pure ordinary and ambient type-only
+namespaces allocate no value storage or empty object: every alias/read/member/call/`new` value demand
+pins future exact `TK2708`, while qualified type use remains clean. The current `TK2304` result is a
+sound diagnostic-code boundary, not permission to manufacture a receiver; WU6A's acceptance target
+is the strict-tsc code.
+
+Two ordinary instantiated namespaces in `wu6a_first_class_values.ts` intentionally publish equal
+structural shapes and clean member reads. The implementation direct gate must prove distinct
+namespace-owned `ValueStorageId`s even when hash-consing deduplicates their structural `TypeId`.
+
+`wu6a_unavailable_ledger.ts` keeps every admitted exported child that cannot publish on its precise
+non-43 boundary and
+requires the complete parent value to remain terminal `Unavailable`: `typeof` type query → `52`
+(`annotation-lower/type-query/typeof`), inferred initializer/function return → `76`, enum → `42`,
+import-equals → `15`, duplicate value → `18`, TDZ/use-before-assignment → `47`, and the current
+class/static dependency cycle → implementation or `76`. The stable payload incomplete ids are
+pinned where they already exist. The duplicate row deliberately retains its backlog-18 incomplete
+instead of pretending tsc's `TS2451` pair is implemented; the TDZ row pins future `TK2448` and
+`TK2454` because no honest typed incomplete surface currently represents that semantic check. Root
+aliases in the ledger are direct-state demands: they must observe no `Ready` value, partial prefix,
+empty/error object, or fallback owner.
+
+The class/static row is a real dependency cycle: the namespace root requires the exported class
+value while the class's inferred static `root` initializer references that namespace value. It must
+retain `decl/class-declaration/namespace-payload-static-cycle` at the class declaration under owner
+`76` and withhold the whole namespace, never publish a partial class/root pair.
+
+TypeScript 6.0.3 admits a plain private `using` declaration inside an ordinary namespace and the
+namespace root remains a valid value, but rejects `export using` (`TS1491`), namespace `await using`
+(`TS2852`), exported `await using` (`TS1495`), and ambient `using` (`TS1545`). The private form can
+instantiate the group but contributes no public property. No WU6A marker or owner is invented: a
+later direct gate must either support private `using` or assign it one concrete non-43
+`Unavailable` owner before publishing `Ready`, and must prove the private binding cannot leak. Any
+future admitted `await using` or exported using form requires the same owner decision first.
+
+The disabled `wu6a_project_forward/` and `wu6a_project_reverse/` projects contain the same reopened
+namespace declarations and semantic demands in opposite source/input order. The marker oracle pins
+the same `TK2322`; implementation direct tests additionally compare the stable `ValueStorageId`,
+structural `TypeId`, terminal publication, and exact EventStore replay tuple
+`(original_module_ordinal, source_start, event_ordinal, record_ordinal)` without deduplication,
+truncation, suppression, or completion-order drift. Existing `wu4_function_namespace_matrix.ts`,
+`wu4_class_namespace_matrix.ts`, `keep_pairs_forward.ts`, and `keep_pairs_reverse.ts` remain the
+function/class owner controls; WU6A does not duplicate them.
+Across the six flat fixtures and both project orders, the pinned tsc oracle has exactly 33
+diagnostics: `TS2322` x5, `TS2339` x2, `TS2345` x4, `TS2349`, `TS2351`, `TS2448`, `TS2451` x2,
+`TS2454`, `TS2540` x2, `TS2631` x4, and `TS2708` x10.
+
+The directory contains 58 flat fixtures. Seven older fixtures plus all six WU6A flat fixtures remain
+outside the admitted slice, so the whole directory stays disabled; the conformance harness gates
+the other 45 flat fixtures
 explicitly through
-`ENABLED_FIXTURES`, plus both two-file WU5 projects through `ENABLED_PROJECT_FIXTURES`. WU6 adds
+`ENABLED_FIXTURES`, plus both two-file WU5 projects through `ENABLED_PROJECT_FIXTURES`. Neither WU6A
+project is registered. WU6 adds
 `wu6_ambient_namespace_body_lookup.ts` and `wu6_local_array_heritage.ts`. WU5 adds
 `global_augmentation.ts`, `global_missing_declare_negative.ts`,
 `global_script_negative.ts`, `global_value_publication_deferred.ts`, `umd_export.d.ts`,
