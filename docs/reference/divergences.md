@@ -201,13 +201,6 @@ and validated the same way.
   surface, but typokat does not emit tsc's `TS2300`/`TS2451` family. Backlog `18`
   owns it.
   <!-- div: id=namespaces/attached-duplicate-class dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_namespace_payload_incomplete_ledger.ts -->
-- **A standalone namespace value surface is unavailable (over-report).** typokat
-  publishes the namespace's exported type members but records
-  `decl/module-declaration/self` for its value receiver; tsc publishes both. The pinned
-  ES5 proof isolates exactly one backlog-`43` instance at `declare namespace Intl`:
-  the `Intl` type path works, while the value witness reports `TK2304` instead of tsc's
-  `TS2322`. This is the sole owner-43 ES5 start blocker, not a runtime-emit claim.
-  <!-- div: id=namespaces/standalone-value-surface dir=over scope=b-namespaces owner=../backlog/43-namespaces-declaration-merging.md witness=../../tests/fixtures/lib-es5-6.0.3/readiness.toml -->
 - **A type depending on a deferred global value namespace is unavailable
   (cosmetic).** typokat records the exact backlog-82 global-augmentation incomplete
   outcome and withholds the dependent type instead of guessing from a same-named

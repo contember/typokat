@@ -1,8 +1,8 @@
 schema = 1
 target = "typescript-6.0.3-lib-es5-model-readiness"
-conclusion = "NO-GO"
+conclusion = "GO"
 decision_target = "../../../docs/backlog/14-libdts-loading.md"
-reason = "The raw artifact still has one backlog-43 architecture stop and exact non-43 residuals."
+reason = "The pinned explicit-input type model has no backlog-43 residual, so backlog 14 may start; owners 50 and 75 still block checker 1.0."
 witness_marker_grammar = "// witness[ID] oracle[TSdddd] typokat[TKdddd] [owner[relative-path]]"
 
 [artifact]
@@ -19,32 +19,32 @@ lines = 4599
 artifact_path = "tests/fixtures/lib-es5-6.0.3/lib.es5.d.ts"
 witness_path = "tests/fixtures/lib-es5-6.0.3/semantic-witnesses.ts"
 separator = "one additional LF"
-witness_sha256 = "0ed155e0b4152852d8d9b5792f8ffcf16d996f2a63d9ea2e75159c115338db02"
-witness_bytes = 10599
+witness_sha256 = "53205c34eae4352b31916f70f22b78d4d06c1c7a2baf0d4b8d8d228d6de485e0"
+witness_bytes = 10533
 witness_lines = 141
-sha256 = "cef7200c40e40b6bc9085cf0903b84b851d76de425d513b81930ad9e3caecb5e"
-bytes = 229572
+sha256 = "b4e8644a79bd4ab82fdeed8d8874e8276ed120a7fabbf25fd456bd95a626418b"
+bytes = 229506
 lines = 4741
 
 [measurements.raw_typokat]
-checker_revision = "d2470a3"
+checker_revision = "23bad42"
 command = "target/debug/typokat check --format compact tests/fixtures/lib-es5-6.0.3/lib.es5.d.ts"
 exit_code = 3
 parse_errors = 0
 diagnostics = 4
-incompletes = 188
+incompletes = 187
 
 [measurements.synthetic_typokat]
-checker_revision = "d2470a3"
+checker_revision = "23bad42"
 command = "target/debug/typokat check --format compact $COMBINED"
 exit_code = 3
 parse_errors = 0
 diagnostics = 70
-incompletes = 188
+incompletes = 187
 artifact_diagnostics = 4
 witness_diagnostics = 66
-tk2304 = 1
-tk2322 = 65
+tk2304 = 0
+tk2322 = 66
 tk2430 = 4
 
 [measurements.tsc_oracle]
@@ -109,7 +109,7 @@ ids = [
 "deep.Array.element" = { oracle = "TS2322", typokat = "TK2322" }
 "deep.Date.member" = { oracle = "TS2322", typokat = "TK2322" }
 "deep.Intl.type" = { oracle = "TS2322", typokat = "TK2322" }
-"deep.Intl.value" = { oracle = "TS2322", typokat = "TK2304", owner = "../../../docs/backlog/43-namespaces-declaration-merging.md" }
+"deep.Intl.value" = { oracle = "TS2322", typokat = "TK2322" }
 "deep.Number.member" = { oracle = "TS2322", typokat = "TK2322" }
 "deep.Object.member" = { oracle = "TS2322", typokat = "TK2322" }
 "deep.String.member" = { oracle = "TS2322", typokat = "TK2322" }
@@ -244,13 +244,3 @@ count = 2
 owner = "../../../docs/backlog/63-review-parity-tail.md"
 witnesses = ["lib.es5.d.ts:329:11", "lib.es5.d.ts:366:11"]
 actual_cause = "Heritage checking emits one surplus TK2430 per failing interface instead of one canonical diagnostic per interface/base edge."
-
-[[residual]]
-id = "standalone-namespace-value"
-outcome = "incomplete"
-surface = "decl/module-declaration/self"
-count = 1
-owner = "../../../docs/backlog/43-namespaces-declaration-merging.md"
-witnesses = ["lib.es5.d.ts:4416:1", "deep.Intl.value"]
-architecture_stop = true
-actual_cause = "The checker publishes the ambient namespace type container but no standalone namespace value metadata or qualified receiver; emit and runtime initialization are not involved."

@@ -429,12 +429,13 @@ both fixtures non-permissive under error/`any` recovery.
 The durable WU6 proof is
 [`tests/fixtures/lib-es5-6.0.3/readiness.toml`](../fixtures/lib-es5-6.0.3/readiness.toml).
 All 28 interface/value pairs, repeated `Date`/`Number`/`String` interfaces, local `Array` heritage,
-and the `Intl` type container are represented. The frozen pre-WU6A manifest records **NO-GO** with
-four `TK2430`s and 188 explicit incomplete outcomes: 179 owned by `75`, eight type predicates owned
-by `50`, and the standalone `Intl` value receiver owned by `43`. WU6A removes exactly that owner-43
-outcome, so the deliberately unchanged readiness gate now reports 187 actual versus 188 pinned;
-accepting that baseline delta remains a separate change. These counts are exact accounting, not a
-broad allowlist or a claim that full standard-library loading has started.
+and both `Intl` type and value paths are represented. The superseding proof at checker commit
+`23bad42` records **GO for starting backlog 14** with four `TK2430`s and 187 explicit incomplete
+outcomes: 179 owned by `75` and eight type predicates owned by `50`; owner `43` is absent.
+`deep.Intl.value` now contributes the same `TK2322` as tsc, so the synthetic suffix is exactly 66
+`TK2322` diagnostics with no `TK2304` and no added incomplete. These counts are exact accounting,
+not a broad allowlist. GO permits loader work after the immediate backlog-43 lifecycle closure; it
+does not claim that standard-library loading, owners `50`/`75`, or checker 1.0 are complete.
 
 The WU6A addendum specifies standalone instantiated namespace values under ADR-0010. Five enabled
 `wu6a_*.ts` flat fixtures pin ordinary and ambient/reopened roots as first-class aliases,

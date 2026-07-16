@@ -18,7 +18,7 @@ is [`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml).
 | SHA-256 | `bcd24271a113971ba9eb71ff8cb01bc6b0f872a85c23fdbe5d93065b375933cd` |
 | Size | 218,972 bytes; 4,599 LF-terminated lines; 80 interfaces |
 | Committed artifact | `tests/fixtures/lib-es5-6.0.3/lib.es5.d.ts` |
-| Proof commits | `b424e74`, `5951968`, `3f641ea` |
+| Proof commits | `b424e74`, `5951968`, `3f641ea`; standalone namespace-value checker `23bad42` |
 
 es5 core is the **minimum** surface: `lib.d.ts` itself is a reference file that pulls in
 `lib.es5.d.ts` + `lib.dom.d.ts` + …; es5 is the part every non-`--lib` program loads and
@@ -46,7 +46,7 @@ of loader work.
 | **Generic methods (method-level `<T>`/`<U>`)** | `^\s+\w+<[A-Z][^>]*>\(` | pervasive | **✓ shipped (B41)** — persistent generic method/call/construct signatures; member projection and lib loading remain `14` |
 | **Declaration merging** (interface+`var` same name; repeated `interface` blocks) | committed semantic witnesses | 28 pairs + `Date`/`Number`/`String` | **✓ shipped** — pair type/value witnesses and repeated-interface deep members reject the wrong types |
 | **`namespace` type side** | `declare namespace Intl` | 1 | **✓ shipped** — `Intl.CollatorOptions` resolves and checks |
-| **Standalone namespace value** | `Intl.Collator()` | 1 | **✗ blocks start of 14 → `43`** — no standalone namespace value metadata/qualified receiver; requires a superseding architecture decision |
+| **Standalone namespace value** | `Intl.Collator()` | 1 | **✓ shipped (WU6A / ADR-0010)** — `deep.Intl.value` rejects with `TK2322`, matching tsc, without an incomplete |
 | **Type predicates** | annotation lowering | 8 | **1.0 owner → `50`**; explicit incompletes, independent of loader start |
 | **Polymorphic `this` / object / intrinsic / symbol / bigint annotations** | annotation lowering | 179 | **1.0 owner → `75`** (164/6/5/3/1); explicit incompletes, independent of loader start |
 | **Callable heritage compatibility** | `CallableFunction`/`NewableFunction extends Function` | 2 canonical + 2 surplus `TK2430` | canonical compatibility → `14`; surplus cardinality → parity-only `63` |
@@ -55,24 +55,25 @@ of loader work.
 | `satisfies` / `as const` | `\bsatisfies\b`, `as const` | **0** | ✓ not used by es5 core (full model completeness → `44`, not for `14`) |
 | Symbol / computed keys (`[Symbol.x]`) | `\[Symbol\.` | **0** in es5 | out of es5 (arrives with `es2015.iterable`; Tier B) |
 
-## Headline — current NO-GO boundary
+## Headline — GO for starting backlog 14
 
 The type-side namespace and declaration-merging work is real: all 28 constructor pairs,
-`Date`/`Number`/`String` reopenings, `Intl` type access, and local `Array<T>` heritage are proven.
-The raw pinned artifact produces exactly 4 diagnostics and 188 incompletes:
+`Date`/`Number`/`String` reopenings, `Intl` type and value access, and local `Array<T>` heritage are
+proven. At checker commit `23bad42`, the raw pinned artifact produces exactly 4 diagnostics and 187
+incompletes:
 
-- `43`: 1 standalone `Intl` namespace-value incomplete — the sole architecture stop and only
-  blocker to starting `14`;
 - `14`: 2 canonical `TK2430` diagnostics for apparent `Function` compatibility;
 - `63`: 2 surplus `TK2430` diagnostics at those same sites (parity-only);
 - `50`: 8 type-predicate incompletes (independent 1.0 blocker);
 - `75`: 179 annotation incompletes: `this` 164, `object` 6, `intrinsic` 5, `symbol` 3, `bigint` 1
   (independent 1.0 blockers).
 
-The verdict remains **NO-GO** until backlog `43` records and implements a superseding architecture
-decision for standalone namespace value identity and qualified receivers. Do not infer that `50`
-or `75` are optional for 1.0, or that the canonical backlog-14 compatibility work is already
-implemented. `42` and `44` remain 1.0 model blockers but are absent from ES5 core.
+The machine verdict is **GO for starting backlog 14**: no raw or semantic witness retains owner
+`43`, and `deep.Intl.value` is one of exactly 66 synthetic `TK2322` diagnostics with no `TK2304` or
+added incomplete. This permission is contingent on the immediate backlog-43 lifecycle closure; it
+does not mean the standard library is loaded, that canonical backlog-14 compatibility is complete,
+or that the checker is 1.0-ready. Owners `50` and `75` remain mandatory model work; `42` and `44`
+remain 1.0 model blockers but are absent from ES5 core.
 
 ## Reproduce
 

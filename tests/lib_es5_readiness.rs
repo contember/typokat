@@ -23,10 +23,10 @@ const THIRD_PARTY_BYTES: usize = 37_824;
 const THIRD_PARTY_LFS: usize = 193;
 const TARGET: &str = "typescript-6.0.3-lib-es5-model-readiness";
 const REASON: &str =
-    "The raw artifact still has one backlog-43 architecture stop and exact non-43 residuals.";
+    "The pinned explicit-input type model has no backlog-43 residual, so backlog 14 may start; owners 50 and 75 still block checker 1.0.";
 const ARTIFACT_PATH: &str = "tests/fixtures/lib-es5-6.0.3/lib.es5.d.ts";
 const WITNESS_PATH: &str = "tests/fixtures/lib-es5-6.0.3/semantic-witnesses.ts";
-const CHECKER_REVISION: &str = "d2470a3";
+const CHECKER_REVISION: &str = "23bad42";
 const RAW_COMMAND: &str =
     "target/debug/typokat check --format compact tests/fixtures/lib-es5-6.0.3/lib.es5.d.ts";
 const SYNTHETIC_COMMAND: &str = "target/debug/typokat check --format compact $COMBINED";
@@ -49,7 +49,7 @@ const DEEP_WITNESS_IDS: &[&str] = &[
     "deep.repeat.Number",
     "deep.repeat.String",
 ];
-const RAW_OUTPUT_SHA256: &str = "3c279f71c2622b2bfbcd46a0066bbc3a99dfb28f8fa4738a5a6d0638986ab23d";
+const RAW_OUTPUT_SHA256: &str = "00b45da6ed7d88713970cb355915317204d5e15dfda97571d0ddcde4218169b3";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WitnessRecord {
@@ -440,7 +440,6 @@ fn validate_decision_and_owners(root: &toml::Table, repo_root: &Path, manifest_p
         ("annotation-type-predicate", OWNER_50),
         ("callable-heritage-canonical", OWNER_14),
         ("callable-heritage-cardinality", OWNER_63),
-        ("standalone-namespace-value", OWNER_43),
     ]);
 
     let mut architecture_stops = Vec::new();
@@ -708,7 +707,7 @@ fn validate_raw_measurement(
     );
     assert_eq!(
         output.incomplete.len(),
-        188,
+        187,
         "raw incomplete cardinality drifted"
     );
     assert_eq!(integer(measurement, "exit_code", "raw measurement"), 3);
@@ -925,16 +924,12 @@ fn validate_synthetic_measurement(
     let suffix_counts = code_counts(suffix);
     assert_eq!(
         suffix_counts,
-        BTreeMap::from([("TK2304".to_string(), 1), ("TK2322".to_string(), 65)]),
-        "the witness suffix must remain exactly 65 TK2322 plus one owned TK2304"
+        BTreeMap::from([("TK2322".to_string(), 66)]),
+        "the witness suffix must remain exactly 66 TK2322 with no TK2304"
     );
     assert_eq!(
-        suffix_counts.get("TK2304").copied(),
-        Some(usize_integer(
-            measurement,
-            "tk2304",
-            "synthetic measurement"
-        ))
+        suffix_counts.get("TK2304").copied().unwrap_or(0),
+        usize_integer(measurement, "tk2304", "synthetic measurement")
     );
     assert_eq!(
         suffix_counts.get("TK2322").copied(),
@@ -1090,17 +1085,6 @@ fn expected_marker_span(
                 end -= 1;
             }
             (start, end)
-        }
-        "TK2304" if marker.id == "deep.Intl.value" => {
-            let rhs_start = code
-                .find('=')
-                .map(|offset| offset + 1)
-                .expect("deep.Intl.value requires an assignment");
-            let start = code[rhs_start..]
-                .find("Intl")
-                .map(|offset| rhs_start + offset)
-                .expect("deep.Intl.value requires RHS Intl");
-            (start, start + "Intl".len())
         }
         code => panic!(
             "marker {:?} has unsupported expected code {code:?}",

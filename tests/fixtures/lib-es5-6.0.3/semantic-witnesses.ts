@@ -8,7 +8,7 @@ const wu6DeepDateReject: string = wu6DeepDateSource.getTime(); // witness[deep.D
 
 declare const wu6DeepIntlTypeSource: Intl.CollatorOptions;
 const wu6DeepIntlTypeReject: number = wu6DeepIntlTypeSource.usage; // witness[deep.Intl.type] oracle[TS2322] typokat[TK2322]
-const wu6DeepIntlValueReject: string = Intl.Collator().compare("a", "b"); // witness[deep.Intl.value] oracle[TS2322] typokat[TK2304] owner[../../../docs/backlog/43-namespaces-declaration-merging.md]
+const wu6DeepIntlValueReject: string = Intl.Collator().compare("a", "b"); // witness[deep.Intl.value] oracle[TS2322] typokat[TK2322]
 
 declare const wu6DeepNumberSource: Number;
 const wu6DeepNumberReject: number = wu6DeepNumberSource.toFixed(); // witness[deep.Number.member] oracle[TS2322] typokat[TK2322]

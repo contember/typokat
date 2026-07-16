@@ -7,16 +7,18 @@ blocked-by: [./43-namespaces-declaration-merging.md]
 # 14 — full `lib.d.ts` loading
 
 **Summary.** The "mandatory core" (architecture §4) — unlocks checking real-world code. Big. Also
-where parallelism **Stage 1** lands. This item cannot start while backlog `43` retains its
-standalone-namespace architecture stop. It is the **full** standard-library load; the minimal
-ambient/prelude slice (`38`) is allowed before this item when it buys useful real-world feedback.
+where parallelism **Stage 1** lands. The pinned explicit-input model gate now permits this item to
+start after the immediate backlog-43 lifecycle closure. It is the **full** standard-library load;
+the minimal ambient/prelude slice (`38`) is allowed before this item when it buys useful real-world
+feedback.
 
 ## Problem
 
 Without `lib.d.ts`, `console`, array methods, `Promise`, etc. are absent, so most real code can't be
 checked. The lib's own source text uses nearly the whole type model, including the `RegExp` value
-surface that owns regexp literals, which is why this item remains blocked by the final namespace
-value-side prerequisite in `43`.
+surface that owns regexp literals. The final namespace value-side prerequisite shipped at
+`23bad42`; the temporary `blocked-by` metadata above remains only until WU7 atomically closes the
+owning backlog-43 lifecycle.
 Generic method, call, and construct signatures shipped with B41; explicit receiver parameters and
 contextual `ThisType<T>` shipped with B70; member projection and loading the declarations that expose those
 signatures remain this item's responsibility.
@@ -41,16 +43,19 @@ forking a second ambient-loading path. The full library loader is the canonical 
 
 The authoritative gate is
 [`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml), committed through
-`b424e74`, `5951968`, and `3f641ea`. It currently concludes **NO-GO**. Type-side namespaces,
-reopenings, all 28 interface+var pairs, repeated interfaces, and local `Array<T>` heritage pass.
-The sole blocker to starting this item is backlog `43`'s standalone `Intl` namespace-value
-incomplete.
+`b424e74`, `5951968`, and `3f641ea`, with the standalone namespace-value checker at `23bad42`. It
+concludes **GO for starting backlog 14**: type-side namespaces, reopenings, all 28 interface+var
+pairs, repeated interfaces, local `Array<T>` heritage, and both `Intl` type/value witnesses pass.
+The raw artifact retains exactly four `TK2430` diagnostics and 187 incompletes — 179 owned by `75`
+and eight by `50` — with no owner-43 outcome. The synthetic semantic suffix is exactly 66
+`TK2322`, including `deep.Intl.value`, and no `TK2304` or added incomplete.
 
-After `43` clears, this item owns two canonical `TK2430` diagnostics on `CallableFunction` and
-`NewableFunction` versus `Function`. Two surplus diagnostics at those sites are parity-only backlog
-`63`. Backlogs `50` (8 predicate incompletes) and `75` (179 annotation-shape incompletes)
-independently block checker 1.0, not the start of loader implementation; the loader must preserve
-those explicit outcomes rather than approximate them.
+This machine GO authorizes loader work only after the immediate backlog-43 lifecycle closure. It is
+not evidence that the library is loaded, that this backlog item is complete, or that checker 1.0 is
+ready. This item still owns the two canonical `TK2430` diagnostics on `CallableFunction` and
+`NewableFunction` versus `Function`; two surplus diagnostics at those sites are parity-only backlog
+`63`. Backlogs `50` and `75` independently block checker 1.0, and the loader must preserve their
+explicit outcomes rather than approximate them.
 
 ## Touch points
 
