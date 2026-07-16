@@ -347,7 +347,7 @@ code-only because the exact fixed target can be literal-, primitive-, or
 union-shaped depending on candidate priority and contextual use. The corpus keeps
 at most one mismatched argument per call, per the general call-marker rule above.
 
-`b43_namespaces_declaration_merging/` is the 45-file WU0-WU4 oracle corpus for the
+`b43_namespaces_declaration_merging/` is the 46-file WU0-WU4 oracle corpus for the
 namespace/declaration-space sprint. It covers merged property/method/call/construct/index and
 heritage surfaces, overload precedence and query order, generic constraint/default compatibility,
 recursive merge groups in opposite declaration orders, namespace syntax/reopening/visibility,
@@ -396,13 +396,16 @@ pins the namespace-order diagnostic, and requires receiver-use errors so an `any
 cannot pass it. Exact `TS2567` ownership remains a WU0A/direct-test gate.
 Direct merged-class identity/publication remains a WU0A test because marker fixtures observe only
 downstream surfaces and diagnostics.
-The staged WU4 addendum adds four disabled focused fixtures: type-only interface+namespace pairs in
+The staged WU4 addendum adds five disabled focused fixtures: type-only interface+namespace pairs in
 both orders; ordinary, overloaded, reverse-order, and ambient function+namespace publication;
 ordinary and ambient class+namespace publication in both orders; and the standalone-namespace
-boundary. Function/class augmentation must retain callable/construct, static/tag, and nested-type
-surfaces, with `TK2434` only on ordinary reverse-order pairs. The standalone namespace retains only
+boundary plus inferred function+namespace publication boundaries. Function/class augmentation must
+retain callable/construct, static/tag, and nested-type surfaces, with `TK2434` only on ordinary
+reverse-order pairs. The standalone namespace retains only
 `decl/module-declaration/self` for its unclaimed value surface while exported interface/type members
 remain usable; it makes no standalone namespace value-receiver claim.
+Forward-demand and inferred-return cycles remain precise backlog-76 incomplete records, while
+post-body, annotated-recursive, and declared-overload surfaces require non-permissive witnesses.
 
 The full directory remains disabled while WU4/WU5-owned fixtures are red. The conformance harness
 instead gates this 19-file WU3 slice explicitly through `ENABLED_FIXTURES`:
