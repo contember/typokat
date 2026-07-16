@@ -9,7 +9,7 @@ use crate::check::checker::type_groups::{
 use crate::check::query::{SemanticQueryCoordinator, SemanticQueryState};
 use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::DiagnosticCode;
-use crate::driver::check_source;
+use crate::driver::{check_project, check_source, FileInput};
 use crate::span::Span;
 use crate::types::repr::{ClassId, LiteralValue, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
@@ -1441,5 +1441,237 @@ interface Derived extends Left, Right {}
             .filter(|diagnostic| diagnostic.code == DiagnosticCode::TK2320)
             .count(),
         1
+    );
+}
+
+#[test]
+fn implicit_any_class_properties_keep_member_order_span_and_cardinality() {
+    let source = "class C { public publicValue; private privateValue; protected protectedValue; static staticValue; readonly readonlyValue; }";
+    let output = check_source(source);
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert_eq!(
+        output
+            .incomplete
+            .iter()
+            .map(|incomplete| (
+                incomplete.id.as_str(),
+                incomplete.context.as_str(),
+                &source[incomplete.span.range()],
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "class/property-definition/implicit-any",
+                "class property without an annotation or initializer has implicit any type",
+                "public publicValue;",
+            ),
+            (
+                "class/property-definition/implicit-any",
+                "class property without an annotation or initializer has implicit any type",
+                "private privateValue;",
+            ),
+            (
+                "class/property-definition/implicit-any",
+                "class property without an annotation or initializer has implicit any type",
+                "protected protectedValue;",
+            ),
+            (
+                "class/property-definition/implicit-any",
+                "class property without an annotation or initializer has implicit any type",
+                "static staticValue;",
+            ),
+            (
+                "class/property-definition/implicit-any",
+                "class property without an annotation or initializer has implicit any type",
+                "readonly readonlyValue;",
+            ),
+        ]
+    );
+}
+
+#[test]
+fn explicit_any_class_properties_remain_complete_and_published() {
+    let source = "\
+class Complete {
+  public publicValue: any;
+  private privateValue: any;
+  protected protectedValue: any;
+  static staticValue: any;
+  readonly readonlyValue: any;
+}
+const value = new Complete();
+value.publicValue = 1;
+Complete.staticValue = \"ready\";
+";
+    let output = check_source(source);
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+}
+
+#[test]
+fn implicit_any_member_makes_the_whole_class_surface_unavailable() {
+    let source = "\
+class Poisoned { missing; known: number; }
+interface Source { known: number; }
+declare const source: Source;
+const target: Poisoned = source;
+";
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    let mut interner = Interner::with_intrinsics();
+
+    let output = check_program_with_publication_inspector(
+        &mut interner,
+        &parsed.program,
+        |binder, environment, _| {
+            let poisoned = published_group(binder, environment, "Poisoned");
+            let PublishedTypeGroupSurface::Class(class) = poisoned.surface else {
+                panic!("Poisoned keeps its class identity")
+            };
+            assert!(matches!(
+                environment.classes().published_class(class),
+                DemandOutcome::Exhausted(Exhaustion::ClassSurfacePoison { class: poisoned })
+                    if poisoned == class
+            ));
+        },
+    );
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert_eq!(
+        output
+            .incomplete
+            .iter()
+            .map(|incomplete| incomplete.id.as_str())
+            .collect::<Vec<_>>(),
+        ["class/property-definition/implicit-any"]
+    );
+}
+
+#[test]
+fn implicit_any_class_interface_reopening_is_poisoned_in_both_orders() {
+    for source in [
+        "class Mixed { missing; known: number; }\ninterface Mixed { reopened: string; }",
+        "interface Mixed { reopened: string; }\nclass Mixed { missing; known: number; }",
+    ] {
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let mut interner = Interner::with_intrinsics();
+
+        let output = check_program_with_publication_inspector(
+            &mut interner,
+            &parsed.program,
+            |binder, environment, _| {
+                let mixed = published_group(binder, environment, "Mixed");
+                let PublishedTypeGroupSurface::Class(class) = mixed.surface else {
+                    panic!("Mixed keeps its class identity")
+                };
+                assert!(matches!(
+                    environment.classes().published_class(class),
+                    DemandOutcome::Exhausted(Exhaustion::ClassSurfacePoison { class: poisoned })
+                        if poisoned == class
+                ));
+            },
+        );
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        assert_eq!(
+            output
+                .incomplete
+                .iter()
+                .map(|incomplete| incomplete.id.as_str())
+                .collect::<Vec<_>>(),
+            ["class/property-definition/implicit-any"]
+        );
+    }
+}
+
+#[test]
+fn project_mode_preserves_implicit_any_class_poison_in_the_declaring_module() {
+    let reports = check_project(vec![
+        FileInput {
+            name: "use.ts".into(),
+            source: "import { Poisoned } from './class';\ninterface Source { known: number; }\ndeclare const source: Source;\nconst target: Poisoned = source;".into(),
+        },
+        FileInput {
+            name: "class.ts".into(),
+            source: "export class Poisoned { missing; known: number; }".into(),
+        },
+    ]);
+    assert!(
+        reports
+            .iter()
+            .all(|report| report.output.parse_errors.is_empty()),
+        "unexpected parse errors"
+    );
+    assert!(
+        reports
+            .iter()
+            .all(|report| report.output.diagnostics.is_empty()),
+        "unexpected diagnostics"
+    );
+    assert!(reports[0].output.incomplete.is_empty());
+    assert_eq!(
+        reports[1]
+            .output
+            .incomplete
+            .iter()
+            .map(|incomplete| incomplete.id.as_str())
+            .collect::<Vec<_>>(),
+        ["class/property-definition/implicit-any"]
+    );
+}
+
+#[test]
+fn official_private_identity_case_is_not_a_false_clean_class_surface() {
+    let source = "\
+// @target: es2015
+interface T1 { }
+interface T2 { z }
+
+class C1<T> {
+    private x;
+}
+
+class C2 extends C1<T1> {
+    y;
+}
+
+var c1: C1<T2>;
+<C2>c1;
+
+
+class C3<T> {
+    private x: T;
+}
+
+class C4 extends C3<T1> {
+    y;
+}
+
+var c3: C3<T2>;
+<C4>c3;
+";
+    let output = check_source(source);
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let lines = crate::span::LineIndex::new(source);
+    assert_eq!(
+        output
+            .incomplete
+            .iter()
+            .map(|incomplete| (
+                lines.line_of(incomplete.span.start),
+                incomplete.id.as_str(),
+                &source[incomplete.span.range()],
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (6, "class/property-definition/implicit-any", "private x;"),
+            (9, "class/class-heritage/poisoned-base", "C1"),
+            (10, "class/property-definition/implicit-any", "y;"),
+            (22, "class/property-definition/implicit-any", "y;"),
+        ]
     );
 }

@@ -1963,6 +1963,15 @@ fn lower_class<'ast>(
                         }
                     }
                 } else {
+                    records.push(TicketRecord::incomplete(
+                        immediate_owner,
+                        IncompleteSurface::new(
+                            "class/property-definition/implicit-any",
+                            CheckSpan::from_oxc(property.span),
+                            "class property without an annotation or initializer has implicit any type",
+                        ),
+                    ));
+                    surface_poison.push(immediate_owner);
                     None
                 };
                 let Some(mut ty) = ty else {
