@@ -1,0 +1,1189 @@
+schema = 1
+typescript_version = "6.0.3"
+upstream_revision = "050880ce59e30b356b686bd3144efe24f875ebc8"
+root = "lib.es2025.full.d.ts"
+file_count = 82
+script_file_count = 81
+external_module_file_count = 1
+reference_edge_count = 110
+source_bytes = 2936611
+source_lf = 58349
+source_cr = 0
+root_sha256 = "e03da518b01b46a4c99a1f88cd727ee98ddf14492c43dae1ae7a63e992971bab"
+raw_concat_sha256 = "0c68516cfe1dff30ce17425b2566813cf6d00c7f589dd24f31f4ba879b69a267"
+length_framed_sha256 = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
+length_frame = "u64be(name_len) || u64be(source_len) || name_utf8 || source"
+order = "getDefaultLibFilePriority/libEntries first occurrence; non-entry root last"
+lib_entries_count = 107
+lib_entries_filename_count = 95
+lib_entries_framed_sha256 = "7e237445dc1c4c7f32b6e829da48858fb3eafb0d0b3f3d9f5fe031d5b7a6d6f6"
+
+[license]
+name = "LICENSE.txt"
+npm_path = "LICENSE.txt"
+git_path = "LICENSE.txt"
+git_blob = "8746124b277914d0f0fd9cf4aef2ed3b587143d9"
+sha256 = "a7d00bfd54525bc694b6e32f64c7ebcf5e6b7ae3657be5cc12767bce74654a47"
+bytes = 9197
+lf = 55
+cr = 55
+final_lf = true
+
+[third_party_notice]
+name = "ThirdPartyNoticeText.txt"
+npm_path = "ThirdPartyNoticeText.txt"
+git_path = "ThirdPartyNoticeText.txt"
+git_blob = "a857fb3ce77c3b43c145f94aa8d910c7791394a5"
+sha256 = "1af3c68039c57e539422da82a4faada506ce6d0ea6f90e0b699d02dbcdb7a90c"
+bytes = 37824
+lf = 193
+cr = 193
+final_lf = true
+
+[[file]]
+ordinal = 0
+name = "lib.es5.d.ts"
+npm_path = "lib/lib.es5.d.ts"
+git_path = "lib/lib.es5.d.ts"
+git_blob = "496166ca309c28ab7e07ea0154a406f26b6cf26a"
+sha256 = "bcd24271a113971ba9eb71ff8cb01bc6b0f872a85c23fdbe5d93065b375933cd"
+bytes = 218972
+lf = 4599
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "decorators", file = "lib.decorators.d.ts" }, { lib = "decorators.legacy", file = "lib.decorators.legacy.d.ts" }]
+
+[[file]]
+ordinal = 1
+name = "lib.es2015.d.ts"
+npm_path = "lib/lib.es2015.d.ts"
+git_path = "lib/lib.es2015.d.ts"
+git_blob = "006d4f486f6840cf1de6f90f5b21ff112c1047ab"
+sha256 = "3f88bedbeb09c6f5a6645cb24c7c55f1aa22d19ae96c8e6959cbd8b85a707bc6"
+bytes = 1202
+lf = 26
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es5", file = "lib.es5.d.ts" }, { lib = "es2015.core", file = "lib.es2015.core.d.ts" }, { lib = "es2015.collection", file = "lib.es2015.collection.d.ts" }, { lib = "es2015.iterable", file = "lib.es2015.iterable.d.ts" }, { lib = "es2015.generator", file = "lib.es2015.generator.d.ts" }, { lib = "es2015.promise", file = "lib.es2015.promise.d.ts" }, { lib = "es2015.proxy", file = "lib.es2015.proxy.d.ts" }, { lib = "es2015.reflect", file = "lib.es2015.reflect.d.ts" }, { lib = "es2015.symbol", file = "lib.es2015.symbol.d.ts" }, { lib = "es2015.symbol.wellknown", file = "lib.es2015.symbol.wellknown.d.ts" }]
+
+[[file]]
+ordinal = 2
+name = "lib.es2016.d.ts"
+npm_path = "lib/lib.es2016.d.ts"
+git_path = "lib/lib.es2016.d.ts"
+git_blob = "0fd711fd1ce73bc8e9c487666bdbe2e3ad13c7e4"
+sha256 = "7fe93b39b810eadd916be8db880dd7f0f7012a5cc6ffb62de8f62a2117fa6f1f"
+bytes = 926
+lf = 19
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2015", file = "lib.es2015.d.ts" }, { lib = "es2016.array.include", file = "lib.es2016.array.include.d.ts" }, { lib = "es2016.intl", file = "lib.es2016.intl.d.ts" }]
+
+[[file]]
+ordinal = 3
+name = "lib.es2017.d.ts"
+npm_path = "lib/lib.es2017.d.ts"
+git_path = "lib/lib.es2017.d.ts"
+git_blob = "c7b5f85c2c2ae61eac18b309928ef1cd3370b875"
+sha256 = "bb0074cc08b84a2374af33d8bf044b80851ccc9e719a5e202eacf40db2c31600"
+bytes = 1123
+lf = 24
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2016", file = "lib.es2016.d.ts" }, { lib = "es2017.arraybuffer", file = "lib.es2017.arraybuffer.d.ts" }, { lib = "es2017.date", file = "lib.es2017.date.d.ts" }, { lib = "es2017.intl", file = "lib.es2017.intl.d.ts" }, { lib = "es2017.object", file = "lib.es2017.object.d.ts" }, { lib = "es2017.sharedmemory", file = "lib.es2017.sharedmemory.d.ts" }, { lib = "es2017.string", file = "lib.es2017.string.d.ts" }, { lib = "es2017.typedarrays", file = "lib.es2017.typedarrays.d.ts" }]
+
+[[file]]
+ordinal = 4
+name = "lib.es2018.d.ts"
+npm_path = "lib/lib.es2018.d.ts"
+git_path = "lib/lib.es2018.d.ts"
+git_blob = "6bc4051d04f45cdfa29be7703d57845abdd5a0f2"
+sha256 = "1a7daebe4f45fb03d9ec53d60008fbf9ac45a697fdc89e4ce218bc94b94f94d6"
+bytes = 1049
+lf = 22
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2017", file = "lib.es2017.d.ts" }, { lib = "es2018.asynciterable", file = "lib.es2018.asynciterable.d.ts" }, { lib = "es2018.asyncgenerator", file = "lib.es2018.asyncgenerator.d.ts" }, { lib = "es2018.promise", file = "lib.es2018.promise.d.ts" }, { lib = "es2018.regexp", file = "lib.es2018.regexp.d.ts" }, { lib = "es2018.intl", file = "lib.es2018.intl.d.ts" }]
+
+[[file]]
+ordinal = 5
+name = "lib.es2019.d.ts"
+npm_path = "lib/lib.es2019.d.ts"
+git_path = "lib/lib.es2019.d.ts"
+git_blob = "09ff746d3a616db9379d8127604b2fbf550a1c0f"
+sha256 = "f94b133a3cb14a288803be545ac2683e0d0ff6661bcd37e31aaaec54fc382aed"
+bytes = 1032
+lf = 22
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2018", file = "lib.es2018.d.ts" }, { lib = "es2019.array", file = "lib.es2019.array.d.ts" }, { lib = "es2019.object", file = "lib.es2019.object.d.ts" }, { lib = "es2019.string", file = "lib.es2019.string.d.ts" }, { lib = "es2019.symbol", file = "lib.es2019.symbol.d.ts" }, { lib = "es2019.intl", file = "lib.es2019.intl.d.ts" }]
+
+[[file]]
+ordinal = 6
+name = "lib.es2020.d.ts"
+npm_path = "lib/lib.es2020.d.ts"
+git_path = "lib/lib.es2020.d.ts"
+git_blob = "e6a9f3a5d0309fc7fcffe4af2a18dc2570d5743f"
+sha256 = "f59d0650799f8782fd74cf73c19223730c6d1b9198671b1c5b3a38e1188b5953"
+bytes = 1162
+lf = 25
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2019", file = "lib.es2019.d.ts" }, { lib = "es2020.bigint", file = "lib.es2020.bigint.d.ts" }, { lib = "es2020.date", file = "lib.es2020.date.d.ts" }, { lib = "es2020.number", file = "lib.es2020.number.d.ts" }, { lib = "es2020.promise", file = "lib.es2020.promise.d.ts" }, { lib = "es2020.sharedmemory", file = "lib.es2020.sharedmemory.d.ts" }, { lib = "es2020.string", file = "lib.es2020.string.d.ts" }, { lib = "es2020.symbol.wellknown", file = "lib.es2020.symbol.wellknown.d.ts" }, { lib = "es2020.intl", file = "lib.es2020.intl.d.ts" }]
+
+[[file]]
+ordinal = 7
+name = "lib.es2021.d.ts"
+npm_path = "lib/lib.es2021.d.ts"
+git_path = "lib/lib.es2021.d.ts"
+git_blob = "03b1692b39a4f01b1124bcc5ed147b5b316b23fa"
+sha256 = "8a15b4607d9a499e2dbeed9ec0d3c0d7372c850b2d5f1fb259e8f6d41d468a84"
+bytes = 997
+lf = 21
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2020", file = "lib.es2020.d.ts" }, { lib = "es2021.promise", file = "lib.es2021.promise.d.ts" }, { lib = "es2021.string", file = "lib.es2021.string.d.ts" }, { lib = "es2021.weakref", file = "lib.es2021.weakref.d.ts" }, { lib = "es2021.intl", file = "lib.es2021.intl.d.ts" }]
+
+[[file]]
+ordinal = 8
+name = "lib.es2022.d.ts"
+npm_path = "lib/lib.es2022.d.ts"
+git_path = "lib/lib.es2022.d.ts"
+git_blob = "21f17a5ba65fac65fa5c3f3853dda3975e2efdc4"
+sha256 = "26e0fe14baee4e127f4365d1ae0b276f400562e45e19e35fd2d4c296684715e6"
+bytes = 1069
+lf = 23
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2021", file = "lib.es2021.d.ts" }, { lib = "es2022.array", file = "lib.es2022.array.d.ts" }, { lib = "es2022.error", file = "lib.es2022.error.d.ts" }, { lib = "es2022.intl", file = "lib.es2022.intl.d.ts" }, { lib = "es2022.object", file = "lib.es2022.object.d.ts" }, { lib = "es2022.regexp", file = "lib.es2022.regexp.d.ts" }, { lib = "es2022.string", file = "lib.es2022.string.d.ts" }]
+
+[[file]]
+ordinal = 9
+name = "lib.es2023.d.ts"
+npm_path = "lib/lib.es2023.d.ts"
+git_path = "lib/lib.es2023.d.ts"
+git_blob = "ca01eec1531cde3e13566ea85e92cac6d931ceff"
+sha256 = "1e9332c23e9a907175e0ffc6a49e236f97b48838cc8aec9ce7e4cec21e544b65"
+bytes = 960
+lf = 20
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2022", file = "lib.es2022.d.ts" }, { lib = "es2023.array", file = "lib.es2023.array.d.ts" }, { lib = "es2023.collection", file = "lib.es2023.collection.d.ts" }, { lib = "es2023.intl", file = "lib.es2023.intl.d.ts" }]
+
+[[file]]
+ordinal = 10
+name = "lib.es2024.d.ts"
+npm_path = "lib/lib.es2024.d.ts"
+git_path = "lib/lib.es2024.d.ts"
+git_blob = "723ed4ac005de72cdc5056cbaff98a3ce92ac0a5"
+sha256 = "3753fbc1113dc511214802a2342280a8b284ab9094f6420e7aa171e868679f91"
+bytes = 1127
+lf = 24
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2023", file = "lib.es2023.d.ts" }, { lib = "es2024.arraybuffer", file = "lib.es2024.arraybuffer.d.ts" }, { lib = "es2024.collection", file = "lib.es2024.collection.d.ts" }, { lib = "es2024.object", file = "lib.es2024.object.d.ts" }, { lib = "es2024.promise", file = "lib.es2024.promise.d.ts" }, { lib = "es2024.regexp", file = "lib.es2024.regexp.d.ts" }, { lib = "es2024.sharedmemory", file = "lib.es2024.sharedmemory.d.ts" }, { lib = "es2024.string", file = "lib.es2024.string.d.ts" }]
+
+[[file]]
+ordinal = 11
+name = "lib.es2025.d.ts"
+npm_path = "lib/lib.es2025.d.ts"
+git_path = "lib/lib.es2025.d.ts"
+git_blob = "78e41e31e201f1d18614affb2759ad9cec01bae9"
+sha256 = "999ca32883495a866aa5737fe1babc764a469e4cde6ee6b136a4b9ae68853e4b"
+bytes = 1079
+lf = 23
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2024", file = "lib.es2024.d.ts" }, { lib = "es2025.collection", file = "lib.es2025.collection.d.ts" }, { lib = "es2025.float16", file = "lib.es2025.float16.d.ts" }, { lib = "es2025.intl", file = "lib.es2025.intl.d.ts" }, { lib = "es2025.iterator", file = "lib.es2025.iterator.d.ts" }, { lib = "es2025.promise", file = "lib.es2025.promise.d.ts" }, { lib = "es2025.regexp", file = "lib.es2025.regexp.d.ts" }]
+
+[[file]]
+ordinal = 12
+name = "lib.dom.d.ts"
+npm_path = "lib/lib.dom.d.ts"
+git_path = "lib/lib.dom.d.ts"
+git_blob = "9e127c3f5a524c808f9946ba043aece4f4de5463"
+sha256 = "d6b1eba8496bdd0eed6fc8a685768fe01b2da4a0388b5fe7df558290bffcf32f"
+bytes = 2349483
+lf = 45125
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2015", file = "lib.es2015.d.ts" }, { lib = "es2018.asynciterable", file = "lib.es2018.asynciterable.d.ts" }]
+
+[[file]]
+ordinal = 13
+name = "lib.dom.iterable.d.ts"
+npm_path = "lib/lib.dom.iterable.d.ts"
+git_path = "lib/lib.dom.iterable.d.ts"
+git_blob = "075563ce0340358734524c8416d351b44e3f7039"
+sha256 = "7f57fc4404ff020bc45b9c620aff2b40f700b95fe31164024c453a5e3c163c54"
+bytes = 933
+lf = 18
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 14
+name = "lib.dom.asynciterable.d.ts"
+npm_path = "lib/lib.dom.asynciterable.d.ts"
+git_path = "lib/lib.dom.asynciterable.d.ts"
+git_blob = "075563ce0340358734524c8416d351b44e3f7039"
+sha256 = "7f57fc4404ff020bc45b9c620aff2b40f700b95fe31164024c453a5e3c163c54"
+bytes = 933
+lf = 18
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 15
+name = "lib.webworker.importscripts.d.ts"
+npm_path = "lib/lib.webworker.importscripts.d.ts"
+git_path = "lib/lib.webworker.importscripts.d.ts"
+git_blob = "529928af9c302f6d8d4353e2d14665b282b72e04"
+sha256 = "2a2de5b9459b3fc44decd9ce6100b72f1b002ef523126c1d3d8b2a4a63d74d78"
+bytes = 1002
+lf = 21
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 16
+name = "lib.scripthost.d.ts"
+npm_path = "lib/lib.scripthost.d.ts"
+git_path = "lib/lib.scripthost.d.ts"
+git_blob = "75c558b3bcd90238d417f56db44bf5d7be4026b8"
+sha256 = "f13f4b465c99041e912db5c44129a94588e1aafee35a50eab51044833f50b4ee"
+bytes = 9412
+lf = 320
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 17
+name = "lib.es2015.core.d.ts"
+npm_path = "lib/lib.es2015.core.d.ts"
+git_path = "lib/lib.es2015.core.d.ts"
+git_blob = "7e3609dd818b4ab45a2297365b34828f0e8a4840"
+sha256 = "eadcffda2aa84802c73938e589b9e58248d74c59cb7fcbca6474e3435ac15504"
+bytes = 22824
+lf = 595
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 18
+name = "lib.es2015.collection.d.ts"
+npm_path = "lib/lib.es2015.collection.d.ts"
+git_path = "lib/lib.es2015.collection.d.ts"
+git_blob = "f495e095e294bef7b25bcc55c66282db0667ac7f"
+sha256 = "105ba8ff7ba746404fe1a2e189d1d3d2e0eb29a08c18dded791af02f29fb4711"
+bytes = 5305
+lf = 150
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 19
+name = "lib.es2015.generator.d.ts"
+npm_path = "lib/lib.es2015.generator.d.ts"
+git_path = "lib/lib.es2015.generator.d.ts"
+git_blob = "9fedc4d346a13fe8b036f24c1bef7cd31ee01ec2"
+sha256 = "00343ca5b2e3d48fa5df1db6e32ea2a59afab09590274a6cccb1dbae82e60c7c"
+bytes = 2518
+lf = 75
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2015.iterable", file = "lib.es2015.iterable.d.ts" }]
+
+[[file]]
+ordinal = 20
+name = "lib.es2015.iterable.d.ts"
+npm_path = "lib/lib.es2015.iterable.d.ts"
+git_path = "lib/lib.es2015.iterable.d.ts"
+git_blob = "7396a53feb8cf3d0e74eeafb6132e470ed7756eb"
+sha256 = "ebd9f816d4002697cb2864bea1f0b70a103124e18a8cd9645eeccc09bdf80ab4"
+bytes = 18185
+lf = 603
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2015.symbol", file = "lib.es2015.symbol.d.ts" }]
+
+[[file]]
+ordinal = 21
+name = "lib.es2015.promise.d.ts"
+npm_path = "lib/lib.es2015.promise.d.ts"
+git_path = "lib/lib.es2015.promise.d.ts"
+git_blob = "8030a9bb92783e245102867b546fe5d7b66c8657"
+sha256 = "2c1afac30a01772cd2a9a298a7ce7706b5892e447bb46bdbeef720f7b5da77ad"
+bytes = 3161
+lf = 79
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 22
+name = "lib.es2015.proxy.d.ts"
+npm_path = "lib/lib.es2015.proxy.d.ts"
+git_path = "lib/lib.es2015.proxy.d.ts"
+git_blob = "4f99052fde8897f4a8a7f90a17d0a2aaee284b10"
+sha256 = "7b0225f483e4fa685625ebe43dd584bb7973bbd84e66a6ba7bbe175ee1048b4f"
+bytes = 5212
+lf = 126
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 23
+name = "lib.es2015.reflect.d.ts"
+npm_path = "lib/lib.es2015.reflect.d.ts"
+git_path = "lib/lib.es2015.reflect.d.ts"
+git_blob = "f3210765799483f14cd49972e1db57208c17f7df"
+sha256 = "c0a4b8ac6ce74679c1da2b3795296f5896e31c38e888469a8e0f99dc3305de60"
+bytes = 6454
+lf = 142
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 24
+name = "lib.es2015.symbol.d.ts"
+npm_path = "lib/lib.es2015.symbol.d.ts"
+git_path = "lib/lib.es2015.symbol.d.ts"
+git_blob = "3f36d32430717c729c1b9ab0d79125d4a8de74d0"
+sha256 = "3084a7b5f569088e0146533a00830e206565de65cae2239509168b11434cd84f"
+bytes = 1610
+lf = 44
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 25
+name = "lib.es2015.symbol.wellknown.d.ts"
+npm_path = "lib/lib.es2015.symbol.wellknown.d.ts"
+git_path = "lib/lib.es2015.symbol.wellknown.d.ts"
+git_blob = "e35b14cb98cd00f0fee54514e462b46184acf4c7"
+sha256 = "c5079c53f0f141a0698faa903e76cb41cd664e3efb01cc17a5c46ec2eb0bef42"
+bytes = 10971
+lf = 324
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2015.symbol", file = "lib.es2015.symbol.d.ts" }]
+
+[[file]]
+ordinal = 26
+name = "lib.es2016.array.include.d.ts"
+npm_path = "lib/lib.es2016.array.include.d.ts"
+git_path = "lib/lib.es2016.array.include.d.ts"
+git_blob = "d6a31cb38260be6e7af493020aa26b1987c930bb"
+sha256 = "32cafbc484dea6b0ab62cf8473182bbcb23020d70845b406f80b7526f38ae862"
+bytes = 5165
+lf = 114
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 27
+name = "lib.es2016.intl.d.ts"
+npm_path = "lib/lib.es2016.intl.d.ts"
+git_path = "lib/lib.es2016.intl.d.ts"
+git_blob = "fe677ace3d0980446269f195f84889f5060467ee"
+sha256 = "fca4cdcb6d6c5ef18a869003d02c9f0fd95df8cfaf6eb431cd3376bc034cad36"
+bytes = 1445
+lf = 29
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 28
+name = "lib.es2017.arraybuffer.d.ts"
+npm_path = "lib/lib.es2017.arraybuffer.d.ts"
+git_path = "lib/lib.es2017.arraybuffer.d.ts"
+git_blob = "1c4a1b5da91a2385ead14adfca6ad33196713cbf"
+sha256 = "b93ec88115de9a9dc1b602291b85baf825c85666bf25985cc5f698073892b467"
+bytes = 876
+lf = 19
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 29
+name = "lib.es2017.date.d.ts"
+npm_path = "lib/lib.es2017.date.d.ts"
+git_path = "lib/lib.es2017.date.d.ts"
+git_blob = "99f161c769726c34a66360ffcf040562358897a4"
+sha256 = "f5c06dcc3fe849fcb297c247865a161f995cc29de7aa823afdd75aaaddc1419b"
+bytes = 1877
+lf = 29
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 30
+name = "lib.es2017.object.d.ts"
+npm_path = "lib/lib.es2017.object.d.ts"
+git_path = "lib/lib.es2017.object.d.ts"
+git_blob = "85e93ea34122147e5d08e9b822c12b82d713f244"
+sha256 = "b77e16112127a4b169ef0b8c3a4d730edf459c5f25fe52d5e436a6919206c4d7"
+bytes = 2434
+lf = 47
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 31
+name = "lib.es2017.sharedmemory.d.ts"
+npm_path = "lib/lib.es2017.sharedmemory.d.ts"
+git_path = "lib/lib.es2017.sharedmemory.d.ts"
+git_blob = "94aee6434e844d8f41b081c4b4f49d93bd83d897"
+sha256 = "fbffd9337146eff822c7c00acbb78b01ea7ea23987f6c961eba689349e744f8c"
+bytes = 7170
+lf = 133
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2015.symbol", file = "lib.es2015.symbol.d.ts" }, { lib = "es2015.symbol.wellknown", file = "lib.es2015.symbol.wellknown.d.ts" }]
+
+[[file]]
+ordinal = 32
+name = "lib.es2017.string.d.ts"
+npm_path = "lib/lib.es2017.string.d.ts"
+git_path = "lib/lib.es2017.string.d.ts"
+git_blob = "dd1c5d2856721d028d8e2d51dbad3e05db3948bd"
+sha256 = "a995c0e49b721312f74fdfb89e4ba29bd9824c770bbb4021d74d2bf560e4c6bd"
+bytes = 2339
+lf = 43
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 33
+name = "lib.es2017.intl.d.ts"
+npm_path = "lib/lib.es2017.intl.d.ts"
+git_path = "lib/lib.es2017.intl.d.ts"
+git_blob = "cbbf658903825681225d540ec1588775ab45cbaf"
+sha256 = "c7b3542146734342e440a84b213384bfa188835537ddbda50d30766f0593aff9"
+bytes = 1410
+lf = 42
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 34
+name = "lib.es2017.typedarrays.d.ts"
+npm_path = "lib/lib.es2017.typedarrays.d.ts"
+git_path = "lib/lib.es2017.typedarrays.d.ts"
+git_blob = "ca89ff301bcc5bb74845ead7f8b1742cd05b26dd"
+sha256 = "ce6180fa19b1cccd07ee7f7dbb9a367ac19c0ed160573e4686425060b6df7f57"
+bytes = 1503
+lf = 51
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 35
+name = "lib.es2018.asyncgenerator.d.ts"
+npm_path = "lib/lib.es2018.asyncgenerator.d.ts"
+git_path = "lib/lib.es2018.asyncgenerator.d.ts"
+git_blob = "cf9436f74d846e8468458cd3bc08aedd9bf7ccb7"
+sha256 = "3f02e2476bccb9dbe21280d6090f0df17d2f66b74711489415a8aa4df73c9675"
+bytes = 2653
+lf = 75
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2018.asynciterable", file = "lib.es2018.asynciterable.d.ts" }]
+
+[[file]]
+ordinal = 36
+name = "lib.es2018.asynciterable.d.ts"
+npm_path = "lib/lib.es2018.asynciterable.d.ts"
+git_path = "lib/lib.es2018.asynciterable.d.ts"
+git_blob = "358fe271faf5bab2ad3c4bdc81dfcbf14d29f1d6"
+sha256 = "45e3ab34c1c013c8ab2dc1ba4c80c780744b13b5676800ae2e3be27ae862c40c"
+bytes = 2218
+lf = 51
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2015.symbol", file = "lib.es2015.symbol.d.ts" }, { lib = "es2015.iterable", file = "lib.es2015.iterable.d.ts" }]
+
+[[file]]
+ordinal = 37
+name = "lib.es2018.intl.d.ts"
+npm_path = "lib/lib.es2018.intl.d.ts"
+git_path = "lib/lib.es2018.intl.d.ts"
+git_blob = "10334dca4a876f5f34406e6b3e1205b3892d37c4"
+sha256 = "805c86f6cca8d7702a62a844856dbaa2a3fd2abef0536e65d48732441dde5b5b"
+bytes = 2982
+lf = 81
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 38
+name = "lib.es2018.promise.d.ts"
+npm_path = "lib/lib.es2018.promise.d.ts"
+git_path = "lib/lib.es2018.promise.d.ts"
+git_blob = "156c843bd37a521fa156608d09c79cc0ffc45ed9"
+sha256 = "e42e397f1a5a77994f0185fd1466520691456c772d06bf843e5084ceb879a0ad"
+bytes = 1314
+lf = 28
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 39
+name = "lib.es2018.regexp.d.ts"
+npm_path = "lib/lib.es2018.regexp.d.ts"
+git_path = "lib/lib.es2018.regexp.d.ts"
+git_blob = "4bbca17e259358fb8ce7fdcbd1159e4621ecaf65"
+sha256 = "f4c2b41f90c95b1c532ecc874bd3c111865793b23aebcc1c3cbbabcd5d76ffb0"
+bytes = 1193
+lf = 35
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 40
+name = "lib.es2019.array.d.ts"
+npm_path = "lib/lib.es2019.array.d.ts"
+git_path = "lib/lib.es2019.array.d.ts"
+git_blob = "204f0e69c79193dfc542c486180aa43ede0089c8"
+sha256 = "ab26191cfad5b66afa11b8bf935ef1cd88fabfcb28d30b2dfa6fad877d050332"
+bytes = 3124
+lf = 77
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 41
+name = "lib.es2019.object.d.ts"
+npm_path = "lib/lib.es2019.object.d.ts"
+git_path = "lib/lib.es2019.object.d.ts"
+git_blob = "8a9242d937c4072dbf039c818826f6769ca6eaf3"
+sha256 = "2088bc26531e38fb05eedac2951480db5309f6be3fa4a08d2221abb0f5b4200d"
+bytes = 1434
+lf = 31
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2015.iterable", file = "lib.es2015.iterable.d.ts" }]
+
+[[file]]
+ordinal = 42
+name = "lib.es2019.string.d.ts"
+npm_path = "lib/lib.es2019.string.d.ts"
+git_path = "lib/lib.es2019.string.d.ts"
+git_blob = "9ae5be7f53978a8434a46aa3c949ee0b2f35c0e9"
+sha256 = "cb9d366c425fea79716a8fb3af0d78e6b22ebbab3bd64d25063b42dc9f531c1e"
+bytes = 1489
+lf = 35
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 43
+name = "lib.es2019.symbol.d.ts"
+npm_path = "lib/lib.es2019.symbol.d.ts"
+git_path = "lib/lib.es2019.symbol.d.ts"
+git_blob = "835350fbdc053f0463918192ee7ae52bdab2fa25"
+sha256 = "500934a8089c26d57ebdb688fc9757389bb6207a3c8f0674d68efa900d2abb34"
+bytes = 967
+lf = 22
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 44
+name = "lib.es2019.intl.d.ts"
+npm_path = "lib/lib.es2019.intl.d.ts"
+git_path = "lib/lib.es2019.intl.d.ts"
+git_blob = "7fb16fc44bb60dae2135053b2418bf9b15d7a666"
+sha256 = "689da16f46e647cef0d64b0def88910e818a5877ca5379ede156ca3afb780ac3"
+bytes = 919
+lf = 21
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 45
+name = "lib.es2020.bigint.d.ts"
+npm_path = "lib/lib.es2020.bigint.d.ts"
+git_path = "lib/lib.es2020.bigint.d.ts"
+git_blob = "fde848f7216842777804a12fe9dd8b0a03d25f37"
+sha256 = "bc21cc8b6fee4f4c2440d08035b7ea3c06b3511314c8bab6bef7a92de58a2593"
+bytes = 38258
+lf = 763
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2020.intl", file = "lib.es2020.intl.d.ts" }]
+
+[[file]]
+ordinal = 46
+name = "lib.es2020.date.d.ts"
+npm_path = "lib/lib.es2020.date.d.ts"
+git_path = "lib/lib.es2020.date.d.ts"
+git_blob = "d56af7f37ebb745c6f82786e86318bec6b89392e"
+sha256 = "7ca53d13d2957003abb47922a71866ba7cb2068f8d154877c596d63c359fed25"
+bytes = 2917
+lf = 40
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2020.intl", file = "lib.es2020.intl.d.ts" }]
+
+[[file]]
+ordinal = 47
+name = "lib.es2020.promise.d.ts"
+npm_path = "lib/lib.es2020.promise.d.ts"
+git_path = "lib/lib.es2020.promise.d.ts"
+git_blob = "1c28cf67d36c4981a3506740b3d96f9fd7028b33"
+sha256 = "54725f8c4df3d900cb4dac84b64689ce29548da0b4e9b7c2de61d41c79293611"
+bytes = 1764
+lf = 45
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 48
+name = "lib.es2020.sharedmemory.d.ts"
+npm_path = "lib/lib.es2020.sharedmemory.d.ts"
+git_path = "lib/lib.es2020.sharedmemory.d.ts"
+git_blob = "ba412f1dc3c6481751f7a8a4be86e9ea0c84c9f4"
+sha256 = "e5594bc3076ac29e6c1ebda77939bc4c8833de72f654b6e376862c0473199323"
+bytes = 5089
+lf = 97
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2020.bigint", file = "lib.es2020.bigint.d.ts" }]
+
+[[file]]
+ordinal = 49
+name = "lib.es2020.string.d.ts"
+npm_path = "lib/lib.es2020.string.d.ts"
+git_path = "lib/lib.es2020.string.d.ts"
+git_blob = "0ca623cc895f4b4c9b5fc9293e1459b6e0679e39"
+sha256 = "2f3eb332c2d73e729f3364fcc0c2b375e72a121e8157d25a82d67a138c83a95c"
+bytes = 2451
+lf = 42
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2015.iterable", file = "lib.es2015.iterable.d.ts" }, { lib = "es2020.intl", file = "lib.es2020.intl.d.ts" }, { lib = "es2020.symbol.wellknown", file = "lib.es2020.symbol.wellknown.d.ts" }]
+
+[[file]]
+ordinal = 50
+name = "lib.es2020.symbol.wellknown.d.ts"
+npm_path = "lib/lib.es2020.symbol.wellknown.d.ts"
+git_path = "lib/lib.es2020.symbol.wellknown.d.ts"
+git_blob = "44bd867eb9c21db7b57413e6aa8f1da9fe096ad6"
+sha256 = "6f4427f9642ce8d500970e4e69d1397f64072ab73b97e476b4002a646ac743b1"
+bytes = 1566
+lf = 39
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2015.iterable", file = "lib.es2015.iterable.d.ts" }, { lib = "es2015.symbol", file = "lib.es2015.symbol.d.ts" }]
+
+[[file]]
+ordinal = 51
+name = "lib.es2020.intl.d.ts"
+npm_path = "lib/lib.es2020.intl.d.ts"
+git_path = "lib/lib.es2020.intl.d.ts"
+git_blob = "055c63b70cac98e92c94104e155fd5ee98f8a47c"
+sha256 = "48915f327cd1dea4d7bd358d9dc7732f58f9e1626a29cc0c05c8c692419d9bb7"
+bytes = 22399
+lf = 472
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2018.intl", file = "lib.es2018.intl.d.ts" }]
+
+[[file]]
+ordinal = 52
+name = "lib.es2020.number.d.ts"
+npm_path = "lib/lib.es2020.number.d.ts"
+git_path = "lib/lib.es2020.number.d.ts"
+git_blob = "99d414b388d3b9de4acece494c9a3630c74200a1"
+sha256 = "b7bf9377723203b5a6a4b920164df22d56a43f593269ba6ae1fdc97774b68855"
+bytes = 1548
+lf = 26
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2020.intl", file = "lib.es2020.intl.d.ts" }]
+
+[[file]]
+ordinal = 53
+name = "lib.es2021.promise.d.ts"
+npm_path = "lib/lib.es2021.promise.d.ts"
+git_path = "lib/lib.es2021.promise.d.ts"
+git_blob = "63c149f22a1ebf853639e0377f26f7e752c92f9b"
+sha256 = "db9709688f82c9e5f65a119c64d835f906efe5f559d08b11642d56eb85b79357"
+bytes = 2223
+lf = 46
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 54
+name = "lib.es2021.string.d.ts"
+npm_path = "lib/lib.es2021.string.d.ts"
+git_path = "lib/lib.es2021.string.d.ts"
+git_blob = "507877af72652ea63d4e49d45c5dabd32b8a1f7d"
+sha256 = "4b25b8c874acd1a4cf8444c3617e037d444d19080ac9f634b405583fd10ce1f7"
+bytes = 1553
+lf = 31
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 55
+name = "lib.es2021.weakref.d.ts"
+npm_path = "lib/lib.es2021.weakref.d.ts"
+git_path = "lib/lib.es2021.weakref.d.ts"
+git_blob = "35598e2717691456d8eb4a81d09988b4ca973ca0"
+sha256 = "37be57d7c90cf1f8112ee2636a068d8fd181289f82b744160ec56a7dc158a9f5"
+bytes = 3132
+lf = 76
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2015.symbol.wellknown", file = "lib.es2015.symbol.wellknown.d.ts" }]
+
+[[file]]
+ordinal = 56
+name = "lib.es2021.intl.d.ts"
+npm_path = "lib/lib.es2021.intl.d.ts"
+git_path = "lib/lib.es2021.intl.d.ts"
+git_blob = "88f4c7e927f0aefe5c4a06e71613f33e9ab3fdce"
+sha256 = "a917a49ac94cd26b754ab84e113369a75d1a47a710661d7cd25e961cc797065f"
+bytes = 8206
+lf = 164
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 57
+name = "lib.es2022.array.d.ts"
+npm_path = "lib/lib.es2022.array.d.ts"
+git_path = "lib/lib.es2022.array.d.ts"
+git_blob = "0441a95e64c53ace6e9a39f3efbb83404ea220c6"
+sha256 = "6d3261badeb7843d157ef3e6f5d1427d0eeb0af0cf9df84a62cfd29fd47ac86e"
+bytes = 4637
+lf = 119
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 58
+name = "lib.es2022.error.d.ts"
+npm_path = "lib/lib.es2022.error.d.ts"
+git_path = "lib/lib.es2022.error.d.ts"
+git_blob = "7a1f9898a0e352c4c1db11a3976da0f1ff92b65f"
+sha256 = "195daca651dde22f2167ac0d0a05e215308119a3100f5e6268e8317d05a92526"
+bytes = 2340
+lf = 73
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2021.promise", file = "lib.es2021.promise.d.ts" }]
+
+[[file]]
+ordinal = 59
+name = "lib.es2022.intl.d.ts"
+npm_path = "lib/lib.es2022.intl.d.ts"
+git_path = "lib/lib.es2022.intl.d.ts"
+git_blob = "d9f758c5211738d5586b856de10f0c27b211a93a"
+sha256 = "8b11e4285cd2bb164a4dc09248bdec69e9842517db4ca47c1ba913011e44ff2f"
+bytes = 7653
+lf = 143
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 60
+name = "lib.es2022.object.d.ts"
+npm_path = "lib/lib.es2022.object.d.ts"
+git_path = "lib/lib.es2022.object.d.ts"
+git_blob = "f07c8842f188e1b9caa75d752300af60a6796b45"
+sha256 = "0508571a52475e245b02bc50fa1394065a0a3d05277fbf5120c3784b85651799"
+bytes = 1046
+lf = 24
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 61
+name = "lib.es2022.string.d.ts"
+npm_path = "lib/lib.es2022.string.d.ts"
+git_path = "lib/lib.es2022.string.d.ts"
+git_blob = "48e03ea6f486e022dddfcc192a44e206354bd033"
+sha256 = "8f9af488f510c3015af3cc8c267a9e9d96c4dd38a1fdff0e11dc5a544711415b"
+bytes = 1116
+lf = 23
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 62
+name = "lib.es2022.regexp.d.ts"
+npm_path = "lib/lib.es2022.regexp.d.ts"
+git_path = "lib/lib.es2022.regexp.d.ts"
+git_blob = "b632b42dad9d86c16e293e662a9d85aa1dce85db"
+sha256 = "fc611fea8d30ea72c6bbfb599c9b4d393ce22e2f5bfef2172534781e7d138104"
+bytes = 1304
+lf = 37
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 63
+name = "lib.es2023.array.d.ts"
+npm_path = "lib/lib.es2023.array.d.ts"
+git_path = "lib/lib.es2023.array.d.ts"
+git_blob = "f5b55982c7c65a5960597843e985632b9bf901f9"
+sha256 = "0bd714129fca875f7d4c477a1a392200b0bcd13fb2e80928cd334b63830ea047"
+bytes = 40197
+lf = 922
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 64
+name = "lib.es2023.collection.d.ts"
+npm_path = "lib/lib.es2023.collection.d.ts"
+git_path = "lib/lib.es2023.collection.d.ts"
+git_blob = "5e67a83554ba6a7f44f17ba7ce20cfd4b0aa54a1"
+sha256 = "e2c9037ae6cd2c52d80ceef0b3c5ffdb488627d71529cf4f63776daf11161c9a"
+bytes = 861
+lf = 19
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 65
+name = "lib.es2023.intl.d.ts"
+npm_path = "lib/lib.es2023.intl.d.ts"
+git_path = "lib/lib.es2023.intl.d.ts"
+git_blob = "5ea242308f0442037b9a9d4b0500335bb6c838d2"
+sha256 = "135d5cf4d345f59f1a9caadfafcd858d3d9cc68290db616cc85797224448cccc"
+bytes = 2854
+lf = 62
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 66
+name = "lib.es2024.arraybuffer.d.ts"
+npm_path = "lib/lib.es2024.arraybuffer.d.ts"
+git_path = "lib/lib.es2024.arraybuffer.d.ts"
+git_blob = "5f375d3aa57add48a7083e1454af8a16019db994"
+sha256 = "bc238c3f81c2984751932b6aab223cd5b830e0ac6cad76389e5e9d2ffc03287d"
+bytes = 2598
+lf = 63
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 67
+name = "lib.es2024.collection.d.ts"
+npm_path = "lib/lib.es2024.collection.d.ts"
+git_path = "lib/lib.es2024.collection.d.ts"
+git_blob = "a254b01572c683bc7bc389b9b7e0c83c1d591711"
+sha256 = "4a07f9b76d361f572620927e5735b77d6d2101c23cdd94383eb5b706e7b36357"
+bytes = 1185
+lf = 27
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 68
+name = "lib.es2024.object.d.ts"
+npm_path = "lib/lib.es2024.object.d.ts"
+git_path = "lib/lib.es2024.object.d.ts"
+git_blob = "5f57880dcd313102ff058659d88c2a8c459e9063"
+sha256 = "7c4e8dc6ab834cc6baa0227e030606d29e3e8449a9f67cdf5605ea5493c4db29"
+bytes = 1220
+lf = 27
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 69
+name = "lib.es2024.promise.d.ts"
+npm_path = "lib/lib.es2024.promise.d.ts"
+git_path = "lib/lib.es2024.promise.d.ts"
+git_blob = "d74e968d878d29d02f32a06aa6942be87a2e6004"
+sha256 = "de7ba0fd02e06cd9a5bd4ab441ed0e122735786e67dde1e849cced1cd8b46b78"
+bytes = 1350
+lf = 33
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 70
+name = "lib.es2024.regexp.d.ts"
+npm_path = "lib/lib.es2024.regexp.d.ts"
+git_path = "lib/lib.es2024.regexp.d.ts"
+git_blob = "bd023f77e743d54d28ac5f46b80949a685301839"
+sha256 = "6148e4e88d720a06855071c3db02069434142a8332cf9c182cda551adedf3156"
+bytes = 1034
+lf = 23
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 71
+name = "lib.es2024.sharedmemory.d.ts"
+npm_path = "lib/lib.es2024.sharedmemory.d.ts"
+git_path = "lib/lib.es2024.sharedmemory.d.ts"
+git_blob = "f981a325d82360e6bd9afc38f99ef713902e5e92"
+sha256 = "d63dba625b108316a40c95a4425f8d4294e0deeccfd6c7e59d819efa19e23409"
+bytes = 3038
+lf = 66
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2020.bigint", file = "lib.es2020.bigint.d.ts" }]
+
+[[file]]
+ordinal = 72
+name = "lib.es2024.string.d.ts"
+npm_path = "lib/lib.es2024.string.d.ts"
+git_path = "lib/lib.es2024.string.d.ts"
+git_blob = "cb2a4eebf028ec81529d2bdadc43258ba20b016c"
+sha256 = "0568d6befee03dd435bed4fc25c4e46865b24bdcb8c563fdc21f580a2c301904"
+bytes = 1155
+lf = 27
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 73
+name = "lib.es2025.collection.d.ts"
+npm_path = "lib/lib.es2025.collection.d.ts"
+git_path = "lib/lib.es2025.collection.d.ts"
+git_blob = "507e5e72a35256aed823b2bff02c0df0c86a4490"
+sha256 = "30d62269b05b584741f19a5369852d5d34895aa2ac4fd948956f886d15f9cc0d"
+bytes = 3839
+lf = 94
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2024.collection", file = "lib.es2024.collection.d.ts" }]
+
+[[file]]
+ordinal = 74
+name = "lib.es2025.float16.d.ts"
+npm_path = "lib/lib.es2025.float16.d.ts"
+git_path = "lib/lib.es2025.float16.d.ts"
+git_blob = "b4ebf8a689d2e7d0842bc821c4bc84a045ffd84f"
+sha256 = "f128dae7c44d8f35ee42e0a437000a57c9f06cc04f8b4fb42eebf44954d53dc8"
+bytes = 20489
+lf = 443
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2015.symbol", file = "lib.es2015.symbol.d.ts" }, { lib = "es2015.iterable", file = "lib.es2015.iterable.d.ts" }]
+
+[[file]]
+ordinal = 75
+name = "lib.es2025.intl.d.ts"
+npm_path = "lib/lib.es2025.intl.d.ts"
+git_path = "lib/lib.es2025.intl.d.ts"
+git_blob = "ffc660e027174009e0e95bbc946305bf7fa3c9ca"
+sha256 = "ffbe6d7b295306b2ba88030f65b74c107d8d99bdcf596ea99c62a02f606108b0"
+bytes = 9390
+lf = 200
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2018.intl", file = "lib.es2018.intl.d.ts" }]
+
+[[file]]
+ordinal = 76
+name = "lib.es2025.iterator.d.ts"
+npm_path = "lib/lib.es2025.iterator.d.ts"
+git_path = "lib/lib.es2025.iterator.d.ts"
+git_blob = "13ca5401a15307f3da5097e136fcd3fc72197000"
+sha256 = "996fb27b15277369c68a4ba46ed138b4e9e839a02fb4ec756f7997629242fd9f"
+bytes = 8637
+lf = 146
+cr = 0
+final_lf = true
+source_kind = "external-module"
+references = [{ lib = "es2015.iterable", file = "lib.es2015.iterable.d.ts" }]
+
+[[file]]
+ordinal = 77
+name = "lib.es2025.promise.d.ts"
+npm_path = "lib/lib.es2025.promise.d.ts"
+git_path = "lib/lib.es2025.promise.d.ts"
+git_blob = "791fd54e44ea3e7686aca328599bd91410af7687"
+sha256 = "79b712591b270d4778c89706ca2cfc56ddb8c3f895840e477388f1710dc5eda9"
+bytes = 1619
+lf = 32
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 78
+name = "lib.es2025.regexp.d.ts"
+npm_path = "lib/lib.es2025.regexp.d.ts"
+git_path = "lib/lib.es2025.regexp.d.ts"
+git_blob = "1e4d7c14f1c858b2da2587c3565c68a8369809f0"
+sha256 = "20884846cef428b992b9bd032e70a4ef88e349263f63aeddf04dda837a7dba26"
+bytes = 1255
+lf = 30
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 79
+name = "lib.decorators.d.ts"
+npm_path = "lib/lib.decorators.d.ts"
+git_path = "lib/lib.decorators.d.ts"
+git_blob = "83d82bef2e557d355e4a47f3cbf4a3fda14ba16a"
+sha256 = "1ce14b81c5cc821994aa8ec1d42b220dd41b27fcc06373bce3958af7421b77d4"
+bytes = 13153
+lf = 382
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 80
+name = "lib.decorators.legacy.d.ts"
+npm_path = "lib/lib.decorators.legacy.d.ts"
+git_path = "lib/lib.decorators.legacy.d.ts"
+git_blob = "89775167cf7e00ed2d4c2ef15fb9ba19751be815"
+sha256 = "b3a048b3e9302ef9a34ef4ebb9aecfb28b66abb3bce577206a79fee559c230da"
+bytes = 1287
+lf = 20
+cr = 0
+final_lf = true
+source_kind = "script"
+references = []
+
+[[file]]
+ordinal = 81
+name = "lib.es2025.full.d.ts"
+npm_path = "lib/lib.es2025.full.d.ts"
+git_path = "lib/lib.es2025.full.d.ts"
+git_blob = "0870bb4f53d7b42022c46324b6fb001660283c86"
+sha256 = "e03da518b01b46a4c99a1f88cd727ee98ddf14492c43dae1ae7a63e992971bab"
+bytes = 1035
+lf = 22
+cr = 0
+final_lf = true
+source_kind = "script"
+references = [{ lib = "es2025", file = "lib.es2025.d.ts" }, { lib = "dom", file = "lib.dom.d.ts" }, { lib = "webworker.importscripts", file = "lib.webworker.importscripts.d.ts" }, { lib = "scripthost", file = "lib.scripthost.d.ts" }, { lib = "dom.iterable", file = "lib.dom.iterable.d.ts" }, { lib = "dom.asynciterable", file = "lib.dom.asynciterable.d.ts" }]

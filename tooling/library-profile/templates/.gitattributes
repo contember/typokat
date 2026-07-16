@@ -1,0 +1,6 @@
+lib/*.d.ts -text -diff
+LICENSE.txt -text -diff
+ThirdPartyNoticeText.txt -text -diff
+profile.toml text eol=lf
+README.md text eol=lf
+THIRD_PARTY_NOTICE.md text eol=lf
