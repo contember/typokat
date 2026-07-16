@@ -21,8 +21,9 @@ declaration identity must be separated from stable ordered type-group identity.
 
 Valid `export as namespace` publication over either an `export =` or ordinary named-export external
 module surface is owned by backlog `15`; its current WU0 witness is the `export =` form. This item
-owns `TK1314`/`TK1315` context diagnostics where applicable and `TK2669` for global augmentation
-outside an external or ambient module. Enum/function `TK2567` sites and exact
+owns `TK1314`/`TK1315` context diagnostics where applicable, `TK2669` for global augmentation
+outside an external or ambient module, and `TK2670` for a non-ambient `global` block without
+`declare`. Enum/function `TK2567` sites and exact
 three-way enum/function/namespace legality belong to backlog `42`; this item owns namespace
 placement `TK2434` and a non-permissive function+namespace surface.
 
@@ -41,12 +42,22 @@ Generic-header and member/overload/conflict recovery follows the committed stric
 including typed invalid-group recovery with distinct parameter positions. A standalone namespace
 stays a type container; only an existing function/class value may receive exported value members.
 
-Reserve `declare global` scope/records as disconnected metadata first, then atomically link/publish
-one compilation-global scope across files while module locals remain isolated; do not introduce
-another ambient resolver or `Store`. Direct gates cover legal external/ambient contexts and
-`TK2669` in scripts. Corpus first; cross-check tsc 6.0.3 `--strict`. Structurally split the official-
-suite namespace gate after landing; never remove a broad regex that also hides external-module or
-unrelated cases.
+Reserve `declare global` scope/records as disconnected metadata first. Give each augmentation an
+originating lexical overlay, quarantine every `TK2669`/`TK2670` block, and promote only legal
+interfaces, type aliases, and type-only namespaces through the ordinary `TypeGroupId` and
+`NamespaceId` machinery. Once every legal group is complete, atomically link all user modules to
+one compilation-global scope; module locals remain isolated and no second ambient resolver or
+`Store` is introduced. Direct gates cover legal external/ambient contexts, invalid
+placement/modifier contexts, exact diagnostic ownership, cross-file merging, and opposite input
+order.
+
+This item is deliberately limited to declarations without an inseparable value side. Global
+variables, functions, complete class type/constructor pairs, and cross-file
+class/function+namespace value payloads remain [`82`](82-declare-global-value-space.md).
+That tail does not block `lib.es5.d.ts` loading: its ambient values are top-level declarations owned
+by loader `14`, not `declare global` value-space publication. Corpus first; cross-check tsc 6.0.3
+`--strict`. Structurally split the official-suite namespace gate after landing; never remove a
+broad regex that also hides external-module or unrelated cases.
 
 ## Touch points
 

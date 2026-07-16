@@ -49,6 +49,11 @@ do not belong on this critical path.
 - The binder owns declaration identity, source order, merge groups, namespace scopes, and exported
   namespace membership. The checker publishes one complete merged semantic surface from that
   declaration graph.
+- Global publication is a legal-only cutover for interfaces, type aliases, and type-only
+  namespaces. Each augmentation keeps an originating lexical overlay for module-local references;
+  invalid augmentations stay quarantined. Only after every legal global group is complete may all
+  user modules link to the one compilation-global scope. Value-bearing declarations, including the
+  complete class type/constructor pair, remain backlog `82`.
 - A published hash-consed `TypeId` is never mutated into a different identity. Recursive merge
   groups reserve identity and publish atomically; no lookup, relation, or cache may observe a
   partial surface.
@@ -71,7 +76,7 @@ do not belong on this critical path.
 | Cross-space coexistence | Value/type/namespace slots resolve independently; all 28 ES5 interface+`declare var` constructor pairs see the final merged interface | Coexistence is not misreported as interface merging |
 | Keep-pair merging | Interface+namespace, function+namespace, class+namespace, and the approved class+interface(+namespace) composition preserve their instance/type/static/container surfaces in every strict-tsc-legal order | Exact enum+namespace+function legality/recovery remains explicitly deferred to `42`; the interim receiver is typed incomplete and non-permissive |
 | Namespace visibility | Exported members form the reopened public namespace surface; non-exported members remain local to their declaration block | No accidental sharing of private block members across reopenings |
-| Global/UMD surface | In WU5, atomically link/publish legal `declare global` blocks into one compilation-global scope; implement `TK2669` and `TK1314`/`TK1315` context errors; keep valid `export as namespace` publication owned by `15`, with the current `export =` form as its WU0 witness | Keep WU1b global metadata disconnected, keep module locals isolated, and do not absorb valid UMD publication or general package/module loading; backlog `15` must cover both `export =` and ordinary named-export UMD surfaces |
+| Global/UMD surface | In WU5, publish legal interface/type-alias/type-only namespace members from `declare global` through per-augmentation lexical overlays, then atomically link one compilation-global scope; implement `TK2669`/`TK2670` and `TK1314`/`TK1315`; keep valid `export as namespace` publication owned by `15`, with the current `export =` form as its WU0 witness | Invalid augmentations never contribute members; module locals remain isolated; all value-bearing declarations, including complete class type/constructor pairs, are backlog `82`; valid UMD publication and general package/module loading remain backlog `15` |
 
 **Approved scope addendum (2026-07-15).** Backlog `43` includes full
 class+interface(+namespace) merging even though architecture §4.1's original keep-list did not name
@@ -140,8 +145,8 @@ instance members and namespace static/container members compose in either class/
 - Classify legal merging, cross-slot coexistence, illegal redeclaration, global augmentation, UMD
   context errors, and deferred valid UMD/string-literal external-module forms according to WU0A.
 - Reserve one compilation-global scope plus typed augmentation/context records, including
-  `TK2669`, but keep them disconnected from production root lookup and publication until WU5. Do
-  not introduce a second ambient resolver or `Store`.
+  `TK2669`/`TK2670` and `TK1314`/`TK1315`, but keep them disconnected from production root lookup
+  and publication until WU5. Do not introduce a second ambient resolver or `Store`.
 - Add direct tests for namespace identity, public/private scope parentage, reopening isolation,
   dotted/nested equivalence, dormant cross-file global records, legal external/ambient versus
   illegal script context classification, both declaration orders, export visibility, and proof that
@@ -262,13 +267,20 @@ decision instead of adding a bridge if any of those proofs fails.
 ### WU5 — ambient/global surface closure (effort L)
 
 - Implement `declare namespace` through the same namespace machinery.
-- Atomically link and publish WU1b's disconnected global scope/records as the one production
-  compilation global for every file. Implement cross-file `declare global` augmentation there,
-  with module-local same-name declarations remaining isolated and opposite input order producing
-  identical results; no partly linked state may land.
-- Implement `TK2669` for global augmentation outside an external or ambient module. Direct gates
-  cover legal external-module, legal ambient-module, and illegal script contexts plus exact lexical
-  ownership.
+- Give each `declare global` block an originating lexical overlay. Promote only legal interfaces,
+  type aliases, and type-only namespaces into the existing `TypeGroupId`/`NamespaceId` machinery;
+  invalid blocks remain quarantined and cannot leak a direct or nested member into a legal group.
+  The overlay resolves canonical global names before its originating module locals without adding
+  a special resolver.
+- After every legal global group is complete, atomically link every user module to the one
+  compilation-global scope. Module-local same-name declarations remain isolated, opposite input
+  order produces identical results, and no partly linked state may land. Global variables,
+  functions, complete class type/constructor pairs, and cross-file class/function+namespace value
+  payloads stay deferred to backlog `82`.
+- Implement `TK2669` for augmentation outside an external or ambient module and `TK2670` for a
+  non-ambient `global` block without `declare`. Both outcomes quarantine the block. Direct gates
+  cover legal external-module, legal ambient-module, illegal script, and missing-`declare` contexts
+  plus exact lexical ownership.
 - Implement `TK1314`/`TK1315` for invalid `export as namespace` contexts. Reassign
   `decl/namespace-export/self` to backlog `15`, with the valid `export =` form of
   `export as namespace` as its current witness; do not claim valid UMD global publication here.
@@ -510,3 +522,10 @@ adding `42` or `44` only if a reproducible pinned-library audit contradicts the 
   `TK2567` plus exact three-way legality remains with `42`, and `43` retains `TK1314`/`TK1315`,
   `TK2434`, and non-permissive function+namespace behavior. Production may now start at WU1a only
   after this ADR is committed; WU3, WU4, and WU5 remain atomic cutovers.
+- **2026-07-16 — WU5 architecture resolution.** The production global is a legal-only interface,
+  type-alias, and type-only namespace surface: each augmentation retains an originating lexical
+  overlay, `TK2669`/`TK2670` blocks are quarantined, and user modules link to the compilation global
+  only after complete group publication. `TK1314`/`TK1315` remain WU5 context diagnostics; valid
+  UMD publication stays with `15`. Value-bearing declarations, including complete class
+  type/constructor pairs, graduated to backlog `82` and do not block the explicit `lib.es5.d.ts`
+  readiness gate.
