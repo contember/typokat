@@ -26,6 +26,10 @@ WU4-A adversarial review (all verified pre-existing at that sprint's HEAD).
   reservation does not allocate callable/class body owners. Such a base cannot safely enter an
   arrow, function, or class expression to check the member write, so the skipped target needs its
   own record while assertion and class-expression records remain independent and additive.
+- **Static-member update bases have the same nested-scope boundary** — prefix/postfix update
+  reservation does not allocate callable/class owners, so traversal would otherwise enter an
+  unreserved scope. The update base needs a distinct owner because it is not an assignment target
+  and update-operand traversal is otherwise supported.
 - **`for-of` over a non-iterable / `for-in` over a non-object are undiagnosed**
   (tsc TS2488/TS2407) — the element type falls back to the error type (no cascade,
   but no diagnostic either). Needs at least a structural iterability check; full
@@ -42,6 +46,8 @@ Until assignment-LHS lexical reservation is implemented, a static-member target 
 contains a nested arrow/function/class records `expr-infer/static-member-assignment/base`, walks
 assertion syntax without entering the nested scope, preserves the existing class-expression
 record, and checks the RHS exactly once. Assertion records never substitute for the target record.
+The analogous update target records `expr-infer/static-member-update/base`; prefix and postfix
+forms share that identity, and assertion/class-expression records remain additive.
 Operator *result typing* fidelity (TK2362/2365 families) stays owned by backlog `45` —
 this item only stops the silent skips.
 

@@ -234,6 +234,11 @@ and validated the same way.
   `expr-infer/static-member-assignment/base` instead of entering the scope with an incorrect binder
   or silently dropping member-write assignability, readonly, and access checks.
   <!-- div: id=assignments/static-member-nested-scope-base dir=under scope=s-assignability owner=../backlog/71-expression-inference-fn-tail.md witness=../../tests/cases/b73_surface_accounting/static_member_assignment_nested_base.ts -->
+- **Static-member updates with a nested callable/class base are explicitly incomplete
+  (over-report).** typokat records `expr-infer/static-member-update/base` instead of entering an
+  unreserved lexical owner. Numeric prefix/postfix controls accepted by tsc therefore remain
+  conservative, with assertion and class-expression outcomes retained independently.
+  <!-- div: id=updates/static-member-nested-scope-base dir=over scope=b-semantic-candidate-tail owner=../backlog/71-expression-inference-fn-tail.md witness=../../tests/cases/b73_surface_accounting/static_member_update_nested_base.ts -->
 - **Assignment into an explicit `any` narrows it (over-report).** `let s: any;
   s = 5; s.foo` reports `TK2339` where tsc keeps `s` as `any` (assignment narrowing
   applies only to implicit evolving `any`). Safe direction; batched in backlog `63`.

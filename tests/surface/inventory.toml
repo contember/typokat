@@ -836,6 +836,16 @@ owner = "shipped"
 witness = "../cases/b73_expression_shape_tail/update_operand.ts"
 
 [[surface]]
+id = "expr-infer/static-member-update/base"
+role = "expr-infer"
+surface = "static-member-update"
+slot = "base"
+oxc_variant = "SimpleAssignmentTarget::StaticMemberExpression"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/71-expression-inference-fn-tail.md"
+witness = "../cases/b73_surface_accounting/static_member_update_nested_base.ts"
+
+[[surface]]
 id = "expr-infer/v8-intrinsic/self"
 role = "expr-infer"
 surface = "v8-intrinsic"
