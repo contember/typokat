@@ -80,18 +80,44 @@ interface CompatibleNumberSuffixAgainstFixed extends FixedNumberPairTarget {
   callable: (...args: [...number[], number]) => number;
 }
 
-// A target suffix moves with the supplied arity. A fixed source prefix must
-// accept both the target variadic element and the suffix that can occupy it.
+// A target suffix moves with the supplied arity. The source must accept every
+// possible target length, even when its parameter types are otherwise broad.
 interface VariadicBeforeStringSuffixTarget {
   callable: (...args: [...number[], string]) => number;
 }
 
-interface IncompatibleFixedPrefixAgainstMovingSuffix extends VariadicBeforeStringSuffixTarget { // error[TK2430]: Interface 'IncompatibleFixedPrefixAgainstMovingSuffix' incorrectly extends interface 'VariadicBeforeStringSuffixTarget'
-  callable: (first: string, ...rest: unknown[]) => number;
+interface IncompatibleRequiredPrefixAgainstMovingSuffix extends VariadicBeforeStringSuffixTarget { // error[TK2430]: Interface 'IncompatibleRequiredPrefixAgainstMovingSuffix' incorrectly extends interface 'VariadicBeforeStringSuffixTarget'
+  callable: (first: unknown, ...rest: unknown[]) => number;
 }
 
-interface CompatibleFixedPrefixAgainstMovingSuffix extends VariadicBeforeStringSuffixTarget {
+interface IncompatibleFiniteOptionalAgainstMovingSuffix extends VariadicBeforeStringSuffixTarget { // error[TK2430]: Interface 'IncompatibleFiniteOptionalAgainstMovingSuffix' incorrectly extends interface 'VariadicBeforeStringSuffixTarget'
+  callable: (first?: unknown) => number;
+}
+
+interface CompatibleZeroFiniteAgainstMovingSuffix extends VariadicBeforeStringSuffixTarget {
+  callable: () => number;
+}
+
+interface CompatibleOptionalPrefixAndRestAgainstMovingSuffix extends VariadicBeforeStringSuffixTarget {
   callable: (first?: unknown, ...rest: unknown[]) => number;
+}
+
+// A required suffix remains an obligation when the preceding variadic element
+// is never; only a pure never rest retains its permissive fixed-source behavior.
+interface NeverBeforeStringSuffixTarget {
+  callable: (...args: [...never[], string]) => number;
+}
+
+interface IncompatibleFixedAgainstNeverAndSuffix extends NeverBeforeStringSuffixTarget { // error[TK2430]: Interface 'IncompatibleFixedAgainstNeverAndSuffix' incorrectly extends interface 'NeverBeforeStringSuffixTarget'
+  callable: (value: string) => number;
+}
+
+interface PureNeverRestTarget {
+  callable: (...args: never[]) => number;
+}
+
+interface CompatibleFixedAgainstPureNeverRest extends PureNeverRestTarget {
+  callable: (value: string) => number;
 }
 
 // A required tuple-rest suffix still needs a later positional slot when an
