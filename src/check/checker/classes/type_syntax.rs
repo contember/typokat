@@ -1897,6 +1897,68 @@ mod tests {
     }
 
     #[test]
+    fn conditional_extends_infer_rest_binds_true_branch_reference() {
+        with_alias_type(
+            "type X = [string] extends [...infer R] ? R : never;",
+            |annotation| {
+                let mut interner = Interner::with_intrinsics();
+                let mut factory = SurfaceTypeFactory::new(&mut interner);
+                let mut resolver = Resolver::default();
+                let mut lowerer = TypeSyntaxLowerer::new(&mut factory, &mut resolver);
+                let root = lowerer.lower(annotation).unwrap();
+                assert!(lowerer.take_child_failures().is_empty());
+                drop(lowerer);
+
+                let conditional = factory.store().conditional_type(root).unwrap();
+                assert_eq!(conditional.infer_count, 1);
+                let extends = factory.store().tuple_type(conditional.extends_ty).unwrap();
+                let rest = extends.rest.unwrap();
+                assert_eq!(factory.store().infer_index(rest.ty), Some(0));
+                assert_eq!(
+                    factory.store().infer_index(conditional.true_branch),
+                    Some(0)
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn conditional_true_branch_cannot_declare_fresh_infer() {
+        let source = "type X = string extends unknown ? [...infer R] : never;";
+        with_alias_type(source, |annotation| {
+            let mut interner = Interner::with_intrinsics();
+            let mut factory = SurfaceTypeFactory::new(&mut interner);
+            let mut resolver = Resolver::default();
+            let mut lowerer = TypeSyntaxLowerer::new(&mut factory, &mut resolver);
+
+            assert_eq!(
+                lowerer.lower(annotation),
+                Err(SurfaceTypeFailure::Unsupported(
+                    u32::try_from(source.find("infer R").unwrap()).unwrap()
+                ))
+            );
+        });
+    }
+
+    #[test]
+    fn nested_conditional_check_cannot_attach_fresh_infer_to_outer_frame() {
+        let source = "type X = string extends infer Outer ? ([...infer Inner] extends unknown[] ? Outer : never) : never;";
+        with_alias_type(source, |annotation| {
+            let mut interner = Interner::with_intrinsics();
+            let mut factory = SurfaceTypeFactory::new(&mut interner);
+            let mut resolver = Resolver::default();
+            let mut lowerer = TypeSyntaxLowerer::new(&mut factory, &mut resolver);
+
+            assert_eq!(
+                lowerer.lower(annotation),
+                Err(SurfaceTypeFailure::Unsupported(
+                    u32::try_from(source.find("infer Inner").unwrap()).unwrap()
+                ))
+            );
+        });
+    }
+
+    #[test]
     fn mapped_source_and_value_placeholder_are_not_evaluated() {
         with_alias_type(
             "type X = { [K in keyof Box<number>]: Box<number>[K] };",
