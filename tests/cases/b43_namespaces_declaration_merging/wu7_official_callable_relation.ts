@@ -52,3 +52,44 @@ interface SourceRestAgainstTargetSuffixBase {
 interface IncompatibleSourceRestAgainstTargetSuffix extends SourceRestAgainstTargetSuffixBase { // error[TK2430]: Interface 'IncompatibleSourceRestAgainstTargetSuffix' incorrectly extends interface 'SourceRestAgainstTargetSuffixBase'
   callable: (...args: number[]) => number;
 }
+
+// A source tuple-rest suffix remains a required positional obligation. It must
+// neither disappear against a pure target rest nor be replaced by the source's
+// variadic middle against a fixed target.
+interface PureNumberRestTarget {
+  callable: (...args: number[]) => number;
+}
+
+interface IncompatibleStringSuffixAgainstPureRest extends PureNumberRestTarget { // error[TK2430]: Interface 'IncompatibleStringSuffixAgainstPureRest' incorrectly extends interface 'PureNumberRestTarget'
+  callable: (...args: [...number[], string]) => number;
+}
+
+interface CompatiblePureRestAgainstPureRest extends PureNumberRestTarget {
+  callable: (...args: number[]) => number;
+}
+
+interface FixedNumberPairTarget {
+  callable: (first: number, second: number) => number;
+}
+
+interface IncompatibleStringSuffixAgainstFixed extends FixedNumberPairTarget { // error[TK2430]: Interface 'IncompatibleStringSuffixAgainstFixed' incorrectly extends interface 'FixedNumberPairTarget'
+  callable: (...args: [...number[], string]) => number;
+}
+
+interface CompatibleNumberSuffixAgainstFixed extends FixedNumberPairTarget {
+  callable: (...args: [...number[], number]) => number;
+}
+
+// A target suffix moves with the supplied arity. A fixed source prefix must
+// accept both the target variadic element and the suffix that can occupy it.
+interface VariadicBeforeStringSuffixTarget {
+  callable: (...args: [...number[], string]) => number;
+}
+
+interface IncompatibleFixedPrefixAgainstMovingSuffix extends VariadicBeforeStringSuffixTarget { // error[TK2430]: Interface 'IncompatibleFixedPrefixAgainstMovingSuffix' incorrectly extends interface 'VariadicBeforeStringSuffixTarget'
+  callable: (first: string, ...rest: unknown[]) => number;
+}
+
+interface CompatibleFixedPrefixAgainstMovingSuffix extends VariadicBeforeStringSuffixTarget {
+  callable: (first?: unknown, ...rest: unknown[]) => number;
+}
