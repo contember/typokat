@@ -1,5 +1,5 @@
 // WU4 — tsc 6.0.3 --strict --noEmit --lib es5 --module commonjs:
-// TS2300 x5, TS2434 x2, TS2345 x4, TS2322 x20, and TS2339 below. Explicit field,
+// TS2300 x8, TS2451 x3, TS2434 x3, TS2345 x4, TS2322 x22, and TS2339 below. Explicit field,
 // static, namespace-value, and private annotations keep unrelated inference outside this fixture's scope.
 
 class Wu4ForwardClass {
@@ -133,3 +133,23 @@ namespace Wu4PrototypeCollision {
 const wu4PrototypeCollision: Wu4PrototypeCollision = Wu4PrototypeCollision.prototype;
 const wu4PrototypeCollisionWrong: string = Wu4PrototypeCollision.prototype; // error[TK2322]
 const wu4PrototypeInstanceWrong: string = Wu4PrototypeCollision.prototype.instance; // error[TK2322]: Type 'number' is not assignable to type 'string'
+
+class Wu4ForwardStaticAccessorCollision {
+  static get value(): number { return 1; } // error[TK2300]: Duplicate identifier 'value'
+  static set value(next: number) {} // error[TK2300]: Duplicate identifier 'value'
+}
+namespace Wu4ForwardStaticAccessorCollision {
+  export const value: string = "namespace"; // error[TK2300]: Duplicate identifier 'value'
+}
+const wu4ForwardStaticAccessorValue: number = Wu4ForwardStaticAccessorCollision.value;
+const wu4ForwardStaticAccessorWrong: string = Wu4ForwardStaticAccessorCollision.value; // error[TK2322]: Type 'number' is not assignable to type 'string'
+
+namespace Wu4ReverseStaticAccessorCollision { // error[TK2434]: A namespace declaration cannot be located prior to a class or function with which it is merged
+  export const value: string = "namespace"; // error[TK2451]: Cannot redeclare block-scoped variable 'value'
+}
+class Wu4ReverseStaticAccessorCollision {
+  static get value(): number { return 1; } // error[TK2451]: Cannot redeclare block-scoped variable 'value'
+  static set value(next: number) {} // error[TK2451]: Cannot redeclare block-scoped variable 'value'
+}
+const wu4ReverseStaticAccessorValue: string = Wu4ReverseStaticAccessorCollision.value;
+const wu4ReverseStaticAccessorWrong: number = Wu4ReverseStaticAccessorCollision.value; // error[TK2322]: Type 'string' is not assignable to type 'number'
