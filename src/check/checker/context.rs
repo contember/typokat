@@ -636,9 +636,12 @@ pub(in crate::check::checker) struct CondFrame {
     /// `binders.len()`; a repeated name reuses its index (`infer_count` is the final
     /// `binders.len()`).
     pub(in crate::check::checker) binders: FxHashMap<String, u32>,
-    /// Whether this node's binders are in scope — `true` only while its `extends` type
-    /// and true branch are lowered.
+    /// Whether this node's binders are reference-visible — `true` only while its true
+    /// branch is lowered.
     pub(in crate::check::checker) active: bool,
+    /// Whether fresh `infer` declarations may bind this frame — `true` only while its
+    /// `extends` type is lowered.
+    pub(in crate::check::checker) accepts_infer_declarations: bool,
     /// Set when a cross-binder reference poisons this node (see
     /// [`crate::types::repr::ConditionalType::poisoned`]).
     pub(in crate::check::checker) poisoned: bool,

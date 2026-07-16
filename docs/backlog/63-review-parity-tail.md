@@ -29,7 +29,11 @@ do not block backlog `14` from starting. See
   `nominal_origin_ok` requires identical `declaring_class`); (e) `${number}` hole
   assignability demands canonical form — tsc's round-trip rule applies only to
   `infer N extends number` extraction, plain assignability is parse-only (`"01"`,
-  `"1e3"` should be accepted; fix the wrong doc-comment too).
+  `"1e3"` should be accepted; fix the wrong doc-comment too); (n, added 2026-07-16)
+  callable arity conservatively rejects a moving required tuple suffix source against a
+  zero-parameter target and a required-prefix-plus-rest source against a single optional target.
+  Both exact strict-tsc controls are pinned by
+  `b43_namespaces_declaration_merging/wu7_official_callable_relation.ts`.
 - **Checker FPs:** (f) assignment narrowing maps a literal RHS to its base primitive
   without intersecting the declared type — `x = "a"` on `x: "a" | "b"` then
   `const y: "a" | "b" = x` errors (tsc narrows to `"a"`); (g) out-of-subset call

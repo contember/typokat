@@ -443,6 +443,18 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
         "b43_namespaces_declaration_merging",
         "wu6a_type_only_negative.ts",
     ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu7_official_callable_relation.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu7_official_interface_validation.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
+        "wu7_official_named_tuple.ts",
+    ),
 ];
 
 /// An expectation parsed from a single inline marker.

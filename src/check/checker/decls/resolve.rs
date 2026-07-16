@@ -249,9 +249,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         // M25: active `infer` binders shadow named types and take no arguments.
         // Cross-binder references resolve but poison intervening nodes; names in no
-        // active frame fall through to `TK2304`.
-        if type_arguments.is_none() {
-            if let Some(infer_ty) = self.resolve_infer_reference(name) {
+        // active frame fall through to ordinary lexical resolution.
+        if let Some(infer_ty) = self.resolve_infer_reference(name) {
+            if let Some(arguments) = type_arguments {
+                for argument in &arguments.params {
+                    let _ = self.lower_annotation(scope, argument);
+                }
+                self.emit_diagnostic(Diagnostic::type_is_not_generic(reference_span, name));
+                return Some(self.interner.well_known().error);
+            } else {
                 return Some(infer_ty);
             }
         }

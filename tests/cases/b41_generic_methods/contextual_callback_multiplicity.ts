@@ -1,11 +1,9 @@
-// B41 regression — contextual generic callback replay must not duplicate the
-// pre-existing backlog-75 false positive. tsc 6.0.3 --strict is clean here; one
-// TK2345 per call is the documented B75 over-report, while this fixture owns only
-// the duplicate emitted after contextual callback typing.
+// B41 regression — named tuple labels are supported, while the pre-existing
+// backlog-75 TK2345 false positive remains exactly once per call (never duplicated).
 
 interface Events {
-  text: [text: string]; // incomplete[annotation-lower/named-tuple-member/self]
-  count: [count: number]; // incomplete[annotation-lower/named-tuple-member/self]
+  text: [text: string];
+  count: [count: number];
 }
 
 declare class Client {

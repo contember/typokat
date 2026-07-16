@@ -910,6 +910,16 @@ owner = "shipped"
 witness = "../cases/m25_conditional_types"
 
 [[surface]]
+id = "annotation-lower/infer-type/constraint"
+role = "annotation-lower"
+surface = "infer-type"
+slot = "constraint"
+oxc_variant = "TSType::TSInferType"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "../cases/b43_namespaces_declaration_merging/wu7_official_named_tuple.ts"
+
+[[surface]]
 id = "annotation-lower/intersection-type/self"
 role = "annotation-lower"
 surface = "intersection-type"
@@ -995,9 +1005,9 @@ role = "annotation-lower"
 surface = "named-tuple-member"
 slot = "self"
 oxc_variant = "TSType::TSNamedTupleMember"
-disposition = "unsupported-in"
-owner = "../../docs/backlog/75-scope-surface-tail.md"
-witness = "named tuple member aborts tuple annotation lowering"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b43_namespaces_declaration_merging/wu7_official_named_tuple.ts"
 
 [[surface]]
 id = "annotation-lower/object-keyword/self"
@@ -1078,6 +1088,16 @@ oxc_variant = "TSTupleElement::TSRestType"
 disposition = "supported"
 owner = "shipped"
 witness = "../cases/m18_tuples"
+
+[[surface]]
+id = "annotation-lower/tuple-rest-element/non-array"
+role = "annotation-lower"
+surface = "tuple-rest-element"
+slot = "non-array"
+oxc_variant = "TSTupleElement::TSRestType"
+disposition = "unsupported-in"
+owner = "../../docs/backlog/75-scope-surface-tail.md"
+witness = "../cases/b43_namespaces_declaration_merging/wu7_official_named_tuple.ts"
 
 [[surface]]
 id = "annotation-lower/tuple-type/self"

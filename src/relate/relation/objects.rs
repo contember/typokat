@@ -12,18 +12,70 @@ struct ParamShape {
     prefix: Vec<ParamSlot>,
     variadic: Option<ParamSlot>,
     suffix: Vec<ParamSlot>,
+    non_array_rest: bool,
 }
 
 impl ParamShape {
     fn min_len(&self) -> usize {
+        // Reaching a trailing suffix consumes every preceding prefix position.
+        if !self.suffix.is_empty() {
+            return self.prefix.len().saturating_add(self.suffix.len());
+        }
         self.prefix
             .iter()
             .filter(|slot| !slot.accepts_undefined)
             .count()
-            + self.suffix.len()
     }
 
-    fn max_len(&self) -> Option<usize> {
+    fn parameter_count(&self) -> usize {
+        debug_assert!(self.variadic.is_some() || self.suffix.is_empty());
+        // Moving suffixes stay inside the aggregate rest tail, not stable positions.
+        self.prefix.len() + usize::from(self.variadic.is_some())
+    }
+
+    fn has_non_array_rest(&self) -> bool {
+        self.non_array_rest
+    }
+
+    fn positional_slot(&self, index: usize) -> Option<ParamSlot> {
+        self.prefix.get(index).copied().or(self.variadic)
+    }
+
+    fn tail(&self, start: usize) -> ParamTail<'_> {
+        ParamTail {
+            prefix: self.prefix.get(start..).unwrap_or_default(),
+            variadic: self.variadic,
+            suffix: &self.suffix,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct ParamTail<'a> {
+    prefix: &'a [ParamSlot],
+    variadic: Option<ParamSlot>,
+    suffix: &'a [ParamSlot],
+}
+
+#[derive(Copy, Clone)]
+struct ParamTailSlot {
+    slot: ParamSlot,
+    required: bool,
+    rest: bool,
+}
+
+impl ParamTail<'_> {
+    fn min_len(self) -> usize {
+        if !self.suffix.is_empty() {
+            return self.prefix.len().saturating_add(self.suffix.len());
+        }
+        self.prefix
+            .iter()
+            .filter(|slot| !slot.accepts_undefined)
+            .count()
+    }
+
+    fn max_len(self) -> Option<usize> {
         if self.variadic.is_some() {
             None
         } else {
@@ -31,25 +83,45 @@ impl ParamShape {
         }
     }
 
-    fn can_have_index(&self, index: usize) -> bool {
-        match self.max_len() {
-            Some(max) => index < max,
-            None => true,
-        }
+    fn slot_count(self) -> usize {
+        self.prefix.len() + usize::from(self.variadic.is_some()) + self.suffix.len()
     }
 
-    fn slot_at(&self, index: usize, len: usize) -> Option<ParamSlot> {
-        if index >= len {
-            return None;
+    fn start_count(self) -> usize {
+        self.prefix.len()
+    }
+
+    fn end_count(self) -> usize {
+        self.suffix.len()
+    }
+
+    fn slot(self, index: usize) -> Option<ParamTailSlot> {
+        if let Some(slot) = self.prefix.get(index).copied() {
+            return Some(ParamTailSlot {
+                slot,
+                required: !self.suffix.is_empty() || !slot.accepts_undefined,
+                rest: false,
+            });
         }
-        if index < self.prefix.len() {
-            return self.prefix.get(index).copied();
+        let rest_index = self.prefix.len();
+        if let Some(slot) = self.variadic {
+            if index == rest_index {
+                return Some(ParamTailSlot {
+                    slot,
+                    required: false,
+                    rest: true,
+                });
+            }
         }
-        let suffix_start = len.saturating_sub(self.suffix.len());
-        if index >= suffix_start {
-            return self.suffix.get(index - suffix_start).copied();
-        }
-        self.variadic
+        let suffix_index = index.checked_sub(rest_index + usize::from(self.variadic.is_some()))?;
+        self.suffix
+            .get(suffix_index)
+            .copied()
+            .map(|slot| ParamTailSlot {
+                slot,
+                required: true,
+                rest: false,
+            })
     }
 }
 
@@ -693,14 +765,11 @@ impl<'a> Relater<'a> {
     /// Function assignability (mvp-plan §6.5, architecture §6.5). `src` is
     /// assignable to `tgt` iff:
     ///
-    ///  - **arity is satisfiable** — the source takes **no more** parameters than
-    ///    the target (a source with fewer parameters just ignores the extra
-    ///    arguments; M3 has no optional/rest params, so a *surplus source*
-    ///    parameter is the only arity failure), and
-    ///  - each **parameter is contravariant** over the common positions
-    ///    `0..src.len()` — the *target's* parameter type is assignable to the
-    ///    *source's* parameter type (`tgt_param → src_param`); extra target
-    ///    parameters are ignored, and
+    ///  - **arity is satisfiable** — fixed target shapes reject surplus required
+    ///    source slots, while a target variadic absorbs compatible fixed slots, and
+    ///  - each **parameter is contravariant** — the *target's* parameter type is
+    ///    assignable to the *source's* parameter type (`tgt_param → src_param`);
+    ///    source rests cover every remaining target prefix/rest/suffix slot, and
     ///  - the **return type is covariant** — the *source's* return type is
     ///    assignable to the *target's* return type (`src_ret → tgt_ret`), **except**
     ///    that a `void` target return accepts any source return type (a
@@ -937,11 +1006,36 @@ impl<'a> Relater<'a> {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
 
-        if src_params.min_len() > tgt_params.min_len()
-            && tgt_params
-                .variadic
-                .is_none_or(|slot| slot.ty != self.well_known.never)
-        {
+        // A moving target suffix changes the rest rule: after the stable target
+        // prefix, a variadic source may add only omittable fixed slots. A finite
+        // source may add none because the target has no maximum length.
+        let arity_fails = if tgt_params.variadic.is_some() {
+            let suffix_exceeds_shortest = !src_params.suffix.is_empty()
+                && src_params
+                    .prefix
+                    .len()
+                    .saturating_add(src_params.suffix.len())
+                    > tgt_params.min_len();
+            if tgt_params.suffix.is_empty() {
+                suffix_exceeds_shortest
+            } else if src_params.variadic.is_some() {
+                suffix_exceeds_shortest
+                    || src_params
+                        .prefix
+                        .iter()
+                        .skip(tgt_params.prefix.len())
+                        .any(|slot| !slot.accepts_undefined)
+            } else {
+                src_params
+                    .prefix
+                    .len()
+                    .saturating_add(src_params.suffix.len())
+                    > tgt_params.prefix.len()
+            }
+        } else {
+            src_params.min_len() > tgt_params.min_len()
+        };
+        if arity_fails {
             return Relation::No(ReasonChain::of(Reason::ParameterCount { src, tgt }));
         }
 
@@ -982,15 +1076,23 @@ impl<'a> Relater<'a> {
         kind: RelationKind,
         assumed: &mut AssumedSet,
     ) -> Relation {
-        for index in 0..src_params.prefix.len() {
-            if !tgt_params.can_have_index(index) {
-                continue;
-            }
-            let len = tgt_params.min_len().max(index + 1);
-            let Some(src_slot) = src_params.slot_at(index, len) else {
+        let aggregate_tail = src_params.has_non_array_rest() || tgt_params.has_non_array_rest();
+        let src_count = src_params.parameter_count();
+        let tgt_count = tgt_params.parameter_count();
+        let parameter_count = if aggregate_tail {
+            src_count.min(tgt_count)
+        } else {
+            src_count.max(tgt_count)
+        };
+        let stable_count = parameter_count.saturating_sub(usize::from(aggregate_tail));
+
+        for index in 0..stable_count {
+            #[cfg(test)]
+            super::measure_relation(|measure| measure.function_parameter_positions += 1);
+            let Some(src_slot) = src_params.positional_slot(index) else {
                 continue;
             };
-            let Some(tgt_slot) = tgt_params.slot_at(index, len) else {
+            let Some(tgt_slot) = tgt_params.positional_slot(index) else {
                 continue;
             };
             if let Relation::No(child) =
@@ -1005,50 +1107,78 @@ impl<'a> Relater<'a> {
             }
         }
 
-        let Some(src_rest) = src_params.variadic else {
-            return Relation::Yes;
-        };
-        if let Some(max) = tgt_params.max_len() {
-            for index in src_params.prefix.len()..max {
-                let Some(tgt_slot) = tgt_params.slot_at(index, max) else {
-                    continue;
-                };
-                if let Relation::No(child) =
-                    self.relate_parameter_slot(tgt_slot, src_rest, kind, assumed)
-                {
-                    return Relation::No(ReasonChain::of(Reason::Parameter {
-                        index,
-                        src,
-                        tgt,
-                        because: Box::new(child.head),
-                    }));
-                }
+        if aggregate_tail && parameter_count != 0 {
+            let index = parameter_count - 1;
+            let target_arguments = tgt_params.tail(index);
+            let source_accepts = src_params.tail(index);
+            if let Relation::No(child) = self.relate_parameter_tail(
+                tgt,
+                src,
+                target_arguments,
+                source_accepts,
+                kind,
+                assumed,
+            ) {
+                return Relation::No(ReasonChain::of(Reason::Parameter {
+                    index,
+                    src,
+                    tgt,
+                    because: Box::new(child.head),
+                }));
             }
-            return Relation::Yes;
         }
 
-        if let Some(tgt_rest) = tgt_params.variadic {
-            if let Relation::No(child) =
-                self.relate_parameter_slot(tgt_rest, src_rest, kind, assumed)
-            {
-                return Relation::No(ReasonChain::of(Reason::Parameter {
-                    index: src_params.prefix.len(),
-                    src,
-                    tgt,
-                    because: Box::new(child.head),
-                }));
-            }
+        Relation::Yes
+    }
+
+    /// Compare the target signature's remaining argument tuple with the tail the
+    /// source signature accepts. This is the aggregate non-array-rest position
+    /// from TypeScript's signature relation, represented as borrowed shape views
+    /// so relation stays read-only and allocation-free.
+    fn relate_parameter_tail(
+        &mut self,
+        argument_root: TypeId,
+        accepted_root: TypeId,
+        arguments: ParamTail<'_>,
+        accepts: ParamTail<'_>,
+        kind: RelationKind,
+        assumed: &mut AssumedSet,
+    ) -> Relation {
+        if arguments.min_len() < accepts.min_len()
+            || accepts.max_len().is_some_and(|accepted_max| {
+                arguments
+                    .max_len()
+                    .is_none_or(|argument_max| argument_max > accepted_max)
+            })
+        {
+            return Relation::No(ReasonChain::leaf(argument_root, accepted_root));
         }
-        for (offset, tgt_slot) in tgt_params.suffix.iter().copied().enumerate() {
+
+        let argument_count = arguments.slot_count();
+        let accepted_count = accepts.slot_count();
+        for argument_index in 0..argument_count {
+            #[cfg(test)]
+            super::measure_relation(|measure| measure.function_parameter_positions += 1);
+            let Some(argument) = arguments.slot(argument_index) else {
+                return Relation::No(ReasonChain::leaf(argument_root, accepted_root));
+            };
+            let argument_from_end = argument_count - 1 - argument_index;
+            let accepted_index =
+                if accepts.variadic.is_some() && argument_index >= accepts.start_count() {
+                    accepted_count.checked_sub(1 + argument_from_end.min(accepts.end_count()))
+                } else {
+                    Some(argument_index)
+                };
+            let Some(accepted) = accepted_index.and_then(|index| accepts.slot(index)) else {
+                return Relation::No(ReasonChain::leaf(argument_root, accepted_root));
+            };
+            if accepted.required && (argument.rest || !argument.required) {
+                return Relation::No(ReasonChain::leaf(argument_root, accepted_root));
+            }
             if let Relation::No(child) =
-                self.relate_parameter_slot(tgt_slot, src_rest, kind, assumed)
+                self.relate_parameter_slot(argument.slot, accepted.slot, kind, assumed)
             {
-                return Relation::No(ReasonChain::of(Reason::Parameter {
-                    index: src_params.prefix.len() + offset,
-                    src,
-                    tgt,
-                    because: Box::new(child.head),
-                }));
+                return Relation::No(child);
             }
         }
         Relation::Yes
@@ -1090,6 +1220,7 @@ impl<'a> Relater<'a> {
                 prefix,
                 variadic: None,
                 suffix: Vec::new(),
+                non_array_rest: false,
             });
         };
         let rest_shape = self.rest_param_shape(rest.ty)?;
@@ -1098,6 +1229,7 @@ impl<'a> Relater<'a> {
             prefix,
             variadic: rest_shape.variadic,
             suffix: rest_shape.suffix,
+            non_array_rest: rest_shape.non_array_rest,
         })
     }
 
@@ -1111,6 +1243,7 @@ impl<'a> Relater<'a> {
                     accepts_undefined: false,
                 }),
                 suffix: Vec::new(),
+                non_array_rest: false,
             });
         }
         if let Some(tuple) = self.store.tuple_type(ty) {
@@ -1123,6 +1256,7 @@ impl<'a> Relater<'a> {
                 accepts_undefined: false,
             }),
             suffix: Vec::new(),
+            non_array_rest: true,
         })
     }
 
@@ -1139,6 +1273,7 @@ impl<'a> Relater<'a> {
                     .collect(),
                 variadic: None,
                 suffix: Vec::new(),
+                non_array_rest: false,
             });
         };
         if rest.position > tuple.elements.len() {
@@ -1160,12 +1295,25 @@ impl<'a> Relater<'a> {
             .collect();
         let rest_shape = self.rest_param_shape(rest.ty)?;
         prefix.extend(rest_shape.prefix);
+        let nested_non_array_rest = rest_shape.non_array_rest;
         let mut combined_suffix = rest_shape.suffix;
         combined_suffix.extend(suffix);
+        if rest_shape.variadic.is_none() {
+            prefix.extend(combined_suffix);
+            return Some(ParamShape {
+                prefix,
+                variadic: None,
+                suffix: Vec::new(),
+                non_array_rest: false,
+            });
+        }
+        // A prefix-only tuple rest collapses to its array tail; a suffix keeps it aggregate.
+        let non_array_rest = nested_non_array_rest || !combined_suffix.is_empty();
         Some(ParamShape {
             prefix,
             variadic: rest_shape.variadic,
             suffix: combined_suffix,
+            non_array_rest,
         })
     }
 

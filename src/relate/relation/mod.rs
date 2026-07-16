@@ -26,6 +26,7 @@ pub(super) struct RelationMeasure {
     pub environment_sort_items: u64,
     pub object_target_properties: u64,
     pub object_source_property_comparisons: u64,
+    pub function_parameter_positions: u64,
 }
 
 #[cfg(test)]

@@ -4,12 +4,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// Lower a conditional type `check extends extends_ty ? true : false` (M25, WU1).
     ///
     /// The node's [`CondFrame`] is pushed for the WHOLE call (check/extends/true/false
-    /// positions) and its binders are in scope (`active`) only while the `extends` type
-    /// and the **true** branch are lowered — so `infer U` binds a node-scoped de Bruijn
-    /// index there, a reference to a name declared by THIS node from its false branch
-    /// finds no active frame → `TK2304`, and a reference to an OUTER node's still-active
-    /// binder from any nested position resolves as **cross-binder** — no `TK2304`, but it
-    /// POISONS every node from the reference up to the binder's owner
+    /// positions). Its `extends` type accepts declarations without making them visible
+    /// as references; the completed binders become active only in the **true** branch.
+    /// A reference to a name declared by THIS node from its false branch finds no active
+    /// frame → `TK2304`, and a reference to an OUTER node's still-active binder from any
+    /// nested position resolves as **cross-binder** — no `TK2304`, but it POISONS every
+    /// node from the reference up to the binder's owner
     /// ([`Pass::resolve_infer_reference`], backlog 26 stopgap; a poisoned node never
     /// evaluates). The check type is lowered without this node's binders; `distributive`
     /// records whether it was a **naked** declaration type parameter. A check that
@@ -53,12 +53,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let distributive =
             check.is_some_and(|c| self.interner.store().tag(c) == TypeTag::TypeParam);
 
-        // The `infer` binders declared in the extends type are in scope for the extends
-        // type itself and the true branch only.
+        // The extends type may declare this node's binders, but cannot reference them.
+        // Outer active binders remain reference-visible while this frame is declaration-only.
         if let Some(frame) = self.cond_frames.last_mut() {
-            frame.active = true;
+            frame.accepts_infer_declarations = true;
         }
         let extends_ty = self.lower_annotation(scope, &cond.extends_type);
+        if let Some(frame) = self.cond_frames.last_mut() {
+            frame.accepts_infer_declarations = false;
+            frame.active = true;
+        }
         let true_branch = self.lower_annotation(scope, &cond.true_type);
         if let Some(frame) = self.cond_frames.last_mut() {
             frame.active = false;
@@ -94,12 +98,32 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         self.maybe_evaluate(id, span)
     }
 
-    /// Lower `infer U` into the innermost active conditional frame. Repeated names
-    /// reuse their de Bruijn index; outside `extends`/true positions it is out of
-    /// subset (`None`).
+    /// Lower an `infer U` declaration into the innermost conditional's `extends`
+    /// frame. Binder references use [`resolve_infer_reference`] and remain visible
+    /// through the true branch.
     pub(super) fn lower_infer_type(&mut self, infer: &TSInferType<'_>) -> Option<TypeId> {
         let name = infer.type_parameter.name.name.as_str();
-        let frame = self.cond_frames.iter_mut().rev().find(|f| f.active)?;
+        let accepts_declaration = self
+            .cond_frames
+            .last()
+            .is_some_and(|frame| frame.accepts_infer_declarations);
+        if infer.type_parameter.constraint.is_some() {
+            self.record_incomplete(
+                "annotation-lower/infer-type/constraint",
+                Span::from_oxc(infer.span),
+                "infer type constraint not lowered",
+            );
+            if accepts_declaration {
+                let frame = self.cond_frames.last_mut()?;
+                let next = frame.binders.len() as u32;
+                frame.binders.entry(name.to_string()).or_insert(next);
+            }
+            return None;
+        }
+        let frame = self.cond_frames.last_mut()?;
+        if !frame.accepts_infer_declarations {
+            return None;
+        }
         let index = match frame.binders.get(name) {
             Some(&i) => i,
             None => {
@@ -159,13 +183,18 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
 
         // Adjacent-`infer` poison: an empty interior separator between two holes where
-        // either is an `infer` node poisons the innermost active conditional frame.
+        // either is an `infer` node poisons the frame owning the current extends pattern.
         for i in 1..holes.len() {
             let separator_empty = texts.get(i).is_some_and(|t| t.is_empty());
             let adjacent_infer = self.interner.store().tag(holes[i - 1]) == TypeTag::Infer
                 || self.interner.store().tag(holes[i]) == TypeTag::Infer;
             if separator_empty && adjacent_infer {
-                if let Some(frame) = self.cond_frames.iter_mut().rev().find(|f| f.active) {
+                if let Some(frame) = self
+                    .cond_frames
+                    .iter_mut()
+                    .rev()
+                    .find(|frame| frame.accepts_infer_declarations || frame.active)
+                {
                     frame.poisoned = true;
                 }
             }

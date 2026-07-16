@@ -1807,6 +1807,469 @@ fn function_optional_and_rest_shape_assignability() {
     assert!(!rel.is_assignable(rest, number_rest).is_yes());
 }
 
+/// WU7 callable rest/fixed parity: a target rest absorbs compatible surplus
+/// fixed source slots, while a source rest covers every remaining target slot.
+#[test]
+fn function_rest_and_fixed_slot_assignability() {
+    use crate::types::repr::{FunctionType, ParameterType, TupleRestType, TupleType};
+
+    fn function(params: Vec<ParameterType>, ret: TypeId) -> FunctionType {
+        FunctionType {
+            type_params: Vec::new(),
+            receiver: None,
+            params,
+            ret,
+        }
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let number_arr = interner.intern_array(wk.number);
+    let string_arr = interner.intern_array(wk.string);
+    let unknown_arr = interner.intern_array(wk.unknown);
+    let never_arr = interner.intern_array(wk.never);
+    let rest_tuple = interner.intern_tuple_type(TupleType::with_rest(
+        vec![wk.number, wk.string],
+        TupleRestType::new(1, number_arr),
+    ));
+    let string_suffix_tuple = interner.intern_tuple_type(TupleType::with_rest(
+        vec![wk.string],
+        TupleRestType::new(0, number_arr),
+    ));
+    let number_suffix_tuple = interner.intern_tuple_type(TupleType::with_rest(
+        vec![wk.number],
+        TupleRestType::new(0, number_arr),
+    ));
+    let unknown_string_suffix_tuple = interner.intern_tuple_type(TupleType::with_rest(
+        vec![wk.string],
+        TupleRestType::new(0, unknown_arr),
+    ));
+    let never_string_suffix_tuple = interner.intern_tuple_type(TupleType::with_rest(
+        vec![wk.string],
+        TupleRestType::new(0, never_arr),
+    ));
+    let unknown_suffix_tuple = interner.intern_tuple_type(TupleType::with_rest(
+        vec![wk.unknown],
+        TupleRestType::new(0, unknown_arr),
+    ));
+    let unknown_prefix_suffix_tuple = interner.intern_tuple_type(TupleType::with_rest(
+        vec![wk.unknown, wk.unknown],
+        TupleRestType::new(1, unknown_arr),
+    ));
+
+    let target_rest = interner.intern_function(function(
+        vec![ParameterType::rest("args", number_arr)],
+        wk.number,
+    ));
+    let source_one_fixed = interner.intern_function(function(
+        vec![ParameterType::required("x", wk.number)],
+        wk.number,
+    ));
+    let source_bad_fixed = interner.intern_function(function(
+        vec![ParameterType::required("x", wk.string)],
+        wk.number,
+    ));
+    let target_fixed_rest = interner.intern_function(function(
+        vec![
+            ParameterType::required("x", wk.number),
+            ParameterType::rest("rest", number_arr),
+        ],
+        wk.number,
+    ));
+    let source_two_fixed = interner.intern_function(function(
+        vec![
+            ParameterType::required("x", wk.number),
+            ParameterType::required("y", wk.number),
+        ],
+        wk.number,
+    ));
+    let source_bad_second_fixed = interner.intern_function(function(
+        vec![
+            ParameterType::required("x", wk.number),
+            ParameterType::required("y", wk.string),
+        ],
+        wk.number,
+    ));
+    let target_optional_rest = interner.intern_function(function(
+        vec![
+            ParameterType::required("x", wk.number),
+            ParameterType::optional("y", wk.string),
+            ParameterType::rest("rest", number_arr),
+        ],
+        wk.number,
+    ));
+    let source_fixed_number_rest = interner.intern_function(function(
+        vec![
+            ParameterType::required("x", wk.number),
+            ParameterType::rest("rest", number_arr),
+        ],
+        wk.number,
+    ));
+    let target_optional_prefix_rest = interner.intern_function(function(
+        vec![
+            ParameterType::optional("x", wk.number),
+            ParameterType::optional("y", wk.string),
+            ParameterType::rest("rest", number_arr),
+        ],
+        wk.number,
+    ));
+    let source_number_rest = interner.intern_function(function(
+        vec![ParameterType::rest("args", number_arr)],
+        wk.number,
+    ));
+    let target_string_rest = interner.intern_function(function(
+        vec![
+            ParameterType::required("x", wk.number),
+            ParameterType::rest("rest", string_arr),
+        ],
+        wk.number,
+    ));
+    let target_rest_suffix = interner.intern_function(function(
+        vec![ParameterType::rest("args", rest_tuple)],
+        wk.number,
+    ));
+    let source_string_suffix = interner.intern_function(function(
+        vec![ParameterType::rest("source", string_suffix_tuple)],
+        wk.number,
+    ));
+    let source_number_suffix = interner.intern_function(function(
+        vec![ParameterType::rest("source", number_suffix_tuple)],
+        wk.number,
+    ));
+    let target_fixed_pair = interner.intern_function(function(
+        vec![
+            ParameterType::required("first", wk.number),
+            ParameterType::required("second", wk.number),
+        ],
+        wk.number,
+    ));
+    let target_moving_suffix = interner.intern_function(function(
+        vec![ParameterType::rest("target", string_suffix_tuple)],
+        wk.number,
+    ));
+    let source_required_unknown_prefix_rest = interner.intern_function(function(
+        vec![
+            ParameterType::required("first", wk.unknown),
+            ParameterType::rest("rest", unknown_arr),
+        ],
+        wk.number,
+    ));
+    let source_optional_unknown_prefix_rest = interner.intern_function(function(
+        vec![
+            ParameterType::optional("first", wk.unknown),
+            ParameterType::rest("rest", unknown_arr),
+        ],
+        wk.number,
+    ));
+    let source_defaulted_unknown_prefix_rest = interner.intern_function(function(
+        vec![
+            ParameterType::defaulted("first", wk.unknown),
+            ParameterType::rest("rest", unknown_arr),
+        ],
+        wk.number,
+    ));
+    let source_finite_optional = interner.intern_function(function(
+        vec![ParameterType::optional("first", wk.unknown)],
+        wk.number,
+    ));
+    let source_finite_defaulted = interner.intern_function(function(
+        vec![ParameterType::defaulted("first", wk.unknown)],
+        wk.number,
+    ));
+    let source_zero_finite = interner.intern_function(function(Vec::new(), wk.number));
+    let target_never_moving_suffix = interner.intern_function(function(
+        vec![ParameterType::rest("target", never_string_suffix_tuple)],
+        wk.number,
+    ));
+    let target_pure_never_rest = interner.intern_function(function(
+        vec![ParameterType::rest("target", never_arr)],
+        wk.number,
+    ));
+    let source_optional_prefix_and_suffix = interner.intern_function(function(
+        vec![
+            ParameterType::optional("first", wk.unknown),
+            ParameterType::rest("rest", unknown_string_suffix_tuple),
+        ],
+        wk.number,
+    ));
+    let target_single_string = interner.intern_function(function(
+        vec![ParameterType::required("value", wk.string)],
+        wk.number,
+    ));
+    let source_prefix_and_suffix = interner.intern_function(function(
+        vec![
+            ParameterType::required("first", wk.unknown),
+            ParameterType::rest("rest", unknown_string_suffix_tuple),
+        ],
+        wk.number,
+    ));
+    let target_prefix_and_moving_suffix = interner.intern_function(function(
+        vec![
+            ParameterType::required("first", wk.number),
+            ParameterType::rest("rest", string_suffix_tuple),
+        ],
+        wk.number,
+    ));
+    let target_rest_copy = interner.intern_function(function(
+        vec![ParameterType::rest("target", number_arr)],
+        wk.number,
+    ));
+    let source_one_unknown_fixed = interner.intern_function(function(
+        vec![ParameterType::required("value", wk.unknown)],
+        wk.number,
+    ));
+    let source_unknown_rest = interner.intern_function(function(
+        vec![ParameterType::rest("source", unknown_arr)],
+        wk.number,
+    ));
+    let source_unknown_suffix = interner.intern_function(function(
+        vec![ParameterType::rest("source", unknown_suffix_tuple)],
+        wk.number,
+    ));
+    let target_prefix_moving_unknown_suffix = interner.intern_function(function(
+        vec![ParameterType::rest("target", unknown_prefix_suffix_tuple)],
+        wk.number,
+    ));
+    let target_fixed_unknown_rest = interner.intern_function(function(
+        vec![
+            ParameterType::required("value", wk.unknown),
+            ParameterType::rest("rest", unknown_arr),
+        ],
+        wk.number,
+    ));
+    let target_single_unknown = interner.intern_function(function(
+        vec![ParameterType::required("value", wk.unknown)],
+        wk.number,
+    ));
+    let target_optional_unknown = interner.intern_function(function(
+        vec![ParameterType::optional("value", wk.unknown)],
+        wk.number,
+    ));
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+
+    assert!(rel.is_assignable(source_one_fixed, target_rest).is_yes());
+    assert!(rel
+        .is_assignable(source_two_fixed, target_fixed_rest)
+        .is_yes());
+    assert!(!rel.is_assignable(source_bad_fixed, target_rest).is_yes());
+    assert!(!rel
+        .is_assignable(source_bad_second_fixed, target_fixed_rest)
+        .is_yes());
+    assert!(!rel
+        .is_assignable(source_fixed_number_rest, target_optional_rest)
+        .is_yes());
+    assert!(!rel
+        .is_assignable(source_number_rest, target_optional_prefix_rest)
+        .is_yes());
+    assert!(!rel
+        .is_assignable(source_fixed_number_rest, target_string_rest)
+        .is_yes());
+    assert!(!rel
+        .is_assignable(source_number_rest, target_rest_suffix)
+        .is_yes());
+    assert!(!rel
+        .is_assignable(source_string_suffix, target_rest)
+        .is_yes());
+    assert!(rel.is_assignable(target_rest_copy, target_rest).is_yes());
+    assert!(!rel
+        .is_assignable(source_string_suffix, target_fixed_pair)
+        .is_yes());
+    assert!(rel
+        .is_assignable(source_number_suffix, target_fixed_pair)
+        .is_yes());
+    assert!(!rel
+        .is_assignable(source_required_unknown_prefix_rest, target_moving_suffix)
+        .is_yes());
+    assert!(rel
+        .is_assignable(source_optional_unknown_prefix_rest, target_moving_suffix)
+        .is_yes());
+    assert!(rel
+        .is_assignable(source_defaulted_unknown_prefix_rest, target_moving_suffix)
+        .is_yes());
+    assert!(!rel
+        .is_assignable(source_finite_optional, target_moving_suffix)
+        .is_yes());
+    assert!(!rel
+        .is_assignable(source_finite_defaulted, target_moving_suffix)
+        .is_yes());
+    assert!(rel
+        .is_assignable(source_zero_finite, target_moving_suffix)
+        .is_yes());
+    assert!(!rel
+        .is_assignable(source_bad_fixed, target_never_moving_suffix)
+        .is_yes());
+    assert!(rel
+        .is_assignable(source_bad_fixed, target_pure_never_rest)
+        .is_yes());
+    assert!(!rel
+        .is_assignable(source_optional_prefix_and_suffix, target_single_string)
+        .is_yes());
+    assert!(rel
+        .is_assignable(source_string_suffix, target_moving_suffix)
+        .is_yes());
+    assert!(!rel
+        .is_assignable(source_prefix_and_suffix, target_moving_suffix)
+        .is_yes());
+    assert!(rel
+        .is_assignable(source_prefix_and_suffix, target_prefix_and_moving_suffix)
+        .is_yes());
+
+    for (source, target, expected_index) in [
+        (source_bad_second_fixed, target_fixed_rest, 1),
+        (
+            source_one_unknown_fixed,
+            target_prefix_moving_unknown_suffix,
+            0,
+        ),
+    ] {
+        for _ in 0..2 {
+            let Relation::No(chain) = rel.is_assignable(source, target) else {
+                panic!("parameter mismatch must remain rejected");
+            };
+            assert!(matches!(
+                chain.head(),
+                Reason::Parameter { index, .. } if *index == expected_index
+            ));
+        }
+    }
+
+    // Representative rows from the 26-shape adversarial cross-product. The
+    // fourth column is strict tsc 6.0.3; the fifth is typokat's intended WU7
+    // contract. Only the two backlog-63 rows deliberately differ.
+    let matrix = [
+        (
+            "finite source consumed by target prefix+moving suffix",
+            source_one_unknown_fixed,
+            target_prefix_moving_unknown_suffix,
+            false,
+            false,
+        ),
+        (
+            "zero source ignores target prefix+moving suffix",
+            source_zero_finite,
+            target_prefix_moving_unknown_suffix,
+            true,
+            true,
+        ),
+        (
+            "pure source rest accepts target prefix+moving suffix",
+            source_unknown_rest,
+            target_prefix_moving_unknown_suffix,
+            true,
+            true,
+        ),
+        (
+            "optional source prefix+rest accepts target prefix+moving suffix",
+            source_optional_unknown_prefix_rest,
+            target_prefix_moving_unknown_suffix,
+            true,
+            true,
+        ),
+        (
+            "source moving suffix rejects target fixed prefix+pure rest",
+            source_unknown_suffix,
+            target_fixed_unknown_rest,
+            false,
+            false,
+        ),
+        (
+            "pure source rest accepts target fixed prefix+pure rest",
+            source_unknown_rest,
+            target_fixed_unknown_rest,
+            true,
+            true,
+        ),
+        (
+            "source moving suffix accepts one fixed target",
+            source_unknown_suffix,
+            target_single_unknown,
+            true,
+            true,
+        ),
+        (
+            "pure never target rest accepts fixed source",
+            source_bad_fixed,
+            target_pure_never_rest,
+            true,
+            true,
+        ),
+        (
+            "backlog 63: moving suffix source against zero target",
+            source_unknown_suffix,
+            source_zero_finite,
+            true,
+            false,
+        ),
+        (
+            "backlog 63: required prefix+rest source against optional target",
+            source_required_unknown_prefix_rest,
+            target_optional_unknown,
+            true,
+            false,
+        ),
+    ];
+    for (case, source, target, tsc_assignable, expected_assignable) in matrix {
+        let actual = rel.is_assignable(source, target).is_yes();
+        assert_eq!(
+            actual, expected_assignable,
+            "{case}: strict tsc assignable={tsc_assignable}"
+        );
+    }
+}
+
+/// Callable parameter traversal must stay linear in a long optional tail.
+#[test]
+fn function_optional_tail_relation_work_is_linear() {
+    const OPTIONALS: usize = 256;
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let calibration_source = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("source", wk.unknown)],
+        ret: wk.void,
+    });
+    let calibration_target = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("target", wk.unknown)],
+        ret: wk.void,
+    });
+    let source = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: Vec::new(),
+        ret: wk.void,
+    });
+    let target = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: (0..OPTIONALS)
+            .map(|index| ParameterType::optional(format!("p{index}"), wk.unknown))
+            .collect(),
+        ret: wk.void,
+    });
+
+    reset_relation_measure();
+    assert!(Relater::new(interner.store(), wk)
+        .is_assignable(calibration_source, calibration_target)
+        .is_yes());
+    assert!(relation_measure().function_parameter_positions > 0);
+
+    reset_relation_measure();
+    assert!(Relater::new(interner.store(), wk)
+        .is_assignable(source, target)
+        .is_yes());
+    let positions = relation_measure().function_parameter_positions;
+    assert!(
+        positions <= (OPTIONALS * 8) as u64,
+        "optional-tail relation visited {positions} parameter positions for {OPTIONALS} slots"
+    );
+}
+
 /// M17 array assignability is covariant in the element and recurses through
 /// nested arrays; arrays and non-arrays do not relate.
 #[test]

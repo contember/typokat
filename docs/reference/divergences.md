@@ -582,8 +582,9 @@ property, fixed tuple positions, function param/return; same-name covariant cand
     6.0.3; the divergence only shows on *overlapping* candidates (disjoint candidates yield `never`
     in both). (An earlier note claiming this *unions* was corrected in the 2026-07-07 audit.)
     <!-- div: id=conditional/contravariant-infer-never dir=over scope=b-type-level-tail owner=../backlog/68-contravariant-infer-intersection.md witness=../../tests/cases/m25_conditional_types -->
-  - `infer X extends C` (TS 4.7) is out of scope.
-    <!-- div: id=conditional/infer-extends-constraint dir=over scope=design-oos owner=design-oos witness=../../tests/cases/m25_conditional_types -->
+  - `infer X extends C` (TS 4.7) is withheld at annotation lowering, including when
+    `C` is array-like (backlog `75`).
+    <!-- div: id=conditional/infer-extends-constraint dir=over scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu7_official_named_tuple.ts -->
   - Rest-based conditional `infer` is implemented for fixed tuple/function rest patterns, but a
     variadic source tuple such as `Tail<[string, ...number[]]>` is still a safe-direction
     over-report (tracked in backlog `69`).
@@ -700,6 +701,12 @@ method signature whose return annotation is omitted; typokat is silent — a dro
   the same explicit type argument by constraint, typokat preserves the first candidate's `TK2344`
   text while tsc 6.0.3 renders the last overload's constraint. The code and rejection are identical.
   <!-- div: id=signatures/explicit-constraint-first-failure dir=cosmetic scope=s-overload-resolution owner=design-oos witness=../../tests/cases/sr_semantic_duplication/selector_precedence.ts -->
+- **Two callable-rest arity boundaries remain conservative (over-report).** Unlike strict tsc
+  6.0.3, typokat rejects a source with a moving required tuple suffix against a zero-parameter
+  target, and rejects a required-prefix-plus-rest source against a single optional target. Both
+  reject in the safe direction; backlog `63` owns their parity tail independently of WU7's
+  dropped-error fixes for moving target/source suffixes.
+  <!-- div: id=signatures/rest-arity-conservative dir=over scope=s-assignability owner=../backlog/63-review-parity-tail.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu7_official_callable_relation.ts -->
 
 - **Accepted official-suite over-reports** (safe direction, recorded in the scoreboard rather than
   dropped errors):

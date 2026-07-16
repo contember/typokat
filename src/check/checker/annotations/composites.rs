@@ -9,6 +9,11 @@ struct MethodOverloadAccumulator {
     unavailable: bool,
 }
 
+enum LoweredTupleElement {
+    Fixed(TypeId),
+    Rest(TypeId),
+}
+
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Lower `A | B | …` to a canonical interned union. Any unlowerable member
     /// aborts the whole annotation; dropping it would mis-state the union.
@@ -91,8 +96,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     }
 
     /// Lower `[A, B, …]` to an ordered interned tuple; `[]` is the empty tuple.
-    /// Optional and named tuple members are out of subset and abort the
-    /// annotation rather than silently mis-shaping the tuple.
+    /// Labels are erased while optional tuple members abort the annotation.
     pub(super) fn lower_tuple_annotation(
         &mut self,
         scope: ScopeId,
@@ -103,60 +107,19 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let mut seen_rest = false;
         let mut unavailable = false;
         let mut recorded_optional = false;
-        let mut recorded_named = false;
         for element in elements {
-            match element {
-                TSTupleElement::TSRestType(rest_type) => {
+            match self.lower_tuple_element_annotation(scope, element, &mut recorded_optional) {
+                Some(LoweredTupleElement::Rest(ty)) => {
                     if seen_rest {
                         unavailable = true;
                     }
                     seen_rest = true;
-                    let ty = self.with_indirection(|p| {
-                        p.lower_annotation(scope, &rest_type.type_annotation)
-                    });
-                    match ty {
-                        Some(ty) if rest.is_none() => {
-                            rest = Some(TupleRestType::new(lowered.len(), ty));
-                        }
-                        Some(_) => {}
-                        None => unavailable = true,
+                    if rest.is_none() {
+                        rest = Some(TupleRestType::new(lowered.len(), ty));
                     }
                 }
-                TSTupleElement::TSOptionalType(optional) => {
-                    if !recorded_optional {
-                        self.record_incomplete(
-                            "annotation-lower/tuple-optional-element/self",
-                            Span::from_oxc(optional.span),
-                            "optional tuple element aborts tuple lowering",
-                        );
-                        recorded_optional = true;
-                    }
-                    unavailable = true;
-                    self.with_indirection(|p| p.lower_annotation(scope, &optional.type_annotation));
-                }
-                _ => {
-                    let Some(ts_type) = element.as_ts_type() else {
-                        unavailable = true;
-                        continue;
-                    };
-                    if let TSType::TSNamedTupleMember(named) = ts_type {
-                        if !recorded_named {
-                            self.record_incomplete(
-                                "annotation-lower/named-tuple-member/self",
-                                Span::from_oxc(named.span),
-                                "named tuple member aborts tuple lowering",
-                            );
-                            recorded_named = true;
-                        }
-                        unavailable = true;
-                        self.visit_tuple_element_annotation(scope, &named.element_type);
-                        continue;
-                    }
-                    match self.with_indirection(|p| p.lower_annotation(scope, ts_type)) {
-                        Some(ty) => lowered.push(ty),
-                        None => unavailable = true,
-                    }
-                }
+                Some(LoweredTupleElement::Fixed(ty)) => lowered.push(ty),
+                None => unavailable = true,
             }
         }
         if unavailable {
@@ -170,6 +133,155 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         } else {
             Some(self.interner.intern_tuple(lowered))
         }
+    }
+
+    fn lower_tuple_element_annotation(
+        &mut self,
+        scope: ScopeId,
+        element: &TSTupleElement<'_>,
+        recorded_optional: &mut bool,
+    ) -> Option<LoweredTupleElement> {
+        match element {
+            TSTupleElement::TSRestType(rest) => self
+                .lower_tuple_rest_annotation(
+                    scope,
+                    rest.span,
+                    &rest.type_annotation,
+                    recorded_optional,
+                )
+                .map(LoweredTupleElement::Rest),
+            TSTupleElement::TSOptionalType(optional) => {
+                self.record_optional_tuple_element(optional.span, recorded_optional);
+                self.with_indirection(|p| p.lower_annotation(scope, &optional.type_annotation));
+                None
+            }
+            TSTupleElement::TSNamedTupleMember(named) => {
+                if named.optional {
+                    self.record_optional_tuple_element(named.span, recorded_optional);
+                    self.visit_tuple_element_annotation(scope, &named.element_type);
+                    None
+                } else {
+                    self.lower_tuple_element_annotation(
+                        scope,
+                        &named.element_type,
+                        recorded_optional,
+                    )
+                }
+            }
+            _ => element.as_ts_type().and_then(|ty| {
+                self.with_indirection(|p| p.lower_annotation(scope, ty))
+                    .map(LoweredTupleElement::Fixed)
+            }),
+        }
+    }
+
+    fn lower_tuple_rest_annotation(
+        &mut self,
+        scope: ScopeId,
+        span: oxc_span::Span,
+        annotation: &TSType<'_>,
+        recorded_optional: &mut bool,
+    ) -> Option<TypeId> {
+        let infer = Self::tuple_rest_infer_declaration(annotation);
+        let lowered = if let TSType::TSNamedTupleMember(named) = annotation {
+            if named.optional {
+                self.record_optional_tuple_element(named.span, recorded_optional);
+                self.visit_tuple_element_annotation(scope, &named.element_type);
+                return None;
+            }
+            self.lower_tuple_element_annotation(scope, &named.element_type, recorded_optional)
+                .map(|element| match element {
+                    LoweredTupleElement::Fixed(ty) | LoweredTupleElement::Rest(ty) => ty,
+                })
+        } else {
+            self.with_indirection(|p| p.lower_annotation(scope, annotation))
+        };
+        if infer.is_some_and(|infer| infer.type_parameter.constraint.is_some()) {
+            return None;
+        }
+        if let Some(lowered) = lowered {
+            let container_is_array_like =
+                infer.is_some() || self.tuple_rest_container_is_array_like(lowered);
+            if container_is_array_like {
+                return Some(lowered);
+            }
+        }
+        self.record_incomplete(
+            "annotation-lower/tuple-rest-element/non-array",
+            Span::from_oxc(span),
+            "tuple rest element is not provably array-like",
+        );
+        None
+    }
+
+    fn tuple_rest_infer_declaration<'node, 'source>(
+        annotation: &'node TSType<'source>,
+    ) -> Option<&'node TSInferType<'source>> {
+        match annotation {
+            TSType::TSInferType(infer) => Some(infer),
+            TSType::TSParenthesizedType(parenthesized) => {
+                Self::tuple_rest_infer_declaration(&parenthesized.type_annotation)
+            }
+            TSType::TSNamedTupleMember(named) => {
+                Self::tuple_element_infer_declaration(&named.element_type)
+            }
+            _ => None,
+        }
+    }
+
+    fn tuple_element_infer_declaration<'node, 'source>(
+        element: &'node TSTupleElement<'source>,
+    ) -> Option<&'node TSInferType<'source>> {
+        match element {
+            TSTupleElement::TSNamedTupleMember(named) => {
+                Self::tuple_element_infer_declaration(&named.element_type)
+            }
+            _ => element
+                .as_ts_type()
+                .and_then(Self::tuple_rest_infer_declaration),
+        }
+    }
+
+    fn tuple_rest_container_is_array_like(&self, ty: TypeId) -> bool {
+        let store = self.interner.store();
+        let mut current = ty;
+        let mut seen = FxHashSet::default();
+        loop {
+            match store.tag(current) {
+                TypeTag::Array | TypeTag::Tuple => return true,
+                TypeTag::Readonly => {
+                    let Some(operand) = store.readonly_operand(current) else {
+                        return false;
+                    };
+                    current = operand;
+                }
+                TypeTag::TypeParam => {
+                    let Some(parameter) = store.type_param(current) else {
+                        return false;
+                    };
+                    if !seen.insert(parameter.id) {
+                        return false;
+                    }
+                    let Some(constraint) = store.type_param_constraint(parameter.id) else {
+                        return false;
+                    };
+                    current = constraint;
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    fn record_optional_tuple_element(&mut self, span: oxc_span::Span, recorded: &mut bool) {
+        if *recorded {
+            return;
+        }
+        self.record_incomplete(
+            "annotation-lower/tuple-optional-element/self",
+            Span::from_oxc(span),
+            "optional tuple element aborts tuple lowering",
+        );
+        *recorded = true;
     }
 
     fn visit_tuple_element_annotation(&mut self, scope: ScopeId, element: &TSTupleElement<'_>) {

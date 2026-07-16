@@ -553,6 +553,16 @@ public value payload while the exported `ready` property remains usable. Typokat
 `decl/enum-declaration/self` and `decl/import-equals/self` completeness owners when it consumes that
 fragment; publishing `Ready` may not silently discard either private declaration.
 
+WU7 adds three enabled strict-tsc regression fixtures from the official-suite ratchet:
+
+- `wu7_official_named_tuple.ts` erases fixed/rest tuple labels without losing element, rest, or
+  call-argument checking; named optional members retain the existing owner-75 incomplete.
+- `wu7_official_interface_validation.ts` pins method-owned `TK2411` and lets a complete own property
+  reconcile inherited base/base conflicts without suppressing own-vs-base `TK2430` checks.
+- `wu7_official_callable_relation.ts` pins fixed/rest contravariance in both directions, including
+  target-rest absorption, aggregate moving prefix/suffix tails, and source-rest checks against every
+  remaining target slot; two exact backlog-63 markers retain deliberate safe arity over-reports.
+
 The project-order gate retains the existing module-local isolation and function/class owner controls
 in `wu5_global_augmentation_forward/`, `wu5_global_augmentation_reverse/`,
 `wu4_function_namespace_matrix.ts`, `wu4_class_namespace_matrix.ts`, `keep_pairs_forward.ts`, and
@@ -560,9 +570,9 @@ in `wu5_global_augmentation_forward/`, `wu5_global_augmentation_reverse/`,
 alias resolution, private-`using` non-leakage, unavailable-root publication, and event replay each
 retain direct checker/binder inspection in addition to marker parity.
 
-The directory contains 71 flat fixtures. Seven older fixtures, the WU6A unavailable ledger,
+The directory contains 74 flat fixtures. Seven older fixtures, the WU6A unavailable ledger,
 `wu6a_review_using_legality.ts`, and `wu6a_review_duplicate_legality.ts` remain outside the admitted
-slice, so the whole directory stays disabled; the conformance harness gates the other 61 flat fixtures explicitly through
+slice, so the whole directory stays disabled; the conformance harness gates the other 64 flat fixtures explicitly through
 `ENABLED_FIXTURES`, plus both two-file WU5 projects, both two-file WU6A projects, and both
 `wu6a_review_cross_space_*` projects through `ENABLED_PROJECT_FIXTURES`. WU6 adds
 `wu6_ambient_namespace_body_lookup.ts` and `wu6_local_array_heritage.ts`. WU5 adds
@@ -759,7 +769,7 @@ wildcard/`None`/skip that drops the position.
 | `for_of_assign_target.ts` | WU4 | `declare_for_left` records the pre-declared target | `stmt-check/assignment-target/self` | TS2322 |
 | `typeof_query.ts` | WU5 | `lower_annotation_inner` records before dropping `TSTypeQuery` | `annotation-lower/type-query/typeof` | TS2304 |
 | `annotation_keywords.ts` | WU5 | keyword/literal annotation leaves record before `None` | `annotation-lower/{symbol,bigint,object,intrinsic}-keyword/self`, `literal-type/bigint` | TS2304/TS2552 |
-| `tuple_members.ts` | WU5 | `lower_tuple_annotation` records the named/optional member | `annotation-lower/{named-tuple-member,tuple-optional-element}/self` | (tuple mis-shape) |
+| `tuple_members.ts` | WU5/WU7 | named labels lower transparently; optional members remain recorded before withholding the tuple | `annotation-lower/tuple-optional-element/self` | (optional tuple unavailable) |
 | `type_name_qualified.ts` | WU2/WU5 | a successful public qualified type-group path stays recorded for WU3 lowering; `this`/predicate type leaves remain recorded | `decl/module-declaration/self`, `annotation-lower/type-name/qualified-name`, `type-predicate/self`, `this-type/self` | clean |
 | `signature_computed_key.ts` | WU5 | object/interface member collection records the computed key (property AND method signatures — WU7-E F1) | `signature/{property,method}-signature/computed-key` | TS1170/TS2304 |
 | `class_members.ts` | WU5 | `collect_class_own_members` records static-block/accessor/index-sig/computed method + property keys (WU7-E F2) | `class/{static-block,accessor-property,class-index-signature}/self`, `class/{method,property}-definition/computed-key` | (member skip) |

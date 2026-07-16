@@ -1503,6 +1503,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
             alternatives.extend(self.validate_interface_heritage_conflicts(
                 &heritage_surfaces,
+                &own,
                 canonical_owner,
                 canonical_span,
             ));
@@ -2201,6 +2202,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                             readonly: false,
                             name: name.clone(),
                         };
+                        all_properties.push(member.clone());
                         if let Some(first) = members.get(&name).and_then(|items| items.first()) {
                             if first.kind != member.kind {
                                 for conflict in [first, &member] {
@@ -2361,6 +2363,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             String,
             crate::types::repr::ObjectType,
         )],
+        own: &crate::types::repr::ObjectType,
         diagnostic_owner: super::events::RecordTicket,
         diagnostic_span: Span,
     ) -> Vec<InterfaceTypedAlternative> {
@@ -2376,6 +2379,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     let Some(right_property) = right.property(&left_property.name) else {
                         continue;
                     };
+                    // A complete own property replaces the inherited candidates.
+                    if own.property(&left_property.name).is_some() {
+                        continue;
+                    }
                     if left_property.ty == right_property.ty
                         && left_property.write_ty == right_property.write_ty
                         && left_property.optional == right_property.optional
@@ -2435,6 +2442,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     .expect("interface member has one exact preallocated owner");
                 match member {
                     oxc_ast::ast::TSSignature::TSPropertySignature(signature)
+                        if !signature.computed =>
+                    {
+                        if let Some(name) = signature.key.static_name() {
+                            owners
+                                .properties
+                                .entry(name.into_owned())
+                                .or_insert((owner, span));
+                        }
+                    }
+                    oxc_ast::ast::TSSignature::TSMethodSignature(signature)
                         if !signature.computed =>
                     {
                         if let Some(name) = signature.key.static_name() {

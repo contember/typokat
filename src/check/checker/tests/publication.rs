@@ -9,6 +9,7 @@ use crate::check::checker::type_groups::{
 use crate::check::query::{SemanticQueryCoordinator, SemanticQueryState};
 use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::DiagnosticCode;
+use crate::driver::check_source;
 use crate::span::Span;
 use crate::types::repr::{ClassId, LiteralValue, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
@@ -464,6 +465,92 @@ interface Derived extends StringBase, NumberBase { [key: string]: boolean }
         [
             "Interface 'Derived' incorrectly extends interface 'NumberBase'.",
             "Interface 'Derived' incorrectly extends interface 'StringBase'.",
+        ]
+    );
+}
+
+#[test]
+fn method_string_index_conflicts_keep_the_method_source_owner() {
+    let source = "\
+interface LocalBad {
+  [key: string]: number;
+  local(value: string): string;
+}
+interface InheritedIndex { [key: string]: number }
+interface InheritedBad extends InheritedIndex {
+  inherited(value: string): string;
+}
+interface LocalGood {
+  [key: string]: (value: string) => string;
+  local(value: string): string;
+}
+";
+    let output = check_source(source);
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    let lines = crate::span::LineIndex::new(source);
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (
+                lines.line_of(diagnostic.span.start),
+                diagnostic.code,
+                &source[diagnostic.span.range()],
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (3, DiagnosticCode::TK2411, "local(value: string): string;"),
+            (
+                7,
+                DiagnosticCode::TK2411,
+                "inherited(value: string): string;"
+            ),
+        ]
+    );
+}
+
+#[test]
+fn complete_own_properties_replace_base_conflicts_with_own_base_validation() {
+    let source = "\
+interface CompatibleLeft { value: { left: number } }
+interface CompatibleRight { value: { right: string } }
+interface Compatible extends CompatibleLeft, CompatibleRight { value: { left: number; right: string } }
+interface NoOwnLeft { value: { left: number } }
+interface NoOwnRight { value: { right: string } }
+interface NoOwn extends NoOwnLeft, NoOwnRight {}
+interface BadOwnLeft { value: { left: number } }
+interface BadOwnRight { value: { right: string } }
+interface BadOwn extends BadOwnLeft, BadOwnRight { value: boolean }
+declare const queryValue: number;
+interface PartialOwnLeft { value: string }
+interface PartialOwnRight { value: number }
+interface PartialOwn extends PartialOwnLeft, PartialOwnRight { value: typeof queryValue }
+";
+    let output = check_source(source);
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.code, diagnostic.message.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (
+                DiagnosticCode::TK2320,
+                "Interface cannot simultaneously extend types 'NoOwnLeft' and 'NoOwnRight'.",
+            ),
+            (
+                DiagnosticCode::TK2430,
+                "Interface 'BadOwn' incorrectly extends interface 'BadOwnLeft'.",
+            ),
+            (
+                DiagnosticCode::TK2430,
+                "Interface 'BadOwn' incorrectly extends interface 'BadOwnRight'.",
+            ),
+            (
+                DiagnosticCode::TK2320,
+                "Interface cannot simultaneously extend types 'PartialOwnLeft' and 'PartialOwnRight'.",
+            ),
         ]
     );
 }

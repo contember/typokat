@@ -1,12 +1,12 @@
-// Surface-accounting spec (backlog 73). ENABLED by WU5: tuple lowering records the
-// incomplete surface for a named or optional tuple member before aborting the whole
-// tuple annotation. See tests/cases/README.md ("Surface-accounting corpus").
+// Surface-accounting spec (backlog 73). Named tuple labels are erased transparently;
+// an optional tuple member remains explicitly unavailable. See tests/cases/README.md
+// ("Surface-accounting corpus").
 //
-// Skip accounted: `lower_tuple_annotation` returned `None` on the first named/optional
-// member, mis-shaping (dropping) the tuple silently. WU5 records the member first.
+// Skip accounted: `lower_tuple_annotation` returns `None` on an optional member rather
+// than mis-shaping the tuple. Named members lower their inner element normally.
 
-// INCOMPLETE: a named tuple member aborts lowering at the first named element.
-type Named = [first: number, second: string]; // incomplete[annotation-lower/named-tuple-member/self]
+// CONTROL (supported): labels do not affect tuple identity or element types.
+type Named = [first: number, second: string];
 
 // INCOMPLETE: an optional tuple element aborts lowering.
 type Opt = [number, string?]; // incomplete[annotation-lower/tuple-optional-element/self]

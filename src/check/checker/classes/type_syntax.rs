@@ -18,7 +18,7 @@ use oxc_ast::ast::{
     TSTypeParameterDeclaration, UnaryOperator,
 };
 use oxc_span::{GetSpan, Span};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::application::{
     complete_class_arguments, ClassApplicationKind, ClassApplicationRequest, ClassTypeParameter,
@@ -124,6 +124,7 @@ pub(in crate::check::checker) trait SurfaceTypeResolver<Ticket> {
 #[derive(Default)]
 struct InferFrame {
     active: bool,
+    accepts_infer_declarations: bool,
     binders: FxHashMap<String, u32>,
     poisoned: bool,
 }
@@ -425,8 +426,18 @@ where
             match element {
                 TSTupleElement::TSRestType(rest_type) if rest.is_none() => {
                     let lowered = self.lower_type(&rest_type.type_annotation);
-                    if let Some(ty) = self.capture_child(lowered, &mut failure) {
-                        rest = Some(TupleRestType::new(fixed.len(), ty));
+                    let lowered = self.capture_child(lowered, &mut failure);
+                    let direct_infer =
+                        Self::tuple_rest_infer_declaration(&rest_type.type_annotation);
+                    if let Some(ty) = lowered {
+                        let array_like =
+                            direct_infer.is_some() || self.tuple_rest_container_is_array_like(ty);
+                        if array_like {
+                            rest = Some(TupleRestType::new(fixed.len(), ty));
+                        } else {
+                            let unsupported = self.unsupported(rest_type.span);
+                            self.capture_failure(unsupported, &mut failure);
+                        }
                     }
                 }
                 TSTupleElement::TSOptionalType(optional) => {
@@ -465,6 +476,48 @@ where
                 Some(rest) => TupleType::with_rest(fixed, rest),
                 None => TupleType::fixed(fixed),
             })),
+        }
+    }
+
+    fn tuple_rest_infer_declaration<'node, 'source>(
+        annotation: &'node TSType<'source>,
+    ) -> Option<&'node oxc_ast::ast::TSInferType<'source>> {
+        match annotation {
+            TSType::TSInferType(infer) => Some(infer),
+            TSType::TSParenthesizedType(parenthesized) => {
+                Self::tuple_rest_infer_declaration(&parenthesized.type_annotation)
+            }
+            _ => None,
+        }
+    }
+
+    fn tuple_rest_container_is_array_like(&self, ty: TypeId) -> bool {
+        let store = self.factory.store();
+        let mut current = ty;
+        let mut seen = FxHashSet::default();
+        loop {
+            match store.tag(current) {
+                TypeTag::Array | TypeTag::Tuple => return true,
+                TypeTag::Readonly => {
+                    let Some(operand) = store.readonly_operand(current) else {
+                        return false;
+                    };
+                    current = operand;
+                }
+                TypeTag::TypeParam => {
+                    let Some(parameter) = store.type_param(current) else {
+                        return false;
+                    };
+                    if !seen.insert(parameter.id) {
+                        return false;
+                    }
+                    let Some(constraint) = store.type_param_constraint(parameter.id) else {
+                        return false;
+                    };
+                    current = constraint;
+                }
+                _ => return false,
+            }
         }
     }
 
@@ -508,6 +561,15 @@ where
             TSTypeName::ThisExpression(_) => return Err(self.unsupported(span)),
         };
         let name = identifier.name.as_str();
+        if let Some(ty) = self.resolve_infer_name(name) {
+            return self.lower_resolved_reference(
+                name,
+                identifier.span,
+                arguments,
+                span,
+                SurfaceNameResolution::Direct(ty),
+            );
+        }
         if arguments.is_none() {
             if let Some(ty) = self
                 .type_param_frames
@@ -515,9 +577,6 @@ where
                 .rev()
                 .find_map(|frame| frame.get(name).copied())
             {
-                return Ok(ty);
-            }
-            if let Some(ty) = self.resolve_infer_name(name) {
                 return Ok(ty);
             }
         }
@@ -847,9 +906,13 @@ where
             .as_ref()
             .is_ok_and(|ty| self.factory.store().tag(*ty) == TypeTag::TypeParam);
         if let Some(frame) = self.infer_frames.last_mut() {
-            frame.active = true;
+            frame.accepts_infer_declarations = true;
         }
         let extends_ty = self.lower_type(&conditional.extends_type);
+        if let Some(frame) = self.infer_frames.last_mut() {
+            frame.accepts_infer_declarations = false;
+            frame.active = true;
+        }
         let true_branch = self.lower_type(&conditional.true_type);
         if let Some(frame) = self.infer_frames.last_mut() {
             frame.active = false;
@@ -879,14 +942,25 @@ where
     }
 
     fn lower_infer(&mut self, infer: &oxc_ast::ast::TSInferType<'_>) -> SurfaceTypeResult<Ticket> {
-        let Some(frame) = self
+        let accepts_declaration = self
             .infer_frames
-            .iter_mut()
-            .rev()
-            .find(|frame| frame.active)
-        else {
+            .last()
+            .is_some_and(|frame| frame.accepts_infer_declarations);
+        if infer.type_parameter.constraint.is_some() {
+            if accepts_declaration {
+                let frame = self.infer_frames.last_mut().expect("checked above");
+                let name = infer.type_parameter.name.name.as_str();
+                let next = frame.binders.len() as u32;
+                frame.binders.entry(name.to_string()).or_insert(next);
+            }
+            return Err(self.unsupported(infer.span));
+        }
+        let Some(frame) = self.infer_frames.last_mut() else {
             return Err(self.unsupported(infer.span));
         };
+        if !frame.accepts_infer_declarations {
+            return Err(self.unsupported(infer.span));
+        }
         let name = infer.type_parameter.name.name.as_str();
         let next = frame.binders.len() as u32;
         let index = *frame.binders.entry(name.to_string()).or_insert(next);
@@ -1035,7 +1109,7 @@ where
                     .infer_frames
                     .iter_mut()
                     .rev()
-                    .find(|frame| frame.active)
+                    .find(|frame| frame.accepts_infer_declarations || frame.active)
                 {
                     frame.poisoned = true;
                 }
@@ -1918,6 +1992,108 @@ mod tests {
                     factory.store().infer_index(conditional.true_branch),
                     Some(0)
                 );
+            },
+        );
+    }
+
+    #[test]
+    fn parenthesized_conditional_infer_rest_binds_true_branch_reference() {
+        with_alias_type(
+            "type X = [string] extends [...(infer R)] ? R : never;",
+            |annotation| {
+                let mut interner = Interner::with_intrinsics();
+                let mut factory = SurfaceTypeFactory::new(&mut interner);
+                let mut resolver = Resolver::default();
+                let mut lowerer = TypeSyntaxLowerer::new(&mut factory, &mut resolver);
+                let root = lowerer.lower(annotation).unwrap();
+                assert!(lowerer.take_child_failures().is_empty());
+                drop(lowerer);
+
+                let conditional = factory.store().conditional_type(root).unwrap();
+                let extends = factory.store().tuple_type(conditional.extends_ty).unwrap();
+                assert_eq!(
+                    factory.store().infer_index(extends.rest.unwrap().ty),
+                    Some(0)
+                );
+                assert_eq!(
+                    factory.store().infer_index(conditional.true_branch),
+                    Some(0)
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn active_infer_shadows_type_parameter_and_rejects_type_arguments() {
+        let source = "type X = string extends infer R ? R<number> : never;";
+        with_alias_type(source, |annotation| {
+            let mut interner = Interner::with_intrinsics();
+            interner.intern_type_param(TypeParamId(7), "T");
+            let template = interner.well_known().string;
+            let mut resolver = Resolver::default();
+            resolver.names.insert(
+                "R".to_string(),
+                SurfaceNameResolution::Alias {
+                    template,
+                    parameters: vec![class_parameter(7)],
+                },
+            );
+            let mut factory = SurfaceTypeFactory::new(&mut interner);
+            let number = factory.well_known().number;
+            let mut lowerer = TypeSyntaxLowerer::new(&mut factory, &mut resolver);
+
+            assert!(matches!(
+                lowerer.lower_with_type_parameters(
+                    annotation,
+                    [("R".to_string(), number)],
+                ),
+                Err(SurfaceTypeFailure::WrongArity {
+                    name,
+                    expected_min: 0,
+                    expected_max: 0,
+                    ..
+                }) if name == "R"
+            ));
+        });
+    }
+
+    #[test]
+    fn constrained_infer_withholds_class_surface_without_unresolved_cascade() {
+        let source = "type X = string extends infer R extends readonly unknown[] ? R : never;";
+        with_alias_type(source, |annotation| {
+            let mut interner = Interner::with_intrinsics();
+            let mut factory = SurfaceTypeFactory::new(&mut interner);
+            let mut resolver = Resolver::default();
+            let mut lowerer = TypeSyntaxLowerer::new(&mut factory, &mut resolver);
+
+            assert_eq!(
+                lowerer.lower(annotation),
+                Err(SurfaceTypeFailure::Unsupported(
+                    u32::try_from(source.find("infer R").unwrap()).unwrap()
+                ))
+            );
+            assert!(lowerer.take_child_failures().is_empty());
+        });
+    }
+
+    #[test]
+    fn outer_infer_remains_visible_during_nested_extends() {
+        with_alias_type(
+            "type X = string extends infer Outer ? (number extends Outer ? Outer : never) : never;",
+            |annotation| {
+                let mut interner = Interner::with_intrinsics();
+                let mut factory = SurfaceTypeFactory::new(&mut interner);
+                let mut resolver = Resolver::default();
+                let mut lowerer = TypeSyntaxLowerer::new(&mut factory, &mut resolver);
+                let root = lowerer.lower(annotation).unwrap();
+                assert!(lowerer.take_child_failures().is_empty());
+                drop(lowerer);
+
+                let outer = factory.store().conditional_type(root).unwrap();
+                assert!(outer.poisoned);
+                let inner = factory.store().conditional_type(outer.true_branch).unwrap();
+                assert!(inner.poisoned);
+                assert_eq!(factory.store().infer_index(inner.extends_ty), Some(0));
             },
         );
     }
