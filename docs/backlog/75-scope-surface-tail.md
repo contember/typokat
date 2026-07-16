@@ -10,6 +10,12 @@ blocked-by: []
 manifest: each remaining family is implemented with a witness or explicitly moved out of scope
 with a documented, sound boundary.
 
+The pinned TS 6.0.3 ES5 readiness gate assigns 179 explicit annotation incompletes here:
+polymorphic `this` 164, `object` 6, `intrinsic` 5, `symbol` 3, and `bigint` 1. This is independent
+1.0 work, not the architecture dependency that prevents backlog `14` from starting. The exact
+sites and counts are enforced by
+[`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml).
+
 ## Problem
 
 The scope map names semantic families and exact diagnostics that do not yet have a dedicated
@@ -80,6 +86,7 @@ witnessed in the structured ledger.
 ## Touch points
 
 `docs/reference/scope.md`, `docs/backlog/completion-1.0.toml`, `tests/manifest.rs`, focused
-conformance corpora, checker/binder/type-store paths selected per family, and diagnostics.
+conformance corpora, `src/check/checker/annotations/`, checker/binder/type-store paths selected per
+family, and `src/diagnostics/`.
 
 <!-- Origin: post-sprint scope-to-manifest completeness audit, 2026-07-10. -->

@@ -10,6 +10,12 @@ soundness review, batched: none drops errors, each is a real divergence worth ki
 when its area is next touched. Repro details in the review transcripts; each was
 probe-verified vs tsc 6.0.3.
 
+The pinned ES5 readiness proof adds one exact parity record here: heritage checking emits one
+surplus `TK2430` for each of `CallableFunction` and `NewableFunction` at the same two sites as the
+canonical backlog-14 diagnostics. These 2 extra diagnostics are safe-direction parity noise; they
+do not block backlog `14` from starting. See
+[`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml).
+
 ## The list
 
 - **Evaluator FPs:** (a) naked check parameter in the true branch —
@@ -45,6 +51,9 @@ probe-verified vs tsc 6.0.3.
   recursive-descent parser** before lowering runs, so the guard cannot see it — this needs
   an oxc-side parser nesting limit (or a pre-lowering token-depth reject). tsc 6.0.3 itself
   dies at ~3k. Pinned by the enabled `sr_wu3_types_recursion/deep_annotation.ts` fixture.
+- **ES5 heritage cardinality (m):** canonical `CallableFunction` and `NewableFunction` heritage
+  each emit a duplicate `TK2430`. Backlog `14` owns the underlying apparent-`Function`
+  compatibility; this item owns only the surplus cardinality.
 
 ## Acceptance
 
@@ -53,8 +62,9 @@ Each entry: fixture pinning tsc behavior, fix, or an explicit divergence-ledger 
 
 ## Touch points
 
-`src/check/checker/eval.rs` / `annotations.rs` (a-c), `src/relate/relation.rs` (d-e),
-`src/check/checker/flowgraph.rs` / `calls.rs` (f-h), `src/diagnostics.rs` (i),
-lowering depth guard (k).
+`src/check/checker/eval/` and `src/check/checker/annotations/` (a-c),
+`src/relate/relation/` (d-e), `src/check/checker/flowgraph/` and
+`src/check/checker/calls.rs` (f-h), `src/diagnostics/` (i), parser/lowering depth guard (k), and
+`src/check/checker/decls/interface.rs` for ES5 heritage cardinality (m).
 
 <!-- Origin: cross-cutting soundness review 2026-07-07, low-severity batch. -->

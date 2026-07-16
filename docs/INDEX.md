@@ -24,7 +24,8 @@ decisions → reference → archive.
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
 - [`sprint-2026-07-15-namespaces-declaration-merging.md`](sprints/sprint-2026-07-15-namespaces-declaration-merging.md) —
-  active; closing the sole remaining audited `lib.es5.d.ts` model prerequisite before backlog `14`.
+  active at WU6 NO-GO; the remaining backlog-43 standalone namespace value surface requires a
+  superseding architecture decision before backlog `14` can start.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
 
@@ -32,10 +33,12 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Namespaces/declaration merging is active** —
+- **Namespaces/declaration merging reached a measured NO-GO** —
   [`sprint-2026-07-15-namespaces-declaration-merging.md`](sprints/sprint-2026-07-15-namespaces-declaration-merging.md)
-  closes backlog `43` through a spec-first multi-slot/merged-publication rollout and finishes with a
-  pinned ES5 readiness proof. Full library loading and the shared Store remain the following sprint.
+  shipped type-side namespaces, reopenings, declaration groups, keep-pairs, global type
+  publication, and local `Array<T>` heritage. The committed pinned proof has one backlog-43
+  architecture stop: standalone `Intl` namespace value metadata/receiver. Backlog `14` remains
+  blocked; backlogs `50`/`75` independently block 1.0 and `63` owns parity-only surplus diagnostics.
 - **Semantic duplication/layering shipped 2026-07-14** (archived:
   [`archive/sprint-2026-07-13-semantic-duplication-layering.md`](archive/sprint-2026-07-13-semantic-duplication-layering.md)) —
   immutable complete `ClassInstance` applications, atomic declaration-SCC publication, retained
@@ -66,7 +69,8 @@ decisions → reference → archive.
 - **Generic methods (`41`) shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-generic-methods.md`](archive/sprint-2026-07-12-generic-methods.md)) —
   persistent generic method/call/construct binders now survive substitution and relate under a
-  cache-safe local alignment. The remaining direct model/lib blocker is `43` namespaces/merging;
+  cache-safe local alignment. The remaining direct model/lib blocker is `43`'s standalone
+  namespace value metadata/receiver;
   explicit `this`/`ThisType<T>` shipped with `70`.
 - **Real-project preview (`72`) paused at WU0** — no screened public project met the multi-file,
   minimal-graph, zero-threshold contract; no implementation or prelude expansion started.
@@ -110,8 +114,9 @@ decisions → reference → archive.
   (`.github/workflows/ci.yml`, pinned toolchain), and the 1.0 plan is executable:
   [`backlog/completion-1.0.toml`](backlog/completion-1.0.toml) validated by
   `tests/manifest.rs`, with the pinned TS 6.0.3 lib audit
-  ([`backlog/lib-audit-6.0.3.md`](backlog/lib-audit-6.0.3.md)) naming the es5
-  blocker: `43` namespaces/merging; `70` this-parameter typing subsequently shipped. Backlog `38` is GO
+  ([`backlog/lib-audit-6.0.3.md`](backlog/lib-audit-6.0.3.md)) now backed by the committed WU6
+  readiness proof: type-side namespace/merging shipped, with `43`'s standalone namespace value
+  surface still blocking `14`; `70` this-parameter typing subsequently shipped. Backlog `38` is GO
   (ADR-0003). The post-sprint MVP audit added executable
   scope/unsupported censuses (`73`/`75`) and the first honest pinned-project preview gate
   (`72`). **Now:** `72` remains paused at its witness gate; track A

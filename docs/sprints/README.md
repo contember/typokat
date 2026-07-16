@@ -21,7 +21,7 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 
 <!-- one line per active sprint; empty between sprints -->
 - [`sprint-2026-07-15-namespaces-declaration-merging.md`](sprint-2026-07-15-namespaces-declaration-merging.md) —
-  active; completing namespaces and declaration merging, then proving pinned ES5 readiness for
-  backlog `14` without implementing the loader.
+  active at WU6 NO-GO; type-side namespaces/merging shipped, but standalone ambient namespace
+  value metadata needs a superseding architecture decision before backlog `14` can start.
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold public-witness gate; no implementation started.

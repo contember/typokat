@@ -11,6 +11,11 @@ documented M23 deferral:
 calls to them narrow nothing (safe direction, but they are the idiomatic narrowing tool
 of real-world code, and `lib.d.ts` ships them — `Array.isArray`).
 
+The pinned TS 6.0.3 ES5 readiness gate records exactly 8
+`annotation-lower/type-predicate/self` incompletes owned here. They independently block checker
+1.0, but are not the remaining architecture dependency that prevents backlog `14` from starting.
+See [`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml).
+
 ## Problem
 
 The flow-node CFG narrows on syntactic guards only. A call whose callee's return type is
@@ -28,8 +33,7 @@ predicate-signature assignability; cross-check tsc 6.0.3 --strict.
 
 ## Touch points
 
-`src/types/repr.rs` (predicates on signatures), `src/check/checker/annotations.rs`
-(lowering `x is T` / `asserts`), `src/check/checker/flowgraph.rs` + `flow.rs` (guard-call
-recognition).
+`src/types/repr.rs` (predicates on signatures), `src/check/checker/annotations/` (lowering `x is T`
+/ `asserts`), `src/check/checker/flowgraph/` and `src/check/flow.rs` (guard-call recognition).
 
 <!-- Origin: completion-roadmap review (2026-07-07); M23 deferral list (README known limitations). -->

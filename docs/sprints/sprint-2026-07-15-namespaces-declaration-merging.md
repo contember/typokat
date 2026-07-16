@@ -1,8 +1,15 @@
 # Sprint — namespace and declaration-space completion (2026-07-15)
 
 **Goal.** Implement type-side namespaces and legal declaration merging with stable,
-order-independent publication; close every checker surface owned by backlog `43`; and prove that
-the pinned TypeScript 6.0.3 `lib.es5.d.ts` has no remaining namespace/declaration-merging blocker.
+order-independent publication, then prove the pinned TypeScript 6.0.3 `lib.es5.d.ts` readiness
+boundary without implementing its loader.
+
+**Current outcome: NO-GO.** Type-side namespaces, reopenings, declaration groups, keep-pairs,
+legal global type publication, and local `Array<T>` heritage are shipped. The committed WU6 proof
+([`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml)) still finds one backlog-43
+architecture stop: a standalone ambient namespace has no value metadata or qualified value
+receiver. Closing it requires an explicit architecture decision that supersedes the relevant
+ADR-0009 boundary. The sprint and backlog `43` therefore remain active; backlog `14` may not start.
 
 **Outcome boundary.** This sprint unblocks backlog `14`; it does not automatically load the
 standard library. Full `lib.d.ts` loading, the frozen base plus per-file delta `Store`, and
@@ -10,15 +17,35 @@ parallelism Stage 1 remain the following sprint. The final `lib.es5.d.ts` gate c
 source as an explicit input through the existing pipeline and produces a GO/NO-GO handoff for
 `14`, not a claim of ambient standard-library support.
 
-**Why this scope.** Backlog `43` is the sole remaining audited `lib.es5.d.ts` model prerequisite.
+**Why this scope.** Backlog `43` is the sole remaining prerequisite to *start* backlog `14`.
 Combining it with backlog `14` would couple two XL, independently reviewable risk domains:
 declaration identity/publication and shared-prelude storage. Enums (`42`) and
 `satisfies`/`as const` (`44`) remain release blockers but have zero uses in the pinned ES5 core and
 do not belong on this critical path.
 
-## Refs re-verified at HEAD (2026-07-15, `1836d37`)
+## WU6 measured handoff (2026-07-16)
 
-`✔` = confirmed live · `⚠` = drift/nuance caught.
+The reproducible proof landed as `b424e74`, `5951968`, and `3f641ea`. It checks the exact npm
+`lib/lib.es5.d.ts` artifact (SHA-256
+`bcd24271a113971ba9eb71ff8cb01bc6b0f872a85c23fdbe5d93065b375933cd`) as one explicit input.
+The raw result is 4 diagnostics and 188 incomplete records:
+
+- backlog `14`: 2 canonical `TK2430` diagnostics for `CallableFunction` and `NewableFunction`
+  compatibility with `Function`;
+- backlog `63`: 2 surplus `TK2430` diagnostics for the same two heritage edges;
+- backlog `75`: 179 incompletes — polymorphic `this` 164, `object` 6, `intrinsic` 5, `symbol` 3,
+  and `bigint` 1;
+- backlog `50`: 8 type-predicate incompletes;
+- backlog `43`: 1 `decl/module-declaration/self` incomplete for the standalone `Intl` namespace
+  value surface. This is the only architecture stop and the only blocker to starting `14`.
+
+Backlogs `50` and `75` independently block checker 1.0 but do not block starting the loader work;
+backlog `63` is parity-only. The proof is model-readiness evidence, not standard-library loading.
+
+## Planning baseline (2026-07-15, historical `1836d37`)
+
+These facts motivated the sprint and are retained as a run record; use the current touch-point list
+at the end of this file for the live tree. `✔` = then confirmed · `⚠` = then-current drift/nuance.
 
 - ✔ `Symbol` already has distinct value/type/namespace slots, but the namespace slot remains
   unused — `src/binder/symbol.rs:30-51`.
@@ -529,3 +556,29 @@ adding `42` or `44` only if a reproducible pinned-library audit contradicts the 
   UMD publication stays with `15`. Value-bearing declarations, including complete class
   type/constructor pairs, graduated to backlog `82` and do not block the explicit `lib.es5.d.ts`
   readiness gate.
+- **2026-07-16 — WU6 committed NO-GO proof.** Commits `b424e74`, `5951968`, and `3f641ea`
+  vendor and byte-pin the authoritative TS 6.0.3 npm artifact, add 28 interface+var pair witnesses
+  plus deep/repeated/`Intl` witnesses, and enforce the manifest through an offline integration
+  test. The raw checker result is exactly 4 `TK2430` diagnostics and 188 incompletes with the owner
+  split recorded above and in
+  [`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml). Local `Array<T>` heritage
+  and namespace public-sibling lookup were fixed before the proof. The remaining backlog-43
+  record is architectural rather than an emit/runtime request: the type container exists, but a
+  standalone ambient namespace has no value metadata/receiver. Do not add one ad hoc; record and
+  review a superseding ADR before implementation. WU7 closure, backlog-43 removal, and sprint
+  archival are intentionally deferred.
+
+## Current implementation touch points
+
+- namespace identity, scopes, merge classification, and global overlays:
+  `src/binder/namespace.rs`, `src/binder/scope.rs`, `src/binder/symbol.rs`;
+- ordered type groups, qualified type paths, merged interfaces, and topology:
+  `src/check/checker/type_groups.rs`, `src/check/checker/decls/interface.rs`,
+  `src/check/checker/decls/resolve.rs`, `src/check/checker/decls/mod.rs`;
+- class/function namespace value augmentation:
+  `src/check/checker/namespace_values.rs`, `src/check/checker/function_groups.rs`,
+  `src/check/checker/classes/construction.rs`, `src/check/checker/classes/publication.rs`;
+- statement dispatch and project/global linkage: `src/check/checker/statements.rs`,
+  `src/check/checker/mod.rs`, `src/driver.rs`;
+- pinned WU6 gate: `tests/fixtures/lib-es5-6.0.3/readiness.toml`,
+  `tests/fixtures/lib-es5-6.0.3/semantic-witnesses.ts`, `tests/lib_es5_readiness.rs`.

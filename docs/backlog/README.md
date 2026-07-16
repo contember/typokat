@@ -55,9 +55,11 @@ in [`divergences.md`](../reference/divergences.md)), **D** scale + IDE (the §12
 
 The pinned TS 6.0.3 `lib.d.ts` surface audit — what actually blocks `14` — is
 [`lib-audit-6.0.3.md`](lib-audit-6.0.3.md) (generic method/call/construct signatures shipped with
-`41`, and receiver typing shipped with `70`; only `43` namespaces/declaration merging still blocks
-the es5 core; `42`/`44` are not used by es5 core). The official-suite scoreboard is the ratchet on
-the way there — its syntax gates flip OOS→IN as features land — not a numeric pass/fail gate.
+`41`, receiver typing shipped with `70`, and type-side namespace/merging work shipped in the active
+2026-07-15 sprint). The committed WU6 proof remains NO-GO only on `43`'s standalone namespace value
+metadata/receiver. Backlogs `50` and `75` independently block 1.0; `63` owns parity-only surplus
+diagnostics. `42`/`44` are not used by ES5 core. The official-suite scoreboard is the ratchet on the
+way there — its syntax gates flip OOS→IN as features land — not a numeric pass/fail gate.
 
 ## Roadmap at a glance
 
@@ -69,7 +71,7 @@ checker, not the checker.
 
 | Track | Active items | Typical effort | Role |
 |---|---:|---|---|
-| **A — model completeness** | 4 | L–XL | Eliminate silently-permissive model gaps; `43` directly unblocks full `lib.d.ts`. |
+| **A — model completeness** | 4 | L–XL | Eliminate silently-permissive model gaps; the remaining `43` architecture stop directly unblocks starting full `lib.d.ts`. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
 | **C — soundness/parity tail** | 16 | S–XL | Seven release-blocking known gaps plus nine safe-direction parity improvements. |
 | **D — scale + IDE** | 8 | M–XL | Preview, full standard library, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
@@ -94,7 +96,7 @@ of `14`; `42`, `44`, and `76` still block checker 1.0 but are not needed by the
 `lib.es5.d.ts` core.
 
 - **L** · [`42`](42-enums-type-side.md) — enum type/value sides, nominal member types, and narrowing.
-- **XL** · [`43`](43-namespaces-declaration-merging.md) — namespace binding, qualified names, and declaration merging.
+- **XL** · [`43`](43-namespaces-declaration-merging.md) — shipped type-side namespace/merging substrate; remaining standalone ambient namespace value metadata/receiver requires a superseding architecture decision.
 - **L** · [`44`](44-satisfies-as-const.md) — `satisfies` checking plus readonly literal/tuple semantics for `as const`.
 - **XL** · [`76`](76-lazy-value-type-resolution.md) — demand-driven declaration/value types and inferred-return cycles · blocked by `46`, `48`.
 
@@ -170,10 +172,12 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
    The five HIGH review findings (`53` `55` `57` `58` `61`) shipped in
    sprint-2026-07-07-soundness-fn-fixes; the remaining silent-FN C group (`60`, `62`, `32`,
    `21`, `66`, `71`, `78`) remains available as independently valuable dropped-error work.
-2. **Run the remaining model/lib prerequisite `43`.** Generic methods, calls, and construct
-   signatures shipped with `41`; explicit `this`/`ThisType<T>` shipped with `70`; namespace and
-   declaration merging is now the sole Track A blocker of `14`. Interleave B items and C's parity
-   tail as warm-ups. The `13` profiling gate closed DEFER/no-VM under ADR-0001.
+2. **Resolve the remaining architecture stop in `43`.** Type-side namespaces and declaration
+   merging shipped, but the WU6 proof is NO-GO on standalone ambient namespace value
+   metadata/receivers. Record and independently review the required superseding ADR before
+   implementation. Do not start `14` until the pinned proof clears this sole dependency. Backlogs
+   `50`/`75` remain independent 1.0 work; `63` is parity-only. The `13` profiling gate closed
+   DEFER/no-VM under ADR-0001.
 3. **Climb the full-project/scale ladder** (`14` → `15` → `16` → `17`), finishing the B/C
    remainder along the way. `14` + `15` must graduate a pinned Bundler-compatible full-stack
    witness (deptective only if it qualifies); the small `72` preview is not evidence for full
