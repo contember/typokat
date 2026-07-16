@@ -26,3 +26,4 @@ a commit message suffices.
 - [`0008`](0008-class-surface-lowering-and-lexical-event-ownership.md) — class surface lowering and lexical event ownership cut over atomically — accepted (2026-07-14)
 - [`0009`](0009-ordered-declaration-groups-and-namespace-publication.md) — ordered declaration groups and namespace surfaces publish atomically — accepted (2026-07-15)
 - [`0010`](0010-publish-instantiated-standalone-namespace-values.md) — instantiated standalone namespace values publish as immutable structural objects — accepted (2026-07-16)
+- [`0011`](0011-freeze-pinned-default-library-base.md) — freeze the pinned TypeScript 6.0.3 default library as a shared semantic base with private collision rebuilds — accepted (2026-07-16)
