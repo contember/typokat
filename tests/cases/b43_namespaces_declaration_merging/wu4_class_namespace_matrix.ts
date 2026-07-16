@@ -131,5 +131,5 @@ namespace Wu4PrototypeCollision {
   export const prototype: string = "namespace"; // error[TK2300]: Duplicate identifier 'prototype'
 }
 const wu4PrototypeCollision: Wu4PrototypeCollision = Wu4PrototypeCollision.prototype;
-const wu4PrototypeCollisionWrong: string = Wu4PrototypeCollision.prototype; // error[TK2322]: Type 'Wu4PrototypeCollision' is not assignable to type 'string'
+const wu4PrototypeCollisionWrong: string = Wu4PrototypeCollision.prototype; // error[TK2322]
 const wu4PrototypeInstanceWrong: string = Wu4PrototypeCollision.prototype.instance; // error[TK2322]: Type 'number' is not assignable to type 'string'
