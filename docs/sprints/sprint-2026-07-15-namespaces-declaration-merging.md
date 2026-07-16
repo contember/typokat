@@ -8,8 +8,9 @@ boundary without implementing its loader.
 legal global type publication, and local `Array<T>` heritage are shipped. The committed WU6 proof
 ([`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml)) still finds one backlog-43
 architecture stop: a standalone ambient namespace has no value metadata or qualified value
-receiver. Closing it requires an explicit architecture decision that supersedes the relevant
-ADR-0009 boundary. The sprint and backlog `43` therefore remain active; backlog `14` may not start.
+receiver. [ADR-0010](../decisions/0010-publish-instantiated-standalone-namespace-values.md) now
+defines that missing publication contract; implementation and review remain. The sprint and
+backlog `43` therefore remain active, and backlog `14` may not start yet.
 
 **Outcome boundary.** This sprint unblocks backlog `14`; it does not automatically load the
 standard library. Full `lib.d.ts` loading, the frozen base plus per-file delta `Store`, and
@@ -41,6 +42,21 @@ The raw result is 4 diagnostics and 188 incomplete records:
 
 Backlogs `50` and `75` independently block checker 1.0 but do not block starting the loader work;
 backlog `63` is parity-only. The proof is model-readiness evidence, not standard-library loading.
+
+## ADR-0010 decision addendum (2026-07-16)
+
+An instantiated standalone `NamespaceId` owns one stable `ValueStorageId` and one complete immutable
+structural `ObjectType` shared across reopenings. Nested instantiated namespaces publish bottom-up;
+non-instantiated namespaces remain type-only. Construction is query-free and atomically publishes
+`Ready` or a complete typed `Unavailable`. Ordinary value lookup consumes the published storage;
+there is no qualified-leaf-only resolver. Exported `const` properties are readonly, while exported
+`let`, `var`, function, class, and nested namespace properties are mutable. Existing function/class
+merge groups keep their existing owner. This is checker value-shape metadata only—no runtime,
+initialization, emit, loader, shared Store, or backlog-82 global value publication.
+
+This narrowly supersedes only ADR-0009's standalone type-container-only boundary. Every unaffected
+ADR-0009 ordering, scope, atomicity, typed-unavailability, existing-owner, event, and no-fallback
+rule remains binding.
 
 ## Planning baseline (2026-07-15, historical `1836d37`)
 
@@ -334,6 +350,51 @@ decision instead of adding a bridge if any of those proofs fails.
   backlog `14`. This proves model readiness only; no standard-library auto-loading or Stage 1 store
   work may enter the diff.
 
+### WU6A — standalone instantiated namespace values (effort L; spec first)
+
+- **Architecture gate.** Commit accepted ADR-0010 and this decision addendum before the spec. Do
+  not modify accepted ADR-0009; ADR-0010 textually narrows one boundary.
+- **Spec commit.** Add a disabled strict-tsc 6.0.3 corpus covering: one identity across reopenings
+  and opposite input order; distinct identities for equal-shape namespaces; ambient-default,
+  explicit-export, and private visibility; first-class namespace roots and aliases; calls/member
+  reads; nested and dotted bottom-up values; non-instantiated no-value behavior; missing/private
+  diagnostics; function/class keep-pairs retaining their existing owner; and exact `const`
+  readonly versus `let`/`var`/function/class/nested mutable assignments. Root assignment/update
+  forms `N = ...`, `N++`, `++N`, and `N--` must match `TS2631` or name one precise sound non-43
+  owner; `N()` must match `TS2349` (owner 19 if deferred), and `new N()` must match `TS2351`
+  (owner 75 if deferred). Do not assume current ordinary value machinery is safe before this matrix
+  passes.
+- **Type-only negative.** A pure type-only namespace gets zero storage and no empty object. Root
+  alias/read/call/`new`/member value access matches `TS2708` or has a documented sound owner and
+  divergence; none may become clean through a fabricated value.
+- **Direct invariant gates.** Prove one namespace-owned `ValueStorageId`, complete immutable
+  `ObjectType`, group-level transitive instantiation, terminal `Ready | Unavailable`, unavailable
+  child/member propagation, no per-fragment storage, no partial surface, zero construction-time
+  semantic queries, and deterministic publication/event order. Unsupported using/import/enum or
+  cycle cases remain explicitly unavailable with exact owners.
+- **Unavailable ledger.** Pin type query → `52`; inferred initializer/function return → `76`; enum
+  → `42`; import/import-equals → `15`; duplicate → `18`; TDZ/use-before-declaration → `47`; and
+  class/static dependency cycle → implemented behavior or concrete owner `76` by default. Every
+  cause withholds the whole parent, and no broad backlog-43 incomplete remains.
+- **Project order gate.** One exact two-file `check_project` fixture runs forward and reverse input
+  order with identical storage identity, structural type, terminal publication, and diagnostics.
+  EventStore replay must preserve the exact `(original_module_ordinal, source_start,
+  event_ordinal, record_ordinal)` tuple order with no deduplication, truncation, suppression, or
+  completion-order drift.
+- **Implementation.** Bind the storage only for instantiated standalone groups, construct nested
+  values bottom-up, publish once before ordinary expression checking, and route roots through the
+  ordinary symbol value slot. Existing function/class namespace publication is unchanged.
+- **Review and proof.** An independent agent attacks false negatives, mutability, reopening/file
+  order, private leakage, nested availability, owner collisions, and accidental runtime/loader
+  expansion against strict tsc. Then rerun WU6: `deep.Intl.value` must become `TK2322`, the sole
+  backlog-43 incomplete must disappear, and every non-43 outcome must remain explicitly accounted.
+  Any second resolver, mutable publication, query-time build, guessed property, false negative, or
+  order dependence stops the cut with no shim.
+
+WU6A runs before WU7 closure. Its spec commits separately; implementation follows only after the
+spec and review gates. Backlog `14`, architecture/reference claims, sprint archival, and completion
+state changes remain deferred until the implementation and repeated readiness proof pass.
+
 ### WU7 — independent adversarial review, official ratchet, and closure (effort L)
 
 - A reviewer independent of WU1-WU6 starts from WU0 and attacks false negatives, declaration-order
@@ -567,6 +628,12 @@ adding `42` or `44` only if a reproducible pinned-library audit contradicts the 
   standalone ambient namespace has no value metadata/receiver. Do not add one ad hoc; record and
   review a superseding ADR before implementation. WU7 closure, backlog-43 removal, and sprint
   archival are intentionally deferred.
+- **2026-07-16 — ADR-0010 continuation gate.** The user approved option 2—the ordinary immutable
+  `ObjectType` execution path—by asking the team to continue. Independent SOL decision review
+  passed with conditions. The subsequent spec review caught required negative and ownership gates:
+  root assignment/update/call/new behavior, pure type-only namespace value rejection, an exhaustive
+  unavailable-owner ledger, and an exact two-file/EventStore order matrix. These are WU6A
+  acceptance conditions only; no standalone namespace value implementation is claimed yet.
 
 ## Current implementation touch points
 

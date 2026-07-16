@@ -5,6 +5,9 @@ One file per significant architectural/product decision: `NNNN-<slug>.md`
 
 **Immutable.** Once a decision is Accepted, don't rewrite it — to change course,
 write a *new* ADR and set the old one's status to `Superseded by NNNN`.
+Use that status only when the old decision is superseded wholesale. A new ADR that narrowly
+supersedes one named boundary states that scope textually; both ADRs remain Accepted and all
+unaffected rules in the older ADR stay binding.
 
 Write one when the choice (a) constrains future work, (b) rejected a real
 alternative, or (c) someone will later ask "why did we do it this way?". Otherwise
@@ -22,3 +25,4 @@ a commit message suffices.
 - [`0007`](0007-bundler-resolution-via-oxc-resolver.md) — Bundler is the 1.0 resolution profile, delegated to `oxc_resolver` — accepted (2026-07-13)
 - [`0008`](0008-class-surface-lowering-and-lexical-event-ownership.md) — class surface lowering and lexical event ownership cut over atomically — accepted (2026-07-14)
 - [`0009`](0009-ordered-declaration-groups-and-namespace-publication.md) — ordered declaration groups and namespace surfaces publish atomically — accepted (2026-07-15)
+- [`0010`](0010-publish-instantiated-standalone-namespace-values.md) — instantiated standalone namespace values publish as immutable structural objects — accepted (2026-07-16)

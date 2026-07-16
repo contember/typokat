@@ -6,8 +6,9 @@ title: Namespaces (type side) + declaration merging
 # 43 — Namespaces (type side) + declaration merging
 
 **Summary.** Type-side namespaces and declaration merging are substantially shipped. One
-architecture stop remains before backlog `14` may start: standalone ambient namespace value
-metadata and qualified value access. The pinned WU6 proof is
+implementation remains before backlog `14` may start: standalone instantiated namespace value
+metadata and ordinary qualified value access under
+[ADR-0010](../decisions/0010-publish-instantiated-standalone-namespace-values.md). The pinned WU6 proof is
 [`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml).
 
 ## Problem
@@ -34,17 +35,32 @@ placement `TK2434` and a non-permissive function+namespace surface.
 
 ## Remaining approach / acceptance
 
-First record and independently review an architecture decision that explicitly supersedes the
-ADR-0009 standalone-namespace boundary. It must specify namespace value identity, qualified value
-receiver construction, publication timing, cross-space coexistence, and interaction with existing
-function/class namespace augmentation. No production implementation starts before that gate.
+ADR-0010 is accepted and narrowly supersedes ADR-0009's standalone type-container-only boundary.
+Every instantiated standalone `NamespaceId` owns one stable `ValueStorageId` and one complete
+immutable structural `ObjectType` shared across reopenings. Nested instantiated namespaces publish
+bottom-up; non-instantiated namespaces have no value. Construction is query-free and atomically
+reaches typed `Ready | Unavailable`; ordinary symbol value lookup consumes only terminal
+publication. Function/class namespace groups retain their existing owner. Exported `const` is
+readonly; exported `let`, `var`, function, class, and nested namespace properties are mutable. No
+runtime/emit/loader or `declare global` value support is added.
 
-Then add a spec-first corpus for standalone ambient namespace value calls/member reads, reopenings,
-shadowing, missing members, value/type coexistence, and opposite declaration order. Publication
-must remain query-free and atomic; qualified lookup must retain public-path no-fallback semantics;
-no published `TypeId` may mutate. The pinned proof becomes GO for backlog `14` only when the sole
-backlog-43 residual and the owned `deep.Intl.value` mismatch disappear without hiding or
-misassigning any remaining diagnostic/incomplete outcome.
+Add and separately commit the strict-tsc corpus before implementation: namespace root reads and
+aliases, calls/member reads, reopenings/opposite orders, equal-shape distinct storage identities,
+nested/dotted bottom-up publication, ambient/explicit/private visibility, non-instantiated no-value,
+missing/private diagnostics, exact mutability, and function/class existing-owner controls. Direct
+gates must prove group-level instantiation, one storage/type per namespace, complete parent
+unavailability, zero queries/partial publication, and deterministic event order. Root
+assignment/update (`N =`, `N++`, `++N`, `N--`), root call/new, and pure type-only root
+alias/read/call/new/member access require strict-tsc parity or precise documented non-43 owners;
+ordinary value machinery is not accepted without those negative gates. The unavailable ledger is:
+type query `52`, inferred initializer/function return `76`, enum `42`, import/import-equals `15`,
+duplicate `18`, TDZ/use-before-declaration `47`, and class/static dependency cycle implemented or
+owned by `76` by default. Every cause withholds the whole parent and leaves no broad `43` fallback.
+An exact two-file forward/reverse `check_project` gate must preserve storage/type/publication,
+diagnostics, and the full EventStore tuple order without deduplication, truncation, suppression, or
+completion drift. The pinned proof
+becomes GO for backlog `14` only when the sole backlog-43 residual disappears,
+`deep.Intl.value` becomes its expected `TK2322`, and every non-43 outcome remains explicit.
 
 Global variables, functions, complete class type/constructor pairs, and cross-file
 class/function+namespace value payloads remain [`82`](82-declare-global-value-space.md).
@@ -64,7 +80,7 @@ landing; never remove a broad regex that also hides external-module or unrelated
 
 The main namespace/merging implementation and review fixes precede WU6. Proof commits `b424e74`,
 `5951968`, and `3f641ea` pin and enforce the current NO-GO boundary. Do not close this item, mark
-criterion `A-namespaces-declaration-merging` complete, or unblock `14` until the superseding
-architecture decision and implementation pass independent adversarial review.
+criterion `A-namespaces-declaration-merging` complete, or unblock `14` until ADR-0010's spec,
+implementation, repeated readiness proof, and independent adversarial review pass.
 
 <!-- Origin: completion-roadmap review (2026-07-07); architecture §4.1 requirement, prerequisite of 14. -->
