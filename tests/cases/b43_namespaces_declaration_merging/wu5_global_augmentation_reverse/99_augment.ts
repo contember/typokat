@@ -5,6 +5,10 @@ interface WU5Shared {
   augmentModuleOnly: boolean;
 }
 
+interface WU5AugmentLocalShape {
+  captured: number;
+}
+
 namespace WU5GlobalSpace {
   export interface ModuleOnly { augmentModuleNamespaceOnly: boolean }
 }
@@ -16,6 +20,10 @@ declare global {
 
   interface WU5GlobalConsumer {
     shared: WU5Shared;
+  }
+
+  interface WU5GlobalLocalCapture {
+    value: WU5AugmentLocalShape;
   }
 
   namespace WU5GlobalSpace {

@@ -29,3 +29,8 @@ const reverseNamespaceWrong: boolean = reverseNamespaceAugment.value; // error[T
 declare const reverseNamespaceShared: WU5GlobalSpace.Shared;
 const reverseNamespaceSharedAugment: number = reverseNamespaceShared.fromAugment;
 const reverseNamespaceSharedConsume: string = reverseNamespaceShared.fromConsume;
+
+type ReverseModuleLocalLeak = WU5AugmentLocalShape; // error[TK2304]: Cannot find name 'WU5AugmentLocalShape'
+declare const reverseLocalCapture: WU5GlobalLocalCapture;
+const reverseCaptured: number = reverseLocalCapture.value.captured;
+const reverseCapturedWrong: boolean = reverseLocalCapture.value.captured; // error[TK2322]: Type 'number' is not assignable to type 'boolean'

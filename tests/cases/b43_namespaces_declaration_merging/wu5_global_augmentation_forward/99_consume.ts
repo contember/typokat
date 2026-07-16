@@ -29,3 +29,8 @@ const forwardNamespaceWrong: boolean = forwardNamespaceAugment.value; // error[T
 declare const forwardNamespaceShared: WU5GlobalSpace.Shared;
 const forwardNamespaceSharedAugment: number = forwardNamespaceShared.fromAugment;
 const forwardNamespaceSharedConsume: string = forwardNamespaceShared.fromConsume;
+
+type ForwardModuleLocalLeak = WU5AugmentLocalShape; // error[TK2304]: Cannot find name 'WU5AugmentLocalShape'
+declare const forwardLocalCapture: WU5GlobalLocalCapture;
+const forwardCaptured: number = forwardLocalCapture.value.captured;
+const forwardCapturedWrong: boolean = forwardLocalCapture.value.captured; // error[TK2322]: Type 'number' is not assignable to type 'boolean'
