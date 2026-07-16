@@ -172,3 +172,25 @@ class ClassOwnedHeritage {}
 interface ClassOwnedHeritage extends ClassOwnedHeritageBase {}
 const classOwnedHeritageNumber: number = new ClassOwnedHeritage().inherited;
 const classOwnedHeritageWrong: string = new ClassOwnedHeritage().inherited; // error[TK2322]: Type 'number' is not assignable to type 'string'
+
+type ClassFirstIntersectionHeritageShape = { value: string } & { other: boolean };
+type ClassFirstIntersectionHeritageAlias = ClassFirstIntersectionHeritageShape;
+class ClassFirstIntersectionHeritage {
+  value: number = 1;
+}
+interface ClassFirstIntersectionHeritage extends ClassFirstIntersectionHeritageAlias {} // error[TK2430]
+const classFirstIntersectionValue: number = new ClassFirstIntersectionHeritage().value;
+const classFirstIntersectionOther: boolean = new ClassFirstIntersectionHeritage().other;
+const classFirstIntersectionValueWrong: string = new ClassFirstIntersectionHeritage().value; // error[TK2322]: Type 'number' is not assignable to type 'string'
+const classFirstIntersectionOtherWrong: number = new ClassFirstIntersectionHeritage().other; // error[TK2322]: Type 'boolean' is not assignable to type 'number'
+
+type InterfaceFirstIntersectionHeritageShape = { value: string } & { other: boolean };
+type InterfaceFirstIntersectionHeritageAlias = InterfaceFirstIntersectionHeritageShape;
+interface InterfaceFirstIntersectionHeritage extends InterfaceFirstIntersectionHeritageAlias {} // error[TK2430]
+class InterfaceFirstIntersectionHeritage {
+  value: number = 1;
+}
+const interfaceFirstIntersectionValue: number = new InterfaceFirstIntersectionHeritage().value;
+const interfaceFirstIntersectionOther: boolean = new InterfaceFirstIntersectionHeritage().other;
+const interfaceFirstIntersectionValueWrong: string = new InterfaceFirstIntersectionHeritage().value; // error[TK2322]: Type 'number' is not assignable to type 'string'
+const interfaceFirstIntersectionOtherWrong: number = new InterfaceFirstIntersectionHeritage().other; // error[TK2322]: Type 'boolean' is not assignable to type 'number'

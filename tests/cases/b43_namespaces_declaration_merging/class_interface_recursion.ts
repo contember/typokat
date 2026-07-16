@@ -30,3 +30,20 @@ const recursiveRightMissing: RecursiveInterfaceFirst = { // error[TK2741]
   ownRight: "right",
   left: recursiveLeft,
 };
+
+class MutualClassHeritageA { // error[TK2310]: recursively references itself as a base type
+  ownA: number = 1;
+}
+interface MutualClassHeritageA extends MutualClassHeritageB {} // error[TK2310]: recursively references itself as a base type
+class MutualClassHeritageB { // error[TK2310]: recursively references itself as a base type
+  ownB: string = "b";
+}
+interface MutualClassHeritageB extends MutualClassHeritageA {} // error[TK2310]: recursively references itself as a base type
+
+const mutualClassHeritageAOwn: number = new MutualClassHeritageA().ownA;
+const mutualClassHeritageAOwnWrong: string = new MutualClassHeritageA().ownA; // error[TK2322]: Type 'number' is not assignable to type 'string'
+new MutualClassHeritageA().ownB; // error[TK2339]: Property 'ownB' does not exist on type 'MutualClassHeritageA'
+const mutualClassHeritageBOwn: string = new MutualClassHeritageB().ownB;
+const mutualClassHeritageBInherited: number = new MutualClassHeritageB().ownA;
+const mutualClassHeritageBOwnWrong: number = new MutualClassHeritageB().ownB; // error[TK2322]: Type 'string' is not assignable to type 'number'
+const mutualClassHeritageBInheritedWrong: string = new MutualClassHeritageB().ownA; // error[TK2322]: Type 'number' is not assignable to type 'string'
