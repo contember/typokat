@@ -23,15 +23,27 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-07-16-full-lib-loading.md`](sprints/sprint-2026-07-16-full-lib-loading.md) —
+  current capability sprint: execute backlog `14` under
+  [`ADR-0011`](decisions/0011-freeze-pinned-default-library-base.md), beginning with hard profile,
+  ownership, routing, `Send + Sync`, and performance gates. The curated `src/prelude.ts` remains
+  production until the sprint's atomic cutover.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprints/sprint-2026-07-16-namespace-binder-refactor.md) —
-  planned, not started; its namespace-closure gate is satisfied.
+  planned/deferred; start it during the full-lib work only if WU0 proves it is a loader prerequisite.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **Full default-library loading is the active capability sprint** —
+  [`ADR-0011`](decisions/0011-freeze-pinned-default-library-base.md) accepts an exact embedded
+  TypeScript 6.0.3 ES2025 full-host profile, one AST-free frozen library base with private deltas,
+  and a same-pipeline private rebuild for global collisions. The
+  [`active sprint`](sprints/sprint-2026-07-16-full-lib-loading.md) is still at its audit-first
+  delivery boundary: Stage 1 is planned, not shipped, and `src/prelude.ts` remains the production
+  standard-library slice.
 - **Namespaces/declaration merging shipped 2026-07-16** (archived:
   [`archive/sprint-2026-07-15-namespaces-declaration-merging.md`](archive/sprint-2026-07-15-namespaces-declaration-merging.md)) —
   ordered groups, qualified types, keep-pairs, legal global type publication, and immutable

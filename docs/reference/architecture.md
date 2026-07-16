@@ -509,13 +509,15 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   boundary while delegating physical Bundler resolution to `oxc_resolver`; project enumeration,
   graph construction, import/export semantics, `.d.ts` checking, diagnostics, and determinism stay
   in typokat ([ADR-0007](../decisions/0007-bundler-resolution-via-oxc-resolver.md)).
-- **Stage 1 — shared *read-only* prelude.** `lib.d.ts` + intrinsics form a large,
-  immutable, universally-needed base; re-seeding them into N per-file interners is
-  absurd. Freeze a base `Store` once and share it `&`-immutably across workers —
-  immutable shared data is `Sync`-friendly; the §3.4 enemy is only the *growing*
-  interner. Each file layers a private **delta** arena over the frozen base.
-  Parallelism survives intact. This is the first real cross-unit type-sharing, and
-  it arrives with `lib.d.ts` (mandatory core, §4).
+- **Stage 1 — shared *read-only* default-library base (accepted, not yet shipped).**
+  `lib.d.ts` + intrinsics form a large, immutable, universally-needed base; re-seeding them into N
+  per-file interners is absurd. [ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md)
+  accepts one AST-free frozen library `Store` **and immutable library binder prefix**, shared across
+  workers, with an identity-preserving private type/binder delta for each non-colliding run. A
+  conservative preflight routes any possible library-global collision or global-object
+  contribution to a correctness-first private rebuild of library + project in one universe; the
+  shared base is never mutated or partially overlaid. Production still uses `src/prelude.ts`; the
+  [full-lib sprint](../sprints/sprint-2026-07-16-full-lib-loading.md) owns feasibility and cutover.
 - **Stage 2 — cross-file *mutable* exports.** `export interface Foo` in A consumed by
   B: A must emit its **public type surface** (`export name → type`), and B must give
   those types identity in *its* world. A run-local `TypeId` (§3.2) is meaningless
@@ -528,10 +530,15 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
 
 ### 8.3 Invariant across all stages
 
-Parse + bind is **always** per-file-parallel and interner-free (`Binder` is owned; it
-never touches types). Only the *type universe / check phase* climbs the Stage 0→1→2
-ladder. The reserved `stable_hash` column in the type store (§3.2) exists precisely
-for Stage 2; computing it is shared work with incrementality (Phase 5).
+User parse + mutable binding remains per-file/project owned and interner-free: user ASTs, allocators,
+mutable binder rows, and private deltas are never shared across runs. Stage 1's accepted narrow
+exception is the already-consumed, AST-free immutable library binder prefix frozen with its type
+base; a colliding project instead owns one complete private library-plus-project binder and type
+universe. Only immutable library products cross threads. Stage 2 still owns mutable cross-file
+export identity; the reserved `stable_hash` column in the type store (§3.2) exists precisely for
+that later stage and incrementality (Phase 5). See
+[ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md) for the boundary and failure
+path.
 
 ---
 

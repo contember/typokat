@@ -12,6 +12,13 @@ start. It is the **full** standard-library load;
 the minimal ambient/prelude slice (`38`) is allowed before this item when it buys useful real-world
 feedback.
 
+**Active delivery contract.** The in-memory and collision semantics are accepted in
+[`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md); execution, hard feasibility
+gates, work-unit boundaries, and commit/review sequencing live in the
+[`2026-07-16 full-lib sprint`](../sprints/sprint-2026-07-16-full-lib-loading.md). Those documents do
+not claim the loader is shipped: `src/prelude.ts` remains the production path until the sprint's
+atomic cutover passes.
+
 ## Problem
 
 Without `lib.d.ts`, `console`, array methods, `Promise`, etc. are absent, so most real code can't be
@@ -77,6 +84,9 @@ explicit outcomes rather than approximate them.
 
 `src/driver.rs`, `src/check/checker/mod.rs`, `src/check/checker/decls/`, and the shared prelude/type
 universe paths selected by its architecture design (parallelism Stage 1 — architecture §8.2). The
-current explicit-input readiness fixture is not the loader.
+accepted detailed design and exact implementation touch points are maintained in
+[`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md) and the
+[`active sprint`](../sprints/sprint-2026-07-16-full-lib-loading.md), rather than duplicated here.
+The current explicit-input readiness fixture is not the loader.
 
 <!-- Origin: dev roadmap (was HANDOFF §3, long-term scale + IDE). -->

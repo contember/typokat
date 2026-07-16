@@ -20,9 +20,13 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+- [`sprint-2026-07-16-full-lib-loading.md`](sprint-2026-07-16-full-lib-loading.md) —
+  current capability sprint for backlog `14`: audit-gated TypeScript 6.0.3 default-library loading,
+  frozen Stage-1 base, private deltas, and correctness-first collision rebuild. Production still
+  uses `src/prelude.ts`; no cutover occurs before the sprint's WU0 and later acceptance gates pass.
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold public-witness gate; no implementation started.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprint-2026-07-16-namespace-binder-refactor.md) —
-  planned, not started; behavior-preserving split of `binder/namespace.rs` into submodules plus
-  measured dedup (mirrored walkers, `declaration_owner_scope`, canonical sorts). Its namespace
-  closure gate is satisfied.
+  planned/deferred while the full-lib sprint runs. Its behavior-preserving split and measured
+  dedup start only if full-lib WU0 shows that they materially unblock the loader; otherwise it
+  remains a separate cleanup after the capability work.
