@@ -1,5 +1,5 @@
 // WU4 adversarial HOLD — tsc 6.0.3 --strict --noEmit --lib es5 --module commonjs:
-// TS2394, TS2391 x4, TS2434, TS2769 x5, TS2339 x3, and TS2322 x16 below.
+// TS2394, TS2391 x4, TS2434, TS2769 x6, TS2339 x3, and TS2322 x18 below.
 
 function Wu4PrivateVariableOwner(): void {}
 namespace Wu4PrivateVariableOwner {
@@ -103,3 +103,30 @@ const wu4NonConsecutiveTag: string = Wu4NonConsecutiveOwner.tag;
 Wu4NonConsecutiveOwner("bad"); // error[TK2769]
 const wu4NonConsecutiveNumberWrong: string = Wu4NonConsecutiveOwner(1); // error[TK2322]: Type 'number' is not assignable to type 'string'
 const wu4NonConsecutiveTagWrong: number = Wu4NonConsecutiveOwner.tag; // error[TK2322]: Type 'string' is not assignable to type 'number'
+
+function Wu4PrivateParameterOwner(): void {}
+namespace Wu4PrivateParameterOwner {
+  export const tag: string = "private-parameter";
+
+  function validate(x: number): number {
+    return x;
+  }
+
+  class HiddenValidator {
+    validate(x: number): number {
+      return x;
+    }
+  }
+}
+const wu4PrivateParameterTag: string = Wu4PrivateParameterOwner.tag;
+
+declare function Wu4AmbientDefaultOverloadOwner(): void;
+declare namespace Wu4AmbientDefaultOverloadOwner {
+  function g(value: number): number;
+  function g(value: string): string;
+}
+const wu4AmbientDefaultNumber: number = Wu4AmbientDefaultOverloadOwner.g(1);
+const wu4AmbientDefaultString: string = Wu4AmbientDefaultOverloadOwner.g("one");
+Wu4AmbientDefaultOverloadOwner.g(true); // error[TK2769]
+const wu4AmbientDefaultNumberWrong: string = Wu4AmbientDefaultOverloadOwner.g(1); // error[TK2322]: Type 'number' is not assignable to type 'string'
+const wu4AmbientDefaultStringWrong: number = Wu4AmbientDefaultOverloadOwner.g("one"); // error[TK2322]: Type 'string' is not assignable to type 'number'
