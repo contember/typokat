@@ -1,7 +1,8 @@
 //! Namespace, merge, global-augmentation, and UMD context metadata.
 //!
-//! The base inventory remains independent of checker storage. Admitted class/function
-//! augmentations selectively reuse the ordinary value binder for exported members.
+//! Lexical namespace declarations remain independent of checker storage. Standalone groups keep
+//! dormant owner slots in dense side columns, while admitted class/function augmentations reuse
+//! the ordinary value binder for exported members.
 
 use crate::binder::bind::{
     bind_class_declaration, bind_declarator, bind_function_declaration, declare_type, BindState,
@@ -762,6 +763,8 @@ struct MergeKey {
 #[derive(Default)]
 pub struct NamespaceTable {
     namespaces: Vec<Namespace>,
+    aggregate_instance_states: Vec<NamespaceInstanceState>,
+    standalone_value_storages: Vec<Option<ValueStorageId>>,
     fragments: Vec<NamespaceFragment>,
     members: Vec<NamespaceMember>,
     namespace_keys: FxHashMap<NamespaceKey, NamespaceId>,
@@ -800,6 +803,22 @@ impl NamespaceTable {
         self.canonical_namespaces
             .iter()
             .filter_map(|id| self.namespaces.get(id.index()))
+    }
+
+    /// Whole-group instantiation after joining every reopening.
+    pub(crate) fn aggregate_instance_state(
+        &self,
+        id: NamespaceId,
+    ) -> Option<NamespaceInstanceState> {
+        self.aggregate_instance_states.get(id.index()).copied()
+    }
+
+    /// Dormant owner slot for an admitted instantiated standalone namespace.
+    pub(crate) fn standalone_value_storage(&self, id: NamespaceId) -> Option<ValueStorageId> {
+        self.standalone_value_storages
+            .get(id.index())
+            .copied()
+            .flatten()
     }
 
     #[cfg(test)]
@@ -1152,6 +1171,16 @@ impl NamespaceTable {
         for fragment in &mut self.fragments {
             fragment.instance_state = states[fragment.id.index()];
         }
+        self.aggregate_instance_states.resize(
+            self.namespaces.len(),
+            NamespaceInstanceState::NonInstantiated,
+        );
+        self.aggregate_instance_states
+            .fill(NamespaceInstanceState::NonInstantiated);
+        for fragment in &self.fragments {
+            let aggregate = &mut self.aggregate_instance_states[fragment.namespace.index()];
+            *aggregate = join_instance_state(*aggregate, fragment.instance_state);
+        }
         for participants in self.placements.values_mut() {
             for participant in participants {
                 participant.namespace_instance = participant
@@ -1159,6 +1188,80 @@ impl NamespaceTable {
                     .map(|fragment| states[fragment.index()]);
             }
         }
+    }
+
+    fn dormant_standalone_value_storage_candidates(&self) -> Vec<NamespaceId> {
+        self.canonical_namespaces
+            .iter()
+            .copied()
+            .filter(|namespace| {
+                self.aggregate_instance_state(*namespace)
+                    == Some(NamespaceInstanceState::Instantiated)
+                    && self.standalone_value_storage(*namespace).is_none()
+                    && !self.has_compilation_global_ancestor(*namespace)
+                    && self
+                        .standalone_merge_record(*namespace)
+                        .is_some_and(|record| {
+                            record.classification.disposition == MergeDisposition::Admitted
+                                && namespace_value_attachment_disposition(record)
+                                    == Some(NamespaceValueAttachmentDisposition::TypeContainerOnly)
+                        })
+            })
+            .collect()
+    }
+
+    fn standalone_merge_record(&self, id: NamespaceId) -> Option<&MergeRecord> {
+        let namespace = self.get(id)?;
+        let owner = match namespace.owner {
+            NamespaceOwner::Lexical(scope) => DeclarationOwner::Lexical(scope),
+            NamespaceOwner::NamespacePublic(parent) => DeclarationOwner::NamespacePublic(parent),
+            NamespaceOwner::FragmentPrivate(fragment) => {
+                DeclarationOwner::NamespacePrivate(fragment)
+            }
+            NamespaceOwner::CompilationGlobal => DeclarationOwner::CompilationGlobal,
+        };
+        self.merges
+            .iter()
+            .find(|record| record.owner == owner && record.name == namespace.name)
+    }
+
+    fn has_compilation_global_ancestor(&self, id: NamespaceId) -> bool {
+        let mut current = Some(id);
+        let mut remaining = self.namespaces.len();
+        while let Some(namespace) = current {
+            if remaining == 0 {
+                return true;
+            }
+            remaining -= 1;
+            current = match self.get(namespace).map(|namespace| namespace.owner) {
+                Some(NamespaceOwner::CompilationGlobal) => return true,
+                Some(NamespaceOwner::NamespacePublic(parent)) => Some(parent),
+                Some(NamespaceOwner::FragmentPrivate(fragment)) => {
+                    self.fragment(fragment).map(|fragment| fragment.namespace)
+                }
+                Some(NamespaceOwner::Lexical(_)) | None => None,
+            };
+        }
+        false
+    }
+}
+
+/// Append dormant namespace-owned slots after all lexical storage allocation.
+pub(super) fn allocate_dormant_namespace_value_storages(state: &mut BindState) {
+    let candidates = state
+        .namespaces
+        .dormant_standalone_value_storage_candidates();
+    for namespace in candidates {
+        let storage = state.fresh_value_storage();
+        let slot = state
+            .namespaces
+            .standalone_value_storages
+            .get_mut(namespace.index())
+            .expect("namespace storage side column is dense");
+        assert!(
+            slot.replace(storage).is_none(),
+            "namespace storage is stable"
+        );
     }
 }
 
@@ -3331,6 +3434,11 @@ fn namespace_for(state: &mut BindState, owner: NamespaceOwner, name: &str) -> Na
         symbol,
         fragments: Vec::new(),
     });
+    state
+        .namespaces
+        .aggregate_instance_states
+        .push(NamespaceInstanceState::NonInstantiated);
+    state.namespaces.standalone_value_storages.push(None);
     state.namespaces.namespace_keys.insert(key, id);
     id
 }
@@ -4935,7 +5043,15 @@ function Reverse(): void {}
         assert_eq!(binder.resolve_value(binder.module, "N"), None);
         assert_eq!(binder.resolve_type(binder.module, "N"), None);
 
-        assert_eq!(binder.decl_count, 0);
+        assert_eq!(binder.decl_count, 1);
+        assert_eq!(
+            binder.namespaces.aggregate_instance_state(namespace.id),
+            Some(NamespaceInstanceState::Instantiated)
+        );
+        assert_eq!(
+            binder.namespaces.standalone_value_storage(namespace.id),
+            Some(ValueStorageId(0))
+        );
         assert!(binder.type_groups.is_empty());
         for name in ["publicOne", "privateOne", "privateTwo", "privateThree"] {
             let declaration = binder
@@ -4980,6 +5096,245 @@ function Reverse(): void {}
                 .and_then(|scope| scope.parent),
             Some(binder.compilation_global)
         );
+    }
+
+    #[test]
+    fn standalone_namespace_storage_is_group_owned_dormant_and_exclusion_aware() {
+        let source = r#"
+const lexical = 0;
+namespace Reopened { export interface Shape {} }
+namespace Reopened { export const value: number = 1; }
+namespace EqualLeft { export const value: number = 1; }
+namespace EqualRight { export const value: number = 1; }
+namespace TypeOnly { export interface Shape {} }
+declare namespace Ambient { const value: number; }
+function FunctionOwner(): void {}
+namespace FunctionOwner { export const value: number = 1; }
+class ClassOwner {}
+namespace ClassOwner { export const value: number = 1; }
+enum Rejected { Value }
+namespace Rejected { export const value: number = 1; }
+function Recovery(): void {}
+namespace Recovery { export const value: number = 1; }
+enum Recovery { Value }
+namespace Parent {
+    export namespace Child {
+        export namespace Grandchild { export const value: number = 1; }
+    }
+}
+export {};
+declare global {
+    namespace GlobalRoot {
+        export const value: number;
+        export namespace Nested { export const value: number; }
+    }
+}
+"#;
+        let binder = bind(source, false);
+        let namespace = |name: &str| {
+            binder
+                .namespaces
+                .namespaces()
+                .find(|namespace| namespace.name == name)
+                .unwrap_or_else(|| panic!("{name} namespace"))
+        };
+
+        let reopened = namespace("Reopened");
+        assert_eq!(
+            reopened
+                .fragments
+                .iter()
+                .filter_map(|fragment| binder.namespaces.fragment(*fragment))
+                .map(|fragment| fragment.instance_state)
+                .collect::<Vec<_>>(),
+            [
+                NamespaceInstanceState::NonInstantiated,
+                NamespaceInstanceState::Instantiated,
+            ]
+        );
+        assert_eq!(
+            binder.namespaces.aggregate_instance_state(reopened.id),
+            Some(NamespaceInstanceState::Instantiated)
+        );
+        assert!(binder
+            .namespaces
+            .standalone_value_storage(reopened.id)
+            .is_some());
+
+        let equal_left = binder
+            .namespaces
+            .standalone_value_storage(namespace("EqualLeft").id)
+            .expect("left namespace storage");
+        let equal_right = binder
+            .namespaces
+            .standalone_value_storage(namespace("EqualRight").id)
+            .expect("right namespace storage");
+        assert_ne!(equal_left, equal_right);
+
+        for name in ["Parent", "Child", "Grandchild", "Ambient"] {
+            let namespace = namespace(name);
+            assert_eq!(
+                binder.namespaces.aggregate_instance_state(namespace.id),
+                Some(NamespaceInstanceState::Instantiated),
+                "{name} aggregate state"
+            );
+            assert!(
+                binder
+                    .namespaces
+                    .standalone_value_storage(namespace.id)
+                    .is_some(),
+                "{name} standalone storage"
+            );
+        }
+        assert_eq!(
+            binder
+                .namespaces
+                .aggregate_instance_state(namespace("TypeOnly").id),
+            Some(NamespaceInstanceState::NonInstantiated)
+        );
+        for name in [
+            "TypeOnly",
+            "FunctionOwner",
+            "ClassOwner",
+            "Rejected",
+            "Recovery",
+            "GlobalRoot",
+            "Nested",
+        ] {
+            assert_eq!(
+                binder
+                    .namespaces
+                    .standalone_value_storage(namespace(name).id),
+                None,
+                "{name} must not own standalone storage"
+            );
+        }
+
+        for name in ["FunctionOwner", "ClassOwner", "Recovery"] {
+            let namespace = namespace(name);
+            assert!(binder
+                .symbols
+                .get(namespace.symbol)
+                .is_some_and(|symbol| symbol.value.is_some()));
+        }
+        for name in [
+            "Reopened",
+            "EqualLeft",
+            "EqualRight",
+            "Ambient",
+            "Parent",
+            "Child",
+            "Grandchild",
+        ] {
+            let namespace = namespace(name);
+            assert_eq!(
+                binder
+                    .symbols
+                    .get(namespace.symbol)
+                    .and_then(|symbol| symbol.value),
+                None,
+                "{name} root symbol stays dormant"
+            );
+        }
+        assert!(binder
+            .declarations
+            .iter()
+            .filter(|declaration| declaration.kind == DeclarationKind::Namespace)
+            .all(|declaration| declaration.value_storage.is_none()));
+
+        let lexical_max = binder
+            .declarations
+            .iter()
+            .filter_map(|declaration| declaration.value_storage)
+            .map(|storage| storage.0)
+            .max()
+            .expect("ordinary lexical storage");
+        let dormant = binder
+            .namespaces
+            .namespaces()
+            .filter_map(|namespace| binder.namespaces.standalone_value_storage(namespace.id))
+            .collect::<Vec<_>>();
+        assert_eq!(dormant.len(), 7);
+        assert!(dormant.iter().all(|storage| storage.0 > lexical_max));
+        assert_eq!(
+            dormant
+                .iter()
+                .map(|storage| storage.0)
+                .max()
+                .map(|id| id + 1),
+            Some(binder.decl_count)
+        );
+    }
+
+    #[test]
+    fn standalone_namespace_storage_order_uses_stable_source_keys() {
+        fn storage_map(reverse_input: bool) -> Vec<(String, ValueStorageId)> {
+            let prelude_allocator = Allocator::default();
+            let first_allocator = Allocator::default();
+            let second_allocator = Allocator::default();
+            let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+            let first = Parser::new(
+                &first_allocator,
+                "const firstLexical = 1; namespace First { export const value = 1; }",
+                SourceType::ts(),
+            )
+            .parse();
+            let second = Parser::new(
+                &second_allocator,
+                "const secondLexical = 1; namespace Second { export const value = 1; }",
+                SourceType::ts(),
+            )
+            .parse();
+            assert!(!first.panicked && !second.panicked);
+
+            let mut builder = ProjectBinderBuilder::new(&prelude.program);
+            let units = if reverse_input {
+                [
+                    (&second.program, SourceUnitKey(20)),
+                    (&first.program, SourceUnitKey(10)),
+                ]
+            } else {
+                [
+                    (&first.program, SourceUnitKey(10)),
+                    (&second.program, SourceUnitKey(20)),
+                ]
+            };
+            let mut last_module = None;
+            for (original_module, (program, source)) in units.into_iter().enumerate() {
+                let unit = CompilationUnit {
+                    source,
+                    original_module: OriginalModuleOrdinal(
+                        u32::try_from(original_module).expect("two modules fit u32"),
+                    ),
+                    binding: ModuleBindingContext::for_program(
+                        program,
+                        SourceFileKind::ImplementationTs,
+                    ),
+                };
+                let (module, _) = builder.add_module(program, &[], unit);
+                last_module = Some(module);
+            }
+            let binder = builder.finish(last_module.expect("one project module"));
+            ["First", "Second"]
+                .into_iter()
+                .map(|name| {
+                    let namespace = binder
+                        .namespaces
+                        .namespaces()
+                        .find(|namespace| namespace.name == name)
+                        .expect("project namespace");
+                    (
+                        name.to_string(),
+                        binder
+                            .namespaces
+                            .standalone_value_storage(namespace.id)
+                            .expect("standalone namespace storage"),
+                    )
+                })
+                .collect()
+        }
+
+        assert_eq!(storage_map(false), storage_map(true));
     }
 
     #[test]
@@ -6500,7 +6855,7 @@ namespace Visibility {
     fn rich_namespace_and_global_bodies_inventory_exact_declarations_without_storage() {
         let source = "interface Existing {} namespace Existing { export const { a, nested: { b } } = value; export function f(param: number): void {} export class C {} export type T = number; export interface I {} export enum E {} export namespace Child {} export { a as alias }; } declare global { const [g]: number[]; function gf(arg: number): void; class GC {} type GT = number; interface GI {} enum GE {} namespace GN {} }";
         let binder = bind(source, false);
-        assert_eq!(binder.decl_count, 0);
+        assert_eq!(binder.decl_count, 1);
         assert_eq!(binder.type_groups.len(), 4);
 
         let existing_symbol = binder

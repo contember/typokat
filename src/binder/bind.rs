@@ -8,7 +8,8 @@ use crate::binder::declaration::{
     TypeFragmentKind, TypeGroupFragment, TypeGroupId, TypeGroupTable, ValueStorageId,
 };
 use crate::binder::namespace::{
-    bind_namespace_metadata, CompilationUnit, NamespaceTable, SourceUnitKey,
+    allocate_dormant_namespace_value_storages, bind_namespace_metadata, CompilationUnit,
+    NamespaceTable, SourceUnitKey,
 };
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
@@ -42,7 +43,7 @@ pub struct Binder {
     pub compilation_global: ScopeId,
     /// Number of value storage slots (`ValueStorageId`s run
     /// `0..decl_count`). Includes variable bindings, function declaration names,
-    /// and function parameters.
+    /// function parameters, and dormant standalone namespace slots.
     pub decl_count: u32,
     /// Number of type groups bound from the trusted prelude. User groups form the
     /// dense suffix, allowing two immutable publication epochs.
@@ -280,7 +281,7 @@ impl BindState {
         }
     }
 
-    fn fresh_value_storage(&mut self) -> ValueStorageId {
+    pub(super) fn fresh_value_storage(&mut self) -> ValueStorageId {
         let id = ValueStorageId(self.next_value_storage);
         self.next_value_storage += 1;
         id
@@ -409,6 +410,7 @@ impl ProjectBinderBuilder {
     }
 
     pub(crate) fn finish(mut self, module: ScopeId) -> Binder {
+        allocate_dormant_namespace_value_storages(&mut self.state);
         self.state
             .namespaces
             .finalize_global_scopes(&mut self.state.graph, &mut self.state.symbols);
