@@ -2,3 +2,5 @@
 declare global { // error[TK2669]: Augmentations for the global scope can only be directly nested in external modules or ambient module declarations
   interface InvalidScriptGlobal { value: number }
 }
+
+declare const invalidScriptGlobal: InvalidScriptGlobal; // error[TK2304]: Cannot find name 'InvalidScriptGlobal'

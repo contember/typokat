@@ -103,6 +103,7 @@ EOF spans.
 | `TK2589` | Type instantiation is excessively deep and possibly infinite |
 | `TK2503` | Cannot find namespace |
 | `TK2669` | Global augmentation is outside an external or ambient module |
+| `TK2670` | Global augmentation is missing `declare` outside an ambient context |
 | `TK2673` | Constructor of class is private (direct `new` outside the declaring class) |
 | `TK2674` | Constructor of class is protected (direct `new` outside the declaring class/subclasses) |
 | `TK2684` | The `this` context of a call is not assignable to the method's explicit receiver type |
