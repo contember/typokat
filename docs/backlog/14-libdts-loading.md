@@ -26,6 +26,17 @@ Loading the lib with any of those
 still silently-permissive would poison every downstream check. A deliberately small prelude slice
 (`38`) may land earlier because it curates its declarations around the gaps.
 
+The post-WU7 official-suite adjudication supplies an exact missing-library witness set. Newly
+reachable annotations now report `TK2304` for `Error`, `Promise`, `Generator`, `AsyncGenerator`,
+and `CloseEvent` in `dependentDestructuredVariables.ts`; `Number`/`String` in the two
+`*IndexerConstrainsPropertyDeclarations.ts` files; `Object` in
+`callSignaturesThatDifferOnlyByReturnType.ts` and `subtypingWithConstructSignatures2.ts`; and the
+second `Date` occurrences in `C3<Date>` at harness lines 83/105/127/149 of
+`subtypesOfTypeParameterWithConstraints.ts`. `Iterable` in `partiallyNamedTuples2.ts` and the
+implicit `Array` heritage of `arityAndOrderCompatibility01.ts` are the same host-library boundary,
+not checker regressions. The label/heritage work made these dependencies honest; this item owns
+supplying them, not suppressing their diagnostics piecemeal.
+
 ## Approach / acceptance
 
 Parse and load the standard `lib.d.ts` declarations into the type universe as a shared read-only
@@ -35,6 +46,12 @@ per-file workers (architecture §8.2). Acceptance: fixtures using `console`, arr
 with backlogs `72`/`15` must no longer produce missing-global or standard-library-member noise;
 `contember/deptective` remains a candidate only if it qualifies under that resolver profile.
 Backlog `15` owns resolving the same witness's modules.
+
+The exact official witnesses above must leave the harness's `OOS:unresolved`/host-heritage buckets
+without replacing `TK2304` by an error-type fallback: all named globals resolve from the loaded
+library, `StrNum extends Array<string | number>` composes its real heritage surface, and the
+pre-existing diagnostics in those files remain measurable. Run the full official-suite ratchet
+after the loader corpus passes; do not rebaseline away any newly exposed dependency.
 
 If the minimal prelude slice (`38`) exists by the time this item starts, replace it rather than
 forking a second ambient-loading path. The full library loader is the canonical mechanism.

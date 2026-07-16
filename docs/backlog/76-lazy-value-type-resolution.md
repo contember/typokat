@@ -33,6 +33,15 @@ signature return on demand, tracks `Unresolved → Resolving → Resolved/Errore
 reports the implicit-any cycle family (TS7022/TS7023) before using a recovery type.
 typokat needs the equivalent model before it can claim exact inferred-return hoisting.
 
+Class accessors and static methods are the same declaration-type demand, not a separate callability
+bug. The official-suite witnesses are exact: the static getters in
+`classPropertyAsPrivate.ts`, `classPropertyAsProtected.ts`, and
+`classPropertyIsPublicByDefault.ts` return `null` but are published as `void`, producing a safe
+`TK2349`; `accessorsAreNotContextuallyTyped.ts` publishes an arrow-returning getter as `void` and
+produces the same `TK2349`; and `typeOfThisInStaticMembers.ts` publishes static `bar()` as `void`,
+causing `TK2351` on `new t(...)`/`new t2(...)`. Backlog `49` owns the eventual strict-null
+`TK2721` for calling a null getter; this item owns recovering each inferred declaration type.
+
 ## Approach / acceptance
 
 Add a declaration-plan layer keyed by `DeclId` for function declarations and the value
@@ -54,6 +63,12 @@ mutual return cycles, mixed value/function cycles, annotated cycle breakers, ove
 implementations, reordered declarations, and repeated-query/cache-order probes.
 Acceptance requires exact verdicts without conservative `unknown` over-reports, no
 duplicate/reordered body diagnostics, and no query-order-dependent false negative.
+
+Add the five official files above as getter/static-method demand controls. The arrow getter must be
+callable, both `this`-returning static methods must preserve their constructor surfaces, and the
+null getters must expose `null` to backlog `49` rather than `void`. Keep the existing backlog `46`
+return aggregation and backlog `48` cycle-diagnostic dependencies; do not special-case call/new
+sites around an unavailable declaration type.
 
 ## Touch points
 

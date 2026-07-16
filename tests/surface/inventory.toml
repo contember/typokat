@@ -1457,8 +1457,8 @@ role = "class"
 surface = "class-heritage"
 slot = "type-arguments"
 oxc_variant = "Class::super_type_arguments"
-disposition = "unsupported-in"
-owner = "../../docs/backlog/75-scope-surface-tail.md"
+disposition = "supported"
+owner = "shipped"
 witness = "../cases/b73_surface_accounting/class_heritage.ts"
 
 [[surface]]

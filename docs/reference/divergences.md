@@ -77,11 +77,21 @@ and validated the same way.
   <!-- div: id=names/type-args-on-type-param dir=under scope=a-type-argument-arity owner=../backlog/52-type-reference-tail.md witness=../../tests/cases/m24_generic_constraints/constraint_check_explicit.ts -->
   <!-- div: id=names/type-arg-count-on-builtin dir=under scope=a-type-argument-arity owner=../backlog/52-type-reference-tail.md witness=../../tests/cases/m22_unresolved_type/generics.ts -->
   <!-- div: id=names/type-only-import-as-value-code dir=cosmetic scope=s-value-type-space owner=../backlog/52-type-reference-tail.md witness=../../tests/cases/sr_wu2_export_space/type_only_export_leak/a.ts -->
+- **An unsupported `typeof` query withholds its enclosing callable atomically
+  (under-report).** This prevents partial signature publication, but the official
+  `subtypingWithCallSignaturesA.ts` then loses tsc's downstream `TS2345` until value-side type
+  queries are modeled.
+  <!-- div: id=names/type-query-atomic-unavailable dir=under scope=s-value-type-space owner=../backlog/52-type-reference-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
 - **Multiple mismatched arguments (over-report).** On a call/`new` with several
   mismatched arguments, typokat reports a `TK2345` for **each**, whereas tsc stops at
   the first. Fixtures keep at most one mismatched argument per call so the corpus
   matches both.
   <!-- div: id=calls/multiple-mismatched-arguments dir=over scope=s-call-arguments owner=design-oos witness=../../tests/cases/m3_functions -->
+- **Spread call arguments remain explicitly unavailable (over-report / OOS).** The checker records
+  `call/call-arguments/spread-argument` rather than dropping traversal or inventing an argument
+  vector. Official `partiallyNamedTuples3.ts` therefore remains unsupported after its tuple label
+  becomes transparent; backlog `71` owns spread traversal.
+  <!-- div: id=calls/spread-argument-oos dir=over scope=b-iterability owner=../backlog/71-expression-inference-fn-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
 - **A fresh literal with both a wrong known property and an excess property
   over-reports.** typokat preserves the independent assignability and freshness
   diagnostics (`TK2322` plus `TK2353`), while tsc 6.0.3 gives the known-property
@@ -105,6 +115,12 @@ and validated the same way.
   `intrinsic` ×5, `symbol` ×3, and `bigint` ×1. These are non-permissive incomplete
   results rather than silent fallback, but tsc accepts the declarations.
   <!-- div: id=lib-es5/annotation-surface-tail dir=over scope=b-semantic-candidate-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/fixtures/lib-es5-6.0.3/readiness.toml -->
+- **Newly traversed official surfaces expose missing standard-library globals
+  (over-report / OOS movement).** Tuple-label and generic-heritage review now reaches
+  `Error`, `Promise`, `Generator`, `AsyncGenerator`, `CloseEvent`, `Number`, `String`, `Object`,
+  `Date`, and `Iterable` in files that tsc checks with a library. Typokat reports `TK2304` or an
+  honest host-heritage incomplete; backlog `14` owns loading those declarations.
+  <!-- div: id=lib/official-newly-reached-globals dir=over scope=design-oos owner=../backlog/14-libdts-loading.md witness=../../tooling/official-suite/scoreboard.txt -->
 - **Qualified enum endpoints remain unavailable (under-report).** Until enum types
   land, `E.Member` records
   `annotation-lower/type-name/qualified-enum` instead of guessing a type. Withholding
@@ -269,6 +285,15 @@ flow-node CFG (M23), the single narrowing model.
   signature. Lowering predicate/assertion signature identity and its flow effect remains
   backlog `50`.
   <!-- div: id=narrowing/type-predicate-annotations dir=over scope=a-type-predicates owner=../backlog/50-type-predicates-assertions.md witness=../../tests/fixtures/lib-es5-6.0.3/readiness.toml -->
+- **Type assertions do not validate source/target overlap (under-report).** Both `x as T` and
+  `<T>x` publish `T` but currently skip tsc's `TS2352` compatibility check. The dedicated
+  surface-accounting fixture prevents this from becoming a hidden false clean.
+  <!-- div: id=assertions/source-target-overlap dir=under scope=b-semantic-candidate-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/b73_surface_accounting/assertion_compatibility.ts -->
+- **Non-null assertion expressions remain explicitly unavailable (over-report / OOS).** The
+  operand is still traversed, but `x!` records `expr-infer/non-null-assertion/self` rather than
+  publishing a value with only `null | undefined` removed. Official `partiallyNamedTuples2.ts`
+  exposes the same boundary after tuple-label support.
+  <!-- div: id=assertions/non-null-expression-oos dir=over scope=a-nullish-receivers owner=../backlog/49-possibly-undefined-family.md witness=../../tooling/official-suite/scoreboard.txt -->
 - **Deferred:** `for`/`for-of`/`do-while` loop narrowing and narrowing seen by a
   **closure** over a never-reassigned binding (tsc narrows; typokat keeps the
   function-boundary reset — over-report, safe direction). Member-path narrowing
@@ -311,9 +336,10 @@ type, clamp-to-constraint inference reporting `TK2345`, `TK2313` for a circular 
 
 ## Classes (M11–M16 · b06 · b20)
 
-Implemented: fields/constructor/methods/`this`/`new`/structural instances (M11); inheritance
-(M12); access modifiers + `static` (M13); member-assignment + `readonly` (M14); getters/setters +
-`abstract` (M15); generic classes (M16); override compatibility (`TK2416`) and abstract-member
+Implemented: fields/constructor/methods/`this`/`new`/structural instances (M11); inheritance,
+including local plain-identifier generic heritage applications (M12/M16); access modifiers +
+`static` (M13); member-assignment + `readonly` (M14); getters/setters + `abstract` (M15); generic
+classes (M16); override compatibility (`TK2416`) and abstract-member
 completeness (`TK2515`/`TK2654`) (b06); private/protected constructor accessibility (`TK2673`/
 `TK2674`) (b20).
 
@@ -333,6 +359,17 @@ completeness (`TK2515`/`TK2654`) (b06); private/protected constructor accessibil
   query after 128 distinct class applications and records its projection-budget outcome; tsc's
   recursive cutoff accepts some infinitely matching structural pairs.
   <!-- div: id=classes/recursive-projection-budget dir=over scope=s-assignability owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/sr_semantic_duplication/class_projection_exhaustion.ts -->
+- **Class index signatures remain explicitly unavailable (over-report / OOS).** Interface and
+  object-type index signatures are represented, but a class index signature records
+  `class/class-index-signature/self`. The official numeric/string indexer files and the two
+  `subtypesOfTypeParameterWithConstraints` files retain that boundary while preserving their
+  independent diagnostic diff.
+  <!-- div: id=classes/class-index-signature-oos dir=over scope=b-indexed-access-diagnostics owner=../backlog/75-scope-surface-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
+- **Non-object interface heritage topology is explicitly unavailable (over-report / OOS).** A
+  local interface extending a tuple alias records `interface/heritage/topology` instead of
+  publishing a partial base; `contextualTypeWithTuple.ts` is the exact official witness. The
+  analogous implicit-`Array` case is a standard-library dependency owned by backlog `14`.
+  <!-- div: id=interfaces/tuple-alias-heritage-topology dir=over scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
 
 - **Unannotated class-method returns are externally `void`.** Class fill publishes an omitted method
   return annotation as `void`; source-order body checking does not replace that public member type.
@@ -343,6 +380,11 @@ completeness (`TK2515`/`TK2654`) (b06); private/protected constructor accessibil
     <!-- div: id=classes/unannotated-method-return-number dir=over scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/sr_semantic_duplication/class_member_surfaces.ts -->
   - Assigning that result to `void` is clean where tsc reports `TS2322` (under-report).
     <!-- div: id=classes/unannotated-method-return-void dir=under scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/sr_semantic_duplication/class_member_surfaces.ts -->
+  - Official unannotated getter/static-method controls expose safe cascades: arrow/null getters
+    report `TK2349`, and static methods returning `this` report `TK2351` at construction. Exact
+    getter/method return publication belongs to backlog `76`; after that, backlog `49` owns the
+    strict-null getter call's `TK2721`.
+    <!-- div: id=classes/unannotated-accessor-static-return-cascade dir=over scope=s-declaration-hoisting owner=../backlog/76-lazy-value-type-resolution.md witness=../../tooling/official-suite/scoreboard.txt -->
 
 - **Nominal typing is one-directional (matches tsc in verdict).** typokat enforces the
   foreign→private direction — a target with a `private`/`protected` member requires the *same*
@@ -365,9 +407,10 @@ completeness (`TK2515`/`TK2654`) (b06); private/protected constructor accessibil
     shapes without a dedicated override review. Over a base **field** the strict relation query
     still applies.
     <!-- div: id=classes/override-raw-arity dir=under scope=s-class-override owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/b06_class_completeness/override_kind_mixtures.ts -->
-  - **Generic bases are skipped** — an override against a generic base / from within a generic
-    class may carry a free type parameter (the generic-base composition deferral), where the
-    relation would over-report. Relatedly, `TK2515`/`TK2654` render a generic direct base as its
+  - **Generic-base override validation is skipped** — although represented generic heritage
+    composition is supported, an override against a generic base / from within a generic class may
+    carry a free type parameter where the bespoke override relation would over-report. Relatedly,
+    `TK2515`/`TK2654` render a generic direct base as its
     bare name (`Box`) where tsc renders the instantiation (`Box<string>`) — cosmetic.
     <!-- div: id=classes/override-generic-base dir=under scope=s-class-override owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/b06_class_completeness/override_incompatible.ts -->
     <!-- div: id=classes/abstract-completeness-generic-name dir=cosmetic scope=s-abstract-completeness owner=design-oos witness=../../tests/cases/b06_class_completeness -->
@@ -405,6 +448,15 @@ function rest/optional/default signature shape (M32).
   gaps.
   <!-- div: id=arrays/array-methods-need-lib dir=over scope=design-oos owner=../backlog/14-libdts-loading.md witness=../../tests/cases/m17_arrays -->
   <!-- div: id=tuples/optional-elements dir=under scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/m18_tuples -->
+- **Tuple labels are transparent, but some valid rest containers are not provably array-like
+  (over-report / OOS).** Conditional and mapped containers in official
+  `partiallyNamedTuples{,2}.ts` retain `annotation-lower/tuple-rest-element/non-array`; the tuple
+  is withheld rather than published with an invented rest shape.
+  <!-- div: id=tuples/rest-container-proof-oos dir=over scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
+- **The intrinsic `object` keyword remains explicitly unavailable (over-report / OOS).** It records
+  `annotation-lower/object-keyword/self`; official `partiallyNamedTuples2.ts` reaches that existing
+  boundary in `MultiKeyMap<..., object>` once labels lower.
+  <!-- div: id=types/object-keyword-oos dir=over scope=b-semantic-candidate-tail owner=../backlog/75-scope-surface-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
 
 ## Index signatures & keyof (M19 / M20)
 
@@ -420,7 +472,9 @@ object types as the common-key set (b34), evaluated eagerly (M20/M28).
   <!-- div: id=keyof/keyof-intersection-nonobject dir=over scope=b-type-level-tail owner=../backlog/35-keyof-union-and-key-source-edges.md witness=../../tests/cases/m31_intersections -->
   <!-- div: id=keyof/generic-indexed-access dir=under scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/m20_keyof -->
 - **Contextual generic callbacks over a multi-key `Events[K]` conservatively reject selected-key
-  listeners that tsc accepts (over-report).** This was exposed by contextual callback typing; the
+  listeners that tsc accepts (over-report).** This was exposed first by contextual callback typing
+  and again when named event tuples became transparent in official
+  `dependentDestructuredVariables.ts`; the callback still sees the whole tuple union. The
   underlying generic indexed-access model remains the backlog `75` deferral.
   <!-- div: id=keyof/generic-indexed-contextual-callback dir=over scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/sr_deferred_ledger/b75_generic_indexed_access.ts -->
 
@@ -707,6 +761,17 @@ method signature whose return annotation is omitted; typokat is silent — a dro
   reject in the safe direction; backlog `63` owns their parity tail independently of WU7's
   dropped-error fixes for moving target/source suffixes.
   <!-- div: id=signatures/rest-arity-conservative dir=over scope=s-assignability owner=../backlog/63-review-parity-tail.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu7_official_callable_relation.ts -->
+- **Contextual generic signature instantiation is not modeled (over-report).** Alpha-aligned
+  generic signatures are cache-safe and persistent, but official
+  `callSignatureAssignabilityInInheritance4.ts` needs query-local contextual instantiation for
+  members `a6`, `a11`, `a15`, and `a18`. Typokat emits four `TK2430` records; `a17` is the clean
+  control. Backlog `83` owns the non-cacheable relation trial.
+  <!-- div: id=signatures/contextual-generic-instantiation dir=over scope=s-assignability owner=../backlog/83-contextual-generic-signature-relation.md witness=../../tooling/official-suite/scoreboard.txt -->
+- **Aggregate variadic-call diagnostics have two conservative identity/cardinality errors.** In
+  official `variadicTuples2.ts`, harness line 66 reports `TK2555` instead of one aggregate
+  `TK2345`, and line 71 reports the expected `TK2345` plus a duplicate. Both calls reject; backlog
+  `69` owns exact tuple-rest call reporting independently of label lowering.
+  <!-- div: id=signatures/variadic-call-diagnostic-cardinality dir=over scope=s-call-arguments owner=../backlog/69-signature-rest-parity-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
 
 - **Accepted official-suite over-reports** (safe direction, recorded in the scoreboard rather than
   dropped errors):

@@ -57,6 +57,37 @@ and the shipped surface inventory enforces their accounting. Iterability belongs
 methods/accessors belong to `49`; enums and namespaces belong to `42`/`43`; explicit `this`
 parameters are shipped.
 
+The post-WU7 official adjudication adds exact witnesses without reopening shipped tuple labels or
+local generic class heritage:
+
+- Local plain-identifier generic class heritage is shipped. The official run correctly drops 42
+  stale `class/class-heritage/type-arguments` outcomes: 3 in
+  `classWithBaseClassButNoConstructor.ts`, 1 in `privateNamesConstructorChain-2.ts`, 29 in
+  `subtypesOfTypeParameterWithConstraints.ts`, and 9 in
+  `subtypesOfTypeParameterWithConstraints4.ts`. `derivedClassTransitivity3.ts` and
+  `derivedGenericClassWithAny.ts` move into scope without a new false positive, while
+  `objectTypesIdentityWithPrivates2.ts` is a clean positive. None of these belongs to this item.
+- `numericIndexerConstrainsPropertyDeclarations.ts`,
+  `stringIndexerConstrainsPropertyDeclarations.ts`, and both
+  `subtypesOfTypeParameterWithConstraints{,4}.ts` retain
+  `class/class-index-signature/self`; class index signatures remain this item's boundary.
+- `contextualTypeWithTuple.ts` records `interface/heritage/topology` for an interface extending a
+  tuple alias and therefore moves `IN` → `OOS:unsupported`.
+  `arityAndOrderCompatibility01.ts` makes the same state transition through the implicit
+  standard-library `Array` and is owned by backlog `14`, not by generic class heritage.
+- `partiallyNamedTuples{,2}.ts` prove labels are transparent while conditional/mapped rest
+  containers that are not provably array-like retain
+  `annotation-lower/tuple-rest-element/non-array`; `partiallyNamedTuples3.ts` remains owned by
+  backlog `71` solely for spread-call traversal. In `partiallyNamedTuples2.ts`, `Iterable` is a
+  backlog `14` library dependency, the `object` keyword remains this item's type-model boundary,
+  and `null!` remains backlog `49`'s expression boundary.
+- `dependentDestructuredVariables.ts` exposes the existing selected-key listener over-report after
+  its event tuple labels lower; the multi-key `Events[K]` callback still conservatively sees the
+  whole tuple union.
+- `assertion_compatibility.ts` pins the hidden false-clean `TS2352` family for both `as` and
+  angle-bracket assertions. The asserted type may remain the expression result, but publication
+  must not skip source/target overlap validation.
+
 ## Approach / acceptance
 
 Turn `scope.md` into a canonical family inventory with stable ids and require every in-scope
@@ -71,6 +102,12 @@ Merely adding a divergence entry is not enough to remove an in-scope family. Mov
 must update the canonical scope inventory, divergence/user-facing limitations where applicable,
 and the manifest in the same change. Close this item only when it owns no remaining family and the
 scope-to-manifest validator proves full disposition coverage.
+
+For the witnesses above, acceptance is exact: class-index and interface-topology cases remain
+non-permissive until implemented; tuple-label controls never regain a named-member incomplete;
+rest proof failures emit only their own stable identity; selected-key callbacks match strict tsc
+without duplicate `TK2345`; and both assertion forms emit `TK2352` without suppressing independent
+child diagnostics.
 
 **Census infrastructure shipped (2026-07-10 completeness-accounting sprint, WU6 — do not redo).**
 The one-time divergence census this item demanded is done and machine-enforced: every entry in

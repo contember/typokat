@@ -63,8 +63,8 @@ way there — its syntax gates flip OOS→IN as features land — not a numeric 
 
 ## Roadmap at a glance
 
-The active backlog has **39 items**: **27 checker-1.0 release blockers** and **12 non-blocking**
-(9 safe-direction parity items plus 3 consumer-surface items). The release classification comes from
+The active backlog has **40 items**: **27 checker-1.0 release blockers** and **13 non-blocking**
+(10 safe-direction parity items plus 3 consumer-surface items). The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml); the grouping below is the human roadmap view.
 Consumer-surface items are deliberately absent from the manifest — they gate *consumers* of the
 checker, not the checker.
@@ -73,7 +73,7 @@ checker, not the checker.
 |---|---:|---|---|
 | **A — model completeness** | 4 | L–XL | Eliminate silently-permissive model gaps; the remaining `43` architecture stop directly unblocks starting full `lib.d.ts`. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 16 | S–XL | Seven release-blocking known gaps plus nine safe-direction parity improvements. |
+| **C — soundness/parity tail** | 17 | S–XL | Seven release-blocking known gaps plus ten safe-direction parity improvements. |
 | **D — scale + IDE** | 8 | M–XL | Preview, full standard library, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
 
 Effort is a **relative planning estimate**, not a time promise:
@@ -137,6 +137,7 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - **M** · [`37`](37-constraint-approximation-deferred-args.md) — upper-bound approximation for provable deferred arguments.
 - **M** · [`68`](68-contravariant-infer-intersection.md) — intersect same-name contravariant `infer` candidates instead of collapsing to `never`.
 - **M** · [`69`](69-signature-rest-parity-tail.md) — embedded tuple-rest and variadic source-tuple inference.
+- **M** · [`83`](83-contextual-generic-signature-relation.md) — contextual generic-signature instantiation under a cache-safe query-local relation environment.
 - **L** · [`63`](63-review-parity-tail.md) — batched evaluator/relation/checker FPs, messages, and residual parser-depth guard.
 - **XL** · [`82`](82-declare-global-value-space.md) — legal `declare global` value-space
   publication for variables, functions, complete class type/constructor pairs, and cross-file

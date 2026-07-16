@@ -21,12 +21,22 @@ Type-reference and value-type-query resolution accept shapes they should reject,
 open type params). Small, self-contained, and high-noise-reduction once ambient types
 appear (the shipped minimal prelude and `14` make misuse of generic names much more common).
 
+Type queries also form an atomic publication boundary. In the official
+`subtypingWithCallSignaturesA.ts` witness, the return `typeof cb` is explicitly incomplete, so
+typokat withholds the whole signature and drops tsc's call-site `TS2345` at harness line 2. That is
+sounder than publishing a partial callable, but support for `typeof` must restore the downstream
+diagnostic as well as the queried value type.
+
 ## Approach / acceptance
 
 Validate every type-reference and `typeof` query against the target symbol: value-only symbol → TK2749
 (with the `typeof` hint), generic arity mismatch → TK2314, type args on a type param →
 TS2315, explicit call-site type-arg count → TK2558. Corpus first; cross-check tsc 6.0.3
 --strict.
+
+Pin `subtypingWithCallSignaturesA.ts` as the atomic-unavailable control: before support it must
+retain `annotation-lower/type-query/typeof` and never publish a partial signature; after support it
+must resolve `typeof cb` and recover the exact `TK2345` call rejection.
 
 ## Touch points
 

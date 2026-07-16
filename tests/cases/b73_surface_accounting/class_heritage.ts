@@ -1,22 +1,19 @@
-// Surface-accounting spec (backlog 75). ENABLED by WU5 (review F3): class heritage type
-// arguments and implements clauses are RECORD-ONLY accounted for composition. WU2
-// additionally traverses heritage argument syntax without publishing a partial base. See
+// Surface-accounting spec (backlog 75). Local plain-identifier generic heritage is
+// supported and traverses every argument; implements clauses remain record-only. See
 // tests/cases/README.md ("Surface-accounting corpus").
 //
-// Skip accounted: `resolve_base_class` reads only the plain-identifier super class —
-// generic-base composition remains deferred (divergences.md
-// `classes/override-generic-base`), while nested unsupported syntax retains its own
-// record. The `implements` clause remains entirely unprocessed.
+// The separate `classes/override-generic-base` divergence concerns override validation
+// inside generic inheritance, not composition of this represented heritage application.
 
 class B<T> {
   v!: T;
 }
 
-// INCOMPLETE (F3a): generic-base composition is deferred; the nested type query is
-// traversed and keeps its canonical record.
+// CONTROL: heritage arguments are traversed, so the unsupported nested type query keeps
+// its canonical owner while the class never publishes a partial base.
 class C extends B<typeof Missing> {} // incomplete[annotation-lower/type-query/typeof]
 
-// INCOMPLETE (F3a): a well-formed instantiation is unaccounted too (composition ignores it).
+// CONTROL (supported): a well-formed generic application composes without a record.
 class E extends B<number> {}
 
 // INCOMPLETE (F3b): the implements clause is not processed — the unresolved interface

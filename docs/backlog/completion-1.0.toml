@@ -138,8 +138,8 @@ title = "Lazy declaration/value-type resolution with inferred-return cycle diagn
 state = "incomplete"
 blocks_release = "true"
 owner = "./76-lazy-value-type-resolution.md"
-witness = "spec-first forward inferred-return/value dependency/cycle corpus cross-checked with tsc 6.0.3 --strict"
-links = ["../archive/sprint-2026-07-11-declaration-hoisting-parity.md", "./46-return-path-analysis.md", "./48-no-implicit-any.md"]
+witness = "spec-first forward inferred-return/value dependency/cycle corpus plus official unannotated getter/static-method return controls; cross-check tsc 6.0.3 --strict"
+links = ["../archive/sprint-2026-07-11-declaration-hoisting-parity.md", "./46-return-path-analysis.md", "./48-no-implicit-any.md", "../../tooling/official-suite/scoreboard.txt"]
 deps = ["./46-return-path-analysis.md", "./48-no-implicit-any.md"]
 
 # ---------------------------------------------------------------------------
@@ -225,8 +225,8 @@ title = "Possibly-undefined/null family + optional methods/accessors"
 state = "incomplete"
 blocks_release = "true"
 owner = "./49-possibly-undefined-family.md"
-witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
-links = []
+witness = "spec-first corpus plus strict official static-null-getter TK2721 controls; cross-check tsc 6.0.3 --strict"
+links = ["../../tooling/official-suite/scoreboard.txt"]
 deps = []
 scope = ["a-nullish-receivers"]
 
@@ -261,8 +261,8 @@ title = "Type-reference tail (TS2749, TS2314/2315, TK2558)"
 state = "incomplete"
 blocks_release = "true"
 owner = "./52-type-reference-tail.md"
-witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
-links = []
+witness = "spec-first corpus plus official subtypingWithCallSignaturesA atomic typeof-unavailable control; cross-check tsc 6.0.3 --strict"
+links = ["../../tooling/official-suite/scoreboard.txt"]
 deps = []
 scope = ["a-type-argument-arity"]
 
@@ -285,8 +285,8 @@ title = "Unowned Tier S/A/B diagnostic and semantic surface tail"
 state = "incomplete"
 blocks_release = "true"
 owner = "./75-scope-surface-tail.md"
-witness = "canonical scope-family inventory plus pinned TS 6.0.3 readiness.toml: owner 75 has 179 explicit annotation incompletes (this 164, object 6, intrinsic 5, symbol 3, bigint 1)"
-links = ["../reference/scope.md", "../reference/divergences.md"]
+witness = "canonical scope-family inventory, pinned TS 6.0.3 readiness.toml counts, assertion compatibility fixture, and exact official class-index/interface-topology/rest/contextual-callback witnesses"
+links = ["../reference/scope.md", "../reference/divergences.md", "../../tests/cases/b73_surface_accounting/assertion_compatibility.ts", "../../tooling/official-suite/scoreboard.txt"]
 deps = []
 scope = ["s-multiple-missing-properties", "s-weak-type", "s-member-suggestion", "s-value-type-space", "s-class-override", "s-static-implements", "a-unknown-receivers", "a-call-construct-parity", "b-indexed-access-diagnostics", "b-type-level-tail", "b-implicit-this", "b-accessor-compatibility", "b-decorators-computed-members", "b-reachability", "b-delete-operand", "b-semantic-candidate-tail"]
 
@@ -498,12 +498,34 @@ deps = []
 [[criterion]]
 id = "C-parity-tail-signature-rest"
 track = "C"
-title = "Signature rest parity tail (variadic source tuple infer) — safe over-report"
+title = "Signature rest parity tail (inference + aggregate call diagnostics) — safe over-report"
 state = "incomplete"
 blocks_release = "false"
 owner = "./69-signature-rest-parity-tail.md"
-witness = "documented safe-direction over-report; reference/divergences.md (Conditional types)"
+witness = "documented safe-direction over-report; conditional inference fixtures plus official variadicTuples2 harness lines 66/71"
 links = ["../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-parity-tail-declare-global-values"
+track = "C"
+title = "declare global value-space publication — safe missing-value over-report"
+state = "incomplete"
+blocks_release = "false"
+owner = "./82-declare-global-value-space.md"
+witness = "spec-first legal declare-global variable/function/class and cross-file namespace-publication corpus"
+links = ["./43-namespaces-declaration-merging.md", "../reference/divergences.md"]
+deps = ["./43-namespaces-declaration-merging.md"]
+
+[[criterion]]
+id = "C-parity-tail-contextual-generic-signature"
+track = "C"
+title = "Contextual generic signature instantiation — safe inheritance over-report"
+state = "incomplete"
+blocks_release = "false"
+owner = "./83-contextual-generic-signature-relation.md"
+witness = "official callSignatureAssignabilityInInheritance4 members a6/a11/a15/a18; a17 clean control; tsc 6.0.3 strict"
+links = ["../reference/divergences.md", "../../tooling/official-suite/scoreboard.txt"]
 deps = []
 
 [[criterion]]
@@ -607,8 +629,8 @@ title = "Full lib.d.ts loading + parallelism Stage 1"
 state = "incomplete"
 blocks_release = "true"
 owner = "./14-libdts-loading.md"
-witness = "WU6 proof commits b424e74/5951968/3f641ea and readiness.toml: explicit-input model gate is NO-GO only on backlog 43 standalone namespace value; loader acceptance remains console/array/Promise fixtures against tsc"
-links = ["./lib-audit-6.0.3.md"]
+witness = "WU6 proof commits b424e74/5951968/3f641ea and readiness.toml plus exact official missing-global/host-heritage witnesses; loader acceptance remains blocked by backlog 43"
+links = ["./lib-audit-6.0.3.md", "../../tooling/official-suite/scoreboard.txt"]
 deps = ["./43-namespaces-declaration-merging.md"]
 
 [[criterion]]
