@@ -169,7 +169,7 @@ to replace.
   backlog [`14`](../backlog/14-libdts-loading.md) owns the canonical replacement.
 - Generic methods, namespaces/declaration merging, `this` parameters, enums, and
   `satisfies`/`as const` — Track A backlogs [`41`](../backlog/41-generic-methods.md),
-  [`43`](../backlog/43-namespaces-declaration-merging.md),
+  [`43`](sprint-2026-07-15-namespaces-declaration-merging.md),
   `70` (subsequently shipped by WU4), [`42`](../backlog/42-enums-type-side.md),
   and [`44`](../backlog/44-satisfies-as-const.md).
 - A new primitive-boxing or array instance-member architecture. WU1 established

@@ -32,11 +32,13 @@ complete root set. Typokat must construct a deterministic module graph, load eve
 wire default/namespace/star imports and re-exports across value/type/namespace spaces, handle guarded
 cycles, parse/bind/check `.d.ts`, and report every unresolved or unsupported branch explicitly.
 
-Valid UMD global publication is also part of this module boundary. In a declaration-file external
-module, `export as namespace N` globally aliases/publishes that external module's export surface.
+Ambient external modules and valid UMD global publication are also part of this module boundary. In
+a declaration-file external module, `export as namespace N` globally aliases/publishes that
+external module's export surface.
 The surface may come from `export =` or ordinary named exports; local namespace/type lookup is not
-sufficient. Backlog `43` owns the `TK1314`/`TK1315` context diagnostics, while this item owns the
-valid publication semantics and both surface inventory entries. The current WU0 ownership witness
+sufficient. The namespace sprint shipped the `TK1314`/`TK1315` context diagnostics; this item owns
+string-literal ambient external modules, valid publication semantics, and both UMD surface
+inventory entries. The current WU0 ownership witness
 is specifically the `export =` form, not the complete differential matrix.
 
 ## Approach / acceptance

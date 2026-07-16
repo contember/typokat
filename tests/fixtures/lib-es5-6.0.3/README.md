@@ -2,8 +2,8 @@
 
 This fixture proves the current type model against one exact `lib.es5.d.ts`; it does not load a
 standard library into other source files. `readiness.toml` is the machine contract and records the
-current **GO for starting backlog 14** result. That GO is permission to begin loader work after the
-immediate backlog-43 lifecycle closure; it is not proof of full library support or checker 1.0
+current **GO for starting backlog 14** result. The namespace/declaration-merging lifecycle is
+closed, so that GO permits loader work now; it is not proof of full library support or checker 1.0
 readiness. The explicit owner-50 and owner-75 incompletes remain release work.
 
 The authoritative artifact is the npm package output `lib/lib.es5.d.ts`, not the distinct upstream

@@ -4,7 +4,7 @@
 `src/binder/namespace/` submodule tree and remove measured duplication, with bit-identical
 checker behavior.
 
-**Theme.** Backlog 43 left one 4.6k-line implementation file (plus 3.3k lines of in-file
+**Theme.** The shipped namespace sprint left one 4.6k-line implementation file (plus 3.3k lines of in-file
 tests) mixing six concerns, four parallel AST walkers with mirrored `Statement`/`Declaration`
 match arms, and three copies of `declaration_owner_scope` across binder and checker. This
 sprint is a pure refactor: no semantics, no diagnostics, no new capability. Success is
@@ -51,9 +51,8 @@ scoreboard movement, and the duplication findings below gone.
   `src/binder/bind.rs`, `src/check/checker/mod.rs`, `src/check/checker/namespace_values.rs`
   (plus tests in `src/driver.rs`); ~28 of 56 public types are consumed only by in-file tests —
   deliberate dormant substrate owned by backlog `15`/`82` per the 2026-07-15 sprint (WU1b).
-- ✔ Backlog-43 sprint (`sprint-2026-07-15-namespaces-declaration-merging.md`) is still active:
-  WU6A implementation landed (`23bad42`, `16cda3f`, `52cea92`), WU7 adversarial review and
-  closure are pending.
+- ✔ The namespace sprint is archived after WU7 PASS: WU6A implementation landed (`23bad42`,
+  `16cda3f`, `52cea92`) and the official ratchet closed at `30cd7cf`.
 
 ## Work units
 
@@ -198,9 +197,8 @@ scoreboard movement, and the duplication findings below gone.
 
 ## Sequencing
 
-1. **Gate:** start only after the backlog-43 sprint's WU7 adversarial review/closure lands
-   (or with explicit user approval) — this refactor touches the same files that review
-   re-reads, and churn mid-review invalidates it.
+1. **Gate satisfied:** the namespace sprint's WU7 adversarial review and closure landed before
+   this refactor starts.
 2. WU1 → WU2 → WU3 → WU4 (independent of each other after WU1; may be one subagent run,
    separate commits) → WU5 last.
 3. Per dev-method: implementation via a subagent; the leader verifies gates and commits.

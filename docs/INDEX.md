@@ -23,22 +23,20 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-07-15-namespaces-declaration-merging.md`](sprints/sprint-2026-07-15-namespaces-declaration-merging.md) —
-  active at WU6 NO-GO; the remaining backlog-43 standalone namespace value surface requires a
-  superseding architecture decision before backlog `14` can start.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
+- [`sprint-2026-07-16-namespace-binder-refactor.md`](sprints/sprint-2026-07-16-namespace-binder-refactor.md) —
+  planned, not started; its namespace-closure gate is satisfied.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Namespaces/declaration merging reached a measured NO-GO** —
-  [`sprint-2026-07-15-namespaces-declaration-merging.md`](sprints/sprint-2026-07-15-namespaces-declaration-merging.md)
-  shipped type-side namespaces, reopenings, declaration groups, keep-pairs, global type
-  publication, and local `Array<T>` heritage. The committed pinned proof has one backlog-43
-  architecture stop: standalone `Intl` namespace value metadata/receiver. Backlog `14` remains
-  blocked; backlogs `50`/`75` independently block 1.0 and `63` owns parity-only surplus diagnostics.
+- **Namespaces/declaration merging shipped 2026-07-16** (archived:
+  [`archive/sprint-2026-07-15-namespaces-declaration-merging.md`](archive/sprint-2026-07-15-namespaces-declaration-merging.md)) —
+  ordered groups, qualified types, keep-pairs, legal global type publication, and immutable
+  standalone instantiated namespace values are complete. The pinned ES5 proof is GO and backlog
+  `14` is unblocked; `15`, `63`, `76`, and `82` retain their explicit non-namespace tails.
 - **Semantic duplication/layering shipped 2026-07-14** (archived:
   [`archive/sprint-2026-07-13-semantic-duplication-layering.md`](archive/sprint-2026-07-13-semantic-duplication-layering.md)) —
   immutable complete `ClassInstance` applications, atomic declaration-SCC publication, retained
@@ -69,9 +67,8 @@ decisions → reference → archive.
 - **Generic methods (`41`) shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-generic-methods.md`](archive/sprint-2026-07-12-generic-methods.md)) —
   persistent generic method/call/construct binders now survive substitution and relate under a
-  cache-safe local alignment. The remaining direct model/lib blocker is `43`'s standalone
-  namespace value metadata/receiver;
-  explicit `this`/`ThisType<T>` shipped with `70`.
+  cache-safe local alignment. Namespace value publication subsequently shipped under ADR-0010,
+  unblocking `14`; explicit `this`/`ThisType<T>` shipped with `70`.
 - **Real-project preview (`72`) paused at WU0** — no screened public project met the multi-file,
   minimal-graph, zero-threshold contract; no implementation or prelude expansion started.
 - **Surface-accounting tail shipped 2026-07-12** (archived:
@@ -98,7 +95,7 @@ decisions → reference → archive.
   [`archive/sprint-2026-07-11-declaration-hoisting-parity.md`](archive/sprint-2026-07-11-declaration-hoisting-parity.md)) —
   forward ordinary/generic/overload calls now see stable callable surfaces; `var`
   binds to its function/module owner while initializer and flow timing stay lexical/source ordered.
-  `72` was subsequently screened and paused; the next recommended model/lib work is `43`.
+  `72` was subsequently screened and paused; the now-runnable model/lib step is `14`.
 - **2026-07-10 completeness-accounting sprint shipped** (archived:
   [`archive/sprint-2026-07-10-completeness-accounting.md`](archive/sprint-2026-07-10-completeness-accounting.md)) —
   machine-validated OXC surface inventory with compile-time drift tripwires, a first-class
@@ -114,13 +111,13 @@ decisions → reference → archive.
   (`.github/workflows/ci.yml`, pinned toolchain), and the 1.0 plan is executable:
   [`backlog/completion-1.0.toml`](backlog/completion-1.0.toml) validated by
   `tests/manifest.rs`, with the pinned TS 6.0.3 lib audit
-  ([`backlog/lib-audit-6.0.3.md`](backlog/lib-audit-6.0.3.md)) now backed by the committed WU6
-  readiness proof: type-side namespace/merging shipped, with `43`'s standalone namespace value
-  surface still blocking `14`; `70` this-parameter typing subsequently shipped. Backlog `38` is GO
+  ([`backlog/lib-audit-6.0.3.md`](backlog/lib-audit-6.0.3.md)) now backed by the committed namespace
+  readiness proof: type/value publication is GO and `14` is unblocked; `70` this-parameter typing
+  subsequently shipped. Backlog `38` is GO
   (ADR-0003). The post-sprint MVP audit added executable
   scope/unsupported censuses (`73`/`75`) and the first honest pinned-project preview gate
-  (`72`). **Now:** `72` remains paused at its witness gate; track A
-  (`43` next) continues toward full `lib.d.ts`.
+  (`72`). **Now:** `72` remains paused at its witness gate; full `lib.d.ts` work (`14`) is runnable
+  while the remaining model-completeness items continue independently.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
   invariants CLEAN and filed `53`–`65`; the five HIGH silent-FN families then shipped through

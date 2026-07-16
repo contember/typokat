@@ -18,9 +18,9 @@ bucket. Needed: the `E` type (union of member types), member types `E.A` (nomina
 enum-literal semantics per tsc, including the number-assignability quirks — pin the exact
 tsc 6.0.3 rules in the spec first), the value side (`E.A` member access), string/number
 members, `const enum` treated type-side-only. This item also owns enum/function `TK2567` diagnostic
-sites and the exact three-way `enum`+`namespace`+`function` legality and recovery matrix. Until it
-lands, backlog `43` owns namespace placement `TK2434` and must keep the function+namespace receiver
-non-permissive without guessing the enum surface.
+sites and the exact three-way `enum`+`namespace`+`function` legality and recovery matrix. The
+shipped namespace substrate already owns `TK2434` placement and keeps function+namespace receivers
+non-permissive without guessing the enum surface; this item must preserve that behavior.
 
 ## Approach / acceptance
 

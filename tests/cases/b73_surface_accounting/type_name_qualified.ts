@@ -1,10 +1,9 @@
-// Surface-accounting spec (backlog 43 / 75). WU2 classifies the successful qualified
-// path but leaves its type-group lowering to WU3; `this` types and type predicates
+// Surface-accounting spec (shipped namespace path / backlog 75). Qualified type-group lowering is
+// supported; `this` types and type predicates
 // remain recorded before degrading. See tests/cases/README.md ("Surface-accounting corpus").
 //
-// Skip accounted: `resolve_type_reference` returns `None` after classifying the qualified
-// type group (or for a `this` name), and `lower_annotation_inner` drops `TSThisType` /
-// `TSTypePredicate` silently.
+// Skip accounted: `lower_annotation_inner` records `TSThisType` / `TSTypePredicate` before
+// withholding those annotations.
 
 namespace A {
   export interface B {}

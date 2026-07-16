@@ -1,18 +1,19 @@
 ---
 id: 82
 title: declare global value-space publication
-blocked-by: [./43-namespaces-declaration-merging.md]
+blocked-by: []
 ---
 
 # 82 — `declare global` value-space publication
 
-**Summary.** Publish value-bearing declarations from legal `declare global` augmentations after
-backlog `43` lands the compilation-global type-only surface. This is a safe-direction parity tail,
+**Summary.** Publish value-bearing declarations from legal `declare global` augmentations by
+extending the shipped compilation-global type-only surface. This is a safe-direction parity tail,
 not a `lib.es5.d.ts` loading blocker.
 
 ## Problem
 
-Backlog `43` deliberately publishes only interfaces, type aliases, and type-only namespaces.
+The shipped namespace/declaration-merging substrate deliberately publishes only interfaces, type
+aliases, and type-only namespaces from `declare global`.
 Global variables and functions therefore remain unavailable as values. A global class is deferred
 wholesale because its type identity and constructor/static value surface must publish as one atomic
 dual-space pair. Cross-file class/function+namespace groups also cannot stage namespace
@@ -26,7 +27,7 @@ are top-level declarations loaded by [`14`](14-libdts-loading.md), rather than m
 
 ## Approach / acceptance
 
-Reuse backlog `43`'s legal-only augmentation overlays and compilation-global symbol identities.
+Reuse the shipped legal-only augmentation overlays and compilation-global symbol identities.
 Stage global variable storage, callable rows, complete class type/constructor/static surfaces, and
 admitted class/function+namespace payloads across files before the existing immutable publication
 barriers; publish each owner once. Invalid `TK2669`/`TK2670` blocks remain quarantined. Do not add

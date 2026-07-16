@@ -292,6 +292,10 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
     ),
     (
         "b43_namespaces_declaration_merging",
+        "wu2_ambient_export_alias_list.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
         "wu2_checker_local_qualified_roots.ts",
     ),
     (

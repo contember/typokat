@@ -12,7 +12,7 @@ with a documented, sound boundary.
 
 The pinned TS 6.0.3 ES5 readiness gate assigns 179 explicit annotation incompletes here:
 polymorphic `this` 164, `object` 6, `intrinsic` 5, `symbol` 3, and `bigint` 1. This is independent
-1.0 work, not the architecture dependency that prevents backlog `14` from starting. The exact
+1.0 work and does not prevent backlog `14` from starting. The exact
 sites and counts are enforced by
 [`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml).
 
@@ -54,7 +54,8 @@ implemented or explicitly re-scoped.
 Template-expression traversal, elisions, object/call spreads, tagged templates, and iteration
 targets are not duplicated here: their concrete silent-skip owner is [`71`](./71-expression-inference-fn-tail.md),
 and the shipped surface inventory enforces their accounting. Iterability belongs to `71`; optional
-methods/accessors belong to `49`; enums and namespaces belong to `42`/`43`; explicit `this`
+methods/accessors belong to `49`; enums belong to `42`; namespace type/value publication is shipped,
+while ambient external modules remain `15`; explicit `this`
 parameters are shipped.
 
 The post-WU7 official adjudication adds exact witnesses without reopening shipped tuple labels or

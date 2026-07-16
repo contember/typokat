@@ -46,7 +46,12 @@ do not block backlog `14` from starting. See
 - **Docs/messages:** (i) TK2741 renders "missing in type ⟨TARGET⟩" — semantically
   inverted vs tsc's "missing in ⟨SRC⟩ but required in ⟨TGT⟩". *(Item (j), the
   multi-candidate inference union rule, graduated to backlog `65` — the b57 review
-  confirmed it is a dropped-error family, not a doc-ledger gap.)*
+  confirmed it is a dropped-error family, not a doc-ledger gap.)* (o) after `TK2661` diagnoses an
+  alias-only ambient export endpoint, typokat omits tsc's follow-on `TS2694` qualified-use cascade;
+  the declaration remains unavailable, so this is diagnostic cardinality rather than permissive
+  recovery. The same item explicitly owns the four
+  `decl/export-specifier/namespace-payload-unavailable` records that keep the ambient alias-list
+  witness honest while this parity tail remains open.
 - **Robustness (k) — PARTIALLY SHIPPED in sprint-2026-07-10 WU3.** The lowering/interning
   half landed: a shared annotation-depth budget (`MAX_ANNOTATION_DEPTH = 200`, reported as
   `TK2589`) paired with a 256 MiB scoped worker thread in the driver (rustc-style; exit

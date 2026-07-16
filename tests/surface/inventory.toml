@@ -1175,9 +1175,9 @@ role = "annotation-lower"
 surface = "type-name"
 slot = "qualified-name"
 oxc_variant = "TSTypeName::QualifiedName"
-disposition = "unsupported-in"
-owner = "../../docs/backlog/43-namespaces-declaration-merging.md"
-witness = "../cases/b43_namespaces_declaration_merging/wu2_ambient_export_alias_list.ts"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b73_surface_accounting/type_name_qualified.ts"
 
 [[surface]]
 id = "annotation-lower/type-name/qualified-import-alias"
@@ -1424,8 +1424,8 @@ surface = "module-declaration"
 slot = "self"
 oxc_variant = "Declaration::TSModuleDeclaration"
 disposition = "unsupported-in"
-owner = "../../docs/backlog/43-namespaces-declaration-merging.md"
-witness = "../fixtures/lib-es5-6.0.3/readiness.toml"
+owner = "../../docs/backlog/15-modules-imports.md"
+witness = "../cases/b73_surface_accounting/ambient_external_module.ts"
 
 [[surface]]
 id = "decl/namespace-export/self"

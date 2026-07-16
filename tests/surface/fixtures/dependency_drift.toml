@@ -4,7 +4,7 @@
 # criterion "A-libdts-loading". A completion criterion's `deps` must agree with its
 # backlog owner's `blocked-by` frontmatter, unless an explicit `deps_exception` field
 # documents a deliberate slice. Here `deps` names `./70-this-parameters.md` while the
-# owner's `blocked-by` names `./14-libdts-loading.md` — the historical 14/70 drift that
+# owner's `blocked-by` is empty — the historical 14/70 drift that
 # triggered backlog 75's audit. There is no `deps_exception`, so it must be rejected.
 #
 # This is completion-manifest shaped (mirrors docs/backlog/completion-1.0.toml); WU6
@@ -21,6 +21,6 @@ state = "incomplete"
 blocks_release = "true"
 owner = "./14-libdts-loading.md"
 witness = "spec-first corpus"
-# DRIFT: the owner (14) is blocked-by [./15-...]; this criterion claims a dependency on
-# 70, which does not appear in 14's `blocked-by` (now only 43). No `deps_exception` field justifies it.
+# DRIFT: owner 14 has no `blocked-by` entry; this criterion claims dependency 70 without a
+# `deps_exception`.
 deps = ["./70-this-parameters.md"]

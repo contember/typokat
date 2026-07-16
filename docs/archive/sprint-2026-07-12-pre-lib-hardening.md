@@ -193,7 +193,7 @@ closable; the batch does not authorize a VM or namespace/type-container redesign
 ## Out of scope (explicit)
 
 - Namespace binding, qualified type containers, and declaration merging — backlog
-  [`43`](../backlog/43-namespaces-declaration-merging.md), the immediately following
+  [`43`](sprint-2026-07-15-namespaces-declaration-merging.md), the immediately following
   dedicated XL sprint and the remaining direct blocker of `14` after `70`.
 - Full `lib.d.ts` loading (`14`), resolver breadth (`15`), parallel identity (`16`), and
   incrementality (`17`).

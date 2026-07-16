@@ -171,9 +171,14 @@ Which merges to keep correct vs defer:
   work. Namespace placement diagnostics and a non-permissive function+namespace surface remain
   required meanwhile.
 
-A standalone namespace is deliberately a type container only. Exported namespace values augment
-an existing modeled function or class/static draft; they do not create a standalone namespace
-runtime/value object.
+An instantiated standalone `NamespaceId` owns one stable `ValueStorageId` and publishes one
+complete immutable structural `ObjectType` shared across reopenings. Nested instantiated namespaces
+publish bottom-up. Construction is query-free and atomically publishes `Ready` or complete typed
+`Unavailable`; ordinary value lookup consumes that storage. Exported `const` properties are
+readonly, while exported `let`, `var`, function, class, and nested namespace properties are mutable.
+A namespace with no value-bearing member remains type-only and allocates no empty value object.
+This is checker value-shape metadata, not runtime namespace emit. See
+[ADR-0010](../decisions/0010-publish-instantiated-standalone-namespace-values.md).
 
 Legal `declare global` blocks reuse the same identities through one project-wide compilation
 scope. Each block has a lexical overlay whose parent is its originating module; canonical global
@@ -547,9 +552,10 @@ The cut runs between **type semantics** (keep, cheap) and **runtime/emit semanti
 
 **Common-mistake correction:** enum *on the type side* (= union of its members, for
 narrowing in `switch`) and namespace *on the type side* (= named type container, `N.T`)
-belong to the **core**, not to the sacrifice column. Only their runtime/value side is
-sacrificed. A standalone namespace therefore remains a type-only container; value members are
-modeled only when augmenting an existing function/class value. `export =` runtime emit is covered by
+belong to the **core**, not to the sacrifice column. Only runtime namespace emit is sacrificed.
+Instantiated standalone namespaces publish stable, query-free `ValueStorageId`/`ObjectType`
+checker metadata, while non-instantiated namespaces remain type-only; function/class owners retain
+their existing augmented value identity. `export =` runtime emit is covered by
 the general emit sacrifice, but type-checking its module export surface belongs to backlog `15`;
 `import =` may remain sacrificed. Exact enum+function+namespace type-side legality and recovery are
 deferred to backlog `42`, not accepted as a degraded implementation. Namespaces on the type side you

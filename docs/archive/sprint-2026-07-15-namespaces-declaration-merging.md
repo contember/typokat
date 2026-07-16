@@ -1,16 +1,35 @@
+> **OUTCOME — shipped 2026-07-16.** Backlog `43` is closed. Ordered declaration groups,
+> qualified namespace types, legal keep-pairs, compilation-global type publication, and immutable
+> standalone instantiated namespace values all shipped under ADR-0009/0010. The final pinned
+> TypeScript 6.0.3 ES5 proof is **GO** with no namespace-owned residual; backlog `14` is unblocked.
+> Ambient external modules remain backlog `15`, attached class/static dependency cycles remain
+> backlog `76`, `declare global` value publication remains backlog `82`, and the diagnosed ambient
+> alias-use cascade is cosmetic backlog `63` work. Commit map: architecture/substrate
+> `a96c99d`/`b6ecfa4`/`fe61867`; qualified/type-group publication `058a80b`/`f6dd47b`; keep-pair and
+> global publication `26d5f12`/`6195b27`; ES5 hard-stop fix `d2470a3` and proof enforcement
+> `b424e74`/`5951968`/`3f641ea`; standalone-value
+> decision/spec/implementation `9bf4a76`/`043cf90`/`16cda3f`/`23bad42`; GO confirmation `52cea92`;
+> WU7 remediation and official ratchet `a3fc116`/`8bd8c8f`/`30cd7cf`.
+>
+> **Verification:** `cargo test` — 702 unit tests enumerated (696 passed, 6 ignored release
+> measurements), all integration suites passed, and conformance spans 403 enabled source files;
+> `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, and
+> `cargo build --release` — clean; manifest, surface, divergence, and pinned
+> ES5 readiness validators — PASS; official-suite `run --check` at `30cd7cf` — 874 total,
+> 314 IN / 560 OOS, zero regressions.
+
 # Sprint — namespace and declaration-space completion (2026-07-15)
 
 **Goal.** Implement type-side namespaces and legal declaration merging with stable,
 order-independent publication, then prove the pinned TypeScript 6.0.3 `lib.es5.d.ts` readiness
 boundary without implementing its loader.
 
-**Current outcome: NO-GO.** Type-side namespaces, reopenings, declaration groups, keep-pairs,
-legal global type publication, and local `Array<T>` heritage are shipped. The committed WU6 proof
-([`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml)) still finds one backlog-43
-architecture stop: a standalone ambient namespace has no value metadata or qualified value
-receiver. [ADR-0010](../decisions/0010-publish-instantiated-standalone-namespace-values.md) now
-defines that missing publication contract; implementation and review remain. The sprint and
-backlog `43` therefore remain active, and backlog `14` may not start yet.
+**Final outcome: GO.** Type-side namespaces, reopenings, declaration groups, keep-pairs, legal
+global type publication, local `Array<T>` heritage, and standalone instantiated namespace values
+are shipped. The committed proof
+([`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml)) has no namespace-owned
+residual. ADR-0010's publication contract is implemented and independently reviewed; backlog `14`
+may start.
 
 **Outcome boundary.** This sprint unblocks backlog `14`; it does not automatically load the
 standard library. Full `lib.d.ts` loading, the frozen base plus per-file delta `Store`, and
@@ -641,6 +660,19 @@ adding `42` or `44` only if a reproducible pinned-library audit contradicts the 
   root assignment/update/call/new behavior, pure type-only namespace value rejection, an exhaustive
   unavailable-owner ledger, and an exact two-file/EventStore order matrix. These are WU6A
   acceptance conditions only; no standalone namespace value implementation is claimed yet.
+- **2026-07-16 — WU6A shipped.** Spec commits `043cf90`, `1e732ed`, `fda515c`, `66c4c89`, and
+  `4588732` pinned first-class roots, mutability, nested values, terminal unavailability, dependency
+  cycles, and consumed surface owners. `16cda3f` reserved stable namespace-owned value storage;
+  `23bad42` published complete immutable structural objects through ordinary value lookup.
+  `52cea92` reran the exact ES5 artifact and changed its machine verdict to GO: four `TK2430`
+  diagnostics, 187 explicit non-namespace incompletes, and all 66 synthetic semantic witnesses as
+  `TK2322` with no `TK2304`.
+- **2026-07-16 — WU7 PASS and closure.** The official-suite review corpus landed at `432c8c6`.
+  Callable rest/relation and declaration-accounting regressions were pinned in separate specs and
+  remediated at `a3fc116`; `2d9d193`/`8bd8c8f` retained the structural namespace prefilter boundary
+  for ambient external modules. The exact ratchet landed at `30cd7cf` with zero regression. Closure
+  retires owner `43`; ambient external modules stay with `15`, class/static dependency cycles with
+  `76`, global values with `82`, and ambient alias-use cascade parity with `63`.
 
 ## Current implementation touch points
 

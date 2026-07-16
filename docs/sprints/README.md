@@ -20,12 +20,9 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-07-15-namespaces-declaration-merging.md`](sprint-2026-07-15-namespaces-declaration-merging.md) —
-  active at WU6 NO-GO; type-side namespaces/merging shipped, but standalone ambient namespace
-  value metadata needs a superseding architecture decision before backlog `14` can start.
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold public-witness gate; no implementation started.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprint-2026-07-16-namespace-binder-refactor.md) —
   planned, not started; behavior-preserving split of `binder/namespace.rs` into submodules plus
-  measured dedup (mirrored walkers, `declaration_owner_scope`, canonical sorts). Gated on
-  backlog-43 WU7 closure.
+  measured dedup (mirrored walkers, `declaration_owner_scope`, canonical sorts). Its namespace
+  closure gate is satisfied.

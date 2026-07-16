@@ -2,7 +2,7 @@ schema = 1
 target = "typescript-6.0.3-lib-es5-model-readiness"
 conclusion = "GO"
 decision_target = "../../../docs/backlog/14-libdts-loading.md"
-reason = "The pinned explicit-input type model has no backlog-43 residual, so backlog 14 may start; owners 50 and 75 still block checker 1.0."
+reason = "The pinned explicit-input type model is GO after namespace/declaration-merging closure, so backlog 14 may start; owners 50 and 75 still block checker 1.0."
 witness_marker_grammar = "// witness[ID] oracle[TSdddd] typokat[TKdddd] [owner[relative-path]]"
 
 [artifact]

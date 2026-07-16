@@ -29,7 +29,8 @@ evaluator memoization + `TK2589`, sprint-2026-07-12), and `77` (callable-object
 contextual `ThisType<T>`, and receiver utilities, sprint-2026-07-12), and `13` (the ADR-0001
 profiling gate, strict DEFER/no-VM, WU5 of
 [`sprint-2026-07-12-pre-lib-hardening.md`](../archive/sprint-2026-07-12-pre-lib-hardening.md),
-closed 2026-07-13). The earlier shipped items are in
+closed 2026-07-13), and `43` (namespace/declaration-space completion,
+[`sprint-2026-07-15-namespaces-declaration-merging.md`](../archive/sprint-2026-07-15-namespaces-declaration-merging.md)). The earlier shipped items are in
 [`../archive/`](../archive/README.md), including the completed WU6 official-suite ratchet.
 Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
@@ -55,15 +56,15 @@ in [`divergences.md`](../reference/divergences.md)), **D** scale + IDE (the §12
 
 The pinned TS 6.0.3 `lib.d.ts` surface audit — what actually blocks `14` — is
 [`lib-audit-6.0.3.md`](lib-audit-6.0.3.md) (generic method/call/construct signatures shipped with
-`41`, receiver typing shipped with `70`, and type-side namespace/merging work shipped in the active
-2026-07-15 sprint). The committed WU6 proof remains NO-GO only on `43`'s standalone namespace value
-metadata/receiver. Backlogs `50` and `75` independently block 1.0; `63` owns parity-only surplus
+`41`, receiver typing shipped with `70`, and namespace/merging work shipped in the archived
+2026-07-15 sprint). The committed proof is GO for starting `14`. Backlogs `50` and `75`
+independently block 1.0; `63` owns parity-only surplus
 diagnostics. `42`/`44` are not used by ES5 core. The official-suite scoreboard is the ratchet on the
 way there — its syntax gates flip OOS→IN as features land — not a numeric pass/fail gate.
 
 ## Roadmap at a glance
 
-The active backlog has **40 items**: **27 checker-1.0 release blockers** and **13 non-blocking**
+The active backlog has **39 items**: **26 checker-1.0 release blockers** and **13 non-blocking**
 (10 safe-direction parity items plus 3 consumer-surface items). The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml); the grouping below is the human roadmap view.
 Consumer-surface items are deliberately absent from the manifest — they gate *consumers* of the
@@ -71,7 +72,7 @@ checker, not the checker.
 
 | Track | Active items | Typical effort | Role |
 |---|---:|---|---|
-| **A — model completeness** | 4 | L–XL | Eliminate silently-permissive model gaps; the remaining `43` architecture stop directly unblocks starting full `lib.d.ts`. |
+| **A — model completeness** | 3 | L–XL | Eliminate the remaining silently-permissive model gaps; namespace/declaration merging is shipped. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
 | **C — soundness/parity tail** | 17 | S–XL | Seven release-blocking known gaps plus ten safe-direction parity improvements. |
 | **D — scale + IDE** | 8 | M–XL | Preview, full standard library, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
@@ -90,13 +91,12 @@ non-blocking groups.
 
 ## Items
 
-**A. Model completeness — the `lib.d.ts` critical path plus exact declaration types.** Every item
-kills a silently-permissive or deliberately approximate model family. `43` is the direct blocker
-of `14`; `42`, `44`, and `76` still block checker 1.0 but are not needed by the
+**A. Model completeness — exact declaration types.** Every item kills a silently-permissive or
+deliberately approximate model family. `42`, `44`, and `76` still block checker 1.0 but are not
+needed by the
 `lib.es5.d.ts` core.
 
 - **L** · [`42`](42-enums-type-side.md) — enum type/value sides, nominal member types, and narrowing.
-- **XL** · [`43`](43-namespaces-declaration-merging.md) — shipped type-side namespace/merging substrate; remaining standalone ambient namespace value metadata/receiver requires a superseding architecture decision.
 - **L** · [`44`](44-satisfies-as-const.md) — `satisfies` checking plus readonly literal/tuple semantics for `as const`.
 - **XL** · [`76`](76-lazy-value-type-resolution.md) — demand-driven declaration/value types and inferred-return cycles · blocked by `46`, `48`.
 
@@ -141,12 +141,12 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - **L** · [`63`](63-review-parity-tail.md) — batched evaluator/relation/checker FPs, messages, and residual parser-depth guard.
 - **XL** · [`82`](82-declare-global-value-space.md) — legal `declare global` value-space
   publication for variables, functions, complete class type/constructor pairs, and cross-file
-  class/function+namespace payloads · blocked by `43`; not required by `lib.es5.d.ts` loading.
+  class/function+namespace payloads; not required by `lib.es5.d.ts` loading.
 
 **D. Scale + IDE — the §12 phase ladder.**
 
 - **XL** · [`72`](72-real-project-preview-readiness.md) — public project CLI, pinned strict project, mutation pack, and differential CI ratchet.
-- **XL** · [`14`](14-libdts-loading.md) — full `lib.d.ts` and shared-prelude parallelism Stage 1 · blocked by `43`.
+- **XL** · [`14`](14-libdts-loading.md) — full `lib.d.ts` and shared-prelude parallelism Stage 1; its namespace model gate is GO.
 - **XL** · [`15`](15-modules-imports.md) — Bundler resolution via `oxc_resolver` plus typokat-owned
   module semantics; the local-relative slice shipped as M29.
 - **XL** · [`16`](16-parallelism-type-universe.md) — deterministic parallel cross-file type identity · blocked by `14`, `15`.
@@ -173,13 +173,10 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
    The five HIGH review findings (`53` `55` `57` `58` `61`) shipped in
    sprint-2026-07-07-soundness-fn-fixes; the remaining silent-FN C group (`60`, `62`, `32`,
    `21`, `66`, `71`, `78`) remains available as independently valuable dropped-error work.
-2. **Resolve the remaining architecture stop in `43`.** Type-side namespaces and declaration
-   merging shipped, but the WU6 proof is NO-GO on standalone ambient namespace value
-   metadata/receivers. Record and independently review the required superseding ADR before
-   implementation. Do not start `14` until the pinned proof clears this sole dependency. Backlogs
-   `50`/`75` remain independent 1.0 work; `63` is parity-only. The `13` profiling gate closed
-   DEFER/no-VM under ADR-0001.
-3. **Climb the full-project/scale ladder** (`14` → `15` → `16` → `17`), finishing the B/C
+2. **Start the now-unblocked full-library work (`14`).** The pinned ES5 proof is GO after immutable
+   standalone namespace values shipped under ADR-0010. Backlogs `50`/`75` remain independent 1.0
+   work; `63` is parity-only. The `13` profiling gate closed DEFER/no-VM under ADR-0001.
+3. **Climb the full-project/scale ladder** (`14` → `15` → `16` → `17`), finishing the A/B/C
    remainder along the way. `14` + `15` must graduate a pinned Bundler-compatible full-stack
    witness (deptective only if it qualifies); the small `72` preview is not evidence for full
    resolver/lib fidelity. Per

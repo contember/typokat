@@ -66,11 +66,11 @@ scope = ["b-enums"]
 id = "A-namespaces-declaration-merging"
 track = "A"
 title = "Namespaces (type side) + declaration merging"
-state = "incomplete"
+state = "complete"
 blocks_release = "true"
-owner = "./43-namespaces-declaration-merging.md"
-witness = "type-side namespace/declaration-merging corpus shipped; WU6 proof commits b424e74/5951968/3f641ea verify 28 interface+var pairs, repeated interfaces, and Intl types; readiness.toml remains NO-GO on one standalone Intl namespace-value architecture stop"
-links = ["./14-libdts-loading.md", "./lib-audit-6.0.3.md"]
+owner = "shipped"
+witness = "ADR-0009/0010 namespace publication shipped through 23bad42; 52cea92 proves the pinned lib.es5 model GO and 30cd7cf records the zero-regression WU7 official-suite ratchet"
+links = ["../archive/sprint-2026-07-15-namespaces-declaration-merging.md", "./14-libdts-loading.md", "./lib-audit-6.0.3.md"]
 deps = []
 scope = ["b-namespaces"]
 
@@ -514,8 +514,8 @@ state = "incomplete"
 blocks_release = "false"
 owner = "./82-declare-global-value-space.md"
 witness = "spec-first legal declare-global variable/function/class and cross-file namespace-publication corpus"
-links = ["./43-namespaces-declaration-merging.md", "../reference/divergences.md"]
-deps = ["./43-namespaces-declaration-merging.md"]
+links = ["../reference/divergences.md"]
+deps = []
 
 [[criterion]]
 id = "C-parity-tail-contextual-generic-signature"
@@ -629,9 +629,9 @@ title = "Full lib.d.ts loading + parallelism Stage 1"
 state = "incomplete"
 blocks_release = "true"
 owner = "./14-libdts-loading.md"
-witness = "WU6 proof commits b424e74/5951968/3f641ea and readiness.toml plus exact official missing-global/host-heritage witnesses; loader acceptance remains blocked by backlog 43"
+witness = "readiness.toml is GO after standalone namespace publication at 23bad42 and confirmation at 52cea92; exact official missing-global/host-heritage witnesses define the loader boundary"
 links = ["./lib-audit-6.0.3.md", "../../tooling/official-suite/scoreboard.txt"]
-deps = ["./43-namespaces-declaration-merging.md"]
+deps = []
 
 [[criterion]]
 id = "D-module-resolver-breadth"

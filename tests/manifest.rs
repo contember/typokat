@@ -716,7 +716,7 @@ fn valid_base() -> String {
         "title = \"an open thing\"\n",
         "state = \"incomplete\"\n",
         "blocks_release = \"false\"\n",
-        "owner = \"./43-namespaces-declaration-merging.md\"\n",
+        "owner = \"./79-resolution-query-surface.md\"\n",
         "witness = \"spec-first corpus\"\n",
         "links = [\"../reference/divergences.md\"]\n",
         "deps = []\n",
@@ -780,7 +780,7 @@ fn rejects_invalid_manifests() {
         ),
         (
             "missing owner",
-            valid_base().replace("owner = \"./43-namespaces-declaration-merging.md\"\n", ""),
+            valid_base().replace("owner = \"./79-resolution-query-surface.md\"\n", ""),
             "owner",
         ),
         (
@@ -791,18 +791,18 @@ fn rejects_invalid_manifests() {
         (
             // flip the shipped criterion's owner to a path while keeping state=complete
             "inconsistent: complete but owner is a link",
-            valid_base().replace("owner = \"shipped\"", "owner = \"./43-namespaces-declaration-merging.md\""),
+            valid_base().replace("owner = \"shipped\"", "owner = \"./79-resolution-query-surface.md\""),
             "requires owner",
         ),
         (
             "inconsistent: incomplete but owner=shipped",
-            valid_base().replace("owner = \"./43-namespaces-declaration-merging.md\"", "owner = \"shipped\""),
+            valid_base().replace("owner = \"./79-resolution-query-surface.md\"", "owner = \"shipped\""),
             "inconsistent",
         ),
         (
             "unknown backlog owner link",
             valid_base().replace(
-                "owner = \"./43-namespaces-declaration-merging.md\"",
+                "owner = \"./79-resolution-query-surface.md\"",
                 "owner = \"./999-does-not-exist.md\"",
             ),
             "does not exist",
@@ -1018,20 +1018,20 @@ fn scope_inventory_rejects_unmarked_duplicate_and_wrong_tier_families() {
 // ---------------------------------------------------------------------------
 // deps <-> blocked-by parity witnesses (table-driven).
 //
-// The `open-one` criterion owns backlog `14`, whose real `blocked-by` frontmatter
-// is `[43]`; a matching `deps` array makes the base pass. Each mutation
+// The `open-one` criterion owns backlog `16`, whose real `blocked-by` frontmatter
+// is `[14, 15]`; a matching `deps` array makes the base pass. Each mutation
 // then drifts one side and must be rejected unless a `deps_exception` justifies it.
 // ---------------------------------------------------------------------------
 
 fn deps_parity_base() -> String {
     valid_base()
         .replace(
-            "owner = \"./43-namespaces-declaration-merging.md\"",
-            "owner = \"./14-libdts-loading.md\"",
+            "owner = \"./79-resolution-query-surface.md\"",
+            "owner = \"./16-parallelism-type-universe.md\"",
         )
         .replace(
             "deps = []\n",
-            "deps = [\"./43-namespaces-declaration-merging.md\"]\n",
+            "deps = [\"./14-libdts-loading.md\", \"./15-modules-imports.md\"]\n",
         )
 }
 
@@ -1053,11 +1053,11 @@ fn rejects_deps_parity_drift() {
 
     let cases: Vec<(&str, String, &str)> = vec![
         (
-            // Drop the owner's only dependency.
-            "14 drift (deps drop 43)",
+            // Drop one of the owner's dependencies.
+            "16 drift (deps drop 15)",
             deps_parity_base().replace(
-                "deps = [\"./43-namespaces-declaration-merging.md\"]",
-                "deps = []",
+                "deps = [\"./14-libdts-loading.md\", \"./15-modules-imports.md\"]",
+                "deps = [\"./14-libdts-loading.md\"]",
             ),
             "disagree with owner",
         ),
@@ -1065,17 +1065,17 @@ fn rejects_deps_parity_drift() {
             // Extra dep the owner's blocked-by does not list.
             "deps names an unlisted dependency",
             deps_parity_base().replace(
-                "deps = [\"./43-namespaces-declaration-merging.md\"]",
-                "deps = [\"./43-namespaces-declaration-merging.md\", \"./15-modules-imports.md\"]",
+                "deps = [\"./14-libdts-loading.md\", \"./15-modules-imports.md\"]",
+                "deps = [\"./14-libdts-loading.md\", \"./15-modules-imports.md\", \"./42-enums-type-side.md\"]",
             ),
             "disagree with owner",
         ),
         (
-            // Owner (43) has no blocked-by, but the criterion claims a dep.
+            // Owner (79) has no blocked-by, but the criterion claims a dep.
             "deps on an owner with empty blocked-by",
             valid_base().replace(
-                "owner = \"./43-namespaces-declaration-merging.md\"\nwitness = \"spec-first corpus\"\nlinks = [\"../reference/divergences.md\"]\ndeps = []",
-                "owner = \"./43-namespaces-declaration-merging.md\"\nwitness = \"spec-first corpus\"\nlinks = [\"../reference/divergences.md\"]\ndeps = [\"./15-modules-imports.md\"]",
+                "owner = \"./79-resolution-query-surface.md\"\nwitness = \"spec-first corpus\"\nlinks = [\"../reference/divergences.md\"]\ndeps = []",
+                "owner = \"./79-resolution-query-surface.md\"\nwitness = \"spec-first corpus\"\nlinks = [\"../reference/divergences.md\"]\ndeps = [\"./15-modules-imports.md\"]",
             ),
             "disagree with owner",
         ),
@@ -1102,8 +1102,8 @@ fn rejects_deps_parity_drift() {
 fn deps_exception_permits_a_declared_slice() {
     // A drift with an explicit rationale is allowed (a deliberate dependency slice).
     let text = deps_parity_base().replace(
-        "deps = [\"./43-namespaces-declaration-merging.md\"]",
-        "deps = []\ndeps_exception = \"slice defers the namespace prerequisite\"",
+        "deps = [\"./14-libdts-loading.md\", \"./15-modules-imports.md\"]",
+        "deps = [\"./14-libdts-loading.md\"]\ndeps_exception = \"slice defers the module prerequisite\"",
     );
     assert!(
         validate_deps_parity(&text, &backlog_dir()).is_ok(),

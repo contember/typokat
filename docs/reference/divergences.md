@@ -98,9 +98,9 @@ and validated the same way.
   mismatch precedence and reports only `TS2322`.
   <!-- div: id=objects/wrong-known-and-excess dir=over scope=s-excess-property owner=design-oos witness=../../tests/cases/m30_contextual_literals/excess_properties.ts -->
 - **Diagnosed ambient export-alias endpoints suppress qualified-use cascades
-  (under-report).** After `TK2661` rejects an alias-only local name, typokat keeps the
+  (cosmetic).** After `TK2661` rejects an alias-only local name, typokat keeps the
   exported endpoint unavailable and omits tsc's follow-on `TS2694` at each use.
-  <!-- div: id=namespaces/ambient-alias-use-cascade dir=under scope=b-namespaces owner=../backlog/43-namespaces-declaration-merging.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu2_ambient_export_alias_list.ts -->
+  <!-- div: id=namespaces/ambient-alias-use-cascade dir=cosmetic scope=b-namespaces owner=../backlog/63-review-parity-tail.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu2_ambient_export_alias_list.ts -->
 - **The pinned ES5 `CallableFunction` and `NewableFunction` heritage edges
   over-report.** typokat emits one canonical `TK2430` for each interface where tsc is
   clean because apparent `Function` compatibility does not yet admit their generic
@@ -193,8 +193,8 @@ and validated the same way.
 - **An exported class in an attached namespace is unavailable (over-report).** Its
   exact declaration records `decl/class-declaration/namespace-payload-static-cycle`
   because the owner static surface cannot yet depend on the nested class publication;
-  tsc publishes the class value. This remains backlog-`43` WU4 work.
-  <!-- div: id=namespaces/attached-class-static-cycle dir=over scope=b-namespaces owner=../backlog/43-namespaces-declaration-merging.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_namespace_payload_incomplete_ledger.ts -->
+  tsc publishes the class value. Lazy class/static dependency resolution remains backlog `76` work.
+  <!-- div: id=namespaces/attached-class-static-cycle dir=over scope=b-namespaces owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_namespace_payload_incomplete_ledger.ts -->
 - **An attached namespace import-equals value is unavailable (over-report).** The
   exact alias declaration records `decl/import-equals/namespace-payload-unavailable`
   and withholds the owner value where tsc publishes the forwarded member. Backlog
@@ -707,7 +707,7 @@ resolved to provided `.ts` files; named imports, `import type`, exported declara
   un-traversed code, so `controlFlowIIFE.ts`, `controlFlowInOperator.ts`,
   `booleanLiteralTypes1/2.ts`, `literalTypes3.ts`, and `numericLiteralTypes1/2.ts` self-gate as
   `OOS:unresolved` on a no-lib `TK2304` — lost measurement coverage, not a dropped error.
-  (Backlog `14`, `15`, `38`, `43`, `52`.)
+  (Backlog `14`, `15`, `38`, `52`.)
   <!-- div: id=modules/out-of-scope-resolution dir=over scope=design-oos owner=../backlog/15-modules-imports.md witness=../../tests/cases/m29_modules -->
 
 The 1.0 plan narrows that deferred resolver surface to `moduleResolution: "bundler"` and delegates

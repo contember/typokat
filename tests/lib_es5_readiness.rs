@@ -7,7 +7,6 @@ use typokat::span::LineIndex;
 
 const FIXTURE_DIR: &str = "tests/fixtures/lib-es5-6.0.3";
 const MANIFEST_PATH: &str = "tests/fixtures/lib-es5-6.0.3/readiness.toml";
-const BACKLOG_43: &str = "43-namespaces-declaration-merging.md";
 const TYPESCRIPT_VERSION: &str = "6.0.3";
 const UPSTREAM_REVISION: &str = "050880ce59e30b356b686bd3144efe24f875ebc8";
 const UPSTREAM_PACKAGE_PATH: &str = "lib/lib.es5.d.ts";
@@ -23,7 +22,7 @@ const THIRD_PARTY_BYTES: usize = 37_824;
 const THIRD_PARTY_LFS: usize = 193;
 const TARGET: &str = "typescript-6.0.3-lib-es5-model-readiness";
 const REASON: &str =
-    "The pinned explicit-input type model has no backlog-43 residual, so backlog 14 may start; owners 50 and 75 still block checker 1.0.";
+    "The pinned explicit-input type model is GO after namespace/declaration-merging closure, so backlog 14 may start; owners 50 and 75 still block checker 1.0.";
 const ARTIFACT_PATH: &str = "tests/fixtures/lib-es5-6.0.3/lib.es5.d.ts";
 const WITNESS_PATH: &str = "tests/fixtures/lib-es5-6.0.3/semantic-witnesses.ts";
 const CHECKER_REVISION: &str = "23bad42";
@@ -33,7 +32,6 @@ const SYNTHETIC_COMMAND: &str = "target/debug/typokat check --format compact $CO
 const TSC_EXPLICIT_COMMAND: &str = "tsc --strict --noEmit --pretty false --noLib tests/fixtures/lib-es5-6.0.3/lib.es5.d.ts tests/fixtures/lib-es5-6.0.3/semantic-witnesses.ts";
 const TSC_SYNTHETIC_COMMAND: &str = "tsc --strict --noEmit --pretty false --noLib $COMBINED";
 const OWNER_14: &str = "../../../docs/backlog/14-libdts-loading.md";
-const OWNER_43: &str = "../../../docs/backlog/43-namespaces-declaration-merging.md";
 const OWNER_50: &str = "../../../docs/backlog/50-type-predicates-assertions.md";
 const OWNER_63: &str = "../../../docs/backlog/63-review-parity-tail.md";
 const OWNER_75: &str = "../../../docs/backlog/75-scope-surface-tail.md";
@@ -213,7 +211,7 @@ fn pinned_lib_es5_model_readiness_is_exact_and_reproducible() {
         .unwrap_or_else(|error| panic!("synthetic lib.es5 proof source must be UTF-8: {error}"));
 
     let repeated_names = validate_declaration_inventory(root_table, &artifact);
-    let markers = validate_witness_markers(root_table, &witnesses, &manifest_path, &repeated_names);
+    let markers = validate_witness_markers(root_table, &witnesses, &repeated_names);
 
     let raw = run_one(
         string(artifact_record, "path", "artifact"),
@@ -443,7 +441,6 @@ fn validate_decision_and_owners(root: &toml::Table, repo_root: &Path, manifest_p
     ]);
 
     let mut architecture_stops = Vec::new();
-    let mut backlog_43_owners = Vec::new();
     for value in array(root, "residual", "manifest root") {
         let residual = table(value, "residual record");
         let id = string(residual, "id", "residual record");
@@ -458,9 +455,6 @@ fn validate_decision_and_owners(root: &toml::Table, repo_root: &Path, manifest_p
             expected,
             &format!("residual {id} owner"),
         );
-        if owner.ends_with(BACKLOG_43) {
-            backlog_43_owners.push(id);
-        }
         if residual.get("architecture_stop").and_then(Value::as_bool) == Some(true) {
             architecture_stops.push((id, owner));
         }
@@ -470,34 +464,15 @@ fn validate_decision_and_owners(root: &toml::Table, repo_root: &Path, manifest_p
         expected_owners.len(),
         "residual owner map must be exhaustive"
     );
-    let witness_table = child_table(root, "witness", "manifest root");
-    let witness_owns_backlog_43 = witness_table.values().any(|value| {
-        table(value, "witness record")
-            .get("owner")
-            .and_then(Value::as_str)
-            .is_some_and(|owner| owner.ends_with(BACKLOG_43))
-    });
-
     let conclusion = string(root, "conclusion", "manifest root");
-    let has_exact_stop =
-        architecture_stops.len() == 1 && architecture_stops[0].1.ends_with(BACKLOG_43);
     assert_eq!(
-        conclusion == "NO-GO",
-        has_exact_stop,
-        "NO-GO must be equivalent to exactly one backlog-43 architecture stop"
+        conclusion, "GO",
+        "the shipped namespace model gate must stay GO"
     );
-    match conclusion {
-        "NO-GO" => assert_eq!(
-            backlog_43_owners,
-            vec!["standalone-namespace-value"],
-            "the current NO-GO may have only the declared backlog-43 owner"
-        ),
-        "GO" => assert!(
-            backlog_43_owners.is_empty() && !witness_owns_backlog_43,
-            "a future GO manifest must not retain any backlog-43 residual"
-        ),
-        other => panic!("conclusion must be GO or NO-GO, got {other:?}"),
-    }
+    assert!(
+        architecture_stops.is_empty(),
+        "the GO manifest must not retain an architecture stop: {architecture_stops:?}"
+    );
 }
 
 fn validate_declaration_inventory(root: &toml::Table, source: &str) -> Vec<String> {
@@ -548,7 +523,6 @@ fn validate_declaration_inventory(root: &toml::Table, source: &str) -> Vec<Strin
 fn validate_witness_markers(
     root: &toml::Table,
     source: &str,
-    manifest_path: &Path,
     repeated_names: &[String],
 ) -> Vec<Marker> {
     let manifest_witnesses = manifest_witness_records(root);
@@ -580,17 +554,9 @@ fn validate_witness_markers(
                 marker.id
             );
         } else {
-            let owner = marker
-                .owner
-                .as_deref()
-                .unwrap_or_else(|| panic!("divergent witness {:?} requires an owner", marker.id));
-            let manifest_dir = manifest_path.parent().expect("manifest has parent");
-            assert_safe_repo_path(
-                &PathBuf::from(env!("CARGO_MANIFEST_DIR")),
-                manifest_dir,
-                owner,
-                OWNER_43,
-                &format!("witness {} owner", marker.id),
+            panic!(
+                "GO semantic witness {:?} must retain matching TypeScript/typokat codes",
+                marker.id
             );
         }
         markers.push(marker);

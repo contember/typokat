@@ -270,7 +270,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b41_generic_methods/` | shipped B41 | generic method/call/construct signatures: persistent binders through outer substitution, calls, relation, overloads, inheritance, and cache order |
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
-| `b43_namespaces_declaration_merging/` | backlog `43` (WU3 subset gated; full directory disabled) | namespace type containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global/UMD forms, and an explicitly backlog-42-deferred typed-incomplete chimera |
+| `b43_namespaces_declaration_merging/` | shipped namespace sprint (65 flat fixtures + 6 projects enabled) | namespace type/value containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global boundaries, and explicitly owned deferred UMD/enum tails |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 
@@ -368,8 +368,8 @@ code-only because the exact fixed target can be literal-, primitive-, or
 union-shaped depending on candidate priority and contextual use. The corpus keeps
 at most one mismatched argument per call, per the general call-marker rule above.
 
-`b43_namespaces_declaration_merging/` contains 58 flat fixtures plus four project
-fixtures with eight source files (66 source files total) for the namespace/declaration-space
+`b43_namespaces_declaration_merging/` contains 74 flat fixtures plus six project
+fixtures with 12 source files (86 source files total) for the namespace/declaration-space
 sprint. It covers merged property/method/call/construct/index and
 heritage surfaces, overload precedence and query order, generic constraint/default compatibility,
 recursive merge groups in opposite declaration orders, namespace syntax/reopening/visibility,
@@ -442,11 +442,11 @@ The durable WU6 proof is
 All 28 interface/value pairs, repeated `Date`/`Number`/`String` interfaces, local `Array` heritage,
 and both `Intl` type and value paths are represented. The superseding proof at checker commit
 `23bad42` records **GO for starting backlog 14** with four `TK2430`s and 187 explicit incomplete
-outcomes: 179 owned by `75` and eight type predicates owned by `50`; owner `43` is absent.
+outcomes: 179 owned by `75` and eight type predicates owned by `50`; no namespace owner remains.
 `deep.Intl.value` now contributes the same `TK2322` as tsc, so the synthetic suffix is exactly 66
 `TK2322` diagnostics with no `TK2304` and no added incomplete. These counts are exact accounting,
-not a broad allowlist. GO permits loader work after the immediate backlog-43 lifecycle closure; it
-does not claim that standard-library loading, owners `50`/`75`, or checker 1.0 are complete.
+not a broad allowlist. The namespace lifecycle is closed, so GO permits loader work now; it does
+not claim that standard-library loading, owners `50`/`75`, or checker 1.0 are complete.
 
 The WU6A addendum specifies standalone instantiated namespace values under ADR-0010. Five enabled
 `wu6a_*.ts` flat fixtures pin ordinary and ambient/reopened roots as first-class aliases,
@@ -463,7 +463,7 @@ structural shapes and clean member reads. The implementation direct gate must pr
 namespace-owned `ValueStorageId`s even when hash-consing deduplicates their structural `TypeId`.
 
 `wu6a_unavailable_ledger.ts` keeps every admitted exported child that cannot publish on its precise
-non-43 boundary and
+non-namespace boundary and
 requires the complete parent value to remain terminal `Unavailable`: `typeof` type query → `52`
 (`annotation-lower/type-query/typeof`), inferred initializer/function return → `76`, enum → `42`,
 import-equals → `15`, duplicate value → `18`, TDZ/use-before-assignment → `47`, and the current
@@ -483,7 +483,7 @@ TypeScript 6.0.3 admits a plain private `using` declaration inside an ordinary n
 namespace root remains a valid value, but rejects `export using` (`TS1491`), namespace `await using`
 (`TS2852`), exported `await using` (`TS1495`), and ambient `using` (`TS1545`). The private form can
 instantiate the group but contributes no public property. No WU6A marker or owner is invented: a
-later direct gate must either support private `using` or assign it one concrete non-43
+later direct gate must either support private `using` or assign it one concrete non-namespace
 `Unavailable` owner before publishing `Ready`, and must prove the private binding cannot leak. Any
 future admitted `await using` or exported using form requires the same owner decision first.
 
@@ -520,10 +520,10 @@ fixtures plus the two projects pin 23 strict TypeScript 6.0.3 diagnostics:
   `decl/class-declaration/namespace-payload-static-cycle` under owner `76`, alongside the class
   surface's legitimate `class/property-definition/initializer-inference`; a direct inspector proves
   the whole root terminal is `Unavailable` with no published storage type.
-- `wu6a_review_ambient_export_alias.ts` is the exact support target for an ambient export alias:
-  `TS2322` and `TS2339` prove the aliased public property type and private original spelling. If
-  support is rejected, the whole root must instead be exactly unavailable under backlog `15`; an
-  empty or prefix `Ready` object is never an alternative.
+- `wu6a_review_ambient_export_alias.ts` proves the supported ambient value-alias surface:
+  `TS2322` and `TS2339` pin the aliased public property type and private original spelling. Broader
+  ambient external-module export semantics remain backlog `15`; an empty or prefix `Ready` object
+  is never an alternative.
 - `wu6a_review_using_legality.ts` pins private valid `using` as body-only/no-public-leak plus
   `TS2339`. Parsed namespace `await using` and ambient `using` are checker-owned as `TK2852` and
   `TK1545`; direct terminal tests cover both together with the valid private form. Oxc currently
@@ -581,11 +581,12 @@ in `wu5_global_augmentation_forward/`, `wu5_global_augmentation_reverse/`,
 alias resolution, private-`using` non-leakage, unavailable-root publication, and event replay each
 retain direct checker/binder inspection in addition to marker parity.
 
-The directory contains 74 flat fixtures. Seven older fixtures, the WU6A unavailable ledger,
+The directory contains 74 flat fixtures. Six older fixtures, the WU6A unavailable ledger,
 `wu6a_review_using_legality.ts`, and `wu6a_review_duplicate_legality.ts` remain outside the admitted
-slice, so the whole directory stays disabled; the conformance harness gates the other 64 flat fixtures explicitly through
+slice, so the whole directory stays disabled; the conformance harness gates the other 65 flat fixtures explicitly through
 `ENABLED_FIXTURES`, plus both two-file WU5 projects, both two-file WU6A projects, and both
-`wu6a_review_cross_space_*` projects through `ENABLED_PROJECT_FIXTURES`. WU6 adds
+`wu6a_review_cross_space_*` projects through `ENABLED_PROJECT_FIXTURES`. Together with all other
+corpora, the harness currently covers 403 enabled source files. WU6 adds
 `wu6_ambient_namespace_body_lookup.ts` and `wu6_local_array_heritage.ts`. WU5 adds
 `global_augmentation.ts`, `global_missing_declare_negative.ts`,
 `global_script_negative.ts`, `global_value_publication_deferred.ts`, `umd_export.d.ts`,
@@ -636,9 +637,11 @@ WU2 fixtures contain successful qualified
 leaves whose classification belongs to WU2 but whose lowering closes only with WU3; the gate also
 retains their earlier diagnostics and incomplete records unchanged.
 
-Three mixed WU2/WU3 fixtures remain outside this gate because their namespace surfaces cross into
-WU5 ambient/global or broader qualified value/static publication: `qualified_diagnostics.ts`,
-`wu2_ambient_export_alias_list.ts`, and `wu2_topology_slot_edges.ts`. The selected type-only WU3
+Two mixed WU2/WU3 fixtures remain outside this gate because their namespace surfaces cross into
+WU5 ambient/global or broader qualified value/static publication: `qualified_diagnostics.ts` and
+`wu2_topology_slot_edges.ts`. The ambient alias-list fixture is enabled with its export-specifier
+unavailability records and omitted follow-on diagnostic cardinality explicitly owned by backlog
+`63`. The selected type-only WU3
 fixtures cover qualified generic-leaf arity/constraint checks and nested generic lowering,
 qualified leaves through exported type-alias chains, and qualified forward-reopening leaf lowering.
 
@@ -781,7 +784,8 @@ wildcard/`None`/skip that drops the position.
 | `typeof_query.ts` | WU5 | `lower_annotation_inner` records before dropping `TSTypeQuery` | `annotation-lower/type-query/typeof` | TS2304 |
 | `annotation_keywords.ts` | WU5 | keyword/literal annotation leaves record before `None` | `annotation-lower/{symbol,bigint,object,intrinsic}-keyword/self`, `literal-type/bigint` | TS2304/TS2552 |
 | `tuple_members.ts` | WU5/WU7 | named labels lower transparently; optional members remain recorded before withholding the tuple | `annotation-lower/tuple-optional-element/self` | (optional tuple unavailable) |
-| `type_name_qualified.ts` | WU2/WU5 | a successful public qualified type-group path stays recorded for WU3 lowering; `this`/predicate type leaves remain recorded | `decl/module-declaration/self`, `annotation-lower/type-name/qualified-name`, `type-predicate/self`, `this-type/self` | clean |
+| `type_name_qualified.ts` | WU2/WU5 | successful public qualified type-group paths are supported; `this`/predicate type leaves remain recorded | `type-predicate/self`, `this-type/self` | clean qualified paths |
+| `ambient_external_module.ts` | closure | a value-bearing string-literal ambient module stays explicitly deferred to backlog `15` | `decl/module-declaration/self` | clean |
 | `signature_computed_key.ts` | WU5 | object/interface member collection records the computed key (property AND method signatures — WU7-E F1) | `signature/{property,method}-signature/computed-key` | TS1170/TS2304 |
 | `class_members.ts` | WU5 | `collect_class_own_members` records static-block/accessor/index-sig/computed method + property keys (WU7-E F2) | `class/{static-block,accessor-property,class-index-signature}/self`, `class/{method,property}-definition/computed-key` | (member skip) |
 | `class_heritage.ts` | WU5/WU7 | generic extends arguments are supported/traversed; nested unsupported syntax keeps its owner; implements remains record-only | `annotation-lower/type-query/typeof`, `class/implements-clause/self` | TS2304 |

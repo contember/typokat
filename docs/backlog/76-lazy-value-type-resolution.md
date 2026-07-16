@@ -42,6 +42,11 @@ produces the same `TK2349`; and `typeOfThisInStaticMembers.ts` publishes static 
 causing `TK2351` on `new t(...)`/`new t2(...)`. Backlog `49` owns the eventual strict-null
 `TK2721` for calling a null getter; this item owns recovering each inferred declaration type.
 
+Attached namespace class/static cycles are the same demand problem. When an exported class static
+initializer refers back to its namespace root, publication currently records
+`decl/class-declaration/namespace-payload-static-cycle` and withholds the complete root. This item
+owns resolving that cycle without partial class or namespace publication.
+
 ## Approach / acceptance
 
 Add a declaration-plan layer keyed by `DeclId` for function declarations and the value

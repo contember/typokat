@@ -18,13 +18,13 @@ profiles deferred. The one goal is to preserve the **type model** faithfully; wh
 <p>
   <img alt="Rust" src="https://img.shields.io/badge/built%20with-Rust-000?logo=rust">
   <img alt="Milestones" src="https://img.shields.io/badge/milestones-M0--M33-2ea44f">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-631%20unit%20%2B%20369%20fixtures-blue">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-702%20unit%20%2B%20403%20conformance-blue">
   <img alt="Clippy" src="https://img.shields.io/badge/clippy-clean-brightgreen">
 </p>
 
-By the numbers: **83,195 lines of Rust** (78,888 nonblank), **631 passing unit tests**
-(plus 6 ignored release measurements), and a **369-file enabled conformance corpus** with
-1,814 expected diagnostic markers plus 166 explicit incomplete-surface markers. `clippy -D warnings` is
+By the numbers: **83,195 lines of Rust** (78,888 nonblank), **702 unit tests**
+(696 passing plus 6 ignored release measurements), and **403 enabled conformance source files** with
+1,910 expected diagnostic markers plus 234 explicit incomplete-surface markers. `clippy -D warnings` is
 clean, and **every milestone is cross-checked against real `tsc 6.0.3 --strict`**.
 
 ## Quick start
@@ -153,15 +153,15 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   `keyof` over unions/`never`/template-literal key sources plus two tsc-parity conditional
   edges are documented divergences (backlog `26`, `27`, `35`–`37`). (A bytecode VM is a
   deferred, profiling-gated refactor — see `docs/decisions/0001-…`.)
-- **Remaining type-model gaps** — enums, the standalone namespace **value receiver**, and
-  `satisfies`/`as const` are not modeled yet. Type-side namespaces, reopenings, qualified lookup,
-  declaration merging, and local `Array` heritage are modeled. Generic methods, explicit `this`
+- **Remaining type-model gaps** — enums and `satisfies`/`as const` are not modeled yet. Type-side
+  namespaces, reopenings, qualified lookup, declaration merging, standalone instantiated namespace
+  values, and local `Array` heritage are modeled. Generic methods, explicit `this`
   parameters, contextual `ThisType<T>`, and object call/construct signatures are modeled
   persistently, but generic/
   deferred indexed access (`T[K]`), optional methods, member-path narrowing, and library loading
-  remain separate gaps. The remaining
-  model-completeness track is in [`docs/backlog/`](./docs/backlog/README.md) and is the prerequisite for full
-  `lib.d.ts` loading. (Intersections `A & B` landed in M31; signature shape landed in M32;
+  remain separate gaps. The remaining model-completeness track is in
+  [`docs/backlog/`](./docs/backlog/README.md); the namespace model prerequisite for full `lib.d.ts`
+  loading is complete. (Intersections `A & B` landed in M31; signature shape landed in M32;
   overloads landed in M33; `&` distribution over unions,
   `keyof`/indexed-access over an intersection, and overload-signature intersection remain
   deferred — see [`docs/reference/divergences.md`](./docs/reference/divergences.md).)
@@ -178,9 +178,9 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   graphs, and parallel cross-file type identity. An **unresolved type name** in type position is
   `TK2304` (M22); still deferred there (distinct tsc codes): a value used as a type (`TS2749`), type
   args on a type parameter (`TS2315`) and a wrong type-argument count such as bare `Array`
-  (`TS2314`). Qualified namespace types `A.B` are modeled; diagnosed ambient export-alias endpoint
-  recovery and standalone namespace values remain narrow backlog-`43` boundaries. (Backlog `14`,
-  `15`, `43`, `52`.)
+  (`TS2314`). Qualified namespace types `A.B` and standalone instantiated namespace values are
+  modeled. Ambient external modules remain with `15`; diagnosed ambient export-alias cascade parity
+  remains with `63`. (Backlog `14`, `15`, `52`, `63`.)
 - **Incomplete checking is a first-class outcome (2026-07-10 accounting sprint).** The consumed
   OXC AST surface is classified in a machine-validated inventory (`tests/surface/`), and an
   unsupported in-scope construct now reports `incomplete[<surface-id>]` with exit `3` instead of
@@ -191,10 +191,9 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   `75`. The pinned real-project preview gate (`72`) remains required but **paused**: no screened
   public project met its multi-file, minimal-graph, zero-threshold witness contract. Do not resume
   `72`, add a project-specific shim, or expand the prelude merely to manufacture that witness; the
-  immediate model/lib step is resolving backlog `43`'s standalone namespace value architecture
-  stop, pinned by the current **NO-GO**
-  [`lib.es5.d.ts` readiness manifest](./tests/fixtures/lib-es5-6.0.3/readiness.toml). Full
-  `lib.d.ts` loading (`14`) may start only after that stop closes; Bundler module resolution (`15`)
+  immediate model/lib step is the now-unblocked full `lib.d.ts` loader (`14`), backed by the current
+  **GO** [`lib.es5.d.ts` readiness manifest](./tests/fixtures/lib-es5-6.0.3/readiness.toml).
+  Bundler module resolution (`15`)
   follows on the scale ladder. A clean result on an arbitrary
   npm/Bun/Node project is not yet a completeness claim.
 - Remaining `tsc` divergences are logged in

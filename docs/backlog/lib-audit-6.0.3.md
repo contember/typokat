@@ -68,10 +68,10 @@ incompletes:
 - `75`: 179 annotation incompletes: `this` 164, `object` 6, `intrinsic` 5, `symbol` 3, `bigint` 1
   (independent 1.0 blockers).
 
-The machine verdict is **GO for starting backlog 14**: no raw or semantic witness retains owner
-`43`, and `deep.Intl.value` is one of exactly 66 synthetic `TK2322` diagnostics with no `TK2304` or
-added incomplete. This permission is contingent on the immediate backlog-43 lifecycle closure; it
-does not mean the standard library is loaded, that canonical backlog-14 compatibility is complete,
+The machine verdict is **GO for starting backlog 14**: no raw or semantic witness retains a
+namespace owner, and `deep.Intl.value` is one of exactly 66 synthetic `TK2322` diagnostics with no `TK2304` or
+added incomplete. The namespace/declaration-merging lifecycle is closed, so loader work may start;
+this does not mean the standard library is loaded, that canonical backlog-14 compatibility is complete,
 or that the checker is 1.0-ready. Owners `50` and `75` remain mandatory model work; `42` and `44`
 remain 1.0 model blockers but are absent from ES5 core.
 

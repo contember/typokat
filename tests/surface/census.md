@@ -136,8 +136,8 @@ owner before any WU3–WU5 implementation commit that touches it.
 
 Families already owned (classified, not new): template interpolation + array spread + iteration
 → `71`; computed/symbol member keys, decorators, delete, reachability, indexed-access compat →
-`75`; enums → `42`; namespaces / module declarations → `43`; `this` type/params → `70`; module
-breadth → `15`/`29`. The **for/do flow-comment drift** (flow claims "not walked" while
+`75`; enums → `42`; identifier namespaces and qualified type/value paths → shipped; string-literal
+ambient modules and module breadth → `15`/`29`; `this` type/params → `70`. The **for/do flow-comment drift** (flow claims "not walked" while
 `stmt-check` walks them) is a narrowing gap owned by `51`.
 
 Consequence of >8: this is **volume, which the gate says does NOT trigger the architecture

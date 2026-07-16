@@ -1,14 +1,14 @@
 ---
 id: 14
 title: Full lib.d.ts loading (the standard library)
-blocked-by: [./43-namespaces-declaration-merging.md]
+blocked-by: []
 ---
 
 # 14 — full `lib.d.ts` loading
 
 **Summary.** The "mandatory core" (architecture §4) — unlocks checking real-world code. Big. Also
-where parallelism **Stage 1** lands. The pinned explicit-input model gate now permits this item to
-start after the immediate backlog-43 lifecycle closure. It is the **full** standard-library load;
+where parallelism **Stage 1** lands. The pinned explicit-input model gate permits this item to
+start. It is the **full** standard-library load;
 the minimal ambient/prelude slice (`38`) is allowed before this item when it buys useful real-world
 feedback.
 
@@ -17,8 +17,7 @@ feedback.
 Without `lib.d.ts`, `console`, array methods, `Promise`, etc. are absent, so most real code can't be
 checked. The lib's own source text uses nearly the whole type model, including the `RegExp` value
 surface that owns regexp literals. The final namespace value-side prerequisite shipped at
-`23bad42`; the temporary `blocked-by` metadata above remains only until WU7 atomically closes the
-owning backlog-43 lifecycle.
+`23bad42`, and its WU7 adversarial review and official-suite ratchet are complete.
 Generic method, call, and construct signatures shipped with B41; explicit receiver parameters and
 contextual `ThisType<T>` shipped with B70; member projection and loading the declarations that expose those
 signatures remain this item's responsibility.
@@ -64,11 +63,11 @@ The authoritative gate is
 concludes **GO for starting backlog 14**: type-side namespaces, reopenings, all 28 interface+var
 pairs, repeated interfaces, local `Array<T>` heritage, and both `Intl` type/value witnesses pass.
 The raw artifact retains exactly four `TK2430` diagnostics and 187 incompletes — 179 owned by `75`
-and eight by `50` — with no owner-43 outcome. The synthetic semantic suffix is exactly 66
+and eight by `50` — with no namespace-owned outcome. The synthetic semantic suffix is exactly 66
 `TK2322`, including `deep.Intl.value`, and no `TK2304` or added incomplete.
 
-This machine GO authorizes loader work only after the immediate backlog-43 lifecycle closure. It is
-not evidence that the library is loaded, that this backlog item is complete, or that checker 1.0 is
+This machine GO authorizes loader work now. It is not evidence that the library is loaded, that
+this backlog item is complete, or that checker 1.0 is
 ready. This item still owns the two canonical `TK2430` diagnostics on `CallableFunction` and
 `NewableFunction` versus `Function`; two surplus diagnostics at those sites are parity-only backlog
 `63`. Backlogs `50` and `75` independently block checker 1.0, and the loader must preserve their

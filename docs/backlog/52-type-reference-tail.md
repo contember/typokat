@@ -12,7 +12,8 @@ and bare `Box` relates against the *uninstantiated* `{ v: T }` (a confusing FP i
 tsc's TS2314). Type args on a type parameter (TS2315) and `TK2558` (wrong count on
 explicit call-site type arguments) belong to the same family. `typeof value` type queries must
 also resolve the value-side type without accepting a value as an ordinary type reference.
-Qualified names `A.B` (TS2503) are covered by `43`.
+Qualified namespace names `A.B` are shipped; this item retains the distinct value/type misuse and
+generic-arity diagnostics around their endpoints.
 
 ## Problem
 
