@@ -836,14 +836,14 @@ owner = "shipped"
 witness = "../cases/b73_expression_shape_tail/update_operand.ts"
 
 [[surface]]
-id = "expr-infer/static-member-update/base"
+id = "expr-infer/update-expression/nested-scope-target"
 role = "expr-infer"
-surface = "static-member-update"
-slot = "base"
-oxc_variant = "SimpleAssignmentTarget::StaticMemberExpression"
+surface = "update-expression"
+slot = "nested-scope-target"
+oxc_variant = "SimpleAssignmentTarget"
 disposition = "unsupported-in"
 owner = "../../docs/backlog/71-expression-inference-fn-tail.md"
-witness = "../cases/b73_surface_accounting/static_member_update_nested_base.ts"
+witness = "../cases/b73_surface_accounting/update_expression_nested_scope_target.ts"
 
 [[surface]]
 id = "expr-infer/v8-intrinsic/self"
