@@ -51,3 +51,14 @@ const wu7PlainTupleRestControl: Wu7PlainTupleRestControl = ["ok", 1, true];
 const wu7NamedTupleRestControl: Wu7NamedTupleRestControl = ["ok", 1, true];
 const wu7PlainGenericRestControl: Wu7PlainGenericRestControl<[number, boolean]> = ["ok", 1, true];
 const wu7NamedGenericRestControl: Wu7NamedGenericRestControl<[number, boolean]> = ["ok", 1, true];
+
+// A direct infer rest is valid only in a conditional extends clause and only
+// when its own constraint is array-like. tsc reports TS2574 for the first case;
+// owner75 withholds the tuple until that diagnostic is modeled.
+type Wu7ConstrainedInferNonArray<T> = T extends [...infer R extends number] ? R : never; // incomplete[annotation-lower/tuple-rest-element/non-array]
+type Wu7ConstrainedInferArrayControl<T> = T extends [...infer R extends readonly unknown[]] ? R : never;
+
+// tsc reports TS1338 for declaring infer in a conditional true branch. This is
+// a separate infer-placement validation gap; the tuple-rest boundary must still
+// prevent the invalid declaration from becoming a silently published tuple.
+type Wu7MisplacedInferRest<T> = T extends unknown ? [...infer R] : never; // incomplete[annotation-lower/tuple-rest-element/non-array]

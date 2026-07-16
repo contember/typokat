@@ -93,3 +93,17 @@ interface IncompatibleFixedPrefixAgainstMovingSuffix extends VariadicBeforeStrin
 interface CompatibleFixedPrefixAgainstMovingSuffix extends VariadicBeforeStringSuffixTarget {
   callable: (first?: unknown, ...rest: unknown[]) => number;
 }
+
+// A required tuple-rest suffix still needs a later positional slot when an
+// optional fixed prefix precedes it; the prefix cannot satisfy both positions.
+interface SingleStringTarget {
+  callable: (value: string) => number;
+}
+
+interface IncompatibleOptionalPrefixRequiredSuffix extends SingleStringTarget { // error[TK2430]: Interface 'IncompatibleOptionalPrefixRequiredSuffix' incorrectly extends interface 'SingleStringTarget'
+  callable: (first?: unknown, ...rest: [...unknown[], string]) => number;
+}
+
+interface CompatibleOptionalPrefixPureRest extends SingleStringTarget {
+  callable: (first?: unknown, ...rest: unknown[]) => number;
+}
