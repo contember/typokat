@@ -23,7 +23,7 @@ const wu6aReviewShadowedResult: number = Wu6aReviewShadowedStatic.Box.project(1)
 
 namespace Wu6aReviewTrueStaticCycle {
   export class Box { // incomplete[decl/class-declaration/namespace-payload-static-cycle]
-    static root = Wu6aReviewTrueStaticCycle;
+    static root = Wu6aReviewTrueStaticCycle; // incomplete[class/property-definition/initializer-inference]
   }
 }
 
