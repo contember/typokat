@@ -10,14 +10,14 @@ const reverseInterfaceInstanceWrong: string = reverseInterfaceInstance.instance;
 const reverseInterfaceOptionsWrong: number = reverseInterfaceOptions.enabled; // error[TK2322]: Type 'boolean' is not assignable to type 'number'
 
 namespace ReverseFunction { // error[TK2434]: A namespace declaration cannot be located prior to a class or function with which it is merged
-  export const tag = "function";
+  export const tag: string = "function";
 }
 function ReverseFunction(value: number): number { return value; }
 
 namespace ReverseClass { // error[TK2434]: A namespace declaration cannot be located prior to a class or function with which it is merged
-  export const tag = "class";
+  export const tag: string = "class";
 }
-class ReverseClass { instance = 1; }
+class ReverseClass { instance: number = 1; }
 
 declare namespace AmbientReverseFunction {
   const tag: string;

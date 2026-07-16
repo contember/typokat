@@ -12,7 +12,7 @@ function FunctionPair(value: number): number;
 function FunctionPair(value: string): string;
 function FunctionPair(value: number | string): number | string { return value; }
 namespace FunctionPair {
-  export const tag = "function";
+  export const tag: string = "function";
   export interface Options { enabled: boolean }
 }
 const functionCall: number = FunctionPair(1);
@@ -23,12 +23,12 @@ const functionReturnWrong: string = FunctionPair(1); // error[TK2322]: Type 'num
 const functionTagWrong: number = FunctionPair.tag; // error[TK2322]: Type 'string' is not assignable to type 'number'
 
 class ClassPair {
-  static existing = 1;
-  private identity = 1;
-  instance = 1;
+  static existing: number = 1;
+  private identity: number = 1;
+  instance: number = 1;
 }
 namespace ClassPair {
-  export const tag = "class";
+  export const tag: string = "class";
   export interface Options { enabled: boolean }
 }
 const classInstance: ClassPair = new ClassPair();
@@ -40,7 +40,7 @@ const classExistingWrong: string = ClassPair.existing; // error[TK2322]: Type 'n
 const classInstanceWrong: { instance: string } = new ClassPair(); // error[TK2322]
 
 class ForeignClassPair {
-  private identity = 1;
-  instance = 1;
+  private identity: number = 1;
+  instance: number = 1;
 }
 const classNominalWrong: ClassPair = new ForeignClassPair(); // error[TK2322]

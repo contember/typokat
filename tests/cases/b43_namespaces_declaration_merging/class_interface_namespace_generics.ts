@@ -1,6 +1,6 @@
 // WU0 addendum — one side may introduce a constraint/default; conflicting supplied headers reject.
 class GenericClassFirst<T extends { id: number } = { id: number }> {
-  static existing = 1;
+  static existing: number = 1;
   constructor(readonly value: T) {}
 }
 interface GenericClassFirst<T extends { id: number } = { id: number }> {
@@ -9,7 +9,7 @@ interface GenericClassFirst<T extends { id: number } = { id: number }> {
   generic<U>(value: U): U;
 }
 namespace GenericClassFirst {
-  export const added = "generic-class-first";
+  export const added: string = "generic-class-first";
   export interface Options<T> { value: T }
 }
 
@@ -26,11 +26,11 @@ interface GenericInterfaceFirst<T extends { id: number } = { id: number }> {
   recursive: GenericInterfaceFirst<T>;
 }
 class GenericInterfaceFirst<T extends { id: number } = { id: number }> {
-  static existing = 2;
+  static existing: number = 2;
   constructor(readonly value: T) {}
 }
 namespace GenericInterfaceFirst {
-  export const added = "generic-interface-first";
+  export const added: string = "generic-interface-first";
 }
 const genericInterfaceFirst = new GenericInterfaceFirst({ id: 2 });
 const genericInterfaceFirstPayloadWrong: string = genericInterfaceFirst.payload.id; // error[TK2322]: Type 'number' is not assignable to type 'string'

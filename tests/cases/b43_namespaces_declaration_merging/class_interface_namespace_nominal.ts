@@ -1,23 +1,23 @@
 // WU0 addendum — class construction and private origin survive interface/namespace augmentation.
 class NominalClassMerge {
-  static existing = 1;
-  private identity = 1;
-  instance = 1;
+  static existing: number = 1;
+  private identity: number = 1;
+  instance: number = 1;
 }
 interface NominalClassMerge {
   augmented: string;
   recursive: NominalClassMerge;
 }
 namespace NominalClassMerge {
-  export const added = "nominal";
+  export const added: string = "nominal";
   export interface Nested { nested: boolean }
 }
 
 class ForeignNominalClass {
-  private identity = 1;
-  instance = 1;
-  augmented = "foreign";
-  recursive = this;
+  private identity: number = 1;
+  instance: number = 1;
+  augmented: string = "foreign";
+  recursive: ForeignNominalClass = this;
 }
 
 const nominalConstructed: NominalClassMerge = new NominalClassMerge();

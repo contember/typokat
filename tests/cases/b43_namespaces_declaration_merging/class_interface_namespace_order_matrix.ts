@@ -1,7 +1,7 @@
 // WU0 addendum — strict-tsc namespace placement around class/interface merges.
-class ClassNamespaceInterface { instance = 1; }
+class ClassNamespaceInterface { instance: number = 1; }
 namespace ClassNamespaceInterface {
-  export const added = "class-namespace-interface";
+  export const added: string = "class-namespace-interface";
 }
 interface ClassNamespaceInterface { augmented: string }
 const classNamespaceInterface = new ClassNamespaceInterface();
@@ -10,15 +10,15 @@ const classNamespaceStaticWrong: number = ClassNamespaceInterface.added; // erro
 
 interface InterfaceNamespaceClass { augmented: string }
 namespace InterfaceNamespaceClass { // error[TK2434]: A namespace declaration cannot be located prior to a class or function with which it is merged
-  export const added = "interface-namespace-class";
+  export const added: string = "interface-namespace-class";
 }
-class InterfaceNamespaceClass { instance = 1; }
+class InterfaceNamespaceClass { instance: number = 1; }
 
 namespace NamespaceInterfaceClass { // error[TK2434]: A namespace declaration cannot be located prior to a class or function with which it is merged
-  export const added = "namespace-interface-class";
+  export const added: string = "namespace-interface-class";
 }
 interface NamespaceInterfaceClass { augmented: string }
-class NamespaceInterfaceClass { instance = 1; }
+class NamespaceInterfaceClass { instance: number = 1; }
 
 declare namespace AmbientReverseCombination {
   const added: string;

@@ -1,7 +1,7 @@
 // WU0 addendum — tsc 6.0.3 --strict oracle for approved class+interface+namespace merging.
 class ClassFirstMerge {
-  static existing = 1;
-  own = 1;
+  static existing: number = 1;
+  own: number = 1;
   constructor(seed: number) {}
 }
 interface ClassFirstMerge {
@@ -11,7 +11,7 @@ interface ClassFirstMerge {
   recursive: ClassFirstMerge;
 }
 namespace ClassFirstMerge {
-  export const added = "class-first";
+  export const added: string = "class-first";
   export interface Options { enabled: boolean }
 }
 
@@ -45,12 +45,12 @@ interface InterfaceFirstMerge {
   recursive: InterfaceFirstMerge;
 }
 class InterfaceFirstMerge {
-  static existing = 2;
-  own = 2;
+  static existing: number = 2;
+  own: number = 2;
   constructor(seed: number) {}
 }
 namespace InterfaceFirstMerge {
-  export const added = "interface-first";
+  export const added: string = "interface-first";
   export interface Options { enabled: boolean }
 }
 
