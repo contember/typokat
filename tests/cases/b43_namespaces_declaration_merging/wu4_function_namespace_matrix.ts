@@ -1,10 +1,11 @@
 // WU4 — tsc 6.0.3 --strict --noEmit --lib es5 --module commonjs:
-// TS2434, TS2345, TS2322 x14, and TS2769 x2 below.
+// TS2434, TS2345, TS2322 x18, TS2339, and TS2769 x3 below.
 
 function Wu4ForwardFunction(value: number): number {
   return value;
 }
 namespace Wu4ForwardFunction {
+  const hidden: boolean = true;
   export const tag: string = "forward";
   export interface Options {
     enabled: boolean;
@@ -18,6 +19,7 @@ Wu4ForwardFunction("bad"); // error[TK2345]: Argument of type 'string' is not as
 const wu4ForwardFunctionCallWrong: string = Wu4ForwardFunction(1); // error[TK2322]: Type 'number' is not assignable to type 'string'
 const wu4ForwardFunctionTagWrong: number = Wu4ForwardFunction.tag; // error[TK2322]: Type 'string' is not assignable to type 'number'
 const wu4ForwardFunctionOptionsWrong: number = wu4ForwardFunctionOptions.enabled; // error[TK2322]: Type 'boolean' is not assignable to type 'number'
+Wu4ForwardFunction.hidden; // error[TK2339]: Property 'hidden' does not exist on type 'typeof Wu4ForwardFunction'
 
 function Wu4ForwardOverload(value: number): number;
 function Wu4ForwardOverload(value: string): string;
@@ -88,3 +90,22 @@ Wu4AmbientReverseOverload(true); // error[TK2769]
 const wu4AmbientReverseOverloadNumberWrong: string = Wu4AmbientReverseOverload(wu4AmbientReverseOverloadOptions.value); // error[TK2322]: Type 'number' is not assignable to type 'string'
 const wu4AmbientReverseOverloadStringWrong: number = Wu4AmbientReverseOverload(Wu4AmbientReverseOverload.tag); // error[TK2322]: Type 'string' is not assignable to type 'number'
 const wu4AmbientReverseOverloadOptionsWrong: string = wu4AmbientReverseOverloadOptions.value; // error[TK2322]: Type 'number' is not assignable to type 'string'
+
+declare function Wu4AmbientSplit(value: number): number;
+declare namespace Wu4AmbientSplit {
+  const numberTag: number;
+}
+declare function Wu4AmbientSplit(value: string): string;
+declare namespace Wu4AmbientSplit {
+  const stringTag: string;
+}
+
+const wu4AmbientSplitNumber: number = Wu4AmbientSplit(1);
+const wu4AmbientSplitString: string = Wu4AmbientSplit("ok");
+const wu4AmbientSplitNumberTag: number = Wu4AmbientSplit.numberTag;
+const wu4AmbientSplitStringTag: string = Wu4AmbientSplit.stringTag;
+Wu4AmbientSplit(true); // error[TK2769]
+const wu4AmbientSplitNumberWrong: string = Wu4AmbientSplit(1); // error[TK2322]: Type 'number' is not assignable to type 'string'
+const wu4AmbientSplitStringWrong: number = Wu4AmbientSplit("ok"); // error[TK2322]: Type 'string' is not assignable to type 'number'
+const wu4AmbientSplitNumberTagWrong: string = Wu4AmbientSplit.numberTag; // error[TK2322]: Type 'number' is not assignable to type 'string'
+const wu4AmbientSplitStringTagWrong: number = Wu4AmbientSplit.stringTag; // error[TK2322]: Type 'string' is not assignable to type 'number'

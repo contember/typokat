@@ -1,6 +1,6 @@
 // WU4 — tsc 6.0.3 --strict --noEmit --lib es5 --module commonjs:
-// TS2300 x4, TS2434 x2, TS2345 x4, and TS2322 x18 below. Explicit field, static,
-// namespace-value, and private annotations keep unrelated inference outside this fixture's scope.
+// TS2300 x4, TS2434 x2, TS2345 x4, TS2322 x18, and TS2339 below. Explicit field,
+// static, namespace-value, and private annotations keep unrelated inference outside this fixture's scope.
 
 class Wu4ForwardClass {
   static existing: number = 1;
@@ -12,6 +12,7 @@ class Wu4ForwardClass {
   }
 }
 namespace Wu4ForwardClass {
+  const hidden: boolean = true;
   export const tag: string = "forward";
   export interface Options {
     enabled: boolean;
@@ -28,6 +29,7 @@ const wu4ForwardClassInstanceWrong: string = wu4ForwardClassInstance.instance; /
 const wu4ForwardClassStaticWrong: string = Wu4ForwardClass.existing; // error[TK2322]: Type 'number' is not assignable to type 'string'
 const wu4ForwardClassTagWrong: number = Wu4ForwardClass.tag; // error[TK2322]: Type 'string' is not assignable to type 'number'
 const wu4ForwardClassOptionsWrong: number = wu4ForwardClassOptions.enabled; // error[TK2322]: Type 'boolean' is not assignable to type 'number'
+Wu4ForwardClass.hidden; // error[TK2339]: Property 'hidden' does not exist on type 'typeof Wu4ForwardClass'
 
 namespace Wu4ReverseClass { // error[TK2434]: A namespace declaration cannot be located prior to a class or function with which it is merged
   export const tag: string = "reverse";
