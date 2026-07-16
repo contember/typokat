@@ -25,3 +25,7 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
   value metadata needs a superseding architecture decision before backlog `14` can start.
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold public-witness gate; no implementation started.
+- [`sprint-2026-07-16-namespace-binder-refactor.md`](sprint-2026-07-16-namespace-binder-refactor.md) —
+  planned, not started; behavior-preserving split of `binder/namespace.rs` into submodules plus
+  measured dedup (mirrored walkers, `declaration_owner_scope`, canonical sorts). Gated on
+  backlog-43 WU7 closure.
