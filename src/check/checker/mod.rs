@@ -61,6 +61,8 @@ mod statements;
 mod type_groups;
 #[cfg(test)]
 pub(crate) mod wu0b_library;
+#[cfg(test)]
+pub(crate) mod wu0b_profile;
 
 use context::{
     AssertionCompatibilityObligation, AssignObligation, CheckerEffects, CheckerRecordBatch,

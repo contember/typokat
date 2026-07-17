@@ -38,6 +38,7 @@ use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct InjectedLibrarySource<'source> {
@@ -71,6 +72,25 @@ pub(crate) struct LibraryPhaseCounts {
     pub(crate) filled_records: usize,
     pub(crate) publication_validations: usize,
     pub(crate) statement_check_units: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LibraryPhaseTimings {
+    pub(crate) parse: Duration,
+    pub(crate) bind: Duration,
+    pub(crate) reserve_fill: Duration,
+    pub(crate) publication_validation: Duration,
+    pub(crate) statement_check: Duration,
+}
+
+impl LibraryPhaseTimings {
+    fn measured_total(&self) -> Duration {
+        self.parse
+            + self.bind
+            + self.reserve_fill
+            + self.publication_validation
+            + self.statement_check
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,6 +131,7 @@ pub(crate) struct ValueProbe {
 #[derive(Debug)]
 pub(crate) struct InjectedProfileRun {
     pub(crate) phase_counts: LibraryPhaseCounts,
+    pub(crate) phase_timings: LibraryPhaseTimings,
     pub(crate) reserved_file_ordinals: Vec<LibraryFileOrdinal>,
     pub(crate) reporting_receipts: Vec<LibraryReportingReceipt>,
     pub(crate) library_records: Vec<(LibraryEventKey, CheckerRecord)>,
@@ -155,6 +176,7 @@ struct ParserExportClaim {
 pub(crate) fn run_injected_profile(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<InjectedProfileRun, InjectedProfileError> {
+    let parse_started = Instant::now();
     let canonical = canonical_inputs(sources)?;
     let allocators = (0..canonical.len())
         .map(|_| Allocator::default())
@@ -229,7 +251,9 @@ pub(crate) fn run_injected_profile(
         .collect::<Result<Vec<_>, _>>()?;
     let (parsed, claims): (Vec<_>, Vec<_>) = parsed_and_claims.into_iter().unzip();
     let parser_export_claims = claims.into_iter().flatten().collect::<Vec<_>>();
+    let parse_elapsed = parse_started.elapsed();
 
+    let bind_started = Instant::now();
     let units = parsed
         .iter()
         .zip(&canonical)
@@ -261,7 +285,9 @@ pub(crate) fn run_injected_profile(
             }
         })
         .collect::<Vec<_>>();
+    let bind_elapsed = bind_started.elapsed();
 
+    let reserve_fill_started = Instant::now();
     let mut ledger = LibraryEventLedger::default();
     let mut lexical_events: LexicalReservations<LibraryRecordTicket> =
         LexicalReservations::default();
@@ -329,6 +355,9 @@ pub(crate) fn run_injected_profile(
 
     let declaration_count = pass.type_decls.len();
     pass.fill_type_decls_range(binder.module, 0, declaration_count);
+    let reserve_fill_elapsed = reserve_fill_started.elapsed();
+
+    let publication_validation_started = Instant::now();
     let module_programs = module_scopes
         .iter()
         .copied()
@@ -356,7 +385,9 @@ pub(crate) fn run_injected_profile(
         .iter()
         .copied()
         .collect::<Vec<_>>();
+    let publication_validation_elapsed = publication_validation_started.elapsed();
 
+    let statement_check_started = Instant::now();
     let mut pass_source_units = Vec::with_capacity(canonical.len());
     for (((input, parsed), module), semantic_scope) in canonical
         .iter()
@@ -386,6 +417,7 @@ pub(crate) fn run_injected_profile(
         .map_err(InjectedProfileError::Reporting)?;
     let snapshot = ledger.snapshot();
     let library_records = ledger.finish().map_err(InjectedProfileError::Reporting)?;
+    let statement_check_elapsed = statement_check_started.elapsed();
 
     Ok(InjectedProfileRun {
         phase_counts: LibraryPhaseCounts {
@@ -395,6 +427,13 @@ pub(crate) fn run_injected_profile(
             filled_records: snapshot.filled_records,
             publication_validations,
             statement_check_units: pass_source_units.len(),
+        },
+        phase_timings: LibraryPhaseTimings {
+            parse: parse_elapsed,
+            bind: bind_elapsed,
+            reserve_fill: reserve_fill_elapsed,
+            publication_validation: publication_validation_elapsed,
+            statement_check: statement_check_elapsed,
         },
         reserved_file_ordinals: snapshot.reserved_file_ordinals,
         reporting_receipts,
@@ -745,16 +784,207 @@ fn library_ordinal(origin: CompilationOrigin) -> Option<LibraryFileOrdinal> {
     }
 }
 
+fn release_phase_line(
+    process: usize,
+    registry_validation: Duration,
+    timings: &LibraryPhaseTimings,
+    total: Duration,
+) -> String {
+    format!(
+        "typokat-wu0b-phase-v1 process={process} registry_validation_us={} parse_us={} bind_us={} reserve_fill_us={} publication_validation_us={} statement_check_us={} total_us={}",
+        registry_validation.as_micros(),
+        timings.parse.as_micros(),
+        timings.bind.as_micros(),
+        timings.reserve_fill.as_micros(),
+        timings.publication_validation.as_micros(),
+        timings.statement_check.as_micros(),
+        total.as_micros(),
+    )
+}
+
+struct ReleaseOutcomeLine {
+    process: usize,
+    file_count: usize,
+    reserved_records: usize,
+    filled_records: usize,
+    publication_validations: usize,
+    library_diagnostics: usize,
+    library_incompletes: usize,
+    tiny_parse_errors: usize,
+    tiny_diagnostics: usize,
+    tiny_incompletes: usize,
+}
+
+impl ReleaseOutcomeLine {
+    fn render(&self) -> String {
+        format!(
+            "typokat-wu0b-outcome-v1 process={} file_count={} reserved_records={} filled_records={} publication_validations={} library_diagnostics={} library_incompletes={} tiny_parse_errors={} tiny_diagnostics={} tiny_incompletes={}",
+            self.process,
+            self.file_count,
+            self.reserved_records,
+            self.filled_records,
+            self.publication_validations,
+            self.library_diagnostics,
+            self.library_incompletes,
+            self.tiny_parse_errors,
+            self.tiny_diagnostics,
+            self.tiny_incompletes,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::check::checker::wu0b_profile::load_strict_profile;
+    use crate::driver::check_source;
 
     fn assert_owned_terminal<T: Send + Sync + 'static>() {}
+
+    const TINY_SOURCE: &str = "export const typokatWu0bProbe: number = 1;\n";
 
     #[test]
     fn injected_results_are_ast_free_owned_terminals() {
         assert_owned_terminal::<InjectedProfileRun>();
         assert_owned_terminal::<InjectedProfileError>();
+        assert_owned_terminal::<LibraryPhaseTimings>();
+    }
+
+    #[test]
+    fn phase_timings_are_real_nonoverlapping_measurements() {
+        let started = Instant::now();
+        let run = run_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "timing.d.ts",
+            source: "interface TimingWitness { value: number; }",
+        }])
+        .expect("focused timing profile");
+        let external = started.elapsed();
+        assert!(run.phase_timings.measured_total() <= external);
+        assert_eq!(run.phase_counts.parse_units, 1);
+        assert_eq!(run.phase_counts.bind_units, 1);
+        assert_eq!(run.phase_counts.statement_check_units, 1);
+    }
+
+    #[test]
+    fn release_probe_lines_have_the_exact_v1_contract() {
+        let timings = LibraryPhaseTimings {
+            parse: Duration::from_micros(2),
+            bind: Duration::from_micros(3),
+            reserve_fill: Duration::from_micros(5),
+            publication_validation: Duration::from_micros(7),
+            statement_check: Duration::from_micros(11),
+        };
+        assert_eq!(
+            release_phase_line(
+                4,
+                Duration::from_micros(1),
+                &timings,
+                Duration::from_micros(31),
+            ),
+            "typokat-wu0b-phase-v1 process=4 registry_validation_us=1 parse_us=2 bind_us=3 reserve_fill_us=5 publication_validation_us=7 statement_check_us=11 total_us=31"
+        );
+        assert_eq!(
+            ReleaseOutcomeLine {
+                process: 4,
+                file_count: 82,
+                reserved_records: 13,
+                filled_records: 13,
+                publication_validations: 9,
+                library_diagnostics: 2,
+                library_incompletes: 3,
+                tiny_parse_errors: 0,
+                tiny_diagnostics: 0,
+                tiny_incompletes: 0,
+            }
+            .render(),
+            "typokat-wu0b-outcome-v1 process=4 file_count=82 reserved_records=13 filled_records=13 publication_validations=9 library_diagnostics=2 library_incompletes=3 tiny_parse_errors=0 tiny_diagnostics=0 tiny_incompletes=0"
+        );
+    }
+
+    #[test]
+    #[ignore = "release-only WU0B cold-process measurement"]
+    fn wu0b_release_probe_once() {
+        let process = std::env::var("TYPOKAT_WU0B_PROCESS")
+            .expect("TYPOKAT_WU0B_PROCESS must identify release process 1..5")
+            .parse::<usize>()
+            .expect("TYPOKAT_WU0B_PROCESS must be an integer in 1..5");
+        assert!(
+            (1..=5).contains(&process),
+            "TYPOKAT_WU0B_PROCESS must be in 1..5"
+        );
+
+        let total_started = Instant::now();
+        let registry_started = Instant::now();
+        let profile = load_strict_profile().expect("strict WU0B registry validation");
+        let registry_validation = registry_started.elapsed();
+        let injected = profile.injected_sources();
+        let run = run_injected_profile(&injected).expect("exact WU0B profile execution");
+
+        assert_eq!(run.phase_counts.parse_units, 82);
+        assert_eq!(run.phase_counts.bind_units, 82);
+        assert_eq!(run.phase_counts.statement_check_units, 82);
+        assert!(run.phase_counts.reserved_records > 0);
+        assert_eq!(
+            run.phase_counts.reserved_records,
+            run.phase_counts.filled_records
+        );
+        assert!(run.phase_counts.publication_validations > 0);
+        let expected = (0..82)
+            .map(LibraryFileOrdinal::new)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            run.reserved_file_ordinals
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            expected
+        );
+        assert!(run
+            .library_records
+            .iter()
+            .all(|(key, _)| expected.contains(&key.file_ordinal)));
+        assert!(run
+            .reporting_receipts
+            .iter()
+            .all(|receipt| expected.contains(&receipt.file_ordinal)));
+
+        let tiny = check_source(TINY_SOURCE);
+        assert!(tiny.parse_errors.is_empty(), "{:?}", tiny.parse_errors);
+        assert!(tiny.diagnostics.is_empty(), "{:?}", tiny.diagnostics);
+        assert!(tiny.incomplete.is_empty(), "{:?}", tiny.incomplete);
+        let library_diagnostics = run
+            .library_records
+            .iter()
+            .filter(|(_, record)| matches!(record, CheckerRecord::Diagnostic(_)))
+            .count();
+        let library_incompletes = run.library_records.len() - library_diagnostics;
+        let total = total_started.elapsed();
+        assert!(
+            registry_validation + run.phase_timings.measured_total() <= total,
+            "external total must cover every measured phase"
+        );
+
+        println!(
+            "{}",
+            release_phase_line(process, registry_validation, &run.phase_timings, total)
+        );
+        println!(
+            "{}",
+            ReleaseOutcomeLine {
+                process,
+                file_count: injected.len(),
+                reserved_records: run.phase_counts.reserved_records,
+                filled_records: run.phase_counts.filled_records,
+                publication_validations: run.phase_counts.publication_validations,
+                library_diagnostics,
+                library_incompletes,
+                tiny_parse_errors: tiny.parse_errors.len(),
+                tiny_diagnostics: tiny.diagnostics.len(),
+                tiny_incompletes: tiny.incomplete.len(),
+            }
+            .render()
+        );
     }
 
     #[test]

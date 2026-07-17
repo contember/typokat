@@ -28,13 +28,13 @@ use super::events_library::{
 use super::library_reporting::LibraryReportingFamily;
 use super::reporting_record::CheckerRecord;
 use super::wu0b_library::{run_injected_profile, InjectedLibrarySource};
+use super::wu0b_profile::load_strict_profile;
 use crate::binder::declaration::{TypeGroupId, ValueStorageId};
 use crate::diagnostics::{DiagnosticCode, IncompleteSurface};
 use crate::driver::{FileInput, FileReport};
 use crate::source::{LibraryFileOrdinal, ModuleOrdinal, SourceOrdinal, SourceUnit, UnitSlot};
 use crate::span::Span;
 use std::collections::BTreeSet;
-use std::path::Path;
 
 trait NominalTicketDomain {}
 
@@ -190,60 +190,6 @@ fn use_statements(source: &str) -> Vec<String> {
         statements.push(current);
     }
     statements
-}
-
-struct OwnedProfileSource {
-    file_ordinal: LibraryFileOrdinal,
-    name: String,
-    source: String,
-}
-
-fn validated_profile_sources() -> Result<Vec<OwnedProfileSource>, String> {
-    let manifest = include_str!("../../library/typescript-6.0.3/profile.toml")
-        .parse::<toml::Value>()
-        .map_err(|error| format!("profile.toml must parse: {error}"))?;
-    let files = manifest
-        .get("file")
-        .and_then(toml::Value::as_array)
-        .ok_or_else(|| "profile.toml must contain [[file]] rows".to_string())?;
-    if files.len() != 82 {
-        return Err(format!(
-            "profile.toml must contain 82 rows, found {}",
-            files.len()
-        ));
-    }
-
-    let library_dir =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/library/typescript-6.0.3/lib");
-    let mut sources = Vec::with_capacity(files.len());
-    for (position, row) in files.iter().enumerate() {
-        let row = row
-            .as_table()
-            .ok_or_else(|| format!("profile row {position} must be a table"))?;
-        let declared = row
-            .get("ordinal")
-            .and_then(toml::Value::as_integer)
-            .ok_or_else(|| format!("profile row {position} must have an ordinal"))?;
-        let declared = usize::try_from(declared)
-            .map_err(|_| format!("profile row {position} ordinal must fit usize"))?;
-        if declared != position {
-            return Err(format!(
-                "profile row {position} declares ordinal {declared}"
-            ));
-        }
-        let name = row
-            .get("name")
-            .and_then(toml::Value::as_str)
-            .ok_or_else(|| format!("profile row {position} must have a name"))?;
-        let source = std::fs::read_to_string(library_dir.join(name))
-            .map_err(|error| format!("cannot read profile row {position} {name}: {error}"))?;
-        sources.push(OwnedProfileSource {
-            file_ordinal: LibraryFileOrdinal::new(position),
-            name: name.to_string(),
-            source,
-        });
-    }
-    Ok(sources)
 }
 
 #[test]
@@ -1335,15 +1281,8 @@ fn all_binder_outcome_families_flow_through_the_real_library_consumer() -> Resul
 
 #[test]
 fn committed_registry_rows_drive_the_injected_profile_and_exact_owner_set() -> Result<(), String> {
-    let owned = validated_profile_sources()?;
-    let injected = owned
-        .iter()
-        .map(|row| InjectedLibrarySource {
-            file_ordinal: row.file_ordinal,
-            name: &row.name,
-            source: &row.source,
-        })
-        .collect::<Vec<_>>();
+    let owned = load_strict_profile()?;
+    let injected = owned.injected_sources();
     let run = run_injected_profile(&injected)
         .map_err(|error| format!("injected profile failed: {error:?}"))?;
 
@@ -1358,6 +1297,7 @@ fn committed_registry_rows_drive_the_injected_profile_and_exact_owner_set() -> R
     assert_eq!(run.phase_counts.statement_check_units, 82);
 
     let expected = owned
+        .sources
         .iter()
         .map(|row| row.file_ordinal)
         .collect::<BTreeSet<_>>();
