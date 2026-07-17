@@ -52,6 +52,8 @@ pub(crate) mod lexical_events;
 #[cfg(test)]
 pub(crate) mod lexical_events_library;
 mod lexical_events_user;
+#[cfg(test)]
+pub(crate) mod library_reporting;
 mod namespace_values;
 mod narrowing;
 pub(crate) mod reporting_record;

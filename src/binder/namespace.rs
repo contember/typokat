@@ -885,7 +885,7 @@ impl NamespaceTable {
     }
 
     #[cfg(test)]
-    fn members(&self) -> impl Iterator<Item = &NamespaceMember> {
+    pub(crate) fn members(&self) -> impl Iterator<Item = &NamespaceMember> {
         self.members.iter()
     }
 
