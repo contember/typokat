@@ -1,10 +1,12 @@
 //! Lexical event reservations retained across class/SCC/body phases.
 
-use super::events::{EventStore, EventStoreError, ReservedEvent, UserRecordTicket};
+use super::events::UserRecordTicket;
 use crate::binder::declaration::{
     source_declaration_occurrences, DeclId, DeclarationKind, TypeGroupId, ValueStorageId,
 };
-use crate::source::{ModuleOrdinal, SourceOrdinal, SourceUnit, UnitSlot};
+#[cfg(test)]
+use crate::source::{ModuleOrdinal, UnitSlot};
+use crate::source::{SourceOrdinal, SourceUnit};
 use crate::span::Span;
 use crate::types::repr::{ClassId, TypeParamId};
 use oxc_ast::ast::{
@@ -33,6 +35,7 @@ pub(crate) struct SourceSite {
 }
 
 impl SourceSite {
+    #[cfg(test)]
     pub(crate) const fn user(
         module_ordinal: ModuleOrdinal,
         unit_slot: UnitSlot,
@@ -102,6 +105,7 @@ pub(crate) struct DeclarationReservation<Ticket: Copy = UserRecordTicket> {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct ExportAliasReservation<Ticket: Copy = UserRecordTicket> {
+    source: SourceSite,
     local_span: Span,
     owner: Ticket,
 }
@@ -115,8 +119,8 @@ pub(crate) enum InterfaceOccurrenceKind {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct InterfaceOccurrenceReservation<Ticket: Copy = UserRecordTicket> {
+    source: SourceSite,
     binding_start: u32,
-    source_start: u32,
     kind: InterfaceOccurrenceKind,
     owner: Ticket,
 }
@@ -204,31 +208,21 @@ pub(crate) struct CallableReservation<Ticket: Copy = UserRecordTicket> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ReservationError {
+pub(crate) enum ReservationStateError {
     UnknownClass(ClassSiteId),
     DuplicateClassBinding(ClassSiteId),
     DuplicateCallableBinding(CallableSiteId),
     MissingDeclarationOwner(DeclId),
-    #[cfg(test)]
-    NonUserSource(SourceUnit),
-    EventStore(EventStoreError),
 }
 
-impl From<EventStoreError> for ReservationError {
-    fn from(error: EventStoreError) -> Self {
-        Self::EventStore(error)
-    }
-}
+pub(super) trait LexicalReservationAllocator {
+    type Event: Copy;
+    type Ticket: Copy + PartialEq;
+    type Error;
 
-fn user_source_parts(source: SourceSite) -> Result<(ModuleOrdinal, UnitSlot), ReservationError> {
-    match source.unit {
-        SourceUnit::User {
-            module_ordinal,
-            unit_slot,
-        } => Ok((module_ordinal, unit_slot)),
-        #[cfg(test)]
-        SourceUnit::Library { .. } => Err(ReservationError::NonUserSource(source.unit)),
-    }
+    fn source_unit(&self) -> SourceUnit;
+    fn reserve_event(&mut self, source_start: u32) -> (Self::Event, Self::Ticket);
+    fn reserve_record(&mut self, event: Self::Event) -> Result<Self::Ticket, Self::Error>;
 }
 
 /// Persistent source-site table built before class construction, SCCs, and bodies.
@@ -276,32 +270,34 @@ impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
     }
 }
 
-impl LexicalReservations<UserRecordTicket> {
+impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     /// Walk one program in lexical order and reserve all top-level/class/callable sites.
-    pub(crate) fn reserve_program(
+    pub(super) fn reserve_program_with<Allocator>(
         &mut self,
-        module_ordinal: ModuleOrdinal,
-        unit_slot: UnitSlot,
         program: &Program<'_>,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
+        let unit = allocator.source_unit();
+        let ordinal = source_ordinal(unit);
         for occurrence in source_declaration_occurrences(program) {
-            let event = store.reserve_event(module_ordinal, occurrence.binding_span.start);
+            let (_, owner) = allocator.reserve_event(occurrence.binding_span.start);
             let index = self.declarations.len();
             self.declarations.push(DeclarationReservation {
-                source: SourceSite::user(
-                    module_ordinal,
-                    unit_slot,
-                    occurrence.declaration_span.start,
-                ),
+                source: SourceSite {
+                    unit,
+                    source_start: occurrence.declaration_span.start,
+                },
                 kind: occurrence.kind,
                 declaration_span: occurrence.declaration_span,
                 binding_span: occurrence.binding_span,
-                owner: event.primary,
+                owner,
             });
             let previous = self.declarations_by_binding.insert(
                 (
-                    SourceOrdinal::User(module_ordinal),
+                    ordinal,
                     occurrence.binding_span.start,
                     occurrence.binding_span.end,
                 ),
@@ -315,56 +311,58 @@ impl LexicalReservations<UserRecordTicket> {
         for statement in &program.body {
             match statement {
                 Statement::TSModuleDeclaration(declaration) => {
-                    self.reserve_export_aliases_in_module(module_ordinal, declaration, store)?;
+                    self.reserve_export_aliases_in_module(unit, declaration, allocator)?;
                 }
                 Statement::ExportNamedDeclaration(export) => {
                     if let Some(Declaration::TSModuleDeclaration(declaration)) = &export.declaration
                     {
-                        self.reserve_export_aliases_in_module(module_ordinal, declaration, store)?;
+                        self.reserve_export_aliases_in_module(unit, declaration, allocator)?;
                     }
                 }
                 _ => {}
             }
         }
-        self.reserve_interface_occurrences_in_statements(module_ordinal, &program.body, store);
-        self.reserve_statement_list(module_ordinal, unit_slot, &program.body, true, store)
+        self.reserve_interface_occurrences_in_statements(unit, &program.body, allocator);
+        self.reserve_statement_list(unit, &program.body, true, allocator)
     }
 
-    fn reserve_interface_occurrences_in_statements(
+    fn reserve_interface_occurrences_in_statements<Allocator>(
         &mut self,
-        module_ordinal: ModuleOrdinal,
+        unit: SourceUnit,
         statements: &[Statement<'_>],
-        store: &mut EventStore,
-    ) {
+        allocator: &mut Allocator,
+    ) where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         for statement in statements {
             match statement {
                 Statement::TSInterfaceDeclaration(interface) => {
-                    self.reserve_interface_occurrences(module_ordinal, interface, store);
+                    self.reserve_interface_occurrences(unit, interface, allocator);
                 }
                 Statement::ExportNamedDeclaration(export) => match &export.declaration {
                     Some(Declaration::TSInterfaceDeclaration(interface)) => {
-                        self.reserve_interface_occurrences(module_ordinal, interface, store);
+                        self.reserve_interface_occurrences(unit, interface, allocator);
                     }
                     Some(Declaration::TSModuleDeclaration(module)) => {
-                        self.reserve_interface_occurrences_in_module(module_ordinal, module, store);
+                        self.reserve_interface_occurrences_in_module(unit, module, allocator);
                     }
                     Some(Declaration::TSGlobalDeclaration(global)) => {
                         self.reserve_interface_occurrences_in_statements(
-                            module_ordinal,
+                            unit,
                             &global.body.body,
-                            store,
+                            allocator,
                         );
                     }
                     _ => {}
                 },
                 Statement::TSModuleDeclaration(module) => {
-                    self.reserve_interface_occurrences_in_module(module_ordinal, module, store);
+                    self.reserve_interface_occurrences_in_module(unit, module, allocator);
                 }
                 Statement::TSGlobalDeclaration(global) => {
                     self.reserve_interface_occurrences_in_statements(
-                        module_ordinal,
+                        unit,
                         &global.body.body,
-                        store,
+                        allocator,
                     );
                 }
                 _ => {}
@@ -372,44 +370,48 @@ impl LexicalReservations<UserRecordTicket> {
         }
     }
 
-    fn reserve_interface_occurrences_in_module(
+    fn reserve_interface_occurrences_in_module<Allocator>(
         &mut self,
-        module_ordinal: ModuleOrdinal,
+        unit: SourceUnit,
         module: &TSModuleDeclaration<'_>,
-        store: &mut EventStore,
-    ) {
+        allocator: &mut Allocator,
+    ) where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         match &module.body {
             Some(TSModuleDeclarationBody::TSModuleBlock(block)) => {
-                self.reserve_interface_occurrences_in_statements(module_ordinal, &block.body, store)
+                self.reserve_interface_occurrences_in_statements(unit, &block.body, allocator)
             }
             Some(TSModuleDeclarationBody::TSModuleDeclaration(nested)) => {
-                self.reserve_interface_occurrences_in_module(module_ordinal, nested, store);
+                self.reserve_interface_occurrences_in_module(unit, nested, allocator);
             }
             None => {}
         }
     }
 
-    fn reserve_interface_occurrences(
+    fn reserve_interface_occurrences<Allocator>(
         &mut self,
-        module_ordinal: ModuleOrdinal,
+        unit: SourceUnit,
         interface: &oxc_ast::ast::TSInterfaceDeclaration<'_>,
-        store: &mut EventStore,
-    ) {
+        allocator: &mut Allocator,
+    ) where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         let binding_start = interface.id.span.start;
         self.reserve_interface_occurrence(
-            module_ordinal,
+            unit,
             binding_start,
             InterfaceOccurrenceKind::Header,
             binding_start,
-            store,
+            allocator,
         );
         for heritage in &interface.extends {
             self.reserve_interface_occurrence(
-                module_ordinal,
+                unit,
                 binding_start,
                 InterfaceOccurrenceKind::Heritage,
                 heritage.span.start,
-                store,
+                allocator,
             );
         }
         for member in &interface.body.body {
@@ -421,70 +423,70 @@ impl LexicalReservations<UserRecordTicket> {
                 TSSignature::TSIndexSignature(signature) => signature.span.start,
             };
             self.reserve_interface_occurrence(
-                module_ordinal,
+                unit,
                 binding_start,
                 InterfaceOccurrenceKind::Member,
                 source_start,
-                store,
+                allocator,
             );
         }
     }
 
-    fn reserve_interface_occurrence(
+    fn reserve_interface_occurrence<Allocator>(
         &mut self,
-        module_ordinal: ModuleOrdinal,
+        unit: SourceUnit,
         binding_start: u32,
         kind: InterfaceOccurrenceKind,
         source_start: u32,
-        store: &mut EventStore,
-    ) {
-        let event = store.reserve_event(module_ordinal, source_start);
+        allocator: &mut Allocator,
+    ) where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
+        let (_, owner) = allocator.reserve_event(source_start);
         let index = self.interface_occurrences.len();
         self.interface_occurrences
             .push(InterfaceOccurrenceReservation {
+                source: SourceSite { unit, source_start },
                 binding_start,
-                source_start,
                 kind,
-                owner: event.primary,
+                owner,
             });
         let previous = self.interface_occurrences_by_source.insert(
-            (
-                SourceOrdinal::User(module_ordinal),
-                binding_start,
-                kind,
-                source_start,
-            ),
+            (source_ordinal(unit), binding_start, kind, source_start),
             index,
         );
         debug_assert!(previous.is_none(), "one exact interface occurrence owner");
     }
 
-    fn reserve_export_aliases_in_statement(
+    fn reserve_export_aliases_in_statement<Allocator>(
         &mut self,
-        module_ordinal: ModuleOrdinal,
+        unit: SourceUnit,
         statement: &Statement<'_>,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         match statement {
             Statement::TSModuleDeclaration(declaration) => {
-                self.reserve_export_aliases_in_module(module_ordinal, declaration, store)?;
+                self.reserve_export_aliases_in_module(unit, declaration, allocator)?;
             }
             Statement::ExportNamedDeclaration(export) => {
                 if export.source.is_none() && export.declaration.is_none() {
                     for specifier in &export.specifiers {
                         let local_span = Span::from_oxc(specifier.local.span());
-                        let event = store.reserve_event(module_ordinal, local_span.start);
+                        let (_, owner) = allocator.reserve_event(local_span.start);
                         let index = self.export_aliases.len();
                         self.export_aliases.push(ExportAliasReservation {
+                            source: SourceSite {
+                                unit,
+                                source_start: local_span.start,
+                            },
                             local_span,
-                            owner: event.primary,
+                            owner,
                         });
                         let previous = self.export_aliases_by_local_span.insert(
-                            (
-                                SourceOrdinal::User(module_ordinal),
-                                local_span.start,
-                                local_span.end,
-                            ),
+                            (source_ordinal(unit), local_span.start, local_span.end),
                             index,
                         );
                         debug_assert!(
@@ -494,7 +496,7 @@ impl LexicalReservations<UserRecordTicket> {
                     }
                 }
                 if let Some(Declaration::TSModuleDeclaration(declaration)) = &export.declaration {
-                    self.reserve_export_aliases_in_module(module_ordinal, declaration, store)?;
+                    self.reserve_export_aliases_in_module(unit, declaration, allocator)?;
                 }
             }
             _ => {}
@@ -502,57 +504,68 @@ impl LexicalReservations<UserRecordTicket> {
         Ok(())
     }
 
-    fn reserve_export_aliases_in_module(
+    fn reserve_export_aliases_in_module<Allocator>(
         &mut self,
-        module_ordinal: ModuleOrdinal,
+        unit: SourceUnit,
         declaration: &TSModuleDeclaration<'_>,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         match &declaration.body {
             Some(TSModuleDeclarationBody::TSModuleBlock(block)) => {
                 for statement in &block.body {
-                    self.reserve_export_aliases_in_statement(module_ordinal, statement, store)?;
+                    self.reserve_export_aliases_in_statement(unit, statement, allocator)?;
                 }
             }
             Some(TSModuleDeclarationBody::TSModuleDeclaration(nested)) => {
-                self.reserve_export_aliases_in_module(module_ordinal, nested, store)?;
+                self.reserve_export_aliases_in_module(unit, nested, allocator)?;
             }
             None => {}
         }
         Ok(())
     }
 
-    fn reserve_statement_list(
+    fn reserve_statement_list<Allocator>(
         &mut self,
-        module_ordinal: ModuleOrdinal,
-        unit_slot: UnitSlot,
+        unit: SourceUnit,
         statements: &[Statement<'_>],
         top_level: bool,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         for statement in statements {
-            self.reserve_statement(module_ordinal, unit_slot, statement, top_level, store)?;
+            self.reserve_statement(unit, statement, top_level, allocator)?;
         }
         Ok(())
     }
 
-    fn reserve_statement(
+    fn reserve_statement<Allocator>(
         &mut self,
-        module_ordinal: ModuleOrdinal,
-        unit_slot: UnitSlot,
+        unit: SourceUnit,
         statement: &Statement<'_>,
         top_level: bool,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
-        let source = SourceSite::user(module_ordinal, unit_slot, statement.span().start);
-        let event = store.reserve_event(module_ordinal, source.source_start);
-        let tickets = reserve_site_tickets(event, store)?;
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
+        let source = SourceSite {
+            unit,
+            source_start: statement.span().start,
+        };
+        let (event, primary) = allocator.reserve_event(source.source_start);
+        let tickets = reserve_site_tickets(event, primary, allocator)?;
         let mut class_site = None;
         let mut callable = None;
         if let Some(class) = statement_class(statement) {
-            class_site = Some(self.reserve_class(source, class, tickets, store)?);
+            class_site = Some(self.reserve_class(source, class, tickets, allocator)?);
         } else if let Some(function) = statement_function(statement) {
-            callable = Some(self.reserve_callable(source, event, tickets, None, function, store)?);
+            callable =
+                Some(self.reserve_callable(source, event, tickets, None, function, allocator)?);
         }
         if top_level {
             self.top_level.push(TopLevelReservation {
@@ -570,115 +583,79 @@ impl LexicalReservations<UserRecordTicket> {
         }
 
         if let Some(declaration) = statement_variable_declaration(statement) {
-            self.reserve_declarators(source, declaration, store)?;
+            self.reserve_declarators(source, declaration, allocator)?;
         }
         if let Some(function) = statement_function(statement) {
-            self.reserve_parameter_expressions(source, &function.params, store)?;
+            self.reserve_parameter_expressions(source, &function.params, allocator)?;
             if let Some(body) = function.body.as_ref() {
-                self.reserve_statement_list(
-                    module_ordinal,
-                    unit_slot,
-                    &body.statements,
-                    false,
-                    store,
-                )?;
+                self.reserve_statement_list(unit, &body.statements, false, allocator)?;
             }
             return Ok(());
         }
         if statement_class(statement).is_some() {
             return Ok(());
         }
-        self.reserve_statement_expressions(source, statement, store)?;
+        self.reserve_statement_expressions(source, statement, allocator)?;
         match statement {
             Statement::BlockStatement(block) => {
-                self.reserve_statement_list(module_ordinal, unit_slot, &block.body, false, store)?
+                self.reserve_statement_list(unit, &block.body, false, allocator)?
             }
             Statement::IfStatement(statement) => {
-                self.reserve_statement(
-                    module_ordinal,
-                    unit_slot,
-                    &statement.consequent,
-                    false,
-                    store,
-                )?;
+                self.reserve_statement(unit, &statement.consequent, false, allocator)?;
                 if let Some(alternate) = statement.alternate.as_ref() {
-                    self.reserve_statement(module_ordinal, unit_slot, alternate, false, store)?;
+                    self.reserve_statement(unit, alternate, false, allocator)?;
                 }
             }
             Statement::DoWhileStatement(statement) => {
-                self.reserve_statement(module_ordinal, unit_slot, &statement.body, false, store)?
+                self.reserve_statement(unit, &statement.body, false, allocator)?
             }
             Statement::WhileStatement(statement) => {
-                self.reserve_statement(module_ordinal, unit_slot, &statement.body, false, store)?
+                self.reserve_statement(unit, &statement.body, false, allocator)?
             }
             Statement::ForStatement(statement) => {
                 if let Some(ForStatementInit::VariableDeclaration(declaration)) = &statement.init {
-                    self.reserve_declarators(source, declaration, store)?;
+                    self.reserve_declarators(source, declaration, allocator)?;
                 }
-                self.reserve_statement(module_ordinal, unit_slot, &statement.body, false, store)?;
+                self.reserve_statement(unit, &statement.body, false, allocator)?;
             }
             Statement::ForInStatement(statement) => {
                 if let ForStatementLeft::VariableDeclaration(declaration) = &statement.left {
-                    self.reserve_declarators(source, declaration, store)?;
+                    self.reserve_declarators(source, declaration, allocator)?;
                 }
-                self.reserve_statement(module_ordinal, unit_slot, &statement.body, false, store)?;
+                self.reserve_statement(unit, &statement.body, false, allocator)?;
             }
             Statement::ForOfStatement(statement) => {
                 if let ForStatementLeft::VariableDeclaration(declaration) = &statement.left {
-                    self.reserve_declarators(source, declaration, store)?;
+                    self.reserve_declarators(source, declaration, allocator)?;
                 }
-                self.reserve_statement(module_ordinal, unit_slot, &statement.body, false, store)?;
+                self.reserve_statement(unit, &statement.body, false, allocator)?;
             }
             Statement::WithStatement(statement) => {
-                self.reserve_statement(module_ordinal, unit_slot, &statement.body, false, store)?
+                self.reserve_statement(unit, &statement.body, false, allocator)?
             }
             Statement::SwitchStatement(statement) => {
                 for case in &statement.cases {
-                    self.reserve_statement_list(
-                        module_ordinal,
-                        unit_slot,
-                        &case.consequent,
-                        false,
-                        store,
-                    )?;
+                    self.reserve_statement_list(unit, &case.consequent, false, allocator)?;
                 }
             }
             Statement::LabeledStatement(statement) => {
-                self.reserve_statement(module_ordinal, unit_slot, &statement.body, false, store)?
+                self.reserve_statement(unit, &statement.body, false, allocator)?
             }
             Statement::TryStatement(statement) => {
-                self.reserve_statement_list(
-                    module_ordinal,
-                    unit_slot,
-                    &statement.block.body,
-                    false,
-                    store,
-                )?;
+                self.reserve_statement_list(unit, &statement.block.body, false, allocator)?;
                 if let Some(handler) = &statement.handler {
-                    self.reserve_statement_list(
-                        module_ordinal,
-                        unit_slot,
-                        &handler.body.body,
-                        false,
-                        store,
-                    )?;
+                    self.reserve_statement_list(unit, &handler.body.body, false, allocator)?;
                 }
                 if let Some(finalizer) = &statement.finalizer {
-                    self.reserve_statement_list(
-                        module_ordinal,
-                        unit_slot,
-                        &finalizer.body,
-                        false,
-                        store,
-                    )?;
+                    self.reserve_statement_list(unit, &finalizer.body, false, allocator)?;
                 }
             }
             Statement::TSModuleDeclaration(module) => {
-                self.reserve_module_statements(module_ordinal, unit_slot, module, store)?;
+                self.reserve_module_statements(unit, module, allocator)?;
             }
             Statement::ExportNamedDeclaration(export) => {
                 if let Some(Declaration::TSModuleDeclaration(module)) = &export.declaration {
-                    self.reserve_module_statements(module_ordinal, unit_slot, module, store)?;
+                    self.reserve_module_statements(unit, module, allocator)?;
                 }
             }
             _ => {}
@@ -686,60 +663,67 @@ impl LexicalReservations<UserRecordTicket> {
         Ok(())
     }
 
-    fn reserve_module_statements(
+    fn reserve_module_statements<Allocator>(
         &mut self,
-        module_ordinal: ModuleOrdinal,
-        unit_slot: UnitSlot,
+        unit: SourceUnit,
         module: &TSModuleDeclaration<'_>,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         match &module.body {
             Some(TSModuleDeclarationBody::TSModuleBlock(block)) => {
-                self.reserve_statement_list(module_ordinal, unit_slot, &block.body, false, store)?;
+                self.reserve_statement_list(unit, &block.body, false, allocator)?;
             }
             Some(TSModuleDeclarationBody::TSModuleDeclaration(nested)) => {
-                self.reserve_module_statements(module_ordinal, unit_slot, nested, store)?;
+                self.reserve_module_statements(unit, nested, allocator)?;
             }
             None => {}
         }
         Ok(())
     }
 
-    fn reserve_declarators(
+    fn reserve_declarators<Allocator>(
         &mut self,
         parent: SourceSite,
         declaration: &VariableDeclaration<'_>,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
-        let (module_ordinal, _) = user_source_parts(parent)?;
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         for declarator in &declaration.declarations {
             let source = SourceSite {
                 source_start: declarator.span.start,
                 ..parent
             };
-            let event = store.reserve_event(module_ordinal, source.source_start);
-            let tickets = reserve_site_tickets(event, store)?;
+            let (event, primary) = allocator.reserve_event(source.source_start);
+            let tickets = reserve_site_tickets(event, primary, allocator)?;
             self.declarators
                 .push(DeclaratorReservation { source, tickets });
             if let Some(initializer) = &declarator.init {
-                self.reserve_expression(source, initializer, store)?;
+                self.reserve_expression(source, initializer, allocator)?;
             }
         }
         Ok(())
     }
 
-    fn reserve_statement_expressions(
+    fn reserve_statement_expressions<Allocator>(
         &mut self,
         source: SourceSite,
         statement: &Statement<'_>,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         match statement {
             Statement::DoWhileStatement(statement) => {
-                self.reserve_expression(source, &statement.test, store)?;
+                self.reserve_expression(source, &statement.test, allocator)?;
             }
             Statement::ExpressionStatement(statement) => {
-                self.reserve_expression(source, &statement.expression, store)?;
+                self.reserve_expression(source, &statement.expression, allocator)?;
             }
             Statement::ForStatement(statement) => {
                 if let Some(expression) = statement
@@ -747,49 +731,49 @@ impl LexicalReservations<UserRecordTicket> {
                     .as_ref()
                     .and_then(ForStatementInit::as_expression)
                 {
-                    self.reserve_expression(source, expression, store)?;
+                    self.reserve_expression(source, expression, allocator)?;
                 }
                 if let Some(test) = &statement.test {
-                    self.reserve_expression(source, test, store)?;
+                    self.reserve_expression(source, test, allocator)?;
                 }
                 if let Some(update) = &statement.update {
-                    self.reserve_expression(source, update, store)?;
+                    self.reserve_expression(source, update, allocator)?;
                 }
             }
             Statement::ForInStatement(statement) => {
-                self.reserve_expression(source, &statement.right, store)?;
+                self.reserve_expression(source, &statement.right, allocator)?;
             }
             Statement::ForOfStatement(statement) => {
-                self.reserve_expression(source, &statement.right, store)?;
+                self.reserve_expression(source, &statement.right, allocator)?;
             }
             Statement::IfStatement(statement) => {
-                self.reserve_expression(source, &statement.test, store)?;
+                self.reserve_expression(source, &statement.test, allocator)?;
             }
             Statement::ReturnStatement(statement) => {
                 if let Some(argument) = &statement.argument {
-                    self.reserve_expression(source, argument, store)?;
+                    self.reserve_expression(source, argument, allocator)?;
                 }
             }
             Statement::SwitchStatement(statement) => {
-                self.reserve_expression(source, &statement.discriminant, store)?;
+                self.reserve_expression(source, &statement.discriminant, allocator)?;
                 for case in &statement.cases {
                     if let Some(test) = &case.test {
-                        self.reserve_expression(source, test, store)?;
+                        self.reserve_expression(source, test, allocator)?;
                     }
                 }
             }
             Statement::ThrowStatement(statement) => {
-                self.reserve_expression(source, &statement.argument, store)?;
+                self.reserve_expression(source, &statement.argument, allocator)?;
             }
             Statement::WhileStatement(statement) => {
-                self.reserve_expression(source, &statement.test, store)?;
+                self.reserve_expression(source, &statement.test, allocator)?;
             }
             Statement::WithStatement(statement) => {
-                self.reserve_expression(source, &statement.object, store)?;
+                self.reserve_expression(source, &statement.object, allocator)?;
             }
             Statement::ExportDefaultDeclaration(export) => {
                 if let Some(expression) = export.declaration.as_expression() {
-                    self.reserve_expression(source, expression, store)?;
+                    self.reserve_expression(source, expression, allocator)?;
                 }
             }
             _ => {}
@@ -797,151 +781,154 @@ impl LexicalReservations<UserRecordTicket> {
         Ok(())
     }
 
-    fn reserve_expression(
+    fn reserve_expression<Allocator>(
         &mut self,
         source: SourceSite,
         expression: &Expression<'_>,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         match expression {
             Expression::TemplateLiteral(template) => {
                 for expression in &template.expressions {
-                    self.reserve_expression(source, expression, store)?;
+                    self.reserve_expression(source, expression, allocator)?;
                 }
             }
             Expression::ArrayExpression(array) => {
                 for element in &array.elements {
                     if let Some(expression) = element.as_expression() {
-                        self.reserve_expression(source, expression, store)?;
+                        self.reserve_expression(source, expression, allocator)?;
                     } else if let ArrayExpressionElement::SpreadElement(spread) = element {
-                        self.reserve_expression(source, &spread.argument, store)?;
+                        self.reserve_expression(source, &spread.argument, allocator)?;
                     }
                 }
             }
             Expression::ArrowFunctionExpression(arrow) => {
-                self.reserve_arrow_expression(source, arrow, store)?;
+                self.reserve_arrow_expression(source, arrow, allocator)?;
             }
             Expression::AssignmentExpression(assignment) => {
-                self.reserve_expression(source, &assignment.right, store)?;
+                self.reserve_expression(source, &assignment.right, allocator)?;
             }
             Expression::AwaitExpression(await_expression) => {
-                self.reserve_expression(source, &await_expression.argument, store)?;
+                self.reserve_expression(source, &await_expression.argument, allocator)?;
             }
             Expression::BinaryExpression(binary) => {
-                self.reserve_expression(source, &binary.left, store)?;
-                self.reserve_expression(source, &binary.right, store)?;
+                self.reserve_expression(source, &binary.left, allocator)?;
+                self.reserve_expression(source, &binary.right, allocator)?;
             }
             Expression::CallExpression(call) => {
-                self.reserve_call_expression(source, call, store)?;
+                self.reserve_call_expression(source, call, allocator)?;
             }
             Expression::ChainExpression(chain) => match &chain.expression {
                 ChainElement::CallExpression(call) => {
-                    self.reserve_call_expression(source, call, store)?;
+                    self.reserve_call_expression(source, call, allocator)?;
                 }
                 ChainElement::TSNonNullExpression(expression) => {
-                    self.reserve_expression(source, &expression.expression, store)?;
+                    self.reserve_expression(source, &expression.expression, allocator)?;
                 }
                 ChainElement::ComputedMemberExpression(member) => {
-                    self.reserve_expression(source, &member.object, store)?;
-                    self.reserve_expression(source, &member.expression, store)?;
+                    self.reserve_expression(source, &member.object, allocator)?;
+                    self.reserve_expression(source, &member.expression, allocator)?;
                 }
                 ChainElement::StaticMemberExpression(member) => {
-                    self.reserve_expression(source, &member.object, store)?;
+                    self.reserve_expression(source, &member.object, allocator)?;
                 }
                 ChainElement::PrivateFieldExpression(member) => {
-                    self.reserve_expression(source, &member.object, store)?;
+                    self.reserve_expression(source, &member.object, allocator)?;
                 }
             },
             Expression::ClassExpression(class) => {
-                self.reserve_class_expression(source, class, store)?;
+                self.reserve_class_expression(source, class, allocator)?;
             }
             Expression::ConditionalExpression(conditional) => {
-                self.reserve_expression(source, &conditional.test, store)?;
-                self.reserve_expression(source, &conditional.consequent, store)?;
-                self.reserve_expression(source, &conditional.alternate, store)?;
+                self.reserve_expression(source, &conditional.test, allocator)?;
+                self.reserve_expression(source, &conditional.consequent, allocator)?;
+                self.reserve_expression(source, &conditional.alternate, allocator)?;
             }
             Expression::FunctionExpression(function) => {
-                self.reserve_function_expression(source, function, store)?;
+                self.reserve_function_expression(source, function, allocator)?;
             }
             Expression::ImportExpression(import) => {
-                self.reserve_expression(source, &import.source, store)?;
+                self.reserve_expression(source, &import.source, allocator)?;
                 if let Some(options) = &import.options {
-                    self.reserve_expression(source, options, store)?;
+                    self.reserve_expression(source, options, allocator)?;
                 }
             }
             Expression::LogicalExpression(logical) => {
-                self.reserve_expression(source, &logical.left, store)?;
-                self.reserve_expression(source, &logical.right, store)?;
+                self.reserve_expression(source, &logical.left, allocator)?;
+                self.reserve_expression(source, &logical.right, allocator)?;
             }
             Expression::NewExpression(new_expression) => {
-                self.reserve_expression(source, &new_expression.callee, store)?;
-                self.reserve_arguments(source, &new_expression.arguments, store)?;
+                self.reserve_expression(source, &new_expression.callee, allocator)?;
+                self.reserve_arguments(source, &new_expression.arguments, allocator)?;
             }
             Expression::ObjectExpression(object) => {
                 for property in &object.properties {
                     match property {
                         ObjectPropertyKind::ObjectProperty(property) => {
-                            self.reserve_property_key(source, &property.key, store)?;
-                            self.reserve_expression(source, &property.value, store)?;
+                            self.reserve_property_key(source, &property.key, allocator)?;
+                            self.reserve_expression(source, &property.value, allocator)?;
                         }
                         ObjectPropertyKind::SpreadProperty(spread) => {
-                            self.reserve_expression(source, &spread.argument, store)?;
+                            self.reserve_expression(source, &spread.argument, allocator)?;
                         }
                     }
                 }
             }
             Expression::ParenthesizedExpression(parenthesized) => {
-                self.reserve_expression(source, &parenthesized.expression, store)?;
+                self.reserve_expression(source, &parenthesized.expression, allocator)?;
             }
             Expression::SequenceExpression(sequence) => {
                 for expression in &sequence.expressions {
-                    self.reserve_expression(source, expression, store)?;
+                    self.reserve_expression(source, expression, allocator)?;
                 }
             }
             Expression::TaggedTemplateExpression(tagged) => {
-                self.reserve_expression(source, &tagged.tag, store)?;
+                self.reserve_expression(source, &tagged.tag, allocator)?;
                 for expression in &tagged.quasi.expressions {
-                    self.reserve_expression(source, expression, store)?;
+                    self.reserve_expression(source, expression, allocator)?;
                 }
             }
             Expression::UnaryExpression(unary) => {
-                self.reserve_expression(source, &unary.argument, store)?;
+                self.reserve_expression(source, &unary.argument, allocator)?;
             }
             Expression::YieldExpression(yield_expression) => {
                 if let Some(argument) = &yield_expression.argument {
-                    self.reserve_expression(source, argument, store)?;
+                    self.reserve_expression(source, argument, allocator)?;
                 }
             }
             Expression::PrivateInExpression(private_in) => {
-                self.reserve_expression(source, &private_in.right, store)?;
+                self.reserve_expression(source, &private_in.right, allocator)?;
             }
             Expression::TSAsExpression(assertion) => {
-                self.reserve_expression(source, &assertion.expression, store)?;
+                self.reserve_expression(source, &assertion.expression, allocator)?;
             }
             Expression::TSSatisfiesExpression(assertion) => {
-                self.reserve_expression(source, &assertion.expression, store)?;
+                self.reserve_expression(source, &assertion.expression, allocator)?;
             }
             Expression::TSTypeAssertion(assertion) => {
-                self.reserve_expression(source, &assertion.expression, store)?;
+                self.reserve_expression(source, &assertion.expression, allocator)?;
             }
             Expression::TSNonNullExpression(expression) => {
-                self.reserve_expression(source, &expression.expression, store)?;
+                self.reserve_expression(source, &expression.expression, allocator)?;
             }
             Expression::TSInstantiationExpression(instantiation) => {
-                self.reserve_expression(source, &instantiation.expression, store)?;
+                self.reserve_expression(source, &instantiation.expression, allocator)?;
             }
             Expression::ComputedMemberExpression(member) => {
-                self.reserve_expression(source, &member.object, store)?;
-                self.reserve_expression(source, &member.expression, store)?;
+                self.reserve_expression(source, &member.object, allocator)?;
+                self.reserve_expression(source, &member.expression, allocator)?;
             }
             Expression::StaticMemberExpression(member) => {
-                self.reserve_expression(source, &member.object, store)?;
+                self.reserve_expression(source, &member.object, allocator)?;
             }
             Expression::PrivateFieldExpression(member) => {
-                self.reserve_expression(source, &member.object, store)?;
+                self.reserve_expression(source, &member.object, allocator)?;
             }
             Expression::V8IntrinsicExpression(intrinsic) => {
-                self.reserve_arguments(source, &intrinsic.arguments, store)?;
+                self.reserve_arguments(source, &intrinsic.arguments, allocator)?;
             }
             Expression::BooleanLiteral(_)
             | Expression::NullLiteral(_)
@@ -960,125 +947,137 @@ impl LexicalReservations<UserRecordTicket> {
         Ok(())
     }
 
-    fn reserve_arguments(
+    fn reserve_arguments<Allocator>(
         &mut self,
         source: SourceSite,
         arguments: &[Argument<'_>],
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         for argument in arguments {
             if let Some(expression) = argument.as_expression() {
-                self.reserve_expression(source, expression, store)?;
+                self.reserve_expression(source, expression, allocator)?;
             } else if let Argument::SpreadElement(spread) = argument {
-                self.reserve_expression(source, &spread.argument, store)?;
+                self.reserve_expression(source, &spread.argument, allocator)?;
             }
         }
         Ok(())
     }
 
-    fn reserve_call_expression(
+    fn reserve_call_expression<Allocator>(
         &mut self,
         source: SourceSite,
         call: &oxc_ast::ast::CallExpression<'_>,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
-        self.reserve_expression(source, &call.callee, store)?;
-        self.reserve_arguments(source, &call.arguments, store)
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
+        self.reserve_expression(source, &call.callee, allocator)?;
+        self.reserve_arguments(source, &call.arguments, allocator)
     }
 
-    fn reserve_property_key(
+    fn reserve_property_key<Allocator>(
         &mut self,
         source: SourceSite,
         key: &PropertyKey<'_>,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         if let Some(expression) = key.as_expression() {
-            self.reserve_expression(source, expression, store)?;
+            self.reserve_expression(source, expression, allocator)?;
         }
         Ok(())
     }
 
-    fn reserve_parameter_expressions(
+    fn reserve_parameter_expressions<Allocator>(
         &mut self,
         source: SourceSite,
         parameters: &FormalParameters<'_>,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         for parameter in &parameters.items {
             if let Some(initializer) = &parameter.initializer {
-                self.reserve_expression(source, initializer, store)?;
+                self.reserve_expression(source, initializer, allocator)?;
             }
         }
         Ok(())
     }
 
-    fn reserve_function_expression(
+    fn reserve_function_expression<Allocator>(
         &mut self,
         parent: SourceSite,
         function: &Function<'_>,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         let source = SourceSite {
             source_start: function.span.start,
             ..parent
         };
-        let (module_ordinal, unit_slot) = user_source_parts(source)?;
-        let event = store.reserve_event(module_ordinal, source.source_start);
-        let tickets = reserve_site_tickets(event, store)?;
+        let (event, primary) = allocator.reserve_event(source.source_start);
+        let tickets = reserve_site_tickets(event, primary, allocator)?;
         self.expression_site_tickets.push(tickets);
-        self.reserve_callable(source, event, tickets, None, function, store)?;
-        self.reserve_parameter_expressions(source, &function.params, store)?;
+        self.reserve_callable(source, event, tickets, None, function, allocator)?;
+        self.reserve_parameter_expressions(source, &function.params, allocator)?;
         if let Some(body) = &function.body {
-            self.reserve_statement_list(module_ordinal, unit_slot, &body.statements, false, store)?;
+            self.reserve_statement_list(source.unit, &body.statements, false, allocator)?;
         }
         Ok(())
     }
 
-    fn reserve_arrow_expression(
+    fn reserve_arrow_expression<Allocator>(
         &mut self,
         parent: SourceSite,
         arrow: &oxc_ast::ast::ArrowFunctionExpression<'_>,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         let source = SourceSite {
             source_start: arrow.span.start,
             ..parent
         };
-        let (module_ordinal, unit_slot) = user_source_parts(source)?;
-        let event = store.reserve_event(module_ordinal, source.source_start);
-        let tickets = reserve_site_tickets(event, store)?;
+        let (event, primary) = allocator.reserve_event(source.source_start);
+        let tickets = reserve_site_tickets(event, primary, allocator)?;
         self.expression_site_tickets.push(tickets);
-        self.reserve_arrow_callable(source, event, tickets, arrow, store)?;
-        self.reserve_parameter_expressions(source, &arrow.params, store)?;
+        self.reserve_arrow_callable(source, event, tickets, arrow, allocator)?;
+        self.reserve_parameter_expressions(source, &arrow.params, allocator)?;
         if let Some(expression) = arrow.get_expression() {
-            self.reserve_expression(source, expression, store)?;
+            self.reserve_expression(source, expression, allocator)?;
         } else {
-            self.reserve_statement_list(
-                module_ordinal,
-                unit_slot,
-                &arrow.body.statements,
-                false,
-                store,
-            )?;
+            self.reserve_statement_list(source.unit, &arrow.body.statements, false, allocator)?;
         }
         Ok(())
     }
 
-    fn reserve_class_expression(
+    fn reserve_class_expression<Allocator>(
         &mut self,
         parent: SourceSite,
         class: &Class<'_>,
-        store: &mut EventStore,
-    ) -> Result<(), ReservationError> {
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         let source = SourceSite {
             source_start: class.span.start,
             ..parent
         };
-        let (module_ordinal, _) = user_source_parts(source)?;
-        let event = store.reserve_event(module_ordinal, source.source_start);
-        let tickets = reserve_site_tickets(event, store)?;
+        let (event, primary) = allocator.reserve_event(source.source_start);
+        let tickets = reserve_site_tickets(event, primary, allocator)?;
         self.expression_site_tickets.push(tickets);
-        self.reserve_class(source, class, tickets, store)?;
+        self.reserve_class(source, class, tickets, allocator)?;
         Ok(())
     }
 }
@@ -1129,12 +1128,12 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         kind: DeclarationKind,
         declaration_span: Span,
         binding_span: Span,
-    ) -> Result<(), ReservationError> {
+    ) -> Result<(), ReservationStateError> {
         let reservation = self
             .declarations_by_binding
             .get(&(source, binding_span.start, binding_span.end))
             .and_then(|index| self.declarations.get(*index))
-            .ok_or(ReservationError::MissingDeclarationOwner(declaration))?;
+            .ok_or(ReservationStateError::MissingDeclarationOwner(declaration))?;
         assert_eq!(
             reservation.kind, kind,
             "declaration kind must match source prewalk"
@@ -1199,7 +1198,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         ))?;
         let occurrence = self.interface_occurrences.get(*index)?;
         debug_assert_eq!(occurrence.binding_start, reservation.binding_span.start);
-        debug_assert_eq!(occurrence.source_start, source_start);
+        debug_assert_eq!(occurrence.source.source_start, source_start);
         debug_assert_eq!(occurrence.kind, kind);
         Some(occurrence.owner)
     }
@@ -1265,12 +1264,12 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         &mut self,
         site: ClassSiteId,
         binding: ClassBinding,
-    ) -> Result<(), ReservationError> {
+    ) -> Result<(), ReservationStateError> {
         let Some(reservation) = self.classes.get_mut(site.0) else {
-            return Err(ReservationError::UnknownClass(site));
+            return Err(ReservationStateError::UnknownClass(site));
         };
         if reservation.binding.is_some() {
-            return Err(ReservationError::DuplicateClassBinding(site));
+            return Err(ReservationStateError::DuplicateClassBinding(site));
         }
         reservation.binding = Some(binding);
         Ok(())
@@ -1280,13 +1279,13 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     pub(crate) fn reserve_callable_type_params(
         &mut self,
         next_type_param: &mut u32,
-    ) -> Result<(), ReservationError> {
+    ) -> Result<(), ReservationStateError> {
         if let Some(callable) = self
             .callables
             .iter()
             .find(|callable| callable.binding.is_some())
         {
-            return Err(ReservationError::DuplicateCallableBinding(callable.id));
+            return Err(ReservationStateError::DuplicateCallableBinding(callable.id));
         }
         for callable in &mut self.callables {
             let mut type_params = Vec::with_capacity(callable.type_parameter_count);
@@ -1338,15 +1337,17 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     }
 }
 
-impl LexicalReservations<UserRecordTicket> {
-    fn reserve_class(
+impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
+    fn reserve_class<Allocator>(
         &mut self,
         source: SourceSite,
         class: &Class<'_>,
-        tickets: SiteTickets,
-        store: &mut EventStore,
-    ) -> Result<ClassSiteId, ReservationError> {
-        let (module_ordinal, unit_slot) = user_source_parts(source)?;
+        tickets: SiteTickets<Ticket>,
+        allocator: &mut Allocator,
+    ) -> Result<ClassSiteId, Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         let id = ClassSiteId(self.classes.len());
         let mut constraints = Vec::new();
         let mut defaults = Vec::new();
@@ -1358,21 +1359,27 @@ impl LexicalReservations<UserRecordTicket> {
             .enumerate()
         {
             if let Some(constraint) = parameter.constraint.as_ref() {
-                let source = SourceSite::user(module_ordinal, unit_slot, constraint.span().start);
-                let event = store.reserve_event(module_ordinal, source.source_start);
+                let source = SourceSite {
+                    unit: source.unit,
+                    source_start: constraint.span().start,
+                };
+                let (_, owner) = allocator.reserve_event(source.source_start);
                 constraints.push(ClassConstraintReservation {
                     parameter_index,
                     source,
-                    owner: event.primary,
+                    owner,
                 });
             }
             if let Some(default) = parameter.default.as_ref() {
-                let source = SourceSite::user(module_ordinal, unit_slot, default.span().start);
-                let event = store.reserve_event(module_ordinal, source.source_start);
+                let source = SourceSite {
+                    unit: source.unit,
+                    source_start: default.span().start,
+                };
+                let (_, owner) = allocator.reserve_event(source.source_start);
                 defaults.push(ClassDefaultReservation {
                     parameter_index,
                     source,
-                    owner: event.primary,
+                    owner,
                 });
             }
         }
@@ -1391,13 +1398,17 @@ impl LexicalReservations<UserRecordTicket> {
             .push(id);
 
         if let Some(super_class) = &class.super_class {
-            self.reserve_expression(source, super_class, store)?;
+            self.reserve_expression(source, super_class, allocator)?;
         }
 
         for element in &class.body.body {
-            let element_source = SourceSite::user(module_ordinal, unit_slot, element.span().start);
-            let member_event = store.reserve_event(module_ordinal, element_source.source_start);
-            let member_tickets = reserve_site_tickets(member_event, store)?;
+            let element_source = SourceSite {
+                unit: source.unit,
+                source_start: element.span().start,
+            };
+            let (member_event, member_primary) =
+                allocator.reserve_event(element_source.source_start);
+            let member_tickets = reserve_site_tickets(member_event, member_primary, allocator)?;
             let member_id = MemberSiteId(self.members.len());
             let mut member = MemberReservation {
                 id: member_id,
@@ -1413,19 +1424,23 @@ impl LexicalReservations<UserRecordTicket> {
                     member_tickets,
                     Some(member_id),
                     &method.value,
-                    store,
+                    allocator,
                 )?);
-                self.reserve_property_key(element_source, &method.key, store)?;
-                self.reserve_parameter_expressions(element_source, &method.value.params, store)?;
+                self.reserve_property_key(element_source, &method.key, allocator)?;
+                self.reserve_parameter_expressions(
+                    element_source,
+                    &method.value.params,
+                    allocator,
+                )?;
             } else if let ClassElement::PropertyDefinition(property) = element {
-                self.reserve_property_key(element_source, &property.key, store)?;
+                self.reserve_property_key(element_source, &property.key, allocator)?;
                 if let Some(value) = &property.value {
-                    self.reserve_expression(element_source, value, store)?;
+                    self.reserve_expression(element_source, value, allocator)?;
                 }
             } else if let ClassElement::AccessorProperty(property) = element {
-                self.reserve_property_key(element_source, &property.key, store)?;
+                self.reserve_property_key(element_source, &property.key, allocator)?;
                 if let Some(value) = &property.value {
-                    self.reserve_expression(element_source, value, store)?;
+                    self.reserve_expression(element_source, value, allocator)?;
                 }
             }
             self.members.push(member);
@@ -1434,22 +1449,15 @@ impl LexicalReservations<UserRecordTicket> {
                 ClassElement::MethodDefinition(method) => {
                     if let Some(body) = method.value.body.as_ref() {
                         self.reserve_statement_list(
-                            module_ordinal,
-                            unit_slot,
+                            source.unit,
                             &body.statements,
                             false,
-                            store,
+                            allocator,
                         )?;
                     }
                 }
                 ClassElement::StaticBlock(block) => {
-                    self.reserve_statement_list(
-                        module_ordinal,
-                        unit_slot,
-                        &block.body,
-                        false,
-                        store,
-                    )?;
+                    self.reserve_statement_list(source.unit, &block.body, false, allocator)?;
                 }
                 ClassElement::PropertyDefinition(_)
                 | ClassElement::AccessorProperty(_)
@@ -1459,17 +1467,20 @@ impl LexicalReservations<UserRecordTicket> {
         Ok(id)
     }
 
-    fn reserve_callable(
+    fn reserve_callable<Allocator>(
         &mut self,
         source: SourceSite,
-        event: ReservedEvent,
-        site_tickets: SiteTickets,
+        event: Allocator::Event,
+        site_tickets: SiteTickets<Ticket>,
         owner_member: Option<MemberSiteId>,
         function: &Function<'_>,
-        store: &mut EventStore,
-    ) -> Result<CallableSiteId, ReservationError> {
+        allocator: &mut Allocator,
+    ) -> Result<CallableSiteId, Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         let id = CallableSiteId(self.callables.len());
-        let body = store.reserve_record(event.id)?;
+        let body = allocator.reserve_record(event)?;
         self.callables.push(CallableReservation {
             id,
             owner_member,
@@ -1493,16 +1504,19 @@ impl LexicalReservations<UserRecordTicket> {
         Ok(id)
     }
 
-    fn reserve_arrow_callable(
+    fn reserve_arrow_callable<Allocator>(
         &mut self,
         source: SourceSite,
-        event: ReservedEvent,
-        site_tickets: SiteTickets,
+        event: Allocator::Event,
+        site_tickets: SiteTickets<Ticket>,
         arrow: &oxc_ast::ast::ArrowFunctionExpression<'_>,
-        store: &mut EventStore,
-    ) -> Result<CallableSiteId, ReservationError> {
+        allocator: &mut Allocator,
+    ) -> Result<CallableSiteId, Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         let id = CallableSiteId(self.callables.len());
-        let body = store.reserve_record(event.id)?;
+        let body = allocator.reserve_record(event)?;
         self.callables.push(CallableReservation {
             id,
             owner_member: None,
@@ -1527,14 +1541,18 @@ impl LexicalReservations<UserRecordTicket> {
     }
 }
 
-fn reserve_site_tickets(
-    event: ReservedEvent,
-    store: &mut EventStore,
-) -> Result<SiteTickets, EventStoreError> {
+fn reserve_site_tickets<Allocator>(
+    event: Allocator::Event,
+    primary: Allocator::Ticket,
+    allocator: &mut Allocator,
+) -> Result<SiteTickets<Allocator::Ticket>, Allocator::Error>
+where
+    Allocator: LexicalReservationAllocator,
+{
     Ok(SiteTickets {
-        immediate: event.primary,
-        deferred: store.reserve_record(event.id)?,
-        incomplete: store.reserve_record(event.id)?,
+        immediate: primary,
+        deferred: allocator.reserve_record(event)?,
+        incomplete: allocator.reserve_record(event)?,
     })
 }
 
@@ -1587,7 +1605,15 @@ fn statement_variable_declaration<'ast>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::events::{EventStore, EventStoreError};
+    use super::super::events_library::{
+        LibraryEventKey, LibraryEventLedger, LibraryEventLedgerError, LibraryRecordTicket,
+    };
+    use super::super::lexical_events_user::ReservationError as UserReservationError;
+    use super::super::reporting_record::CheckerRecord;
     use super::*;
+    use crate::diagnostics::IncompleteSurface;
+    use crate::source::LibraryFileOrdinal;
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
@@ -1599,6 +1625,370 @@ mod tests {
             u32::try_from(start).expect("source offset fits u32"),
             u32::try_from(start + needle.len()).expect("source offset fits u32"),
         )
+    }
+
+    fn test_record(index: usize) -> CheckerRecord {
+        let start = u32::try_from(index).expect("test record index fits u32");
+        CheckerRecord::Incomplete(IncompleteSurface::new(
+            format!("lexical-reservation-test-{index}"),
+            Span::new(start, start.saturating_add(1)),
+            "lexical reservation adapter witness",
+        ))
+    }
+
+    fn reservation_sources<Ticket: Copy>(
+        reservations: &LexicalReservations<Ticket>,
+    ) -> Vec<SourceSite> {
+        let mut sources = Vec::new();
+        sources.extend(reservations.declarations.iter().map(|row| row.source));
+        sources.extend(reservations.export_aliases.iter().map(|row| row.source));
+        sources.extend(
+            reservations
+                .interface_occurrences
+                .iter()
+                .map(|row| row.source),
+        );
+        sources.extend(reservations.top_level.iter().map(|row| row.source));
+        sources.extend(reservations.nested_statements.iter().map(|row| row.source));
+        sources.extend(reservations.declarators.iter().map(|row| row.source));
+        for class in &reservations.classes {
+            sources.push(class.source);
+            sources.extend(class.constraints.iter().map(|row| row.source));
+            sources.extend(class.defaults.iter().map(|row| row.source));
+        }
+        sources.extend(reservations.members.iter().map(|row| row.source));
+        sources.extend(reservations.callables.iter().map(|row| row.source));
+        sources
+    }
+
+    fn finish_user_reservations(
+        mut store: EventStore,
+        tickets: &[UserRecordTicket],
+    ) -> Vec<(u32, usize, usize, String, Span)> {
+        for (index, ticket) in tickets.iter().enumerate() {
+            store
+                .complete(*ticket, vec![test_record(index)])
+                .expect("each user lexical ticket completes once");
+        }
+        store
+            .finish()
+            .expect("complete user lexical inventory finishes")
+            .into_iter()
+            .map(|(key, record)| {
+                let CheckerRecord::Incomplete(record) = record else {
+                    panic!("lexical parity emits only incompletes");
+                };
+                (
+                    key.source_start,
+                    key.event_ordinal,
+                    key.record_ordinal,
+                    record.id,
+                    record.span,
+                )
+            })
+            .collect()
+    }
+
+    fn finish_library_reservations(
+        mut ledger: LibraryEventLedger,
+        tickets: &[LibraryRecordTicket],
+    ) -> Vec<(u32, usize, usize, String, Span)> {
+        for (index, ticket) in tickets.iter().enumerate().rev() {
+            ledger
+                .complete(*ticket, vec![test_record(index)])
+                .expect("each library lexical ticket completes once");
+        }
+        ledger
+            .finish()
+            .expect("complete library lexical inventory finishes")
+            .into_iter()
+            .map(|(key, record)| {
+                let CheckerRecord::Incomplete(record) = record else {
+                    panic!("lexical parity emits only incompletes");
+                };
+                (
+                    key.source_start,
+                    key.event_ordinal,
+                    key.record_ordinal,
+                    record.id,
+                    record.span,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn user_and_library_wrappers_expose_concrete_authority_errors() {
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, "const value = 1;", SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty());
+
+        let mut user = LexicalReservations::<UserRecordTicket>::default();
+        let mut store = EventStore::default();
+        let user_result: Result<(), UserReservationError> = user.reserve_program(
+            ModuleOrdinal::new(3),
+            UnitSlot::new(2),
+            &parsed.program,
+            &mut store,
+        );
+        user_result.expect("user wrapper reserves through EventStore");
+
+        let mut library = LexicalReservations::<LibraryRecordTicket>::default();
+        let mut ledger = LibraryEventLedger::default();
+        let library_result: Result<(), LibraryEventLedgerError> = library.reserve_library_program(
+            LibraryFileOrdinal::new(5),
+            &parsed.program,
+            &mut ledger,
+        );
+        library_result.expect("library wrapper reserves through LibraryEventLedger");
+    }
+
+    #[test]
+    fn rich_ast_has_identical_user_and_library_reservation_streams() {
+        let source = r#"
+interface Shape<T> extends Base {
+  value: T;
+  call(input: number): string;
+  new (input: string): Shape<T>;
+  [key: string]: unknown;
+}
+declare namespace Outer {
+  export { Missing as Alias };
+  export interface Nested { nested: boolean; }
+}
+class Box<T extends object = {}> extends Base {
+  static { const staticArrow = (value = 1) => value; }
+  [computed()] = function (value = 1) { return value; };
+  method<U>(value = () => 1) { return value(); }
+}
+function outer<T>(value = () => 1) {
+  if (value) { const nested = class { field = () => 1; }; }
+  return function inner(input = 1) { return input; };
+}
+const arrow = (input = 1) => class Inner { method() { return input; } };
+"#;
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+
+        let user_unit = SourceUnit::User {
+            module_ordinal: ModuleOrdinal::new(11),
+            unit_slot: UnitSlot::new(4),
+        };
+        let library_unit = SourceUnit::Library {
+            file_ordinal: LibraryFileOrdinal::new(11),
+        };
+        let mut user = LexicalReservations::<UserRecordTicket>::default();
+        let mut user_store = EventStore::default();
+        user.reserve_program(
+            ModuleOrdinal::new(11),
+            UnitSlot::new(4),
+            &parsed.program,
+            &mut user_store,
+        )
+        .unwrap();
+        let mut library = LexicalReservations::<LibraryRecordTicket>::default();
+        let mut library_ledger = LibraryEventLedger::default();
+        library
+            .reserve_library_program(
+                LibraryFileOrdinal::new(11),
+                &parsed.program,
+                &mut library_ledger,
+            )
+            .unwrap();
+
+        let user_sources = reservation_sources(&user);
+        let library_sources = reservation_sources(&library);
+        assert!(!user_sources.is_empty());
+        assert!(user_sources.iter().all(|site| site.unit == user_unit));
+        assert!(library_sources.iter().all(|site| site.unit == library_unit));
+        assert_eq!(
+            user_sources
+                .iter()
+                .map(|site| site.source_start)
+                .collect::<Vec<_>>(),
+            library_sources
+                .iter()
+                .map(|site| site.source_start)
+                .collect::<Vec<_>>()
+        );
+
+        let user_tickets = user.tickets();
+        let library_tickets = library.tickets();
+        assert_eq!(user_tickets.len(), library_tickets.len());
+        assert_eq!(
+            user_tickets.iter().copied().collect::<BTreeSet<_>>().len(),
+            user_tickets.len()
+        );
+        assert_eq!(
+            library_tickets
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len(),
+            library_tickets.len()
+        );
+        assert_eq!(
+            finish_user_reservations(user_store, &user_tickets),
+            finish_library_reservations(library_ledger, &library_tickets)
+        );
+    }
+
+    #[test]
+    fn identical_spans_in_two_library_files_keep_exact_sources_and_keys() {
+        let source = "class Shared { method(value = 1) { return () => value; } }";
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty());
+        let first = LibraryFileOrdinal::new(2);
+        let second = LibraryFileOrdinal::new(7);
+        let mut reservations = LexicalReservations::<LibraryRecordTicket>::default();
+        let mut ledger = LibraryEventLedger::default();
+        reservations
+            .reserve_library_program(first, &parsed.program, &mut ledger)
+            .unwrap();
+        reservations
+            .reserve_library_program(second, &parsed.program, &mut ledger)
+            .unwrap();
+
+        let sources = reservation_sources(&reservations);
+        let first_unit = SourceUnit::Library {
+            file_ordinal: first,
+        };
+        let second_unit = SourceUnit::Library {
+            file_ordinal: second,
+        };
+        let first_sources = sources
+            .iter()
+            .filter(|site| site.unit == first_unit)
+            .map(|site| site.source_start)
+            .collect::<Vec<_>>();
+        let second_sources = sources
+            .iter()
+            .filter(|site| site.unit == second_unit)
+            .map(|site| site.source_start)
+            .collect::<Vec<_>>();
+        assert!(!first_sources.is_empty());
+        assert_eq!(first_sources, second_sources);
+        assert_eq!(first_sources.len() + second_sources.len(), sources.len());
+
+        let class_start = reservations
+            .classes
+            .iter()
+            .find(|class| class.source.unit == first_unit)
+            .map(|class| class.source.source_start)
+            .expect("first library class source");
+        let first_class = reservations
+            .class_at(SourceOrdinal::Library(first), class_start)
+            .expect("first library class site");
+        let second_class = reservations
+            .class_at(SourceOrdinal::Library(second), class_start)
+            .expect("second library class site");
+        assert_ne!(first_class, second_class);
+        let callable_start = reservations
+            .callables_by_source
+            .keys()
+            .find(|(source, _)| *source == SourceOrdinal::Library(first))
+            .map(|(_, source_start)| *source_start)
+            .expect("first library callable source");
+        let first_callable = reservations
+            .callable_at(SourceOrdinal::Library(first), callable_start)
+            .expect("first library callable site");
+        let second_callable = reservations
+            .callable_at(SourceOrdinal::Library(second), callable_start)
+            .expect("second library callable site");
+        assert_ne!(first_callable, second_callable);
+
+        let tickets = reservations.tickets();
+        for (index, ticket) in tickets.iter().enumerate() {
+            ledger.complete(*ticket, vec![test_record(index)]).unwrap();
+        }
+        let keys = ledger
+            .finish()
+            .expect("both library files have complete inventories")
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect::<Vec<_>>();
+        let first_keys = keys
+            .iter()
+            .filter(|key| key.file_ordinal == first)
+            .map(|key| (key.source_start, key.event_ordinal, key.record_ordinal))
+            .collect::<Vec<_>>();
+        let second_keys = keys
+            .iter()
+            .filter(|key| key.file_ordinal == second)
+            .map(|key| (key.source_start, key.event_ordinal, key.record_ordinal))
+            .collect::<Vec<_>>();
+        assert!(!first_keys.is_empty());
+        assert_eq!(first_keys, second_keys);
+        assert_eq!(
+            keys.iter().copied().collect::<BTreeSet<_>>().len(),
+            keys.len()
+        );
+    }
+
+    #[test]
+    fn library_inventory_is_unique_complete_once_and_reports_exact_failures() {
+        let source = "const value = () => class { method() { return 1; } };";
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty());
+        let file = LibraryFileOrdinal::new(13);
+        let mut reservations = LexicalReservations::<LibraryRecordTicket>::default();
+        let mut ledger = LibraryEventLedger::default();
+        reservations
+            .reserve_library_program(file, &parsed.program, &mut ledger)
+            .unwrap();
+        let tickets = reservations.tickets();
+        assert!(!tickets.is_empty());
+        assert_eq!(
+            tickets.iter().copied().collect::<BTreeSet<_>>().len(),
+            tickets.len()
+        );
+        let duplicate = tickets[0];
+        ledger.complete(duplicate, Vec::new()).unwrap();
+        assert_eq!(
+            ledger.complete(duplicate, Vec::new()),
+            Err(LibraryEventLedgerError::DuplicateCompletion(duplicate))
+        );
+        for ticket in tickets
+            .iter()
+            .copied()
+            .filter(|ticket| *ticket != duplicate)
+        {
+            ledger.complete(ticket, Vec::new()).unwrap();
+        }
+        assert!(ledger.finish().unwrap().is_empty());
+
+        let short_source = "const x = 1;";
+        let short_allocator = Allocator::default();
+        let short = Parser::new(&short_allocator, short_source, SourceType::ts()).parse();
+        assert!(short.diagnostics.is_empty());
+        let unfinished_file = LibraryFileOrdinal::new(21);
+        let mut unfinished_reservations = LexicalReservations::<LibraryRecordTicket>::default();
+        let mut unfinished_ledger = LibraryEventLedger::default();
+        unfinished_reservations
+            .reserve_library_program(unfinished_file, &short.program, &mut unfinished_ledger)
+            .unwrap();
+        let unfinished_tickets = unfinished_reservations.tickets();
+        let missing = unfinished_tickets[0];
+        for ticket in unfinished_tickets
+            .iter()
+            .copied()
+            .filter(|ticket| *ticket != missing)
+        {
+            unfinished_ledger.complete(ticket, Vec::new()).unwrap();
+        }
+        let expected_unfinished = vec![LibraryEventKey {
+            file_ordinal: unfinished_file,
+            source_start: u32::try_from(short_source.find('x').unwrap()).unwrap(),
+            event_ordinal: 0,
+            record_ordinal: 0,
+        }];
+        assert!(matches!(
+            unfinished_ledger.finish(),
+            Err(LibraryEventLedgerError::Unfinished(keys)) if keys == expected_unfinished
+        ));
     }
 
     #[test]
@@ -1779,6 +2169,7 @@ mod tests {
 
             let export_index = reservations.export_aliases.len();
             reservations.export_aliases.push(ExportAliasReservation {
+                source,
                 local_span,
                 owner: ticket,
             });
@@ -1791,8 +2182,8 @@ mod tests {
             reservations
                 .interface_occurrences
                 .push(InterfaceOccurrenceReservation {
+                    source,
                     binding_start: binding_span.start,
-                    source_start,
                     kind: InterfaceOccurrenceKind::Header,
                     owner: ticket,
                 });
@@ -2069,7 +2460,7 @@ interface Combined extends First, Second {
                 reservations.interface_occurrence_owner(
                     declaration,
                     occurrence.kind,
-                    occurrence.source_start,
+                    occurrence.source.source_start,
                 ),
                 Some(occurrence.owner),
                 "each interface child resolves only through its exact occurrence key"
@@ -2446,7 +2837,7 @@ interface Combined extends First, Second {
             .unwrap();
         assert_eq!(
             reservations.reserve_callable_type_params(&mut next_type_param),
-            Err(ReservationError::DuplicateCallableBinding(callable))
+            Err(ReservationStateError::DuplicateCallableBinding(callable))
         );
 
         assert_eq!(store.event_count(), event_count);

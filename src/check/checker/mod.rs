@@ -49,6 +49,9 @@ mod flowgraph;
 mod function_groups;
 mod indexed_access;
 pub(crate) mod lexical_events;
+#[cfg(test)]
+pub(crate) mod lexical_events_library;
+mod lexical_events_user;
 mod namespace_values;
 mod narrowing;
 pub(crate) mod reporting_record;
