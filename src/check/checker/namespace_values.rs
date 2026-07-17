@@ -31,16 +31,15 @@ use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-#[derive(Default)]
-pub(in crate::check::checker) struct NamespaceValueRegistry {
-    prepared: FxHashMap<(ScopeId, u32), PreparedNamespaceMember>,
+pub(in crate::check::checker) struct NamespaceValueRegistry<Ticket: Copy = UserRecordTicket> {
+    prepared: FxHashMap<(ScopeId, u32), PreparedNamespaceMember<Ticket>>,
     consumed_fragments: FxHashSet<(ScopeId, u32)>,
     fragment_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     private_fragments: FxHashSet<(ScopeId, u32)>,
     private_unsupported_members: FxHashSet<(ScopeId, u32)>,
     ambient_fragments: FxHashSet<(ScopeId, u32)>,
     prepared_owners: FxHashSet<(ScopeId, String)>,
-    standalone_plans: FxHashMap<NamespaceId, StandaloneNamespacePlan>,
+    standalone_plans: FxHashMap<NamespaceId, StandaloneNamespacePlan<Ticket>>,
     standalone_terminals: FxHashMap<NamespaceId, StandaloneNamespaceTerminal>,
     #[cfg(test)]
     standalone_query_root_calls: u64,
@@ -53,22 +52,22 @@ pub(in crate::check::checker) enum StandaloneNamespaceTerminal {
     Unavailable { cause: &'static str },
 }
 
-struct StandaloneNamespacePlan {
+struct StandaloneNamespacePlan<Ticket: Copy> {
     storage: ValueStorageId,
     properties: Vec<PropertyType>,
-    dependencies: Vec<StandaloneNamespaceDependency>,
+    dependencies: Vec<StandaloneNamespaceDependency<Ticket>>,
     unavailable: Option<&'static str>,
 }
 
-struct StandaloneNamespaceDependency {
+struct StandaloneNamespaceDependency<Ticket: Copy> {
     name: String,
     readonly: bool,
-    kind: StandaloneNamespaceDependencyKind,
+    kind: StandaloneNamespaceDependencyKind<Ticket>,
 }
 
 #[derive(Copy, Clone)]
-struct AliasDependencyFailure {
-    owner: UserRecordTicket,
+struct AliasDependencyFailure<Ticket: Copy> {
+    owner: Ticket,
     span: Span,
 }
 
@@ -78,7 +77,7 @@ struct LegalExistingOwnerMerge {
     storage: ValueStorageId,
 }
 
-enum StandaloneNamespaceDependencyKind {
+enum StandaloneNamespaceDependencyKind<Ticket: Copy> {
     Class {
         class: ClassId,
         storage: ValueStorageId,
@@ -88,22 +87,22 @@ enum StandaloneNamespaceDependencyKind {
     },
     Namespace {
         namespace: NamespaceId,
-        alias_failure: Option<AliasDependencyFailure>,
+        alias_failure: Option<AliasDependencyFailure<Ticket>>,
     },
     ExistingValue {
         storage: ValueStorageId,
-        alias_failure: Option<AliasDependencyFailure>,
+        alias_failure: Option<AliasDependencyFailure<Ticket>>,
     },
 }
 
-enum PreparedNamespaceMember {
+enum PreparedNamespaceMember<Ticket: Copy = UserRecordTicket> {
     Variable {
         scope: ScopeId,
         annotation: Option<TypeId>,
     },
     Function {
         scope: ScopeId,
-        reservation: FunctionReservation,
+        reservation: FunctionReservation<Ticket>,
     },
     Class {
         scope: ScopeId,
@@ -174,10 +173,10 @@ struct StagedVariable {
     annotation: Option<TypeId>,
 }
 
-struct StagedFunction<'stmt, 'ast> {
+struct StagedFunction<'stmt, 'ast, Ticket: Copy = UserRecordTicket> {
     input: OwnedMemberInput,
     syntax: &'stmt Function<'ast>,
-    reservation: FunctionReservation,
+    reservation: FunctionReservation<Ticket>,
 }
 
 #[derive(Default)]
@@ -222,7 +221,25 @@ struct StandaloneMemberInput {
     has_value_space: bool,
 }
 
-impl NamespaceValueRegistry {
+impl<Ticket: Copy> Default for NamespaceValueRegistry<Ticket> {
+    fn default() -> Self {
+        Self {
+            prepared: FxHashMap::default(),
+            consumed_fragments: FxHashSet::default(),
+            fragment_scopes: FxHashMap::default(),
+            private_fragments: FxHashSet::default(),
+            private_unsupported_members: FxHashSet::default(),
+            ambient_fragments: FxHashSet::default(),
+            prepared_owners: FxHashSet::default(),
+            standalone_plans: FxHashMap::default(),
+            standalone_terminals: FxHashMap::default(),
+            #[cfg(test)]
+            standalone_query_root_calls: 0,
+        }
+    }
+}
+
+impl NamespaceValueRegistry<UserRecordTicket> {
     pub(in crate::check::checker) fn standalone_terminal(
         &self,
         namespace: NamespaceId,
@@ -235,7 +252,11 @@ impl NamespaceValueRegistry {
         self.standalone_query_root_calls
     }
 
-    fn insert_standalone_plan(&mut self, namespace: NamespaceId, plan: StandaloneNamespacePlan) {
+    fn insert_standalone_plan(
+        &mut self,
+        namespace: NamespaceId,
+        plan: StandaloneNamespacePlan<UserRecordTicket>,
+    ) {
         assert!(
             self.standalone_plans.insert(namespace, plan).is_none(),
             "standalone namespace planned once"
@@ -1040,7 +1061,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 let mut waiting = false;
                 let mut unavailable = None;
                 let mut static_cycles = Vec::new();
-                let mut alias_failures: Vec<AliasDependencyFailure> = Vec::new();
+                let mut alias_failures: Vec<AliasDependencyFailure<UserRecordTicket>> = Vec::new();
                 for dependency in &plan.dependencies {
                     let ty = match &dependency.kind {
                         StandaloneNamespaceDependencyKind::Class {

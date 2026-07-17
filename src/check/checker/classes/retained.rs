@@ -37,9 +37,9 @@ pub(in crate::check::checker) struct RetainedParameterProperty<Ticket> {
 /// been lowered exactly once. `core` owns the frame/receiver/parameters/return and
 /// lexical tickets; this wrapper owns class-specific ordering and property rules.
 #[derive(Clone, Debug)]
-pub(in crate::check::checker) struct RetainedClassCallable<Ticket> {
+pub(in crate::check::checker) struct RetainedClassCallable<Ticket: Copy> {
     pub site: CallableSiteId,
-    pub tickets: CallableTickets,
+    pub tickets: CallableTickets<Ticket>,
     pub type_params: Vec<GenericTypeParam>,
     pub type_param_frame: FxHashMap<String, TypeId>,
     pub receiver: Option<TypeId>,
@@ -53,7 +53,7 @@ pub(in crate::check::checker) struct RetainedClassCallable<Ticket> {
     pub parameter_properties: Vec<RetainedParameterProperty<Ticket>>,
 }
 
-impl<Ticket> RetainedClassCallable<Ticket> {
+impl<Ticket: Copy> RetainedClassCallable<Ticket> {
     pub(in crate::check::checker) fn owned_type_parameters(
         &self,
     ) -> impl Iterator<Item = TypeParamId> + '_ {
@@ -127,7 +127,7 @@ mod tests {
         let callable = reservations.member(member).unwrap().callable.unwrap();
         let reserved = reservations.callable(callable).unwrap();
         let id = TypeParamId(7);
-        let retained = RetainedClassCallable::<u32> {
+        let retained = RetainedClassCallable {
             site: callable,
             tickets: reserved.tickets,
             type_params: vec![GenericTypeParam {

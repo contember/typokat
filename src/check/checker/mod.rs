@@ -1701,8 +1701,9 @@ where
                 }
             }
         }
+        let (owner, records) = effects.records.into_parts();
         pass.event_store
-            .commit(effects.records)
+            .complete(owner, records)
             .expect("each lexical record owner completes exactly once");
     }
 

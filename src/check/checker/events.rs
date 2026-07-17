@@ -1,7 +1,9 @@
 //! Deterministic checker record reservation and replay.
 
 use super::reporting_record::CheckerRecord;
-use crate::diagnostics::{Diagnostic, IncompleteSurface};
+use crate::diagnostics::Diagnostic;
+#[cfg(test)]
+use crate::diagnostics::IncompleteSurface;
 use crate::source::ModuleOrdinal;
 use std::collections::BTreeMap;
 
@@ -153,6 +155,7 @@ impl EventStore {
     }
 
     /// Atomically commit the selected candidate's completions.
+    #[cfg(test)]
     pub(crate) fn commit(&mut self, effects: CandidateEffects) -> Result<(), EventStoreError> {
         self.complete(effects.owner, effects.records)
     }
@@ -226,14 +229,12 @@ impl CandidateEffects {
         self.records.push(CheckerRecord::Diagnostic(diagnostic));
     }
 
+    #[cfg(test)]
     pub(crate) fn incomplete(&mut self, incomplete: IncompleteSurface) {
         self.records.push(CheckerRecord::Incomplete(incomplete));
     }
 
-    pub(crate) fn record(&mut self, record: CheckerRecord) {
-        self.records.push(record);
-    }
-
+    #[cfg(test)]
     pub(crate) fn merge(&mut self, child: CandidateEffects) {
         assert_eq!(
             self.owner, child.owner,
@@ -242,15 +243,11 @@ impl CandidateEffects {
         self.records.extend(child.records);
     }
 
-    pub(crate) fn owner(&self) -> UserRecordTicket {
-        self.owner
+    pub(crate) fn into_parts(self) -> (UserRecordTicket, Vec<CheckerRecord>) {
+        (self.owner, self.records)
     }
 
     #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.records.len()
-    }
-
     pub(crate) fn discard(self) {}
 }
 

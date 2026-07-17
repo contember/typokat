@@ -2191,7 +2191,8 @@ interface Combined extends First, Second {
                 "recorded",
             ));
         for effects in pending {
-            store.commit(effects.records).unwrap();
+            let (owner, records) = effects.records.into_parts();
+            store.complete(owner, records).unwrap();
         }
         assert_eq!(
             store.complete(owner.ticket, Vec::new()),

@@ -179,17 +179,21 @@ macro_rules! contextual_inference_args {
     }};
 }
 
-pub(in crate::check::checker) struct RetainedFunctionBodySurface {
+pub(in crate::check::checker) struct RetainedFunctionBodySurface<
+    Ticket: Copy = super::events::UserRecordTicket,
+> {
     pub type_param_frame: FxHashMap<String, TypeId>,
     pub receiver: Option<TypeId>,
     pub params: Vec<Option<ParameterType>>,
     pub declared_return: Option<TypeId>,
-    pub tickets: Option<super::lexical_events::CallableTickets>,
+    pub tickets: Option<super::lexical_events::CallableTickets<Ticket>>,
 }
 
-pub(in crate::check::checker) enum FunctionReservation {
-    Ready(FunctionSurface),
-    Unavailable(RetainedFunctionBodySurface),
+pub(in crate::check::checker) enum FunctionReservation<
+    Ticket: Copy = super::events::UserRecordTicket,
+> {
+    Ready(FunctionSurface<Ticket>),
+    Unavailable(RetainedFunctionBodySurface<Ticket>),
 }
 
 impl<'a, 'ast> Pass<'a, 'ast> {

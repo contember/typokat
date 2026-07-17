@@ -156,13 +156,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         name: &str,
         payload: FunctionNamespacePayload,
     ) -> bool {
-        let Some(identity) =
-            super::function_groups::FunctionGroupRegistry::function_namespace_identity(
-                self.binder,
-                scope,
-                name,
-            )
-        else {
+        let Some(identity) = super::function_groups::FunctionGroupRegistry::<
+            super::events::UserRecordTicket,
+        >::function_namespace_identity(self.binder, scope, name) else {
             return false;
         };
         let symbol = identity.symbol;
@@ -1235,11 +1231,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         name: &str,
     ) -> Option<FunctionGroupIdentity> {
-        let identity = super::function_groups::FunctionGroupRegistry::function_namespace_identity(
-            self.binder,
-            scope,
-            name,
-        )?;
+        let identity = super::function_groups::FunctionGroupRegistry::<
+            super::events::UserRecordTicket,
+        >::function_namespace_identity(self.binder, scope, name)?;
         self.function_groups.register(identity.clone());
         Some(identity)
     }

@@ -164,7 +164,7 @@ pub(in crate::check::checker) enum PendingSurfaceObligation<Ticket> {
 
 /// Complete query-free draft for one registered class declaration.
 #[derive(Clone, Debug)]
-pub(in crate::check::checker) struct ClassDraft<Ticket> {
+pub(in crate::check::checker) struct ClassDraft<Ticket: Copy> {
     pub class: ClassId,
     pub recovery_order: ClassRecoveryOrder,
     pub type_parameters: Vec<DraftClassTypeParameter<Ticket>>,
@@ -241,7 +241,7 @@ impl<Ticket: Copy> ClassDraft<Ticket> {
 
 /// Narrow class-draft coordinator. It accepts already-lowered immutable nodes
 /// and preallocated owners only; no checker pass or query capability is exposed.
-pub(in crate::check::checker) struct ClassSurfaceLowerer<Ticket> {
+pub(in crate::check::checker) struct ClassSurfaceLowerer<Ticket: Copy> {
     draft: ClassDraft<Ticket>,
 }
 
@@ -406,7 +406,7 @@ pub(in crate::check::checker) enum ClassPublicationError {
     InvalidFinalRegistry,
 }
 
-pub(in crate::check::checker) struct ClassPublication<Ticket> {
+pub(in crate::check::checker) struct ClassPublication<Ticket: Copy> {
     pub published: PublishedClasses,
     #[cfg(test)]
     pub graph: ClassGraph,
@@ -420,12 +420,12 @@ pub(in crate::check::checker) struct ClassPublication<Ticket> {
     pub heritage_constructors: BTreeMap<ClassId, TypeId>,
 }
 
-pub(in crate::check::checker) struct ClassConstruction<Ticket> {
+pub(in crate::check::checker) struct ClassConstruction<Ticket: Copy> {
     drafts: BTreeMap<ClassId, ClassDraft<Ticket>>,
     roots: ReservedSurfaceRoots,
 }
 
-impl<Ticket> Default for ClassConstruction<Ticket> {
+impl<Ticket: Copy> Default for ClassConstruction<Ticket> {
     fn default() -> Self {
         Self {
             drafts: BTreeMap::new(),

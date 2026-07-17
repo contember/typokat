@@ -20,9 +20,9 @@ pub(in crate::check::checker) struct FunctionGroupIdentity {
 
 /// Namespace-side input frozen before a merged function can be published.
 #[derive(Clone, Debug)]
-pub(in crate::check::checker) enum FunctionNamespacePayload {
+pub(in crate::check::checker) enum FunctionNamespacePayload<Ticket: Copy = UserRecordTicket> {
     Ready(Vec<PropertyType>),
-    Unavailable { owner: Option<UserRecordTicket> },
+    Unavailable { owner: Option<Ticket> },
 }
 
 /// Why an inferred merged function can no longer publish a callable value.
@@ -59,11 +59,11 @@ pub(in crate::check::checker) struct FunctionGroupPublication {
 
 /// Terminal result of one unannotated ordinary function body.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(in crate::check::checker) enum FunctionGroupBodyCompletion {
+pub(in crate::check::checker) enum FunctionGroupBodyCompletion<Ticket: Copy = UserRecordTicket> {
     Ready,
     Unavailable {
         cause: FunctionGroupUnavailableCause,
-        owner: Option<UserRecordTicket>,
+        owner: Option<Ticket>,
     },
 }
 
@@ -75,14 +75,14 @@ enum NamespacePayloadState {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum FunctionGroupState {
+enum FunctionGroupState<Ticket: Copy> {
     Building,
     Published {
         ty: TypeId,
     },
     Unavailable {
         cause: FunctionGroupUnavailableCause,
-        owner: Option<UserRecordTicket>,
+        owner: Option<Ticket>,
     },
 }
 
@@ -102,32 +102,41 @@ struct FunctionParticipantSlot {
 
 /// The sole mutable construction object for one admitted merge.
 #[derive(Clone, Debug)]
-struct FunctionGroupDraft {
+struct FunctionGroupDraft<Ticket: Copy> {
     symbol: SymbolId,
     name: String,
     participants: Vec<FunctionParticipantSlot>,
     namespace_payload: NamespacePayloadState,
-    state: FunctionGroupState,
+    state: FunctionGroupState<Ticket>,
 }
 
 #[derive(Copy, Clone, Debug)]
-struct ActiveFunctionGroupFill {
+struct ActiveFunctionGroupFill<Ticket: Copy> {
     symbol: SymbolId,
-    owner: Option<UserRecordTicket>,
+    owner: Option<Ticket>,
     private_self: Option<TypeId>,
     dependency: Option<SymbolId>,
     dependency_unavailable: bool,
 }
 
 /// Checker-wide registry. Drafts never escape this construction-only owner.
-#[derive(Default)]
-pub(in crate::check::checker) struct FunctionGroupRegistry {
-    groups: FxHashMap<SymbolId, FunctionGroupDraft>,
+pub(in crate::check::checker) struct FunctionGroupRegistry<Ticket: Copy = UserRecordTicket> {
+    groups: FxHashMap<SymbolId, FunctionGroupDraft<Ticket>>,
     by_value: FxHashMap<ValueStorageId, SymbolId>,
-    active_fills: Vec<ActiveFunctionGroupFill>,
+    active_fills: Vec<ActiveFunctionGroupFill<Ticket>>,
 }
 
-impl FunctionGroupRegistry {
+impl<Ticket: Copy> Default for FunctionGroupRegistry<Ticket> {
+    fn default() -> Self {
+        Self {
+            groups: FxHashMap::default(),
+            by_value: FxHashMap::default(),
+            active_fills: Vec::new(),
+        }
+    }
+}
+
+impl<Ticket: Copy> FunctionGroupRegistry<Ticket> {
     /// Resolve only a binder-approved function owner with an attachable namespace
     /// value surface.
     pub(in crate::check::checker) fn function_namespace_identity(
@@ -202,7 +211,7 @@ impl FunctionGroupRegistry {
     pub(in crate::check::checker) fn install_namespace_payload(
         &mut self,
         symbol: SymbolId,
-        payload: FunctionNamespacePayload,
+        payload: FunctionNamespacePayload<Ticket>,
     ) {
         let draft = self
             .groups
@@ -320,7 +329,7 @@ impl FunctionGroupRegistry {
         &mut self,
         symbol: SymbolId,
         declaration: ValueStorageId,
-        owner: Option<UserRecordTicket>,
+        owner: Option<Ticket>,
         private_self: Option<TypeId>,
     ) {
         let draft = self
@@ -346,7 +355,7 @@ impl FunctionGroupRegistry {
         symbol: SymbolId,
         declaration: ValueStorageId,
         completed_ty: TypeId,
-    ) -> FunctionGroupBodyCompletion {
+    ) -> FunctionGroupBodyCompletion<Ticket> {
         let active = self
             .active_fills
             .pop()
@@ -401,7 +410,7 @@ impl FunctionGroupRegistry {
         &mut self,
         symbol: SymbolId,
         cause: FunctionGroupUnavailableCause,
-        owner: Option<UserRecordTicket>,
+        owner: Option<Ticket>,
     ) {
         let draft = self
             .groups
@@ -548,6 +557,10 @@ impl FunctionGroupRegistry {
 mod tests {
     use super::*;
 
+    fn registry() -> FunctionGroupRegistry<UserRecordTicket> {
+        FunctionGroupRegistry::default()
+    }
+
     fn identity() -> FunctionGroupIdentity {
         FunctionGroupIdentity {
             symbol: SymbolId(3),
@@ -558,7 +571,7 @@ mod tests {
 
     #[test]
     fn split_public_rows_gate_publication_and_keep_binder_order() {
-        let mut registry = FunctionGroupRegistry::default();
+        let mut registry = registry();
         registry.register(identity());
         registry
             .install_namespace_payload(SymbolId(3), FunctionNamespacePayload::Ready(Vec::new()));
@@ -579,7 +592,7 @@ mod tests {
 
     #[test]
     fn validation_only_participant_is_terminal_but_not_public() {
-        let mut registry = FunctionGroupRegistry::default();
+        let mut registry = registry();
         registry.register(identity());
         registry
             .install_namespace_payload(SymbolId(3), FunctionNamespacePayload::Ready(Vec::new()));
@@ -599,7 +612,7 @@ mod tests {
 
     #[test]
     fn namespace_payload_is_an_independent_publication_gate() {
-        let mut registry = FunctionGroupRegistry::default();
+        let mut registry = registry();
         registry.register(identity());
         registry.reserve_public_row(SymbolId(3), ValueStorageId(4), TypeId(10));
         registry.reserve_public_row(SymbolId(3), ValueStorageId(7), TypeId(20));
@@ -612,7 +625,7 @@ mod tests {
 
     #[test]
     fn source_demand_is_pending_without_changing_waiting_state() {
-        let mut registry = FunctionGroupRegistry::default();
+        let mut registry = registry();
         registry.register(identity());
         registry.wait_for_body(SymbolId(3), ValueStorageId(4));
 
@@ -625,7 +638,7 @@ mod tests {
 
     #[test]
     fn waiting_body_blocks_split_publication_until_completion() {
-        let mut registry = FunctionGroupRegistry::default();
+        let mut registry = registry();
         registry.register(identity());
         registry
             .install_namespace_payload(SymbolId(3), FunctionNamespacePayload::Ready(Vec::new()));
@@ -646,7 +659,7 @@ mod tests {
 
     #[test]
     fn inferred_self_dependency_is_terminally_unavailable() {
-        let mut registry = FunctionGroupRegistry::default();
+        let mut registry = registry();
         registry.register(identity());
         registry.wait_for_body(SymbolId(3), ValueStorageId(4));
         registry.begin_body(SymbolId(3), ValueStorageId(4), None, None);
@@ -670,7 +683,7 @@ mod tests {
 
     #[test]
     fn inferred_cross_group_dependency_is_terminally_unavailable() {
-        let mut registry = FunctionGroupRegistry::default();
+        let mut registry = registry();
         registry.register(identity());
         registry.register(FunctionGroupIdentity {
             symbol: SymbolId(8),
@@ -696,7 +709,7 @@ mod tests {
 
     #[test]
     fn private_self_callable_preserves_pure_never_recursion() {
-        let mut registry = FunctionGroupRegistry::default();
+        let mut registry = registry();
         registry.register(identity());
         registry.wait_for_body(SymbolId(3), ValueStorageId(4));
         registry.begin_body(SymbolId(3), ValueStorageId(4), None, Some(TypeId(99)));
@@ -713,7 +726,7 @@ mod tests {
 
     #[test]
     fn published_group_cannot_plan_or_transition_twice() {
-        let mut registry = FunctionGroupRegistry::default();
+        let mut registry = registry();
         registry.register(identity());
         registry
             .install_namespace_payload(SymbolId(3), FunctionNamespacePayload::Ready(Vec::new()));
@@ -731,7 +744,7 @@ mod tests {
 
     #[test]
     fn published_group_no_longer_requires_flow_interception() {
-        let mut registry = FunctionGroupRegistry::default();
+        let mut registry = registry();
         registry.register(identity());
         registry
             .install_namespace_payload(SymbolId(3), FunctionNamespacePayload::Ready(Vec::new()));
@@ -749,7 +762,7 @@ mod tests {
 
     #[test]
     fn unavailable_namespace_payload_terminally_ignores_callable_rows() {
-        let mut registry = FunctionGroupRegistry::default();
+        let mut registry = registry();
         registry.register(identity());
         registry.install_namespace_payload(
             SymbolId(3),

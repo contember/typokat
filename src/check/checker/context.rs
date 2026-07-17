@@ -27,6 +27,7 @@ use super::events::{CandidateEffects, EventStore, UserRecordTicket};
 use super::function_groups::FunctionGroupRegistry;
 use super::lexical_events::{CallableTickets, LexicalReservations};
 use super::namespace_values::NamespaceValueRegistry;
+use super::reporting_record::CheckerRecord;
 use super::type_groups::{
     InterfaceTypedAlternative, PublishedTypeParameterDefault, TypeEnvironmentState,
     TypeGroupConstruction,
@@ -141,19 +142,85 @@ pub(in crate::check::checker) struct OverrideCheck {
 
 /// One lexical owner's ordered records and semantic work. Nested speculative
 /// children remain local until the selected child merges into its parent.
-pub(in crate::check::checker) struct CheckerEffects {
-    pub(in crate::check::checker) records: CandidateEffects,
+pub(in crate::check::checker) struct CheckerRecordBatch<Ticket: Copy> {
+    owner: Ticket,
+    records: Vec<CheckerRecord>,
+}
+
+impl<Ticket: Copy> CheckerRecordBatch<Ticket> {
+    fn new(owner: Ticket) -> Self {
+        Self {
+            owner,
+            records: Vec::new(),
+        }
+    }
+
+    fn from_parts(owner: Ticket, records: Vec<CheckerRecord>) -> Self {
+        Self { owner, records }
+    }
+
+    pub(in crate::check::checker) fn diagnostic(
+        &mut self,
+        diagnostic: crate::diagnostics::Diagnostic,
+    ) {
+        self.records.push(CheckerRecord::Diagnostic(diagnostic));
+    }
+
+    pub(in crate::check::checker) fn incomplete(
+        &mut self,
+        incomplete: crate::diagnostics::IncompleteSurface,
+    ) {
+        self.records.push(CheckerRecord::Incomplete(incomplete));
+    }
+
+    pub(in crate::check::checker) fn record(&mut self, record: CheckerRecord) {
+        self.records.push(record);
+    }
+
+    pub(in crate::check::checker) const fn owner(&self) -> Ticket {
+        self.owner
+    }
+
+    pub(in crate::check::checker) fn into_parts(self) -> (Ticket, Vec<CheckerRecord>) {
+        (self.owner, self.records)
+    }
+
+    pub(in crate::check::checker) fn discard(self) {}
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    #[cfg(test)]
+    fn records(&self) -> &[CheckerRecord] {
+        &self.records
+    }
+}
+
+impl<Ticket: Copy + PartialEq> CheckerRecordBatch<Ticket> {
+    fn merge(&mut self, child: Self) {
+        assert!(
+            self.owner == child.owner,
+            "nested effects must share one owner"
+        );
+        self.records.extend(child.records);
+    }
+}
+
+pub(in crate::check::checker) struct CheckerEffects<Ticket: Copy = UserRecordTicket> {
+    pub(in crate::check::checker) records: CheckerRecordBatch<Ticket>,
     pub(in crate::check::checker) obligations: Vec<DeferredRelationObligation>,
     pub(in crate::check::checker) constraint_checks: Vec<ConstraintCheckObligation>,
     pub(in crate::check::checker) interface_relations: Vec<InterfaceRelationObligation>,
     pub(in crate::check::checker) override_checks: Vec<OverrideCheck>,
-    pub(in crate::check::checker) nested: Vec<CheckerEffects>,
+    pub(in crate::check::checker) nested: Vec<CheckerEffects<Ticket>>,
 }
 
-impl CheckerEffects {
-    pub(in crate::check::checker) fn new(owner: UserRecordTicket) -> Self {
+impl<Ticket: Copy> CheckerEffects<Ticket> {
+    pub(in crate::check::checker) fn new(owner: Ticket) -> Self {
         Self {
-            records: CandidateEffects::new(owner),
+            records: CheckerRecordBatch::new(owner),
             obligations: Vec::new(),
             constraint_checks: Vec::new(),
             interface_relations: Vec::new(),
@@ -161,10 +228,13 @@ impl CheckerEffects {
             nested: Vec::new(),
         }
     }
+}
 
+impl CheckerEffects<UserRecordTicket> {
     pub(in crate::check::checker) fn from_records(records: CandidateEffects) -> Self {
+        let (owner, records) = records.into_parts();
         Self {
-            records,
+            records: CheckerRecordBatch::from_parts(owner, records),
             obligations: Vec::new(),
             constraint_checks: Vec::new(),
             interface_relations: Vec::new(),
@@ -172,8 +242,10 @@ impl CheckerEffects {
             nested: Vec::new(),
         }
     }
+}
 
-    pub(in crate::check::checker) fn merge(&mut self, child: CheckerEffects) {
+impl<Ticket: Copy + PartialEq> CheckerEffects<Ticket> {
+    pub(in crate::check::checker) fn merge(&mut self, child: CheckerEffects<Ticket>) {
         self.records.merge(child.records);
         self.obligations.extend(child.obligations);
         self.constraint_checks.extend(child.constraint_checks);
@@ -212,7 +284,7 @@ impl DeclTypes {
 /// A function declaration's callable signature, reserved before statement bodies
 /// are checked. The reservation owns the stable generic ids and lowered signature;
 /// body checking later fills only an unannotated return type.
-pub(in crate::check::checker) struct FunctionSurface {
+pub(in crate::check::checker) struct FunctionSurface<Ticket: Copy = UserRecordTicket> {
     pub(in crate::check::checker) receiver: Option<TypeId>,
     pub(in crate::check::checker) params: Vec<crate::types::repr::ParameterType>,
     pub(in crate::check::checker) generic_params: Vec<crate::types::repr::GenericTypeParam>,
@@ -221,7 +293,7 @@ pub(in crate::check::checker) struct FunctionSurface {
     pub(in crate::check::checker) function_ty: TypeId,
     /// Preallocated declaration owners; expression/arrow surfaces emit into the
     /// enclosing active lexical effect frame and therefore carry no tickets.
-    pub(in crate::check::checker) tickets: Option<CallableTickets>,
+    pub(in crate::check::checker) tickets: Option<CallableTickets<Ticket>>,
 }
 
 /// An explicit `var` annotation lowered before executable checking. The type makes
@@ -398,12 +470,13 @@ pub(in crate::check::checker) struct ClassNamespacePropertySourceOrder {
 
 /// One class-attached namespace property and its exact diagnostic provenance.
 #[derive(Clone, Debug)]
-pub(in crate::check::checker) struct ClassNamespacePropertyPayload {
+pub(in crate::check::checker) struct ClassNamespacePropertyPayload<Ticket: Copy = UserRecordTicket>
+{
     pub(in crate::check::checker) property: PropertyType,
     pub(in crate::check::checker) declaration: DeclId,
     pub(in crate::check::checker) owner_span: Span,
     pub(in crate::check::checker) source_order: ClassNamespacePropertySourceOrder,
-    pub(in crate::check::checker) owner: UserRecordTicket,
+    pub(in crate::check::checker) owner: Ticket,
 }
 
 /// A class's fill progress, tracked per [`TypeDecl`] index.
@@ -500,12 +573,12 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     pub(in crate::check::checker) class_names: FxHashMap<ClassId, String>,
     pub(in crate::check::checker) decl_types: DeclTypes,
     /// Construction and single-publication state for admitted function/namespace groups.
-    pub(in crate::check::checker) function_groups: FunctionGroupRegistry,
+    pub(in crate::check::checker) function_groups: FunctionGroupRegistry<UserRecordTicket>,
     /// Immutable namespace value surfaces awaiting their exact class-owned draft.
     pub(in crate::check::checker) class_namespace_payloads:
-        BTreeMap<TypeGroupId, Vec<ClassNamespacePropertyPayload>>,
+        BTreeMap<TypeGroupId, Vec<ClassNamespacePropertyPayload<UserRecordTicket>>>,
     /// Prepared attached-namespace members consumed exactly once at their source sites.
-    pub(in crate::check::checker) namespace_values: NamespaceValueRegistry,
+    pub(in crate::check::checker) namespace_values: NamespaceValueRegistry<UserRecordTicket>,
     /// Explicit `var` annotations reserved across one function/module hoist
     /// container, keyed by their own `(module, declarator span)` source site.
     pub(in crate::check::checker) var_annotation_surfaces:
@@ -673,4 +746,50 @@ pub(in crate::check::checker) struct CondFrame {
     /// Set when a cross-binder reference poisons this node (see
     /// [`crate::types::repr::ConditionalType::poisoned`]).
     pub(in crate::check::checker) poisoned: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CheckerEffects;
+    use crate::check::checker::events_library::{LibraryEventLedger, LibraryRecordTicket};
+    use crate::check::checker::reporting_record::CheckerRecord;
+    use crate::diagnostics::{Diagnostic, IncompleteSurface};
+    use crate::source::LibraryFileOrdinal;
+    use crate::span::Span;
+
+    #[test]
+    fn library_effects_accumulate_and_merge_records_without_reporting_authority() {
+        let mut ledger = LibraryEventLedger::default();
+        let owner: LibraryRecordTicket =
+            ledger.reserve_event(LibraryFileOrdinal::new(7), 11).primary;
+        drop(ledger);
+
+        let mut effects = CheckerEffects::new(owner);
+        effects
+            .records
+            .diagnostic(Diagnostic::cannot_find_name(Span::new(11, 12), "first"));
+        let mut child = CheckerEffects::new(owner);
+        child.records.incomplete(IncompleteSurface::new(
+            "library/effects",
+            Span::new(12, 13),
+            "second",
+        ));
+        child
+            .records
+            .record(CheckerRecord::Diagnostic(Diagnostic::cannot_find_name(
+                Span::new(13, 14),
+                "third",
+            )));
+        effects.merge(child);
+
+        assert_eq!(effects.records.owner(), owner);
+        assert!(matches!(
+            effects.records.records(),
+            [
+                CheckerRecord::Diagnostic(first),
+                CheckerRecord::Incomplete(second),
+                CheckerRecord::Diagnostic(third),
+            ] if first.span.start == 11 && second.span.start == 12 && third.span.start == 13
+        ));
+    }
 }

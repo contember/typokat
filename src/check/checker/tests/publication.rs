@@ -128,8 +128,9 @@ fn interface_relation_exhaustion_stays_with_its_lexical_owner_without_failure_di
     pass.event_store
         .complete(unrelated.primary, Vec::new())
         .expect("unrelated owner completes independently");
+    let (owner, records) = effects.records.into_parts();
     pass.event_store
-        .commit(effects.records)
+        .complete(owner, records)
         .expect("relation owner commits its recovery record");
     let records = std::mem::take(&mut pass.event_store)
         .finish()
