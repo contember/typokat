@@ -11,8 +11,15 @@ use crate::binder::namespace::{
     allocate_dormant_namespace_value_storages, bind_namespace_metadata, CompilationUnit,
     NamespaceId, NamespaceInstanceState, NamespaceTable, SourceUnitKey,
 };
+#[cfg(test)]
+use crate::binder::namespace::{
+    collect_namespace_metadata, fill_namespace_value_attachments, finalize_namespace_metadata,
+    NamespaceMetadataRoot,
+};
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
+#[cfg(test)]
+use crate::source::{CompilationOrigin, LibraryFileOrdinal};
 use crate::span::Span;
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, BlockStatement, Class, ClassElement, Declaration,
@@ -260,6 +267,8 @@ pub(crate) struct BindState {
     pub(crate) declarations_by_site: FxHashMap<(ScopeId, u32, DeclarationKind), DeclId>,
     /// Stable source ownership for every module scope, including the prelude.
     module_sources: FxHashMap<ScopeId, SourceUnitKey>,
+    #[cfg(test)]
+    library_module_ordinals: FxHashMap<ScopeId, LibraryFileOrdinal>,
     fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     fn_decl_ids: FxHashMap<(ScopeId, u32), ValueStorageId>,
     /// Per-block lexical scopes (M7), keyed by `(module scope, block span start)`.
@@ -364,6 +373,25 @@ impl BindState {
         if let Some(row) = self.symbols.get_mut(symbol) {
             if !row.declarations.contains(&declaration) {
                 row.declarations.push(declaration);
+                #[cfg(test)]
+                if !self.library_module_ordinals.is_empty() {
+                    row.declarations.sort_by_key(|id| {
+                        let declaration = self
+                            .declarations
+                            .get(*id)
+                            .expect("library symbol declaration exists");
+                        (
+                            self.library_module_ordinals
+                                .get(&declaration.site.module)
+                                .copied()
+                                .expect("library declaration has an exact file ordinal"),
+                            declaration.site.declaration_span.start,
+                            declaration.site.binding_span.start,
+                            declaration.id.0,
+                        )
+                    });
+                    return;
+                }
                 row.declarations.sort_by_key(|id| source_key(*id));
             }
         }
@@ -388,6 +416,18 @@ pub(crate) struct ProjectBinderBuilder {
     compilation_global: ScopeId,
     script_namespace_root: ScopeId,
     prelude_type_group_count: u32,
+    #[cfg(test)]
+    use_mode: BuilderUseMode,
+    #[cfg(test)]
+    empty_prelude: bool,
+}
+
+#[cfg(test)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum BuilderUseMode {
+    Pristine,
+    Project,
+    Library,
 }
 
 impl ProjectBinderBuilder {
@@ -401,6 +441,8 @@ impl ProjectBinderBuilder {
             namespaces: NamespaceTable::default(),
             declarations_by_site: FxHashMap::default(),
             module_sources: FxHashMap::default(),
+            #[cfg(test)]
+            library_module_ordinals: FxHashMap::default(),
             fn_scopes: FxHashMap::default(),
             fn_decl_ids: FxHashMap::default(),
             block_scopes: FxHashMap::default(),
@@ -432,6 +474,10 @@ impl ProjectBinderBuilder {
             compilation_global,
             script_namespace_root,
             prelude_type_group_count,
+            #[cfg(test)]
+            use_mode: BuilderUseMode::Pristine,
+            #[cfg(test)]
+            empty_prelude: prelude.body.is_empty(),
         }
     }
 
@@ -439,6 +485,15 @@ impl ProjectBinderBuilder {
         &mut self,
         units: impl IntoIterator<Item = (&'ast Program<'ast>, CompilationUnit)>,
     ) {
+        #[cfg(test)]
+        match self.use_mode {
+            BuilderUseMode::Pristine | BuilderUseMode::Project => {
+                self.use_mode = BuilderUseMode::Project;
+            }
+            BuilderUseMode::Library => {
+                panic!("project modules cannot follow the one-shot library batch")
+            }
+        }
         let mut roots = Vec::new();
         for (program, unit) in units {
             if unit.binding.external_module {
@@ -506,6 +561,15 @@ impl ProjectBinderBuilder {
         imports: &[ImportedSymbol],
         unit: CompilationUnit,
     ) -> (ScopeId, Vec<ImportPlaceholder>) {
+        #[cfg(test)]
+        match self.use_mode {
+            BuilderUseMode::Pristine | BuilderUseMode::Project => {
+                self.use_mode = BuilderUseMode::Project;
+            }
+            BuilderUseMode::Library => {
+                panic!("project modules cannot follow the one-shot library batch")
+            }
+        }
         let module = self
             .state
             .graph
@@ -527,6 +591,95 @@ impl ProjectBinderBuilder {
             self.script_namespace_root,
         );
         (module, placeholders)
+    }
+
+    /// Bind declaration-library files into one shared global identity domain.
+    #[cfg(test)]
+    pub(crate) fn add_library_modules<'ast>(
+        &mut self,
+        units: &[(&'ast Program<'ast>, CompilationUnit)],
+    ) -> Vec<ScopeId> {
+        assert!(
+            !units.is_empty(),
+            "library binder requires at least one unit"
+        );
+        assert!(
+            self.empty_prelude,
+            "library batch requires a fresh empty prelude"
+        );
+        let mut sources = rustc_hash::FxHashSet::default();
+        let mut origins = rustc_hash::FxHashSet::default();
+        let mut canonical_units = Vec::with_capacity(units.len());
+        for (input_index, (program, unit)) in units.iter().enumerate() {
+            let CompilationOrigin::Library(file_ordinal) = unit.origin else {
+                panic!("library binder accepts only library compilation units")
+            };
+            assert_ne!(
+                unit.source,
+                SourceUnitKey::PRELUDE,
+                "library source key cannot be the prelude key"
+            );
+            assert!(sources.insert(unit.source), "library source key is unique");
+            assert!(
+                origins.insert(unit.origin),
+                "library file ordinal is unique"
+            );
+            canonical_units.push((file_ordinal, input_index, *program, *unit));
+        }
+        canonical_units.sort_by_key(|(file_ordinal, _, _, _)| *file_ordinal);
+        match self.use_mode {
+            BuilderUseMode::Pristine => self.use_mode = BuilderUseMode::Library,
+            BuilderUseMode::Project => {
+                panic!("library batch requires a pristine project builder")
+            }
+            BuilderUseMode::Library => panic!("library batch is one-shot"),
+        }
+
+        let mut bound_units = Vec::with_capacity(canonical_units.len());
+        for (file_ordinal, input_index, program, unit) in canonical_units {
+            let module = self
+                .state
+                .graph
+                .push(Scope::new(ScopeKind::Module, Some(self.prelude_module)));
+            self.state.current_module = module;
+            self.state.module_sources.insert(module, unit.source);
+            self.state
+                .library_module_ordinals
+                .insert(module, file_ordinal);
+            self.state.record_source_declarations(program);
+            let ordinary_scope = if unit.binding.external_module {
+                module
+            } else {
+                self.compilation_global
+            };
+            bind_library_statements(
+                &mut self.state,
+                ordinary_scope,
+                &program.body,
+                unit,
+                self.compilation_global,
+            );
+            collect_namespace_metadata(
+                &mut self.state,
+                module,
+                program,
+                unit,
+                self.compilation_global,
+                self.script_namespace_root,
+                NamespaceMetadataRoot::LibrarySharedGlobal,
+            );
+            bound_units.push((input_index, program, module));
+        }
+        finalize_namespace_metadata(&mut self.state);
+        for (_, program, module) in &bound_units {
+            self.state.current_module = *module;
+            fill_namespace_value_attachments(&mut self.state, program);
+        }
+        bound_units.sort_by_key(|(input_index, _, _)| *input_index);
+        bound_units
+            .into_iter()
+            .map(|(_, _, module)| module)
+            .collect()
     }
 
     pub(crate) fn finish(mut self, module: ScopeId) -> Binder {
@@ -586,6 +739,26 @@ impl ProjectBinderBuilder {
             .and_then(|scope| scope.lookup_local(name))
             .and_then(|symbol_id| self.state.symbols.get(symbol_id))
             .is_some_and(|symbol| symbol.blocks_type_lookup)
+    }
+}
+
+#[cfg(test)]
+fn bind_library_statements(
+    state: &mut BindState,
+    scope: ScopeId,
+    statements: &[Statement<'_>],
+    unit: CompilationUnit,
+    compilation_global: ScopeId,
+) {
+    bind_type_declarations(state, scope, statements);
+    for statement in statements {
+        if let Statement::TSGlobalDeclaration(global) = statement {
+            if unit.binding.external_module {
+                bind_statements(state, compilation_global, &global.body.body);
+            }
+            continue;
+        }
+        bind_statement(state, scope, statement);
     }
 }
 
@@ -1277,18 +1450,41 @@ pub(super) fn declare_type(
                 site,
                 kind,
             });
-        state
+        let fragments = &mut state
             .type_groups
             .get_mut(group)
             .expect("allocated type group exists")
-            .fragments
-            .sort_by_key(|fragment| {
+            .fragments;
+        #[cfg(test)]
+        if !state.library_module_ordinals.is_empty() {
+            fragments.sort_by_key(|fragment| {
+                (
+                    state
+                        .library_module_ordinals
+                        .get(&fragment.site.module)
+                        .copied()
+                        .expect("library type fragment has an exact file ordinal"),
+                    fragment.site.declaration_span.start,
+                    fragment.declaration.0,
+                )
+            });
+        } else {
+            fragments.sort_by_key(|fragment| {
                 (
                     fragment.source,
                     fragment.site.declaration_span.start,
                     fragment.declaration.0,
                 )
             });
+        }
+        #[cfg(not(test))]
+        fragments.sort_by_key(|fragment| {
+            (
+                fragment.source,
+                fragment.site.declaration_span.start,
+                fragment.declaration.0,
+            )
+        });
         let lexical = state
             .declarations
             .get_mut(declaration)
@@ -1398,6 +1594,10 @@ fn binding_name_and_start<'a>(pattern: &'a BindingPattern<'a>) -> Option<(&'a st
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binder::namespace::{
+        GlobalIssue, MergeDisposition, NamespaceValueAttachmentDisposition,
+    };
+    use crate::source::{CompilationOrigin, LibraryFileOrdinal};
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
@@ -1409,6 +1609,1072 @@ mod tests {
         let parsed = Parser::new(&alloc, src, SourceType::ts()).parse();
         assert!(!parsed.panicked, "parse failed: {src}");
         bind_module_with_prelude(&prelude.program, &parsed.program)
+    }
+
+    fn bind_libraries<'ast>(
+        programs: &[(&'ast Program<'ast>, SourceUnitKey, LibraryFileOrdinal)],
+    ) -> (Binder, Vec<ScopeId>) {
+        let prelude_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+        assert!(prelude.diagnostics.is_empty());
+        let units = programs
+            .iter()
+            .map(|(program, source, file)| {
+                (*program, CompilationUnit::library(*source, *file, program))
+            })
+            .collect::<Vec<_>>();
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        let modules = builder.add_library_modules(&units);
+        let last = modules.last().copied().expect("library batch is non-empty");
+        (builder.finish(last), modules)
+    }
+
+    fn declaration_sources(binder: &Binder, symbol: SymbolId) -> Vec<SourceUnitKey> {
+        binder
+            .symbols
+            .get(symbol)
+            .expect("canonical symbol exists")
+            .declarations
+            .iter()
+            .map(|declaration| {
+                let module = binder
+                    .declarations
+                    .get(*declaration)
+                    .expect("canonical declaration exists")
+                    .site
+                    .module;
+                binder
+                    .namespaces
+                    .source_units()
+                    .find(|unit| unit.module == module)
+                    .map(|unit| unit.source)
+                    .expect("canonical declaration module has source ownership")
+            })
+            .collect()
+    }
+
+    #[test]
+    #[should_panic(expected = "project modules cannot follow the one-shot library batch")]
+    fn library_batch_rejects_a_later_project_module() {
+        let prelude_allocator = Allocator::default();
+        let source_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+        let source = Parser::new(
+            &source_allocator,
+            "interface LibraryOnly {}",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let library = CompilationUnit::library(
+            SourceUnitKey(10),
+            LibraryFileOrdinal::new(10),
+            &source.program,
+        );
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        builder.add_library_modules(&[(&source.program, library)]);
+        let project = CompilationUnit::implementation(SourceUnitKey(11), &source.program);
+        builder.add_module(&source.program, &[], project);
+    }
+
+    #[test]
+    #[should_panic(expected = "library batch requires a pristine project builder")]
+    fn library_batch_rejects_reserved_script_namespace_roots() {
+        let prelude_allocator = Allocator::default();
+        let source_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+        let source = Parser::new(
+            &source_allocator,
+            "declare namespace ReservedBeforeLibrary { export const value: number; }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        assert!(source.diagnostics.is_empty());
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        let project = CompilationUnit::implementation(SourceUnitKey(11), &source.program);
+        builder.reserve_script_namespace_roots([(&source.program, project)]);
+        assert!(builder
+            .state
+            .graph
+            .get(builder.script_namespace_root)
+            .and_then(|scope| scope.lookup_local("ReservedBeforeLibrary"))
+            .is_some());
+        let library = CompilationUnit::library(
+            SourceUnitKey(10),
+            LibraryFileOrdinal::new(10),
+            &source.program,
+        );
+        builder.add_library_modules(&[(&source.program, library)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "project modules cannot follow the one-shot library batch")]
+    fn script_namespace_root_reservation_rejects_a_finished_library_batch() {
+        let prelude_allocator = Allocator::default();
+        let library_allocator = Allocator::default();
+        let script_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+        let library = Parser::new(
+            &library_allocator,
+            "interface LibraryBeforeReservation {}",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let script = Parser::new(
+            &script_allocator,
+            "declare namespace ReservedAfterLibrary { export const value: number; }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        assert!(library.diagnostics.is_empty());
+        assert!(script.diagnostics.is_empty());
+        let library_unit = CompilationUnit::library(
+            SourceUnitKey(10),
+            LibraryFileOrdinal::new(10),
+            &library.program,
+        );
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        builder.add_library_modules(&[(&library.program, library_unit)]);
+        let project = CompilationUnit::implementation(SourceUnitKey(11), &script.program);
+        builder.reserve_script_namespace_roots([(&script.program, project)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "library batch requires a pristine project builder")]
+    fn library_batch_rejects_an_existing_project_module() {
+        let prelude_allocator = Allocator::default();
+        let source_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+        let source = Parser::new(
+            &source_allocator,
+            "interface ProjectFirst {}",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        let project = CompilationUnit::implementation(SourceUnitKey(11), &source.program);
+        builder.add_module(&source.program, &[], project);
+        let library = CompilationUnit::library(
+            SourceUnitKey(10),
+            LibraryFileOrdinal::new(10),
+            &source.program,
+        );
+        builder.add_library_modules(&[(&source.program, library)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "library batch is one-shot")]
+    fn library_batch_rejects_a_second_batch() {
+        let prelude_allocator = Allocator::default();
+        let source_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+        let source = Parser::new(
+            &source_allocator,
+            "interface OneShot {}",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let unit = CompilationUnit::library(
+            SourceUnitKey(10),
+            LibraryFileOrdinal::new(10),
+            &source.program,
+        );
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        builder.add_library_modules(&[(&source.program, unit)]);
+        builder.add_library_modules(&[(&source.program, unit)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "library batch requires a fresh empty prelude")]
+    fn library_batch_rejects_a_non_empty_prelude() {
+        let prelude_allocator = Allocator::default();
+        let source_allocator = Allocator::default();
+        let prelude = Parser::new(
+            &prelude_allocator,
+            "interface PreludeFallback {}",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let source = Parser::new(
+            &source_allocator,
+            "interface PreludeFallback {} type PreludeFallback = string;",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let unit = CompilationUnit::library(
+            SourceUnitKey(10),
+            LibraryFileOrdinal::new(10),
+            &source.program,
+        );
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        builder.add_library_modules(&[(&source.program, unit)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "library binder requires at least one unit")]
+    fn library_batch_rejects_an_empty_batch() {
+        let prelude_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        builder.add_library_modules(&[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "library source key cannot be the prelude key")]
+    fn library_batch_rejects_the_prelude_source_key() {
+        let prelude_allocator = Allocator::default();
+        let source_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+        let source = Parser::new(
+            &source_allocator,
+            "interface InvalidPreludeOwnedLibrary {}",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let unit = CompilationUnit::library(
+            SourceUnitKey::PRELUDE,
+            LibraryFileOrdinal::new(0),
+            &source.program,
+        );
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        builder.add_library_modules(&[(&source.program, unit)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "library file ordinal is unique")]
+    fn library_batch_rejects_duplicate_file_ordinals() {
+        let prelude_allocator = Allocator::default();
+        let first_allocator = Allocator::default();
+        let second_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+        let first = Parser::new(
+            &first_allocator,
+            "interface FirstLibraryFile {}",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let second = Parser::new(
+            &second_allocator,
+            "interface SecondLibraryFile {}",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let units = [
+            (
+                &first.program,
+                CompilationUnit::library(
+                    SourceUnitKey(10),
+                    LibraryFileOrdinal::new(10),
+                    &first.program,
+                ),
+            ),
+            (
+                &second.program,
+                CompilationUnit::library(
+                    SourceUnitKey(11),
+                    LibraryFileOrdinal::new(10),
+                    &second.program,
+                ),
+            ),
+        ];
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        builder.add_library_modules(&units);
+    }
+
+    #[test]
+    #[should_panic(expected = "library source key is unique")]
+    fn library_batch_rejects_duplicate_source_keys() {
+        let prelude_allocator = Allocator::default();
+        let first_allocator = Allocator::default();
+        let second_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+        let first = Parser::new(
+            &first_allocator,
+            "interface FirstLibrarySource {}",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let second = Parser::new(
+            &second_allocator,
+            "interface SecondLibrarySource {}",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let units = [
+            (
+                &first.program,
+                CompilationUnit::library(
+                    SourceUnitKey(10),
+                    LibraryFileOrdinal::new(10),
+                    &first.program,
+                ),
+            ),
+            (
+                &second.program,
+                CompilationUnit::library(
+                    SourceUnitKey(10),
+                    LibraryFileOrdinal::new(11),
+                    &second.program,
+                ),
+            ),
+        ];
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        builder.add_library_modules(&units);
+    }
+
+    #[test]
+    fn library_scripts_reopen_one_global_interface_group_with_exact_provenance() {
+        let first_allocator = Allocator::default();
+        let second_allocator = Allocator::default();
+        let first = Parser::new(
+            &first_allocator,
+            "interface SharedLibraryShape { first: number; }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let second = Parser::new(
+            &second_allocator,
+            "interface SharedLibraryShape { second: string; }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        assert!(first.diagnostics.is_empty());
+        assert!(second.diagnostics.is_empty());
+        let first_source = SourceUnitKey(20);
+        let second_source = SourceUnitKey(21);
+        let first_file = LibraryFileOrdinal::new(20);
+        let second_file = LibraryFileOrdinal::new(21);
+        let (binder, modules) = bind_libraries(&[
+            (&first.program, first_source, first_file),
+            (&second.program, second_source, second_file),
+        ]);
+
+        assert_ne!(modules[0], modules[1]);
+        let first_symbol = binder
+            .resolve_type(modules[0], "SharedLibraryShape")
+            .expect("first script resolves shared interface");
+        let second_symbol = binder
+            .resolve_type(modules[1], "SharedLibraryShape")
+            .expect("second script resolves shared interface");
+        assert_eq!(first_symbol, second_symbol);
+        let symbol = binder.symbols.get(first_symbol).expect("shared symbol");
+        let group = symbol.ty.expect("shared type group");
+        assert_eq!(symbol.declarations.len(), 2);
+        let fragments = &binder
+            .type_groups
+            .get(group)
+            .expect("shared type group row")
+            .fragments;
+        assert_eq!(fragments.len(), 2);
+        assert_eq!(
+            fragments
+                .iter()
+                .map(|fragment| (fragment.source, fragment.site.module, fragment.scope))
+                .collect::<Vec<_>>(),
+            [
+                (first_source, modules[0], binder.compilation_global),
+                (second_source, modules[1], binder.compilation_global),
+            ]
+        );
+    }
+
+    #[test]
+    fn library_overloads_and_type_fragments_are_canonical_before_binding() {
+        let first_allocator = Allocator::default();
+        let second_allocator = Allocator::default();
+        let first = Parser::new(
+            &first_allocator,
+            "declare function CanonicalOverload(value: number): number; interface CanonicalType { first: number; }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let second = Parser::new(
+            &second_allocator,
+            "declare function CanonicalOverload(value: string): string; declare namespace CanonicalOverload { export const tag: boolean; } interface CanonicalType { second: string; }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        assert!(first.diagnostics.is_empty());
+        assert!(second.diagnostics.is_empty());
+        let first_row = (
+            &first.program,
+            SourceUnitKey(900),
+            LibraryFileOrdinal::new(70),
+        );
+        let second_row = (
+            &second.program,
+            SourceUnitKey(100),
+            LibraryFileOrdinal::new(71),
+        );
+        let (forward, forward_modules) = bind_libraries(&[first_row, second_row]);
+        let (reverse, reverse_modules) = bind_libraries(&[second_row, first_row]);
+        assert_eq!(forward_modules[0], reverse_modules[1]);
+        assert_eq!(forward_modules[1], reverse_modules[0]);
+
+        let snapshot = |binder: &Binder| {
+            let function_symbol = binder
+                .graph
+                .get(binder.compilation_global)
+                .and_then(|scope| scope.lookup_local("CanonicalOverload"))
+                .expect("canonical overload symbol");
+            let function = binder
+                .symbols
+                .get(function_symbol)
+                .expect("canonical overload row");
+            let attachment = binder
+                .namespace_value_attachment(binder.compilation_global, "CanonicalOverload")
+                .expect("canonical overload namespace attachment");
+            assert_eq!(attachment.symbol, function_symbol);
+            assert_eq!(
+                attachment.disposition,
+                NamespaceValueAttachmentDisposition::AdmittedFunction
+            );
+            let type_symbol = binder
+                .resolve_type(binder.compilation_global, "CanonicalType")
+                .expect("canonical reopened interface");
+            let type_group = binder
+                .symbols
+                .get(type_symbol)
+                .and_then(|symbol| symbol.ty)
+                .expect("canonical type group identity");
+            let fragment_sources = binder
+                .type_groups
+                .get(type_group)
+                .expect("canonical type group row")
+                .fragments
+                .iter()
+                .map(|fragment| fragment.source)
+                .collect::<Vec<_>>();
+            let member_storage = attachment.members[0]
+                .value_storage
+                .expect("canonical namespace member storage");
+            (
+                function_symbol,
+                function.value,
+                function.function_values.clone(),
+                declaration_sources(binder, function_symbol),
+                attachment.symbol,
+                member_storage,
+                type_symbol,
+                type_group,
+                fragment_sources,
+                binder
+                    .namespaces
+                    .source_units()
+                    .map(|unit| (unit.source, unit.origin, unit.module))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let forward_snapshot = snapshot(&forward);
+        let reverse_snapshot = snapshot(&reverse);
+        assert_eq!(forward_snapshot, reverse_snapshot);
+        assert_eq!(forward_snapshot.1, forward_snapshot.2.last().copied());
+        assert_eq!(forward_snapshot.2.len(), 2);
+        assert_eq!(
+            forward_snapshot.3,
+            [SourceUnitKey(900), SourceUnitKey(100), SourceUnitKey(100)]
+        );
+        assert_eq!(forward_snapshot.8, [SourceUnitKey(900), SourceUnitKey(100)]);
+        assert_eq!(
+            forward_snapshot.9,
+            [
+                (
+                    SourceUnitKey(900),
+                    CompilationOrigin::Library(LibraryFileOrdinal::new(70)),
+                    forward_modules[0],
+                ),
+                (
+                    SourceUnitKey(100),
+                    CompilationOrigin::Library(LibraryFileOrdinal::new(71)),
+                    forward_modules[1],
+                ),
+            ]
+        );
+    }
+
+    fn assert_library_function_namespace(
+        binder: &Binder,
+        modules: &[ScopeId],
+        name: &str,
+        expected_sources: [SourceUnitKey; 2],
+    ) {
+        let symbols = modules
+            .iter()
+            .map(|module| {
+                binder
+                    .resolve_value(*module, name)
+                    .expect("merged global value")
+            })
+            .collect::<Vec<_>>();
+        assert!(symbols.windows(2).all(|pair| pair[0] == pair[1]));
+        let symbol = binder.symbols.get(symbols[0]).expect("merged symbol");
+        assert!(symbol.value.is_some());
+        assert_eq!(symbol.function_values.len(), 1);
+        assert_eq!(symbol.value, symbol.function_values.first().copied());
+        assert!(symbol.ns.is_some());
+        assert_eq!(symbol.declarations.len(), 2);
+        let attachment = binder
+            .namespace_value_attachment(binder.compilation_global, name)
+            .expect("global function/namespace attachment");
+        assert_eq!(
+            attachment.disposition,
+            NamespaceValueAttachmentDisposition::AdmittedFunction
+        );
+        assert_eq!(attachment.symbol, symbols[0]);
+        assert_eq!(attachment.members.len(), 1);
+        assert_eq!(attachment.members[0].name, "tag");
+        assert!(attachment.members[0].value_storage.is_some());
+        let merge = binder
+            .namespaces
+            .merges()
+            .find(|record| {
+                record.owner == crate::binder::namespace::DeclarationOwner::CompilationGlobal
+                    && record.name == name
+            })
+            .expect("global merge record");
+        assert_eq!(merge.classification.disposition, MergeDisposition::Admitted);
+        assert_eq!(
+            merge
+                .declarations
+                .iter()
+                .map(|participant| participant.source)
+                .collect::<Vec<_>>(),
+            expected_sources
+        );
+    }
+
+    #[test]
+    fn library_function_namespace_merges_are_complete_in_both_source_and_input_orders() {
+        let function_first_allocator = Allocator::default();
+        let function_first_namespace_allocator = Allocator::default();
+        let namespace_first_allocator = Allocator::default();
+        let namespace_first_function_allocator = Allocator::default();
+        let function_first = Parser::new(
+            &function_first_allocator,
+            "declare function FunctionFirst(value: number): string;",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let function_first_namespace = Parser::new(
+            &function_first_namespace_allocator,
+            "declare namespace FunctionFirst { export const tag: number; }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let namespace_first = Parser::new(
+            &namespace_first_allocator,
+            "declare namespace NamespaceFirst { export const tag: string; }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let namespace_first_function = Parser::new(
+            &namespace_first_function_allocator,
+            "declare function NamespaceFirst(value: string): number;",
+            SourceType::d_ts(),
+        )
+        .parse();
+        for parsed in [
+            &function_first,
+            &function_first_namespace,
+            &namespace_first,
+            &namespace_first_function,
+        ] {
+            assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        }
+        let programs = [
+            (
+                &function_first.program,
+                SourceUnitKey(30),
+                LibraryFileOrdinal::new(30),
+            ),
+            (
+                &function_first_namespace.program,
+                SourceUnitKey(31),
+                LibraryFileOrdinal::new(31),
+            ),
+            (
+                &namespace_first.program,
+                SourceUnitKey(32),
+                LibraryFileOrdinal::new(32),
+            ),
+            (
+                &namespace_first_function.program,
+                SourceUnitKey(33),
+                LibraryFileOrdinal::new(33),
+            ),
+        ];
+        let reversed = programs.iter().rev().copied().collect::<Vec<_>>();
+        let (forward, forward_modules) = bind_libraries(&programs);
+        let (reverse, reverse_modules) = bind_libraries(&reversed);
+        assert_eq!(
+            forward
+                .namespaces
+                .source_units()
+                .map(|unit| (unit.source, unit.origin, unit.module))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    SourceUnitKey(30),
+                    CompilationOrigin::Library(LibraryFileOrdinal::new(30)),
+                    forward_modules[0],
+                ),
+                (
+                    SourceUnitKey(31),
+                    CompilationOrigin::Library(LibraryFileOrdinal::new(31)),
+                    forward_modules[1],
+                ),
+                (
+                    SourceUnitKey(32),
+                    CompilationOrigin::Library(LibraryFileOrdinal::new(32)),
+                    forward_modules[2],
+                ),
+                (
+                    SourceUnitKey(33),
+                    CompilationOrigin::Library(LibraryFileOrdinal::new(33)),
+                    forward_modules[3],
+                ),
+            ]
+        );
+        assert_eq!(
+            reverse
+                .namespaces
+                .source_units()
+                .map(|unit| (unit.source, unit.origin, unit.module))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    SourceUnitKey(30),
+                    CompilationOrigin::Library(LibraryFileOrdinal::new(30)),
+                    reverse_modules[3],
+                ),
+                (
+                    SourceUnitKey(31),
+                    CompilationOrigin::Library(LibraryFileOrdinal::new(31)),
+                    reverse_modules[2],
+                ),
+                (
+                    SourceUnitKey(32),
+                    CompilationOrigin::Library(LibraryFileOrdinal::new(32)),
+                    reverse_modules[1],
+                ),
+                (
+                    SourceUnitKey(33),
+                    CompilationOrigin::Library(LibraryFileOrdinal::new(33)),
+                    reverse_modules[0],
+                ),
+            ]
+        );
+        for (binder, modules) in [(&forward, forward_modules), (&reverse, reverse_modules)] {
+            assert_library_function_namespace(
+                binder,
+                &modules,
+                "FunctionFirst",
+                [SourceUnitKey(30), SourceUnitKey(31)],
+            );
+            assert_library_function_namespace(
+                binder,
+                &modules,
+                "NamespaceFirst",
+                [SourceUnitKey(32), SourceUnitKey(33)],
+            );
+        }
+    }
+
+    #[test]
+    fn library_class_namespace_identity_is_canonical_in_both_input_orders() {
+        let class_allocator = Allocator::default();
+        let namespace_allocator = Allocator::default();
+        let class = Parser::new(
+            &class_allocator,
+            "declare class CanonicalClass {}",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let namespace = Parser::new(
+            &namespace_allocator,
+            "declare namespace CanonicalClass { export const member: number; }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        assert!(class.diagnostics.is_empty());
+        assert!(namespace.diagnostics.is_empty());
+        let class_row = (
+            &class.program,
+            SourceUnitKey(800),
+            LibraryFileOrdinal::new(80),
+        );
+        let namespace_row = (
+            &namespace.program,
+            SourceUnitKey(200),
+            LibraryFileOrdinal::new(81),
+        );
+        let (forward, forward_modules) = bind_libraries(&[class_row, namespace_row]);
+        let (reverse, reverse_modules) = bind_libraries(&[namespace_row, class_row]);
+        assert_eq!(forward_modules[0], reverse_modules[1]);
+        assert_eq!(forward_modules[1], reverse_modules[0]);
+
+        let snapshot = |binder: &Binder| {
+            let symbol = binder
+                .graph
+                .get(binder.compilation_global)
+                .and_then(|scope| scope.lookup_local("CanonicalClass"))
+                .expect("canonical class symbol");
+            let row = binder.symbols.get(symbol).expect("canonical class row");
+            let attachment = binder
+                .namespace_value_attachment(binder.compilation_global, "CanonicalClass")
+                .expect("canonical class namespace attachment");
+            assert_eq!(
+                attachment.disposition,
+                NamespaceValueAttachmentDisposition::AdmittedClass
+            );
+            assert_eq!(attachment.symbol, symbol);
+            assert_eq!(attachment.members.len(), 1);
+            (
+                symbol,
+                row.value,
+                row.ty,
+                row.ns,
+                declaration_sources(binder, symbol),
+                attachment.members[0].value_storage,
+            )
+        };
+        let forward_snapshot = snapshot(&forward);
+        let reverse_snapshot = snapshot(&reverse);
+        assert_eq!(forward_snapshot, reverse_snapshot);
+        assert!(forward_snapshot.1.is_some());
+        assert!(forward_snapshot.2.is_some());
+        assert!(forward_snapshot.3.is_some());
+        assert_eq!(forward_snapshot.4, [SourceUnitKey(800), SourceUnitKey(200)]);
+        assert!(forward_snapshot.5.is_some());
+    }
+
+    #[test]
+    fn library_standalone_namespace_reopenings_keep_canonical_storage_and_members() {
+        let first_allocator = Allocator::default();
+        let second_allocator = Allocator::default();
+        let first = Parser::new(
+            &first_allocator,
+            "declare namespace CanonicalStandalone { export const first: number; }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let second = Parser::new(
+            &second_allocator,
+            "declare namespace CanonicalStandalone { export const second: string; }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        assert!(first.diagnostics.is_empty());
+        assert!(second.diagnostics.is_empty());
+        let first_row = (
+            &first.program,
+            SourceUnitKey(9_000),
+            LibraryFileOrdinal::new(90),
+        );
+        let second_row = (
+            &second.program,
+            SourceUnitKey(1_000),
+            LibraryFileOrdinal::new(91),
+        );
+        let (forward, forward_modules) = bind_libraries(&[first_row, second_row]);
+        let (reverse, reverse_modules) = bind_libraries(&[second_row, first_row]);
+        assert_eq!(forward_modules[0], reverse_modules[1]);
+        assert_eq!(forward_modules[1], reverse_modules[0]);
+
+        let snapshot = |binder: &Binder| {
+            let namespace = binder
+                .namespaces
+                .namespaces()
+                .find(|namespace| namespace.name == "CanonicalStandalone")
+                .expect("canonical standalone namespace");
+            let storage = binder
+                .namespaces
+                .standalone_value_storage(namespace.id)
+                .expect("canonical standalone storage");
+            let root = binder
+                .symbols
+                .get(namespace.symbol)
+                .expect("canonical standalone root");
+            assert_eq!(root.value, Some(storage));
+            let attachment = binder
+                .standalone_namespace_value_attachments()
+                .into_iter()
+                .find(|attachment| attachment.namespace == namespace.id)
+                .expect("canonical standalone attachment");
+            let members = attachment
+                .members
+                .iter()
+                .map(|member| {
+                    (
+                        member.source,
+                        member.name.map(str::to_string),
+                        member.value_storage.expect("standalone member storage"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            (namespace.id, namespace.symbol, storage, members)
+        };
+        let forward_snapshot = snapshot(&forward);
+        let reverse_snapshot = snapshot(&reverse);
+        assert_eq!(forward_snapshot, reverse_snapshot);
+        assert_eq!(
+            forward_snapshot.3,
+            [
+                (
+                    SourceUnitKey(9_000),
+                    Some("first".to_string()),
+                    forward_snapshot.3[0].2,
+                ),
+                (
+                    SourceUnitKey(1_000),
+                    Some("second".to_string()),
+                    forward_snapshot.3[1].2,
+                ),
+            ]
+        );
+        assert_ne!(forward_snapshot.3[0].2, forward_snapshot.3[1].2);
+    }
+
+    #[test]
+    fn library_external_privates_stay_local_and_legal_global_merges_without_duplicates() {
+        let script_allocator = Allocator::default();
+        let module_allocator = Allocator::default();
+        let script = Parser::new(
+            &script_allocator,
+            "interface SharedAugmentedShape { script: number; }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let module = Parser::new(
+            &module_allocator,
+            "export {}; interface ModulePrivateShape { privateMember: boolean; } declare const ModulePrivateValue: number; declare class ModulePrivateClass {} declare namespace ModulePrivateNamespace { export const tag: number; } declare global { interface SharedAugmentedShape { augmentation: string; } }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        assert!(script.diagnostics.is_empty());
+        assert!(module.diagnostics.is_empty());
+        let script_source = SourceUnitKey(40);
+        let module_source = SourceUnitKey(41);
+        let script_file = LibraryFileOrdinal::new(40);
+        let module_file = LibraryFileOrdinal::new(41);
+        let (binder, modules) = bind_libraries(&[
+            (&script.program, script_source, script_file),
+            (&module.program, module_source, module_file),
+        ]);
+
+        assert!(binder
+            .resolve_type(modules[0], "ModulePrivateShape")
+            .is_none());
+        assert!(binder
+            .resolve_value(modules[0], "ModulePrivateValue")
+            .is_none());
+        assert!(binder
+            .resolve_value(modules[0], "ModulePrivateClass")
+            .is_none());
+        assert!(binder
+            .resolve_type(modules[0], "ModulePrivateClass")
+            .is_none());
+        assert!(binder
+            .resolve_value(modules[0], "ModulePrivateNamespace")
+            .is_none());
+        assert!(binder
+            .graph
+            .resolve(modules[0], "ModulePrivateNamespace")
+            .is_none());
+        let private = binder
+            .resolve_type(modules[1], "ModulePrivateShape")
+            .expect("external private type remains local");
+        let private_group = binder
+            .symbols
+            .get(private)
+            .and_then(|symbol| symbol.ty)
+            .and_then(|group| binder.type_groups.get(group))
+            .expect("private type group");
+        assert_eq!(private_group.fragments.len(), 1);
+        assert_eq!(private_group.fragments[0].source, module_source);
+        for name in [
+            "ModulePrivateValue",
+            "ModulePrivateClass",
+            "ModulePrivateNamespace",
+        ] {
+            assert!(
+                binder.resolve_value(modules[1], name).is_some(),
+                "external module keeps private value {name}"
+            );
+        }
+        assert!(binder
+            .resolve_type(modules[1], "ModulePrivateClass")
+            .is_some());
+
+        let shared_script = binder
+            .resolve_type(modules[0], "SharedAugmentedShape")
+            .expect("script sees augmented global");
+        let shared_module = binder
+            .resolve_type(modules[1], "SharedAugmentedShape")
+            .expect("external module sees augmented global");
+        assert_eq!(shared_script, shared_module);
+        let shared_group = binder
+            .symbols
+            .get(shared_script)
+            .and_then(|symbol| symbol.ty)
+            .and_then(|group| binder.type_groups.get(group))
+            .expect("shared global type group");
+        assert_eq!(shared_group.fragments.len(), 2);
+        assert_eq!(
+            shared_group
+                .fragments
+                .iter()
+                .map(|fragment| fragment.source)
+                .collect::<Vec<_>>(),
+            [script_source, module_source]
+        );
+        let global = binder.namespaces.globals().next().expect("global metadata");
+        assert!(global.issues.is_empty());
+        assert_eq!(
+            binder
+                .graph
+                .get(global.overlay_scope)
+                .and_then(|scope| scope.lookup_local("SharedAugmentedShape")),
+            Some(shared_script)
+        );
+        assert_eq!(
+            binder
+                .namespaces
+                .source_units()
+                .map(|unit| (unit.source, unit.origin, unit.module))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    script_source,
+                    CompilationOrigin::Library(script_file),
+                    modules[0],
+                ),
+                (
+                    module_source,
+                    CompilationOrigin::Library(module_file),
+                    modules[1],
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn library_script_declare_global_is_fail_closed() {
+        let allocator = Allocator::default();
+        let parsed = Parser::new(
+            &allocator,
+            "declare global { interface InvalidScriptGlobal {} }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        assert!(parsed.diagnostics.is_empty());
+        let (binder, modules) = bind_libraries(&[(
+            &parsed.program,
+            SourceUnitKey(50),
+            LibraryFileOrdinal::new(50),
+        )]);
+        assert!(binder
+            .resolve_type(modules[0], "InvalidScriptGlobal")
+            .is_none());
+        assert!(binder
+            .graph
+            .get(binder.compilation_global)
+            .and_then(|scope| scope.lookup_local("InvalidScriptGlobal"))
+            .is_none());
+        let global = binder
+            .namespaces
+            .globals()
+            .next()
+            .expect("invalid global metadata");
+        assert_eq!(global.issues, [GlobalIssue::FutureTk2669]);
+        assert!(binder.declarations.iter().all(|declaration| {
+            declaration.site.binding_span.start
+                != u32::try_from("declare global { interface ".len()).expect("test offset fits u32")
+                || declaration.type_group.is_none()
+        }));
+    }
+
+    #[test]
+    fn library_global_freeze_removes_non_admitted_names_and_blocks_overlay_fallback() {
+        let script_allocator = Allocator::default();
+        let module_allocator = Allocator::default();
+        let script = Parser::new(
+            &script_allocator,
+            "interface RejectedGlobal {} type RejectedGlobal = string; declare var DeferredGlobal: number; declare var DeferredGlobal: number;",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let module = Parser::new(
+            &module_allocator,
+            "export {}; declare global { interface LegalOverlayWitness {} }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        assert!(script.diagnostics.is_empty());
+        assert!(module.diagnostics.is_empty());
+        let (binder, modules) = bind_libraries(&[
+            (
+                &script.program,
+                SourceUnitKey(60),
+                LibraryFileOrdinal::new(60),
+            ),
+            (
+                &module.program,
+                SourceUnitKey(61),
+                LibraryFileOrdinal::new(61),
+            ),
+        ]);
+        for name in ["RejectedGlobal", "DeferredGlobal"] {
+            assert!(binder
+                .graph
+                .get(binder.compilation_global)
+                .and_then(|scope| scope.lookup_local(name))
+                .is_none());
+            assert!(binder.resolve_type(modules[0], name).is_none());
+            assert!(binder.resolve_value(modules[0], name).is_none());
+        }
+        let rejected = binder
+            .namespaces
+            .merges()
+            .find(|record| record.name == "RejectedGlobal")
+            .expect("rejected global merge");
+        assert_eq!(
+            rejected.classification.disposition,
+            MergeDisposition::RejectedRedeclaration
+        );
+        let deferred = binder
+            .namespaces
+            .merges()
+            .find(|record| record.name == "DeferredGlobal")
+            .expect("deferred global merge");
+        assert_eq!(
+            deferred.classification.disposition,
+            MergeDisposition::DeferredBacklog15
+        );
+        let overlay = binder
+            .namespaces
+            .globals()
+            .find(|global| global.issues.is_empty())
+            .map(|global| global.overlay_scope)
+            .expect("legal global overlay");
+        for name in ["RejectedGlobal", "DeferredGlobal"] {
+            let blocker = binder
+                .graph
+                .get(overlay)
+                .and_then(|scope| scope.lookup_local(name))
+                .and_then(|symbol| binder.symbols.get(symbol))
+                .expect("non-admitted global blocker");
+            assert!(blocker.value.is_none());
+            assert!(blocker.ty.is_none());
+            assert!(blocker.ns.is_none());
+            assert!(blocker.blocks_value_lookup);
+            assert!(blocker.blocks_type_lookup);
+            assert!(blocker.blocks_namespace_lookup);
+        }
+        assert!(binder
+            .graph
+            .get(overlay)
+            .and_then(|scope| scope.lookup_local("LegalOverlayWitness"))
+            .is_some());
     }
 
     #[test]

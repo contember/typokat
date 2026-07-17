@@ -829,9 +829,22 @@ pub struct NamespaceTable {
     canonical_export_contexts: Vec<ExportContextId>,
     compilation_global: Option<ScopeId>,
     script_namespace_root: Option<ScopeId>,
+    #[cfg(test)]
+    library_shared_globals: bool,
 }
 
 impl NamespaceTable {
+    fn uses_library_shared_globals(&self) -> bool {
+        #[cfg(test)]
+        {
+            self.library_shared_globals
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    }
+
     pub fn get(&self, id: NamespaceId) -> Option<&Namespace> {
         self.namespaces.get(id.index())
     }
@@ -934,17 +947,21 @@ impl NamespaceTable {
             .iter()
             .filter(|record| record.owner == DeclarationOwner::CompilationGlobal)
         {
-            let safe = record
-                .declarations
-                .iter()
-                .all(|participant| match participant.kind {
-                    MergeDeclarationKind::Interface | MergeDeclarationKind::TypeAlias => true,
-                    MergeDeclarationKind::Namespace => {
-                        participant.namespace_instance
-                            == Some(NamespaceInstanceState::NonInstantiated)
-                    }
-                    _ => false,
-                });
+            let safe = if self.uses_library_shared_globals() {
+                record.classification.disposition == MergeDisposition::Admitted
+            } else {
+                record
+                    .declarations
+                    .iter()
+                    .all(|participant| match participant.kind {
+                        MergeDeclarationKind::Interface | MergeDeclarationKind::TypeAlias => true,
+                        MergeDeclarationKind::Namespace => {
+                            participant.namespace_instance
+                                == Some(NamespaceInstanceState::NonInstantiated)
+                        }
+                        _ => false,
+                    })
+            };
             if !safe {
                 unsafe_names.insert(record.name.clone());
             }
@@ -1049,51 +1066,88 @@ impl NamespaceTable {
 
     fn classify(&mut self) {
         self.compute_namespace_instance_states();
+        let library_order = self.uses_library_shared_globals();
         for namespace in &mut self.namespaces {
-            namespace.fragments.sort_by_key(|fragment| {
-                self.fragments
-                    .get(fragment.index())
-                    .map(|fragment| {
-                        (
-                            fragment.source,
-                            fragment.source_start,
-                            fragment.declaration.0,
-                        )
-                    })
-                    .unwrap_or((SourceUnitKey(u32::MAX), u32::MAX, u32::MAX))
-            });
+            if library_order {
+                namespace.fragments.sort_by_key(|fragment| {
+                    let fragment = self
+                        .fragments
+                        .get(fragment.index())
+                        .expect("canonical library namespace fragment exists");
+                    (
+                        fragment.origin,
+                        fragment.source_start,
+                        fragment.declaration.0,
+                    )
+                });
+            } else {
+                namespace.fragments.sort_by_key(|fragment| {
+                    self.fragments
+                        .get(fragment.index())
+                        .map(|fragment| {
+                            (
+                                fragment.source,
+                                fragment.source_start,
+                                fragment.declaration.0,
+                            )
+                        })
+                        .unwrap_or((SourceUnitKey(u32::MAX), u32::MAX, u32::MAX))
+                });
+            }
         }
         self.canonical_namespaces = (0..self.namespaces.len())
             .map(|index| NamespaceId(u32::try_from(index).expect("namespace count fits u32")))
             .collect();
-        self.canonical_namespaces.sort_by_key(|id| {
-            let namespace = &self.namespaces[id.index()];
-            let first = namespace
-                .fragments
-                .first()
-                .and_then(|fragment| self.fragments.get(fragment.index()));
-            (
-                first
-                    .map(|fragment| fragment.source)
-                    .unwrap_or(SourceUnitKey(u32::MAX)),
-                first
-                    .map(|fragment| fragment.source_start)
-                    .unwrap_or(u32::MAX),
-                namespace.name.clone(),
-            )
-        });
+        if library_order {
+            self.canonical_namespaces.sort_by_key(|id| {
+                let namespace = &self.namespaces[id.index()];
+                let first = namespace
+                    .fragments
+                    .first()
+                    .and_then(|fragment| self.fragments.get(fragment.index()))
+                    .expect("canonical library namespace has a fragment");
+                (first.origin, first.source_start, namespace.name.clone())
+            });
+        } else {
+            self.canonical_namespaces.sort_by_key(|id| {
+                let namespace = &self.namespaces[id.index()];
+                let first = namespace
+                    .fragments
+                    .first()
+                    .and_then(|fragment| self.fragments.get(fragment.index()));
+                (
+                    first
+                        .map(|fragment| fragment.source)
+                        .unwrap_or(SourceUnitKey(u32::MAX)),
+                    first
+                        .map(|fragment| fragment.source_start)
+                        .unwrap_or(u32::MAX),
+                    namespace.name.clone(),
+                )
+            });
+        }
         self.merges = self
             .placements
             .iter()
             .map(|(key, participants)| {
                 let mut declarations = participants.clone();
-                declarations.sort_by_key(|participant| {
-                    (
-                        participant.source,
-                        participant.span.start,
-                        participant.declaration.0,
-                    )
-                });
+                if library_order {
+                    declarations.sort_by_key(|participant| {
+                        (
+                            participant.origin,
+                            participant.span.start,
+                            participant.declaration.0,
+                        )
+                    });
+                } else {
+                    declarations.sort_by_key(|participant| {
+                        (
+                            participant.source,
+                            participant.span.start,
+                            participant.declaration.0,
+                        )
+                    });
+                }
                 let classification = classify_group(&declarations);
                 let placement_issues = placement_issues(&declarations);
                 MergeRecord {
@@ -1105,59 +1159,119 @@ impl NamespaceTable {
                 }
             })
             .collect();
-        self.merges.sort_by(|left, right| {
-            let left_key = left
-                .declarations
-                .first()
-                .map(|item| (item.source, item.span.start))
-                .unwrap_or((SourceUnitKey(u32::MAX), u32::MAX));
-            let right_key = right
-                .declarations
-                .first()
-                .map(|item| (item.source, item.span.start))
-                .unwrap_or((SourceUnitKey(u32::MAX), u32::MAX));
-            left_key
-                .cmp(&right_key)
-                .then_with(|| left.name.cmp(&right.name))
-        });
+        if library_order {
+            self.merges.sort_by(|left, right| {
+                let left_key = left
+                    .declarations
+                    .first()
+                    .map(|item| (item.origin, item.span.start))
+                    .expect("canonical library merge has a declaration");
+                let right_key = right
+                    .declarations
+                    .first()
+                    .map(|item| (item.origin, item.span.start))
+                    .expect("canonical library merge has a declaration");
+                left_key
+                    .cmp(&right_key)
+                    .then_with(|| left.name.cmp(&right.name))
+            });
+        } else {
+            self.merges.sort_by(|left, right| {
+                let left_key = left
+                    .declarations
+                    .first()
+                    .map(|item| (item.source, item.span.start))
+                    .unwrap_or((SourceUnitKey(u32::MAX), u32::MAX));
+                let right_key = right
+                    .declarations
+                    .first()
+                    .map(|item| (item.source, item.span.start))
+                    .unwrap_or((SourceUnitKey(u32::MAX), u32::MAX));
+                left_key
+                    .cmp(&right_key)
+                    .then_with(|| left.name.cmp(&right.name))
+            });
+        }
         self.canonical_globals = (0..self.globals.len())
             .map(|index| GlobalAugmentationId(u32::try_from(index).expect("global count fits u32")))
             .collect();
-        self.canonical_globals.sort_by_key(|id| {
-            let global = &self.globals[id.index()];
-            (global.source, global.diagnostic_span.start, global.origin)
-        });
+        if library_order {
+            self.canonical_globals.sort_by_key(|id| {
+                let global = &self.globals[id.index()];
+                (global.origin, global.diagnostic_span.start, global.source)
+            });
+        } else {
+            self.canonical_globals.sort_by_key(|id| {
+                let global = &self.globals[id.index()];
+                (global.source, global.diagnostic_span.start, global.origin)
+            });
+        }
         self.canonical_deferred_modules = (0..self.deferred_modules.len())
             .map(|index| DeferredModuleId(u32::try_from(index).expect("module count fits u32")))
             .collect();
-        self.canonical_deferred_modules.sort_by_key(|id| {
-            let module = &self.deferred_modules[id.index()];
-            (module.source, module.span.start, module.origin)
-        });
+        if library_order {
+            self.canonical_deferred_modules.sort_by_key(|id| {
+                let module = &self.deferred_modules[id.index()];
+                (module.origin, module.span.start, module.source)
+            });
+        } else {
+            self.canonical_deferred_modules.sort_by_key(|id| {
+                let module = &self.deferred_modules[id.index()];
+                (module.source, module.span.start, module.origin)
+            });
+        }
         self.canonical_source_units = (0..self.source_units.len()).collect();
-        self.canonical_source_units.sort_by_key(|index| {
-            let unit = &self.source_units[*index];
-            (unit.source, unit.origin)
-        });
+        if library_order {
+            self.canonical_source_units.sort_by_key(|index| {
+                let unit = &self.source_units[*index];
+                (unit.origin, unit.source)
+            });
+        } else {
+            self.canonical_source_units.sort_by_key(|index| {
+                let unit = &self.source_units[*index];
+                (unit.source, unit.origin)
+            });
+        }
         self.canonical_deferred_children = (0..self.deferred_children.len()).collect();
-        self.canonical_deferred_children.sort_by_key(|index| {
-            let child = &self.deferred_children[*index];
-            (child.source, child.span.start, child.origin)
-        });
+        if library_order {
+            self.canonical_deferred_children.sort_by_key(|index| {
+                let child = &self.deferred_children[*index];
+                (child.origin, child.span.start, child.source)
+            });
+        } else {
+            self.canonical_deferred_children.sort_by_key(|index| {
+                let child = &self.deferred_children[*index];
+                (child.source, child.span.start, child.origin)
+            });
+        }
         self.canonical_umd_exports = (0..self.umd_exports.len()).collect();
-        self.canonical_umd_exports.sort_by_key(|index| {
-            let export = &self.umd_exports[*index];
-            (export.source, export.span.start, export.origin)
-        });
+        if library_order {
+            self.canonical_umd_exports.sort_by_key(|index| {
+                let export = &self.umd_exports[*index];
+                (export.origin, export.span.start, export.source)
+            });
+        } else {
+            self.canonical_umd_exports.sort_by_key(|index| {
+                let export = &self.umd_exports[*index];
+                (export.source, export.span.start, export.origin)
+            });
+        }
         self.canonical_export_contexts = (0..self.export_contexts.len())
             .map(|index| {
                 ExportContextId(u32::try_from(index).expect("export context count fits u32"))
             })
             .collect();
-        self.canonical_export_contexts.sort_by_key(|id| {
-            let context = &self.export_contexts[id.index()];
-            (context.source, context.span.start, context.origin)
-        });
+        if library_order {
+            self.canonical_export_contexts.sort_by_key(|id| {
+                let context = &self.export_contexts[id.index()];
+                (context.origin, context.span.start, context.source)
+            });
+        } else {
+            self.canonical_export_contexts.sort_by_key(|id| {
+                let context = &self.export_contexts[id.index()];
+                (context.source, context.span.start, context.origin)
+            });
+        }
     }
 
     fn compute_namespace_instance_states(&mut self) {
@@ -1255,7 +1369,8 @@ impl NamespaceTable {
                 self.aggregate_instance_state(*namespace)
                     == Some(NamespaceInstanceState::Instantiated)
                     && self.standalone_value_storage(*namespace).is_none()
-                    && !self.has_compilation_global_ancestor(*namespace)
+                    && (self.uses_library_shared_globals()
+                        || !self.has_compilation_global_ancestor(*namespace))
                     && self
                         .standalone_merge_record(*namespace)
                         .is_some_and(|record| {
@@ -1268,10 +1383,10 @@ impl NamespaceTable {
     }
 
     fn is_admitted_instantiated_standalone(&self, record: &MergeRecord) -> bool {
-        !matches!(
-            record.owner,
-            DeclarationOwner::CompilationGlobal | DeclarationOwner::DeferredAmbientModule(_)
-        ) && record.classification.disposition == MergeDisposition::Admitted
+        !matches!(record.owner, DeclarationOwner::DeferredAmbientModule(_))
+            && (record.owner != DeclarationOwner::CompilationGlobal
+                || self.uses_library_shared_globals())
+            && record.classification.disposition == MergeDisposition::Admitted
             && namespace_value_attachment_disposition(record)
                 == Some(NamespaceValueAttachmentDisposition::TypeContainerOnly)
             && record.declarations.iter().any(|participant| {
@@ -1283,7 +1398,10 @@ impl NamespaceTable {
                 .iter()
                 .filter_map(|participant| participant.namespace_fragment)
                 .filter_map(|fragment| self.fragment(fragment))
-                .all(|fragment| !self.has_compilation_global_ancestor(fragment.namespace))
+                .all(|fragment| {
+                    self.uses_library_shared_globals()
+                        || !self.has_compilation_global_ancestor(fragment.namespace)
+                })
     }
 
     fn standalone_merge_record(&self, id: NamespaceId) -> Option<&MergeRecord> {
@@ -1470,18 +1588,33 @@ impl Binder {
                         }
                     })
                     .collect::<Vec<_>>();
-                members.sort_by_key(|member| {
-                    (
-                        member.source,
-                        member
-                            .site
-                            .map_or(u32::MAX, |site| site.declaration_span.start),
-                        member
-                            .declaration
-                            .map_or(u32::MAX, |declaration| declaration.0),
-                        member.member.0,
-                    )
-                });
+                if self.namespaces.uses_library_shared_globals() {
+                    members.sort_by_key(|member| {
+                        (
+                            member.origin,
+                            member
+                                .site
+                                .map_or(u32::MAX, |site| site.declaration_span.start),
+                            member
+                                .declaration
+                                .map_or(u32::MAX, |declaration| declaration.0),
+                            member.member.0,
+                        )
+                    });
+                } else {
+                    members.sort_by_key(|member| {
+                        (
+                            member.source,
+                            member
+                                .site
+                                .map_or(u32::MAX, |site| site.declaration_span.start),
+                            member
+                                .declaration
+                                .map_or(u32::MAX, |declaration| declaration.0),
+                            member.member.0,
+                        )
+                    });
+                }
                 Some(StandaloneNamespaceValueAttachment {
                     namespace: *namespace,
                     storage,
@@ -1620,13 +1753,23 @@ impl Binder {
                 })
             })
             .collect::<Vec<_>>();
-        members.sort_by_key(|member| {
-            (
-                member.source,
-                member.site.declaration_span.start,
-                member.declaration.0,
-            )
-        });
+        if self.namespaces.uses_library_shared_globals() {
+            members.sort_by_key(|member| {
+                (
+                    member.origin,
+                    member.site.declaration_span.start,
+                    member.declaration.0,
+                )
+            });
+        } else {
+            members.sort_by_key(|member| {
+                (
+                    member.source,
+                    member.site.declaration_span.start,
+                    member.declaration.0,
+                )
+            });
+        }
         Some(NamespaceValueAttachment {
             owner: record.owner,
             name: &record.name,
@@ -2380,15 +2523,22 @@ impl WalkContext {
     }
 }
 
-/// Bind namespace topology after ordinary declarations, then activate only value
-/// members that can attach to an admitted class/function draft.
-pub(crate) fn bind_namespace_metadata(
+#[derive(Copy, Clone)]
+pub(super) enum NamespaceMetadataRoot {
+    Module,
+    #[cfg(test)]
+    LibrarySharedGlobal,
+}
+
+/// Collect namespace topology after ordinary declarations.
+pub(super) fn collect_namespace_metadata(
     state: &mut BindState,
     module: ScopeId,
     program: &Program<'_>,
     unit: CompilationUnit,
     compilation_global: ScopeId,
     script_namespace_root: ScopeId,
+    root: NamespaceMetadataRoot,
 ) {
     state.namespaces.source_units.push(SourceUnitRecord {
         source: unit.source,
@@ -2398,9 +2548,24 @@ pub(crate) fn bind_namespace_metadata(
     });
     state.namespaces.compilation_global = Some(compilation_global);
     state.namespaces.script_namespace_root = Some(script_namespace_root);
+    #[cfg(test)]
+    if matches!(root, NamespaceMetadataRoot::LibrarySharedGlobal) {
+        state.namespaces.library_shared_globals = true;
+    }
+    let (owner, lexical_scope) = match root {
+        NamespaceMetadataRoot::Module => (DeclarationOwner::Lexical(module), module),
+        #[cfg(test)]
+        NamespaceMetadataRoot::LibrarySharedGlobal if unit.binding.external_module => {
+            (DeclarationOwner::Lexical(module), module)
+        }
+        #[cfg(test)]
+        NamespaceMetadataRoot::LibrarySharedGlobal => {
+            (DeclarationOwner::CompilationGlobal, compilation_global)
+        }
+    };
     let context = WalkContext {
-        owner: DeclarationOwner::Lexical(module),
-        lexical_scope: module,
+        owner,
+        lexical_scope,
         namespace: None,
         global: None,
         deferred_module: None,
@@ -2410,9 +2575,37 @@ pub(crate) fn bind_namespace_metadata(
         direct_top_level: true,
     };
     walk_statements(state, &program.body, context, unit, compilation_global);
+}
+
+pub(super) fn finalize_namespace_metadata(state: &mut BindState) {
     resolve_local_ambient_export_alias_targets(state);
     state.namespaces.classify();
+}
+
+pub(super) fn fill_namespace_value_attachments(state: &mut BindState, program: &Program<'_>) {
     bind_namespace_value_attachment_members(state, program);
+}
+
+/// Production wrapper retaining the serial project's current phase boundary.
+pub(crate) fn bind_namespace_metadata(
+    state: &mut BindState,
+    module: ScopeId,
+    program: &Program<'_>,
+    unit: CompilationUnit,
+    compilation_global: ScopeId,
+    script_namespace_root: ScopeId,
+) {
+    collect_namespace_metadata(
+        state,
+        module,
+        program,
+        unit,
+        compilation_global,
+        script_namespace_root,
+        NamespaceMetadataRoot::Module,
+    );
+    finalize_namespace_metadata(state);
+    fill_namespace_value_attachments(state, program);
 }
 
 #[derive(Clone)]
@@ -2436,11 +2629,11 @@ fn bind_namespace_value_attachment_members(state: &mut BindState, program: &Prog
                     | NamespaceValueAttachmentDisposition::DeferredFunctionBacklog42
             )
         );
+        let inaccessible_owner = matches!(record.owner, DeclarationOwner::DeferredAmbientModule(_))
+            || (record.owner == DeclarationOwner::CompilationGlobal
+                && !state.namespaces.uses_library_shared_globals());
         if (!attached && !state.namespaces.is_admitted_instantiated_standalone(record))
-            || matches!(
-                record.owner,
-                DeclarationOwner::CompilationGlobal | DeclarationOwner::DeferredAmbientModule(_)
-            )
+            || inaccessible_owner
         {
             continue;
         }
@@ -2468,6 +2661,14 @@ fn bind_namespace_value_attachment_members(state: &mut BindState, program: &Prog
                 else {
                     continue;
                 };
+                if state.namespaces.uses_library_shared_globals()
+                    && state
+                        .declarations
+                        .get(declaration)
+                        .is_none_or(|row| row.site.module != state.current_module)
+                {
+                    continue;
+                }
                 let public_symbol = if matches!(member.publication, NamespacePublication::Private) {
                     None
                 } else {
@@ -3251,7 +3452,12 @@ fn bind_named_declaration_with_syntax(
             merge_kind,
             MergeDeclarationKind::TypeAlias | MergeDeclarationKind::Interface
         );
-    if context.namespace.is_some() || legal_global_type {
+    let already_bound_type = state.namespaces.uses_library_shared_globals()
+        && state
+            .declarations
+            .get(declaration)
+            .is_some_and(|row| row.type_group.is_some());
+    if (context.namespace.is_some() || legal_global_type) && !already_bound_type {
         let fragment_kind = match merge_kind {
             MergeDeclarationKind::TypeAlias => Some(TypeFragmentKind::TypeAlias),
             MergeDeclarationKind::Interface => Some(TypeFragmentKind::Interface),
@@ -4286,13 +4492,18 @@ fn bind_global(
         declared: declaration.declare,
         members: Vec::new(),
     });
+    let global_lexical_scope = if legal && state.namespaces.uses_library_shared_globals() {
+        compilation_global
+    } else {
+        overlay_scope
+    };
     let global_body = WalkContext {
         owner: if legal {
             DeclarationOwner::CompilationGlobal
         } else {
             DeclarationOwner::Lexical(overlay_scope)
         },
-        lexical_scope: overlay_scope,
+        lexical_scope: global_lexical_scope,
         namespace: None,
         global: Some(id),
         deferred_module: None,
