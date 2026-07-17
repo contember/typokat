@@ -376,6 +376,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 if !self.check_prepared_namespace_declaration(declaration)
                     && !module_declaration_is_type_only(declaration) =>
             {
+                #[cfg(test)]
+                if self
+                    .binder
+                    .library_module_reporting_owns(self.current_module, declaration.span.start)
+                {
+                    return;
+                }
                 self.record_incomplete(
                     "decl/module-declaration/self",
                     Span::from_oxc(stmt.span()),
@@ -411,6 +418,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
             }
             Statement::ExportDefaultDeclaration(_) => {
+                #[cfg(test)]
+                if self
+                    .binder
+                    .library_export_default_reporting_owns(self.current_module, stmt.span().start)
+                {
+                    return;
+                }
                 self.record_incomplete(
                     "decl/export-default/self",
                     Span::from_oxc(stmt.span()),
@@ -499,6 +513,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 if !self.check_prepared_namespace_declaration(declaration)
                     && !module_declaration_is_type_only(declaration) =>
             {
+                #[cfg(test)]
+                if self
+                    .binder
+                    .library_module_reporting_owns(self.current_module, declaration.span.start)
+                {
+                    return;
+                }
                 self.record_incomplete(
                     "decl/module-declaration/self",
                     Span::from_oxc(decl.span()),

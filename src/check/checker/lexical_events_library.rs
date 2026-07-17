@@ -4,8 +4,16 @@ use super::events_library::{
     LibraryEventLedger, LibraryEventLedgerError, LibraryRecordTicket, LibraryReservedEvent,
 };
 use super::lexical_events::{LexicalReservationAllocator, LexicalReservations, SourceSite};
-use crate::source::{LibraryFileOrdinal, SourceUnit};
+use super::{attach_class_bindings, attach_type_decl_owners, context::TypeDecl};
+use crate::binder::{scope::ScopeId, Binder};
+use crate::source::{LibraryFileOrdinal, SourceOrdinal, SourceUnit};
 use oxc_ast::ast::Program;
+
+pub(crate) type ExactUnit = SourceUnit;
+
+pub(crate) const fn library_unit(file_ordinal: LibraryFileOrdinal) -> ExactUnit {
+    SourceUnit::Library { file_ordinal }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LibraryLexicalEvidence(Vec<SourceUnit>);
@@ -75,6 +83,40 @@ impl LexicalReservations<LibraryRecordTicket> {
 
     pub(crate) fn library_lexical_evidence(&self) -> LibraryLexicalEvidence {
         LibraryLexicalEvidence(self.retained_source_units())
+    }
+
+    pub(crate) fn attach_library_declaration_owners(
+        &mut self,
+        file_ordinal: LibraryFileOrdinal,
+        binder: &Binder,
+        scope: ScopeId,
+        program: &Program<'_>,
+    ) {
+        attach_type_decl_owners(
+            self,
+            SourceOrdinal::Library(file_ordinal),
+            binder,
+            scope,
+            program,
+        );
+    }
+
+    pub(in crate::check::checker) fn attach_library_class_bindings(
+        &mut self,
+        file_ordinal: LibraryFileOrdinal,
+        binder: &Binder,
+        scope: ScopeId,
+        program: &Program<'_>,
+        declarations: &[TypeDecl<'_>],
+    ) {
+        attach_class_bindings(
+            self,
+            SourceOrdinal::Library(file_ordinal),
+            binder,
+            scope,
+            program,
+            declarations,
+        );
     }
 }
 

@@ -96,4 +96,14 @@ impl SymbolTable {
     pub fn get_mut(&mut self, id: SymbolId) -> Option<&mut Symbol> {
         self.symbols.get_mut(id.index())
     }
+
+    #[cfg(test)]
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (SymbolId, &Symbol)> {
+        self.symbols.iter().enumerate().map(|(index, symbol)| {
+            (
+                SymbolId(u32::try_from(index).expect("symbol table index fits u32")),
+                symbol,
+            )
+        })
+    }
 }

@@ -89,6 +89,14 @@ impl SourceUnitKey {
     pub(crate) const SINGLE_SOURCE: Self = Self(1);
 }
 
+#[cfg(test)]
+pub(crate) type ExactKey = SourceUnitKey;
+
+#[cfg(test)]
+pub(crate) const fn exact_key(index: u32) -> ExactKey {
+    SourceUnitKey(index)
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum SourceFileKind {
     ImplementationTs,
@@ -1683,6 +1691,45 @@ impl Binder {
             export.module == module
                 && export.span.start == span_start
                 && export.context == UmdContext::DeferredValidBacklog15
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn library_export_default_reporting_owns(
+        &self,
+        module: ScopeId,
+        span_start: u32,
+    ) -> bool {
+        let source = self
+            .namespaces
+            .source_units()
+            .find(|unit| unit.module == module)
+            .map(|unit| unit.source);
+        source.is_some_and(|source| {
+            self.namespaces.export_contexts().any(|context| {
+                context.source == source
+                    && context.span.start == span_start
+                    && context.kind == ExportContextKind::ExportDefault
+                    && context.syntax == ExportSyntaxDisposition::FutureTk1319
+                    && matches!(context.origin, CompilationOrigin::Library(_))
+            })
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn library_module_reporting_owns(&self, module: ScopeId, source_start: u32) -> bool {
+        self.namespaces.export_contexts().any(|context| {
+            if context.syntax != ExportSyntaxDisposition::FutureTk1319
+                || !matches!(context.origin, CompilationOrigin::Library(_))
+            {
+                return false;
+            }
+            let ExportContextOwner::NamespaceFragment(fragment) = context.owner else {
+                return false;
+            };
+            self.namespaces.fragment(fragment).is_some_and(|fragment| {
+                fragment.module == module && fragment.source_start == source_start
+            })
         })
     }
 

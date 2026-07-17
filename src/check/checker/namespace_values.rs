@@ -7,6 +7,8 @@ use super::context::{
 };
 use super::events::UserRecordTicket;
 use super::function_groups::FunctionNamespacePayload;
+#[cfg(test)]
+use super::lexical_events::SourceSite;
 use super::lexical_events::{source_ordinal, LexicalOwnerPhase};
 use super::source_ordinal_from_origin;
 use super::statements::{function_decl_from_statement, function_overload_group};
@@ -41,6 +43,8 @@ pub(in crate::check::checker) struct NamespaceValueRegistry<Ticket: Copy = UserR
     prepared_owners: FxHashSet<(ScopeId, String)>,
     standalone_plans: FxHashMap<NamespaceId, StandaloneNamespacePlan<Ticket>>,
     standalone_terminals: FxHashMap<NamespaceId, StandaloneNamespaceTerminal>,
+    #[cfg(test)]
+    namespace_function_reservations: FxHashMap<DeclId, SourceSite>,
     #[cfg(test)]
     standalone_query_root_calls: u64,
 }
@@ -270,6 +274,8 @@ impl<Ticket: Copy> Default for NamespaceValueRegistry<Ticket> {
             standalone_plans: FxHashMap::default(),
             standalone_terminals: FxHashMap::default(),
             #[cfg(test)]
+            namespace_function_reservations: FxHashMap::default(),
+            #[cfg(test)]
             standalone_query_root_calls: 0,
         }
     }
@@ -286,6 +292,26 @@ impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
     #[cfg(test)]
     fn standalone_query_root_calls(&self) -> u64 {
         self.standalone_query_root_calls
+    }
+
+    #[cfg(test)]
+    fn record_namespace_function_reservation(&mut self, declaration: DeclId, source: SourceSite) {
+        if let Some(previous) = self
+            .namespace_function_reservations
+            .insert(declaration, source)
+        {
+            assert_eq!(previous, source, "one exact callable reservation source");
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn namespace_function_reservation(
+        &self,
+        declaration: DeclId,
+    ) -> Option<SourceSite> {
+        self.namespace_function_reservations
+            .get(&declaration)
+            .copied()
     }
 
     fn insert_standalone_plan(
@@ -642,7 +668,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         unavailable = Some("missing-exported-function-syntax");
                         continue;
                     };
-                    let reservation = self.reserve_namespace_function(scope, function);
+                    let reservation =
+                        self.reserve_namespace_function(member.declaration, scope, function);
                     functions.push(StagedFunction {
                         input: OwnedMemberInput {
                             declaration: member.declaration.expect("function declaration"),
@@ -1013,7 +1040,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     else {
                         continue;
                     };
-                    let reservation = self.reserve_namespace_function(scope, function);
+                    let reservation =
+                        self.reserve_namespace_function(member.declaration, scope, function);
                     if let (Some(storage), FunctionReservation::Ready(surface)) =
                         (member.value_storage, &reservation)
                     {
@@ -1347,7 +1375,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         unavailable = true;
                         continue;
                     };
-                    let reservation = self.reserve_namespace_function(member.scope, function);
+                    let reservation = self.reserve_namespace_function(
+                        Some(member.declaration),
+                        member.scope,
+                        function,
+                    );
                     functions.push(StagedFunction {
                         input: member.clone(),
                         syntax: function,
@@ -1525,7 +1557,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     else {
                         continue;
                     };
-                    let reservation = self.reserve_namespace_function(member.scope, function);
+                    let reservation = self.reserve_namespace_function(
+                        Some(member.declaration),
+                        member.scope,
+                        function,
+                    );
                     self.namespace_values.insert_member(
                         member.module,
                         member.source_start,
@@ -1568,15 +1604,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     fn reserve_namespace_function(
         &mut self,
+        declaration: Option<DeclId>,
         scope: ScopeId,
         function: &Function<'_>,
     ) -> FunctionReservation<Ticket> {
-        let tickets = self
+        let callable = self
             .lexical_events
             .callable_at(source_ordinal(self.current_source), function.span.start)
             .and_then(|site| self.lexical_events.callable(site))
-            .map(|callable| callable.tickets)
             .expect("namespace function has preallocated callable tickets");
+        let tickets = callable.tickets;
+        #[cfg(test)]
+        self.namespace_values.record_namespace_function_reservation(
+            declaration.expect("namespace function declaration"),
+            callable.source,
+        );
+        #[cfg(not(test))]
+        let _ = declaration;
         self.with_ticket_effects(tickets.signature, |pass| {
             let (mut lowered, child_failures) =
                 pass.lower_namespace_callable_surface(scope, function, tickets.signature);

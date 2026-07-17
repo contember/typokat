@@ -291,19 +291,23 @@ impl TypeGroupConstruction {
             .is_some_and(|slot| matches!(slot, TypeGroupConstructionSlot::Frozen(_)))
     }
 
-    fn consume(self, expected: usize) -> Option<PublishedTypeGroups> {
+    fn consume(self, expected: usize) -> Option<(PublishedTypeGroups, usize)> {
         if self.slots.len() != expected {
             return None;
         }
+        let mut publication_validations = 0;
         let entries = self
             .slots
             .into_iter()
             .map(|slot| match slot {
-                TypeGroupConstructionSlot::Frozen(terminal) => Some(terminal),
+                TypeGroupConstructionSlot::Frozen(terminal) => {
+                    publication_validations += 1;
+                    Some(terminal)
+                }
                 TypeGroupConstructionSlot::Pending | TypeGroupConstructionSlot::Building => None,
             })
             .collect::<Option<Vec<_>>>()?;
-        Some(PublishedTypeGroups { entries })
+        Some((PublishedTypeGroups { entries }, publication_validations))
     }
 
     fn unfinished_groups(&self) -> Vec<(usize, &'static str)> {
@@ -547,7 +551,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    pub(in crate::check::checker) fn publish_type_groups(&mut self) {
+    pub(in crate::check::checker) fn publish_type_groups(&mut self) -> usize {
         let base_len = self.type_environment.inherited().groups().len();
         let owned_parameters: Vec<TypeParamId> = self
             .type_decls
@@ -594,7 +598,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             unfinished.is_empty(),
             "every type group must be explicitly frozen before publication: {unfinished:?}"
         );
-        let groups = construction
+        let (groups, publication_validations) = construction
             .consume(self.type_decls.len())
             .expect("every type group must be explicitly frozen before publication");
         let staged_classes = self
@@ -602,6 +606,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .take()
             .expect("class registry must be staged before type publication");
         self.type_environment.publish(groups, staged_classes);
+        publication_validations
     }
 }
 
@@ -662,7 +667,9 @@ mod tests {
         let mut construction = TypeGroupConstruction::new(1);
         construction.install_base(&base);
 
-        let inherited = construction.consume(1).expect("installed base is terminal");
+        let (inherited, publication_validations) =
+            construction.consume(1).expect("installed base is terminal");
+        assert_eq!(publication_validations, 1);
         assert_eq!(inherited.get(TypeGroupId(0)), Some(&terminal));
     }
 }

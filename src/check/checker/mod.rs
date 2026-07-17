@@ -59,6 +59,8 @@ mod narrowing;
 pub(crate) mod reporting_record;
 mod statements;
 mod type_groups;
+#[cfg(test)]
+pub(crate) mod wu0b_library;
 
 use context::{
     AssertionCompatibilityObligation, AssignObligation, CheckerEffects, CheckerRecordBatch,
