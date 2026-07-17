@@ -125,6 +125,13 @@ struct InterfaceOccurrenceReservation<Ticket: Copy = UserRecordTicket> {
     owner: Ticket,
 }
 
+#[cfg(test)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct SourceAnchorReservation<Ticket: Copy = UserRecordTicket> {
+    source: SourceSite,
+    owner: Ticket,
+}
+
 /// Stable class identities attached after binder/type reservation and before fill.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ClassBinding {
@@ -235,6 +242,10 @@ pub(crate) struct LexicalReservations<Ticket: Copy = UserRecordTicket> {
     members: Vec<MemberReservation<Ticket>>,
     callables: Vec<CallableReservation<Ticket>>,
     expression_site_tickets: Vec<SiteTickets<Ticket>>,
+    #[cfg(test)]
+    expression_sources: Vec<SourceSite>,
+    #[cfg(test)]
+    source_anchors: Vec<SourceAnchorReservation<Ticket>>,
     declarations: Vec<DeclarationReservation<Ticket>>,
     export_aliases: Vec<ExportAliasReservation<Ticket>>,
     interface_occurrences: Vec<InterfaceOccurrenceReservation<Ticket>>,
@@ -257,6 +268,10 @@ impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
             members: Vec::new(),
             callables: Vec::new(),
             expression_site_tickets: Vec::new(),
+            #[cfg(test)]
+            expression_sources: Vec::new(),
+            #[cfg(test)]
+            source_anchors: Vec::new(),
             declarations: Vec::new(),
             export_aliases: Vec::new(),
             interface_occurrences: Vec::new(),
@@ -1027,6 +1042,8 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         let (event, primary) = allocator.reserve_event(source.source_start);
         let tickets = reserve_site_tickets(event, primary, allocator)?;
         self.expression_site_tickets.push(tickets);
+        #[cfg(test)]
+        self.expression_sources.push(source);
         self.reserve_callable(source, event, tickets, None, function, allocator)?;
         self.reserve_parameter_expressions(source, &function.params, allocator)?;
         if let Some(body) = &function.body {
@@ -1051,6 +1068,8 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         let (event, primary) = allocator.reserve_event(source.source_start);
         let tickets = reserve_site_tickets(event, primary, allocator)?;
         self.expression_site_tickets.push(tickets);
+        #[cfg(test)]
+        self.expression_sources.push(source);
         self.reserve_arrow_callable(source, event, tickets, arrow, allocator)?;
         self.reserve_parameter_expressions(source, &arrow.params, allocator)?;
         if let Some(expression) = arrow.get_expression() {
@@ -1077,6 +1096,8 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         let (event, primary) = allocator.reserve_event(source.source_start);
         let tickets = reserve_site_tickets(event, primary, allocator)?;
         self.expression_site_tickets.push(tickets);
+        #[cfg(test)]
+        self.expression_sources.push(source);
         self.reserve_class(source, class, tickets, allocator)?;
         Ok(())
     }
@@ -1334,6 +1355,82 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             tickets.push(callable.tickets.body);
         }
         tickets
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retain_source_anchor(&mut self, source: SourceSite, owner: Ticket) {
+        self.source_anchors
+            .push(SourceAnchorReservation { source, owner });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source_anchor_tickets(&self) -> Vec<Ticket> {
+        self.source_anchors
+            .iter()
+            .map(|anchor| anchor.owner)
+            .collect()
+    }
+
+    #[cfg(test)]
+    fn structural_source_sites(&self) -> Vec<SourceSite> {
+        let mut sites = Vec::new();
+        sites.extend(
+            self.declarations
+                .iter()
+                .map(|reservation| reservation.source),
+        );
+        sites.extend(
+            self.export_aliases
+                .iter()
+                .map(|reservation| reservation.source),
+        );
+        sites.extend(
+            self.interface_occurrences
+                .iter()
+                .map(|reservation| reservation.source),
+        );
+        sites.extend(self.top_level.iter().map(|reservation| reservation.source));
+        sites.extend(
+            self.nested_statements
+                .iter()
+                .map(|reservation| reservation.source),
+        );
+        sites.extend(
+            self.declarators
+                .iter()
+                .map(|reservation| reservation.source),
+        );
+        for reservation in &self.classes {
+            sites.push(reservation.source);
+            sites.extend(
+                reservation
+                    .constraints
+                    .iter()
+                    .map(|constraint| constraint.source),
+            );
+            sites.extend(reservation.defaults.iter().map(|default| default.source));
+        }
+        sites.extend(self.members.iter().map(|reservation| reservation.source));
+        sites.extend(self.callables.iter().map(|reservation| reservation.source));
+        sites.extend(self.expression_sources.iter().copied());
+        sites
+    }
+
+    #[cfg(test)]
+    fn retained_source_sites(&self) -> Vec<SourceSite> {
+        self.source_anchors
+            .iter()
+            .map(|anchor| anchor.source)
+            .chain(self.structural_source_sites())
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retained_source_units(&self) -> Vec<SourceUnit> {
+        self.retained_source_sites()
+            .into_iter()
+            .map(|site| site.unit)
+            .collect()
     }
 }
 
@@ -1605,9 +1702,11 @@ fn statement_variable_declaration<'ast>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::context::CheckerEffects;
     use super::super::events::{EventStore, EventStoreError};
     use super::super::events_library::{
         LibraryEventKey, LibraryEventLedger, LibraryEventLedgerError, LibraryRecordTicket,
+        LibrarySemanticReportingAdapter,
     };
     use super::super::lexical_events_user::ReservationError as UserReservationError;
     use super::super::reporting_record::CheckerRecord;
@@ -1636,29 +1735,10 @@ mod tests {
         ))
     }
 
-    fn reservation_sources<Ticket: Copy>(
+    fn reservation_sources<Ticket: Copy + PartialEq>(
         reservations: &LexicalReservations<Ticket>,
     ) -> Vec<SourceSite> {
-        let mut sources = Vec::new();
-        sources.extend(reservations.declarations.iter().map(|row| row.source));
-        sources.extend(reservations.export_aliases.iter().map(|row| row.source));
-        sources.extend(
-            reservations
-                .interface_occurrences
-                .iter()
-                .map(|row| row.source),
-        );
-        sources.extend(reservations.top_level.iter().map(|row| row.source));
-        sources.extend(reservations.nested_statements.iter().map(|row| row.source));
-        sources.extend(reservations.declarators.iter().map(|row| row.source));
-        for class in &reservations.classes {
-            sources.push(class.source);
-            sources.extend(class.constraints.iter().map(|row| row.source));
-            sources.extend(class.defaults.iter().map(|row| row.source));
-        }
-        sources.extend(reservations.members.iter().map(|row| row.source));
-        sources.extend(reservations.callables.iter().map(|row| row.source));
-        sources
+        reservations.structural_source_sites()
     }
 
     fn finish_user_reservations(
@@ -1692,7 +1772,15 @@ mod tests {
     fn finish_library_reservations(
         mut ledger: LibraryEventLedger,
         tickets: &[LibraryRecordTicket],
+        anchors: &[LibraryRecordTicket],
     ) -> Vec<(u32, usize, usize, String, Span)> {
+        let anchor_batches = anchors
+            .iter()
+            .map(|anchor| CheckerEffects::new(*anchor).records)
+            .collect();
+        LibrarySemanticReportingAdapter::new(&mut ledger)
+            .complete_semantic_batches(anchor_batches)
+            .expect("each library source anchor completes once");
         for (index, ticket) in tickets.iter().enumerate().rev() {
             ledger
                 .complete(*ticket, vec![test_record(index)])
@@ -1799,7 +1887,24 @@ const arrow = (input = 1) => class Inner { method() { return input; } };
 
         let user_sources = reservation_sources(&user);
         let library_sources = reservation_sources(&library);
+        let retained_row_count = user.declarations.len()
+            + user.export_aliases.len()
+            + user.interface_occurrences.len()
+            + user.top_level.len()
+            + user.nested_statements.len()
+            + user.declarators.len()
+            + user.classes.len()
+            + user
+                .classes
+                .iter()
+                .map(|class| class.constraints.len() + class.defaults.len())
+                .sum::<usize>()
+            + user.members.len()
+            + user.callables.len()
+            + user.expression_sources.len();
         assert!(!user_sources.is_empty());
+        assert!(!user.expression_sources.is_empty());
+        assert_eq!(user_sources.len(), retained_row_count);
         assert!(user_sources.iter().all(|site| site.unit == user_unit));
         assert!(library_sources.iter().all(|site| site.unit == library_unit));
         assert_eq!(
@@ -1815,6 +1920,8 @@ const arrow = (input = 1) => class Inner { method() { return input; } };
 
         let user_tickets = user.tickets();
         let library_tickets = library.tickets();
+        let library_anchors = library.source_anchor_tickets();
+        assert_eq!(library_anchors.len(), 1);
         assert_eq!(user_tickets.len(), library_tickets.len());
         assert_eq!(
             user_tickets.iter().copied().collect::<BTreeSet<_>>().len(),
@@ -1830,7 +1937,7 @@ const arrow = (input = 1) => class Inner { method() { return input; } };
         );
         assert_eq!(
             finish_user_reservations(user_store, &user_tickets),
-            finish_library_reservations(library_ledger, &library_tickets)
+            finish_library_reservations(library_ledger, &library_tickets, &library_anchors)
         );
     }
 
@@ -1899,6 +2006,14 @@ const arrow = (input = 1) => class Inner { method() { return input; } };
             .expect("second library callable site");
         assert_ne!(first_callable, second_callable);
 
+        let anchor_batches = reservations
+            .source_anchor_tickets()
+            .into_iter()
+            .map(|anchor| CheckerEffects::new(anchor).records)
+            .collect();
+        LibrarySemanticReportingAdapter::new(&mut ledger)
+            .complete_semantic_batches(anchor_batches)
+            .unwrap();
         let tickets = reservations.tickets();
         for (index, ticket) in tickets.iter().enumerate() {
             ledger.complete(*ticket, vec![test_record(index)]).unwrap();
@@ -1940,10 +2055,12 @@ const arrow = (input = 1) => class Inner { method() { return input; } };
             .reserve_library_program(file, &parsed.program, &mut ledger)
             .unwrap();
         let tickets = reservations.tickets();
+        let anchors = reservations.source_anchor_tickets();
+        let inventory = anchors.iter().chain(&tickets).copied().collect::<Vec<_>>();
         assert!(!tickets.is_empty());
         assert_eq!(
-            tickets.iter().copied().collect::<BTreeSet<_>>().len(),
-            tickets.len()
+            inventory.iter().copied().collect::<BTreeSet<_>>().len(),
+            inventory.len()
         );
         let duplicate = tickets[0];
         ledger.complete(duplicate, Vec::new()).unwrap();
@@ -1958,6 +2075,13 @@ const arrow = (input = 1) => class Inner { method() { return input; } };
         {
             ledger.complete(ticket, Vec::new()).unwrap();
         }
+        let anchor_batches = anchors
+            .into_iter()
+            .map(|anchor| CheckerEffects::new(anchor).records)
+            .collect();
+        LibrarySemanticReportingAdapter::new(&mut ledger)
+            .complete_semantic_batches(anchor_batches)
+            .unwrap();
         assert!(ledger.finish().unwrap().is_empty());
 
         let short_source = "const x = 1;";
@@ -1971,6 +2095,14 @@ const arrow = (input = 1) => class Inner { method() { return input; } };
             .reserve_library_program(unfinished_file, &short.program, &mut unfinished_ledger)
             .unwrap();
         let unfinished_tickets = unfinished_reservations.tickets();
+        let anchor_batches = unfinished_reservations
+            .source_anchor_tickets()
+            .into_iter()
+            .map(|anchor| CheckerEffects::new(anchor).records)
+            .collect();
+        LibrarySemanticReportingAdapter::new(&mut unfinished_ledger)
+            .complete_semantic_batches(anchor_batches)
+            .unwrap();
         let missing = unfinished_tickets[0];
         for ticket in unfinished_tickets
             .iter()
