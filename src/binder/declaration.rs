@@ -7,6 +7,7 @@ use crate::span::Span;
 use oxc_ast::ast::{Program, TSModuleDeclarationName};
 use oxc_ast::AstKind;
 use oxc_ast_visit::Visit;
+use rustc_hash::FxHashMap;
 
 /// Unified lexical identity of one source declaration occurrence.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -215,10 +216,11 @@ pub struct LexicalDeclaration {
     pub namespace: Option<NamespaceId>,
 }
 
-/// Dense declaration table indexed only by unified lexical [`DeclId`].
+/// Dense canonical declaration rows with exact-site lookup into unified lexical [`DeclId`].
 #[derive(Default)]
 pub struct DeclarationTable {
     declarations: Vec<LexicalDeclaration>,
+    declarations_by_site: FxHashMap<(ScopeId, u32, DeclarationKind), DeclId>,
 }
 
 impl DeclarationTable {
@@ -234,7 +236,23 @@ impl DeclarationTable {
             type_group: None,
             namespace: None,
         });
+        let previous = self
+            .declarations_by_site
+            .insert((site.module, site.binding_span.start, kind), id);
+        debug_assert!(previous.is_none(), "one declaration per binding leaf");
         id
+    }
+
+    pub(crate) fn declaration_at_site(
+        &self,
+        syntax_module: ScopeId,
+        binding_start: u32,
+        kind: DeclarationKind,
+    ) -> Option<&LexicalDeclaration> {
+        let declaration = self
+            .declarations_by_site
+            .get(&(syntax_module, binding_start, kind))?;
+        self.declarations.get(declaration.index())
     }
 
     pub fn get(&self, id: DeclId) -> Option<&LexicalDeclaration> {

@@ -12,4 +12,7 @@ pub mod symbol;
 pub use bind::{bind_module_with_prelude, Binder};
 
 #[cfg(test)]
+mod exact_declaration_site_spec;
+
+#[cfg(test)]
 mod wu0b_compilation_origin_spec;

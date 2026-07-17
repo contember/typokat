@@ -6,7 +6,9 @@ use super::lexical_events::InterfaceOccurrenceKind;
 use super::type_groups::{
     InterfaceAlternativeKind, InterfaceTypedAlternative, PublishedTypeParameterDefault,
 };
-use crate::binder::declaration::{TypeGroupFragment, TypeGroupId};
+use crate::binder::declaration::{
+    DeclarationKind as BinderDeclarationKind, TypeGroupFragment, TypeGroupId,
+};
 use crate::binder::namespace::SourceUnitKey;
 use crate::binder::scope::ScopeId;
 use crate::binder::Binder;
@@ -3381,14 +3383,17 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
         &mut |_walk_scope, _, declaration| {
             match declaration {
                 TopTypeDecl::Interface(iface) => {
-                    let Some((group, declaration, scope)) = exact_type_fragment_at(
-                        binder,
+                    let Some(exact) = binder.exact_declaration_at(
                         module,
-                        crate::binder::declaration::TypeFragmentKind::Interface,
                         iface.id.span.start,
+                        BinderDeclarationKind::Interface,
                     ) else {
                         return;
                     };
+                    let (Some(group), Some(scope)) = (exact.type_group, exact.site.scope) else {
+                        return;
+                    };
+                    let declaration = exact.id;
                     let mut fragment = InterfaceFragment {
                         declaration,
                         scope,
@@ -3503,14 +3508,16 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                     }
                 }
                 TopTypeDecl::Alias(alias) => {
-                    let exact = exact_type_fragment_at(
-                        binder,
+                    let exact = binder.exact_declaration_at(
                         module,
-                        crate::binder::declaration::TypeFragmentKind::TypeAlias,
                         alias.id.span.start,
+                        BinderDeclarationKind::TypeAlias,
                     );
                     let (group, declaration, scope) = match exact {
-                        Some(exact) => (Some(exact.0), Some(exact.1), exact.2),
+                        Some(exact) => match (exact.type_group, exact.site.scope) {
+                            (Some(group), Some(scope)) => (Some(group), Some(exact.id), scope),
+                            _ => (None, None, _walk_scope),
+                        },
                         None => (None, None, _walk_scope),
                     };
                     let params =
@@ -3604,14 +3611,16 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                     let class_id = ClassId(*next_class_id);
                     *next_class_id += 1;
                     if let Some(id) = &class.id {
-                        let exact = exact_type_fragment_at(
-                            binder,
+                        let exact = binder.exact_declaration_at(
                             module,
-                            crate::binder::declaration::TypeFragmentKind::Class,
                             id.span.start,
+                            BinderDeclarationKind::Class,
                         );
                         let (group, declaration, scope) = match exact {
-                            Some(exact) => (Some(exact.0), Some(exact.1), exact.2),
+                            Some(exact) => match (exact.type_group, exact.site.scope) {
+                                (Some(group), Some(scope)) => (Some(group), Some(exact.id), scope),
+                                _ => (None, None, _walk_scope),
+                            },
                             None => (None, None, _walk_scope),
                         };
                         if let (Some(group), Some(declaration)) = (group, declaration) {
@@ -3758,28 +3767,6 @@ fn ensure_type_group_slot<'ast>(decls: &mut Vec<TypeDecl<'ast>>, index: usize) {
     }
 }
 
-pub(in crate::check::checker) fn exact_type_fragment_at(
-    binder: &Binder,
-    module: ScopeId,
-    kind: crate::binder::declaration::TypeFragmentKind,
-    binding_start: u32,
-) -> Option<(TypeGroupId, crate::binder::declaration::DeclId, ScopeId)> {
-    let source = binder
-        .namespaces
-        .source_units()
-        .find(|unit| unit.module == module)
-        .map(|unit| unit.source);
-    binder.type_groups.iter().find_map(|group| {
-        group.fragments.iter().find_map(|fragment| {
-            (source.map_or(fragment.site.module == module, |source| {
-                fragment.source == source
-            }) && fragment.kind == kind
-                && fragment.site.binding_span.start == binding_start)
-                .then_some((group.id, fragment.declaration, fragment.scope))
-        })
-    })
-}
-
 fn sort_interface_fragments(
     binder: &Binder,
     group: TypeGroupId,
@@ -3865,7 +3852,7 @@ fn walk_type_decl_statement<'ast>(
                 module,
                 scope,
                 interface.span.start,
-                crate::binder::declaration::TypeFragmentKind::Interface,
+                BinderDeclarationKind::Interface,
                 interface.id.span.start,
                 TopTypeDecl::Interface(interface),
                 visit,
@@ -3877,7 +3864,7 @@ fn walk_type_decl_statement<'ast>(
                 module,
                 scope,
                 alias.span.start,
-                crate::binder::declaration::TypeFragmentKind::TypeAlias,
+                BinderDeclarationKind::TypeAlias,
                 alias.id.span.start,
                 TopTypeDecl::Alias(alias),
                 visit,
@@ -3890,7 +3877,7 @@ fn walk_type_decl_statement<'ast>(
                     module,
                     scope,
                     class.span.start,
-                    crate::binder::declaration::TypeFragmentKind::Class,
+                    BinderDeclarationKind::Class,
                     id.span.start,
                     TopTypeDecl::Class(class),
                     visit,
@@ -3920,7 +3907,7 @@ fn walk_type_decl_statement<'ast>(
                     module,
                     scope,
                     export.span.start,
-                    crate::binder::declaration::TypeFragmentKind::Interface,
+                    BinderDeclarationKind::Interface,
                     interface.id.span.start,
                     TopTypeDecl::Interface(interface),
                     visit,
@@ -3931,7 +3918,7 @@ fn walk_type_decl_statement<'ast>(
                         module,
                         scope,
                         export.span.start,
-                        crate::binder::declaration::TypeFragmentKind::TypeAlias,
+                        BinderDeclarationKind::TypeAlias,
                         alias.id.span.start,
                         TopTypeDecl::Alias(alias),
                         visit,
@@ -3944,7 +3931,7 @@ fn walk_type_decl_statement<'ast>(
                             module,
                             scope,
                             export.span.start,
-                            crate::binder::declaration::TypeFragmentKind::Class,
+                            BinderDeclarationKind::Class,
                             id.span.start,
                             TopTypeDecl::Class(class),
                             visit,
@@ -4097,27 +4084,14 @@ fn visit_bound_type<'ast>(
     module: ScopeId,
     fallback_scope: ScopeId,
     owner_start: u32,
-    kind: crate::binder::declaration::TypeFragmentKind,
+    kind: BinderDeclarationKind,
     binding_start: u32,
     declaration: TopTypeDecl<'ast>,
     visit: &mut impl FnMut(ScopeId, u32, TopTypeDecl<'ast>),
 ) {
-    let source = binder
-        .namespaces
-        .source_units()
-        .find(|unit| unit.module == module)
-        .map(|unit| unit.source);
     let matched = binder
-        .type_groups
-        .iter()
-        .flat_map(|group| group.fragments.iter())
-        .find(|fragment| {
-            source.map_or(fragment.site.module == module, |source| {
-                fragment.source == source
-            }) && fragment.kind == kind
-                && fragment.site.binding_span.start == binding_start
-        })
-        .map(|fragment| fragment.scope);
+        .exact_declaration_at(module, binding_start, kind)
+        .and_then(|declaration| declaration.site.scope);
     let scope = matched.unwrap_or(fallback_scope);
     visit(scope, owner_start, declaration);
 }

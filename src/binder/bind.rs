@@ -5,7 +5,8 @@
 
 use crate::binder::declaration::{
     source_declaration_occurrences, DeclId, DeclarationKind, DeclarationSite, DeclarationTable,
-    TypeFragmentKind, TypeGroupFragment, TypeGroupId, TypeGroupTable, ValueStorageId,
+    LexicalDeclaration, TypeFragmentKind, TypeGroupFragment, TypeGroupId, TypeGroupTable,
+    ValueStorageId,
 };
 use crate::binder::namespace::{
     allocate_dormant_namespace_value_storages, bind_namespace_metadata, CompilationUnit,
@@ -89,6 +90,18 @@ pub(crate) enum ValueResolution {
 }
 
 impl Binder {
+    /// Return the canonical semantically admitted declaration at one exact syntax site.
+    pub(crate) fn exact_declaration_at(
+        &self,
+        syntax_module: ScopeId,
+        binding_start: u32,
+        kind: DeclarationKind,
+    ) -> Option<&LexicalDeclaration> {
+        self.declarations
+            .declaration_at_site(syntax_module, binding_start, kind)
+            .filter(|declaration| declaration.site.scope.is_some())
+    }
+
     /// Resolve a value binding and its namespace provenance in one scope walk.
     pub(crate) fn resolve_value_binding(&self, scope: ScopeId, name: &str) -> ValueResolution {
         resolve_value_binding(&self.graph, &self.symbols, &self.namespaces, scope, name)
@@ -264,7 +277,6 @@ pub(crate) struct BindState {
     pub(crate) declarations: DeclarationTable,
     pub(crate) type_groups: TypeGroupTable,
     pub(crate) namespaces: NamespaceTable,
-    pub(crate) declarations_by_site: FxHashMap<(ScopeId, u32, DeclarationKind), DeclId>,
     /// Stable source ownership for every module scope, including the prelude.
     module_sources: FxHashMap<ScopeId, SourceUnitKey>,
     #[cfg(test)]
@@ -289,23 +301,14 @@ impl BindState {
                 declaration_span: occurrence.declaration_span,
                 binding_span: occurrence.binding_span,
             };
-            let id = self.declarations.push(occurrence.kind, site);
-            let previous = self.declarations_by_site.insert(
-                (
-                    self.current_module,
-                    occurrence.binding_span.start,
-                    occurrence.kind,
-                ),
-                id,
-            );
-            debug_assert!(previous.is_none(), "one declaration per binding leaf");
+            self.declarations.push(occurrence.kind, site);
         }
     }
 
     pub(crate) fn source_decl_at(&self, span_start: u32, kind: DeclarationKind) -> Option<DeclId> {
-        self.declarations_by_site
-            .get(&(self.current_module, span_start, kind))
-            .copied()
+        self.declarations
+            .declaration_at_site(self.current_module, span_start, kind)
+            .map(|declaration| declaration.id)
     }
 
     pub(crate) fn attach_declaration_scope(
@@ -439,7 +442,6 @@ impl ProjectBinderBuilder {
             declarations: DeclarationTable::default(),
             type_groups: TypeGroupTable::default(),
             namespaces: NamespaceTable::default(),
-            declarations_by_site: FxHashMap::default(),
             module_sources: FxHashMap::default(),
             #[cfg(test)]
             library_module_ordinals: FxHashMap::default(),

@@ -912,6 +912,7 @@ impl NamespaceTable {
         issues.into_iter()
     }
 
+    #[cfg(test)]
     pub(crate) fn source_units(&self) -> impl Iterator<Item = &SourceUnitRecord> {
         self.canonical_source_units
             .iter()

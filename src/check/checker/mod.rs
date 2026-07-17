@@ -5,7 +5,7 @@
 
 use crate::binder::bind::{ImportPlaceholder, ImportedSymbol, ProjectBinderBuilder};
 use crate::binder::bind_module_with_prelude;
-use crate::binder::declaration::{TypeGroupId, ValueStorageId};
+use crate::binder::declaration::{DeclarationKind, TypeGroupId, ValueStorageId};
 use crate::binder::namespace::{
     CompilationUnit, GlobalIssue, LocalAmbientExportAliasFailureKind, PlacementIssueKind,
     UmdContext,
@@ -70,7 +70,7 @@ use context::{
     InterfaceRelationKind, InterfaceRelationObligation, InterfaceRelationReport, OverrideCheck,
     Pass, TypeDecl,
 };
-use decls::{reserve_type_decls, type_decl_id, value_decl_id, walk_type_decls, TopTypeDecl};
+use decls::{reserve_type_decls, type_decl_id, walk_type_decls, TopTypeDecl};
 use events::{CandidateEffects, EventStore, UserRecordTicket};
 use lexical_events::{ClassBinding, LexicalOwnerPhase, LexicalReservations};
 use reporting_record::CheckerRecord;
@@ -1380,58 +1380,52 @@ fn attach_class_bindings<Ticket: Copy + PartialEq>(
     declarations: &[TypeDecl<'_>],
 ) {
     let mut reserved_class_owners = BTreeMap::new();
-    walk_type_decls(
-        binder,
-        scope,
-        program,
-        &mut |declaration_scope, _, declaration| {
-            let TopTypeDecl::Class(class) = declaration else {
-                return;
-            };
-            let Some(name) = class.id.as_ref().map(|id| id.name.as_str()) else {
-                return;
-            };
-            let Some(site) = reservations.class_at(source_ordinal, class.span.start) else {
-                return;
-            };
-            let Some((type_decl, _, _)) = decls::exact_type_fragment_at(
-                binder,
-                scope,
-                crate::binder::declaration::TypeFragmentKind::Class,
-                class.id.as_ref().expect("named class binding").span.start,
-            ) else {
-                return;
-            };
-            let value_decl = value_decl_id(binder, declaration_scope, name);
-            let Some(type_declaration) = declarations.get(type_decl.index()) else {
-                return;
-            };
-            let (class_id, lexical_params) = match type_declaration {
-                TypeDecl::Class {
+    walk_type_decls(binder, scope, program, &mut |_, _, declaration| {
+        let TopTypeDecl::Class(class) = declaration else {
+            return;
+        };
+        let Some(binding) = class.id.as_ref() else {
+            return;
+        };
+        let Some(site) = reservations.class_at(source_ordinal, class.span.start) else {
+            return;
+        };
+        let Some(declaration) =
+            binder.exact_declaration_at(scope, binding.span.start, DeclarationKind::Class)
+        else {
+            return;
+        };
+        let Some(type_decl) = declaration.type_group else {
+            return;
+        };
+        let Some(type_declaration) = declarations.get(type_decl.index()) else {
+            return;
+        };
+        let (class_id, lexical_params) = match type_declaration {
+            TypeDecl::Class {
+                class_id,
+                class_params,
+                ..
+            } => (*class_id, class_params),
+            _ => return,
+        };
+        let previous = reserved_class_owners.insert(class_id, type_decl);
+        debug_assert!(
+            previous.is_none(),
+            "one source class owns each reserved nominal identity"
+        );
+        reservations
+            .attach_class_binding(
+                site,
+                ClassBinding {
                     class_id,
-                    class_params,
-                    ..
-                } => (*class_id, class_params),
-                _ => return,
-            };
-            let previous = reserved_class_owners.insert(class_id, type_decl);
-            debug_assert!(
-                previous.is_none(),
-                "one source class owns each reserved nominal identity"
-            );
-            reservations
-                .attach_class_binding(
-                    site,
-                    ClassBinding {
-                        class_id,
-                        type_decl,
-                        value_decl,
-                        header_type_params: lexical_params.clone(),
-                    },
-                )
-                .expect("one class binding attachment per lexical class site");
-        },
-    );
+                    type_decl,
+                    value_decl: declaration.value_storage,
+                    header_type_params: lexical_params.clone(),
+                },
+            )
+            .expect("one class binding attachment per lexical class site");
+    });
 }
 
 fn consume_relation_exhaustion<Ticket: Copy + PartialEq>(
