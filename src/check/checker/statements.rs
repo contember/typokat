@@ -786,12 +786,22 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     self.own_type_demand(DemandOutcome::Exhausted(exhaustion), init_span);
                 }
             }
-            self.schedule_obligation(AssignObligation {
+            let obligation = AssignObligation {
                 src: init_ty,
                 tgt: ann,
                 src_span: init_span,
                 kind: ObligationKind::Assignment,
-            });
+            };
+            if let Some(owner) = self
+                .lexical_events
+                .initializer_owner_at(self.current_source, init_span.start)
+            {
+                self.with_ticket_effects(owner, move |pass| {
+                    pass.schedule_obligation(obligation);
+                });
+            } else {
+                self.schedule_obligation(obligation);
+            }
         }
 
         initializer

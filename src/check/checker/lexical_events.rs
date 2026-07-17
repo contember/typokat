@@ -168,6 +168,13 @@ pub(crate) struct DeclaratorReservation<Ticket: Copy = UserRecordTicket> {
     pub(crate) tickets: SiteTickets<Ticket>,
 }
 
+/// One lexical owner for an initializer's assignment relation.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InitializerReservation<Ticket: Copy = UserRecordTicket> {
+    pub(crate) source: SourceSite,
+    pub(crate) owner: Ticket,
+}
+
 /// One lexical owner per source class type-parameter default.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ClassDefaultReservation<Ticket: Copy = UserRecordTicket> {
@@ -238,6 +245,7 @@ pub(crate) struct LexicalReservations<Ticket: Copy = UserRecordTicket> {
     top_level: Vec<TopLevelReservation<Ticket>>,
     nested_statements: Vec<NestedStatementReservation<Ticket>>,
     declarators: Vec<DeclaratorReservation<Ticket>>,
+    initializers: Vec<InitializerReservation<Ticket>>,
     classes: Vec<ClassReservation<Ticket>>,
     members: Vec<MemberReservation<Ticket>>,
     callables: Vec<CallableReservation<Ticket>>,
@@ -255,6 +263,7 @@ pub(crate) struct LexicalReservations<Ticket: Copy = UserRecordTicket> {
     export_aliases_by_local_span: FxHashMap<(SourceOrdinal, u32, u32), usize>,
     classes_by_source: BTreeMap<(SourceOrdinal, u32), Vec<ClassSiteId>>,
     callables_by_source: BTreeMap<(SourceOrdinal, u32), Vec<CallableSiteId>>,
+    initializers_by_source: FxHashMap<(SourceUnit, u32), usize>,
     declaration_owners: FxHashMap<DeclId, LexicalOwner<Ticket>>,
 }
 
@@ -264,6 +273,7 @@ impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
             top_level: Vec::new(),
             nested_statements: Vec::new(),
             declarators: Vec::new(),
+            initializers: Vec::new(),
             classes: Vec::new(),
             members: Vec::new(),
             callables: Vec::new(),
@@ -280,6 +290,7 @@ impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
             export_aliases_by_local_span: FxHashMap::default(),
             classes_by_source: BTreeMap::new(),
             callables_by_source: BTreeMap::new(),
+            initializers_by_source: FxHashMap::default(),
             declaration_owners: FxHashMap::default(),
         }
     }
@@ -718,6 +729,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             self.declarators
                 .push(DeclaratorReservation { source, tickets });
             if let Some(initializer) = &declarator.init {
+                self.reserve_initializer(source.unit, initializer, allocator);
                 self.reserve_expression(source, initializer, allocator)?;
             }
         }
@@ -1020,10 +1032,33 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     {
         for parameter in &parameters.items {
             if let Some(initializer) = &parameter.initializer {
+                self.reserve_initializer(source.unit, initializer, allocator);
                 self.reserve_expression(source, initializer, allocator)?;
             }
         }
         Ok(())
+    }
+
+    fn reserve_initializer<Allocator>(
+        &mut self,
+        unit: SourceUnit,
+        initializer: &Expression<'_>,
+        allocator: &mut Allocator,
+    ) where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
+        let source = SourceSite {
+            unit,
+            source_start: initializer.span().start,
+        };
+        let (_, owner) = allocator.reserve_event(source.source_start);
+        let index = self.initializers.len();
+        self.initializers
+            .push(InitializerReservation { source, owner });
+        let previous = self
+            .initializers_by_source
+            .insert((source.unit, source.source_start), index);
+        debug_assert!(previous.is_none(), "one exact initializer owner");
     }
 
     fn reserve_function_expression<Allocator>(
@@ -1341,6 +1376,11 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         for declarator in &self.declarators {
             tickets.extend(site_tickets(declarator.tickets));
         }
+        tickets.extend(
+            self.initializers
+                .iter()
+                .map(|initializer| initializer.owner),
+        );
         for class in &self.classes {
             tickets.extend(class.constraints.iter().map(|constraint| constraint.owner));
             tickets.extend(class.defaults.iter().map(|default| default.owner));
@@ -1355,6 +1395,17 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             tickets.push(callable.tickets.body);
         }
         tickets
+    }
+
+    pub(crate) fn initializer_owner_at(
+        &self,
+        source: SourceUnit,
+        source_start: u32,
+    ) -> Option<Ticket> {
+        self.initializers_by_source
+            .get(&(source, source_start))
+            .and_then(|index| self.initializers.get(*index))
+            .map(|initializer| initializer.owner)
     }
 
     #[cfg(test)]
@@ -1397,6 +1448,11 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         );
         sites.extend(
             self.declarators
+                .iter()
+                .map(|reservation| reservation.source),
+        );
+        sites.extend(
+            self.initializers
                 .iter()
                 .map(|reservation| reservation.source),
         );
@@ -1532,11 +1588,13 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             } else if let ClassElement::PropertyDefinition(property) = element {
                 self.reserve_property_key(element_source, &property.key, allocator)?;
                 if let Some(value) = &property.value {
+                    self.reserve_initializer(element_source.unit, value, allocator);
                     self.reserve_expression(element_source, value, allocator)?;
                 }
             } else if let ClassElement::AccessorProperty(property) = element {
                 self.reserve_property_key(element_source, &property.key, allocator)?;
                 if let Some(value) = &property.value {
+                    self.reserve_initializer(element_source.unit, value, allocator);
                     self.reserve_expression(element_source, value, allocator)?;
                 }
             }
@@ -1893,6 +1951,7 @@ const arrow = (input = 1) => class Inner { method() { return input; } };
             + user.top_level.len()
             + user.nested_statements.len()
             + user.declarators.len()
+            + user.initializers.len()
             + user.classes.len()
             + user
                 .classes
@@ -1938,6 +1997,78 @@ const arrow = (input = 1) => class Inner { method() { return input; } };
         assert_eq!(
             finish_user_reservations(user_store, &user_tickets),
             finish_library_reservations(library_ledger, &library_tickets, &library_anchors)
+        );
+    }
+
+    #[test]
+    fn root_initializers_have_exact_user_and_library_owners_with_parity() {
+        let source = r#"
+const variable: number = "variable";
+function functionDefault(parameter: number = "parameter") {}
+class Container {
+  property: number = "property";
+  accessor accessorProperty: number = "accessor";
+}
+"#;
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+
+        let module = ModuleOrdinal::new(4);
+        let slot = UnitSlot::new(2);
+        let file = LibraryFileOrdinal::new(4);
+        let user_unit = SourceUnit::User {
+            module_ordinal: module,
+            unit_slot: slot,
+        };
+        let library_unit = SourceUnit::Library { file_ordinal: file };
+        let mut user = LexicalReservations::<UserRecordTicket>::default();
+        let mut user_store = EventStore::default();
+        user.reserve_program(module, slot, &parsed.program, &mut user_store)
+            .unwrap();
+        let mut library = LexicalReservations::<LibraryRecordTicket>::default();
+        let mut library_ledger = LibraryEventLedger::default();
+        library
+            .reserve_library_program(file, &parsed.program, &mut library_ledger)
+            .unwrap();
+
+        let starts = [
+            "\"variable\"",
+            "\"parameter\"",
+            "\"property\"",
+            "\"accessor\"",
+        ]
+        .map(|needle| source_span(source, needle).start);
+        assert_eq!(user.initializers.len(), starts.len());
+        assert_eq!(library.initializers.len(), starts.len());
+        let user_owners = starts.map(|start| {
+            user.initializer_owner_at(user_unit, start)
+                .expect("user initializer owns its exact root expression")
+        });
+        let library_owners = starts.map(|start| {
+            library
+                .initializer_owner_at(library_unit, start)
+                .expect("library initializer owns its exact root expression")
+        });
+        assert_eq!(
+            user_owners.into_iter().collect::<BTreeSet<_>>().len(),
+            starts.len()
+        );
+        assert_eq!(
+            library_owners.into_iter().collect::<BTreeSet<_>>().len(),
+            starts.len()
+        );
+
+        let user_tickets = user.tickets();
+        let library_tickets = library.tickets();
+        assert_eq!(user_tickets.len(), library_tickets.len());
+        assert_eq!(
+            finish_user_reservations(user_store, &user_tickets),
+            finish_library_reservations(
+                library_ledger,
+                &library_tickets,
+                &library.source_anchor_tickets(),
+            )
         );
     }
 

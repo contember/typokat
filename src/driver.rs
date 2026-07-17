@@ -636,6 +636,55 @@ mod tests {
         output.diagnostics.iter().map(|d| d.code.as_str()).collect()
     }
 
+    #[test]
+    fn annotated_initializer_assignment_replays_at_diagnostic_span() {
+        use std::cell::RefCell;
+
+        let source = "const value: number = \"wrong\";";
+        let assignment_keys = RefCell::new(Vec::new());
+        let reports = check_project_inner_with_namespace_value_inspector(
+            vec![FileInput {
+                name: "input.ts".into(),
+                source: source.into(),
+            }],
+            |inspection| {
+                *assignment_keys.borrow_mut() = inspection
+                    .replay
+                    .iter()
+                    .filter_map(|record| match &record.record {
+                        crate::check::checker::ProjectReplayRecordInspection::Diagnostic(code)
+                            if code == "TK2322" =>
+                        {
+                            Some(record.key.source_start)
+                        }
+                        crate::check::checker::ProjectReplayRecordInspection::Diagnostic(_)
+                        | crate::check::checker::ProjectReplayRecordInspection::Incomplete(_) => {
+                            None
+                        }
+                    })
+                    .collect();
+            },
+        );
+
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].output.parse_errors.is_empty());
+        assert!(reports[0].output.incomplete.is_empty());
+        let [diagnostic] = reports[0].output.diagnostics.as_slice() else {
+            panic!("expected one initializer assignment diagnostic");
+        };
+        assert_eq!(diagnostic.code.as_str(), "TK2322");
+        assert_eq!(
+            assignment_keys.into_inner(),
+            [diagnostic.span.start],
+            "event ownership must use the exact diagnostic start",
+        );
+        assert_eq!(
+            diagnostic.span.start,
+            u32::try_from(source.find("\"wrong\"").expect("initializer literal"))
+                .expect("source offset fits u32"),
+        );
+    }
+
     /// Backlog 74 review regression: signature diagnostics discovered during the
     /// reservation prepass still render at their declaration's source position.
     #[test]
@@ -1723,10 +1772,10 @@ mod tests {
         }
         let replay = |module| {
             vec![
-                (module, 213, 15, 1, "diagnostic:TK2322".to_owned()),
-                (module, 264, 16, 0, "diagnostic:TK2349".to_owned()),
-                (module, 292, 18, 1, "diagnostic:TK2322".to_owned()),
-                (module, 335, 19, 0, "diagnostic:TK2351".to_owned()),
+                (module, 213, 17, 1, "diagnostic:TK2322".to_owned()),
+                (module, 264, 19, 0, "diagnostic:TK2349".to_owned()),
+                (module, 292, 21, 1, "diagnostic:TK2322".to_owned()),
+                (module, 335, 23, 0, "diagnostic:TK2351".to_owned()),
             ]
         };
         assert_eq!(forward_replay, replay(0));
