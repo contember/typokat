@@ -1001,6 +1001,106 @@ fn cross_file_function_namespace_merges_publish_in_both_orders() -> Result<(), S
 }
 
 #[test]
+fn attached_callable_members_with_identical_offsets_keep_exact_library_owners_in_both_orders(
+) -> Result<(), String> {
+    let first_ordinal = LibraryFileOrdinal::new(34);
+    let second_ordinal = LibraryFileOrdinal::new(35);
+    let sources = [
+        InjectedLibrarySource {
+            file_ordinal: first_ordinal,
+            name: "offset-callable-first.d.ts",
+            source: "declare namespace OffsetCallable { export function alpha(value: number): string; }\ndeclare function OffsetCallable(): void;",
+        },
+        InjectedLibrarySource {
+            file_ordinal: second_ordinal,
+            name: "offset-callable-second.d.ts",
+            source: "declare namespace OffsetCallable { export function bravo(value: string): number; }",
+        },
+    ];
+    let reversed = sources
+        .iter()
+        .rev()
+        .map(|source| InjectedLibrarySource {
+            file_ordinal: source.file_ordinal,
+            name: source.name,
+            source: source.source,
+        })
+        .collect::<Vec<_>>();
+    let forward = run_injected_profile(&sources)
+        .map_err(|error| format!("forward identical-offset witness failed: {error:?}"))?;
+    let reverse_input = run_injected_profile(&reversed)
+        .map_err(|error| format!("reversed identical-offset witness failed: {error:?}"))?;
+
+    for run in [&forward, &reverse_input] {
+        assert!(
+            run.library_records.is_empty(),
+            "clean identical-offset merge emitted records: {:?}",
+            run.library_records
+        );
+        let merged = run
+            .global_value_probe("OffsetCallable")
+            .ok_or_else(|| "missing identical-offset merged global value".to_string())?;
+        let mut participant_identities: Vec<(LibraryFileOrdinal, ValueStorageId)> =
+            merged.participant_identities.clone();
+        participant_identities.sort_by_key(|(file_ordinal, _)| *file_ordinal);
+        assert_eq!(
+            participant_identities,
+            [
+                (first_ordinal, merged.identity),
+                (first_ordinal, merged.identity),
+                (second_ordinal, merged.identity),
+            ]
+        );
+        assert_eq!(merged.declaration_count, 3);
+        assert_eq!(merged.call_signature_count, 1);
+        assert_eq!(
+            merged
+                .member_names
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["alpha", "bravo"])
+        );
+
+        // These rows must come from the published member storages and their binder origins.
+        let mut callable_members = merged.callable_members.clone();
+        callable_members.sort_by(|left, right| left.name.cmp(&right.name));
+        assert_eq!(callable_members.len(), 2);
+        assert_ne!(callable_members[0].identity, callable_members[1].identity);
+        assert_eq!(
+            callable_members
+                .iter()
+                .map(|member| (
+                    member.name.as_str(),
+                    member.source,
+                    member.source_start,
+                    member.call_signature_count,
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "alpha",
+                    SourceUnit::Library {
+                        file_ordinal: first_ordinal,
+                    },
+                    42,
+                    1,
+                ),
+                (
+                    "bravo",
+                    SourceUnit::Library {
+                        file_ordinal: second_ordinal,
+                    },
+                    42,
+                    1,
+                ),
+            ]
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn external_module_privates_stay_local_while_declare_global_reopens_shared_type(
 ) -> Result<(), String> {
     let script_ordinal = LibraryFileOrdinal::new(40);
