@@ -11,12 +11,6 @@ impl<'a> Substitution<'a> {
     /// No-op substitution preserves nominal identity; re-entry returns the original
     /// id to break self-referential nominal cycles.
     pub(super) fn apply_object(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
-        // Re-entry on an in-flight object id breaks the cycle (see module docs).
-        if self.in_progress.contains(&ty) {
-            #[cfg(test)]
-            measure_substitution(|measure| measure.cycle_reentries += 1);
-            return ty;
-        }
         // Snapshot the property (name, optional, type) tuples before any mutable
         // re-intern: reading the side-table borrows the store immutably, while the
         // recursive `apply` and the final `intern_object` need `&mut`.
@@ -104,11 +98,6 @@ impl<'a> Substitution<'a> {
     /// Method-local binders shadow the incoming outer map, but their constraints
     /// and defaults still rewrite free outer references.
     pub(super) fn apply_function(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
-        if self.in_progress.contains(&ty) {
-            #[cfg(test)]
-            measure_substitution(|measure| measure.cycle_reentries += 1);
-            return ty;
-        }
         let Some(function) = interner.store().function_type(ty) else {
             return ty;
         };
@@ -174,11 +163,6 @@ impl<'a> Substitution<'a> {
     /// substitutes to a duplicate or to `never` collapses correctly) **only when a
     /// member changed**; otherwise the original id is returned.
     pub(super) fn apply_union(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
-        if self.in_progress.contains(&ty) {
-            #[cfg(test)]
-            measure_substitution(|measure| measure.cycle_reentries += 1);
-            return ty;
-        }
         let Some(members) = interner.store().union_members(ty) else {
             return ty;
         };
@@ -206,11 +190,6 @@ impl<'a> Substitution<'a> {
     /// Substitute through an intersection and re-canonicalize through
     /// `Interner::intersection` only when a member changed.
     pub(super) fn apply_intersection(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
-        if self.in_progress.contains(&ty) {
-            #[cfg(test)]
-            measure_substitution(|measure| measure.cycle_reentries += 1);
-            return ty;
-        }
         let Some(members) = interner.store().intersection_members(ty) else {
             return ty;
         };

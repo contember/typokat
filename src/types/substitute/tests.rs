@@ -816,12 +816,15 @@ fn measure_substitution_distinguishes_exact_blocked_context_repeats() {
     assert_ne!(substitution.apply(&mut interner, root), root);
     let same_context = super::substitution_measure();
     assert_eq!(same_context.runs, 1);
-    assert_eq!(same_context.apply_visits, 7);
-    assert_eq!(same_context.type_id_repeats, 4);
-    assert_eq!(same_context.exact_context_repeats, 4);
-    assert_eq!(same_context.type_param_map_hits, 4);
+    assert_eq!(same_context.apply_visits, 5);
+    assert_eq!(same_context.type_id_repeats, 2);
+    assert_eq!(same_context.exact_context_repeats, 2);
+    assert_eq!(same_context.type_param_map_hits, 1);
     assert_eq!(same_context.blocked_type_param_hits, 0);
     assert_eq!(same_context.cycle_reentries, 0);
+    assert_eq!(same_context.completed_memo_entries, 3);
+    assert_eq!(same_context.completed_memo_hits, 2);
+    assert_eq!(same_context.cycle_tainted_skips, 0);
 
     let wrapper = interner.intern_function(FunctionType {
         type_params: vec![GenericTypeParam {
@@ -839,12 +842,15 @@ fn measure_substitution_distinguishes_exact_blocked_context_repeats() {
     let result = substitution.apply(&mut interner, adversary);
     let measure = super::substitution_measure();
     assert_ne!(result, adversary);
-    assert_eq!(measure.apply_visits, 12);
-    assert_eq!(measure.type_id_repeats, 7);
-    assert_eq!(measure.exact_context_repeats, 5);
-    assert_eq!(measure.type_param_map_hits, 4);
-    assert_eq!(measure.blocked_type_param_hits, 2);
+    assert_eq!(measure.apply_visits, 10);
+    assert_eq!(measure.type_id_repeats, 5);
+    assert_eq!(measure.exact_context_repeats, 3);
+    assert_eq!(measure.type_param_map_hits, 1);
+    assert_eq!(measure.blocked_type_param_hits, 1);
     assert_eq!(measure.cycle_reentries, 0);
+    assert_eq!(measure.completed_memo_entries, 7);
+    assert_eq!(measure.completed_memo_hits, 3);
+    assert_eq!(measure.cycle_tainted_skips, 0);
     assert!(
         measure.exact_context_repeats < measure.type_id_repeats,
         "the shared function is visited under both empty and blocked binder contexts"
@@ -866,6 +872,9 @@ fn measure_substitution_distinguishes_exact_blocked_context_repeats() {
     assert_eq!(cycle.type_id_repeats, 1);
     assert_eq!(cycle.exact_context_repeats, 1);
     assert_eq!(cycle.cycle_reentries, 1);
+    assert_eq!(cycle.completed_memo_entries, 0);
+    assert_eq!(cycle.completed_memo_hits, 0);
+    assert_eq!(cycle.cycle_tainted_skips, 1);
 }
 
 #[test]
@@ -891,10 +900,13 @@ fn measure_substitution_hotpaths_counter_only() {
             let mut substitution = Substitution::new(&map);
             assert_ne!(substitution.apply(&mut interner, root), root);
             let measure = super::substitution_measure();
-            assert_eq!(measure.apply_visits, (count * 3 + 1) as u64);
-            assert_eq!(measure.type_id_repeats, (count * 3 - 2) as u64);
-            assert_eq!(measure.exact_context_repeats, (count * 3 - 2) as u64);
-            assert_eq!(measure.type_param_map_hits, (count * 2) as u64);
+            assert_eq!(measure.apply_visits, (count + 3) as u64);
+            assert_eq!(measure.type_id_repeats, count as u64);
+            assert_eq!(measure.exact_context_repeats, count as u64);
+            assert_eq!(measure.type_param_map_hits, 1);
+            assert_eq!(measure.completed_memo_entries, 3);
+            assert_eq!(measure.completed_memo_hits, count as u64);
+            assert_eq!(measure.cycle_tainted_skips, 0);
             samples.push(measure);
         }
         println!(

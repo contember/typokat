@@ -19,6 +19,9 @@ pub(super) struct SubstitutionMeasure {
     pub type_param_map_hits: u64,
     pub blocked_type_param_hits: u64,
     pub cycle_reentries: u64,
+    pub completed_memo_hits: u64,
+    pub completed_memo_entries: u64,
+    pub cycle_tainted_skips: u64,
     seen_type_ids: FxHashSet<TypeId>,
     seen_contexts: FxHashSet<(TypeId, Vec<TypeParamId>)>,
 }
@@ -34,6 +37,9 @@ impl std::fmt::Debug for SubstitutionMeasure {
             .field("type_param_map_hits", &self.type_param_map_hits)
             .field("blocked_type_param_hits", &self.blocked_type_param_hits)
             .field("cycle_reentries", &self.cycle_reentries)
+            .field("completed_memo_hits", &self.completed_memo_hits)
+            .field("completed_memo_entries", &self.completed_memo_entries)
+            .field("cycle_tainted_skips", &self.cycle_tainted_skips)
             .finish()
     }
 }
@@ -76,6 +82,8 @@ pub(super) fn measure_substitution(update: impl FnOnce(&mut SubstitutionMeasure)
 
 mod apply;
 #[cfg(test)]
+mod completed_memo_spec;
+#[cfg(test)]
 mod tests;
 
 /// A substitution `TypeParamId → TypeId` plus the cycle guard, applied over the
@@ -88,6 +96,10 @@ pub struct Substitution<'a> {
     /// Generic function binders currently crossed while applying an outer
     /// substitution. They shadow matching ids in `map` until that signature exits.
     blocked: FxHashSet<TypeParamId>,
+    /// Results completed without observing a recursive re-entry, scoped to this run.
+    completed: FxHashMap<(TypeId, Vec<TypeParamId>), TypeId>,
+    /// Incremented by every raw-`TypeId` re-entry to taint all active ancestors.
+    cycle_epoch: u64,
 }
 
 impl<'a> Substitution<'a> {
@@ -99,6 +111,8 @@ impl<'a> Substitution<'a> {
             map,
             in_progress: FxHashSet::default(),
             blocked: FxHashSet::default(),
+            completed: FxHashMap::default(),
+            cycle_epoch: 0,
         }
     }
 
@@ -115,7 +129,24 @@ impl<'a> Substitution<'a> {
         #[cfg(test)]
         measure_substitution_visit(ty, &self.blocked);
 
-        match interner.store().tag(ty) {
+        // Raw-id re-entry must win over a completed result under any blocked
+        // context; returning the original id is the existing cycle semantics.
+        if self.in_progress.contains(&ty) {
+            self.cycle_epoch += 1;
+            #[cfg(test)]
+            measure_substitution(|measure| measure.cycle_reentries += 1);
+            return ty;
+        }
+
+        let key = (ty, self.canonical_blocked_context());
+        if let Some(&result) = self.completed.get(&key) {
+            #[cfg(test)]
+            measure_substitution(|measure| measure.completed_memo_hits += 1);
+            return result;
+        }
+
+        let start_cycle_epoch = self.cycle_epoch;
+        let result = match interner.store().tag(ty) {
             // A type parameter: replace it with its argument if mapped; otherwise
             // (a parameter from an *outer* scope, not part of this substitution)
             // leave it untouched.
@@ -158,7 +189,29 @@ impl<'a> Substitution<'a> {
             // rule (ADR-0002): substitution must leave it alone (the evaluator resolves
             // it, not this pass).
             TypeTag::Infer | TypeTag::MappedValue => ty,
+        };
+
+        if self.cycle_epoch == start_cycle_epoch {
+            self.completed.insert(key, result);
+            #[cfg(test)]
+            measure_substitution(|measure| measure.completed_memo_entries += 1);
+        } else {
+            #[cfg(test)]
+            measure_substitution(|measure| measure.cycle_tainted_skips += 1);
         }
+
+        result
+    }
+
+    fn canonical_blocked_context(&self) -> Vec<TypeParamId> {
+        let mut context: Vec<TypeParamId> = self
+            .blocked
+            .iter()
+            .filter(|id| self.map.contains_key(id))
+            .copied()
+            .collect();
+        context.sort_unstable();
+        context
     }
 }
 

@@ -1,4 +1,4 @@
-//! Disabled acceptance spec for a per-`Substitution` completed-result memo.
+//! Acceptance spec for a per-`Substitution` completed-result memo.
 //!
 //! Activate from `substitute/mod.rs` only with the implementation. A memo key is
 //! `(TypeId, canonical blocked ∩ substitution-map keys)` and lives for one
