@@ -19,6 +19,7 @@ use crate::check::query::SemanticQueryState;
 use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic, IncompleteSurface};
 use crate::relate::RelationOutcome;
+use crate::source::{ModuleOrdinal, UnitSlot};
 use crate::span::Span;
 use crate::types::store::TypeId;
 use crate::types::Interner;
@@ -39,6 +40,8 @@ mod context;
 mod decls;
 pub(in crate::check) mod eval;
 pub(crate) mod events;
+#[cfg(test)]
+pub(crate) mod events_library;
 mod expr;
 mod flowgraph;
 mod function_groups;
@@ -46,6 +49,7 @@ mod indexed_access;
 pub(crate) mod lexical_events;
 mod namespace_values;
 mod narrowing;
+pub(crate) mod reporting_record;
 mod statements;
 mod type_groups;
 
@@ -55,8 +59,9 @@ use context::{
     InterfaceRelationObligation, InterfaceRelationReport, OverrideCheck, Pass, TypeDecl,
 };
 use decls::{reserve_type_decls, type_decl_id, value_decl_id, walk_type_decls, TopTypeDecl};
-use events::{CandidateEffects, EventStore, ModuleOrdinal, RecordTicket, UnitSlot};
+use events::{CandidateEffects, EventStore, UserRecordTicket};
 use lexical_events::{ClassBinding, LexicalOwnerPhase, LexicalReservations};
+use reporting_record::CheckerRecord;
 use statements::{emit_exhausted_obligation, emit_obligation_failure};
 
 struct PassReporting {
@@ -624,12 +629,12 @@ where
                 .map(|(key, record)| ProjectReplayInspection {
                     key: *key,
                     record: match record {
-                        events::CheckerRecord::Diagnostic(diagnostic) => {
+                        CheckerRecord::Diagnostic(diagnostic) => {
                             ProjectReplayRecordInspection::Diagnostic(
                                 diagnostic.code.as_str().to_owned(),
                             )
                         }
-                        events::CheckerRecord::Incomplete(incomplete) => {
+                        CheckerRecord::Incomplete(incomplete) => {
                             ProjectReplayRecordInspection::Incomplete(incomplete.id.clone())
                         }
                     },
@@ -661,7 +666,7 @@ where
         &EventStore,
         &[ScopeId],
     ),
-    H: FnOnce(&[(events::EventKey, events::CheckerRecord)]),
+    H: FnOnce(&[(events::EventKey, CheckerRecord)]),
 {
     let mut event_store = EventStore::default();
     let mut lexical_events = LexicalReservations::default();
@@ -679,7 +684,7 @@ where
 
     let mut module_scopes = Vec::with_capacity(units.len());
     let mut module_placeholders: Vec<Vec<ImportPlaceholder>> = Vec::with_capacity(units.len());
-    let mut external_effects: BTreeMap<RecordTicket, CandidateEffects> = BTreeMap::new();
+    let mut external_effects: BTreeMap<UserRecordTicket, CandidateEffects> = BTreeMap::new();
     let (
         binder,
         TrustedPreludeHandoff {
@@ -870,7 +875,7 @@ fn imported_symbols(
     unit: &ProjectProgram<'_>,
     exports: &[ExportSurface],
     reservations: &LexicalReservations,
-    effects: &mut BTreeMap<RecordTicket, CandidateEffects>,
+    effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) -> Vec<ImportedSymbol> {
     let mut imports = Vec::new();
     for import in &unit.imports {
@@ -939,7 +944,7 @@ fn collect_exports(
     program: &Program<'_>,
     module_ordinal: ModuleOrdinal,
     reservations: &LexicalReservations,
-    effects: &mut BTreeMap<RecordTicket, CandidateEffects>,
+    effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) -> ExportSurface {
     let mut surface = ExportSurface::new();
     for stmt in &program.body {
@@ -1056,7 +1061,7 @@ struct ListExportContext<'a> {
     surface: &'a mut ExportSurface,
     module_ordinal: ModuleOrdinal,
     reservations: &'a LexicalReservations,
-    effects: &'a mut BTreeMap<RecordTicket, CandidateEffects>,
+    effects: &'a mut BTreeMap<UserRecordTicket, CandidateEffects>,
 }
 
 fn collect_list_export(
@@ -1111,7 +1116,7 @@ fn collect_list_export(
 
 fn enqueue_external_diagnostic(
     reservations: &LexicalReservations,
-    effects: &mut BTreeMap<RecordTicket, CandidateEffects>,
+    effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
     module_ordinal: ModuleOrdinal,
     owner_start: u32,
     diagnostic: Diagnostic,
@@ -1128,7 +1133,7 @@ fn enqueue_external_diagnostic(
 fn enqueue_local_ambient_export_alias_diagnostics(
     binder: &Binder,
     reservations: &LexicalReservations,
-    effects: &mut BTreeMap<RecordTicket, CandidateEffects>,
+    effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) {
     for failure in binder.local_ambient_export_alias_failures() {
         let module_ordinal = ModuleOrdinal::new(
@@ -1155,7 +1160,7 @@ fn enqueue_local_ambient_export_alias_diagnostics(
 fn enqueue_namespace_placement_diagnostics(
     binder: &Binder,
     reservations: &LexicalReservations,
-    effects: &mut BTreeMap<RecordTicket, CandidateEffects>,
+    effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) {
     for issue in binder.namespaces.placement_issues() {
         let owner = reservations
@@ -1187,7 +1192,7 @@ fn enqueue_namespace_placement_diagnostics(
 fn enqueue_ambient_context_diagnostics(
     binder: &Binder,
     reservations: &LexicalReservations,
-    effects: &mut BTreeMap<RecordTicket, CandidateEffects>,
+    effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) {
     for global in binder.namespaces.globals() {
         let owner = reservations
@@ -1426,7 +1431,7 @@ fn finish_event_effects_with_inspector<F>(
     inspect: F,
 ) -> BTreeMap<ModuleOrdinal, (Vec<Diagnostic>, Vec<IncompleteSurface>)>
 where
-    F: FnOnce(&[(events::EventKey, events::CheckerRecord)]),
+    F: FnOnce(&[(events::EventKey, CheckerRecord)]),
 {
     let pending = std::mem::take(&mut pass.pending_effects);
     for mut effects in pending {
@@ -1701,8 +1706,8 @@ where
     for (key, record) in records {
         let channels = by_module.entry(key.module_ordinal).or_default();
         match record {
-            events::CheckerRecord::Diagnostic(diagnostic) => channels.0.push(diagnostic),
-            events::CheckerRecord::Incomplete(incomplete) => channels.1.push(incomplete),
+            CheckerRecord::Diagnostic(diagnostic) => channels.0.push(diagnostic),
+            CheckerRecord::Incomplete(incomplete) => channels.1.push(incomplete),
         }
     }
     by_module
@@ -1727,7 +1732,7 @@ impl Pass<'_, '_> {
     /// Run a producer that already owns an exact preallocated ticket.
     pub(in crate::check::checker) fn with_ticket_effects<R>(
         &mut self,
-        owner: events::RecordTicket,
+        owner: events::UserRecordTicket,
         produce: impl FnOnce(&mut Self) -> R,
     ) -> R {
         let saved_event = self.current_event.replace(owner.event);
@@ -1770,8 +1775,8 @@ impl Pass<'_, '_> {
 
     pub(in crate::check::checker) fn enqueue_ticket_record(
         &mut self,
-        owner: events::RecordTicket,
-        record: events::CheckerRecord,
+        owner: events::UserRecordTicket,
+        record: CheckerRecord,
     ) {
         let mut effects = CheckerEffects::new(owner);
         effects.records.record(record);

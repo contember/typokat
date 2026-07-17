@@ -1,7 +1,7 @@
 use super::super::check_program_with_publication_inspector;
 use crate::binder::declaration::{DeclId, TypeFragmentKind};
 use crate::check::checker::context::{CheckerEffects, DeclTypes, HeaderFragmentBinding, TypeDecl};
-use crate::check::checker::events::{CheckerRecord, ModuleOrdinal};
+use crate::check::checker::reporting_record::CheckerRecord;
 use crate::check::checker::type_groups::{
     InterfaceAlternativeKind, PublishedTypeGroupSurface, PublishedTypeGroupTerminal,
     PublishedTypeParameterDefault,
@@ -10,6 +10,7 @@ use crate::check::query::{SemanticQueryCoordinator, SemanticQueryState};
 use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::DiagnosticCode;
 use crate::driver::{check_project, check_source, FileInput};
+use crate::source::ModuleOrdinal;
 use crate::span::Span;
 use crate::types::repr::{ClassId, LiteralValue, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};

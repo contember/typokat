@@ -99,8 +99,9 @@ impl<Ticket> RetainedClassCallable<Ticket> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::checker::events::{EventStore, ModuleOrdinal, UnitSlot};
+    use crate::check::checker::events::EventStore;
     use crate::check::checker::lexical_events::LexicalReservations;
+    use crate::source::{ModuleOrdinal, UnitSlot};
     use crate::types::repr::GenericTypeParam;
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;

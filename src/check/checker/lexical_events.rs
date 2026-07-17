@@ -1,11 +1,10 @@
 //! Lexical event reservations retained across class/SCC/body phases.
 
-use super::events::{
-    EventId, EventStore, EventStoreError, ModuleOrdinal, RecordTicket, ReservedEvent, UnitSlot,
-};
+use super::events::{EventId, EventStore, EventStoreError, ReservedEvent, UserRecordTicket};
 use crate::binder::declaration::{
     source_declaration_occurrences, DeclId, DeclarationKind, TypeGroupId, ValueStorageId,
 };
+use crate::source::{ModuleOrdinal, UnitSlot};
 use crate::span::Span;
 use crate::types::repr::{ClassId, TypeParamId};
 use oxc_ast::ast::{
@@ -37,18 +36,18 @@ pub(crate) struct SourceSite {
 /// Record positions retained by every callable reservation.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SiteTickets {
-    pub(crate) immediate: RecordTicket,
-    pub(crate) deferred: RecordTicket,
-    pub(crate) incomplete: RecordTicket,
+    pub(crate) immediate: UserRecordTicket,
+    pub(crate) deferred: UserRecordTicket,
+    pub(crate) incomplete: UserRecordTicket,
 }
 
 /// Record positions retained by every callable reservation.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CallableTickets {
-    pub(crate) signature: RecordTicket,
-    pub(crate) deferred: RecordTicket,
-    pub(crate) incomplete: RecordTicket,
-    pub(crate) body: RecordTicket,
+    pub(crate) signature: UserRecordTicket,
+    pub(crate) deferred: UserRecordTicket,
+    pub(crate) incomplete: UserRecordTicket,
+    pub(crate) body: UserRecordTicket,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -62,7 +61,7 @@ pub(crate) enum LexicalOwnerPhase {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LexicalOwner {
     pub(crate) event: EventId,
-    pub(crate) ticket: RecordTicket,
+    pub(crate) ticket: UserRecordTicket,
 }
 
 /// Neutral event reserved for one exact source declaration occurrence.
@@ -73,14 +72,14 @@ pub(crate) struct DeclarationReservation {
     pub(crate) declaration_span: Span,
     pub(crate) binding_span: Span,
     pub(crate) event: EventId,
-    pub(crate) owner: RecordTicket,
+    pub(crate) owner: UserRecordTicket,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct ExportAliasReservation {
     local_span: Span,
     event: EventId,
-    owner: RecordTicket,
+    owner: UserRecordTicket,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -95,7 +94,7 @@ struct InterfaceOccurrenceReservation {
     binding_start: u32,
     source_start: u32,
     kind: InterfaceOccurrenceKind,
-    owner: RecordTicket,
+    owner: UserRecordTicket,
 }
 
 /// Stable class identities attached after binder/type reservation and before fill.
@@ -143,7 +142,7 @@ pub(crate) struct ClassDefaultReservation {
     pub(crate) parameter_index: usize,
     pub(crate) source: SourceSite,
     pub(crate) event: EventId,
-    pub(crate) owner: RecordTicket,
+    pub(crate) owner: UserRecordTicket,
 }
 
 /// One lexical owner per source class type-parameter constraint.
@@ -152,7 +151,7 @@ pub(crate) struct ClassConstraintReservation {
     pub(crate) parameter_index: usize,
     pub(crate) source: SourceSite,
     pub(crate) event: EventId,
-    pub(crate) owner: RecordTicket,
+    pub(crate) owner: UserRecordTicket,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1144,7 +1143,7 @@ impl LexicalReservations {
         declaration: DeclId,
         kind: InterfaceOccurrenceKind,
         source_start: u32,
-    ) -> Option<RecordTicket> {
+    ) -> Option<UserRecordTicket> {
         let reservation = self.declaration_reservation(declaration)?;
         let index = self.interface_occurrences_by_source.get(&(
             reservation.source.module_ordinal,
@@ -1264,7 +1263,7 @@ impl LexicalReservations {
         Ok(())
     }
 
-    pub(crate) fn tickets(&self) -> Vec<RecordTicket> {
+    pub(crate) fn tickets(&self) -> Vec<UserRecordTicket> {
         let mut tickets = Vec::new();
         tickets.extend(
             self.declarations
@@ -1520,7 +1519,7 @@ fn reserve_site_tickets(
     })
 }
 
-fn site_tickets(tickets: SiteTickets) -> [RecordTicket; 3] {
+fn site_tickets(tickets: SiteTickets) -> [UserRecordTicket; 3] {
     [tickets.immediate, tickets.deferred, tickets.incomplete]
 }
 
@@ -2070,7 +2069,8 @@ interface Combined extends First, Second {
         );
         let records = store.finish().unwrap();
         assert_eq!(records.len(), 1);
-        let super::super::events::CheckerRecord::Diagnostic(diagnostic) = &records[0].1 else {
+        let super::super::reporting_record::CheckerRecord::Diagnostic(diagnostic) = &records[0].1
+        else {
             panic!("expected declaration diagnostic");
         };
         assert_eq!(diagnostic.code, crate::diagnostics::DiagnosticCode::TK2304);

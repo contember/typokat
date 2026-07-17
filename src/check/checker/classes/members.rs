@@ -184,7 +184,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         class: &Class<'_>,
         surfaces: ClassBodySurfaces,
         class_type_params: &[TypeParamId],
-        retained: &[RetainedClassCallable<super::super::events::RecordTicket>],
+        retained: &[RetainedClassCallable<super::super::events::UserRecordTicket>],
     ) {
         let ClassBodySurfaces {
             instance: instance_surface,
@@ -324,7 +324,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         function: &oxc_ast::ast::Function<'_>,
-        retained: &[RetainedClassCallable<super::super::events::RecordTicket>],
+        retained: &[RetainedClassCallable<super::super::events::UserRecordTicket>],
     ) {
         let retained = self
             .lexical_events
@@ -373,7 +373,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn check_class_overload_implementations(
         &mut self,
         class: &Class<'_>,
-        retained: &[RetainedClassCallable<super::super::events::RecordTicket>],
+        retained: &[RetainedClassCallable<super::super::events::UserRecordTicket>],
     ) {
         let mut index = 0;
         while index < class.body.body.len() {
@@ -457,7 +457,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn retained_callable_type(
         &self,
         function: &oxc_ast::ast::Function<'_>,
-        retained: &[RetainedClassCallable<super::super::events::RecordTicket>],
+        retained: &[RetainedClassCallable<super::super::events::UserRecordTicket>],
     ) -> Option<TypeId> {
         let site = self
             .lexical_events

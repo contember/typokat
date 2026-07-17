@@ -9,6 +9,7 @@ mod class_semantics;
 pub mod diagnostics;
 pub mod driver;
 pub mod relate;
+mod source;
 pub mod span;
 pub mod surface;
 pub mod types;

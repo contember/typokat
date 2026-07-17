@@ -9,6 +9,7 @@ use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
 use crate::check::flow::{FlowNode, FlowNodeId};
 use crate::check::query::SemanticQueryState;
+use crate::source::{ModuleOrdinal, UnitSlot};
 use crate::span::Span;
 use crate::types::repr::{ClassId, PropertyType, TypeParamId, Visibility};
 use crate::types::store::TypeId;
@@ -22,8 +23,8 @@ use super::classes::body::{BodyClassView, BodyMemberEnvironment};
 use super::classes::construction::DraftClassTypeParameter;
 use super::classes::publication::StagedClassValidation;
 use super::classes::retained::RetainedClassCallable;
-use super::events::{CandidateEffects, RecordTicket};
-use super::events::{EventId, EventStore, ModuleOrdinal, UnitSlot};
+use super::events::{CandidateEffects, UserRecordTicket};
+use super::events::{EventId, EventStore};
 use super::function_groups::FunctionGroupRegistry;
 use super::lexical_events::{CallableTickets, LexicalReservations};
 use super::namespace_values::NamespaceValueRegistry;
@@ -151,7 +152,7 @@ pub(in crate::check::checker) struct CheckerEffects {
 }
 
 impl CheckerEffects {
-    pub(in crate::check::checker) fn new(owner: RecordTicket) -> Self {
+    pub(in crate::check::checker) fn new(owner: UserRecordTicket) -> Self {
         Self {
             records: CandidateEffects::new(owner),
             obligations: Vec::new(),
@@ -403,7 +404,7 @@ pub(in crate::check::checker) struct ClassNamespacePropertyPayload {
     pub(in crate::check::checker) declaration: DeclId,
     pub(in crate::check::checker) owner_span: Span,
     pub(in crate::check::checker) source_order: ClassNamespacePropertySourceOrder,
-    pub(in crate::check::checker) owner: RecordTicket,
+    pub(in crate::check::checker) owner: UserRecordTicket,
 }
 
 /// A class's fill progress, tracked per [`TypeDecl`] index.
@@ -462,12 +463,12 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     pub(in crate::check::checker) semantic_queries: SemanticQueryState,
     /// Frozen class parameter descriptors retained from the atomic publication.
     pub(in crate::check::checker) class_application_parameters:
-        BTreeMap<ClassId, Vec<DraftClassTypeParameter<RecordTicket>>>,
+        BTreeMap<ClassId, Vec<DraftClassTypeParameter<UserRecordTicket>>>,
     /// Query-bearing class validation is held until type groups publish atomically.
     pub(in crate::check::checker) staged_class_validation: Option<StagedClassValidation>,
     /// Exact class callables retained by the one surface-lowering pass.
     pub(in crate::check::checker) retained_class_callables:
-        BTreeMap<ClassId, Vec<RetainedClassCallable<RecordTicket>>>,
+        BTreeMap<ClassId, Vec<RetainedClassCallable<UserRecordTicket>>>,
     /// Query-invisible own-member surfaces used only while checking class bodies.
     /// Poisoned classes stay exhausted through `published_classes`; these drafts keep
     /// independent body diagnostics from losing `this` and `static this`.

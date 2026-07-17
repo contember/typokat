@@ -1,35 +1,9 @@
 //! Deterministic checker record reservation and replay.
 
+use super::reporting_record::CheckerRecord;
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
+use crate::source::ModuleOrdinal;
 use std::collections::BTreeMap;
-
-/// A module's position in the original driver input.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ModuleOrdinal(usize);
-
-impl ModuleOrdinal {
-    pub(crate) const fn new(index: usize) -> Self {
-        Self(index)
-    }
-
-    pub(crate) const fn index(self) -> usize {
-        self.0
-    }
-}
-
-/// A module's dependency-ordered slot in the checker.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct UnitSlot(usize);
-
-impl UnitSlot {
-    pub(crate) const fn new(index: usize) -> Self {
-        Self(index)
-    }
-
-    pub(crate) const fn index(self) -> usize {
-        self.0
-    }
-}
 
 /// Stable identity of one lexically reserved event.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -43,7 +17,7 @@ impl EventId {
 
 /// Stable completion capability for one record position in an event.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct RecordTicket {
+pub(crate) struct UserRecordTicket {
     pub(crate) event: EventId,
     pub(crate) record_ordinal: usize,
 }
@@ -57,18 +31,11 @@ pub(crate) struct EventKey {
     pub(crate) record_ordinal: usize,
 }
 
-/// One checker-owned output record.
-#[derive(Clone, Debug)]
-pub(crate) enum CheckerRecord {
-    Diagnostic(Diagnostic),
-    Incomplete(IncompleteSurface),
-}
-
 /// An event always starts with one record ticket, completed by one ordered record group.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReservedEvent {
     pub(crate) id: EventId,
-    pub(crate) primary: RecordTicket,
+    pub(crate) primary: UserRecordTicket,
 }
 
 #[derive(Debug)]
@@ -89,8 +56,8 @@ enum Completion {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum EventStoreError {
     UnknownEvent(EventId),
-    UnknownRecord(RecordTicket),
-    DuplicateCompletion(RecordTicket),
+    UnknownRecord(UserRecordTicket),
+    DuplicateCompletion(UserRecordTicket),
     Unfinished(Vec<EventKey>),
 }
 
@@ -111,7 +78,7 @@ impl EventStore {
     ) -> ReservedEvent {
         let event_ordinal = self.next_event_ordinal.entry(module_ordinal).or_insert(0);
         let id = EventId(self.events.len());
-        let primary = RecordTicket {
+        let primary = UserRecordTicket {
             event: id,
             record_ordinal: 0,
         };
@@ -136,11 +103,11 @@ impl EventStore {
     pub(crate) fn reserve_record(
         &mut self,
         event: EventId,
-    ) -> Result<RecordTicket, EventStoreError> {
+    ) -> Result<UserRecordTicket, EventStoreError> {
         let Some(meta) = self.events.get_mut(event.index()) else {
             return Err(EventStoreError::UnknownEvent(event));
         };
-        let ticket = RecordTicket {
+        let ticket = UserRecordTicket {
             event,
             record_ordinal: meta.next_record_ordinal,
         };
@@ -158,7 +125,7 @@ impl EventStore {
     /// Complete exactly one reserved position with zero or more ordered records.
     pub(crate) fn complete(
         &mut self,
-        ticket: RecordTicket,
+        ticket: UserRecordTicket,
         records: Vec<CheckerRecord>,
     ) -> Result<(), EventStoreError> {
         let key = self.key(ticket)?;
@@ -224,7 +191,7 @@ impl EventStore {
         self.completions.len()
     }
 
-    fn key(&self, ticket: RecordTicket) -> Result<EventKey, EventStoreError> {
+    fn key(&self, ticket: UserRecordTicket) -> Result<EventKey, EventStoreError> {
         let Some(meta) = self.events.get(ticket.event.index()) else {
             return Err(EventStoreError::UnknownEvent(ticket.event));
         };
@@ -243,12 +210,12 @@ impl EventStore {
 /// Records accumulated by one speculative candidate before the winner commits.
 #[derive(Debug)]
 pub(crate) struct CandidateEffects {
-    owner: RecordTicket,
+    owner: UserRecordTicket,
     records: Vec<CheckerRecord>,
 }
 
 impl CandidateEffects {
-    pub(crate) fn new(owner: RecordTicket) -> Self {
+    pub(crate) fn new(owner: UserRecordTicket) -> Self {
         Self {
             owner,
             records: Vec::new(),
@@ -275,7 +242,7 @@ impl CandidateEffects {
         self.records.extend(child.records);
     }
 
-    pub(crate) fn owner(&self) -> RecordTicket {
+    pub(crate) fn owner(&self) -> UserRecordTicket {
         self.owner
     }
 

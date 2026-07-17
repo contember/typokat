@@ -1,6 +1,6 @@
 //! Single-publication state for admitted function/namespace value merges.
 
-use super::events::RecordTicket;
+use super::events::UserRecordTicket;
 use crate::binder::declaration::ValueStorageId;
 use crate::binder::namespace::NamespaceValueAttachmentDisposition;
 use crate::binder::scope::ScopeId;
@@ -22,7 +22,7 @@ pub(in crate::check::checker) struct FunctionGroupIdentity {
 #[derive(Clone, Debug)]
 pub(in crate::check::checker) enum FunctionNamespacePayload {
     Ready(Vec<PropertyType>),
-    Unavailable { owner: Option<RecordTicket> },
+    Unavailable { owner: Option<UserRecordTicket> },
 }
 
 /// Why an inferred merged function can no longer publish a callable value.
@@ -63,7 +63,7 @@ pub(in crate::check::checker) enum FunctionGroupBodyCompletion {
     Ready,
     Unavailable {
         cause: FunctionGroupUnavailableCause,
-        owner: Option<RecordTicket>,
+        owner: Option<UserRecordTicket>,
     },
 }
 
@@ -82,7 +82,7 @@ enum FunctionGroupState {
     },
     Unavailable {
         cause: FunctionGroupUnavailableCause,
-        owner: Option<RecordTicket>,
+        owner: Option<UserRecordTicket>,
     },
 }
 
@@ -113,7 +113,7 @@ struct FunctionGroupDraft {
 #[derive(Copy, Clone, Debug)]
 struct ActiveFunctionGroupFill {
     symbol: SymbolId,
-    owner: Option<RecordTicket>,
+    owner: Option<UserRecordTicket>,
     private_self: Option<TypeId>,
     dependency: Option<SymbolId>,
     dependency_unavailable: bool,
@@ -320,7 +320,7 @@ impl FunctionGroupRegistry {
         &mut self,
         symbol: SymbolId,
         declaration: ValueStorageId,
-        owner: Option<RecordTicket>,
+        owner: Option<UserRecordTicket>,
         private_self: Option<TypeId>,
     ) {
         let draft = self
@@ -401,7 +401,7 @@ impl FunctionGroupRegistry {
         &mut self,
         symbol: SymbolId,
         cause: FunctionGroupUnavailableCause,
-        owner: Option<RecordTicket>,
+        owner: Option<UserRecordTicket>,
     ) {
         let draft = self
             .groups

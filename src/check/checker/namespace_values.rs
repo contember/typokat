@@ -5,7 +5,7 @@ use super::calls::{FunctionReservation, RetainedFunctionBodySurface};
 use super::context::{
     ClassNamespacePropertyPayload, ClassNamespacePropertySourceOrder, FunctionSurface, Pass,
 };
-use super::events::{ModuleOrdinal, RecordTicket};
+use super::events::UserRecordTicket;
 use super::function_groups::FunctionNamespacePayload;
 use super::lexical_events::LexicalOwnerPhase;
 use super::statements::{function_decl_from_statement, function_overload_group};
@@ -17,6 +17,7 @@ use crate::binder::namespace::{
 use crate::binder::scope::ScopeId;
 use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::Diagnostic;
+use crate::source::ModuleOrdinal;
 use crate::span::Span;
 use crate::types::repr::{ClassId, FunctionType, ObjectType, PropertyType};
 use crate::types::store::TypeId;
@@ -66,7 +67,7 @@ struct StandaloneNamespaceDependency {
 
 #[derive(Copy, Clone)]
 struct AliasDependencyFailure {
-    owner: RecordTicket,
+    owner: UserRecordTicket,
     span: Span,
 }
 

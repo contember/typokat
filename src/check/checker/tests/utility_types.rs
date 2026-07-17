@@ -6,9 +6,9 @@ use super::super::{
     expected_trusted_prelude_incomplete, trusted_prelude_records_are_clean, PRELUDE_SOURCE,
 };
 use crate::binder::bind_module_with_prelude;
-use crate::check::checker::events::ModuleOrdinal;
 use crate::diagnostics::Diagnostic;
 use crate::driver::{check_project, check_source, FileInput};
+use crate::source::ModuleOrdinal;
 use crate::span::Span;
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;

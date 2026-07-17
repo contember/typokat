@@ -6,7 +6,6 @@
 use crate::binder::namespace::{
     CompilationUnit, ModuleBindingContext, OriginalModuleOrdinal, SourceFileKind, SourceUnitKey,
 };
-use crate::check::checker::events::{ModuleOrdinal, UnitSlot};
 #[cfg(test)]
 use crate::check::checker::{
     check_project_programs_with_binding_inspector,
@@ -17,6 +16,7 @@ use crate::check::{
     ProjectProgram,
 };
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
+use crate::source::{ModuleOrdinal, UnitSlot};
 use crate::span::Span;
 use crate::types::Interner;
 use oxc_allocator::Allocator;

@@ -31,14 +31,14 @@ mod resolve;
 
 #[derive(Default)]
 struct InterfaceOwnMemberOwners {
-    properties: BTreeMap<String, (super::events::RecordTicket, Span)>,
-    string_index: Option<(super::events::RecordTicket, Span)>,
-    number_index: Option<(super::events::RecordTicket, Span)>,
+    properties: BTreeMap<String, (super::events::UserRecordTicket, Span)>,
+    string_index: Option<(super::events::UserRecordTicket, Span)>,
+    number_index: Option<(super::events::UserRecordTicket, Span)>,
 }
 
 #[derive(Copy, Clone)]
 struct InterfaceHeritageDiagnostic<'name> {
-    owner: super::events::RecordTicket,
+    owner: super::events::UserRecordTicket,
     span: Span,
     derived_name: &'name str,
 }
@@ -136,7 +136,7 @@ struct InterfaceHeritageTopology {
 #[derive(Clone)]
 pub(in crate::check::checker) struct PreparedClassInstanceHeritage {
     pub(in crate::check::checker) base_name: String,
-    pub(in crate::check::checker) dependency: HeritageDependency<super::events::RecordTicket>,
+    pub(in crate::check::checker) dependency: HeritageDependency<super::events::UserRecordTicket>,
     pub(in crate::check::checker) span: Span,
 }
 
@@ -171,7 +171,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         index: usize,
         declaration: crate::binder::declaration::DeclId,
         source_start: u32,
-    ) -> super::events::RecordTicket {
+    ) -> super::events::UserRecordTicket {
         if matches!(
             self.type_decls.get(index),
             Some(TypeDecl::Class {
@@ -587,7 +587,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         ty: TypeId,
         objects: &mut Vec<crate::types::repr::ObjectType>,
         classes: &mut Vec<PreparedClassInstanceHeritage>,
-        owner: super::events::RecordTicket,
+        owner: super::events::UserRecordTicket,
         base_name: &str,
         span: Span,
     ) -> bool {
@@ -857,7 +857,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             optional: bool,
             readonly: bool,
             visibility: Visibility,
-            owner: super::events::RecordTicket,
+            owner: super::events::UserRecordTicket,
             span: Span,
             order: (SourceUnitKey, u32, u32),
         }
@@ -2016,7 +2016,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
         #[derive(Clone)]
         struct Member {
-            owner: super::events::RecordTicket,
+            owner: super::events::UserRecordTicket,
             span: Span,
             kind: MemberKind,
             ty: TypeId,
@@ -2026,7 +2026,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
         #[derive(Clone)]
         struct Index {
-            owner: super::events::RecordTicket,
+            owner: super::events::UserRecordTicket,
             span: Span,
             ty: TypeId,
         }
@@ -2358,13 +2358,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn validate_interface_heritage_conflicts(
         &mut self,
         surfaces: &[(
-            super::events::RecordTicket,
+            super::events::UserRecordTicket,
             Span,
             String,
             crate::types::repr::ObjectType,
         )],
         own: &crate::types::repr::ObjectType,
-        diagnostic_owner: super::events::RecordTicket,
+        diagnostic_owner: super::events::UserRecordTicket,
         diagnostic_span: Span,
     ) -> Vec<InterfaceTypedAlternative> {
         let mut alternatives = Vec::new();
@@ -2490,7 +2490,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         complete: &crate::types::repr::ObjectType,
         surfaces: &[(
-            super::events::RecordTicket,
+            super::events::UserRecordTicket,
             Span,
             String,
             crate::types::repr::ObjectType,

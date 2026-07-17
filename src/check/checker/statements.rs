@@ -1822,7 +1822,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn check_overload_implementation_compatibility(
         &mut self,
         implementation_ty: TypeId,
-        signatures: &[(TypeId, Span, Option<super::events::RecordTicket>)],
+        signatures: &[(TypeId, Span, Option<super::events::UserRecordTicket>)],
     ) {
         for (signature_ty, span, ticket) in signatures {
             let check = |pass: &mut Self| {
