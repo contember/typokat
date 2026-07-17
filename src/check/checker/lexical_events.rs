@@ -48,27 +48,15 @@ impl SourceSite {
     }
 
     pub(crate) const fn ordinal(self) -> SourceOrdinal {
-        match self.unit {
-            SourceUnit::User { module_ordinal, .. } => SourceOrdinal::User(module_ordinal),
-            #[cfg(test)]
-            SourceUnit::Library { file_ordinal } => SourceOrdinal::Library(file_ordinal),
-        }
+        source_ordinal(self.unit)
     }
+}
 
-    pub(crate) const fn user_module_ordinal(self) -> Option<ModuleOrdinal> {
-        match self.unit {
-            SourceUnit::User { module_ordinal, .. } => Some(module_ordinal),
-            #[cfg(test)]
-            SourceUnit::Library { .. } => None,
-        }
-    }
-
-    pub(crate) const fn user_unit_slot(self) -> Option<UnitSlot> {
-        match self.unit {
-            SourceUnit::User { unit_slot, .. } => Some(unit_slot),
-            #[cfg(test)]
-            SourceUnit::Library { .. } => None,
-        }
+pub(crate) const fn source_ordinal(source: SourceUnit) -> SourceOrdinal {
+    match source {
+        SourceUnit::User { module_ordinal, .. } => SourceOrdinal::User(module_ordinal),
+        #[cfg(test)]
+        SourceUnit::Library { file_ordinal } => SourceOrdinal::Library(file_ordinal),
     }
 }
 
@@ -1093,45 +1081,43 @@ impl LexicalReservations<UserRecordTicket> {
         self.reserve_class(source, class, tickets, store)?;
         Ok(())
     }
+}
 
-    pub(crate) fn top_level(&self) -> &[TopLevelReservation] {
+impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
+    pub(crate) fn top_level(&self) -> &[TopLevelReservation<Ticket>] {
         &self.top_level
     }
 
-    pub(crate) fn classes(&self) -> &[ClassReservation] {
+    pub(crate) fn classes(&self) -> &[ClassReservation<Ticket>] {
         &self.classes
     }
 
-    pub(crate) fn class(&self, id: ClassSiteId) -> Option<&ClassReservation> {
+    pub(crate) fn class(&self, id: ClassSiteId) -> Option<&ClassReservation<Ticket>> {
         self.classes.get(id.0)
     }
 
-    pub(crate) fn class_at(
-        &self,
-        module_ordinal: ModuleOrdinal,
-        source_start: u32,
-    ) -> Option<ClassSiteId> {
+    pub(crate) fn class_at(&self, source: SourceOrdinal, source_start: u32) -> Option<ClassSiteId> {
         self.classes_by_source
-            .get(&(SourceOrdinal::User(module_ordinal), source_start))
+            .get(&(source, source_start))
             .and_then(|ids| ids.first())
             .copied()
     }
 
-    pub(crate) fn member(&self, id: MemberSiteId) -> Option<&MemberReservation> {
+    pub(crate) fn member(&self, id: MemberSiteId) -> Option<&MemberReservation<Ticket>> {
         self.members.get(id.0)
     }
 
-    pub(crate) fn callable(&self, id: CallableSiteId) -> Option<&CallableReservation> {
+    pub(crate) fn callable(&self, id: CallableSiteId) -> Option<&CallableReservation<Ticket>> {
         self.callables.get(id.0)
     }
 
     pub(crate) fn callable_at(
         &self,
-        module_ordinal: ModuleOrdinal,
+        source: SourceOrdinal,
         source_start: u32,
     ) -> Option<CallableSiteId> {
         self.callables_by_source
-            .get(&(SourceOrdinal::User(module_ordinal), source_start))
+            .get(&(source, source_start))
             .and_then(|ids| ids.first())
             .copied()
     }
@@ -1139,18 +1125,14 @@ impl LexicalReservations<UserRecordTicket> {
     pub(crate) fn attach_declaration_owner(
         &mut self,
         declaration: DeclId,
-        module_ordinal: ModuleOrdinal,
+        source: SourceOrdinal,
         kind: DeclarationKind,
         declaration_span: Span,
         binding_span: Span,
     ) -> Result<(), ReservationError> {
         let reservation = self
             .declarations_by_binding
-            .get(&(
-                SourceOrdinal::User(module_ordinal),
-                binding_span.start,
-                binding_span.end,
-            ))
+            .get(&(source, binding_span.start, binding_span.end))
             .and_then(|index| self.declarations.get(*index))
             .ok_or(ReservationError::MissingDeclarationOwner(declaration))?;
         assert_eq!(
@@ -1170,16 +1152,12 @@ impl LexicalReservations<UserRecordTicket> {
 
     pub(crate) fn export_alias_owner(
         &self,
-        module_ordinal: ModuleOrdinal,
+        source: SourceOrdinal,
         local_span: Span,
-    ) -> Option<LexicalOwner> {
+    ) -> Option<LexicalOwner<Ticket>> {
         let reservation = self
             .export_aliases_by_local_span
-            .get(&(
-                SourceOrdinal::User(module_ordinal),
-                local_span.start,
-                local_span.end,
-            ))
+            .get(&(source, local_span.start, local_span.end))
             .and_then(|index| self.export_aliases.get(*index))?;
         debug_assert_eq!(reservation.local_span, local_span);
         Some(LexicalOwner {
@@ -1187,7 +1165,7 @@ impl LexicalReservations<UserRecordTicket> {
         })
     }
 
-    pub(crate) fn declaration_owner(&self, declaration: DeclId) -> Option<LexicalOwner> {
+    pub(crate) fn declaration_owner(&self, declaration: DeclId) -> Option<LexicalOwner<Ticket>> {
         self.declaration_owners.get(&declaration).copied()
     }
 
@@ -1199,7 +1177,7 @@ impl LexicalReservations<UserRecordTicket> {
     pub(crate) fn declaration_reservation(
         &self,
         declaration: DeclId,
-    ) -> Option<&DeclarationReservation> {
+    ) -> Option<&DeclarationReservation<Ticket>> {
         let owner = self.declaration_owner(declaration)?;
         self.declarations
             .iter()
@@ -1211,7 +1189,7 @@ impl LexicalReservations<UserRecordTicket> {
         declaration: DeclId,
         kind: InterfaceOccurrenceKind,
         source_start: u32,
-    ) -> Option<UserRecordTicket> {
+    ) -> Option<Ticket> {
         let reservation = self.declaration_reservation(declaration)?;
         let index = self.interface_occurrences_by_source.get(&(
             reservation.source.ordinal(),
@@ -1228,12 +1206,12 @@ impl LexicalReservations<UserRecordTicket> {
 
     pub(crate) fn owner_at(
         &self,
-        module_ordinal: ModuleOrdinal,
+        source: SourceOrdinal,
         source_start: u32,
         phase: LexicalOwnerPhase,
-    ) -> Option<LexicalOwner> {
+    ) -> Option<LexicalOwner<Ticket>> {
         if let Some(callable) = self
-            .callable_at(module_ordinal, source_start)
+            .callable_at(source, source_start)
             .and_then(|site| self.callable(site))
         {
             let ticket = match phase {
@@ -1248,16 +1226,14 @@ impl LexicalReservations<UserRecordTicket> {
             .declarators
             .iter()
             .find(|site| {
-                site.source.ordinal() == SourceOrdinal::User(module_ordinal)
-                    && site.source.source_start == source_start
+                site.source.ordinal() == source && site.source.source_start == source_start
             })
             .map(|site| site.tickets)
             .or_else(|| {
                 self.nested_statements
                     .iter()
                     .find(|site| {
-                        site.source.ordinal() == SourceOrdinal::User(module_ordinal)
-                            && site.source.source_start == source_start
+                        site.source.ordinal() == source && site.source.source_start == source_start
                     })
                     .map(|site| site.tickets)
             })
@@ -1265,8 +1241,7 @@ impl LexicalReservations<UserRecordTicket> {
                 self.members
                     .iter()
                     .find(|site| {
-                        site.source.ordinal() == SourceOrdinal::User(module_ordinal)
-                            && site.source.source_start == source_start
+                        site.source.ordinal() == source && site.source.source_start == source_start
                     })
                     .map(|site| site.tickets)
             })
@@ -1274,8 +1249,7 @@ impl LexicalReservations<UserRecordTicket> {
                 self.top_level
                     .iter()
                     .find(|site| {
-                        site.source.ordinal() == SourceOrdinal::User(module_ordinal)
-                            && site.source.source_start == source_start
+                        site.source.ordinal() == source && site.source.source_start == source_start
                     })
                     .map(|site| site.tickets)
             })?;
@@ -1325,7 +1299,7 @@ impl LexicalReservations<UserRecordTicket> {
         Ok(())
     }
 
-    pub(crate) fn tickets(&self) -> Vec<UserRecordTicket> {
+    pub(crate) fn tickets(&self) -> Vec<Ticket> {
         let mut tickets = Vec::new();
         tickets.extend(
             self.declarations
@@ -1362,7 +1336,9 @@ impl LexicalReservations<UserRecordTicket> {
         }
         tickets
     }
+}
 
+impl LexicalReservations<UserRecordTicket> {
     fn reserve_class(
         &mut self,
         source: SourceSite,
@@ -1562,7 +1538,7 @@ fn reserve_site_tickets(
     })
 }
 
-fn site_tickets(tickets: SiteTickets) -> [UserRecordTicket; 3] {
+fn site_tickets<Ticket: Copy>(tickets: SiteTickets<Ticket>) -> [Ticket; 3] {
     [tickets.immediate, tickets.deferred, tickets.incomplete]
 }
 
@@ -1645,11 +1621,19 @@ mod tests {
             .reserve_program(first, UnitSlot::new(1), &parsed.program, &mut store)
             .unwrap();
 
-        let first_class = reservations.class_at(first, class_start).unwrap();
-        let second_class = reservations.class_at(second, class_start).unwrap();
+        let first_class = reservations
+            .class_at(SourceOrdinal::User(first), class_start)
+            .unwrap();
+        let second_class = reservations
+            .class_at(SourceOrdinal::User(second), class_start)
+            .unwrap();
         assert_ne!(first_class, second_class);
-        assert!(reservations.callable_at(first, callable_start).is_some());
-        assert!(reservations.callable_at(second, callable_start).is_some());
+        assert!(reservations
+            .callable_at(SourceOrdinal::User(first), callable_start)
+            .is_some());
+        assert!(reservations
+            .callable_at(SourceOrdinal::User(second), callable_start)
+            .is_some());
         assert_eq!(
             reservations.class(first_class).unwrap().source.unit,
             SourceUnit::User {
@@ -1674,6 +1658,201 @@ mod tests {
             store.complete(ticket, Vec::new()).unwrap();
         }
         assert!(store.finish().unwrap().is_empty());
+    }
+
+    #[test]
+    fn identical_user_and_library_spans_keep_distinct_lookup_domains() {
+        use crate::source::LibraryFileOrdinal;
+
+        #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+        enum LookupTicket {
+            User,
+            Library,
+        }
+
+        fn site_tickets(ticket: LookupTicket) -> SiteTickets<LookupTicket> {
+            SiteTickets {
+                immediate: ticket,
+                deferred: ticket,
+                incomplete: ticket,
+            }
+        }
+
+        fn callable_tickets(ticket: LookupTicket) -> CallableTickets<LookupTicket> {
+            CallableTickets {
+                signature: ticket,
+                deferred: ticket,
+                incomplete: ticket,
+                body: ticket,
+            }
+        }
+
+        let source_start = 31;
+        let user_ordinal = ModuleOrdinal::new(4);
+        let library_ordinal = LibraryFileOrdinal::new(4);
+        let user_source = SourceSite {
+            unit: SourceUnit::User {
+                module_ordinal: user_ordinal,
+                unit_slot: UnitSlot::new(2),
+            },
+            source_start,
+        };
+        let library_source = SourceSite {
+            unit: SourceUnit::Library {
+                file_ordinal: library_ordinal,
+            },
+            source_start,
+        };
+        let mut reservations = LexicalReservations::<LookupTicket>::default();
+        let declaration_span = Span::new(source_start, source_start + 8);
+        let binding_span = Span::new(source_start + 2, source_start + 5);
+        let local_span = Span::new(source_start + 6, source_start + 8);
+        let mut source_declarations = Vec::new();
+
+        for (source, ticket) in [
+            (user_source, LookupTicket::User),
+            (library_source, LookupTicket::Library),
+        ] {
+            reservations.top_level.push(TopLevelReservation {
+                source,
+                tickets: site_tickets(ticket),
+                class: None,
+                callable: None,
+            });
+
+            let class = ClassSiteId(reservations.classes.len());
+            reservations.classes.push(ClassReservation {
+                id: class,
+                source,
+                tickets: site_tickets(ticket),
+                constraints: Vec::new(),
+                defaults: Vec::new(),
+                members: Vec::new(),
+                binding: None,
+            });
+            reservations
+                .classes_by_source
+                .entry((source.ordinal(), source_start))
+                .or_default()
+                .push(class);
+
+            let callable = CallableSiteId(reservations.callables.len());
+            reservations.callables.push(CallableReservation {
+                id: callable,
+                owner_member: None,
+                source,
+                tickets: callable_tickets(ticket),
+                type_parameter_count: 0,
+                binding: None,
+            });
+            reservations
+                .callables_by_source
+                .entry((source.ordinal(), source_start))
+                .or_default()
+                .push(callable);
+
+            let declaration = DeclId(
+                u32::try_from(reservations.declarations.len())
+                    .expect("test declaration count fits u32"),
+            );
+            let declaration_index = reservations.declarations.len();
+            reservations.declarations.push(DeclarationReservation {
+                source,
+                kind: DeclarationKind::Interface,
+                declaration_span,
+                binding_span,
+                owner: ticket,
+            });
+            reservations.declarations_by_binding.insert(
+                (source.ordinal(), binding_span.start, binding_span.end),
+                declaration_index,
+            );
+            reservations
+                .attach_declaration_owner(
+                    declaration,
+                    source.ordinal(),
+                    DeclarationKind::Interface,
+                    declaration_span,
+                    binding_span,
+                )
+                .unwrap();
+
+            let export_index = reservations.export_aliases.len();
+            reservations.export_aliases.push(ExportAliasReservation {
+                local_span,
+                owner: ticket,
+            });
+            reservations.export_aliases_by_local_span.insert(
+                (source.ordinal(), local_span.start, local_span.end),
+                export_index,
+            );
+
+            let occurrence_index = reservations.interface_occurrences.len();
+            reservations
+                .interface_occurrences
+                .push(InterfaceOccurrenceReservation {
+                    binding_start: binding_span.start,
+                    source_start,
+                    kind: InterfaceOccurrenceKind::Header,
+                    owner: ticket,
+                });
+            reservations.interface_occurrences_by_source.insert(
+                (
+                    source.ordinal(),
+                    binding_span.start,
+                    InterfaceOccurrenceKind::Header,
+                    source_start,
+                ),
+                occurrence_index,
+            );
+            source_declarations.push((source, declaration, ticket));
+        }
+
+        let user = SourceOrdinal::User(user_ordinal);
+        let library = SourceOrdinal::Library(library_ordinal);
+        let user_class = reservations.class_at(user, source_start).unwrap();
+        let library_class = reservations.class_at(library, source_start).unwrap();
+        let user_callable = reservations.callable_at(user, source_start).unwrap();
+        let library_callable = reservations.callable_at(library, source_start).unwrap();
+
+        assert_ne!(user_class, library_class);
+        assert_ne!(user_callable, library_callable);
+        assert_eq!(reservations.class(user_class).unwrap().source, user_source);
+        assert_eq!(
+            reservations.class(library_class).unwrap().source,
+            library_source
+        );
+        assert_eq!(
+            reservations.callable(user_callable).unwrap().source,
+            user_source
+        );
+        assert_eq!(
+            reservations.callable(library_callable).unwrap().source,
+            library_source
+        );
+        for (source, declaration, ticket) in source_declarations {
+            assert_eq!(reservations.declaration_source(declaration), Some(source));
+            assert_eq!(
+                reservations
+                    .export_alias_owner(source.ordinal(), local_span)
+                    .map(|owner| owner.ticket),
+                Some(ticket)
+            );
+            assert_eq!(
+                reservations.interface_occurrence_owner(
+                    declaration,
+                    InterfaceOccurrenceKind::Header,
+                    source_start,
+                ),
+                Some(ticket)
+            );
+            assert_eq!(
+                reservations
+                    .owner_at(source.ordinal(), source_start, LexicalOwnerPhase::Immediate)
+                    .map(|owner| owner.ticket),
+                Some(ticket)
+            );
+        }
     }
 
     #[test]
@@ -1706,8 +1885,6 @@ mod tests {
             SourceOrdinal::User(ModuleOrdinal::new(12)),
             SourceOrdinal::Library(file_ordinal)
         );
-        assert_eq!(site.user_module_ordinal(), None);
-        assert_eq!(site.user_unit_slot(), None);
         assert_eq!(reservation.source, site);
         assert_eq!(reservation.tickets.immediate, event.primary);
         assert_eq!(reservation.tickets.deferred.record_ordinal, 1);
@@ -1736,10 +1913,13 @@ declare namespace N {
             .unwrap();
 
         assert!(reservations
-            .export_alias_owner(module, source_span(source, "TopLevel"))
+            .export_alias_owner(SourceOrdinal::User(module), source_span(source, "TopLevel"))
             .is_none());
         let first = reservations
-            .export_alias_owner(module, source_span(source, "MissingOne"))
+            .export_alias_owner(
+                SourceOrdinal::User(module),
+                source_span(source, "MissingOne"),
+            )
             .expect("first local alias owner");
         let resolved_start = source
             .find("Resolved as PublicResolved")
@@ -1749,7 +1929,7 @@ declare namespace N {
             u32::try_from(resolved_start + "Resolved".len()).expect("source offset fits u32"),
         );
         let resolved = reservations
-            .export_alias_owner(module, resolved_span)
+            .export_alias_owner(SourceOrdinal::User(module), resolved_span)
             .expect("resolved local alias owner");
         let chained_start = source
             .find("PublicResolved as Chained")
@@ -1759,10 +1939,13 @@ declare namespace N {
             u32::try_from(chained_start + "PublicResolved".len()).expect("source offset fits u32"),
         );
         let chained = reservations
-            .export_alias_owner(module, chained_span)
+            .export_alias_owner(SourceOrdinal::User(module), chained_span)
             .expect("alias-output local owner");
         let second = reservations
-            .export_alias_owner(module, source_span(source, "MissingTwo"))
+            .export_alias_owner(
+                SourceOrdinal::User(module),
+                source_span(source, "MissingTwo"),
+            )
             .expect("nested local alias owner");
         assert_eq!(reservations.export_aliases.len(), 4);
         assert_eq!(first.ticket.record_ordinal, 0);
@@ -2225,7 +2408,9 @@ interface Combined extends First, Second {
             .unwrap();
         let event_count = store.event_count();
         let record_count = store.record_count();
-        let class = reservations.class_at(ModuleOrdinal::new(3), 0).unwrap();
+        let class = reservations
+            .class_at(SourceOrdinal::User(ModuleOrdinal::new(3)), 0)
+            .unwrap();
         let callable = reservations
             .class(class)
             .and_then(|class| class.members.first())
@@ -2240,7 +2425,7 @@ interface Combined extends First, Second {
             _ => panic!("expected class"),
         };
         assert_eq!(
-            reservations.callable_at(ModuleOrdinal::new(3), function_start),
+            reservations.callable_at(SourceOrdinal::User(ModuleOrdinal::new(3)), function_start),
             Some(callable)
         );
 
@@ -2306,14 +2491,26 @@ interface Combined extends First, Second {
         assert_eq!(reservations.declarators.len(), 1);
         let declarator_start = source.find("x:").unwrap() as u32;
         assert!(reservations
-            .owner_at(module, declarator_start, LexicalOwnerPhase::Immediate)
+            .owner_at(
+                SourceOrdinal::User(module),
+                declarator_start,
+                LexicalOwnerPhase::Immediate,
+            )
             .is_some());
         let inner_start = source.find("function inner").unwrap() as u32;
         let signature = reservations
-            .owner_at(module, inner_start, LexicalOwnerPhase::Immediate)
+            .owner_at(
+                SourceOrdinal::User(module),
+                inner_start,
+                LexicalOwnerPhase::Immediate,
+            )
             .unwrap();
         let body = reservations
-            .owner_at(module, inner_start, LexicalOwnerPhase::Body)
+            .owner_at(
+                SourceOrdinal::User(module),
+                inner_start,
+                LexicalOwnerPhase::Body,
+            )
             .unwrap();
         assert_eq!(signature.ticket.event, body.ticket.event);
         assert_ne!(signature.ticket, body.ticket);
@@ -2352,10 +2549,14 @@ interface Combined extends First, Second {
         );
         for start in &starts {
             let signature = reservations
-                .owner_at(module, *start, LexicalOwnerPhase::Immediate)
+                .owner_at(
+                    SourceOrdinal::User(module),
+                    *start,
+                    LexicalOwnerPhase::Immediate,
+                )
                 .unwrap();
             let body = reservations
-                .owner_at(module, *start, LexicalOwnerPhase::Body)
+                .owner_at(SourceOrdinal::User(module), *start, LexicalOwnerPhase::Body)
                 .unwrap();
             assert_eq!(signature.ticket.event, body.ticket.event);
             assert_ne!(signature.ticket, body.ticket);
@@ -2363,7 +2564,11 @@ interface Combined extends First, Second {
         for name in ["a =", "b =", "c ="] {
             let start = u32::try_from(source.find(name).unwrap()).unwrap();
             assert!(reservations
-                .owner_at(module, start, LexicalOwnerPhase::Deferred)
+                .owner_at(
+                    SourceOrdinal::User(module),
+                    start,
+                    LexicalOwnerPhase::Deferred,
+                )
                 .is_some());
         }
 

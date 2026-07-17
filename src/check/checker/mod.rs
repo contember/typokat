@@ -19,7 +19,9 @@ use crate::check::query::SemanticQueryState;
 use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic, IncompleteSurface};
 use crate::relate::RelationOutcome;
-use crate::source::{CompilationOrigin, ModuleOrdinal, OriginalModuleOrdinal, UnitSlot};
+use crate::source::{
+    CompilationOrigin, ModuleOrdinal, OriginalModuleOrdinal, SourceOrdinal, SourceUnit, UnitSlot,
+};
 use crate::span::Span;
 use crate::types::store::TypeId;
 use crate::types::Interner;
@@ -66,8 +68,7 @@ use reporting_record::CheckerRecord;
 use statements::{emit_exhausted_obligation, emit_obligation_failure};
 
 struct PassReporting<Ticket: Copy> {
-    module_ordinal: ModuleOrdinal,
-    unit_slot: UnitSlot,
+    source: SourceUnit,
     lexical_events: LexicalReservations<Ticket>,
     suppress_effects: bool,
 }
@@ -101,8 +102,10 @@ fn reserve_internal_reporting(
         .expect("lexical event reservation must reference valid events");
     (
         PassReporting {
-            module_ordinal,
-            unit_slot,
+            source: SourceUnit::User {
+                module_ordinal,
+                unit_slot,
+            },
             lexical_events,
             suppress_effects: false,
         },
@@ -251,7 +254,7 @@ fn bootstrap_trusted_prelude(
     let intrinsic_markers = prelude_intrinsic_markers(pass.interner);
     seed_prelude_intrinsics(&binder, &mut pass.type_resolved, intrinsic_markers);
     pass.fill_type_decls(binder.prelude_module);
-    pass.publish_class_surfaces(&[(prelude_ordinal, binder.prelude_module)]);
+    pass.publish_class_surfaces();
     pass.fill_pending_interfaces_range(binder.prelude_module, 0, pass.type_decls.len());
     pass.freeze_seeded_type_groups();
     pass.publish_type_groups();
@@ -317,7 +320,7 @@ fn emit_test_incomplete(pass: &mut Pass<'_, '_>) {
         .lexical_events
         .top_level()
         .iter()
-        .find(|site| site.source.user_module_ordinal() == Some(pass.current_module_ordinal))
+        .find(|site| site.source.unit == pass.current_source)
         .map(|site| site.source.source_start);
     if let Some(source_start) = source_start {
         pass.with_lexical_effects(source_start, LexicalOwnerPhase::Incomplete, |pass| {
@@ -446,8 +449,10 @@ where
         decl_types,
         next_type_param,
         PassReporting {
-            module_ordinal,
-            unit_slot,
+            source: SourceUnit::User {
+                module_ordinal,
+                unit_slot,
+            },
             lexical_events,
             suppress_effects: false,
         },
@@ -461,7 +466,7 @@ where
     pass.fill_type_decls(binder.module);
     pass.prepare_attached_namespace_values(binder.module, &program.body);
     pass.prepare_standalone_namespace_values(binder.module, &program.body);
-    pass.publish_class_surfaces(&[(module_ordinal, binder.module)]);
+    pass.publish_class_surfaces();
     pass.finalize_standalone_namespace_values();
     pass.precompute_standalone_namespace_value_aliases(&[(binder.module, program.body.as_slice())]);
     pass.fill_pending_interfaces_range(binder.module, 0, pass.type_decls.len());
@@ -687,6 +692,10 @@ where
     ),
     H: FnOnce(&[(events::EventKey, CheckerRecord)]),
 {
+    if units.is_empty() {
+        return Vec::new();
+    }
+
     let mut event_store = EventStore::default();
     let mut lexical_events = LexicalReservations::default();
     for (slot, unit) in units.iter().enumerate() {
@@ -808,14 +817,10 @@ where
         decl_types,
         next_type_param,
         PassReporting {
-            module_ordinal: units
-                .first()
-                .map(|unit| unit.module_ordinal)
-                .unwrap_or(ModuleOrdinal::new(0)),
-            unit_slot: units
-                .first()
-                .map(|unit| unit.unit_slot)
-                .unwrap_or(UnitSlot::new(0)),
+            source: SourceUnit::User {
+                module_ordinal: units[0].module_ordinal,
+                unit_slot: units[0].unit_slot,
+            },
             lexical_events,
             suppress_effects: false,
         },
@@ -829,8 +834,10 @@ where
 
     for (scope, unit) in module_scopes.iter().copied().zip(units.iter()) {
         pass.current_module = scope;
-        pass.current_module_ordinal = unit.module_ordinal;
-        pass.current_unit_slot = unit.unit_slot;
+        pass.current_source = SourceUnit::User {
+            module_ordinal: unit.module_ordinal,
+            unit_slot: unit.unit_slot,
+        };
         pass.prepare_attached_namespace_values(scope, &unit.program.body);
     }
 
@@ -842,12 +849,7 @@ where
         .collect::<Vec<_>>();
     pass.prepare_project_standalone_namespace_values(&standalone_modules);
 
-    let publication_scopes: Vec<(ModuleOrdinal, ScopeId)> = units
-        .iter()
-        .zip(module_scopes.iter().copied())
-        .map(|(unit, scope)| (unit.module_ordinal, scope))
-        .collect();
-    pass.publish_class_surfaces(&publication_scopes);
+    pass.publish_class_surfaces();
     pass.finalize_standalone_namespace_values();
     pass.precompute_standalone_namespace_value_aliases(&standalone_modules);
 
@@ -866,8 +868,10 @@ where
 
     for (scope, unit) in module_scopes.iter().copied().zip(units) {
         pass.current_module = scope;
-        pass.current_module_ordinal = unit.module_ordinal;
-        pass.current_unit_slot = unit.unit_slot;
+        pass.current_source = SourceUnit::User {
+            module_ordinal: unit.module_ordinal,
+            unit_slot: unit.unit_slot,
+        };
         pass.build_flow_graph(scope, &unit.program.body);
         pass.check_statements(scope, &unit.program.body);
         emit_test_incomplete(&mut pass);
@@ -1144,7 +1148,11 @@ fn enqueue_external_diagnostic(
     diagnostic: Diagnostic,
 ) {
     let owner = reservations
-        .owner_at(module_ordinal, owner_start, LexicalOwnerPhase::Immediate)
+        .owner_at(
+            SourceOrdinal::User(module_ordinal),
+            owner_start,
+            LexicalOwnerPhase::Immediate,
+        )
         .expect("import/export diagnostic owner must be lexically reserved");
     effects
         .entry(owner.ticket)
@@ -1163,7 +1171,7 @@ fn enqueue_local_ambient_export_alias_diagnostics(
         };
         let module_ordinal = ModuleOrdinal::new(original_module.index());
         let owner = reservations
-            .export_alias_owner(module_ordinal, failure.local_span)
+            .export_alias_owner(SourceOrdinal::User(module_ordinal), failure.local_span)
             .expect("local ambient export alias must have an exact lexical owner");
         effects
             .entry(owner.ticket)
@@ -1196,8 +1204,8 @@ fn enqueue_namespace_placement_diagnostics(
             .expect("namespace placement issue must keep its source site");
         let expected_module = ModuleOrdinal::new(original_module.index());
         assert_eq!(
-            source.user_module_ordinal(),
-            Some(expected_module),
+            source.ordinal(),
+            SourceOrdinal::User(expected_module),
             "namespace placement issue must remain in its original module"
         );
         let diagnostic = match issue.kind {
@@ -1228,7 +1236,7 @@ fn enqueue_ambient_context_diagnostics(
             .declaration_source(global.declaration)
             .expect("global context issue must keep its source site");
         let expected_module = ModuleOrdinal::new(original_module.index());
-        assert_eq!(source.user_module_ordinal(), Some(expected_module));
+        assert_eq!(source.ordinal(), SourceOrdinal::User(expected_module));
         let candidate = effects
             .entry(owner.ticket)
             .or_insert_with(|| CandidateEffects::new(owner.ticket));
@@ -1267,7 +1275,7 @@ fn enqueue_ambient_context_diagnostics(
             .declaration_source(export.declaration)
             .expect("UMD context issue must keep its source site");
         let expected_module = ModuleOrdinal::new(original_module.index());
-        assert_eq!(source.user_module_ordinal(), Some(expected_module));
+        assert_eq!(source.ordinal(), SourceOrdinal::User(expected_module));
         effects
             .entry(owner.ticket)
             .or_insert_with(|| CandidateEffects::new(owner.ticket))
@@ -1341,7 +1349,7 @@ fn attach_type_decl_owners(
         reservations
             .attach_declaration_owner(
                 declaration.id,
-                module_ordinal,
+                SourceOrdinal::User(module_ordinal),
                 declaration.kind,
                 declaration.site.declaration_span,
                 declaration.site.binding_span,
@@ -1372,7 +1380,9 @@ fn attach_class_bindings(
             let Some(name) = class.id.as_ref().map(|id| id.name.as_str()) else {
                 return;
             };
-            let Some(site) = reservations.class_at(module_ordinal, class.span.start) else {
+            let Some(site) =
+                reservations.class_at(SourceOrdinal::User(module_ordinal), class.span.start)
+            else {
                 return;
             };
             let Some((type_decl, _, _)) = decls::exact_type_fragment_at(
@@ -1776,7 +1786,11 @@ impl Pass<'_, '_> {
     ) -> R {
         let owner = self
             .lexical_events
-            .owner_at(self.current_module_ordinal, source_start, phase)
+            .owner_at(
+                lexical_events::source_ordinal(self.current_source),
+                source_start,
+                phase,
+            )
             .expect("lexical owner must be preallocated before semantic execution");
         self.with_ticket_effects(owner.ticket, produce)
     }
@@ -1954,8 +1968,10 @@ fn build_pass<'a, 'ast>(
         decl_types,
         next_type_param,
         PassReporting {
-            module_ordinal: ModuleOrdinal::new(0),
-            unit_slot: UnitSlot::new(0),
+            source: SourceUnit::User {
+                module_ordinal: ModuleOrdinal::new(0),
+                unit_slot: UnitSlot::new(0),
+            },
             lexical_events: LexicalReservations::default(),
             suppress_effects: false,
         },
@@ -2020,8 +2036,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         // Overwritten before each module's fill/flow/check phase; the user module is
         // the single-file default (backlog 58).
         current_module: binder.module,
-        current_module_ordinal: reporting.module_ordinal,
-        current_unit_slot: reporting.unit_slot,
+        current_source: reporting.source,
         effect_stack: Vec::new(),
         pending_effects,
         lexical_events: reporting.lexical_events,

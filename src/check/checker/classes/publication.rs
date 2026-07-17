@@ -33,13 +33,15 @@ use crate::check::checker::context::{
 };
 use crate::check::checker::decls::type_decl_id;
 use crate::check::checker::events::UserRecordTicket;
-use crate::check::checker::lexical_events::{ClassReservation, LexicalReservations};
+use crate::check::checker::lexical_events::{
+    source_ordinal, ClassReservation, LexicalReservations,
+};
 use crate::check::checker::reporting_record::CheckerRecord;
 use crate::check::query::SemanticQueryCoordinator;
 use crate::class_semantics::{ClassApplicationArguments, DemandOutcome, Exhaustion};
 use crate::diagnostics::{render_type, Diagnostic, IncompleteSurface};
 use crate::relate::RelationOutcome;
-use crate::source::ModuleOrdinal;
+use crate::source::SourceOrdinal;
 use crate::span::Span as CheckSpan;
 use crate::types::repr::{
     ClassId, FunctionType, ObjectType, PropertyType, TypeParamId, Visibility,
@@ -271,7 +273,7 @@ struct Resolver<'a, 'ast> {
     declarations: &'a [TypeDecl<'ast>],
     resolved: &'a [Option<TypeId>],
     reservations: &'a LexicalReservations,
-    module: ModuleOrdinal,
+    source: SourceOrdinal,
     fallback: UserRecordTicket,
     error: TypeId,
     qualified_outer_type_parameters_visible: bool,
@@ -533,7 +535,7 @@ impl SurfaceTypeResolver<UserRecordTicket> for Resolver<'_, '_> {
         _name: &str,
     ) -> Option<TypeParamId> {
         self.reservations
-            .callable_at(self.module, callable_source_start)
+            .callable_at(self.source, callable_source_start)
             .and_then(|site| self.reservations.callable(site))
             .and_then(|reservation| reservation.binding.as_ref())
             .and_then(|binding| binding.type_params.get(ordinal))
@@ -602,7 +604,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 declarations: &type_decls,
                 resolved: &type_resolved,
                 reservations: &self.lexical_events,
-                module: self.current_module_ordinal,
+                source: source_ordinal(self.current_source),
                 fallback: owner,
                 error,
                 qualified_outer_type_parameters_visible: true,
@@ -635,7 +637,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 declarations: &type_decls,
                 resolved: &type_resolved,
                 reservations: &self.lexical_events,
-                module: self.current_module_ordinal,
+                source: source_ordinal(self.current_source),
                 fallback: owner,
                 error,
                 qualified_outer_type_parameters_visible: true,
@@ -708,10 +710,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         });
     }
 
-    pub(in crate::check::checker) fn publish_class_surfaces(
-        &mut self,
-        _scopes: &[(ModuleOrdinal, ScopeId)],
-    ) {
+    pub(in crate::check::checker) fn publish_class_surfaces(&mut self) {
         let prepared_interface_groups = self.prepare_class_interface_groups();
         let class_groups: Vec<crate::binder::declaration::TypeGroupId> = self
             .type_decls
@@ -752,9 +751,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
 
         for reservation in reservations {
-            let Some(module_ordinal) = reservation.source.user_module_ordinal() else {
-                continue;
-            };
+            let source_ordinal = reservation.source.ordinal();
             let Some(binding) = reservation.binding.as_ref() else {
                 continue;
             };
@@ -852,7 +849,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 declarations: &type_decls,
                 resolved: &type_resolved,
                 reservations: &self.lexical_events,
-                module: module_ordinal,
+                source: source_ordinal,
                 fallback: reservation.tickets.incomplete,
                 error,
                 qualified_outer_type_parameters_visible: true,
@@ -1309,7 +1306,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 let mut lowerer = ClassSurfaceLowerer::new(
                     class_id,
                     ClassRecoveryOrder {
-                        original_module: module_ordinal.index(),
+                        source: source_ordinal,
                         binding_start: reservation.source.source_start,
                         declaration_ordinal: declaration.0,
                     },
@@ -2978,9 +2975,7 @@ fn register_reserved_surface_roots<'ast>(
                     );
                     continue;
                 };
-                let Some(module_ordinal) = source.user_module_ordinal() else {
-                    continue;
-                };
+                let source_ordinal = source.ordinal();
                 let scope = *scope;
                 let fallback = reservations
                     .declaration_owner(*declaration)
@@ -2992,7 +2987,7 @@ fn register_reserved_surface_roots<'ast>(
                     declarations,
                     resolved,
                     reservations,
-                    module: module_ordinal,
+                    source: source_ordinal,
                     fallback,
                     error,
                     qualified_outer_type_parameters_visible: true,

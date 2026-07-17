@@ -5,6 +5,7 @@ use super::retained::RetainedClassCallable;
 use crate::class_semantics::{
     ClassConstructionState, PublishedClassPoison, PublishedClassSurface, PublishedClasses,
 };
+use crate::source::SourceOrdinal;
 use crate::types::repr::{ClassId, FunctionType, ObjectType, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId, TypeParamFreezeError};
 use crate::types::{substitute, Interner};
@@ -116,7 +117,7 @@ pub(in crate::check::checker) struct HeritageDependency<Ticket> {
 /// It deliberately does not depend on dependency scheduling or `ClassId` allocation.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(in crate::check::checker) struct ClassRecoveryOrder {
-    pub original_module: usize,
+    pub source: SourceOrdinal,
     pub binding_start: u32,
     pub declaration_ordinal: u32,
 }
@@ -1209,13 +1210,14 @@ pub(in crate::check::checker) fn dependency_first_sccs<Node: Copy + Ord>(
 mod tests {
     use super::*;
     use crate::class_semantics::{DemandOutcome, Exhaustion};
+    use crate::source::ModuleOrdinal;
     use crate::types::repr::{ObjectType, PropertyType};
 
     fn draft(class: u32, template: TypeId, binder: u32) -> ClassSurfaceLowerer<u32> {
         ClassSurfaceLowerer::new(
             ClassId(class),
             ClassRecoveryOrder {
-                original_module: 0,
+                source: SourceOrdinal::User(ModuleOrdinal::new(0)),
                 binding_start: class,
                 declaration_ordinal: class,
             },
@@ -1445,7 +1447,7 @@ mod tests {
         let base = ClassSurfaceLowerer::new(
             ClassId(1),
             ClassRecoveryOrder {
-                original_module: 0,
+                source: SourceOrdinal::User(ModuleOrdinal::new(0)),
                 binding_start: 1,
                 declaration_ordinal: 1,
             },
@@ -1457,7 +1459,7 @@ mod tests {
         let mut derived = ClassSurfaceLowerer::new(
             ClassId(2),
             ClassRecoveryOrder {
-                original_module: 0,
+                source: SourceOrdinal::User(ModuleOrdinal::new(0)),
                 binding_start: 2,
                 declaration_ordinal: 2,
             },
@@ -1525,7 +1527,7 @@ mod tests {
         let mut first = ClassSurfaceLowerer::new(
             ClassId(1),
             ClassRecoveryOrder {
-                original_module: 0,
+                source: SourceOrdinal::User(ModuleOrdinal::new(0)),
                 binding_start: 10,
                 declaration_ordinal: 1,
             },
@@ -1542,7 +1544,7 @@ mod tests {
         let mut second = ClassSurfaceLowerer::new(
             ClassId(2),
             ClassRecoveryOrder {
-                original_module: 0,
+                source: SourceOrdinal::User(ModuleOrdinal::new(0)),
                 binding_start: 20,
                 declaration_ordinal: 2,
             },
@@ -1622,7 +1624,7 @@ mod tests {
         let mut b = ClassSurfaceLowerer::new(
             ClassId(1),
             ClassRecoveryOrder {
-                original_module: 0,
+                source: SourceOrdinal::User(ModuleOrdinal::new(0)),
                 binding_start: 10,
                 declaration_ordinal: 1,
             },
@@ -1639,7 +1641,7 @@ mod tests {
         let mut a = ClassSurfaceLowerer::new(
             ClassId(2),
             ClassRecoveryOrder {
-                original_module: 0,
+                source: SourceOrdinal::User(ModuleOrdinal::new(0)),
                 binding_start: 20,
                 declaration_ordinal: 2,
             },
@@ -1744,7 +1746,7 @@ mod tests {
         let lowerer = ClassSurfaceLowerer::new(
             class,
             ClassRecoveryOrder {
-                original_module: 0,
+                source: SourceOrdinal::User(ModuleOrdinal::new(0)),
                 binding_start: 1,
                 declaration_ordinal: 1,
             },

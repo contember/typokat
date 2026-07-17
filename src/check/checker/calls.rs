@@ -2234,7 +2234,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> FunctionReservation {
         let retained = self
             .lexical_events
-            .callable_at(self.current_module_ordinal, func.span.start)
+            .callable_at(
+                super::lexical_events::source_ordinal(self.current_source),
+                func.span.start,
+            )
             .and_then(|site| self.lexical_events.callable(site))
             .map(|callable| (callable.binding.clone(), callable.tickets));
         let (type_params, tickets) = match retained {
@@ -2438,7 +2441,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> TypeId {
         let tickets = self
             .lexical_events
-            .callable_at(self.current_module_ordinal, func.span.start)
+            .callable_at(
+                super::lexical_events::source_ordinal(self.current_source),
+                func.span.start,
+            )
             .and_then(|site| self.lexical_events.callable(site))
             .map(|callable| callable.tickets);
         let reservation = match tickets {
@@ -2468,7 +2474,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> TypeId {
         let retained = self
             .lexical_events
-            .callable_at(self.current_module_ordinal, arrow.span.start)
+            .callable_at(
+                super::lexical_events::source_ordinal(self.current_source),
+                arrow.span.start,
+            )
             .and_then(|site| self.lexical_events.callable(site))
             .map(|callable| (callable.binding.clone(), callable.tickets));
         let (param_ids, tickets) = match retained {

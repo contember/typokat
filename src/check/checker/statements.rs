@@ -1323,7 +1323,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) {
         let tickets = self
             .lexical_events
-            .callable_at(self.current_module_ordinal, func.span.start)
+            .callable_at(
+                super::lexical_events::source_ordinal(self.current_source),
+                func.span.start,
+            )
             .and_then(|site| self.lexical_events.callable(site))
             .map(|callable| callable.tickets);
         let surface = match tickets {

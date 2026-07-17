@@ -7,7 +7,7 @@ use super::context::{
 };
 use super::events::UserRecordTicket;
 use super::function_groups::FunctionNamespacePayload;
-use super::lexical_events::LexicalOwnerPhase;
+use super::lexical_events::{source_ordinal, LexicalOwnerPhase};
 use super::statements::{function_decl_from_statement, function_overload_group};
 use super::user_original_module;
 use crate::binder::declaration::{DeclId, TypeGroupId, ValueStorageId};
@@ -18,7 +18,7 @@ use crate::binder::namespace::{
 use crate::binder::scope::ScopeId;
 use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::Diagnostic;
-use crate::source::ModuleOrdinal;
+use crate::source::{ModuleOrdinal, SourceOrdinal};
 use crate::span::Span;
 use crate::types::repr::{ClassId, FunctionType, ObjectType, PropertyType};
 use crate::types::store::TypeId;
@@ -762,7 +762,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     let alias_failure = AliasDependencyFailure {
                         owner: self
                             .lexical_events
-                            .export_alias_owner(member.module_ordinal, local_span)
+                            .export_alias_owner(
+                                SourceOrdinal::User(member.module_ordinal),
+                                local_span,
+                            )
                             .expect("namespace export alias has one exact lexical owner")
                             .ticket,
                         span: local_span,
@@ -906,12 +909,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .declaration
             .and_then(|declaration| self.lexical_events.declaration_source(declaration))
         {
-            if let (Some(module_ordinal), Some(unit_slot)) =
-                (source.user_module_ordinal(), source.user_unit_slot())
-            {
-                self.current_module_ordinal = module_ordinal;
-                self.current_unit_slot = unit_slot;
-            }
+            self.current_source = source.unit;
         }
     }
 
@@ -1522,7 +1520,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) -> FunctionReservation {
         let tickets = self
             .lexical_events
-            .callable_at(self.current_module_ordinal, function.span.start)
+            .callable_at(source_ordinal(self.current_source), function.span.start)
             .and_then(|site| self.lexical_events.callable(site))
             .map(|callable| callable.tickets)
             .expect("namespace function has preallocated callable tickets");

@@ -9,7 +9,7 @@ use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
 use crate::check::flow::{FlowNode, FlowNodeId};
 use crate::check::query::SemanticQueryState;
-use crate::source::{ModuleOrdinal, UnitSlot};
+use crate::source::SourceUnit;
 use crate::span::Span;
 use crate::types::repr::{ClassId, PropertyType, TypeParamId, Visibility};
 use crate::types::store::TypeId;
@@ -513,10 +513,8 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     /// while bodies are walked per module; lazy cross-module inference would
     /// desynchronize insert and lookup keys.
     pub(in crate::check::checker) current_module: ScopeId,
-    /// Original input order, independent of dependency scheduling.
-    pub(in crate::check::checker) current_module_ordinal: ModuleOrdinal,
-    /// Dependency-ordered execution slot for the current module.
-    pub(in crate::check::checker) current_unit_slot: UnitSlot,
+    /// Exact source identity, independent of reporting authority.
+    pub(in crate::check::checker) current_source: SourceUnit,
     /// Hierarchical lexical/speculative output owners; only the outer owner commits.
     pub(in crate::check::checker) effect_stack: Vec<CheckerEffects<Ticket>>,
     /// Completed lexical owners awaiting deferred relation/override resolution.
@@ -752,7 +750,7 @@ mod tests {
     use crate::check::checker::lexical_events::LexicalReservations;
     use crate::check::checker::reporting_record::CheckerRecord;
     use crate::diagnostics::{Diagnostic, DiagnosticCode, IncompleteSurface};
-    use crate::source::{LibraryFileOrdinal, ModuleOrdinal, UnitSlot};
+    use crate::source::{LibraryFileOrdinal, SourceUnit};
     use crate::span::Span;
     use crate::types::Interner;
     use oxc_allocator::Allocator;
@@ -786,8 +784,9 @@ mod tests {
             0,
             super::super::PassReportingPlan {
                 reporting: super::super::PassReporting {
-                    module_ordinal: ModuleOrdinal::new(0),
-                    unit_slot: UnitSlot::new(0),
+                    source: SourceUnit::Library {
+                        file_ordinal: LibraryFileOrdinal::new(7),
+                    },
                     lexical_events: LexicalReservations::default(),
                     suppress_effects: false,
                 },
@@ -796,6 +795,12 @@ mod tests {
         );
         pass.type_environment = super::super::type_groups::TypeEnvironmentState::Published(
             super::super::type_groups::PublishedTypeEnvironment::empty(),
+        );
+        assert_eq!(
+            pass.current_source,
+            SourceUnit::Library {
+                file_ordinal: LibraryFileOrdinal::new(7),
+            }
         );
         pass.pending_effects[0]
             .records

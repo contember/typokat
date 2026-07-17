@@ -36,7 +36,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         // which is the closest plan-faithful behaviour for the deferred nested-class case).
         let binding = self
             .lexical_events
-            .class_at(self.current_module_ordinal, class.span.start)
+            .class_at(
+                super::super::lexical_events::source_ordinal(self.current_source),
+                class.span.start,
+            )
             .and_then(|site| self.lexical_events.class(site))
             .and_then(|reservation| reservation.binding.as_ref())
             .cloned();
@@ -328,7 +331,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) {
         let retained = self
             .lexical_events
-            .callable_at(self.current_module_ordinal, function.span.start)
+            .callable_at(
+                super::super::lexical_events::source_ordinal(self.current_source),
+                function.span.start,
+            )
             .and_then(|site| {
                 retained
                     .iter()
@@ -459,9 +465,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         function: &oxc_ast::ast::Function<'_>,
         retained: &[RetainedClassCallable<super::super::events::UserRecordTicket>],
     ) -> Option<TypeId> {
-        let site = self
-            .lexical_events
-            .callable_at(self.current_module_ordinal, function.span.start)?;
+        let site = self.lexical_events.callable_at(
+            super::super::lexical_events::source_ordinal(self.current_source),
+            function.span.start,
+        )?;
         retained
             .iter()
             .find(|retained| retained.site == site)
