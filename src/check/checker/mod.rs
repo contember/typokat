@@ -19,7 +19,7 @@ use crate::check::query::SemanticQueryState;
 use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic, IncompleteSurface};
 use crate::relate::RelationOutcome;
-use crate::source::{ModuleOrdinal, UnitSlot};
+use crate::source::{CompilationOrigin, ModuleOrdinal, OriginalModuleOrdinal, UnitSlot};
 use crate::span::Span;
 use crate::types::store::TypeId;
 use crate::types::Interner;
@@ -70,6 +70,14 @@ struct PassReporting {
     event_store: EventStore,
     lexical_events: LexicalReservations,
     suppress_effects: bool,
+}
+
+fn user_original_module(origin: CompilationOrigin) -> Option<OriginalModuleOrdinal> {
+    match origin {
+        CompilationOrigin::User(original_module) => Some(original_module),
+        #[cfg(test)]
+        CompilationOrigin::Library(_) => None,
+    }
 }
 
 fn reserve_internal_reporting(
@@ -480,7 +488,7 @@ pub struct ProjectProgram<'ast> {
     pub(crate) module_ordinal: ModuleOrdinal,
     pub(crate) unit_slot: UnitSlot,
     pub program: &'ast Program<'ast>,
-    pub compilation_unit: CompilationUnit,
+    pub(crate) compilation_unit: CompilationUnit,
     pub imports: Vec<ProjectImport>,
 }
 
@@ -1136,10 +1144,10 @@ fn enqueue_local_ambient_export_alias_diagnostics(
     effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) {
     for failure in binder.local_ambient_export_alias_failures() {
-        let module_ordinal = ModuleOrdinal::new(
-            usize::try_from(failure.original_module.0)
-                .expect("original module ordinal fits checker ownership"),
-        );
+        let Some(original_module) = user_original_module(failure.origin) else {
+            continue;
+        };
+        let module_ordinal = ModuleOrdinal::new(original_module.index());
         let owner = reservations
             .export_alias_owner(module_ordinal, failure.local_span)
             .expect("local ambient export alias must have an exact lexical owner");
@@ -1163,16 +1171,16 @@ fn enqueue_namespace_placement_diagnostics(
     effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) {
     for issue in binder.namespaces.placement_issues() {
+        let Some(original_module) = user_original_module(issue.origin) else {
+            continue;
+        };
         let owner = reservations
             .declaration_owner(issue.owner)
             .expect("namespace placement issue must keep its declaration owner");
         let source = reservations
             .declaration_source(issue.owner)
             .expect("namespace placement issue must keep its source site");
-        let expected_module = ModuleOrdinal::new(
-            usize::try_from(issue.original_module.0)
-                .expect("original module ordinal fits checker ownership"),
-        );
+        let expected_module = ModuleOrdinal::new(original_module.index());
         assert_eq!(
             source.module_ordinal, expected_module,
             "namespace placement issue must remain in its original module"
@@ -1195,16 +1203,16 @@ fn enqueue_ambient_context_diagnostics(
     effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) {
     for global in binder.namespaces.globals() {
+        let Some(original_module) = user_original_module(global.origin) else {
+            continue;
+        };
         let owner = reservations
             .declaration_owner(global.declaration)
             .expect("global context issue must keep its declaration owner");
         let source = reservations
             .declaration_source(global.declaration)
             .expect("global context issue must keep its source site");
-        let expected_module = ModuleOrdinal::new(
-            usize::try_from(global.original_module.0)
-                .expect("original module ordinal fits checker ownership"),
-        );
+        let expected_module = ModuleOrdinal::new(original_module.index());
         assert_eq!(source.module_ordinal, expected_module);
         let candidate = effects
             .entry(owner.ticket)
@@ -1222,6 +1230,9 @@ fn enqueue_ambient_context_diagnostics(
     }
 
     for export in binder.namespaces.umd_exports() {
+        let Some(original_module) = user_original_module(export.origin) else {
+            continue;
+        };
         let diagnostic = match export.context {
             UmdContext::FutureTk1314NonExternal => Some(
                 Diagnostic::global_module_export_requires_module(export.span),
@@ -1240,10 +1251,7 @@ fn enqueue_ambient_context_diagnostics(
         let source = reservations
             .declaration_source(export.declaration)
             .expect("UMD context issue must keep its source site");
-        let expected_module = ModuleOrdinal::new(
-            usize::try_from(export.original_module.0)
-                .expect("original module ordinal fits checker ownership"),
-        );
+        let expected_module = ModuleOrdinal::new(original_module.index());
         assert_eq!(source.module_ordinal, expected_module);
         effects
             .entry(owner.ticket)

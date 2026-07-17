@@ -28,6 +28,20 @@ impl UnitSlot {
     }
 }
 
+/// A user module's position in the original driver input.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct OriginalModuleOrdinal(usize);
+
+impl OriginalModuleOrdinal {
+    pub(crate) const fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    pub(crate) const fn index(self) -> usize {
+        self.0
+    }
+}
+
 /// A library file's position in the pinned default-library profile.
 #[cfg(test)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -42,4 +56,12 @@ impl LibraryFileOrdinal {
     pub(crate) const fn index(self) -> usize {
         self.0
     }
+}
+
+/// Stable compilation ownership retained across dependency ordering.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum CompilationOrigin {
+    User(OriginalModuleOrdinal),
+    #[cfg(test)]
+    Library(LibraryFileOrdinal),
 }

@@ -10,3 +10,6 @@ pub mod scope;
 pub mod symbol;
 
 pub use bind::{bind_module_with_prelude, Binder};
+
+#[cfg(test)]
+mod wu0b_compilation_origin_spec;

@@ -270,7 +270,7 @@ pub enum TypeFragmentKind {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct TypeGroupFragment {
     pub declaration: DeclId,
-    pub source: SourceUnitKey,
+    pub(crate) source: SourceUnitKey,
     pub scope: ScopeId,
     pub site: DeclarationSite,
     pub kind: TypeFragmentKind,

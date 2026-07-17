@@ -9,6 +9,7 @@ use super::events::UserRecordTicket;
 use super::function_groups::FunctionNamespacePayload;
 use super::lexical_events::LexicalOwnerPhase;
 use super::statements::{function_decl_from_statement, function_overload_group};
+use super::user_original_module;
 use crate::binder::declaration::{DeclId, TypeGroupId, ValueStorageId};
 use crate::binder::namespace::{
     DeclarationOwner, MergeDeclarationKind, NamespaceId, NamespacePublication,
@@ -1985,10 +1986,9 @@ fn collect_attachment_inputs(pass: &Pass<'_, '_>, module: ScopeId) -> Vec<Attach
             | NamespaceValueAttachmentDisposition::Rejected(_) => false,
         };
         if !exposes_value_attachment
-            || !attachment
-                .fragments
-                .iter()
-                .any(|fragment| fragment.module == module)
+            || !attachment.fragments.iter().any(|fragment| {
+                fragment.module == module && user_original_module(fragment.origin).is_some()
+            })
         {
             continue;
         }
@@ -1997,6 +1997,7 @@ fn collect_attachment_inputs(pass: &Pass<'_, '_>, module: ScopeId) -> Vec<Attach
             .iter()
             .flat_map(|fragment| fragment.members.iter())
             .filter_map(|member| pass.binder.namespaces.member(*member))
+            .filter(|member| user_original_module(member.origin).is_some())
             .filter(|member| {
                 namespace_member_participates_in_payload(member.spaces.value, member.publication)
             })
@@ -2006,6 +2007,7 @@ fn collect_attachment_inputs(pass: &Pass<'_, '_>, module: ScopeId) -> Vec<Attach
             .iter()
             .flat_map(|fragment| fragment.members.iter())
             .filter_map(|member| pass.binder.namespaces.member(*member))
+            .filter(|member| user_original_module(member.origin).is_some())
             .filter(|member| {
                 member.spaces.value
                     && matches!(member.publication, NamespacePublication::Private)
@@ -2039,6 +2041,9 @@ fn collect_attachment_inputs(pass: &Pass<'_, '_>, module: ScopeId) -> Vec<Attach
         let mut members = Vec::new();
         let mut unavailable_members = Vec::new();
         for member in &attachment.members {
+            if user_original_module(member.origin).is_none() {
+                continue;
+            }
             let Some(storage) = member.value_storage else {
                 unavailable_members.push(UnavailableMemberInput {
                     declaration: member.declaration,
@@ -2076,7 +2081,12 @@ fn collect_attachment_inputs(pass: &Pass<'_, '_>, module: ScopeId) -> Vec<Attach
             .symbols
             .get(attachment.symbol)
             .and_then(|symbol| symbol.ty);
-        let has_unavailable_metadata = value_member_count != attachment.members.len();
+        let user_member_count = attachment
+            .members
+            .iter()
+            .filter(|member| user_original_module(member.origin).is_some())
+            .count();
+        let has_unavailable_metadata = value_member_count != user_member_count;
         inputs.push(AttachmentInput {
             owner_scope,
             name: attachment.name.to_owned(),
@@ -2085,6 +2095,7 @@ fn collect_attachment_inputs(pass: &Pass<'_, '_>, module: ScopeId) -> Vec<Attach
             fragments: attachment
                 .fragments
                 .iter()
+                .filter(|fragment| user_original_module(fragment.origin).is_some())
                 .map(|fragment| FragmentInput {
                     module: fragment.module,
                     source_start: fragment.source_start,
@@ -2114,10 +2125,15 @@ fn standalone_attachment_input(
     attachment: StandaloneNamespaceValueAttachment<'_>,
 ) -> Option<StandaloneAttachmentInput> {
     pass.binder.namespaces.get(attachment.namespace)?;
-    let fallback_module = attachment.fragments.first()?.module;
+    let fallback_module = attachment
+        .fragments
+        .iter()
+        .find(|fragment| user_original_module(fragment.origin).is_some())?
+        .module;
     let fragments = attachment
         .fragments
         .iter()
+        .filter(|fragment| user_original_module(fragment.origin).is_some())
         .map(|fragment| FragmentInput {
             module: fragment.module,
             source_start: fragment.source_start,
@@ -2128,30 +2144,30 @@ fn standalone_attachment_input(
     let members = attachment
         .members
         .into_iter()
-        .map(|member| StandaloneMemberInput {
-            declaration: member.declaration,
-            name: member.name.map(str::to_owned),
-            scope: member.site.and_then(|site| site.scope),
-            module: member.site.map_or(fallback_module, |site| site.module),
-            source: member.source,
-            source_start: member.site.map_or(member.declaration_span.start, |site| {
-                site.declaration_span.start
-            }),
-            span: member
-                .site
-                .map_or(member.declaration_span, |site| site.declaration_span),
-            local_span: member.local_span,
-            module_ordinal: ModuleOrdinal::new(
-                usize::try_from(member.original_module.0)
-                    .expect("original module ordinal fits checker ownership"),
-            ),
-            value_storage: member.value_storage,
-            alias_target_storage: member.alias_target_storage,
-            ambient: member.ambient,
-            child_namespace: member.child_namespace,
-            kind: member.kind,
-            publication: member.publication,
-            has_value_space: member.spaces.value,
+        .filter_map(|member| {
+            let original_module = user_original_module(member.origin)?;
+            Some(StandaloneMemberInput {
+                declaration: member.declaration,
+                name: member.name.map(str::to_owned),
+                scope: member.site.and_then(|site| site.scope),
+                module: member.site.map_or(fallback_module, |site| site.module),
+                source: member.source,
+                source_start: member.site.map_or(member.declaration_span.start, |site| {
+                    site.declaration_span.start
+                }),
+                span: member
+                    .site
+                    .map_or(member.declaration_span, |site| site.declaration_span),
+                local_span: member.local_span,
+                module_ordinal: ModuleOrdinal::new(original_module.index()),
+                value_storage: member.value_storage,
+                alias_target_storage: member.alias_target_storage,
+                ambient: member.ambient,
+                child_namespace: member.child_namespace,
+                kind: member.kind,
+                publication: member.publication,
+                has_value_space: member.spaces.value,
+            })
         })
         .collect();
     Some(StandaloneAttachmentInput {

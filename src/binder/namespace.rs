@@ -13,6 +13,9 @@ use crate::binder::declaration::{
 };
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
+#[cfg(test)]
+use crate::source::LibraryFileOrdinal;
+use crate::source::{CompilationOrigin, OriginalModuleOrdinal};
 use crate::span::Span;
 use oxc_ast::ast::{
     Declaration, ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName, Program,
@@ -42,7 +45,7 @@ impl NamespaceFragmentId {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct NamespaceMemberId(pub u32);
+pub(crate) struct NamespaceMemberId(pub(crate) u32);
 
 impl NamespaceMemberId {
     pub fn index(self) -> usize {
@@ -51,7 +54,7 @@ impl NamespaceMemberId {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct GlobalAugmentationId(pub u32);
+pub(crate) struct GlobalAugmentationId(pub(crate) u32);
 
 impl GlobalAugmentationId {
     pub fn index(self) -> usize {
@@ -69,7 +72,7 @@ impl DeferredModuleId {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct ExportContextId(pub u32);
+pub(crate) struct ExportContextId(pub(crate) u32);
 
 impl ExportContextId {
     pub fn index(self) -> usize {
@@ -79,16 +82,12 @@ impl ExportContextId {
 
 /// Run-stable project source ordering key. Project mode derives it from normalized paths.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct SourceUnitKey(pub u32);
+pub(crate) struct SourceUnitKey(pub(crate) u32);
 
 impl SourceUnitKey {
-    pub const PRELUDE: Self = Self(0);
-    pub const SINGLE_SOURCE: Self = Self(1);
+    pub(crate) const PRELUDE: Self = Self(0);
+    pub(crate) const SINGLE_SOURCE: Self = Self(1);
 }
-
-/// Binder-layer copy of original input ownership, separate from dependency slots and checker events.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct OriginalModuleOrdinal(pub u32);
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum SourceFileKind {
@@ -143,18 +142,31 @@ impl ModuleBindingContext {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct CompilationUnit {
-    pub source: SourceUnitKey,
-    pub original_module: OriginalModuleOrdinal,
-    pub binding: ModuleBindingContext,
+pub(crate) struct CompilationUnit {
+    pub(crate) source: SourceUnitKey,
+    pub(crate) origin: CompilationOrigin,
+    pub(crate) binding: ModuleBindingContext,
 }
 
 impl CompilationUnit {
-    pub fn implementation(source: SourceUnitKey, program: &Program<'_>) -> Self {
+    pub(crate) fn implementation(source: SourceUnitKey, program: &Program<'_>) -> Self {
         Self {
             source,
-            original_module: OriginalModuleOrdinal(0),
+            origin: CompilationOrigin::User(OriginalModuleOrdinal::new(0)),
             binding: ModuleBindingContext::for_program(program, SourceFileKind::ImplementationTs),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn library(
+        source: SourceUnitKey,
+        file_ordinal: LibraryFileOrdinal,
+        program: &Program<'_>,
+    ) -> Self {
+        Self {
+            source,
+            origin: CompilationOrigin::Library(file_ordinal),
+            binding: ModuleBindingContext::for_program(program, SourceFileKind::DeclarationTs),
         }
     }
 }
@@ -224,12 +236,12 @@ pub struct Namespace {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct NamespaceFragment {
+pub(crate) struct NamespaceFragment {
     pub id: NamespaceFragmentId,
     pub namespace: NamespaceId,
     pub declaration: DeclId,
     pub source: SourceUnitKey,
-    pub original_module: OriginalModuleOrdinal,
+    pub(crate) origin: CompilationOrigin,
     pub source_start: u32,
     pub module: ScopeId,
     pub private_scope: ScopeId,
@@ -251,7 +263,7 @@ pub enum DeclarationOwner {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub enum NamespaceMemberOwner {
+pub(crate) enum NamespaceMemberOwner {
     Fragment(NamespaceFragmentId),
     GlobalAugmentation(GlobalAugmentationId),
     DeferredAmbientModule(DeferredModuleId),
@@ -319,7 +331,7 @@ pub(crate) enum QualifiedTypePathResolution {
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct LocalAmbientExportAliasFailure {
-    pub original_module: OriginalModuleOrdinal,
+    pub(crate) origin: CompilationOrigin,
     pub local_span: Span,
     pub local_name: String,
     pub kind: LocalAmbientExportAliasFailureKind,
@@ -425,7 +437,7 @@ pub enum MergeDeclarationKind {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct NamespaceMember {
+pub(crate) struct NamespaceMember {
     pub id: NamespaceMemberId,
     pub owner: NamespaceMemberOwner,
     pub target: DeclarationOwner,
@@ -441,7 +453,7 @@ pub struct NamespaceMember {
     pub local_span: Option<Span>,
     pub exported_span: Option<Span>,
     pub source: SourceUnitKey,
-    pub original_module: OriginalModuleOrdinal,
+    pub(crate) origin: CompilationOrigin,
     pub module_specifier: Option<MetadataName>,
     pub outer_type_only: bool,
     pub specifier_type_only: bool,
@@ -477,11 +489,11 @@ pub enum GlobalIssue {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct GlobalAugmentation {
+pub(crate) struct GlobalAugmentation {
     pub id: GlobalAugmentationId,
     pub declaration: DeclId,
     pub source: SourceUnitKey,
-    pub original_module: OriginalModuleOrdinal,
+    pub(crate) origin: CompilationOrigin,
     pub module: ScopeId,
     pub owner: GlobalOwner,
     pub body_span: Span,
@@ -495,11 +507,11 @@ pub struct GlobalAugmentation {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct DeferredAmbientModule {
+pub(crate) struct DeferredAmbientModule {
     pub id: DeferredModuleId,
     pub declaration: DeclId,
     pub source: SourceUnitKey,
-    pub original_module: OriginalModuleOrdinal,
+    pub(crate) origin: CompilationOrigin,
     pub module: ScopeId,
     pub owner: DeclarationOwner,
     pub kind: DeferredModuleKind,
@@ -522,7 +534,7 @@ pub enum DeferredChildKind {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct DeferredAmbientChild {
+pub(crate) struct DeferredAmbientChild {
     pub module: DeferredModuleId,
     pub declaration: Option<DeclId>,
     pub kind: DeferredChildKind,
@@ -530,11 +542,11 @@ pub struct DeferredAmbientChild {
     pub span: Span,
     pub binding_span: Option<Span>,
     pub source: SourceUnitKey,
-    pub original_module: OriginalModuleOrdinal,
+    pub(crate) origin: CompilationOrigin,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub enum ExportContextOwner {
+pub(crate) enum ExportContextOwner {
     NamespaceFragment(NamespaceFragmentId),
     GlobalAugmentation(GlobalAugmentationId),
     DeferredAmbientModule(DeferredModuleId),
@@ -565,7 +577,7 @@ pub enum ExportResolutionDisposition {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct ExportContext {
+pub(crate) struct ExportContext {
     pub id: ExportContextId,
     pub owner: ExportContextOwner,
     pub kind: ExportContextKind,
@@ -573,7 +585,7 @@ pub struct ExportContext {
     pub resolution: ExportResolutionDisposition,
     pub has_module_specifier: bool,
     pub source: SourceUnitKey,
-    pub original_module: OriginalModuleOrdinal,
+    pub(crate) origin: CompilationOrigin,
     pub span: Span,
     pub members: Vec<NamespaceMemberId>,
 }
@@ -587,10 +599,10 @@ pub enum UmdContext {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct UmdNamespaceExport {
+pub(crate) struct UmdNamespaceExport {
     pub declaration: DeclId,
     pub source: SourceUnitKey,
-    pub original_module: OriginalModuleOrdinal,
+    pub(crate) origin: CompilationOrigin,
     pub module: ScopeId,
     pub owner: DeclarationOwner,
     pub name: String,
@@ -668,20 +680,20 @@ pub enum PlacementIssueKind {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub struct PlacementIssue {
+pub(crate) struct PlacementIssue {
     pub kind: PlacementIssueKind,
     pub owner: DeclId,
     pub source: SourceUnitKey,
-    pub original_module: OriginalModuleOrdinal,
+    pub(crate) origin: CompilationOrigin,
     pub span: Span,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub struct MergeParticipant {
+pub(crate) struct MergeParticipant {
     pub declaration: DeclId,
     pub kind: MergeDeclarationKind,
     pub source: SourceUnitKey,
-    pub original_module: OriginalModuleOrdinal,
+    pub(crate) origin: CompilationOrigin,
     pub span: Span,
     pub ambient: bool,
     pub spaces: DeclarationSpaces,
@@ -695,9 +707,9 @@ pub struct MergeParticipant {
 pub struct MergeRecord {
     pub owner: DeclarationOwner,
     pub name: String,
-    pub declarations: Vec<MergeParticipant>,
+    pub(crate) declarations: Vec<MergeParticipant>,
     pub classification: MergeClassification,
-    pub placement_issues: Vec<PlacementIssue>,
+    pub(crate) placement_issues: Vec<PlacementIssue>,
 }
 
 /// Whole-group decision consumed by the class/function namespace lanes.
@@ -721,6 +733,7 @@ pub(crate) struct AttachedNamespaceValueMember<'a> {
     pub(crate) declaration: DeclId,
     pub(crate) name: &'a str,
     pub(crate) source: SourceUnitKey,
+    pub(crate) origin: CompilationOrigin,
     pub(crate) scope: ScopeId,
     pub(crate) site: DeclarationSite,
     pub(crate) value_storage: Option<ValueStorageId>,
@@ -751,7 +764,7 @@ pub(crate) struct StandaloneNamespaceValueMember<'a> {
     pub(crate) site: Option<DeclarationSite>,
     pub(crate) declaration_span: Span,
     pub(crate) local_span: Option<Span>,
-    pub(crate) original_module: OriginalModuleOrdinal,
+    pub(crate) origin: CompilationOrigin,
     pub(crate) value_storage: Option<ValueStorageId>,
     pub(crate) alias_target_storage: Option<ValueStorageId>,
     pub(crate) ambient: bool,
@@ -771,9 +784,9 @@ pub(crate) struct StandaloneNamespaceValueAttachment<'a> {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct SourceUnitRecord {
+pub(crate) struct SourceUnitRecord {
     pub source: SourceUnitKey,
-    pub original_module: OriginalModuleOrdinal,
+    pub(crate) origin: CompilationOrigin,
     pub module: ScopeId,
     pub context: ModuleBindingContext,
 }
@@ -823,11 +836,11 @@ impl NamespaceTable {
         self.namespaces.get(id.index())
     }
 
-    pub fn fragment(&self, id: NamespaceFragmentId) -> Option<&NamespaceFragment> {
+    pub(crate) fn fragment(&self, id: NamespaceFragmentId) -> Option<&NamespaceFragment> {
         self.fragments.get(id.index())
     }
 
-    pub fn member(&self, id: NamespaceMemberId) -> Option<&NamespaceMember> {
+    pub(crate) fn member(&self, id: NamespaceMemberId) -> Option<&NamespaceMember> {
         self.members.get(id.index())
     }
 
@@ -874,24 +887,29 @@ impl NamespaceTable {
             .iter()
             .flat_map(|record| record.placement_issues.iter())
             .collect::<Vec<_>>();
-        issues.sort_by_key(|issue| {
-            (
-                issue.source,
-                issue.original_module,
-                issue.span.start,
-                issue.owner.0,
-            )
-        });
+        issues.sort_by_key(|issue| (issue.source, issue.origin, issue.span.start, issue.owner.0));
         issues.into_iter()
     }
 
-    pub fn source_units(&self) -> impl Iterator<Item = &SourceUnitRecord> {
+    pub(crate) fn source_units(&self) -> impl Iterator<Item = &SourceUnitRecord> {
         self.canonical_source_units
             .iter()
             .filter_map(|index| self.source_units.get(*index))
     }
 
-    pub fn globals(&self) -> impl Iterator<Item = &GlobalAugmentation> {
+    #[cfg(test)]
+    pub(crate) fn compilation_origin_for_source(
+        &self,
+        source: SourceUnitKey,
+    ) -> Option<CompilationOrigin> {
+        self.source_units
+            .iter()
+            .rev()
+            .find(|unit| unit.source == source)
+            .map(|unit| unit.origin)
+    }
+
+    pub(crate) fn globals(&self) -> impl Iterator<Item = &GlobalAugmentation> {
         self.canonical_globals
             .iter()
             .filter_map(|id| self.globals.get(id.index()))
@@ -994,25 +1012,28 @@ impl NamespaceTable {
         }
     }
 
-    pub fn deferred_modules(&self) -> impl Iterator<Item = &DeferredAmbientModule> {
+    #[cfg(test)]
+    pub(crate) fn deferred_modules(&self) -> impl Iterator<Item = &DeferredAmbientModule> {
         self.canonical_deferred_modules
             .iter()
             .filter_map(|id| self.deferred_modules.get(id.index()))
     }
 
-    pub fn deferred_children(&self) -> impl Iterator<Item = &DeferredAmbientChild> {
+    #[cfg(test)]
+    pub(crate) fn deferred_children(&self) -> impl Iterator<Item = &DeferredAmbientChild> {
         self.canonical_deferred_children
             .iter()
             .filter_map(|index| self.deferred_children.get(*index))
     }
 
-    pub fn umd_exports(&self) -> impl Iterator<Item = &UmdNamespaceExport> {
+    pub(crate) fn umd_exports(&self) -> impl Iterator<Item = &UmdNamespaceExport> {
         self.canonical_umd_exports
             .iter()
             .filter_map(|index| self.umd_exports.get(*index))
     }
 
-    pub fn export_contexts(&self) -> impl Iterator<Item = &ExportContext> {
+    #[cfg(test)]
+    pub(crate) fn export_contexts(&self) -> impl Iterator<Item = &ExportContext> {
         self.canonical_export_contexts
             .iter()
             .filter_map(|id| self.export_contexts.get(id.index()))
@@ -1104,33 +1125,29 @@ impl NamespaceTable {
             .collect();
         self.canonical_globals.sort_by_key(|id| {
             let global = &self.globals[id.index()];
-            (
-                global.source,
-                global.diagnostic_span.start,
-                global.original_module,
-            )
+            (global.source, global.diagnostic_span.start, global.origin)
         });
         self.canonical_deferred_modules = (0..self.deferred_modules.len())
             .map(|index| DeferredModuleId(u32::try_from(index).expect("module count fits u32")))
             .collect();
         self.canonical_deferred_modules.sort_by_key(|id| {
             let module = &self.deferred_modules[id.index()];
-            (module.source, module.span.start, module.original_module)
+            (module.source, module.span.start, module.origin)
         });
         self.canonical_source_units = (0..self.source_units.len()).collect();
         self.canonical_source_units.sort_by_key(|index| {
             let unit = &self.source_units[*index];
-            (unit.source, unit.original_module)
+            (unit.source, unit.origin)
         });
         self.canonical_deferred_children = (0..self.deferred_children.len()).collect();
         self.canonical_deferred_children.sort_by_key(|index| {
             let child = &self.deferred_children[*index];
-            (child.source, child.span.start, child.original_module)
+            (child.source, child.span.start, child.origin)
         });
         self.canonical_umd_exports = (0..self.umd_exports.len()).collect();
         self.canonical_umd_exports.sort_by_key(|index| {
             let export = &self.umd_exports[*index];
-            (export.source, export.span.start, export.original_module)
+            (export.source, export.span.start, export.origin)
         });
         self.canonical_export_contexts = (0..self.export_contexts.len())
             .map(|index| {
@@ -1139,7 +1156,7 @@ impl NamespaceTable {
             .collect();
         self.canonical_export_contexts.sort_by_key(|id| {
             let context = &self.export_contexts[id.index()];
-            (context.source, context.span.start, context.original_module)
+            (context.source, context.span.start, context.origin)
         });
     }
 
@@ -1430,7 +1447,7 @@ impl Binder {
                             site: lexical.map(|declaration| declaration.site),
                             declaration_span: member.declaration_span,
                             local_span: member.local_span,
-                            original_module: member.original_module,
+                            origin: member.origin,
                             value_storage: lexical
                                 .and_then(|declaration| declaration.value_storage)
                                 .or_else(|| {
@@ -1586,6 +1603,7 @@ impl Binder {
                     declaration,
                     name,
                     source: member.source,
+                    origin: member.origin,
                     scope: lexical.site.scope?,
                     site: lexical.site,
                     value_storage: lexical.value_storage,
@@ -1659,7 +1677,7 @@ impl Binder {
                     }
                 };
                 Some(LocalAmbientExportAliasFailure {
-                    original_module: member.original_module,
+                    origin: member.origin,
                     local_span: member.local_span?,
                     local_name: local_name.to_string(),
                     kind,
@@ -2282,7 +2300,7 @@ fn placement_issues(declarations: &[MergeParticipant]) -> Vec<PlacementIssue> {
             kind: PlacementIssueKind::FutureTk2434,
             owner: item.declaration,
             source: item.source,
-            original_module: item.original_module,
+            origin: item.origin,
             span: item.binding_span,
         })
         .collect()
@@ -2374,7 +2392,7 @@ pub(crate) fn bind_namespace_metadata(
 ) {
     state.namespaces.source_units.push(SourceUnitRecord {
         source: unit.source,
-        original_module: unit.original_module,
+        origin: unit.origin,
         module,
         context: unit.binding,
     });
@@ -2767,7 +2785,7 @@ fn walk_statement(
                 Span::from_oxc(export.span),
                 unit,
             );
-            push_deferred_export_member(state, context, Span::from_oxc(export.span), unit.source)
+            push_deferred_export_member(state, context, Span::from_oxc(export.span), unit)
         }
         Statement::ExportDefaultDeclaration(export) => {
             let context = context_with_export(
@@ -2778,7 +2796,7 @@ fn walk_statement(
                 Span::from_oxc(export.span),
                 unit,
             );
-            push_deferred_export_member(state, context, Span::from_oxc(export.span), unit.source)
+            push_deferred_export_member(state, context, Span::from_oxc(export.span), unit)
         }
         Statement::TSExportAssignment(export) => {
             let context = context_with_export(
@@ -2789,10 +2807,10 @@ fn walk_statement(
                 Span::from_oxc(export.span),
                 unit,
             );
-            push_deferred_export_member(state, context, Span::from_oxc(export.span), unit.source)
+            push_deferred_export_member(state, context, Span::from_oxc(export.span), unit)
         }
         Statement::VariableDeclaration(declaration) => {
-            bind_variable(state, declaration, context, explicit, unit.source)
+            bind_variable(state, declaration, context, explicit, unit)
         }
         Statement::FunctionDeclaration(function) => {
             if let Some(identifier) = &function.id {
@@ -2806,7 +2824,7 @@ fn walk_statement(
                     MergeDeclarationKind::Function,
                     DeclarationSpaces::VALUE,
                     function.declare,
-                    unit.source,
+                    unit,
                 );
             }
         }
@@ -2822,7 +2840,7 @@ fn walk_statement(
                     MergeDeclarationKind::Class,
                     DeclarationSpaces::VALUE_TYPE,
                     class.declare,
-                    unit.source,
+                    unit,
                 );
             }
         }
@@ -2836,7 +2854,7 @@ fn walk_statement(
             MergeDeclarationKind::TypeAlias,
             DeclarationSpaces::TYPE,
             alias.declare,
-            unit.source,
+            unit,
         ),
         Statement::TSInterfaceDeclaration(interface) => bind_named_declaration(
             state,
@@ -2848,7 +2866,7 @@ fn walk_statement(
             MergeDeclarationKind::Interface,
             DeclarationSpaces::TYPE,
             interface.declare,
-            unit.source,
+            unit,
         ),
         Statement::TSEnumDeclaration(enumeration) => bind_named_declaration_with_syntax(
             state,
@@ -2860,7 +2878,7 @@ fn walk_statement(
             MergeDeclarationKind::Enum,
             DeclarationSpaces::VALUE_TYPE,
             enumeration.declare,
-            unit.source,
+            unit,
             DeclarationSyntaxFacts::Enum {
                 constant: enumeration.r#const,
             },
@@ -2892,7 +2910,7 @@ fn walk_statement(
                     DeclarationSpaces::ALIAS
                 },
                 context.ambient,
-                unit.source,
+                unit,
                 DeclarationSyntaxFacts::Import(ImportSyntaxFacts {
                     form: ImportBindingForm::ImportEquals,
                     outer_type_only: import.import_kind == ImportOrExportKind::Type,
@@ -2939,7 +2957,7 @@ fn walk_statement(
                         MergeDeclarationKind::ImportAlias,
                         spaces,
                         context.ambient,
-                        unit.source,
+                        unit,
                         DeclarationSyntaxFacts::Import(ImportSyntaxFacts {
                             form,
                             outer_type_only,
@@ -2975,7 +2993,7 @@ fn walk_statement(
             state.namespaces.umd_exports.push(UmdNamespaceExport {
                 declaration,
                 source: unit.source,
-                original_module: unit.original_module,
+                origin: unit.origin,
                 module: state.current_module,
                 owner: context.owner,
                 name: export.id.name.to_string(),
@@ -3013,7 +3031,7 @@ fn walk_declaration(
 ) {
     match declaration {
         Declaration::VariableDeclaration(declaration) => {
-            bind_variable(state, declaration, context, explicit, unit.source)
+            bind_variable(state, declaration, context, explicit, unit)
         }
         Declaration::FunctionDeclaration(function) => {
             if let Some(identifier) = &function.id {
@@ -3027,7 +3045,7 @@ fn walk_declaration(
                     MergeDeclarationKind::Function,
                     DeclarationSpaces::VALUE,
                     function.declare,
-                    unit.source,
+                    unit,
                 );
             }
         }
@@ -3043,7 +3061,7 @@ fn walk_declaration(
                     MergeDeclarationKind::Class,
                     DeclarationSpaces::VALUE_TYPE,
                     class.declare,
-                    unit.source,
+                    unit,
                 );
             }
         }
@@ -3057,7 +3075,7 @@ fn walk_declaration(
             MergeDeclarationKind::TypeAlias,
             DeclarationSpaces::TYPE,
             alias.declare,
-            unit.source,
+            unit,
         ),
         Declaration::TSInterfaceDeclaration(interface) => bind_named_declaration(
             state,
@@ -3069,7 +3087,7 @@ fn walk_declaration(
             MergeDeclarationKind::Interface,
             DeclarationSpaces::TYPE,
             interface.declare,
-            unit.source,
+            unit,
         ),
         Declaration::TSEnumDeclaration(enumeration) => bind_named_declaration_with_syntax(
             state,
@@ -3081,7 +3099,7 @@ fn walk_declaration(
             MergeDeclarationKind::Enum,
             DeclarationSpaces::VALUE_TYPE,
             enumeration.declare,
-            unit.source,
+            unit,
             DeclarationSyntaxFacts::Enum {
                 constant: enumeration.r#const,
             },
@@ -3113,7 +3131,7 @@ fn walk_declaration(
                     DeclarationSpaces::ALIAS
                 },
                 context.ambient,
-                unit.source,
+                unit,
                 DeclarationSyntaxFacts::Import(ImportSyntaxFacts {
                     form: ImportBindingForm::ImportEquals,
                     outer_type_only: import.import_kind == ImportOrExportKind::Type,
@@ -3134,7 +3152,7 @@ fn bind_variable(
     declaration: &oxc_ast::ast::VariableDeclaration<'_>,
     context: WalkContext,
     explicit: bool,
-    source: SourceUnitKey,
+    unit: CompilationUnit,
 ) {
     let kind = match declaration.kind {
         VariableDeclarationKind::Var => VariableKind::Var,
@@ -3155,7 +3173,7 @@ fn bind_variable(
                 MergeDeclarationKind::Variable,
                 DeclarationSpaces::VALUE,
                 declaration.declare,
-                source,
+                unit,
                 DeclarationSyntaxFacts::Variable(kind),
             );
         }
@@ -3173,7 +3191,7 @@ fn bind_named_declaration(
     merge_kind: MergeDeclarationKind,
     spaces: DeclarationSpaces,
     declared_ambient: bool,
-    source: SourceUnitKey,
+    unit: CompilationUnit,
 ) {
     bind_named_declaration_with_syntax(
         state,
@@ -3185,7 +3203,7 @@ fn bind_named_declaration(
         merge_kind,
         spaces,
         declared_ambient,
-        source,
+        unit,
         DeclarationSyntaxFacts::None,
     );
 }
@@ -3201,7 +3219,7 @@ fn bind_named_declaration_with_syntax(
     merge_kind: MergeDeclarationKind,
     spaces: DeclarationSpaces,
     declared_ambient: bool,
-    source: SourceUnitKey,
+    unit: CompilationUnit,
     syntax: DeclarationSyntaxFacts,
 ) {
     let declaration =
@@ -3224,7 +3242,7 @@ fn bind_named_declaration_with_syntax(
         merge_kind,
         spaces,
         ambient,
-        source,
+        unit,
     );
     set_placement_syntax(state, declaration, syntax);
     let legal_global_type = context.global.is_some()
@@ -3243,7 +3261,7 @@ fn bind_named_declaration_with_syntax(
         if let (Some(fragment_kind), Some(scope)) =
             (fragment_kind, declaration_owner_scope(state, owner))
         {
-            declare_type(state, scope, name, declaration, fragment_kind, source);
+            declare_type(state, scope, name, declaration, fragment_kind, unit.source);
         }
     }
     if context.member_owner().is_some() {
@@ -3263,7 +3281,7 @@ fn bind_named_declaration_with_syntax(
             spaces,
             merge_kind,
             publication,
-            source,
+            unit,
         );
     }
 }
@@ -3354,7 +3372,7 @@ fn bind_module_declaration(
         namespace,
         declaration: declaration_id,
         source: unit.source,
-        original_module: unit.original_module,
+        origin: unit.origin,
         source_start: declaration.span.start,
         module: state.current_module,
         private_scope,
@@ -3387,7 +3405,7 @@ fn bind_module_declaration(
         MergeDeclarationKind::Namespace,
         DeclarationSpaces::NAMESPACE,
         context.ambient || declaration.declare || unit.binding.declaration_file(),
-        unit.source,
+        unit,
     );
     for participants in state.namespaces.placements.values_mut() {
         if let Some(participant) = participants
@@ -3415,7 +3433,7 @@ fn bind_module_declaration(
             DeclarationSpaces::NAMESPACE,
             MergeDeclarationKind::Namespace,
             publication,
-            unit.source,
+            unit,
         );
     }
 
@@ -3546,7 +3564,7 @@ fn push_export_context(
         resolution,
         has_module_specifier,
         source: unit.source,
-        original_module: unit.original_module,
+        origin: unit.origin,
         span,
         members: Vec::new(),
     });
@@ -3802,7 +3820,7 @@ fn bind_deferred_module(
             id,
             declaration: declaration_id,
             source: unit.source,
-            original_module: unit.original_module,
+            origin: unit.origin,
             module: state.current_module,
             owner: context.owner,
             kind: if unit.binding.external_module {
@@ -3877,7 +3895,7 @@ fn record_deferred_statement(
                     span: Span::from_oxc(export.span),
                     binding_span: None,
                     source: unit.source,
-                    original_module: unit.original_module,
+                    origin: unit.origin,
                 });
         }
         return;
@@ -4163,7 +4181,7 @@ fn record_deferred_binding(
             span,
             binding_span,
             source: unit.source,
-            original_module: unit.original_module,
+            origin: unit.origin,
         });
 }
 
@@ -4184,7 +4202,7 @@ fn record_deferred_export(
             span,
             binding_span: None,
             source: unit.source,
-            original_module: unit.original_module,
+            origin: unit.origin,
         });
 }
 
@@ -4252,7 +4270,7 @@ fn bind_global(
         id,
         declaration: declaration_id,
         source: unit.source,
-        original_module: unit.original_module,
+        origin: unit.origin,
         module: state.current_module,
         owner,
         body_span: Span::from_oxc(declaration.body.span),
@@ -4302,7 +4320,7 @@ fn push_placement(
     kind: MergeDeclarationKind,
     spaces: DeclarationSpaces,
     ambient: bool,
-    source: SourceUnitKey,
+    unit: CompilationUnit,
 ) {
     let span = state
         .declarations
@@ -4319,8 +4337,8 @@ fn push_placement(
     let participant = MergeParticipant {
         declaration,
         kind,
-        source,
-        original_module: original_module_for_source(state, source),
+        source: unit.source,
+        origin: unit.origin,
         span,
         binding_span,
         ambient,
@@ -4380,7 +4398,7 @@ fn push_member(
     spaces: DeclarationSpaces,
     kind: MergeDeclarationKind,
     publication: NamespacePublication,
-    source: SourceUnitKey,
+    unit: CompilationUnit,
 ) {
     let Some(owner) = context.member_owner() else {
         return;
@@ -4388,7 +4406,6 @@ fn push_member(
     let id = NamespaceMemberId(
         u32::try_from(state.namespaces.members.len()).expect("namespace member count fits u32"),
     );
-    let original_module = original_module_for_source(state, source);
     let symbol = name
         .as_deref()
         .and_then(|name| dormant_symbol_for_declaration_owner(state, target, name));
@@ -4418,8 +4435,8 @@ fn push_member(
         binding_span,
         local_span: Some(binding_span),
         exported_span,
-        source,
-        original_module,
+        source: unit.source,
+        origin: unit.origin,
         module_specifier: None,
         outer_type_only: false,
         specifier_type_only: false,
@@ -4466,22 +4483,11 @@ fn attach_export_member(
     }
 }
 
-fn original_module_for_source(state: &BindState, source: SourceUnitKey) -> OriginalModuleOrdinal {
-    state
-        .namespaces
-        .source_units
-        .iter()
-        .rev()
-        .find(|unit| unit.source == source)
-        .map(|unit| unit.original_module)
-        .unwrap_or(OriginalModuleOrdinal(0))
-}
-
 fn push_deferred_export_member(
     state: &mut BindState,
     context: WalkContext,
     span: Span,
-    source: SourceUnitKey,
+    unit: CompilationUnit,
 ) {
     push_member(
         state,
@@ -4494,7 +4500,7 @@ fn push_deferred_export_member(
         DeclarationSpaces::ALIAS,
         MergeDeclarationKind::DeferredExport,
         NamespacePublication::Explicit,
-        source,
+        unit,
     );
 }
 
@@ -4573,7 +4579,7 @@ fn push_export_alias_member(
         local_span: Some(Span::from_oxc(specifier.local.span())),
         exported_span: Some(Span::from_oxc(specifier.exported.span())),
         source: unit.source,
-        original_module: unit.original_module,
+        origin: unit.origin,
         module_specifier: export
             .source
             .as_ref()
@@ -4642,12 +4648,24 @@ mod tests {
     use oxc_parser::Parser;
     use oxc_span::SourceType;
 
+    #[test]
+    fn library_compilation_unit_retains_declaration_context_and_origin() {
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, "interface LibraryShape {}", SourceType::ts()).parse();
+        assert!(!parsed.panicked);
+
+        let file_ordinal = LibraryFileOrdinal::new(17);
+        let unit = CompilationUnit::library(SourceUnitKey(82), file_ordinal, &parsed.program);
+        assert_eq!(unit.origin, CompilationOrigin::Library(file_ordinal));
+        assert!(unit.binding.declaration_file());
+    }
+
     fn bind(source: &str, declaration_file: bool) -> Binder {
         bind_unit(
             source,
             declaration_file,
             SourceUnitKey::SINGLE_SOURCE,
-            OriginalModuleOrdinal(0),
+            OriginalModuleOrdinal::new(0),
         )
     }
 
@@ -4665,7 +4683,7 @@ mod tests {
         let mut builder = ProjectBinderBuilder::new(&prelude.program);
         let unit = CompilationUnit {
             source: source_key,
-            original_module,
+            origin: CompilationOrigin::User(original_module),
             binding: ModuleBindingContext::for_program(
                 &parsed.program,
                 if declaration_file {
@@ -5149,7 +5167,12 @@ function LateIssue(): void {}
 declare namespace Ambient { const implicit: number; }
 declare function Ambient(): void;
 "#;
-        let binder = bind_unit(source, false, SourceUnitKey(17), OriginalModuleOrdinal(5));
+        let binder = bind_unit(
+            source,
+            false,
+            SourceUnitKey(17),
+            OriginalModuleOrdinal::new(5),
+        );
         let issues = binder.namespaces.placement_issues().collect::<Vec<_>>();
         assert_eq!(issues.len(), 3);
         assert!(issues
@@ -5157,7 +5180,7 @@ declare function Ambient(): void;
             .all(|issue| issue.kind == PlacementIssueKind::FutureTk2434));
         assert!(issues.iter().all(|issue| {
             issue.source == SourceUnitKey(17)
-                && issue.original_module == OriginalModuleOrdinal(5)
+                && issue.origin == CompilationOrigin::User(OriginalModuleOrdinal::new(5))
                 && binder
                     .declarations
                     .get(issue.owner)
@@ -5578,9 +5601,7 @@ declare global {
             for (original_module, (program, source)) in units.into_iter().enumerate() {
                 let unit = CompilationUnit {
                     source,
-                    original_module: OriginalModuleOrdinal(
-                        u32::try_from(original_module).expect("two modules fit u32"),
-                    ),
+                    origin: CompilationOrigin::User(OriginalModuleOrdinal::new(original_module)),
                     binding: ModuleBindingContext::for_program(
                         program,
                         SourceFileKind::ImplementationTs,
@@ -5636,9 +5657,7 @@ declare global {
             {
                 let unit = CompilationUnit {
                     source: *source,
-                    original_module: OriginalModuleOrdinal(
-                        u32::try_from(original_module).expect("project module count fits u32"),
-                    ),
+                    origin: CompilationOrigin::User(OriginalModuleOrdinal::new(original_module)),
                     binding: ModuleBindingContext::for_program(
                         &parsed.program,
                         SourceFileKind::ImplementationTs,
@@ -6348,9 +6367,7 @@ declare namespace AmbientN { interface Item { value: number } }
             for (original_module, (program, source)) in units.into_iter().enumerate() {
                 let unit = CompilationUnit {
                     source,
-                    original_module: OriginalModuleOrdinal(
-                        u32::try_from(original_module).expect("two modules fit u32"),
-                    ),
+                    origin: CompilationOrigin::User(OriginalModuleOrdinal::new(original_module)),
                     binding: ModuleBindingContext::for_program(
                         program,
                         SourceFileKind::ImplementationTs,

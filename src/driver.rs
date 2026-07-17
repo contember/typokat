@@ -4,7 +4,7 @@
 //! `Interner`, keeping borrowed parser data inside the parse/check call.
 
 use crate::binder::namespace::{
-    CompilationUnit, ModuleBindingContext, OriginalModuleOrdinal, SourceFileKind, SourceUnitKey,
+    CompilationUnit, ModuleBindingContext, SourceFileKind, SourceUnitKey,
 };
 #[cfg(test)]
 use crate::check::checker::{
@@ -16,7 +16,7 @@ use crate::check::{
     ProjectProgram,
 };
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
-use crate::source::{ModuleOrdinal, UnitSlot};
+use crate::source::{CompilationOrigin, ModuleOrdinal, OriginalModuleOrdinal, UnitSlot};
 use crate::span::Span;
 use crate::types::Interner;
 use oxc_allocator::Allocator;
@@ -252,9 +252,7 @@ where
             program: &parsed[original].program,
             compilation_unit: CompilationUnit {
                 source: source_keys[original],
-                original_module: OriginalModuleOrdinal(
-                    u32::try_from(original).expect("original module ordinal fits u32"),
-                ),
+                origin: CompilationOrigin::User(OriginalModuleOrdinal::new(original)),
                 binding: ModuleBindingContext::for_program(
                     &parsed[original].program,
                     source_file_kind(&inputs[original].name),
