@@ -1,8 +1,7 @@
-//! Disabled RED spec for the binder-owned exact declaration-site index.
+//! Contract spec for the binder-owned exact declaration-site index.
 //!
-//! Activate with `#[cfg(test)] mod exact_declaration_site_spec;` in `binder/mod.rs`
-//! after [`Binder`] retains `BindState::declarations_by_site` at `finish` and exposes
-//! this minimal crate-private API:
+//! [`super::declaration::DeclarationTable`] owns the exact-site index and [`Binder`] exposes this
+//! minimal crate-private API:
 //!
 //! ```ignore
 //! pub(crate) fn exact_declaration_at(
@@ -13,22 +12,32 @@
 //! ) -> Option<&LexicalDeclaration>;
 //! ```
 //!
+//! `DeclarationTable::push` updates its dense row vector and its sole private
+//! `FxHashMap<(ScopeId, u32, DeclarationKind), DeclId>` together. Its crate-private
+//! `declaration_at_site` performs the raw direct lookup, including unattached inventory rows.
+//! `Binder::exact_declaration_at` delegates to that method and filters for an attached scope. The
+//! exported `Binder` field set must not change: adding a private field would break downstream
+//! struct literals and exhaustive destructuring despite the field itself being private.
+//!
 //! The key is the syntax-owning module scope, binding-leaf start, and declaration kind.
 //! The returned row owns the canonical [`super::declaration::DeclId`], exact spans, lexical scope,
 //! and independent storage/group identities. A source-prewalk occurrence is admitted only after
 //! semantic binding attaches its lexical scope; an unattached inventory row returns `None`.
 //!
-//! The implementation contract is one retained binder hash index followed by dense declaration-
-//! table lookup. It must not resolve through the compilation-global scope, declaration name,
-//! `SourceUnitKey`, group order, or hash iteration. Checker cutover deletes
+//! The implementation contract is one declaration-table hash index followed by dense row lookup.
+//! It must not resolve through the compilation-global scope, declaration name, `SourceUnitKey`,
+//! group order, or hash iteration. Checker cutover deletes
 //! `exact_type_fragment_at` and replaces the scan inside `visit_bound_type` with this API; the
 //! checker may retain neither a full-scan fallback nor a duplicate exact-site index.
 
 use super::bind::{bind_module_with_prelude, Binder, ProjectBinderBuilder};
-use super::declaration::{DeclarationKind, LexicalDeclaration, TypeFragmentKind, TypeGroupId};
+use super::declaration::{
+    DeclarationKind, DeclarationSite, LexicalDeclaration, TypeFragmentKind, TypeGroupId,
+};
 use super::namespace::{CompilationUnit, SourceUnitKey};
 use super::scope::{ScopeId, ScopeKind};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
+use crate::span::Span;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Program;
 use oxc_parser::Parser;
@@ -95,7 +104,7 @@ fn group_of(declaration: &LexicalDeclaration) -> TypeGroupId {
 }
 
 #[test]
-fn production_cutover_retains_one_binder_index_and_removes_checker_scans() {
+fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
     let binder_source = include_str!("bind.rs");
     let binder_production = binder_source
         .split_once("#[cfg(test)]\nmod tests")
@@ -106,34 +115,157 @@ fn production_cutover_retains_one_binder_index_and_removes_checker_scans() {
         .and_then(|(_, rest)| rest.split_once("\n}"))
         .map(|(fields, _)| fields)
         .expect("Binder fields");
-    assert_eq!(binder_fields.matches("declarations_by_site:").count(), 1);
-    let binder_fields_compact = binder_fields
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect::<String>();
+    assert!(!binder_fields.contains("declarations_by_site"));
+    let binder_field_declarations = binder_fields
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("pub "))
+        .map(|field| {
+            field
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    let unexpected_private_fields = binder_fields
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with("///")
+                && !line.starts_with("#[")
+                && !line.starts_with("pub ")
+        })
+        .collect::<Vec<_>>();
     assert!(
-        binder_fields_compact.contains("FxHashMap<(ScopeId,u32,DeclarationKind),DeclId>"),
-        "Binder retains the exact three-part source-site key"
+        unexpected_private_fields.is_empty(),
+        "Binder gained private fields: {unexpected_private_fields:?}"
+    );
+    let expected_binder_fields = [
+        "pubgraph:ScopeGraph,",
+        "pubsymbols:SymbolTable,",
+        "pubdeclarations:DeclarationTable,",
+        "pubtype_groups:TypeGroupTable,",
+        "pubnamespaces:NamespaceTable,",
+        "pubmodule:ScopeId,",
+        "pubprelude_module:ScopeId,",
+        "pubcompilation_global:ScopeId,",
+        "pubscript_namespace_root:ScopeId,",
+        "pubdecl_count:u32,",
+        "pubprelude_type_group_count:u32,",
+        "pubfn_scopes:FxHashMap<(ScopeId,u32),ScopeId>,",
+        "pubfn_decl_ids:FxHashMap<(ScopeId,u32),ValueStorageId>,",
+        "pubblock_scopes:FxHashMap<(ScopeId,u32),ScopeId>,",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+    assert_eq!(
+        binder_field_declarations, expected_binder_fields,
+        "the complete exported Binder field declarations are compatibility-sensitive"
     );
     let bind_state_fields = binder_production
         .split_once("pub(crate) struct BindState {")
         .and_then(|(_, rest)| rest.split_once("\n}"))
         .map(|(fields, _)| fields)
         .expect("BindState fields");
+    assert!(!bind_state_fields.contains("declarations_by_site"));
+    assert!(!binder_production.contains("declarations_by_site"));
+
+    let declaration_source = include_str!("declaration.rs");
+    let declaration_production = declaration_source
+        .split_once("#[cfg(test)]\nmod tests")
+        .map(|(production, _)| production)
+        .expect("declaration-table test boundary");
+    let declaration_table_fields = declaration_production
+        .split_once("pub struct DeclarationTable {")
+        .and_then(|(_, rest)| rest.split_once("\n}"))
+        .map(|(fields, _)| fields)
+        .expect("DeclarationTable fields");
+    let declaration_table_field_names = declaration_table_fields
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("///"))
+        .filter_map(|field| field.split_once(':').map(|(name, _)| name))
+        .collect::<Vec<_>>();
     assert_eq!(
-        bind_state_fields.matches("declarations_by_site:").count(),
+        declaration_table_field_names,
+        ["declarations", "declarations_by_site"]
+    );
+    assert!(!declaration_table_fields.contains("pub declarations_by_site"));
+    assert_eq!(
+        declaration_table_fields
+            .matches("declarations_by_site:")
+            .count(),
         1
     );
-    let bind_state_fields_compact = bind_state_fields
+    let declaration_table_fields = declaration_table_fields
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
-    assert!(bind_state_fields_compact.contains("FxHashMap<(ScopeId,u32,DeclarationKind),DeclId>"));
-    let binder_compact = binder_production
+    assert!(
+        declaration_table_fields.contains("FxHashMap<(ScopeId,u32,DeclarationKind),DeclId>"),
+        "DeclarationTable privately owns the sole exact-site index"
+    );
+
+    let declaration_compact = declaration_production
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
-    assert!(binder_compact.contains("declarations_by_site:self.state.declarations_by_site"));
+    assert_eq!(
+        declaration_compact
+            .matches(".declarations_by_site.insert(")
+            .count(),
+        1,
+        "DeclarationTable::push is the sole index mutation boundary"
+    );
+    let table_push = declaration_production
+        .split_once("pub(crate) fn push(")
+        .and_then(|(_, rest)| rest.split_once("\n    pub fn get("))
+        .map(|(body, _)| body)
+        .expect("DeclarationTable push body");
+    let table_push = table_push
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(table_push.contains("self.declarations.push("));
+    assert!(table_push.contains(
+        "letprevious=self.declarations_by_site.insert((site.module,site.binding_span.start,kind),id)"
+    ));
+    assert!(
+        table_push.contains("debug_assert!(previous.is_none(),\"onedeclarationperbindingleaf\")")
+            || table_push.contains("assert!(previous.is_none(),\"onedeclarationperbindingleaf\")"),
+        "duplicate source keys retain the binding-leaf collision guard"
+    );
+
+    let table_lookup = declaration_production
+        .split_once("pub(crate) fn declaration_at_site(")
+        .and_then(|(_, rest)| rest.split_once("\n    }"))
+        .map(|(body, _)| body)
+        .expect("DeclarationTable exact-site lookup");
+    let table_lookup = table_lookup
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        table_lookup.contains(".declarations_by_site.get(&(syntax_module,binding_start,kind))"),
+        "DeclarationTable performs the direct three-part lookup"
+    );
+    assert!(table_lookup.contains("self.declarations.get"));
+    for forbidden_scan in [
+        ".iter(",
+        ".values(",
+        ".keys(",
+        ".find(",
+        ".find_map(",
+        ".flat_map(",
+        ".position(",
+    ] {
+        assert!(
+            !table_lookup.contains(forbidden_scan),
+            "table lookup contains scan primitive {forbidden_scan}"
+        );
+    }
 
     let exact_lookup = binder_production
         .split_once("pub(crate) fn exact_declaration_at(")
@@ -145,10 +277,14 @@ fn production_cutover_retains_one_binder_index_and_removes_checker_scans() {
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
     assert!(
-        exact_lookup.contains(".declarations_by_site.get(&(syntax_module,binding_start,kind))"),
-        "exact lookup uses the three-part key directly"
+        exact_lookup
+            .contains("self.declarations.declaration_at_site(syntax_module,binding_start,kind)"),
+        "Binder delegates exact-site identity to DeclarationTable"
     );
-    assert!(exact_lookup.contains("self.declarations.get"));
+    assert!(
+        exact_lookup.contains(".filter(|declaration|declaration.site.scope.is_some())"),
+        "Binder alone applies semantic-admission filtering"
+    );
     for forbidden_scan in [
         ".iter(",
         ".values(",
@@ -214,6 +350,20 @@ fn production_cutover_retains_one_binder_index_and_removes_checker_scans() {
     assert!(!visit_bound_type.contains("type_groups"));
     assert!(!visit_bound_type.contains("source_units"));
     assert!(!visit_bound_type.contains(".iter("));
+}
+
+#[test]
+#[should_panic(expected = "one declaration per binding leaf")]
+fn declaration_table_rejects_a_duplicate_exact_site_key() {
+    let mut declarations = super::declaration::DeclarationTable::default();
+    let site = DeclarationSite {
+        module: ScopeId(91),
+        scope: None,
+        declaration_span: Span::new(10, 30),
+        binding_span: Span::new(20, 25),
+    };
+    declarations.push(DeclarationKind::Interface, site);
+    declarations.push(DeclarationKind::Interface, site);
 }
 
 #[test]
