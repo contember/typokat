@@ -12,6 +12,9 @@
 //! | Library storage is native | `events_library.rs` owns library IDs, metadata, completion storage, and its exact `BTreeMap<LibraryEventKey, _>` without importing or wrapping the user ledger. |
 //! | No post-hoc retag or split | Each authority reserves its final ordinal domain and finishes its own typed key stream. |
 //! | The injected seam is real | `wu0b_library::run_injected_profile` drives `LibraryReportingConsumer`, returns all phase counters and typed binder receipts, and exposes exact library-ledger ownership. |
+//! | Script globals are one semantic domain | Runtime probes expose real binder identities and published surfaces for cross-file interface and function/namespace merges. |
+//! | Module privacy and global augmentation are exact | An external module keeps private declarations in its module scope while its `declare global` fragments reopen the shared compilation global. |
+//! | Checker ownership is source-aware | The injected Pass and every lexical reservation retain `SourceUnit::Library`; no fabricated user module ordinal or execution slot enters the library path. |
 //!
 //! The neutral source types and origin-bearing binder records are deliberately crate-private.
 //! WU0B is authorized to clean up those internal APIs; only the public driver/checker behavior and
@@ -25,6 +28,7 @@ use super::events_library::{
 use super::library_reporting::LibraryReportingFamily;
 use super::reporting_record::CheckerRecord;
 use super::wu0b_library::{run_injected_profile, InjectedLibrarySource};
+use crate::binder::declaration::{TypeGroupId, ValueStorageId};
 use crate::diagnostics::{DiagnosticCode, IncompleteSurface};
 use crate::driver::{FileInput, FileReport};
 use crate::source::{LibraryFileOrdinal, ModuleOrdinal, SourceOrdinal, SourceUnit, UnitSlot};
@@ -313,6 +317,38 @@ fn source_unit_tags_keep_user_slots_out_of_library_units() {
         SourceOrdinal::Library(file_ordinal),
         SourceOrdinal::Library(LibraryFileOrdinal::new(12))
     );
+}
+
+#[test]
+fn checker_pass_stores_one_source_unit_without_user_coordinate_fallbacks() {
+    let source = include_str!("context.rs");
+    let production = source.split_once("#[cfg(test)]\nmod tests");
+    assert!(
+        production.is_some(),
+        "context.rs must contain its test module"
+    );
+    let Some((production, _)) = production else {
+        return;
+    };
+    let pass_definition = production
+        .split_once("pub(in crate::check::checker) struct Pass")
+        .and_then(|(_, tail)| tail.split_once("\n}\n"));
+    assert!(pass_definition.is_some(), "missing Pass definition");
+    let Some((pass_definition, _)) = pass_definition else {
+        return;
+    };
+    let compact = without_whitespace(pass_definition);
+
+    assert!(
+        compact.contains("current_source:SourceUnit,"),
+        "Pass must retain the exact user or library source unit"
+    );
+    for forbidden in ["current_module_ordinal", "current_unit_slot"] {
+        assert!(
+            !contains_rust_identifier(production, forbidden),
+            "Pass production context retains fabricated user coordinate {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -827,6 +863,238 @@ fn identical_spans_in_two_library_files_keep_distinct_owners() {
             .collect::<Vec<_>>(),
         [(10, 25, 0, 0), (11, 25, 0, 0)]
     );
+}
+
+#[test]
+fn script_interface_reopenings_share_one_real_type_identity_and_surface() -> Result<(), String> {
+    let first_ordinal = LibraryFileOrdinal::new(20);
+    let second_ordinal = LibraryFileOrdinal::new(21);
+    let run = run_injected_profile(&[
+        InjectedLibrarySource {
+            file_ordinal: first_ordinal,
+            name: "shared-interface-first.d.ts",
+            source: "interface SharedLibraryShape { first: number; }",
+        },
+        InjectedLibrarySource {
+            file_ordinal: second_ordinal,
+            name: "shared-interface-second.d.ts",
+            source: "interface SharedLibraryShape { second: string; }",
+        },
+    ])
+    .map_err(|error| format!("shared interface witness failed: {error:?}"))?;
+
+    let shared = run
+        .global_type_probe("SharedLibraryShape")
+        .ok_or_else(|| "missing shared global type probe".to_string())?;
+    let mut declaration_identities: Vec<(LibraryFileOrdinal, TypeGroupId)> =
+        shared.declaration_identities.clone();
+    declaration_identities.sort_by_key(|(file_ordinal, _)| *file_ordinal);
+    assert_eq!(
+        declaration_identities,
+        [
+            (first_ordinal, shared.identity),
+            (second_ordinal, shared.identity),
+        ]
+    );
+    assert_eq!(
+        shared
+            .member_names
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["first", "second"])
+    );
+    assert_eq!(shared.declaration_count, 2);
+    assert!(
+        run.library_records.is_empty(),
+        "clean interface reopening emitted records: {:?}",
+        run.library_records
+    );
+    Ok(())
+}
+
+#[test]
+fn cross_file_function_namespace_merges_publish_in_both_orders() -> Result<(), String> {
+    let sources = [
+        InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(30),
+            name: "function-first.d.ts",
+            source: "declare function FunctionFirst(value: number): string;",
+        },
+        InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(31),
+            name: "function-first-namespace.d.ts",
+            source: "declare namespace FunctionFirst { export const tag: number; }",
+        },
+        InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(32),
+            name: "namespace-first.d.ts",
+            source: "declare namespace NamespaceFirst { export const tag: string; }",
+        },
+        InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(33),
+            name: "namespace-first-function.d.ts",
+            source: "declare function NamespaceFirst(value: string): number;",
+        },
+    ];
+    let reversed = sources
+        .iter()
+        .rev()
+        .map(|source| InjectedLibrarySource {
+            file_ordinal: source.file_ordinal,
+            name: source.name,
+            source: source.source,
+        })
+        .collect::<Vec<_>>();
+    let forward = run_injected_profile(&sources)
+        .map_err(|error| format!("forward function/namespace witness failed: {error:?}"))?;
+    let reverse_input = run_injected_profile(&reversed)
+        .map_err(|error| format!("reversed function/namespace witness failed: {error:?}"))?;
+
+    for run in [&forward, &reverse_input] {
+        assert!(
+            run.library_records.is_empty(),
+            "clean function/namespace merges emitted records: {:?}",
+            run.library_records
+        );
+        for (name, first_file, second_file, tag) in [
+            (
+                "FunctionFirst",
+                LibraryFileOrdinal::new(30),
+                LibraryFileOrdinal::new(31),
+                "tag",
+            ),
+            (
+                "NamespaceFirst",
+                LibraryFileOrdinal::new(32),
+                LibraryFileOrdinal::new(33),
+                "tag",
+            ),
+        ] {
+            let merged = run
+                .global_value_probe(name)
+                .ok_or_else(|| format!("missing merged global value {name}"))?;
+            let mut participant_identities: Vec<(LibraryFileOrdinal, ValueStorageId)> =
+                merged.participant_identities.clone();
+            participant_identities.sort_by_key(|(file_ordinal, _)| *file_ordinal);
+            // Namespace participants report the attached function owner's real storage.
+            assert_eq!(
+                participant_identities,
+                [
+                    (first_file, merged.identity),
+                    (second_file, merged.identity),
+                ]
+            );
+            assert_eq!(merged.declaration_count, 2);
+            assert_eq!(merged.call_signature_count, 1);
+            assert_eq!(
+                merged
+                    .member_names
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from([tag])
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn external_module_privates_stay_local_while_declare_global_reopens_shared_type(
+) -> Result<(), String> {
+    let script_ordinal = LibraryFileOrdinal::new(40);
+    let module_ordinal = LibraryFileOrdinal::new(41);
+    let run = run_injected_profile(&[
+        InjectedLibrarySource {
+            file_ordinal: script_ordinal,
+            name: "shared-global-script.d.ts",
+            source: "interface SharedAugmentedShape { script: number; }",
+        },
+        InjectedLibrarySource {
+            file_ordinal: module_ordinal,
+            name: "private-module.d.ts",
+            source: "export {}; interface ModulePrivateShape { privateMember: boolean; } declare global { interface SharedAugmentedShape { augmentation: string; } }",
+        },
+    ])
+    .map_err(|error| format!("external-module isolation witness failed: {error:?}"))?;
+
+    assert!(run.global_type_probe("ModulePrivateShape").is_none());
+    let private = run
+        .module_type_probe(module_ordinal, "ModulePrivateShape")
+        .ok_or_else(|| "external-module private type was not retained locally".to_string())?;
+    let private_identities: Vec<(LibraryFileOrdinal, TypeGroupId)> =
+        private.declaration_identities.clone();
+    assert_eq!(private_identities, [(module_ordinal, private.identity)]);
+    assert_eq!(private.declaration_count, 1);
+    assert_eq!(
+        private
+            .member_names
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["privateMember"])
+    );
+
+    let shared = run
+        .global_type_probe("SharedAugmentedShape")
+        .ok_or_else(|| "declare global did not reopen the compilation global".to_string())?;
+    let mut shared_identities: Vec<(LibraryFileOrdinal, TypeGroupId)> =
+        shared.declaration_identities.clone();
+    shared_identities.sort_by_key(|(file_ordinal, _)| *file_ordinal);
+    assert_eq!(
+        shared_identities,
+        [
+            (script_ordinal, shared.identity),
+            (module_ordinal, shared.identity),
+        ]
+    );
+    assert_eq!(shared.declaration_count, 2);
+    assert_eq!(
+        shared
+            .member_names
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["augmentation", "script"])
+    );
+    assert!(
+        run.library_records.is_empty(),
+        "clean module/global augmentation emitted records: {:?}",
+        run.library_records
+    );
+    Ok(())
+}
+
+#[test]
+fn injected_pass_and_lexical_owners_keep_library_source_units_end_to_end() -> Result<(), String> {
+    let file_ordinal = LibraryFileOrdinal::new(50);
+    let run = run_injected_profile(&[InjectedLibrarySource {
+        file_ordinal,
+        name: "source-aware-pass.ts",
+        source: "const broken: number = 'wrong';",
+    }])
+    .map_err(|error| format!("source-aware Pass witness failed: {error:?}"))?;
+    let expected = SourceUnit::Library { file_ordinal };
+
+    assert_eq!(run.pass_source_units, [expected]);
+    assert!(!run.lexical_source_units.is_empty());
+    assert!(run
+        .lexical_source_units
+        .iter()
+        .all(|source| *source == expected));
+    assert_eq!(run.library_records.len(), 1);
+    let (key, record) = run
+        .library_records
+        .first()
+        .ok_or_else(|| "source-aware Pass emitted no record".to_string())?;
+    assert_eq!(key.file_ordinal, file_ordinal);
+    let CheckerRecord::Diagnostic(diagnostic) = record else {
+        return Err("source-aware Pass emitted an incomplete instead of TK2322".to_string());
+    };
+    assert_eq!(diagnostic.code, DiagnosticCode::TK2322);
+    assert_eq!(key.source_start, diagnostic.span.start);
+    Ok(())
 }
 
 #[test]
