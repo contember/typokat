@@ -23,8 +23,7 @@ use super::classes::body::{BodyClassView, BodyMemberEnvironment};
 use super::classes::construction::DraftClassTypeParameter;
 use super::classes::publication::StagedClassValidation;
 use super::classes::retained::RetainedClassCallable;
-use super::events::{CandidateEffects, UserRecordTicket};
-use super::events::{EventId, EventStore};
+use super::events::{CandidateEffects, EventStore, UserRecordTicket};
 use super::function_groups::FunctionGroupRegistry;
 use super::lexical_events::{CallableTickets, LexicalReservations};
 use super::namespace_values::NamespaceValueRegistry;
@@ -447,8 +446,6 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     pub(in crate::check::checker) current_unit_slot: UnitSlot,
     /// Checker-wide deterministic record authority.
     pub(in crate::check::checker) event_store: EventStore,
-    /// Lexical source owner for immediate records produced by the current walk.
-    pub(in crate::check::checker) current_event: Option<EventId>,
     /// Hierarchical lexical/speculative output owners; only the outer owner commits.
     pub(in crate::check::checker) effect_stack: Vec<CheckerEffects>,
     /// Completed lexical owners awaiting deferred relation/override resolution.

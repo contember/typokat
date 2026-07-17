@@ -65,3 +65,22 @@ pub(crate) enum CompilationOrigin {
     #[cfg(test)]
     Library(LibraryFileOrdinal),
 }
+
+/// Stable source ordering domain used by checker-local indexes.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum SourceOrdinal {
+    User(ModuleOrdinal),
+    #[cfg(test)]
+    Library(LibraryFileOrdinal),
+}
+
+/// Exact source unit retained by checker producers.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum SourceUnit {
+    User {
+        module_ordinal: ModuleOrdinal,
+        unit_slot: UnitSlot,
+    },
+    #[cfg(test)]
+    Library { file_ordinal: LibraryFileOrdinal },
+}

@@ -885,8 +885,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .declaration
             .and_then(|declaration| self.lexical_events.declaration_source(declaration))
         {
-            self.current_module_ordinal = source.module_ordinal;
-            self.current_unit_slot = source.unit_slot;
+            if let (Some(module_ordinal), Some(unit_slot)) =
+                (source.user_module_ordinal(), source.user_unit_slot())
+            {
+                self.current_module_ordinal = module_ordinal;
+                self.current_unit_slot = unit_slot;
+            }
         }
     }
 

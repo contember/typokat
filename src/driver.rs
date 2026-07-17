@@ -937,7 +937,7 @@ mod tests {
             assert!(owners.iter().enumerate().all(|(index, owner)| owners
                 .iter()
                 .skip(index + 1)
-                .all(|other| owner.event != other.event && owner.ticket != other.ticket)));
+                .all(|other| owner.ticket != other.ticket)));
         }
 
         let use_first = check_project_inner_with_binding_inspector(files(true), inspect);

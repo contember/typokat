@@ -305,7 +305,7 @@ fn emit_test_incomplete(pass: &mut Pass<'_, '_>) {
         .lexical_events
         .top_level()
         .iter()
-        .find(|site| site.source.module_ordinal == pass.current_module_ordinal)
+        .find(|site| site.source.user_module_ordinal() == Some(pass.current_module_ordinal))
         .map(|site| site.source.source_start);
     if let Some(source_start) = source_start {
         pass.with_lexical_effects(source_start, LexicalOwnerPhase::Incomplete, |pass| {
@@ -1182,7 +1182,8 @@ fn enqueue_namespace_placement_diagnostics(
             .expect("namespace placement issue must keep its source site");
         let expected_module = ModuleOrdinal::new(original_module.index());
         assert_eq!(
-            source.module_ordinal, expected_module,
+            source.user_module_ordinal(),
+            Some(expected_module),
             "namespace placement issue must remain in its original module"
         );
         let diagnostic = match issue.kind {
@@ -1213,7 +1214,7 @@ fn enqueue_ambient_context_diagnostics(
             .declaration_source(global.declaration)
             .expect("global context issue must keep its source site");
         let expected_module = ModuleOrdinal::new(original_module.index());
-        assert_eq!(source.module_ordinal, expected_module);
+        assert_eq!(source.user_module_ordinal(), Some(expected_module));
         let candidate = effects
             .entry(owner.ticket)
             .or_insert_with(|| CandidateEffects::new(owner.ticket));
@@ -1252,7 +1253,7 @@ fn enqueue_ambient_context_diagnostics(
             .declaration_source(export.declaration)
             .expect("UMD context issue must keep its source site");
         let expected_module = ModuleOrdinal::new(original_module.index());
-        assert_eq!(source.module_ordinal, expected_module);
+        assert_eq!(source.user_module_ordinal(), Some(expected_module));
         effects
             .entry(owner.ticket)
             .or_insert_with(|| CandidateEffects::new(owner.ticket))
@@ -1743,11 +1744,9 @@ impl Pass<'_, '_> {
         owner: events::UserRecordTicket,
         produce: impl FnOnce(&mut Self) -> R,
     ) -> R {
-        let saved_event = self.current_event.replace(owner.event);
         self.effect_stack.push(CheckerEffects::new(owner));
         let result = produce(self);
         let effects = self.effect_stack.pop().expect("lexical effect frame");
-        self.current_event = saved_event;
         if self.suppress_effects {
             return result;
         }
@@ -1948,7 +1947,6 @@ fn build_pass_with_reporting<'a, 'ast>(
         current_module_ordinal: reporting.module_ordinal,
         current_unit_slot: reporting.unit_slot,
         event_store: reporting.event_store,
-        current_event: None,
         effect_stack: Vec::new(),
         pending_effects,
         lexical_events: reporting.lexical_events,

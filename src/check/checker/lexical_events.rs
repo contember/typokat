@@ -1,10 +1,10 @@
 //! Lexical event reservations retained across class/SCC/body phases.
 
-use super::events::{EventId, EventStore, EventStoreError, ReservedEvent, UserRecordTicket};
+use super::events::{EventStore, EventStoreError, ReservedEvent, UserRecordTicket};
 use crate::binder::declaration::{
     source_declaration_occurrences, DeclId, DeclarationKind, TypeGroupId, ValueStorageId,
 };
-use crate::source::{ModuleOrdinal, UnitSlot};
+use crate::source::{ModuleOrdinal, SourceOrdinal, SourceUnit, UnitSlot};
 use crate::span::Span;
 use crate::types::repr::{ClassId, TypeParamId};
 use oxc_ast::ast::{
@@ -28,26 +28,65 @@ pub(crate) struct CallableSiteId(usize);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SourceSite {
-    pub(crate) module_ordinal: ModuleOrdinal,
-    pub(crate) unit_slot: UnitSlot,
+    pub(crate) unit: SourceUnit,
     pub(crate) source_start: u32,
 }
 
-/// Record positions retained by every callable reservation.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SiteTickets {
-    pub(crate) immediate: UserRecordTicket,
-    pub(crate) deferred: UserRecordTicket,
-    pub(crate) incomplete: UserRecordTicket,
+impl SourceSite {
+    pub(crate) const fn user(
+        module_ordinal: ModuleOrdinal,
+        unit_slot: UnitSlot,
+        source_start: u32,
+    ) -> Self {
+        Self {
+            unit: SourceUnit::User {
+                module_ordinal,
+                unit_slot,
+            },
+            source_start,
+        }
+    }
+
+    pub(crate) const fn ordinal(self) -> SourceOrdinal {
+        match self.unit {
+            SourceUnit::User { module_ordinal, .. } => SourceOrdinal::User(module_ordinal),
+            #[cfg(test)]
+            SourceUnit::Library { file_ordinal } => SourceOrdinal::Library(file_ordinal),
+        }
+    }
+
+    pub(crate) const fn user_module_ordinal(self) -> Option<ModuleOrdinal> {
+        match self.unit {
+            SourceUnit::User { module_ordinal, .. } => Some(module_ordinal),
+            #[cfg(test)]
+            SourceUnit::Library { .. } => None,
+        }
+    }
+
+    pub(crate) const fn user_unit_slot(self) -> Option<UnitSlot> {
+        match self.unit {
+            SourceUnit::User { unit_slot, .. } => Some(unit_slot),
+            #[cfg(test)]
+            SourceUnit::Library { .. } => None,
+        }
+    }
 }
 
 /// Record positions retained by every callable reservation.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CallableTickets {
-    pub(crate) signature: UserRecordTicket,
-    pub(crate) deferred: UserRecordTicket,
-    pub(crate) incomplete: UserRecordTicket,
-    pub(crate) body: UserRecordTicket,
+pub(crate) struct SiteTickets<Ticket: Copy = UserRecordTicket> {
+    pub(crate) immediate: Ticket,
+    pub(crate) deferred: Ticket,
+    pub(crate) incomplete: Ticket,
+}
+
+/// Record positions retained by every callable reservation.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CallableTickets<Ticket: Copy = UserRecordTicket> {
+    pub(crate) signature: Ticket,
+    pub(crate) deferred: Ticket,
+    pub(crate) incomplete: Ticket,
+    pub(crate) body: Ticket,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -59,27 +98,24 @@ pub(crate) enum LexicalOwnerPhase {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct LexicalOwner {
-    pub(crate) event: EventId,
-    pub(crate) ticket: UserRecordTicket,
+pub(crate) struct LexicalOwner<Ticket: Copy = UserRecordTicket> {
+    pub(crate) ticket: Ticket,
 }
 
 /// Neutral event reserved for one exact source declaration occurrence.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DeclarationReservation {
+pub(crate) struct DeclarationReservation<Ticket: Copy = UserRecordTicket> {
     pub(crate) source: SourceSite,
     pub(crate) kind: DeclarationKind,
     pub(crate) declaration_span: Span,
     pub(crate) binding_span: Span,
-    pub(crate) event: EventId,
-    pub(crate) owner: UserRecordTicket,
+    pub(crate) owner: Ticket,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-struct ExportAliasReservation {
+struct ExportAliasReservation<Ticket: Copy = UserRecordTicket> {
     local_span: Span,
-    event: EventId,
-    owner: UserRecordTicket,
+    owner: Ticket,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -90,11 +126,11 @@ pub(crate) enum InterfaceOccurrenceKind {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-struct InterfaceOccurrenceReservation {
+struct InterfaceOccurrenceReservation<Ticket: Copy = UserRecordTicket> {
     binding_start: u32,
     source_start: u32,
     kind: InterfaceOccurrenceKind,
-    owner: UserRecordTicket,
+    owner: Ticket,
 }
 
 /// Stable class identities attached after binder/type reservation and before fill.
@@ -113,76 +149,68 @@ pub(crate) struct CallableBinding {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TopLevelReservation {
+pub(crate) struct TopLevelReservation<Ticket: Copy = UserRecordTicket> {
     pub(crate) source: SourceSite,
-    pub(crate) event: EventId,
-    pub(crate) tickets: SiteTickets,
+    pub(crate) tickets: SiteTickets<Ticket>,
     pub(crate) class: Option<ClassSiteId>,
     pub(crate) callable: Option<CallableSiteId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct NestedStatementReservation {
+pub(crate) struct NestedStatementReservation<Ticket: Copy = UserRecordTicket> {
     pub(crate) source: SourceSite,
-    pub(crate) event: EventId,
-    pub(crate) tickets: SiteTickets,
+    pub(crate) tickets: SiteTickets<Ticket>,
     pub(crate) callable: Option<CallableSiteId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DeclaratorReservation {
+pub(crate) struct DeclaratorReservation<Ticket: Copy = UserRecordTicket> {
     pub(crate) source: SourceSite,
-    pub(crate) event: EventId,
-    pub(crate) tickets: SiteTickets,
+    pub(crate) tickets: SiteTickets<Ticket>,
 }
 
 /// One lexical owner per source class type-parameter default.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ClassDefaultReservation {
+pub(crate) struct ClassDefaultReservation<Ticket: Copy = UserRecordTicket> {
     pub(crate) parameter_index: usize,
     pub(crate) source: SourceSite,
-    pub(crate) event: EventId,
-    pub(crate) owner: UserRecordTicket,
+    pub(crate) owner: Ticket,
 }
 
 /// One lexical owner per source class type-parameter constraint.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ClassConstraintReservation {
+pub(crate) struct ClassConstraintReservation<Ticket: Copy = UserRecordTicket> {
     pub(crate) parameter_index: usize,
     pub(crate) source: SourceSite,
-    pub(crate) event: EventId,
-    pub(crate) owner: UserRecordTicket,
+    pub(crate) owner: Ticket,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ClassReservation {
+pub(crate) struct ClassReservation<Ticket: Copy = UserRecordTicket> {
     pub(crate) id: ClassSiteId,
     pub(crate) source: SourceSite,
-    pub(crate) event: EventId,
-    pub(crate) tickets: SiteTickets,
-    pub(crate) constraints: Vec<ClassConstraintReservation>,
-    pub(crate) defaults: Vec<ClassDefaultReservation>,
+    pub(crate) tickets: SiteTickets<Ticket>,
+    pub(crate) constraints: Vec<ClassConstraintReservation<Ticket>>,
+    pub(crate) defaults: Vec<ClassDefaultReservation<Ticket>>,
     pub(crate) members: Vec<MemberSiteId>,
     pub(crate) binding: Option<ClassBinding>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct MemberReservation {
+pub(crate) struct MemberReservation<Ticket: Copy = UserRecordTicket> {
     pub(crate) id: MemberSiteId,
     pub(crate) class: ClassSiteId,
     pub(crate) source: SourceSite,
-    pub(crate) event: EventId,
-    pub(crate) tickets: SiteTickets,
+    pub(crate) tickets: SiteTickets<Ticket>,
     pub(crate) callable: Option<CallableSiteId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CallableReservation {
+pub(crate) struct CallableReservation<Ticket: Copy = UserRecordTicket> {
     pub(crate) id: CallableSiteId,
     pub(crate) owner_member: Option<MemberSiteId>,
     pub(crate) source: SourceSite,
-    pub(crate) event: EventId,
-    pub(crate) tickets: CallableTickets,
+    pub(crate) tickets: CallableTickets<Ticket>,
     type_parameter_count: usize,
     pub(crate) binding: Option<CallableBinding>,
 }
@@ -193,6 +221,8 @@ pub(crate) enum ReservationError {
     DuplicateClassBinding(ClassSiteId),
     DuplicateCallableBinding(CallableSiteId),
     MissingDeclarationOwner(DeclId),
+    #[cfg(test)]
+    NonUserSource(SourceUnit),
     EventStore(EventStoreError),
 }
 
@@ -202,29 +232,63 @@ impl From<EventStoreError> for ReservationError {
     }
 }
 
-/// Persistent source-site table built before class construction, SCCs, and bodies.
-#[derive(Debug, Default)]
-pub(crate) struct LexicalReservations {
-    top_level: Vec<TopLevelReservation>,
-    nested_statements: Vec<NestedStatementReservation>,
-    declarators: Vec<DeclaratorReservation>,
-    classes: Vec<ClassReservation>,
-    members: Vec<MemberReservation>,
-    callables: Vec<CallableReservation>,
-    expression_site_tickets: Vec<SiteTickets>,
-    declarations: Vec<DeclarationReservation>,
-    export_aliases: Vec<ExportAliasReservation>,
-    interface_occurrences: Vec<InterfaceOccurrenceReservation>,
-    interface_occurrences_by_source:
-        FxHashMap<(ModuleOrdinal, u32, InterfaceOccurrenceKind, u32), usize>,
-    declarations_by_binding: FxHashMap<(ModuleOrdinal, u32, u32), usize>,
-    export_aliases_by_local_span: FxHashMap<(ModuleOrdinal, u32, u32), usize>,
-    classes_by_source: BTreeMap<(ModuleOrdinal, u32), Vec<ClassSiteId>>,
-    callables_by_source: BTreeMap<(ModuleOrdinal, u32), Vec<CallableSiteId>>,
-    declaration_owners: FxHashMap<DeclId, LexicalOwner>,
+fn user_source_parts(source: SourceSite) -> Result<(ModuleOrdinal, UnitSlot), ReservationError> {
+    match source.unit {
+        SourceUnit::User {
+            module_ordinal,
+            unit_slot,
+        } => Ok((module_ordinal, unit_slot)),
+        #[cfg(test)]
+        SourceUnit::Library { .. } => Err(ReservationError::NonUserSource(source.unit)),
+    }
 }
 
-impl LexicalReservations {
+/// Persistent source-site table built before class construction, SCCs, and bodies.
+#[derive(Debug)]
+pub(crate) struct LexicalReservations<Ticket: Copy = UserRecordTicket> {
+    top_level: Vec<TopLevelReservation<Ticket>>,
+    nested_statements: Vec<NestedStatementReservation<Ticket>>,
+    declarators: Vec<DeclaratorReservation<Ticket>>,
+    classes: Vec<ClassReservation<Ticket>>,
+    members: Vec<MemberReservation<Ticket>>,
+    callables: Vec<CallableReservation<Ticket>>,
+    expression_site_tickets: Vec<SiteTickets<Ticket>>,
+    declarations: Vec<DeclarationReservation<Ticket>>,
+    export_aliases: Vec<ExportAliasReservation<Ticket>>,
+    interface_occurrences: Vec<InterfaceOccurrenceReservation<Ticket>>,
+    interface_occurrences_by_source:
+        FxHashMap<(SourceOrdinal, u32, InterfaceOccurrenceKind, u32), usize>,
+    declarations_by_binding: FxHashMap<(SourceOrdinal, u32, u32), usize>,
+    export_aliases_by_local_span: FxHashMap<(SourceOrdinal, u32, u32), usize>,
+    classes_by_source: BTreeMap<(SourceOrdinal, u32), Vec<ClassSiteId>>,
+    callables_by_source: BTreeMap<(SourceOrdinal, u32), Vec<CallableSiteId>>,
+    declaration_owners: FxHashMap<DeclId, LexicalOwner<Ticket>>,
+}
+
+impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
+    fn default() -> Self {
+        Self {
+            top_level: Vec::new(),
+            nested_statements: Vec::new(),
+            declarators: Vec::new(),
+            classes: Vec::new(),
+            members: Vec::new(),
+            callables: Vec::new(),
+            expression_site_tickets: Vec::new(),
+            declarations: Vec::new(),
+            export_aliases: Vec::new(),
+            interface_occurrences: Vec::new(),
+            interface_occurrences_by_source: FxHashMap::default(),
+            declarations_by_binding: FxHashMap::default(),
+            export_aliases_by_local_span: FxHashMap::default(),
+            classes_by_source: BTreeMap::new(),
+            callables_by_source: BTreeMap::new(),
+            declaration_owners: FxHashMap::default(),
+        }
+    }
+}
+
+impl LexicalReservations<UserRecordTicket> {
     /// Walk one program in lexical order and reserve all top-level/class/callable sites.
     pub(crate) fn reserve_program(
         &mut self,
@@ -237,20 +301,19 @@ impl LexicalReservations {
             let event = store.reserve_event(module_ordinal, occurrence.binding_span.start);
             let index = self.declarations.len();
             self.declarations.push(DeclarationReservation {
-                source: SourceSite {
+                source: SourceSite::user(
                     module_ordinal,
                     unit_slot,
-                    source_start: occurrence.declaration_span.start,
-                },
+                    occurrence.declaration_span.start,
+                ),
                 kind: occurrence.kind,
                 declaration_span: occurrence.declaration_span,
                 binding_span: occurrence.binding_span,
-                event: event.id,
                 owner: event.primary,
             });
             let previous = self.declarations_by_binding.insert(
                 (
-                    module_ordinal,
+                    SourceOrdinal::User(module_ordinal),
                     occurrence.binding_span.start,
                     occurrence.binding_span.end,
                 ),
@@ -396,9 +459,15 @@ impl LexicalReservations {
                 kind,
                 owner: event.primary,
             });
-        let previous = self
-            .interface_occurrences_by_source
-            .insert((module_ordinal, binding_start, kind, source_start), index);
+        let previous = self.interface_occurrences_by_source.insert(
+            (
+                SourceOrdinal::User(module_ordinal),
+                binding_start,
+                kind,
+                source_start,
+            ),
+            index,
+        );
         debug_assert!(previous.is_none(), "one exact interface occurrence owner");
     }
 
@@ -420,12 +489,16 @@ impl LexicalReservations {
                         let index = self.export_aliases.len();
                         self.export_aliases.push(ExportAliasReservation {
                             local_span,
-                            event: event.id,
                             owner: event.primary,
                         });
-                        let previous = self
-                            .export_aliases_by_local_span
-                            .insert((module_ordinal, local_span.start, local_span.end), index);
+                        let previous = self.export_aliases_by_local_span.insert(
+                            (
+                                SourceOrdinal::User(module_ordinal),
+                                local_span.start,
+                                local_span.end,
+                            ),
+                            index,
+                        );
                         debug_assert!(
                             previous.is_none(),
                             "one export alias reservation per exact local span"
@@ -483,24 +556,19 @@ impl LexicalReservations {
         top_level: bool,
         store: &mut EventStore,
     ) -> Result<(), ReservationError> {
-        let source = SourceSite {
-            module_ordinal,
-            unit_slot,
-            source_start: statement.span().start,
-        };
+        let source = SourceSite::user(module_ordinal, unit_slot, statement.span().start);
         let event = store.reserve_event(module_ordinal, source.source_start);
         let tickets = reserve_site_tickets(event, store)?;
         let mut class_site = None;
         let mut callable = None;
         if let Some(class) = statement_class(statement) {
-            class_site = Some(self.reserve_class(source, class, event, tickets, store)?);
+            class_site = Some(self.reserve_class(source, class, tickets, store)?);
         } else if let Some(function) = statement_function(statement) {
             callable = Some(self.reserve_callable(source, event, tickets, None, function, store)?);
         }
         if top_level {
             self.top_level.push(TopLevelReservation {
                 source,
-                event: event.id,
                 tickets,
                 class: class_site,
                 callable,
@@ -508,7 +576,6 @@ impl LexicalReservations {
         } else {
             self.nested_statements.push(NestedStatementReservation {
                 source,
-                event: event.id,
                 tickets,
                 callable,
             });
@@ -656,18 +723,16 @@ impl LexicalReservations {
         declaration: &VariableDeclaration<'_>,
         store: &mut EventStore,
     ) -> Result<(), ReservationError> {
+        let (module_ordinal, _) = user_source_parts(parent)?;
         for declarator in &declaration.declarations {
             let source = SourceSite {
                 source_start: declarator.span.start,
                 ..parent
             };
-            let event = store.reserve_event(source.module_ordinal, source.source_start);
+            let event = store.reserve_event(module_ordinal, source.source_start);
             let tickets = reserve_site_tickets(event, store)?;
-            self.declarators.push(DeclaratorReservation {
-                source,
-                event: event.id,
-                tickets,
-            });
+            self.declarators
+                .push(DeclaratorReservation { source, tickets });
             if let Some(initializer) = &declarator.init {
                 self.reserve_expression(source, initializer, store)?;
             }
@@ -969,19 +1034,14 @@ impl LexicalReservations {
             source_start: function.span.start,
             ..parent
         };
-        let event = store.reserve_event(source.module_ordinal, source.source_start);
+        let (module_ordinal, unit_slot) = user_source_parts(source)?;
+        let event = store.reserve_event(module_ordinal, source.source_start);
         let tickets = reserve_site_tickets(event, store)?;
         self.expression_site_tickets.push(tickets);
         self.reserve_callable(source, event, tickets, None, function, store)?;
         self.reserve_parameter_expressions(source, &function.params, store)?;
         if let Some(body) = &function.body {
-            self.reserve_statement_list(
-                source.module_ordinal,
-                source.unit_slot,
-                &body.statements,
-                false,
-                store,
-            )?;
+            self.reserve_statement_list(module_ordinal, unit_slot, &body.statements, false, store)?;
         }
         Ok(())
     }
@@ -996,7 +1056,8 @@ impl LexicalReservations {
             source_start: arrow.span.start,
             ..parent
         };
-        let event = store.reserve_event(source.module_ordinal, source.source_start);
+        let (module_ordinal, unit_slot) = user_source_parts(source)?;
+        let event = store.reserve_event(module_ordinal, source.source_start);
         let tickets = reserve_site_tickets(event, store)?;
         self.expression_site_tickets.push(tickets);
         self.reserve_arrow_callable(source, event, tickets, arrow, store)?;
@@ -1005,8 +1066,8 @@ impl LexicalReservations {
             self.reserve_expression(source, expression, store)?;
         } else {
             self.reserve_statement_list(
-                source.module_ordinal,
-                source.unit_slot,
+                module_ordinal,
+                unit_slot,
                 &arrow.body.statements,
                 false,
                 store,
@@ -1025,10 +1086,11 @@ impl LexicalReservations {
             source_start: class.span.start,
             ..parent
         };
-        let event = store.reserve_event(source.module_ordinal, source.source_start);
+        let (module_ordinal, _) = user_source_parts(source)?;
+        let event = store.reserve_event(module_ordinal, source.source_start);
         let tickets = reserve_site_tickets(event, store)?;
         self.expression_site_tickets.push(tickets);
-        self.reserve_class(source, class, event, tickets, store)?;
+        self.reserve_class(source, class, tickets, store)?;
         Ok(())
     }
 
@@ -1050,7 +1112,7 @@ impl LexicalReservations {
         source_start: u32,
     ) -> Option<ClassSiteId> {
         self.classes_by_source
-            .get(&(module_ordinal, source_start))
+            .get(&(SourceOrdinal::User(module_ordinal), source_start))
             .and_then(|ids| ids.first())
             .copied()
     }
@@ -1069,7 +1131,7 @@ impl LexicalReservations {
         source_start: u32,
     ) -> Option<CallableSiteId> {
         self.callables_by_source
-            .get(&(module_ordinal, source_start))
+            .get(&(SourceOrdinal::User(module_ordinal), source_start))
             .and_then(|ids| ids.first())
             .copied()
     }
@@ -1084,7 +1146,11 @@ impl LexicalReservations {
     ) -> Result<(), ReservationError> {
         let reservation = self
             .declarations_by_binding
-            .get(&(module_ordinal, binding_span.start, binding_span.end))
+            .get(&(
+                SourceOrdinal::User(module_ordinal),
+                binding_span.start,
+                binding_span.end,
+            ))
             .and_then(|index| self.declarations.get(*index))
             .ok_or(ReservationError::MissingDeclarationOwner(declaration))?;
         assert_eq!(
@@ -1096,7 +1162,6 @@ impl LexicalReservations {
             "declaration node span must match source prewalk"
         );
         let owner = LexicalOwner {
-            event: reservation.event,
             ticket: reservation.owner,
         };
         self.declaration_owners.insert(declaration, owner);
@@ -1110,11 +1175,14 @@ impl LexicalReservations {
     ) -> Option<LexicalOwner> {
         let reservation = self
             .export_aliases_by_local_span
-            .get(&(module_ordinal, local_span.start, local_span.end))
+            .get(&(
+                SourceOrdinal::User(module_ordinal),
+                local_span.start,
+                local_span.end,
+            ))
             .and_then(|index| self.export_aliases.get(*index))?;
         debug_assert_eq!(reservation.local_span, local_span);
         Some(LexicalOwner {
-            event: reservation.event,
             ticket: reservation.owner,
         })
     }
@@ -1133,9 +1201,9 @@ impl LexicalReservations {
         declaration: DeclId,
     ) -> Option<&DeclarationReservation> {
         let owner = self.declaration_owner(declaration)?;
-        self.declarations.iter().find(|reservation| {
-            reservation.event == owner.event && reservation.owner == owner.ticket
-        })
+        self.declarations
+            .iter()
+            .find(|reservation| reservation.owner == owner.ticket)
     }
 
     pub(crate) fn interface_occurrence_owner(
@@ -1146,7 +1214,7 @@ impl LexicalReservations {
     ) -> Option<UserRecordTicket> {
         let reservation = self.declaration_reservation(declaration)?;
         let index = self.interface_occurrences_by_source.get(&(
-            reservation.source.module_ordinal,
+            reservation.source.ordinal(),
             reservation.binding_span.start,
             kind,
             source_start,
@@ -1174,55 +1242,49 @@ impl LexicalReservations {
                 LexicalOwnerPhase::Incomplete => callable.tickets.incomplete,
                 LexicalOwnerPhase::Body => callable.tickets.body,
             };
-            return Some(LexicalOwner {
-                event: callable.event,
-                ticket,
-            });
+            return Some(LexicalOwner { ticket });
         }
         let site = self
             .declarators
             .iter()
             .find(|site| {
-                site.source.module_ordinal == module_ordinal
+                site.source.ordinal() == SourceOrdinal::User(module_ordinal)
                     && site.source.source_start == source_start
             })
-            .map(|site| (site.event, site.tickets))
+            .map(|site| site.tickets)
             .or_else(|| {
                 self.nested_statements
                     .iter()
                     .find(|site| {
-                        site.source.module_ordinal == module_ordinal
+                        site.source.ordinal() == SourceOrdinal::User(module_ordinal)
                             && site.source.source_start == source_start
                     })
-                    .map(|site| (site.event, site.tickets))
+                    .map(|site| site.tickets)
             })
             .or_else(|| {
                 self.members
                     .iter()
                     .find(|site| {
-                        site.source.module_ordinal == module_ordinal
+                        site.source.ordinal() == SourceOrdinal::User(module_ordinal)
                             && site.source.source_start == source_start
                     })
-                    .map(|site| (site.event, site.tickets))
+                    .map(|site| site.tickets)
             })
             .or_else(|| {
                 self.top_level
                     .iter()
                     .find(|site| {
-                        site.source.module_ordinal == module_ordinal
+                        site.source.ordinal() == SourceOrdinal::User(module_ordinal)
                             && site.source.source_start == source_start
                     })
-                    .map(|site| (site.event, site.tickets))
+                    .map(|site| site.tickets)
             })?;
         let ticket = match phase {
-            LexicalOwnerPhase::Immediate | LexicalOwnerPhase::Body => site.1.immediate,
-            LexicalOwnerPhase::Deferred => site.1.deferred,
-            LexicalOwnerPhase::Incomplete => site.1.incomplete,
+            LexicalOwnerPhase::Immediate | LexicalOwnerPhase::Body => site.immediate,
+            LexicalOwnerPhase::Deferred => site.deferred,
+            LexicalOwnerPhase::Incomplete => site.incomplete,
         };
-        Some(LexicalOwner {
-            event: site.0,
-            ticket,
-        })
+        Some(LexicalOwner { ticket })
     }
 
     pub(crate) fn attach_class_binding(
@@ -1305,10 +1367,10 @@ impl LexicalReservations {
         &mut self,
         source: SourceSite,
         class: &Class<'_>,
-        event: ReservedEvent,
         tickets: SiteTickets,
         store: &mut EventStore,
     ) -> Result<ClassSiteId, ReservationError> {
+        let (module_ordinal, unit_slot) = user_source_parts(source)?;
         let id = ClassSiteId(self.classes.len());
         let mut constraints = Vec::new();
         let mut defaults = Vec::new();
@@ -1320,30 +1382,20 @@ impl LexicalReservations {
             .enumerate()
         {
             if let Some(constraint) = parameter.constraint.as_ref() {
-                let source = SourceSite {
-                    module_ordinal: source.module_ordinal,
-                    unit_slot: source.unit_slot,
-                    source_start: constraint.span().start,
-                };
-                let event = store.reserve_event(source.module_ordinal, source.source_start);
+                let source = SourceSite::user(module_ordinal, unit_slot, constraint.span().start);
+                let event = store.reserve_event(module_ordinal, source.source_start);
                 constraints.push(ClassConstraintReservation {
                     parameter_index,
                     source,
-                    event: event.id,
                     owner: event.primary,
                 });
             }
             if let Some(default) = parameter.default.as_ref() {
-                let source = SourceSite {
-                    module_ordinal: source.module_ordinal,
-                    unit_slot: source.unit_slot,
-                    source_start: default.span().start,
-                };
-                let event = store.reserve_event(source.module_ordinal, source.source_start);
+                let source = SourceSite::user(module_ordinal, unit_slot, default.span().start);
+                let event = store.reserve_event(module_ordinal, source.source_start);
                 defaults.push(ClassDefaultReservation {
                     parameter_index,
                     source,
-                    event: event.id,
                     owner: event.primary,
                 });
             }
@@ -1351,7 +1403,6 @@ impl LexicalReservations {
         self.classes.push(ClassReservation {
             id,
             source,
-            event: event.id,
             tickets,
             constraints,
             defaults,
@@ -1359,7 +1410,7 @@ impl LexicalReservations {
             binding: None,
         });
         self.classes_by_source
-            .entry((source.module_ordinal, class.span.start))
+            .entry((source.ordinal(), class.span.start))
             .or_default()
             .push(id);
 
@@ -1368,20 +1419,14 @@ impl LexicalReservations {
         }
 
         for element in &class.body.body {
-            let element_source = SourceSite {
-                module_ordinal: source.module_ordinal,
-                unit_slot: source.unit_slot,
-                source_start: element.span().start,
-            };
-            let member_event =
-                store.reserve_event(source.module_ordinal, element_source.source_start);
+            let element_source = SourceSite::user(module_ordinal, unit_slot, element.span().start);
+            let member_event = store.reserve_event(module_ordinal, element_source.source_start);
             let member_tickets = reserve_site_tickets(member_event, store)?;
             let member_id = MemberSiteId(self.members.len());
             let mut member = MemberReservation {
                 id: member_id,
                 class: id,
                 source: element_source,
-                event: member_event.id,
                 tickets: member_tickets,
                 callable: None,
             };
@@ -1413,8 +1458,8 @@ impl LexicalReservations {
                 ClassElement::MethodDefinition(method) => {
                     if let Some(body) = method.value.body.as_ref() {
                         self.reserve_statement_list(
-                            source.module_ordinal,
-                            source.unit_slot,
+                            module_ordinal,
+                            unit_slot,
                             &body.statements,
                             false,
                             store,
@@ -1423,8 +1468,8 @@ impl LexicalReservations {
                 }
                 ClassElement::StaticBlock(block) => {
                     self.reserve_statement_list(
-                        source.module_ordinal,
-                        source.unit_slot,
+                        module_ordinal,
+                        unit_slot,
                         &block.body,
                         false,
                         store,
@@ -1453,7 +1498,6 @@ impl LexicalReservations {
             id,
             owner_member,
             source,
-            event: event.id,
             tickets: CallableTickets {
                 signature: site_tickets.immediate,
                 deferred: site_tickets.deferred,
@@ -1467,7 +1511,7 @@ impl LexicalReservations {
             binding: None,
         });
         self.callables_by_source
-            .entry((source.module_ordinal, function.span.start))
+            .entry((source.ordinal(), function.span.start))
             .or_default()
             .push(id);
         Ok(id)
@@ -1487,7 +1531,6 @@ impl LexicalReservations {
             id,
             owner_member: None,
             source,
-            event: event.id,
             tickets: CallableTickets {
                 signature: site_tickets.immediate,
                 deferred: site_tickets.deferred,
@@ -1501,7 +1544,7 @@ impl LexicalReservations {
             binding: None,
         });
         self.callables_by_source
-            .entry((source.module_ordinal, arrow.span.start))
+            .entry((source.ordinal(), arrow.span.start))
             .or_default()
             .push(id);
         Ok(id)
@@ -1583,6 +1626,95 @@ mod tests {
     }
 
     #[test]
+    fn user_source_units_preserve_lookup_and_source_order() {
+        let source = "class C {} function f() {}";
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty());
+        let first = ModuleOrdinal::new(0);
+        let second = ModuleOrdinal::new(1);
+        let class_start = u32::try_from(source.find("class C").unwrap()).unwrap();
+        let callable_start = u32::try_from(source.find("function f").unwrap()).unwrap();
+        let mut store = EventStore::default();
+        let mut reservations = LexicalReservations::default();
+
+        reservations
+            .reserve_program(second, UnitSlot::new(0), &parsed.program, &mut store)
+            .unwrap();
+        reservations
+            .reserve_program(first, UnitSlot::new(1), &parsed.program, &mut store)
+            .unwrap();
+
+        let first_class = reservations.class_at(first, class_start).unwrap();
+        let second_class = reservations.class_at(second, class_start).unwrap();
+        assert_ne!(first_class, second_class);
+        assert!(reservations.callable_at(first, callable_start).is_some());
+        assert!(reservations.callable_at(second, callable_start).is_some());
+        assert_eq!(
+            reservations.class(first_class).unwrap().source.unit,
+            SourceUnit::User {
+                module_ordinal: first,
+                unit_slot: UnitSlot::new(1),
+            }
+        );
+        assert_eq!(
+            reservations
+                .classes_by_source
+                .keys()
+                .filter(|(_, source_start)| *source_start == class_start)
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![
+                (SourceOrdinal::User(first), class_start),
+                (SourceOrdinal::User(second), class_start),
+            ]
+        );
+
+        for ticket in reservations.tickets() {
+            store.complete(ticket, Vec::new()).unwrap();
+        }
+        assert!(store.finish().unwrap().is_empty());
+    }
+
+    #[test]
+    fn library_source_units_are_nominal_without_user_event_storage() {
+        use super::super::events_library::{LibraryEventLedger, LibraryRecordTicket};
+        use crate::source::LibraryFileOrdinal;
+
+        let file_ordinal = LibraryFileOrdinal::new(12);
+        let site = SourceSite {
+            unit: SourceUnit::Library { file_ordinal },
+            source_start: 38,
+        };
+        let _: LexicalReservations<LibraryRecordTicket> = LexicalReservations::default();
+        let mut ledger = LibraryEventLedger::default();
+        let event = ledger.reserve_event(file_ordinal, site.source_start);
+        let tickets = SiteTickets {
+            immediate: event.primary,
+            deferred: ledger.reserve_record(event.id).unwrap(),
+            incomplete: ledger.reserve_record(event.id).unwrap(),
+        };
+        let reservation = TopLevelReservation::<LibraryRecordTicket> {
+            source: site,
+            tickets,
+            class: None,
+            callable: None,
+        };
+
+        assert_eq!(site.ordinal(), SourceOrdinal::Library(file_ordinal));
+        assert_ne!(
+            SourceOrdinal::User(ModuleOrdinal::new(12)),
+            SourceOrdinal::Library(file_ordinal)
+        );
+        assert_eq!(site.user_module_ordinal(), None);
+        assert_eq!(site.user_unit_slot(), None);
+        assert_eq!(reservation.source, site);
+        assert_eq!(reservation.tickets.immediate, event.primary);
+        assert_eq!(reservation.tickets.deferred.record_ordinal, 1);
+        assert_eq!(reservation.tickets.incomplete.record_ordinal, 2);
+    }
+
+    #[test]
     fn namespace_export_aliases_keep_exact_preallocated_local_owners() {
         let source = "\
 export { TopLevel };
@@ -1637,9 +1769,9 @@ declare namespace N {
         assert_eq!(resolved.ticket.record_ordinal, 0);
         assert_eq!(chained.ticket.record_ordinal, 0);
         assert_eq!(second.ticket.record_ordinal, 0);
-        assert_ne!(first.event, resolved.event);
-        assert_ne!(resolved.event, chained.event);
-        assert_ne!(chained.event, second.event);
+        assert_ne!(first.ticket, resolved.ticket);
+        assert_ne!(resolved.ticket, chained.ticket);
+        assert_ne!(chained.ticket, second.ticket);
     }
 
     #[test]
@@ -1808,7 +1940,6 @@ interface Combined extends First, Second {
             constraints[1].source.source_start,
             u32::try_from(source.find("unknown").unwrap()).unwrap()
         );
-        assert_ne!(constraints[0].event, constraints[1].event);
         assert_ne!(constraints[0].owner, constraints[1].owner);
 
         let defaults = &class.defaults;
@@ -1823,7 +1954,6 @@ interface Combined extends First, Second {
             defaults[1].source.source_start,
             u32::try_from(source.find("number").unwrap()).unwrap()
         );
-        assert_ne!(defaults[0].event, defaults[1].event);
         assert_ne!(defaults[0].owner, defaults[1].owner);
         assert_ne!(constraints[0].owner, defaults[0].owner);
         assert_ne!(constraints[1].owner, defaults[1].owner);
@@ -1868,11 +1998,11 @@ interface Combined extends First, Second {
         for fragment in &group.fragments {
             assert_eq!(
                 reservations.declaration_source(fragment.declaration),
-                Some(SourceSite {
-                    module_ordinal: module,
-                    unit_slot: UnitSlot::new(0),
-                    source_start: fragment.site.declaration_span.start,
-                })
+                Some(SourceSite::user(
+                    module,
+                    UnitSlot::new(0),
+                    fragment.site.declaration_span.start,
+                ))
             );
         }
     }
@@ -1921,7 +2051,7 @@ interface Combined extends First, Second {
             .declaration_owner(second.declaration)
             .expect("second declaration owner");
         assert_ne!(first.declaration, second.declaration);
-        assert_ne!(first_owner.event, second_owner.event);
+        assert_ne!(first_owner.ticket, second_owner.ticket);
         let first_reservation = reservations
             .declaration_reservation(first.declaration)
             .expect("first exact reservation");
@@ -1943,19 +2073,19 @@ interface Combined extends First, Second {
 
         assert_eq!(
             reservations.declaration_source(first.declaration),
-            Some(SourceSite {
-                module_ordinal: module,
-                unit_slot: UnitSlot::new(0),
-                source_start: first.site.declaration_span.start,
-            })
+            Some(SourceSite::user(
+                module,
+                UnitSlot::new(0),
+                first.site.declaration_span.start,
+            ))
         );
         assert_eq!(
             reservations.declaration_source(second.declaration),
-            Some(SourceSite {
-                module_ordinal: module,
-                unit_slot: UnitSlot::new(0),
-                source_start: second.site.declaration_span.start,
-            })
+            Some(SourceSite::user(
+                module,
+                UnitSlot::new(0),
+                second.site.declaration_span.start,
+            ))
         );
     }
 
@@ -2007,7 +2137,7 @@ interface Combined extends First, Second {
         assert!(owners.iter().enumerate().all(|(index, owner)| owners
             .iter()
             .skip(index + 1)
-            .all(|other| owner.event != other.event && owner.ticket != other.ticket)));
+            .all(|other| owner.ticket != other.ticket)));
 
         for ticket in reservations.tickets() {
             store.complete(ticket, Vec::new()).unwrap();
@@ -2184,7 +2314,7 @@ interface Combined extends First, Second {
         let body = reservations
             .owner_at(module, inner_start, LexicalOwnerPhase::Body)
             .unwrap();
-        assert_eq!(signature.event, body.event);
+        assert_eq!(signature.ticket.event, body.ticket.event);
         assert_ne!(signature.ticket, body.ticket);
 
         for ticket in reservations.tickets() {
@@ -2226,7 +2356,7 @@ interface Combined extends First, Second {
             let body = reservations
                 .owner_at(module, *start, LexicalOwnerPhase::Body)
                 .unwrap();
-            assert_eq!(signature.event, body.event);
+            assert_eq!(signature.ticket.event, body.ticket.event);
             assert_ne!(signature.ticket, body.ticket);
         }
         for name in ["a =", "b =", "c ="] {

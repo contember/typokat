@@ -752,6 +752,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
 
         for reservation in reservations {
+            let Some(module_ordinal) = reservation.source.user_module_ordinal() else {
+                continue;
+            };
             let Some(binding) = reservation.binding.as_ref() else {
                 continue;
             };
@@ -849,7 +852,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 declarations: &type_decls,
                 resolved: &type_resolved,
                 reservations: &self.lexical_events,
-                module: reservation.source.module_ordinal,
+                module: module_ordinal,
                 fallback: reservation.tickets.incomplete,
                 error,
                 qualified_outer_type_parameters_visible: true,
@@ -1306,7 +1309,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 let mut lowerer = ClassSurfaceLowerer::new(
                     class_id,
                     ClassRecoveryOrder {
-                        original_module: reservation.source.module_ordinal.index(),
+                        original_module: module_ordinal.index(),
                         binding_start: reservation.source.source_start,
                         declaration_ordinal: declaration.0,
                     },
@@ -2975,6 +2978,9 @@ fn register_reserved_surface_roots<'ast>(
                     );
                     continue;
                 };
+                let Some(module_ordinal) = source.user_module_ordinal() else {
+                    continue;
+                };
                 let scope = *scope;
                 let fallback = reservations
                     .declaration_owner(*declaration)
@@ -2986,7 +2992,7 @@ fn register_reserved_surface_roots<'ast>(
                     declarations,
                     resolved,
                     reservations,
-                    module: source.module_ordinal,
+                    module: module_ordinal,
                     fallback,
                     error,
                     qualified_outer_type_parameters_visible: true,
