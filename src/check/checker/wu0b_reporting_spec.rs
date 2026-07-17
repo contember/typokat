@@ -1062,40 +1062,50 @@ fn attached_callable_members_with_identical_offsets_keep_exact_library_owners_in
             BTreeSet::from(["alpha", "bravo"])
         );
 
-        // These rows must come from the published member storages and their binder origins.
+        // Binder origins, lexical tickets, and signatures must be probed from their real owners.
+        // `signatures` is an AST-free owned DTO canonicalized from the published Store surface.
+        // The probe must not derive any of these fields by reparsing `InjectedLibrarySource::source`.
         let mut callable_members = merged.callable_members.clone();
         callable_members.sort_by(|left, right| left.name.cmp(&right.name));
         assert_eq!(callable_members.len(), 2);
         assert_ne!(callable_members[0].identity, callable_members[1].identity);
-        assert_eq!(
-            callable_members
-                .iter()
-                .map(|member| (
-                    member.name.as_str(),
-                    member.source,
-                    member.source_start,
-                    member.call_signature_count,
-                ))
-                .collect::<Vec<_>>(),
-            [
-                (
-                    "alpha",
-                    SourceUnit::Library {
-                        file_ordinal: first_ordinal,
-                    },
-                    42,
-                    1,
-                ),
-                (
-                    "bravo",
-                    SourceUnit::Library {
-                        file_ordinal: second_ordinal,
-                    },
-                    42,
-                    1,
-                ),
-            ]
-        );
+        for (member, name, file_ordinal, parameter_type, return_type) in [
+            (
+                &callable_members[0],
+                "alpha",
+                first_ordinal,
+                "number",
+                "string",
+            ),
+            (
+                &callable_members[1],
+                "bravo",
+                second_ordinal,
+                "string",
+                "number",
+            ),
+        ] {
+            let expected_source = SourceUnit::Library { file_ordinal };
+            assert_eq!(member.name, name);
+            assert_eq!(member.source, expected_source, "binder origin source");
+            assert_eq!(
+                member.reservation_source, expected_source,
+                "lexical callable reservation owner"
+            );
+            assert_eq!(member.source_start, 42);
+            assert_eq!(member.call_signature_count, 1);
+            assert_eq!(member.signatures.len(), 1);
+            let signature = &member.signatures[0];
+            assert_eq!(
+                signature
+                    .parameter_types
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                [parameter_type]
+            );
+            assert_eq!(signature.return_type, return_type);
+        }
     }
     Ok(())
 }
