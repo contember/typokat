@@ -196,6 +196,111 @@ pub(in crate::check::checker) enum FunctionReservation<
     Unavailable(RetainedFunctionBodySurface<Ticket>),
 }
 
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
+    /// Check already-lowered type arguments against constraint sources. Signature
+    /// default validation shares this with call-site explicit arguments.
+    pub(in crate::check::checker) fn check_constraint_arguments(
+        &mut self,
+        args: &[(Option<TypeId>, TypeId, Span)],
+        map: &FxHashMap<TypeParamId, TypeId>,
+    ) {
+        if self.building_template {
+            self.effect_stack
+                .last_mut()
+                .expect("construction constraint check requires a lexical owner")
+                .constraint_checks
+                .push(ConstraintCheckObligation {
+                    checks: args.to_vec(),
+                    substitutions: map.clone(),
+                });
+            return;
+        }
+        let outcome = self.check_constraint_arguments_outcome(args, map);
+        if let (DemandOutcome::Exhausted(exhaustion), Some((_, _, span))) = (outcome, args.first())
+        {
+            self.own_type_demand(DemandOutcome::Exhausted(exhaustion), *span);
+        }
+    }
+
+    fn check_constraint_arguments_outcome(
+        &mut self,
+        args: &[(Option<TypeId>, TypeId, Span)],
+        map: &FxHashMap<TypeParamId, TypeId>,
+    ) -> DemandOutcome<bool> {
+        // Build the (argument, substituted-constraint, span) checks up front — this needs
+        // `&mut Interner` (substitution may intern new types), which cannot overlap the
+        // relation engine's immutable store borrow below.
+        let mut checks: Vec<(TypeId, TypeId, TypeId, Span)> = Vec::new();
+        for &(raw_constraint, arg, span) in args {
+            let Some(constraint) = raw_constraint else {
+                continue;
+            };
+            let substituted = substitute(self.interner, constraint, map);
+            // A substituted constraint may be pending; resolve it before relating.
+            let evaluated = match self.evaluate_type(substituted) {
+                DemandOutcome::Ready(evaluated) => evaluated,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
+            };
+            // Concrete instantiation decides deferred `keyof` constraints later.
+            if contains_deferred_keyof(self.interner.store(), evaluated) {
+                continue;
+            }
+            // Decidable argument compositions check precisely; deferred ones stay conservative.
+            let evaluated_arg = match self.evaluate_type(arg) {
+                DemandOutcome::Ready(evaluated) => evaluated,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
+            };
+            checks.push((evaluated_arg, arg, evaluated, span));
+        }
+        if checks.is_empty() {
+            return DemandOutcome::Ready(false);
+        }
+
+        // Render relation failures before mutating the effect stack.
+        let mut failures: Vec<(String, String, Span, Vec<String>)> = Vec::new();
+        for (evaluated_arg, written_arg, constraint, span) in checks {
+            match SemanticQueryCoordinator::new(
+                self.interner,
+                self.type_environment.published().classes(),
+                &mut self.semantic_queries,
+                &mut self.next_type_param,
+            )
+            .is_assignable(evaluated_arg, constraint)
+            {
+                RelationOutcome::Yes => {}
+                RelationOutcome::No(chain) => {
+                    let store = self.interner.store();
+                    // Preserve the written argument when evaluation remains deferred.
+                    let render_id = if contains_deferred_argument(store, evaluated_arg) {
+                        written_arg
+                    } else {
+                        evaluated_arg
+                    };
+                    let src = render_type(store, render_id, true);
+                    let tgt = render_type(store, constraint, false);
+                    let elaboration = render_reason_chain(store, chain.head());
+                    failures.push((src, tgt, span, elaboration));
+                }
+                RelationOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
+            }
+        }
+        let failed = !failures.is_empty();
+        for (src, tgt, span, elaboration) in failures {
+            self.emit_diagnostic(
+                Diagnostic::constraint_not_satisfied(span, &src, &tgt)
+                    .with_elaboration(elaboration),
+            );
+        }
+        DemandOutcome::Ready(failed)
+    }
+}
+
 impl<'a, 'ast> Pass<'a, 'ast> {
     /// Run speculative candidate work against a child semantic-query state.
     /// Diagnostics and obligations travel in `CheckerEffects`; query memo/cache
@@ -320,118 +425,6 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             .map(|(param, &(arg, span))| (param.constraint, arg, span))
             .collect();
         self.check_constraint_arguments_outcome(&checks, map)
-    }
-
-    /// Check already-lowered type arguments against constraint sources. Signature
-    /// default validation shares this with call-site explicit arguments.
-    pub(in crate::check::checker) fn check_constraint_arguments(
-        &mut self,
-        args: &[(Option<TypeId>, TypeId, Span)],
-        map: &FxHashMap<TypeParamId, TypeId>,
-    ) {
-        if self.building_template {
-            self.effect_stack
-                .last_mut()
-                .expect("construction constraint check requires a lexical owner")
-                .constraint_checks
-                .push(ConstraintCheckObligation {
-                    checks: args.to_vec(),
-                    substitutions: map.clone(),
-                });
-            return;
-        }
-        let outcome = self.check_constraint_arguments_outcome(args, map);
-        if let (DemandOutcome::Exhausted(exhaustion), Some((_, _, span))) = (outcome, args.first())
-        {
-            self.own_type_demand(DemandOutcome::Exhausted(exhaustion), *span);
-        }
-    }
-
-    fn check_constraint_arguments_outcome(
-        &mut self,
-        args: &[(Option<TypeId>, TypeId, Span)],
-        map: &FxHashMap<TypeParamId, TypeId>,
-    ) -> DemandOutcome<bool> {
-        // Build the (argument, substituted-constraint, span) checks up front — this needs
-        // `&mut Interner` (substitution may intern new types), which cannot overlap the
-        // relation engine's immutable store borrow below.
-        let mut checks: Vec<(TypeId, TypeId, TypeId, Span)> = Vec::new();
-        for &(raw_constraint, arg, span) in args {
-            let Some(constraint) = raw_constraint else {
-                continue;
-            };
-            let substituted = substitute(self.interner, constraint, map);
-            // M28: a substituted constraint may be a pending computation (`K extends
-            // keyof T` at `Pick<P, "q">` → `keyof P`) — resolve it through the shared
-            // evaluator before relating, so the check runs against the VALUE
-            // (`"a" | "b"`), driving the fixture's TK2344.
-            let evaluated = match self.evaluate_type(substituted) {
-                DemandOutcome::Ready(evaluated) => evaluated,
-                DemandOutcome::Exhausted(exhaustion) => {
-                    return DemandOutcome::Exhausted(exhaustion)
-                }
-            };
-            // M28: a substituted constraint still carrying deferred `keyof` cannot
-            // be decided here; tsc lands that check at concrete instantiation.
-            // Keyof only, so conditional/mapped constraints keep prior behavior.
-            if contains_deferred_keyof(self.interner.store(), evaluated) {
-                continue;
-            }
-            // M28: always evaluate the argument before checking. Decidable
-            // compositions check precisely; still-deferred results check
-            // conservatively (documented over-report for backlog 37 shapes).
-            let evaluated_arg = match self.evaluate_type(arg) {
-                DemandOutcome::Ready(evaluated) => evaluated,
-                DemandOutcome::Exhausted(exhaustion) => {
-                    return DemandOutcome::Exhausted(exhaustion)
-                }
-            };
-            checks.push((evaluated_arg, arg, evaluated, span));
-        }
-        if checks.is_empty() {
-            return DemandOutcome::Ready(false);
-        }
-
-        // Relate each argument to its constraint and render the failures under a single
-        // immutable store borrow; push the diagnostics after it ends.
-        let mut failures: Vec<(String, String, Span, Vec<String>)> = Vec::new();
-        for (evaluated_arg, written_arg, constraint, span) in checks {
-            match SemanticQueryCoordinator::new(
-                self.interner,
-                self.type_environment.published().classes(),
-                &mut self.semantic_queries,
-                &mut self.next_type_param,
-            )
-            .is_assignable(evaluated_arg, constraint)
-            {
-                RelationOutcome::Yes => {}
-                RelationOutcome::No(chain) => {
-                    let store = self.interner.store();
-                    // Render the written argument when evaluation remains deferred;
-                    // otherwise render the evaluated value, matching tsc-like output.
-                    let render_id = if contains_deferred_argument(store, evaluated_arg) {
-                        written_arg
-                    } else {
-                        evaluated_arg
-                    };
-                    let src = render_type(store, render_id, /* widen */ true);
-                    let tgt = render_type(store, constraint, /* widen */ false);
-                    let elaboration = render_reason_chain(store, chain.head());
-                    failures.push((src, tgt, span, elaboration));
-                }
-                RelationOutcome::Exhausted(exhaustion) => {
-                    return DemandOutcome::Exhausted(exhaustion)
-                }
-            }
-        }
-        let failed = !failures.is_empty();
-        for (src, tgt, span, elaboration) in failures {
-            self.emit_diagnostic(
-                Diagnostic::constraint_not_satisfied(span, &src, &tgt)
-                    .with_elaboration(elaboration),
-            );
-        }
-        DemandOutcome::Ready(failed)
     }
 
     fn contextual_inference_args(

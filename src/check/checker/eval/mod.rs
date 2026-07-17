@@ -32,7 +32,7 @@ mod tests;
 pub(in crate::check::checker) use keyof::keyof_of_type;
 pub(in crate::check) use keyof::{contains_deferred_argument, contains_deferred_keyof};
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Evaluate a lowered type at a value-position demand site. Concrete
     /// conditionals, lazy instantiations, and unions of those resolve; deferred
     /// conditionals and other types are unchanged. Exhaustion reports `TK2589` at

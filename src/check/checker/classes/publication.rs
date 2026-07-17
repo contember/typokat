@@ -228,26 +228,26 @@ fn class_member_visibility(
     }
 }
 
-struct TicketRecord {
-    owner: UserRecordTicket,
+struct TicketRecord<Ticket: Copy = UserRecordTicket> {
+    owner: Ticket,
     source_start: u32,
     record: CheckerRecord,
 }
 
-pub(in crate::check::checker) struct StagedClassValidation {
-    records: Vec<TicketRecord>,
-    default_checks: Vec<(UserRecordTicket, TypeId, TypeId, CheckSpan)>,
-    application_checks: Vec<StagedClassApplicationCheck>,
+pub(in crate::check::checker) struct StagedClassValidation<Ticket: Copy = UserRecordTicket> {
+    records: Vec<TicketRecord<Ticket>>,
+    default_checks: Vec<(Ticket, TypeId, TypeId, CheckSpan)>,
+    application_checks: Vec<StagedClassApplicationCheck<Ticket>>,
 }
 
-struct StagedClassApplicationCheck {
-    owner: UserRecordTicket,
+struct StagedClassApplicationCheck<Ticket: Copy = UserRecordTicket> {
+    owner: Ticket,
     parameters: Vec<TypeParamId>,
     arguments: Vec<TypeId>,
     explicit_spans: Vec<CheckSpan>,
 }
 
-impl TicketRecord {
+impl TicketRecord<UserRecordTicket> {
     fn diagnostic(owner: UserRecordTicket, diagnostic: Diagnostic) -> Self {
         Self {
             owner,
@@ -275,7 +275,7 @@ struct Resolver<'a, 'ast> {
     fallback: UserRecordTicket,
     error: TypeId,
     qualified_outer_type_parameters_visible: bool,
-    application_checks: Vec<StagedClassApplicationCheck>,
+    application_checks: Vec<StagedClassApplicationCheck<UserRecordTicket>>,
 }
 
 impl Resolver<'_, '_> {

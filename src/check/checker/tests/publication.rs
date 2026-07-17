@@ -110,8 +110,9 @@ fn interface_relation_exhaustion_stays_with_its_lexical_owner_without_failure_di
     pass.type_environment = crate::check::checker::type_groups::TypeEnvironmentState::Published(
         crate::check::checker::type_groups::PublishedTypeEnvironment::empty(),
     );
-    let unrelated = pass.event_store.reserve_event(ModuleOrdinal::new(0), 10);
-    let owner = pass.event_store.reserve_event(ModuleOrdinal::new(0), 20);
+    let mut event_store = crate::check::checker::events::EventStore::default();
+    let unrelated = event_store.reserve_event(ModuleOrdinal::new(0), 10);
+    let owner = event_store.reserve_event(ModuleOrdinal::new(0), 20);
     let effects = CheckerEffects::new(owner.primary);
     let span = Span::new(21, 22);
 
@@ -125,16 +126,14 @@ fn interface_relation_exhaustion_stays_with_its_lexical_owner_without_failure_di
     assert_eq!(failed, None, "exhaustion is not a failed relation");
     assert_eq!(effects.records.owner(), owner.primary);
     assert_eq!(effects.records.len(), 1);
-    pass.event_store
+    event_store
         .complete(unrelated.primary, Vec::new())
         .expect("unrelated owner completes independently");
     let (owner, records) = effects.records.into_parts();
-    pass.event_store
+    event_store
         .complete(owner, records)
         .expect("relation owner commits its recovery record");
-    let records = std::mem::take(&mut pass.event_store)
-        .finish()
-        .expect("all test owners completed");
+    let records = event_store.finish().expect("all test owners completed");
     assert_eq!(records.len(), 1);
     let CheckerRecord::Incomplete(record) = &records[0].1 else {
         panic!("relation exhaustion must not become a failure diagnostic")

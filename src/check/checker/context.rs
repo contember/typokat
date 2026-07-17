@@ -23,7 +23,7 @@ use super::classes::body::{BodyClassView, BodyMemberEnvironment};
 use super::classes::construction::DraftClassTypeParameter;
 use super::classes::publication::StagedClassValidation;
 use super::classes::retained::RetainedClassCallable;
-use super::events::{CandidateEffects, EventStore, UserRecordTicket};
+use super::events::{CandidateEffects, UserRecordTicket};
 use super::function_groups::FunctionGroupRegistry;
 use super::lexical_events::{CallableTickets, LexicalReservations};
 use super::namespace_values::NamespaceValueRegistry;
@@ -505,7 +505,7 @@ pub(in crate::check::checker) struct ConstructionDrafts<'ast> {
 /// pass writes to. Bundled into one struct so the many recursive `infer_*`/
 /// `lower_*` helpers take a single `&mut` rather than a long, churn-prone argument
 /// list.
-pub(in crate::check::checker) struct Pass<'a, 'ast> {
+pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = UserRecordTicket> {
     pub(in crate::check::checker) interner: &'a mut Interner,
     pub(in crate::check::checker) binder: &'a Binder,
     /// The module scope currently being checked.
@@ -517,28 +517,26 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     pub(in crate::check::checker) current_module_ordinal: ModuleOrdinal,
     /// Dependency-ordered execution slot for the current module.
     pub(in crate::check::checker) current_unit_slot: UnitSlot,
-    /// Checker-wide deterministic record authority.
-    pub(in crate::check::checker) event_store: EventStore,
     /// Hierarchical lexical/speculative output owners; only the outer owner commits.
-    pub(in crate::check::checker) effect_stack: Vec<CheckerEffects>,
+    pub(in crate::check::checker) effect_stack: Vec<CheckerEffects<Ticket>>,
     /// Completed lexical owners awaiting deferred relation/override resolution.
-    pub(in crate::check::checker) pending_effects: Vec<CheckerEffects>,
+    pub(in crate::check::checker) pending_effects: Vec<CheckerEffects<Ticket>>,
     /// Prelude declaration lowering uses real lexical frames but discards their effects.
     pub(in crate::check::checker) suppress_effects: bool,
     /// Persistent lexical reservations built before class fill and body checking.
-    pub(in crate::check::checker) lexical_events: LexicalReservations,
+    pub(in crate::check::checker) lexical_events: LexicalReservations<Ticket>,
     /// Construction-only inherited view or the sole query-visible published snapshot.
     pub(in crate::check::checker) type_environment: TypeEnvironmentState<'ast>,
     /// Durable coordinator-owned projection, evaluation, and relation state.
     pub(in crate::check::checker) semantic_queries: SemanticQueryState,
     /// Frozen class parameter descriptors retained from the atomic publication.
     pub(in crate::check::checker) class_application_parameters:
-        BTreeMap<ClassId, Vec<DraftClassTypeParameter<UserRecordTicket>>>,
+        BTreeMap<ClassId, Vec<DraftClassTypeParameter<Ticket>>>,
     /// Query-bearing class validation is held until type groups publish atomically.
-    pub(in crate::check::checker) staged_class_validation: Option<StagedClassValidation>,
+    pub(in crate::check::checker) staged_class_validation: Option<StagedClassValidation<Ticket>>,
     /// Exact class callables retained by the one surface-lowering pass.
     pub(in crate::check::checker) retained_class_callables:
-        BTreeMap<ClassId, Vec<RetainedClassCallable<UserRecordTicket>>>,
+        BTreeMap<ClassId, Vec<RetainedClassCallable<Ticket>>>,
     /// Query-invisible own-member surfaces used only while checking class bodies.
     /// Poisoned classes stay exhausted through `published_classes`; these drafts keep
     /// independent body diagnostics from losing `this` and `static this`.
@@ -573,12 +571,12 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     pub(in crate::check::checker) class_names: FxHashMap<ClassId, String>,
     pub(in crate::check::checker) decl_types: DeclTypes,
     /// Construction and single-publication state for admitted function/namespace groups.
-    pub(in crate::check::checker) function_groups: FunctionGroupRegistry<UserRecordTicket>,
+    pub(in crate::check::checker) function_groups: FunctionGroupRegistry<Ticket>,
     /// Immutable namespace value surfaces awaiting their exact class-owned draft.
     pub(in crate::check::checker) class_namespace_payloads:
-        BTreeMap<TypeGroupId, Vec<ClassNamespacePropertyPayload<UserRecordTicket>>>,
+        BTreeMap<TypeGroupId, Vec<ClassNamespacePropertyPayload<Ticket>>>,
     /// Prepared attached-namespace members consumed exactly once at their source sites.
-    pub(in crate::check::checker) namespace_values: NamespaceValueRegistry<UserRecordTicket>,
+    pub(in crate::check::checker) namespace_values: NamespaceValueRegistry<Ticket>,
     /// Explicit `var` annotations reserved across one function/module hoist
     /// container, keyed by their own `(module, declarator span)` source site.
     pub(in crate::check::checker) var_annotation_surfaces:
@@ -688,7 +686,7 @@ pub(in crate::check::checker) struct Pass<'a, 'ast> {
     pub(in crate::check::checker) mapped_frames: Vec<MappedFrame>,
 }
 
-impl<'ast> Deref for Pass<'_, 'ast> {
+impl<'ast, Ticket: Copy + PartialEq> Deref for Pass<'_, 'ast, Ticket> {
     type Target = ConstructionDrafts<'ast>;
 
     fn deref(&self) -> &Self::Target {
@@ -696,7 +694,7 @@ impl<'ast> Deref for Pass<'_, 'ast> {
     }
 }
 
-impl DerefMut for Pass<'_, '_> {
+impl<Ticket: Copy + PartialEq> DerefMut for Pass<'_, '_, Ticket> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.type_environment.drafts_mut()
     }
@@ -750,46 +748,96 @@ pub(in crate::check::checker) struct CondFrame {
 
 #[cfg(test)]
 mod tests {
-    use super::CheckerEffects;
     use crate::check::checker::events_library::{LibraryEventLedger, LibraryRecordTicket};
+    use crate::check::checker::lexical_events::LexicalReservations;
     use crate::check::checker::reporting_record::CheckerRecord;
-    use crate::diagnostics::{Diagnostic, IncompleteSurface};
-    use crate::source::LibraryFileOrdinal;
+    use crate::diagnostics::{Diagnostic, DiagnosticCode, IncompleteSurface};
+    use crate::source::{LibraryFileOrdinal, ModuleOrdinal, UnitSlot};
     use crate::span::Span;
+    use crate::types::Interner;
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_span::SourceType;
+    use rustc_hash::FxHashMap;
 
     #[test]
-    fn library_effects_accumulate_and_merge_records_without_reporting_authority() {
+    fn library_pass_finishes_ordered_record_batches_without_reporting_authority() {
         let mut ledger = LibraryEventLedger::default();
-        let owner: LibraryRecordTicket =
+        let first_owner: LibraryRecordTicket =
             ledger.reserve_event(LibraryFileOrdinal::new(7), 11).primary;
+        let second_owner: LibraryRecordTicket =
+            ledger.reserve_event(LibraryFileOrdinal::new(7), 13).primary;
         drop(ledger);
 
-        let mut effects = CheckerEffects::new(owner);
-        effects
+        let prelude_allocator = Allocator::default();
+        let user_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let user = Parser::new(&user_allocator, "", SourceType::ts()).parse();
+        let binder = crate::binder::bind_module_with_prelude(&prelude.program, &user.program);
+        let mut interner = Interner::with_intrinsics();
+        let string = interner.well_known().string;
+        let number = interner.well_known().number;
+        let mut pass = super::super::build_pass_with_tickets(
+            &mut interner,
+            &binder,
+            Vec::new(),
+            vec![None; binder.type_groups.len()],
+            super::DeclTypes::new(binder.decl_count),
+            0,
+            super::super::PassReportingPlan {
+                reporting: super::super::PassReporting {
+                    module_ordinal: ModuleOrdinal::new(0),
+                    unit_slot: UnitSlot::new(0),
+                    lexical_events: LexicalReservations::default(),
+                    suppress_effects: false,
+                },
+                pending_tickets: vec![first_owner, second_owner],
+            },
+        );
+        pass.type_environment = super::super::type_groups::TypeEnvironmentState::Published(
+            super::super::type_groups::PublishedTypeEnvironment::empty(),
+        );
+        pass.pending_effects[0]
             .records
             .diagnostic(Diagnostic::cannot_find_name(Span::new(11, 12), "first"));
-        let mut child = CheckerEffects::new(owner);
-        child.records.incomplete(IncompleteSurface::new(
-            "library/effects",
-            Span::new(12, 13),
-            "second",
-        ));
-        child
+        pass.pending_effects[0]
+            .records
+            .incomplete(IncompleteSurface::new(
+                "library/effects",
+                Span::new(12, 13),
+                "second",
+            ));
+        pass.pending_effects[0]
+            .constraint_checks
+            .push(super::ConstraintCheckObligation {
+                checks: vec![(Some(string), number, Span::new(14, 15))],
+                substitutions: FxHashMap::default(),
+            });
+        pass.pending_effects[1]
             .records
             .record(CheckerRecord::Diagnostic(Diagnostic::cannot_find_name(
                 Span::new(13, 14),
                 "third",
             )));
-        effects.merge(child);
+        let batches = super::super::finish_semantic_effects(&mut pass);
 
-        assert_eq!(effects.records.owner(), owner);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].owner(), first_owner);
+        assert_eq!(batches[1].owner(), second_owner);
         assert!(matches!(
-            effects.records.records(),
+            batches[0].records(),
             [
                 CheckerRecord::Diagnostic(first),
                 CheckerRecord::Incomplete(second),
-                CheckerRecord::Diagnostic(third),
-            ] if first.span.start == 11 && second.span.start == 12 && third.span.start == 13
+                CheckerRecord::Diagnostic(constraint),
+            ] if first.span.start == 11
+                && second.span.start == 12
+                && constraint.code == DiagnosticCode::TK2344
+                && constraint.span == Span::new(14, 15)
+        ));
+        assert!(matches!(
+            batches[1].records(),
+            [CheckerRecord::Diagnostic(third)] if third.span.start == 13
         ));
     }
 }

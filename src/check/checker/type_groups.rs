@@ -347,7 +347,7 @@ fn parameter_defaults(
         .collect()
 }
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     pub(in crate::check::checker) fn install_published_type_environment_base(
         &mut self,
         base: PublishedTypeEnvironment,

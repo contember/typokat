@@ -54,9 +54,10 @@ mod statements;
 mod type_groups;
 
 use context::{
-    AssertionCompatibilityObligation, AssignObligation, CheckerEffects, ClassFillState,
-    ConstructionDrafts, DeclTypes, DeferredRelationObligation, InterfaceRelationKind,
-    InterfaceRelationObligation, InterfaceRelationReport, OverrideCheck, Pass, TypeDecl,
+    AssertionCompatibilityObligation, AssignObligation, CheckerEffects, CheckerRecordBatch,
+    ClassFillState, ConstructionDrafts, DeclTypes, DeferredRelationObligation,
+    InterfaceRelationKind, InterfaceRelationObligation, InterfaceRelationReport, OverrideCheck,
+    Pass, TypeDecl,
 };
 use decls::{reserve_type_decls, type_decl_id, value_decl_id, walk_type_decls, TopTypeDecl};
 use events::{CandidateEffects, EventStore, UserRecordTicket};
@@ -64,12 +65,20 @@ use lexical_events::{ClassBinding, LexicalOwnerPhase, LexicalReservations};
 use reporting_record::CheckerRecord;
 use statements::{emit_exhausted_obligation, emit_obligation_failure};
 
-struct PassReporting {
+struct PassReporting<Ticket: Copy> {
     module_ordinal: ModuleOrdinal,
     unit_slot: UnitSlot,
-    event_store: EventStore,
-    lexical_events: LexicalReservations,
+    lexical_events: LexicalReservations<Ticket>,
     suppress_effects: bool,
+}
+
+struct PassReportingPlan<Ticket: Copy> {
+    reporting: PassReporting<Ticket>,
+    pending_tickets: Vec<Ticket>,
+}
+
+struct UserReportingAdapter {
+    event_store: EventStore,
 }
 
 fn user_original_module(origin: CompilationOrigin) -> Option<OriginalModuleOrdinal> {
@@ -84,19 +93,21 @@ fn reserve_internal_reporting(
     program: &Program<'_>,
     module_ordinal: ModuleOrdinal,
     unit_slot: UnitSlot,
-) -> PassReporting {
+) -> (PassReporting<UserRecordTicket>, UserReportingAdapter) {
     let mut event_store = EventStore::default();
     let mut lexical_events = LexicalReservations::default();
     lexical_events
         .reserve_program(module_ordinal, unit_slot, program, &mut event_store)
         .expect("lexical event reservation must reference valid events");
-    PassReporting {
-        module_ordinal,
-        unit_slot,
-        event_store,
-        lexical_events,
-        suppress_effects: false,
-    }
+    (
+        PassReporting {
+            module_ordinal,
+            unit_slot,
+            lexical_events,
+            suppress_effects: false,
+        },
+        UserReportingAdapter { event_store },
+    )
 }
 
 /// Trusted utility aliases and bounded ambient values, checked before user code.
@@ -210,7 +221,8 @@ fn bootstrap_trusted_prelude(
     let prelude_ordinal = ModuleOrdinal::new(0);
     let prelude_slot = UnitSlot::new(0);
     // Capture into an isolated store so cleanliness is checked without leaking records.
-    let mut reporting = reserve_internal_reporting(&parsed.program, prelude_ordinal, prelude_slot);
+    let (mut reporting, reporting_adapter) =
+        reserve_internal_reporting(&parsed.program, prelude_ordinal, prelude_slot);
     attach_type_decl_owners(
         &mut reporting.lexical_events,
         prelude_ordinal,
@@ -247,7 +259,7 @@ fn bootstrap_trusted_prelude(
     pass.build_flow_graph(binder.prelude_module, &parsed.program.body);
     pass.check_statements(binder.prelude_module, &parsed.program.body);
 
-    let records = finish_event_effects(&mut pass);
+    let records = finish_event_effects(&mut pass, reporting_adapter);
     debug_assert!(
         trusted_prelude_records_are_clean(&binder, &parsed.program, &records),
         "the prelude must check clean: {records:?}"
@@ -436,7 +448,6 @@ where
         PassReporting {
             module_ordinal,
             unit_slot,
-            event_store,
             lexical_events,
             suppress_effects: false,
         },
@@ -472,7 +483,7 @@ where
 
     emit_test_incomplete(&mut pass);
 
-    let mut records = finish_event_effects(&mut pass);
+    let mut records = finish_event_effects(&mut pass, UserReportingAdapter { event_store });
     let (diagnostics, incomplete) = records.remove(&module_ordinal).unwrap_or_default();
 
     CheckResult {
@@ -805,7 +816,6 @@ where
                 .first()
                 .map(|unit| unit.unit_slot)
                 .unwrap_or(UnitSlot::new(0)),
-            event_store,
             lexical_events,
             suppress_effects: false,
         },
@@ -850,7 +860,7 @@ where
         &pass.decl_types,
         pass.interner,
         &pass.lexical_events,
-        &pass.event_store,
+        &event_store,
         &module_scopes,
     );
 
@@ -863,7 +873,11 @@ where
         emit_test_incomplete(&mut pass);
     }
 
-    let mut records = finish_event_effects_with_inspector(&mut pass, inspect_replay);
+    let mut records = finish_event_effects_with_inspector(
+        &mut pass,
+        UserReportingAdapter { event_store },
+        inspect_replay,
+    );
     units
         .iter()
         .map(|unit| {
@@ -1401,12 +1415,12 @@ fn attach_class_bindings(
     );
 }
 
-fn consume_relation_exhaustion(
-    pass: &mut Pass<'_, '_>,
-    effects: CheckerEffects,
+fn consume_relation_exhaustion<Ticket: Copy + PartialEq>(
+    pass: &mut Pass<'_, '_, Ticket>,
+    effects: CheckerEffects<Ticket>,
     exhaustion: Exhaustion,
     span: Span,
-) -> CheckerEffects {
+) -> CheckerEffects<Ticket> {
     pass.effect_stack.push(effects);
     let _: Option<TypeId> = pass.own_type_demand(DemandOutcome::Exhausted(exhaustion), span);
     pass.effect_stack
@@ -1414,12 +1428,12 @@ fn consume_relation_exhaustion(
         .expect("relation exhaustion lexical effect frame")
 }
 
-fn consume_interface_relation_decision(
-    pass: &mut Pass<'_, '_>,
-    effects: CheckerEffects,
+fn consume_interface_relation_decision<Ticket: Copy + PartialEq>(
+    pass: &mut Pass<'_, '_, Ticket>,
+    effects: CheckerEffects<Ticket>,
     decision: Result<bool, Exhaustion>,
     span: Span,
-) -> (CheckerEffects, Option<bool>) {
+) -> (CheckerEffects<Ticket>, Option<bool>) {
     match decision {
         Ok(failed) => (effects, Some(failed)),
         Err(exhaustion) => (
@@ -1431,18 +1445,28 @@ fn consume_interface_relation_decision(
 
 fn finish_event_effects(
     pass: &mut Pass<'_, '_>,
+    reporting: UserReportingAdapter,
 ) -> BTreeMap<ModuleOrdinal, (Vec<Diagnostic>, Vec<IncompleteSurface>)> {
-    finish_event_effects_with_inspector(pass, |_| {})
+    finish_event_effects_with_inspector(pass, reporting, |_| {})
 }
 
 fn finish_event_effects_with_inspector<F>(
     pass: &mut Pass<'_, '_>,
+    reporting: UserReportingAdapter,
     inspect: F,
 ) -> BTreeMap<ModuleOrdinal, (Vec<Diagnostic>, Vec<IncompleteSurface>)>
 where
     F: FnOnce(&[(events::EventKey, CheckerRecord)]),
 {
+    let batches = finish_semantic_effects(pass);
+    reporting.finish(batches, inspect)
+}
+
+fn finish_semantic_effects<Ticket: Copy + PartialEq>(
+    pass: &mut Pass<'_, '_, Ticket>,
+) -> Vec<CheckerRecordBatch<Ticket>> {
     let pending = std::mem::take(&mut pass.pending_effects);
+    let mut completed = Vec::with_capacity(pending.len());
     for mut effects in pending {
         let mut reported_heritage_pairs = BTreeSet::new();
         let mut reported_header_groups = BTreeSet::new();
@@ -1701,26 +1725,44 @@ where
                 }
             }
         }
-        let (owner, records) = effects.records.into_parts();
-        pass.event_store
-            .complete(owner, records)
-            .expect("each lexical record owner completes exactly once");
+        completed.push(effects.records);
     }
 
-    let mut by_module: BTreeMap<ModuleOrdinal, (Vec<Diagnostic>, Vec<IncompleteSurface>)> =
-        BTreeMap::new();
-    let records = std::mem::take(&mut pass.event_store)
-        .finish()
-        .expect("all lexically preallocated record owners must be completed");
-    inspect(&records);
-    for (key, record) in records {
-        let channels = by_module.entry(key.module_ordinal).or_default();
-        match record {
-            CheckerRecord::Diagnostic(diagnostic) => channels.0.push(diagnostic),
-            CheckerRecord::Incomplete(incomplete) => channels.1.push(incomplete),
+    completed
+}
+
+impl UserReportingAdapter {
+    fn finish<F>(
+        mut self,
+        batches: Vec<CheckerRecordBatch<UserRecordTicket>>,
+        inspect: F,
+    ) -> BTreeMap<ModuleOrdinal, (Vec<Diagnostic>, Vec<IncompleteSurface>)>
+    where
+        F: FnOnce(&[(events::EventKey, CheckerRecord)]),
+    {
+        for batch in batches {
+            let (owner, records) = batch.into_parts();
+            self.event_store
+                .complete(owner, records)
+                .expect("each lexical record owner completes exactly once");
         }
+
+        let mut by_module: BTreeMap<ModuleOrdinal, (Vec<Diagnostic>, Vec<IncompleteSurface>)> =
+            BTreeMap::new();
+        let records = self
+            .event_store
+            .finish()
+            .expect("all lexically preallocated record owners must be completed");
+        inspect(&records);
+        for (key, record) in records {
+            let channels = by_module.entry(key.module_ordinal).or_default();
+            match record {
+                CheckerRecord::Diagnostic(diagnostic) => channels.0.push(diagnostic),
+                CheckerRecord::Incomplete(incomplete) => channels.1.push(incomplete),
+            }
+        }
+        by_module
     }
-    by_module
 }
 
 impl Pass<'_, '_> {
@@ -1738,11 +1780,13 @@ impl Pass<'_, '_> {
             .expect("lexical owner must be preallocated before semantic execution");
         self.with_ticket_effects(owner.ticket, produce)
     }
+}
 
+impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     /// Run a producer that already owns an exact preallocated ticket.
     pub(in crate::check::checker) fn with_ticket_effects<R>(
         &mut self,
-        owner: events::UserRecordTicket,
+        owner: Ticket,
         produce: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.effect_stack.push(CheckerEffects::new(owner));
@@ -1765,7 +1809,10 @@ impl Pass<'_, '_> {
 
     /// Coalesce repeated phases for one lexical owner before its exactly-once
     /// completion, preserving producer order within the owner group.
-    pub(in crate::check::checker) fn enqueue_effects(&mut self, mut effects: CheckerEffects) {
+    pub(in crate::check::checker) fn enqueue_effects(
+        &mut self,
+        mut effects: CheckerEffects<Ticket>,
+    ) {
         let nested = std::mem::take(&mut effects.nested);
         if let Some(existing) = self
             .pending_effects
@@ -1783,7 +1830,7 @@ impl Pass<'_, '_> {
 
     pub(in crate::check::checker) fn enqueue_ticket_record(
         &mut self,
-        owner: events::UserRecordTicket,
+        owner: Ticket,
         record: CheckerRecord,
     ) {
         let mut effects = CheckerEffects::new(owner);
@@ -1795,7 +1842,7 @@ impl Pass<'_, '_> {
     pub(in crate::check::checker) fn capture_candidate_effects<R>(
         &mut self,
         produce: impl FnOnce(&mut Self) -> R,
-    ) -> (R, CheckerEffects) {
+    ) -> (R, CheckerEffects<Ticket>) {
         let owner = self
             .effect_stack
             .last()
@@ -1807,7 +1854,10 @@ impl Pass<'_, '_> {
         (result, effects)
     }
 
-    pub(in crate::check::checker) fn merge_candidate_effects(&mut self, selected: CheckerEffects) {
+    pub(in crate::check::checker) fn merge_candidate_effects(
+        &mut self,
+        selected: CheckerEffects<Ticket>,
+    ) {
         self.effect_stack
             .last_mut()
             .expect("selected candidate requires an enclosing lexical owner")
@@ -1906,7 +1956,6 @@ fn build_pass<'a, 'ast>(
         PassReporting {
             module_ordinal: ModuleOrdinal::new(0),
             unit_slot: UnitSlot::new(0),
-            event_store: EventStore::default(),
             lexical_events: LexicalReservations::default(),
             suppress_effects: false,
         },
@@ -1920,11 +1969,37 @@ fn build_pass_with_reporting<'a, 'ast>(
     type_resolved: Vec<Option<TypeId>>,
     decl_types: DeclTypes,
     next_type_param: u32,
-    reporting: PassReporting,
-) -> Pass<'a, 'ast> {
-    let pending_effects = reporting
-        .lexical_events
-        .tickets()
+    reporting: PassReporting<UserRecordTicket>,
+) -> Pass<'a, 'ast, UserRecordTicket> {
+    let pending_tickets = reporting.lexical_events.tickets();
+    build_pass_with_tickets(
+        interner,
+        binder,
+        type_decls,
+        type_resolved,
+        decl_types,
+        next_type_param,
+        PassReportingPlan {
+            reporting,
+            pending_tickets,
+        },
+    )
+}
+
+fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
+    interner: &'a mut Interner,
+    binder: &'a Binder,
+    type_decls: Vec<TypeDecl<'ast>>,
+    type_resolved: Vec<Option<TypeId>>,
+    decl_types: DeclTypes,
+    next_type_param: u32,
+    reporting_plan: PassReportingPlan<Ticket>,
+) -> Pass<'a, 'ast, Ticket> {
+    let PassReportingPlan {
+        reporting,
+        pending_tickets,
+    } = reporting_plan;
+    let pending_effects = pending_tickets
         .into_iter()
         .map(CheckerEffects::new)
         .collect();
@@ -1947,7 +2022,6 @@ fn build_pass_with_reporting<'a, 'ast>(
         current_module: binder.module,
         current_module_ordinal: reporting.module_ordinal,
         current_unit_slot: reporting.unit_slot,
-        event_store: reporting.event_store,
         effect_stack: Vec::new(),
         pending_effects,
         lexical_events: reporting.lexical_events,
