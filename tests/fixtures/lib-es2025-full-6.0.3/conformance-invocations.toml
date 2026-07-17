@@ -1,0 +1,1527 @@
+schema = 1
+status = "UNAPPROVED"
+source_path = "tests/conformance.rs"
+source_sha256 = "98f22a6f473222097b0977c213901d7d23aa6924051cc865049a88106affa28d"
+invocation_count = 304
+source_count = 335
+manifest_sha256 = "46c2b6eccb6edfc54be647e077d9040ad69092a99ccdcdb3e4678abadf380c99"
+
+[[invocation]]
+id = "tests/cases/m0_assign_primitives/intrinsics.ts"
+kind = "single"
+source = ["tests/cases/m0_assign_primitives/intrinsics.ts\t3783b0634b3089de28a60fb3696b18414118a0b559d8ad37fca9edc2736ad128"]
+
+[[invocation]]
+id = "tests/cases/m0_assign_primitives/null_undefined.ts"
+kind = "single"
+source = ["tests/cases/m0_assign_primitives/null_undefined.ts\t2e38b922dfcdc4cd64502d90025fdcafc39ab9f5341ab117f0e0dc0d4dc0c6b7"]
+
+[[invocation]]
+id = "tests/cases/m0_assign_primitives/scalars.ts"
+kind = "single"
+source = ["tests/cases/m0_assign_primitives/scalars.ts\t3733b0655ad7e6eb83ed0c3c771ab8b7459afb49cb3018e3803454a18a97c774"]
+
+[[invocation]]
+id = "tests/cases/m1_binder_inference/const_let_widening.ts"
+kind = "single"
+source = ["tests/cases/m1_binder_inference/const_let_widening.ts\tac5690e2da7cd7a885636e5d5714f71d2ffa3644d24fafbdf1ab7bdfcd4c26b6"]
+
+[[invocation]]
+id = "tests/cases/m1_binder_inference/intrinsic_sources.ts"
+kind = "single"
+source = ["tests/cases/m1_binder_inference/intrinsic_sources.ts\te78479a8d95ecec452783c361b3c3f2ae47a253f0bfa092834c96e6203d54b24"]
+
+[[invocation]]
+id = "tests/cases/m1_binder_inference/references.ts"
+kind = "single"
+source = ["tests/cases/m1_binder_inference/references.ts\t08572550d249edefb3403cf28f59932155ea04a441c8a02076942568fad78ec4"]
+
+[[invocation]]
+id = "tests/cases/m2_objects/excess_property.ts"
+kind = "single"
+source = ["tests/cases/m2_objects/excess_property.ts\t806e298d7a4971f9246e0171eacb6920243f32e6e2dc4afb45ee6304bc231a63"]
+
+[[invocation]]
+id = "tests/cases/m2_objects/member_access.ts"
+kind = "single"
+source = ["tests/cases/m2_objects/member_access.ts\t6f762691e3ff65e5b81c1a5a56c460870d4a1f304ca4a7cccc37bedfd8543d0a"]
+
+[[invocation]]
+id = "tests/cases/m2_objects/structural.ts"
+kind = "single"
+source = ["tests/cases/m2_objects/structural.ts\t767dde134c6e1676c4d6b5dfe115a554510117ab35f2756b60ac8c5eeb48204b"]
+
+[[invocation]]
+id = "tests/cases/m3_functions/assignability_arity.ts"
+kind = "single"
+source = ["tests/cases/m3_functions/assignability_arity.ts\t1f8baffbb863d2daf675542f0cb6c384922ba728808c3e301e016577ece7bcb7"]
+
+[[invocation]]
+id = "tests/cases/m3_functions/calls.ts"
+kind = "single"
+source = ["tests/cases/m3_functions/calls.ts\t0477a78d9cf95b872f9a4dbad8d0227d5a7fc010ca29d8a584c8f91a6c8e80c4"]
+
+[[invocation]]
+id = "tests/cases/m3_functions/function_types.ts"
+kind = "single"
+source = ["tests/cases/m3_functions/function_types.ts\t52f05941e80022ac3dd94b7a8ddc2ce7c360d5525934fcbe4db822575799a452"]
+
+[[invocation]]
+id = "tests/cases/m3_functions/return_types.ts"
+kind = "single"
+source = ["tests/cases/m3_functions/return_types.ts\tabbf78cf9eb84731674e6ad162e236d5ceffc9e381926410cc0b534f896303c2"]
+
+[[invocation]]
+id = "tests/cases/m4_unions/assignability.ts"
+kind = "single"
+source = ["tests/cases/m4_unions/assignability.ts\t5379dc86ce698991e921945faaba15ac29dbf47c74019ccc53625cdd00a715d7"]
+
+[[invocation]]
+id = "tests/cases/m4_unions/canonicalization.ts"
+kind = "single"
+source = ["tests/cases/m4_unions/canonicalization.ts\t2966bf44293726960c0e662c6ddb1a5267ff4e189351b2e12a89ca561ab0dc22"]
+
+[[invocation]]
+id = "tests/cases/m4_unions/member_access.ts"
+kind = "single"
+source = ["tests/cases/m4_unions/member_access.ts\t9e8fb9988d5053cfc0fec97afc9d10f69eecf0361bd3150ea2a4910abbd51fce"]
+
+[[invocation]]
+id = "tests/cases/m5_named_recursive/aliases.ts"
+kind = "single"
+source = ["tests/cases/m5_named_recursive/aliases.ts\t61dbc4044cadfdda6202a07810b782adb976bae223d2f9ddb6b0a5fa07adafe1"]
+
+[[invocation]]
+id = "tests/cases/m5_named_recursive/cycle_soundness.ts"
+kind = "single"
+source = ["tests/cases/m5_named_recursive/cycle_soundness.ts\t79c51efeef1edb00ffdb762ee62aec7eee78c03f14787b5f9915350483aa090d"]
+
+[[invocation]]
+id = "tests/cases/m5_named_recursive/interfaces.ts"
+kind = "single"
+source = ["tests/cases/m5_named_recursive/interfaces.ts\t31f5433eba205df6a99f3388cf6365d4e69a3e95b9d8602e0bdfcb4a46d70a5f"]
+
+[[invocation]]
+id = "tests/cases/m5_named_recursive/recursive.ts"
+kind = "single"
+source = ["tests/cases/m5_named_recursive/recursive.ts\tad7cc3a91c75033fe7249c5cfb5a7bb00a32796ed5183a240b6c12bd5cb6c913"]
+
+[[invocation]]
+id = "tests/cases/m6_reporting/nested.ts"
+kind = "single"
+source = ["tests/cases/m6_reporting/nested.ts\t2456505ea826473115e204e817bfa47b762c98e55ce3f86a141c4d56e5eb6356"]
+
+[[invocation]]
+id = "tests/cases/m7_narrowing/equality_null.ts"
+kind = "single"
+source = ["tests/cases/m7_narrowing/equality_null.ts\t8a0120e6492f716a22355716a61cfe24551681d7378711052231de6dacbfb162"]
+
+[[invocation]]
+id = "tests/cases/m7_narrowing/member_access.ts"
+kind = "single"
+source = ["tests/cases/m7_narrowing/member_access.ts\tc7b7cf9c085d7f84c1cdd1f98aed4982a609156f9728e6835d09d03a46a3b28e"]
+
+[[invocation]]
+id = "tests/cases/m7_narrowing/truthiness.ts"
+kind = "single"
+source = ["tests/cases/m7_narrowing/truthiness.ts\t691ac661d8ffd7c9183f3248e35e673c80dcff9970343d546bedcb79c188975a"]
+
+[[invocation]]
+id = "tests/cases/m7_narrowing/typeof.ts"
+kind = "single"
+source = ["tests/cases/m7_narrowing/typeof.ts\t1165b71b0ac47cb78d4df427aea7876a10eb775a49137941a06087cc4bdee875"]
+
+[[invocation]]
+id = "tests/cases/m8_discriminated/discriminated.ts"
+kind = "single"
+source = ["tests/cases/m8_discriminated/discriminated.ts\t58844286845c9b765564eb97df433e8cffd6d985c8466deaac29cc32aa53f586"]
+
+[[invocation]]
+id = "tests/cases/m8_discriminated/in_operator.ts"
+kind = "single"
+source = ["tests/cases/m8_discriminated/in_operator.ts\tcafc9e80c736d9eeba62fabbfc7df7d26ed5ffe0b3f75ba7e78d40cd9a746513"]
+
+[[invocation]]
+id = "tests/cases/m8_discriminated/literal_types.ts"
+kind = "single"
+source = ["tests/cases/m8_discriminated/literal_types.ts\t9b8f924d119dd1923d51f6ba3c2d0175101c711277dbb4d4159ea5d24236bd8b"]
+
+[[invocation]]
+id = "tests/cases/m8_discriminated/switch.ts"
+kind = "single"
+source = ["tests/cases/m8_discriminated/switch.ts\t4f33e93f3afb85161094f158f0eb1deb34ea7cced0506d92e72a76aa10e5c24e"]
+
+[[invocation]]
+id = "tests/cases/m9_generics/generic_functions.ts"
+kind = "single"
+source = ["tests/cases/m9_generics/generic_functions.ts\t9c6999b74ae9ed4da14184ddbc97ff141b29af6d481aad7e7b1e2d1518445d7b"]
+
+[[invocation]]
+id = "tests/cases/m9_generics/generic_interfaces.ts"
+kind = "single"
+source = ["tests/cases/m9_generics/generic_interfaces.ts\t088ffcb865a8b286343c24764565fa63654a27989f6f8a79f843baa2077f377c"]
+
+[[invocation]]
+id = "tests/cases/m9_generics/nested.ts"
+kind = "single"
+source = ["tests/cases/m9_generics/nested.ts\t8717fd0aa59a90eff1d3ffd593c84a4e74dd9c8e0f4323676e757147c645e5cc"]
+
+[[invocation]]
+id = "tests/cases/m10_inference/inference_basic.ts"
+kind = "single"
+source = ["tests/cases/m10_inference/inference_basic.ts\t49ecf9af7211122114c244b5fcfd9a4cd57b6b619f91f00a16af4bc95af0295a"]
+
+[[invocation]]
+id = "tests/cases/m10_inference/inference_multi.ts"
+kind = "single"
+source = ["tests/cases/m10_inference/inference_multi.ts\ta2d373b1f72cfd9b9f0154839f45afcd18ade2a90ec518a66ab106f0eb884caf"]
+
+[[invocation]]
+id = "tests/cases/m10_inference/inference_object.ts"
+kind = "single"
+source = ["tests/cases/m10_inference/inference_object.ts\t15dac0241ced59ad09cc0c8bcc1f751414381464211c238a90d2948742d2c273"]
+
+[[invocation]]
+id = "tests/cases/m11_classes/basic.ts"
+kind = "single"
+source = ["tests/cases/m11_classes/basic.ts\t4b600ea71f8e7d7774138d21c50f5f061e0c0258cabfdd29b8ed2666633efb6f"]
+
+[[invocation]]
+id = "tests/cases/m11_classes/methods.ts"
+kind = "single"
+source = ["tests/cases/m11_classes/methods.ts\t5967b3c43b9648c00f866f0b62560dc1cf3ed20e4044eced391a40a722215455"]
+
+[[invocation]]
+id = "tests/cases/m11_classes/structural.ts"
+kind = "single"
+source = ["tests/cases/m11_classes/structural.ts\t464cce2fd5e7978d81d569a5cc082cd7db065dcebbffe1c2f3ed260ceb1bebc8"]
+
+[[invocation]]
+id = "tests/cases/m12_inheritance/extends.ts"
+kind = "single"
+source = ["tests/cases/m12_inheritance/extends.ts\t841629893454bd91f887ea99df369f9e511aed8d5577764ebb33a70d8f3be078"]
+
+[[invocation]]
+id = "tests/cases/m12_inheritance/super_calls.ts"
+kind = "single"
+source = ["tests/cases/m12_inheritance/super_calls.ts\t0411fba205c7a996cdd8e013da62a5aed4f1adbd5b5af920dbfd365cdb570d34"]
+
+[[invocation]]
+id = "tests/cases/m13_modifiers/access.ts"
+kind = "single"
+source = ["tests/cases/m13_modifiers/access.ts\t3c1a2f61b36ecb3db68069f6c2014973c439554524cb65d525a2195ba85b6e90"]
+
+[[invocation]]
+id = "tests/cases/m13_modifiers/nominal.ts"
+kind = "single"
+source = ["tests/cases/m13_modifiers/nominal.ts\t9c84db2a7e3ebbd525fa6aed8ef4af22adce948b9b755b26b2d2ac246ed236cb"]
+
+[[invocation]]
+id = "tests/cases/m13_modifiers/static.ts"
+kind = "single"
+source = ["tests/cases/m13_modifiers/static.ts\td007c634a13b03b66e2ed77309692b378ca58097c74a9bd2e3d3ccd14eb3dae5"]
+
+[[invocation]]
+id = "tests/cases/m13_modifiers/static_body.ts"
+kind = "single"
+source = ["tests/cases/m13_modifiers/static_body.ts\tc5b1de3d90aa400389c98444caf92b6730fb3c851c9a5471cf2d56427be8edca"]
+
+[[invocation]]
+id = "tests/cases/m14_readonly/member_assign.ts"
+kind = "single"
+source = ["tests/cases/m14_readonly/member_assign.ts\t8a2738b5a3ac42a8151940e0eea25e8643907a21f001b61da1d3c33b46e654b0"]
+
+[[invocation]]
+id = "tests/cases/m14_readonly/readonly.ts"
+kind = "single"
+source = ["tests/cases/m14_readonly/readonly.ts\t7c46f732e40d1c8dc9c2a4f2d3fa41056d9b5e176ab79ba7f1fb866424471528"]
+
+[[invocation]]
+id = "tests/cases/m15_accessors/abstract.ts"
+kind = "single"
+source = ["tests/cases/m15_accessors/abstract.ts\t02ccd69e54cde54c87a512f6500a490d467d1aac77070d5879f16cd3f28f4675"]
+
+[[invocation]]
+id = "tests/cases/m15_accessors/accessors.ts"
+kind = "single"
+source = ["tests/cases/m15_accessors/accessors.ts\t852f22eb86c2e9e8067c985fc68fd2c3a17201dd640a4a251342172d19d68b27"]
+
+[[invocation]]
+id = "tests/cases/m16_generic_classes/generic_class.ts"
+kind = "single"
+source = ["tests/cases/m16_generic_classes/generic_class.ts\t91d85194ceb34f226bba3666e1110688ce992ee5571f6c13d3c90d5a958dcb06"]
+
+[[invocation]]
+id = "tests/cases/m16_generic_classes/two_params.ts"
+kind = "single"
+source = ["tests/cases/m16_generic_classes/two_params.ts\te20f03eb95597d59bd067b2a9388080d6520e4a85e07c42785871282a3d0cb4f"]
+
+[[invocation]]
+id = "tests/cases/m17_arrays/arrays.ts"
+kind = "single"
+source = ["tests/cases/m17_arrays/arrays.ts\t6b2f1b10a387f888408243962ac4cab2fac18b99ecfa2d34956d01129bd15536"]
+
+[[invocation]]
+id = "tests/cases/m18_tuples/tuples.ts"
+kind = "single"
+source = ["tests/cases/m18_tuples/tuples.ts\tc17d591c0bd53ec77519b03d9557f0c07b78f44d4eba81dd40b134ddbe578f74"]
+
+[[invocation]]
+id = "tests/cases/m19_index_sig/index_sig.ts"
+kind = "single"
+source = ["tests/cases/m19_index_sig/index_sig.ts\t9c57e1b274799c3f4c10dbc1273c1de56aa599e0ecc747576121019ca506f2fa"]
+
+[[invocation]]
+id = "tests/cases/m20_keyof/indexed_access.ts"
+kind = "single"
+source = ["tests/cases/m20_keyof/indexed_access.ts\t2a2890a90ca7784f75ae3c2cfb8c804dca0f00409cf729bdc6c35af021bb1faa"]
+
+[[invocation]]
+id = "tests/cases/m20_keyof/keyof.ts"
+kind = "single"
+source = ["tests/cases/m20_keyof/keyof.ts\t258b03c32497108c72d00aa118609aec5747080361e39fed714c70c1fc55806b"]
+
+[[invocation]]
+id = "tests/cases/m21_optional/assignability.ts"
+kind = "single"
+source = ["tests/cases/m21_optional/assignability.ts\tfa5dce21e66dd901ee25a0e9b5d0434d7155654ed7644658ca6a59c1d59462e1"]
+
+[[invocation]]
+id = "tests/cases/m21_optional/classes.ts"
+kind = "single"
+source = ["tests/cases/m21_optional/classes.ts\td49c0ddcb68c7a674c712cea763cba25cba1889c57969ec0791dc6377b1adb95"]
+
+[[invocation]]
+id = "tests/cases/m21_optional/interfaces.ts"
+kind = "single"
+source = ["tests/cases/m21_optional/interfaces.ts\t7c821cf79f7734b4f86524b4d5c3b3a4b2c364c8dc1061a5a6230ccea2124cdf"]
+
+[[invocation]]
+id = "tests/cases/m21_optional/nested.ts"
+kind = "single"
+source = ["tests/cases/m21_optional/nested.ts\tae1f52d99689a7dcf47e9f670b6780a3289594b2d3887488b8340b2a1f053a5a"]
+
+[[invocation]]
+id = "tests/cases/m21_optional/object_types.ts"
+kind = "single"
+source = ["tests/cases/m21_optional/object_types.ts\ta28c5c54494a83c657e5a8096ba8fa0814216de69508cdda52f414897468f9c5"]
+
+[[invocation]]
+id = "tests/cases/m22_unresolved_type/generics.ts"
+kind = "single"
+source = ["tests/cases/m22_unresolved_type/generics.ts\t0985974ce066ea99c78ae2357ddbdcad789e5e31e77ee06e68eee454fcabc2f9"]
+
+[[invocation]]
+id = "tests/cases/m22_unresolved_type/positions.ts"
+kind = "single"
+source = ["tests/cases/m22_unresolved_type/positions.ts\t3a0f3cb8e9daed7bf02473e7b6f2b3c74b737c30282ef4c2ecbbd5eda8996c56"]
+
+[[invocation]]
+id = "tests/cases/m22_unresolved_type/resolved_ok.ts"
+kind = "single"
+source = ["tests/cases/m22_unresolved_type/resolved_ok.ts\te03fcd98ad637553b6c50e96503bc1d9302cc6f974d43866dfe44ac3721a67f8"]
+
+[[invocation]]
+id = "tests/cases/m23_unstructured_narrowing/assignment_narrowing.ts"
+kind = "single"
+source = ["tests/cases/m23_unstructured_narrowing/assignment_narrowing.ts\t8d0926255e6630bce7d81c9bcb29e12a430ef0502c73250c09b3e5556779e093"]
+
+[[invocation]]
+id = "tests/cases/m23_unstructured_narrowing/assignment_patterns.ts"
+kind = "single"
+source = ["tests/cases/m23_unstructured_narrowing/assignment_patterns.ts\ted1387f079c4c699cda3001821db93d881b115f8e7992125952ad6fc70066840"]
+
+[[invocation]]
+id = "tests/cases/m23_unstructured_narrowing/early_exit.ts"
+kind = "single"
+source = ["tests/cases/m23_unstructured_narrowing/early_exit.ts\t2cfd8c8f21ed737d59f6d541ee2a092b64d483e7b1659f3ea2110fd4d1aecdb8"]
+
+[[invocation]]
+id = "tests/cases/m23_unstructured_narrowing/early_exit_discriminated.ts"
+kind = "single"
+source = ["tests/cases/m23_unstructured_narrowing/early_exit_discriminated.ts\t60f5393dd8a3980ac66552dc5b28ed0d87e15a055172ee86220889393072f518"]
+
+[[invocation]]
+id = "tests/cases/m23_unstructured_narrowing/logical_ops.ts"
+kind = "single"
+source = ["tests/cases/m23_unstructured_narrowing/logical_ops.ts\tc0aae60a31dc776e3192c24d0f15682b9526a9a060f53e13f1f58d7dee302d2a"]
+
+[[invocation]]
+id = "tests/cases/m23_unstructured_narrowing/loops.ts"
+kind = "single"
+source = ["tests/cases/m23_unstructured_narrowing/loops.ts\t8015148564e41854921b919b47c946dca0cad57dc3aaf9c620f33dee4cd80d81"]
+
+[[invocation]]
+id = "tests/cases/m24_generic_constraints/apparent_type.ts"
+kind = "single"
+source = ["tests/cases/m24_generic_constraints/apparent_type.ts\tdbf82888490edd716f79bd562d4b3b5a3da9ef28b9399844ebc86b8a5cfacb4d"]
+
+[[invocation]]
+id = "tests/cases/m24_generic_constraints/circular_constraints.ts"
+kind = "single"
+source = ["tests/cases/m24_generic_constraints/circular_constraints.ts\td0c2a3b9260e39579792767d2827c0f9d8a377a7361996e8b5380ec920b17750"]
+
+[[invocation]]
+id = "tests/cases/m24_generic_constraints/constraint_check_explicit.ts"
+kind = "single"
+source = ["tests/cases/m24_generic_constraints/constraint_check_explicit.ts\t921fe116ebe2fdcb3528f82499b29cd7faafcb592d9e39211b1ed48622b85b6b"]
+
+[[invocation]]
+id = "tests/cases/m24_generic_constraints/constraint_inference.ts"
+kind = "single"
+source = ["tests/cases/m24_generic_constraints/constraint_inference.ts\t9c68b7d2bd4f9afe0da9049cc61c10feb7b26deb9cda4fe59d289a1b46c676fe"]
+
+[[invocation]]
+id = "tests/cases/m25_conditional_types/basic_resolution.ts"
+kind = "single"
+source = ["tests/cases/m25_conditional_types/basic_resolution.ts\t33cae416bc45b12f7374feff49814f413b43214e369a97d2cb1dc9b8ec9ad90d"]
+
+[[invocation]]
+id = "tests/cases/m25_conditional_types/deferred_generics.ts"
+kind = "single"
+source = ["tests/cases/m25_conditional_types/deferred_generics.ts\tf0ab399aa83a0c52c90a342162776e9e092d664a52d3a4b51bc620f1f0f0f167"]
+
+[[invocation]]
+id = "tests/cases/m25_conditional_types/distribution.ts"
+kind = "single"
+source = ["tests/cases/m25_conditional_types/distribution.ts\t11ceac34412ea8b218a5a9a7d63ef879f6ec2a705bc42271c7df42b005480bc9"]
+
+[[invocation]]
+id = "tests/cases/m25_conditional_types/infer_extraction.ts"
+kind = "single"
+source = ["tests/cases/m25_conditional_types/infer_extraction.ts\t318688cf6288cfcecdf6914aacf2f1e09c245c65fb96dae7c059f85c2c50321c"]
+
+[[invocation]]
+id = "tests/cases/m25_conditional_types/nested_infer.ts"
+kind = "single"
+source = ["tests/cases/m25_conditional_types/nested_infer.ts\t734a5dd6e369a666ed629059152d8d285b41033591678970c64e5dddba6c624e"]
+
+[[invocation]]
+id = "tests/cases/m25_conditional_types/recursion_depth.ts"
+kind = "single"
+source = ["tests/cases/m25_conditional_types/recursion_depth.ts\t4b0ed31c6def97af0f13a6f7841c90fde384ef3d7876e5a310b1e6586d0709d1"]
+
+[[invocation]]
+id = "tests/cases/m26_mapped_types/basic_mapping.ts"
+kind = "single"
+source = ["tests/cases/m26_mapped_types/basic_mapping.ts\t73912421cad9ad676fbab928a90f3bbcde23b70faf001c9af35bb091e8cebe34"]
+
+[[invocation]]
+id = "tests/cases/m26_mapped_types/deferred_generics.ts"
+kind = "single"
+source = ["tests/cases/m26_mapped_types/deferred_generics.ts\t8ecb8f3d4680cbd5ca7a7f7d405f6d08a1accba125ab40eb59970156e462c2e2"]
+
+[[invocation]]
+id = "tests/cases/m26_mapped_types/evaluation_sites.ts"
+kind = "single"
+source = ["tests/cases/m26_mapped_types/evaluation_sites.ts\tc889d2b6bd17a8833156304e5dbf1c54c3a2cdaec12c5c98e65edfce1188cce3"]
+
+[[invocation]]
+id = "tests/cases/m26_mapped_types/modifiers.ts"
+kind = "single"
+source = ["tests/cases/m26_mapped_types/modifiers.ts\t38d0cf8fd61c8c5adee1b54f925261c6d969957aae3e85693ffc86fb0dd5abb1"]
+
+[[invocation]]
+id = "tests/cases/m26_mapped_types/union_distribution.ts"
+kind = "single"
+source = ["tests/cases/m26_mapped_types/union_distribution.ts\td501a14f4e0b54376651f76aa8942a44434c8b77ef041934d1b548bb3de49d53"]
+
+[[invocation]]
+id = "tests/cases/m27_template_literals/construction.ts"
+kind = "single"
+source = ["tests/cases/m27_template_literals/construction.ts\t6f0c34433e9c54628adc904dae37e0cfe11fd311ed7489087ff6d694c59c2bc4"]
+
+[[invocation]]
+id = "tests/cases/m27_template_literals/deferred_generics.ts"
+kind = "single"
+source = ["tests/cases/m27_template_literals/deferred_generics.ts\t10bcf96a9ec0e40a7d5d9b44edd8a3d39d6694c31aab07f0fadd65a022aa7b37"]
+
+[[invocation]]
+id = "tests/cases/m27_template_literals/infer_extraction.ts"
+kind = "single"
+source = ["tests/cases/m27_template_literals/infer_extraction.ts\tf8244bdb89e544ddf820ba1e89fd41330b248ee31ffb1c4b959c191ad2cb04fc"]
+
+[[invocation]]
+id = "tests/cases/m27_template_literals/pattern_assignability.ts"
+kind = "single"
+source = ["tests/cases/m27_template_literals/pattern_assignability.ts\t9a5da4301d6272af5a0c645a67d3cd89978641380ce9701de8befefe86645c15"]
+
+[[invocation]]
+id = "tests/cases/m28_utility_types/builtin_utilities.ts"
+kind = "single"
+source = ["tests/cases/m28_utility_types/builtin_utilities.ts\tf87dc60850a8c68f00e39cf7cda7082933621ef9cd5f8c3a65dfc3087b143d71"]
+
+[[invocation]]
+id = "tests/cases/m28_utility_types/conditional_positions.ts"
+kind = "single"
+source = ["tests/cases/m28_utility_types/conditional_positions.ts\t7b1ccad647c209285581755d24e593dae15379b271862644bae887f608623c3a"]
+
+[[invocation]]
+id = "tests/cases/m28_utility_types/constraint_arguments.ts"
+kind = "single"
+source = ["tests/cases/m28_utility_types/constraint_arguments.ts\t557310666e0fe2e1a1741fbb81b9738084abc091eacab6e55c3ee6a0be974052"]
+
+[[invocation]]
+id = "tests/cases/m28_utility_types/intrinsics_and_recursion.ts"
+kind = "single"
+source = ["tests/cases/m28_utility_types/intrinsics_and_recursion.ts\tfdd8d6358f7fdca6c5eaabbaa1de64e4e0e7d2ab8dfcd9e41e8ceaa22982e06e"]
+
+[[invocation]]
+id = "tests/cases/m29_modules/basic_named"
+kind = "project"
+source = ["tests/cases/m29_modules/basic_named/a.ts\tfcb78cbda61874641014021b5ae020499b55601ef2efb32104608bafcecf6fba", "tests/cases/m29_modules/basic_named/b.ts\t9d4481c206ca0e1d5c46031aafd854ccabbcb0c93edc3252f9f09a6d4da3499e"]
+
+[[invocation]]
+id = "tests/cases/m29_modules/export_list"
+kind = "project"
+source = ["tests/cases/m29_modules/export_list/a.ts\tb4e7e8d161d0dc33f4ffc03b8ffcb25ffc9a5baaf341fe0ec2b568bcad1e0e57", "tests/cases/m29_modules/export_list/use.ts\t8b3c0b43e9b65fd7559db07710c48a48086f30bc20e0ed61db8e0a2ea42dbd36"]
+
+[[invocation]]
+id = "tests/cases/m29_modules/missing_resolution"
+kind = "project"
+source = ["tests/cases/m29_modules/missing_resolution/use.ts\t3a00dc8d97a5d1afc6834be23d68bd954574d56f243311b6c791459b93c2d94e"]
+
+[[invocation]]
+id = "tests/cases/m29_modules/nested_resolution"
+kind = "project"
+source = ["tests/cases/m29_modules/nested_resolution/app/main.ts\t27cb909e05856665e6a38fe56498925fea3bf4ae252cbe2d4b61e4ef0f8042e3", "tests/cases/m29_modules/nested_resolution/lib/types.ts\t8918e5b30004a280fbedc4f54507c48cdbd05782d1595568e454163221c3e30e"]
+
+[[invocation]]
+id = "tests/cases/m29_modules/type_only_value"
+kind = "project"
+source = ["tests/cases/m29_modules/type_only_value/a.ts\t62fedd8f7f6014812cc4a0b5d0fd44767fa07e76e2b9c8105cef7f87a5d48cd1", "tests/cases/m29_modules/type_only_value/use.ts\t69ecb6596368a56cba3185c0a49d5e405d4e942d515aa300509e0f96e508d5de"]
+
+[[invocation]]
+id = "tests/cases/m29_modules/types_and_classes"
+kind = "project"
+source = ["tests/cases/m29_modules/types_and_classes/model.ts\t12b7fbff609d58b376009d38f64ebe2a279f1edf9c53dd50fd90cab08286da8f", "tests/cases/m29_modules/types_and_classes/use.ts\t2d8947a1c5955d20760c38b82f763c8a6872d0d68f31346c62c873a0cfa4f181"]
+
+[[invocation]]
+id = "tests/cases/m30_contextual_literals/arguments_and_returns.ts"
+kind = "single"
+source = ["tests/cases/m30_contextual_literals/arguments_and_returns.ts\t99ba57912c3a240300e0d7718fca8a900915e8645e83359b195f39b1dd4a4f5c"]
+
+[[invocation]]
+id = "tests/cases/m30_contextual_literals/arrays_and_tuples.ts"
+kind = "single"
+source = ["tests/cases/m30_contextual_literals/arrays_and_tuples.ts\t0b10bb37dbde06bb0b09a71fc8b363c161aad191580d57ca8445b61dacebd610"]
+
+[[invocation]]
+id = "tests/cases/m30_contextual_literals/excess_properties.ts"
+kind = "single"
+source = ["tests/cases/m30_contextual_literals/excess_properties.ts\t4b4440fb0609e70e88708a1ea8a6fbe1304a63c670ce785b243b453e5fdc4c7c"]
+
+[[invocation]]
+id = "tests/cases/m30_contextual_literals/object_members.ts"
+kind = "single"
+source = ["tests/cases/m30_contextual_literals/object_members.ts\t9c89f9d2c32fccf26c8f18c0a904e0a30f75770e39e8a6089629fb3f9e0df2c0"]
+
+[[invocation]]
+id = "tests/cases/m31_intersections/canonicalization.ts"
+kind = "single"
+source = ["tests/cases/m31_intersections/canonicalization.ts\t480589724a8cc96154aadf5116aa5030842386fcf6b1a6d6acbd452058c83a75"]
+
+[[invocation]]
+id = "tests/cases/m31_intersections/circular_constraint.ts"
+kind = "single"
+source = ["tests/cases/m31_intersections/circular_constraint.ts\t34144ed56539a8e99ca5f9068a8d291e19a30610e0ef8b69119fcd5abe9b7470"]
+
+[[invocation]]
+id = "tests/cases/m31_intersections/excess.ts"
+kind = "single"
+source = ["tests/cases/m31_intersections/excess.ts\tcbe97bfa74ec21ce83d49c21462fa2900a9825c34572ccb704def6669e7db457"]
+
+[[invocation]]
+id = "tests/cases/m31_intersections/object_intersection.ts"
+kind = "single"
+source = ["tests/cases/m31_intersections/object_intersection.ts\te3516b0296c1fdd3357058f3066291355d78065653d55d59d3c6d8de5fa36b25"]
+
+[[invocation]]
+id = "tests/cases/m31_intersections/recursive_targets.ts"
+kind = "single"
+source = ["tests/cases/m31_intersections/recursive_targets.ts\t922493b398465af504e4e74ce92f8e5b4a234e0487fc533c9bb551c9cc508d59"]
+
+[[invocation]]
+id = "tests/cases/m31_intersections/relation_directions.ts"
+kind = "single"
+source = ["tests/cases/m31_intersections/relation_directions.ts\ted51bebf6fdf71433168928e72f7af14440ba307b9ff34909a6730305517460a"]
+
+[[invocation]]
+id = "tests/cases/m31_intersections/source_intersection_targets.ts"
+kind = "single"
+source = ["tests/cases/m31_intersections/source_intersection_targets.ts\te8acf3072393095949c101ad640609377f7bd514d506178cb9c966d0f94dfb6c"]
+
+[[invocation]]
+id = "tests/cases/m32_signature_shape/conditional_rest_infer.ts"
+kind = "single"
+source = ["tests/cases/m32_signature_shape/conditional_rest_infer.ts\td001bda975a05d9726dddc2570f247ec24506acf8145cd663dc90862cb33440e"]
+
+[[invocation]]
+id = "tests/cases/m32_signature_shape/construct_signatures.ts"
+kind = "single"
+source = ["tests/cases/m32_signature_shape/construct_signatures.ts\t96dc254b879a19d5857dec3a1abdb22be17446d242661a470dd3d67d8f2042e0"]
+
+[[invocation]]
+id = "tests/cases/m32_signature_shape/optional_default_params.ts"
+kind = "single"
+source = ["tests/cases/m32_signature_shape/optional_default_params.ts\t0930d7d8b17d387004674ac4c8db56c2c8999707e970e1bc97a7de52a5e80996"]
+
+[[invocation]]
+id = "tests/cases/m32_signature_shape/prelude_return_type.ts"
+kind = "single"
+source = ["tests/cases/m32_signature_shape/prelude_return_type.ts\te8b0a50f1538542c31b44035fdae23f20575077e0e625c2b0a37be23cad46561"]
+
+[[invocation]]
+id = "tests/cases/m32_signature_shape/rest_parameters.ts"
+kind = "single"
+source = ["tests/cases/m32_signature_shape/rest_parameters.ts\tbd503a897bdd496d39b842926a26c94788312f774504f397cf276a3a0d20e06a"]
+
+[[invocation]]
+id = "tests/cases/m32_signature_shape/signature_relation.ts"
+kind = "single"
+source = ["tests/cases/m32_signature_shape/signature_relation.ts\t7452d40b57b763062a1d68c3093cf896f384344801d790d9fd5e75778a324a90"]
+
+[[invocation]]
+id = "tests/cases/m32_signature_shape/tuple_rest.ts"
+kind = "single"
+source = ["tests/cases/m32_signature_shape/tuple_rest.ts\t461f9ce38054a7f9cc08aff578bbae4c5570cfda6c3740f6ad718268341e8a02"]
+
+[[invocation]]
+id = "tests/cases/m33_function_overloads/free_functions.ts"
+kind = "single"
+source = ["tests/cases/m33_function_overloads/free_functions.ts\tc7a5028687dfa94537888534bfa62906b17f3a1db2e35625d011be1b33c1ae60"]
+
+[[invocation]]
+id = "tests/cases/m33_function_overloads/generic_functions.ts"
+kind = "single"
+source = ["tests/cases/m33_function_overloads/generic_functions.ts\t981dc63949655e7a29278fc196c3de71d76e0b41b057e2da1d2da68d69b1ad9e"]
+
+[[invocation]]
+id = "tests/cases/m33_function_overloads/methods_and_classes.ts"
+kind = "single"
+source = ["tests/cases/m33_function_overloads/methods_and_classes.ts\t83619b086c8d28b1f0b4e1ad6fd0184b400997b3ab5e9c67438dc84c1ab5bebe"]
+
+[[invocation]]
+id = "tests/cases/m33_function_overloads/object_call_construct.ts"
+kind = "single"
+source = ["tests/cases/m33_function_overloads/object_call_construct.ts\t310d71cb72ebdeadb020f40f7d8c150f70f2d8301cc1d0188f4f7236ab9a5775"]
+
+[[invocation]]
+id = "tests/cases/f1_object_interface_methods/interface_methods.ts"
+kind = "single"
+source = ["tests/cases/f1_object_interface_methods/interface_methods.ts\t5cfd6f7c6040256258a7c9e08165d04262dd44f4adad8bcc3c0d743397ed2b38"]
+
+[[invocation]]
+id = "tests/cases/f1_object_interface_methods/method_assignability.ts"
+kind = "single"
+source = ["tests/cases/f1_object_interface_methods/method_assignability.ts\tcc0f228e5cf61f5644f751cb0c53aedd4dc2128fcd7240d1f701239da66d5dea"]
+
+[[invocation]]
+id = "tests/cases/f1_object_interface_methods/object_type_methods.ts"
+kind = "single"
+source = ["tests/cases/f1_object_interface_methods/object_type_methods.ts\t06b9191931c6b532fde2d1d356dba0231a4d56ce8222cf6dc1bc07c3fd70e00a"]
+
+[[invocation]]
+id = "tests/cases/f1_object_interface_call/assignability.ts"
+kind = "single"
+source = ["tests/cases/f1_object_interface_call/assignability.ts\t45692fdc930120b36f598b99a6b88b91440289d68b7f80eafa0463354f2cee9c"]
+
+[[invocation]]
+id = "tests/cases/f1_object_interface_call/call_behavior.ts"
+kind = "single"
+source = ["tests/cases/f1_object_interface_call/call_behavior.ts\tbf3c7584a3ac4797b69f85df887082bccb93f7ed7d9604752a84a06c3159a0f4"]
+
+[[invocation]]
+id = "tests/cases/f1_object_interface_construct/construct_assignability.ts"
+kind = "single"
+source = ["tests/cases/f1_object_interface_construct/construct_assignability.ts\t227774c7cf977e5f9a630bb23552f8307db4681b4edfe43ea5d60889e60b7037"]
+
+[[invocation]]
+id = "tests/cases/f1_object_interface_construct/constructor_accessibility.ts"
+kind = "single"
+source = ["tests/cases/f1_object_interface_construct/constructor_accessibility.ts\teb78b0393b76a26ea89c828842a76e51988e03ddf35f24295adf203577a69b38"]
+
+[[invocation]]
+id = "tests/cases/f1_object_interface_construct/interface_construct.ts"
+kind = "single"
+source = ["tests/cases/f1_object_interface_construct/interface_construct.ts\t8c48cc36ad988a53a1bd8d556c015d7d14f5e6c750921da3c1c1ee365f77d7b1"]
+
+[[invocation]]
+id = "tests/cases/f1_object_interface_construct/object_type_construct.ts"
+kind = "single"
+source = ["tests/cases/f1_object_interface_construct/object_type_construct.ts\tf6ba873d3061681a726731165603fb5c3d7d1e63ff6730537061f782dff8044d"]
+
+[[invocation]]
+id = "tests/cases/f3_class_member_collection/edge.ts"
+kind = "single"
+source = ["tests/cases/f3_class_member_collection/edge.ts\t76eca976f40d77da3d293ba1a207768006a2cbc4ad687e2cb0c1e926c45a22b9"]
+
+[[invocation]]
+id = "tests/cases/f3_class_member_collection/inferred_fields.ts"
+kind = "single"
+source = ["tests/cases/f3_class_member_collection/inferred_fields.ts\tf93cda6e818e453d5e9edf38b1793d40a32dc091c1cea2bb327d1caab8c207bc"]
+
+[[invocation]]
+id = "tests/cases/f3_class_member_collection/param_properties.ts"
+kind = "single"
+source = ["tests/cases/f3_class_member_collection/param_properties.ts\tf7fd3631afebd2c05013b42a13a9454c436ce767fc081c969aaada50aceb5c72"]
+
+[[invocation]]
+id = "tests/cases/f3_class_member_collection/this_initializer.ts"
+kind = "single"
+source = ["tests/cases/f3_class_member_collection/this_initializer.ts\t7dc03120935e26532c0c0d6353a9185ccf5fc8b94dfd4c29445477bb73251ffe"]
+
+[[invocation]]
+id = "tests/cases/f4_destructuring_access/param.ts"
+kind = "single"
+source = ["tests/cases/f4_destructuring_access/param.ts\tb6d6283596000fa1c4e7465c9a47321224360be6959536fc84e47aaa883ecf47"]
+
+[[invocation]]
+id = "tests/cases/f4_destructuring_access/var_decl.ts"
+kind = "single"
+source = ["tests/cases/f4_destructuring_access/var_decl.ts\t5bbb1633fb7f8595397c20dd63ea40202c5f851509b1686049dad72372fb6570"]
+
+[[invocation]]
+id = "tests/cases/f5_union_readonly/object_readonly.ts"
+kind = "single"
+source = ["tests/cases/f5_union_readonly/object_readonly.ts\t8fcd0f658781c0d4a2538419661f93c7ee9c3f6e201dea46e75dd326ba2bd65d"]
+
+[[invocation]]
+id = "tests/cases/f5_union_readonly/union_readonly.ts"
+kind = "single"
+source = ["tests/cases/f5_union_readonly/union_readonly.ts\tc671d8be056e444809d5dec82568c1bed0a06154799ca77c8f479555b8811602"]
+
+[[invocation]]
+id = "tests/cases/b41_generic_methods/cache_order.ts"
+kind = "single"
+source = ["tests/cases/b41_generic_methods/cache_order.ts\t3ae9d0d6389971441697ea4af59c6fda9eeedfdd1485866ba84cf5e4d7f0fc27"]
+
+[[invocation]]
+id = "tests/cases/b41_generic_methods/call_construct_signatures.ts"
+kind = "single"
+source = ["tests/cases/b41_generic_methods/call_construct_signatures.ts\ta0ed908697ded58d03c726a9209e59f04b399e7e9bfefde8d04589041961dc60"]
+
+[[invocation]]
+id = "tests/cases/b41_generic_methods/class_methods.ts"
+kind = "single"
+source = ["tests/cases/b41_generic_methods/class_methods.ts\t8d3c2e47f73e10e9d4abcbfff09b9fd35ec8fe19045b845e6c9d5cb71970dd31"]
+
+[[invocation]]
+id = "tests/cases/b41_generic_methods/constraints_and_overloads.ts"
+kind = "single"
+source = ["tests/cases/b41_generic_methods/constraints_and_overloads.ts\t649058b2fb6242a7461c23d6e65d20fb262a3a296cc8b529b5c4efe3c5b5917f"]
+
+[[invocation]]
+id = "tests/cases/b41_generic_methods/contextual_callback_multiplicity.ts"
+kind = "single"
+source = ["tests/cases/b41_generic_methods/contextual_callback_multiplicity.ts\t8125f6434cac64529982ae71f56704eae74b5964edd67f19fa38a18ad40ee19b"]
+
+[[invocation]]
+id = "tests/cases/b41_generic_methods/declaration_defaults.ts"
+kind = "single"
+source = ["tests/cases/b41_generic_methods/declaration_defaults.ts\t48df643978d22a95f6e279074a822235fd19b95dc11d0312e9c5fda0bc0b2eec"]
+
+[[invocation]]
+id = "tests/cases/b41_generic_methods/official_suite_regressions.ts"
+kind = "single"
+source = ["tests/cases/b41_generic_methods/official_suite_regressions.ts\tcfdc2c677afaa7fa6437c8c72af4af37dade628c2336b6ccc905a38e54246b0e"]
+
+[[invocation]]
+id = "tests/cases/b41_generic_methods/outer_binder_substitution.ts"
+kind = "single"
+source = ["tests/cases/b41_generic_methods/outer_binder_substitution.ts\tde2b4edada2ea9bb6ed0c16ef86ae34625a373b1c83aeeeaa78f8a9a0acac1b5"]
+
+[[invocation]]
+id = "tests/cases/b41_generic_methods/overload_implementation_parity.ts"
+kind = "single"
+source = ["tests/cases/b41_generic_methods/overload_implementation_parity.ts\t9c6ddece0eaacd7add8469c575c3dc3f3945fe00928fbb835ab3000dfd17fcc8"]
+
+[[invocation]]
+id = "tests/cases/b41_generic_methods/recursive_binder_contexts.ts"
+kind = "single"
+source = ["tests/cases/b41_generic_methods/recursive_binder_contexts.ts\t1b373bfa944f15336a0711d4525249709615f547a78c16d1afbd278c03faaae0"]
+
+[[invocation]]
+id = "tests/cases/b41_generic_methods/signature_relation.ts"
+kind = "single"
+source = ["tests/cases/b41_generic_methods/signature_relation.ts\t094637eb68b0cffef4f99199259c09828d7ec253807d9ab175777dd1402ef60a"]
+
+[[invocation]]
+id = "tests/cases/b41_generic_methods/static_class_type_params.ts"
+kind = "single"
+source = ["tests/cases/b41_generic_methods/static_class_type_params.ts\t9c876f84b75861fa2c5fc338b5639af1a0cec2dc832c90160ac85e045bbaf59f"]
+
+[[invocation]]
+id = "tests/cases/b41_generic_methods/type_annotations.ts"
+kind = "single"
+source = ["tests/cases/b41_generic_methods/type_annotations.ts\t60b225edf099bee90f92da60feb363e83f4bded16d6688c2ce8404dd114f824a"]
+
+[[invocation]]
+id = "tests/cases/b06_class_completeness/abstract_impl_variants.ts"
+kind = "single"
+source = ["tests/cases/b06_class_completeness/abstract_impl_variants.ts\t357932c1b946ebbb5085d8752c8ea821da6ef5206b7a24b91975a8b298873330"]
+
+[[invocation]]
+id = "tests/cases/b06_class_completeness/abstract_missing_multiple.ts"
+kind = "single"
+source = ["tests/cases/b06_class_completeness/abstract_missing_multiple.ts\t9adcaa4ab0edca3b97d11d73e44f298827100530ff1c102ddf02ba0c34d5771f"]
+
+[[invocation]]
+id = "tests/cases/b06_class_completeness/abstract_missing_single.ts"
+kind = "single"
+source = ["tests/cases/b06_class_completeness/abstract_missing_single.ts\t228f9f07eb3b06c92e80c143e45ebe40b24cd497c41c081115bdd5cb5b80a4a3"]
+
+[[invocation]]
+id = "tests/cases/b06_class_completeness/clean_overrides.ts"
+kind = "single"
+source = ["tests/cases/b06_class_completeness/clean_overrides.ts\t2b8f4ee82d5534566f2cb7ac032133b61639efeba6f20e54e12dd2f6c43090a3"]
+
+[[invocation]]
+id = "tests/cases/b06_class_completeness/override_incompatible.ts"
+kind = "single"
+source = ["tests/cases/b06_class_completeness/override_incompatible.ts\t5af06ad5367e46c7ad9f6d4363bd0bf0477901ce7fa0c97b0d2f247d5cf64ce1"]
+
+[[invocation]]
+id = "tests/cases/b06_class_completeness/override_kind_mixtures.ts"
+kind = "single"
+source = ["tests/cases/b06_class_completeness/override_kind_mixtures.ts\t8a9eb276acf80447ab19d43ad0c5dd31d4720f4217154d529b07b975fa277641"]
+
+[[invocation]]
+id = "tests/cases/b06_class_completeness/override_property_accessor.ts"
+kind = "single"
+source = ["tests/cases/b06_class_completeness/override_property_accessor.ts\t2c5ccd8b658cb7f73fba93da5d2e38af0d7b1c6e4c8fac7dbd7280c000c9fe0b"]
+
+[[invocation]]
+id = "tests/cases/b20_ctor_accessibility/abstract_private_ctor.ts"
+kind = "single"
+source = ["tests/cases/b20_ctor_accessibility/abstract_private_ctor.ts\t5d03cd3a8d2abd44cb36f25f8da35117c3053b2754ab9a1f44123a85a5b298a9"]
+
+[[invocation]]
+id = "tests/cases/b20_ctor_accessibility/inherited_ctor.ts"
+kind = "single"
+source = ["tests/cases/b20_ctor_accessibility/inherited_ctor.ts\tafc2029983bf759814f6bbd7cc1929cae99e280244241c707f8f1119e73c93bd"]
+
+[[invocation]]
+id = "tests/cases/b20_ctor_accessibility/private_ctor.ts"
+kind = "single"
+source = ["tests/cases/b20_ctor_accessibility/private_ctor.ts\t5b10b04df65f6823f80bf2b3346141b7c80ec81185d8cce3c9801b7b29941a59"]
+
+[[invocation]]
+id = "tests/cases/b20_ctor_accessibility/protected_ctor.ts"
+kind = "single"
+source = ["tests/cases/b20_ctor_accessibility/protected_ctor.ts\tf3e391b39ba5607d43839e968e19bb41b91b3c8b464ba5b2fcd5d57f591f5c17"]
+
+[[invocation]]
+id = "tests/cases/b22_new_callee_forms/abstract_and_visibility.ts"
+kind = "single"
+source = ["tests/cases/b22_new_callee_forms/abstract_and_visibility.ts\t8910f004e1c67d6c5a6a5f17ed6b3195bffe2af6f2a026ac35565957b1a7b2eb"]
+
+[[invocation]]
+id = "tests/cases/b22_new_callee_forms/access_context_controls.ts"
+kind = "single"
+source = ["tests/cases/b22_new_callee_forms/access_context_controls.ts\t67c3dac9648cf52132fd204042a693d99c5b21b2af2fd806260fe02a222e79ee"]
+
+[[invocation]]
+id = "tests/cases/b22_new_callee_forms/generic_parenthesized.ts"
+kind = "single"
+source = ["tests/cases/b22_new_callee_forms/generic_parenthesized.ts\t5ddcf2c338f4168349a59ed2455983b637ca9abbf1baea728558eab569088ffb"]
+
+[[invocation]]
+id = "tests/cases/b28_interface_extends/interface_extends.ts"
+kind = "single"
+source = ["tests/cases/b28_interface_extends/interface_extends.ts\t042b92c11c4fa829c662dccf8134b8929103f22a982f0a81c9b90f3d34996809"]
+
+[[invocation]]
+id = "tests/cases/b29_alias_cycles/alias_cycles.ts"
+kind = "single"
+source = ["tests/cases/b29_alias_cycles/alias_cycles.ts\t6a963660b2c4d68a063f0b0d808acfeb5fc511e7ae354843b1a2d7dbf5570b1d"]
+
+[[invocation]]
+id = "tests/cases/b30_negative_literals/negative_literals.ts"
+kind = "single"
+source = ["tests/cases/b30_negative_literals/negative_literals.ts\te54f166642ce26ba36a2d2f8443fed8ce469e4884aee93d49656bcd4ef59fc3b"]
+
+[[invocation]]
+id = "tests/cases/b30_numeric_stringify/construction.ts"
+kind = "single"
+source = ["tests/cases/b30_numeric_stringify/construction.ts\tc8ad302514940cf559472d44b26d555ff762386b3e12e1bad743e74b66326684"]
+
+[[invocation]]
+id = "tests/cases/b30_numeric_stringify/pattern_controls.ts"
+kind = "single"
+source = ["tests/cases/b30_numeric_stringify/pattern_controls.ts\t814a4e6984a275200d87bf4dd6fc44b1d1b273c47be92523cfed2d1cd1ab08b1"]
+
+[[invocation]]
+id = "tests/cases/b55_template_memo/exhaustion_then_reuse.ts"
+kind = "single"
+source = ["tests/cases/b55_template_memo/exhaustion_then_reuse.ts\t27ddab5fc509ca729ac98feeda5a6074c50d9d001a4160a2b9beec273561f202"]
+
+[[invocation]]
+id = "tests/cases/b55_template_memo/poison_after_exhaustion.ts"
+kind = "single"
+source = ["tests/cases/b55_template_memo/poison_after_exhaustion.ts\ta49efe7d565cfac499ec0f7f46e446668d1de555dbb499f0c3e31d4e24ee5c29"]
+
+[[invocation]]
+id = "tests/cases/b55_template_memo/template_reuse_across_aliases.ts"
+kind = "single"
+source = ["tests/cases/b55_template_memo/template_reuse_across_aliases.ts\t56b3203c843bd4eb2cee8d987eb36e80fc51f88a6ef8b308240c8945878d69db"]
+
+[[invocation]]
+id = "tests/cases/b56_instantiation_cycles/cycle_then_terminating.ts"
+kind = "single"
+source = ["tests/cases/b56_instantiation_cycles/cycle_then_terminating.ts\t80060add2f8b1d75c137132371bf63c959861feec64a85a83a8fe8163cfd5483"]
+
+[[invocation]]
+id = "tests/cases/b56_instantiation_cycles/cycles_and_reuse.ts"
+kind = "single"
+source = ["tests/cases/b56_instantiation_cycles/cycles_and_reuse.ts\t123a84a8241d4c6cf17e94112b73cc04fe85da1538725f980ec3e9d13377761a"]
+
+[[invocation]]
+id = "tests/cases/b56_instantiation_cycles/terminating_then_cycle.ts"
+kind = "single"
+source = ["tests/cases/b56_instantiation_cycles/terminating_then_cycle.ts\tad9677877f48262dd6199c8b31b2735760c8fce386ab2f159feb806f50dfc309"]
+
+[[invocation]]
+id = "tests/cases/b58_project_scopes/aligned_clean"
+kind = "project"
+source = ["tests/cases/b58_project_scopes/aligned_clean/a.ts\t912c9f54a043980a0ce07b9005536fc6a60a1a07069ec8a15ff3aed03ee8becf", "tests/cases/b58_project_scopes/aligned_clean/b.ts\t85f0a95c839b566363459cc4429d1248c906ce2019557940674c77ae58b117aa"]
+
+[[invocation]]
+id = "tests/cases/b58_project_scopes/arrows"
+kind = "project"
+source = ["tests/cases/b58_project_scopes/arrows/a.ts\t6c7d8598e1b3485e7308f1ec41e037962ad35f436d11aa5ca28014f42edd25e8", "tests/cases/b58_project_scopes/arrows/b.ts\t68e126059ae2ef6ae1cc71aa7fb7749c1705ef6f2c9c8468ee2507c32634417d"]
+
+[[invocation]]
+id = "tests/cases/b58_project_scopes/blocks"
+kind = "project"
+source = ["tests/cases/b58_project_scopes/blocks/a.ts\t14861c67c745dc17a0c9b201991914d10d154e01da89118ac2f63659509dd8a8", "tests/cases/b58_project_scopes/blocks/b.ts\t2abbb0f32c1c982e7eb2784e25cd09138be3048b9dbcd845410f2e2e36614f9a"]
+
+[[invocation]]
+id = "tests/cases/b58_project_scopes/methods"
+kind = "project"
+source = ["tests/cases/b58_project_scopes/methods/a.ts\te3072231e28cb540fc6c51c799fa9cc7d4fc1fc1c84e30af4b5e5ad736200ebe", "tests/cases/b58_project_scopes/methods/b.ts\tc7d4ba20df1877ae84486e9fd1cb2dcdd34d98e72a21f7d75151d4c2036a26ff"]
+
+[[invocation]]
+id = "tests/cases/b58_project_scopes/silent_absorbed"
+kind = "project"
+source = ["tests/cases/b58_project_scopes/silent_absorbed/a.ts\t1af2877349618297a21cb166fba6c18b0c5a8086c54a6dbca1056365927878cf", "tests/cases/b58_project_scopes/silent_absorbed/b.ts\t6e196a162e5ef9697d6ab22e367ddbaed797a18836d33e72a2402ece37a6c005"]
+
+[[invocation]]
+id = "tests/cases/b58_project_scopes/spurious_param"
+kind = "project"
+source = ["tests/cases/b58_project_scopes/spurious_param/a.ts\tcd6ac664d752cb53f6e5578125bf12e134eb22429845ee337bd7f3ca077d09b4", "tests/cases/b58_project_scopes/spurious_param/b.ts\tb5c0ff881f95f71968eb48a5cce08d177e8bbfa542780ce201177a093a7d70aa"]
+
+[[invocation]]
+id = "tests/cases/b61_field_initializers/field_initializers.ts"
+kind = "single"
+source = ["tests/cases/b61_field_initializers/field_initializers.ts\t7b1fdf8e04a8710ac822bd66f1bd1aa95a3e3aa8d59d712b76df15817c648f4d"]
+
+[[invocation]]
+id = "tests/cases/b61_field_initializers/valid_fields_stay_clean.ts"
+kind = "single"
+source = ["tests/cases/b61_field_initializers/valid_fields_stay_clean.ts\t5f65d15f44c2fcd5b931d705f8a7a4fa91cea75ea8e93ce3a4754b05392bf543"]
+
+[[invocation]]
+id = "tests/cases/b53_cfg_assignments/logical_ternary_assignments.ts"
+kind = "single"
+source = ["tests/cases/b53_cfg_assignments/logical_ternary_assignments.ts\t60e7347b03f2adebf6c958d3e4b782e4210357b4af1bcc0e5c758f867cafe302"]
+
+[[invocation]]
+id = "tests/cases/b53_cfg_assignments/loop_fixpoint_regression.ts"
+kind = "single"
+source = ["tests/cases/b53_cfg_assignments/loop_fixpoint_regression.ts\t893a271921ac50373f98b255d58d745ab448320167a8d58ee4a5393d001f2ddf"]
+
+[[invocation]]
+id = "tests/cases/b53_cfg_assignments/sequence_expressions.ts"
+kind = "single"
+source = ["tests/cases/b53_cfg_assignments/sequence_expressions.ts\tc583cb55a321a9d501a8ccf17e19ca62b9e527aadeb7c4db38c91c606758f8a7"]
+
+[[invocation]]
+id = "tests/cases/b53_cfg_assignments/switch_assignments.ts"
+kind = "single"
+source = ["tests/cases/b53_cfg_assignments/switch_assignments.ts\t193a9b4049b0c2006fda3faec08c15ee45b9fff7a77fe5b3b886d7c2879e61e2"]
+
+[[invocation]]
+id = "tests/cases/b53_cfg_assignments/while_test_assignments.ts"
+kind = "single"
+source = ["tests/cases/b53_cfg_assignments/while_test_assignments.ts\td031d191a67c32417a6749a2e07c2f833aa4f5a206d19ad0d607f5ce25d0ab59"]
+
+[[invocation]]
+id = "tests/cases/b57_tuple_array_infer/call_inference.ts"
+kind = "single"
+source = ["tests/cases/b57_tuple_array_infer/call_inference.ts\t2647c4794846e18f21fb54d994ac96739d327e080000b097f2a5be4d48a200f2"]
+
+[[invocation]]
+id = "tests/cases/b57_tuple_array_infer/infer_from_tuple.ts"
+kind = "single"
+source = ["tests/cases/b57_tuple_array_infer/infer_from_tuple.ts\t15d48c212d8f1e245dbd9477de26e778a04b48cfa5e38a74cb24891846752f6e"]
+
+[[invocation]]
+id = "tests/cases/b64_readonly_infer_binder/readonly_infer.ts"
+kind = "single"
+source = ["tests/cases/b64_readonly_infer_binder/readonly_infer.ts\t6ba4ac432935db5cf4afee905a03b507478b0a45330d6345632c22777d0d5929"]
+
+[[invocation]]
+id = "tests/cases/b34_fix_params_keyof/fix_params_keyof.ts"
+kind = "single"
+source = ["tests/cases/b34_fix_params_keyof/fix_params_keyof.ts\tc3a754b9af3b39a1652cd402f7ca8587c55f4a3af1b5f6ded487a0c70979a4b1"]
+
+[[invocation]]
+id = "tests/cases/b33_as_cast_assignability/as_cast_assignability.ts"
+kind = "single"
+source = ["tests/cases/b33_as_cast_assignability/as_cast_assignability.ts\t97ec36726625b8eb09f6efb34daec97bc2e14e972fa33338a0f12efe74d548bf"]
+
+[[invocation]]
+id = "tests/cases/b54_labeled_statements/labeled_statements.ts"
+kind = "single"
+source = ["tests/cases/b54_labeled_statements/labeled_statements.ts\t1bcdfb8c4248f11cf430057ba3e8b295fa13208fb57d72f6eea8d057c9599f99"]
+
+[[invocation]]
+id = "tests/cases/b59_modules_hygiene/export_ghost"
+kind = "project"
+source = ["tests/cases/b59_modules_hygiene/export_ghost/ghost.ts\t5b1f3dbfab607a21af9758740b7586dc0bb2710abfec59b5708662d244be1e51"]
+
+[[invocation]]
+id = "tests/cases/b59_modules_hygiene/override_attribution"
+kind = "project"
+source = ["tests/cases/b59_modules_hygiene/override_attribution/base.ts\t4d0f2030ff940ead7ba4367260ede9c19835e4d0e279e96a2f0e99955fc3b999", "tests/cases/b59_modules_hygiene/override_attribution/derived.ts\t429c288435bb83336fbfac0c98787a5f0ab28483bc486a31c6789720862852a5"]
+
+[[invocation]]
+id = "tests/cases/b65_inference_candidate_policy/array_tuple_rest.ts"
+kind = "single"
+source = ["tests/cases/b65_inference_candidate_policy/array_tuple_rest.ts\t61ae60a33fac57c64a7d2c0c13d55a55bd694c6b0993c487954ae8f945767794"]
+
+[[invocation]]
+id = "tests/cases/b65_inference_candidate_policy/constructors_and_freshness.ts"
+kind = "single"
+source = ["tests/cases/b65_inference_candidate_policy/constructors_and_freshness.ts\tac76c3f681ffdf43b1ddb291cf82e3340081b4f102f77a9714a7e95911a5e909"]
+
+[[invocation]]
+id = "tests/cases/b65_inference_candidate_policy/fresh_and_nullish_edges.ts"
+kind = "single"
+source = ["tests/cases/b65_inference_candidate_policy/fresh_and_nullish_edges.ts\ta2d89735a83e1ab2aaff79d570f1f92f03d5a2ed49c2063004b13fca49a4e4d0"]
+
+[[invocation]]
+id = "tests/cases/b65_inference_candidate_policy/nonprimitive_candidates.ts"
+kind = "single"
+source = ["tests/cases/b65_inference_candidate_policy/nonprimitive_candidates.ts\t06a0547d48eadb51391bbe8eb4af897eee1c1e09ca4be4e84d9f840355cae315"]
+
+[[invocation]]
+id = "tests/cases/b65_inference_candidate_policy/scalar_calls.ts"
+kind = "single"
+source = ["tests/cases/b65_inference_candidate_policy/scalar_calls.ts\t6aabbf74a9fe5835587bec8dd343b180969550574bd457ca55d23d4f3d526279"]
+
+[[invocation]]
+id = "tests/cases/b65_inference_candidate_policy/single_argument_positions.ts"
+kind = "single"
+source = ["tests/cases/b65_inference_candidate_policy/single_argument_positions.ts\t37526d94eb029982b4fd6883d518743f5d661b7d573159e2ada2a45348f668a8"]
+
+[[invocation]]
+id = "tests/cases/b67_utility_alias_constraint/return_type_constraint.ts"
+kind = "single"
+source = ["tests/cases/b67_utility_alias_constraint/return_type_constraint.ts\tffa62262caad56260b75350c60e9ace71da67835ebcd30bf50693ec828a82f27"]
+
+[[invocation]]
+id = "tests/cases/b70_this_parameter_typing/function_receivers.ts"
+kind = "single"
+source = ["tests/cases/b70_this_parameter_typing/function_receivers.ts\tbb6371161d0c5b8f5d15e64e9c4764e5f7661779e21289c2181873d454869e9e"]
+
+[[invocation]]
+id = "tests/cases/b70_this_parameter_typing/generic_bind_shape.ts"
+kind = "single"
+source = ["tests/cases/b70_this_parameter_typing/generic_bind_shape.ts\t284cbc546f31c70b4afd19b5b6e9d6b3f68f31048282fab5dbc3cb0ccbe7c145"]
+
+[[invocation]]
+id = "tests/cases/b70_this_parameter_typing/method_and_call_receivers.ts"
+kind = "single"
+source = ["tests/cases/b70_this_parameter_typing/method_and_call_receivers.ts\td86c19305ecaa3df8565c081a95699e7491f68b7aef680e0c2d5f4e699ba4192"]
+
+[[invocation]]
+id = "tests/cases/b70_this_parameter_typing/this_type_context.ts"
+kind = "single"
+source = ["tests/cases/b70_this_parameter_typing/this_type_context.ts\t24fa8e293300d5d5c04d0ece1a2f687f877db2090b9e96c67ac1b0fcf1c558c9"]
+
+[[invocation]]
+id = "tests/cases/b70_this_parameter_typing/this_utilities.ts"
+kind = "single"
+source = ["tests/cases/b70_this_parameter_typing/this_utilities.ts\t992f38651091d0178f730e21b90228dea91b894d4ca8b9cc23adf0304640ccf4"]
+
+[[invocation]]
+id = "tests/cases/b70_this_parameter_typing/this_utility_shadow.ts"
+kind = "single"
+source = ["tests/cases/b70_this_parameter_typing/this_utility_shadow.ts\t5de1dc4c9fc43ddb3efc963975f964c7e2a7797f9dae4604be0a8c85edb992cb"]
+
+[[invocation]]
+id = "tests/cases/b77_returntype_call_signatures/overload_order.ts"
+kind = "single"
+source = ["tests/cases/b77_returntype_call_signatures/overload_order.ts\ta65086566ba92082924df8ed15bb6dddedfbb6f76dfe03a8347a276ac427d97e"]
+
+[[invocation]]
+id = "tests/cases/b77_returntype_call_signatures/query_order_and_direct_controls.ts"
+kind = "single"
+source = ["tests/cases/b77_returntype_call_signatures/query_order_and_direct_controls.ts\t960e0ac126d40016e6025e52a0c6e61a3c93eb57e9314a15f7c19011a199b77f"]
+
+[[invocation]]
+id = "tests/cases/b77_returntype_call_signatures/single_call_signature.ts"
+kind = "single"
+source = ["tests/cases/b77_returntype_call_signatures/single_call_signature.ts\t0617866f232fdc13b142b35ffa3402cdeba24660d05ff2b72a1a25a95ae7407a"]
+
+[[invocation]]
+id = "tests/cases/b38_minimal_ambient_prelude/console_shadow.ts"
+kind = "single"
+source = ["tests/cases/b38_minimal_ambient_prelude/console_shadow.ts\t59ea14fa88e61d6ebe0ba175457de1317517f8a78e66e20484173776352a2753"]
+
+[[invocation]]
+id = "tests/cases/b38_minimal_ambient_prelude/console_values.ts"
+kind = "single"
+source = ["tests/cases/b38_minimal_ambient_prelude/console_values.ts\t85fb9d65bf4c1a60484106dde1289f1c557c2bad38d2361077ca01f3466b06b1"]
+
+[[invocation]]
+id = "tests/cases/b38_minimal_ambient_prelude/math.ts"
+kind = "single"
+source = ["tests/cases/b38_minimal_ambient_prelude/math.ts\t03dd2b522e459c4d0895435bf91936913091dc15efef42c4b61eea8cbdd74a54"]
+
+[[invocation]]
+id = "tests/cases/b38_minimal_ambient_prelude/math_value_shadow.ts"
+kind = "single"
+source = ["tests/cases/b38_minimal_ambient_prelude/math_value_shadow.ts\tadded895f94ce547a38e7bcdd24a6671b76079ad65fd6c26111c25ab57e5fd4f"]
+
+[[invocation]]
+id = "tests/cases/b38_prelude_lookup_boundaries/erased_value_type_fallback_chain"
+kind = "project"
+source = ["tests/cases/b38_prelude_lookup_boundaries/erased_value_type_fallback_chain/a.ts\t9c654684ddf53f8985aaff4f9e5e242a5fdf689491f68ae9d7bab2f7573ee365", "tests/cases/b38_prelude_lookup_boundaries/erased_value_type_fallback_chain/inline_consumer.ts\t85377c0dd2ad319d7e3c6b6767b63d7265b9f1f365549e906f6bf9644811bf1a", "tests/cases/b38_prelude_lookup_boundaries/erased_value_type_fallback_chain/inline_middle.ts\t0b9ae42001277d79acd1db96d2f360a92f960b53be2cdb54f6bd631b63770319", "tests/cases/b38_prelude_lookup_boundaries/erased_value_type_fallback_chain/outer_consumer.ts\t4215af7e8feb67618f8d71139859d72f95cf21f84f31dc65730451f47ea4548f", "tests/cases/b38_prelude_lookup_boundaries/erased_value_type_fallback_chain/outer_middle.ts\t3e3ac1ac667511ee6321cf2caee28b61d4ba172019c15b50bf3ebab28f22ec70"]
+
+[[invocation]]
+id = "tests/cases/b38_prelude_lookup_boundaries/inherited_export_leak"
+kind = "project"
+source = ["tests/cases/b38_prelude_lookup_boundaries/inherited_export_leak/a.ts\t0caf37988fa5201fd21eaf05316117d377ab0365d32bb3c063013f6cffabc038"]
+
+[[invocation]]
+id = "tests/cases/b38_prelude_lookup_boundaries/local_type_ambient_value_alias"
+kind = "project"
+source = ["tests/cases/b38_prelude_lookup_boundaries/local_type_ambient_value_alias/a.ts\te538d24fff8f679b43934f3e77d7b7b1b6174ba5b52acf119d22b80cb151c7de", "tests/cases/b38_prelude_lookup_boundaries/local_type_ambient_value_alias/b.ts\t13e220b6b31875f869b80afb6ef528827e06789e932323af1ebb5bf58a69d468"]
+
+[[invocation]]
+id = "tests/cases/b38_prelude_lookup_boundaries/local_type_value_fallback"
+kind = "project"
+source = ["tests/cases/b38_prelude_lookup_boundaries/local_type_value_fallback/a.ts\t98139b88030f368ec4bd56650778997708401d168e6a2cac7af3f5ba20e2f96b"]
+
+[[invocation]]
+id = "tests/cases/b38_prelude_lookup_boundaries/type_only_import_barrier"
+kind = "project"
+source = ["tests/cases/b38_prelude_lookup_boundaries/type_only_import_barrier/a.ts\t143f1a0cd9a6116ac6409f0569576ef470d021819ddb968d52c12bd30395cac5", "tests/cases/b38_prelude_lookup_boundaries/type_only_import_barrier/b.ts\t60687d26cf89c4dfa6171a30c4123f0cbd4ede8a88ceb3af8f8bd6c24488f2fa"]
+
+[[invocation]]
+id = "tests/cases/b38_prelude_lookup_boundaries/type_only_reexport_value_origin"
+kind = "project"
+source = ["tests/cases/b38_prelude_lookup_boundaries/type_only_reexport_value_origin/a.ts\t794c650eb5f5c04c174efe809f6f44e8f18ccf350b4e3d3968afb6d844c66750", "tests/cases/b38_prelude_lookup_boundaries/type_only_reexport_value_origin/regular_import.ts\t47cf44de8a607493f2fabcf3126c3d9f882d13e3d8f8e3394c7d012dcee20183", "tests/cases/b38_prelude_lookup_boundaries/type_only_reexport_value_origin/type_import.ts\t5f1de5729f9d1bd181b2116b908a5e9858d83f0c58fe7240f7e0d1323741d2e8"]
+
+[[invocation]]
+id = "tests/cases/b38_prelude_lookup_boundaries/type_only_reexport_value_origin_chain"
+kind = "project"
+source = ["tests/cases/b38_prelude_lookup_boundaries/type_only_reexport_value_origin_chain/a.ts\t785b8958d90722d9c5b8451b8026e77bbf0bccfb7de53a80eb169d445d9f7894", "tests/cases/b38_prelude_lookup_boundaries/type_only_reexport_value_origin_chain/regular_consumer.ts\tf2870e593a3e32c5d485b39e0d03c9dc14dbf712bda6b13ddb2968c6615f7138", "tests/cases/b38_prelude_lookup_boundaries/type_only_reexport_value_origin_chain/regular_middle.ts\t2ae3c75cca51d922c6da87b06b1e8b49805b0043aac6168d6018565e0b6a130d", "tests/cases/b38_prelude_lookup_boundaries/type_only_reexport_value_origin_chain/regular_second.ts\t7e162e98f29472278e3cdbff0ae65628d86f93d3959e26ea38ad94d0334f4a46", "tests/cases/b38_prelude_lookup_boundaries/type_only_reexport_value_origin_chain/type_consumer.ts\t78c69e209ac7fd435a1a7789e7c5ea4c5e4635510d78d49e100cd65789c778eb", "tests/cases/b38_prelude_lookup_boundaries/type_only_reexport_value_origin_chain/type_middle.ts\t6df45fb3c26ba670a3e67fdfbd091e5787f993c5305b8d12374a3e26a83a7324"]
+
+[[invocation]]
+id = "tests/cases/b38_prelude_lookup_boundaries/type_only_type_fallback"
+kind = "project"
+source = ["tests/cases/b38_prelude_lookup_boundaries/type_only_type_fallback/a.ts\tc06b47369c096cd80cfd3689626022732017ab1af8ff526c204dcb97fb316383", "tests/cases/b38_prelude_lookup_boundaries/type_only_type_fallback/b.ts\t7a40a91faf1da6c55270607e3b20703baefeca9ee3865d133fd630719f0a16e4"]
+
+[[invocation]]
+id = "tests/cases/b38_prelude_lookup_boundaries/value_import_type_fallback"
+kind = "project"
+source = ["tests/cases/b38_prelude_lookup_boundaries/value_import_type_fallback/a.ts\tf7d885c8b16083fd4d267c4ea81de4c7d6f65cfe0cd3dd264984af6544cd7e2f", "tests/cases/b38_prelude_lookup_boundaries/value_import_type_fallback/b.ts\t3c92ef9f4e01dc7ac55de5ac8ef3c42048e86d729db016432bd261fb792c1931"]
+
+[[invocation]]
+id = "tests/cases/sr_wu1_expressions/loops_throw.ts"
+kind = "single"
+source = ["tests/cases/sr_wu1_expressions/loops_throw.ts\t74849e0d3a57261c80c53591e1ae3a0f12940d2e22b1770dc005493d344ae979"]
+
+[[invocation]]
+id = "tests/cases/sr_wu1_expressions/nested_assignments.ts"
+kind = "single"
+source = ["tests/cases/sr_wu1_expressions/nested_assignments.ts\tc2b49eaba6addad46cbd385cf86660a0cfe5a07a8e330113502cae9dfa6d64bb"]
+
+[[invocation]]
+id = "tests/cases/sr_wu1_expressions/return_inference.ts"
+kind = "single"
+source = ["tests/cases/sr_wu1_expressions/return_inference.ts\t9ace5cf354ec604204cf7f69f766374df9d34eacee0fc48fb0137c6929fdffcd"]
+
+[[invocation]]
+id = "tests/cases/sr_wu2_scope_overloads/local_overloads.ts"
+kind = "single"
+source = ["tests/cases/sr_wu2_scope_overloads/local_overloads.ts\t51deb8d9b55d6ac43fed6f9ef2341a8641e8e53e4c1d31bb685cbc9678319243"]
+
+[[invocation]]
+id = "tests/cases/sr_wu2_scope_overloads/switch_scope.ts"
+kind = "single"
+source = ["tests/cases/sr_wu2_scope_overloads/switch_scope.ts\t066be68dbf75372f702ca684ea51dc7b1f739e5baadf3ce1908a0b3aeefaaf1c"]
+
+[[invocation]]
+id = "tests/cases/sr_wu2_export_space/type_only_export_leak"
+kind = "project"
+source = ["tests/cases/sr_wu2_export_space/type_only_export_leak/a.ts\t2c87629b8670bee7972459aac0f1d11549b5bc064503c1784713e840843f56dc", "tests/cases/sr_wu2_export_space/type_only_export_leak/use.ts\tbf7930cd0234289c0403ea4dfba547689ec4ae2828fbdca2dfe56179875d03eb"]
+
+[[invocation]]
+id = "tests/cases/sr_wu3_types_recursion/any_never.ts"
+kind = "single"
+source = ["tests/cases/sr_wu3_types_recursion/any_never.ts\taa2295b3adb36d702f80a9df07b5eeab231a54429bdc809860a5cfbeb919b77f"]
+
+[[invocation]]
+id = "tests/cases/sr_wu3_types_recursion/deep_annotation.ts"
+kind = "single"
+source = ["tests/cases/sr_wu3_types_recursion/deep_annotation.ts\t8882b546c40f1395b14ba2b245fc4eff1ee99be21a1bac84545b0abed203c162"]
+
+[[invocation]]
+id = "tests/cases/sr_wu3_types_recursion/intersection_nominal.ts"
+kind = "single"
+source = ["tests/cases/sr_wu3_types_recursion/intersection_nominal.ts\td3e722a3066d9ce48e85246e54ae87d49cb6e21bf4c4bbc34c9abf0f68d5392e"]
+
+[[invocation]]
+id = "tests/cases/sr_wu3_types_recursion/keyof_string_index.ts"
+kind = "single"
+source = ["tests/cases/sr_wu3_types_recursion/keyof_string_index.ts\td0dd391a27f46bae5756d832146f64e7b3148c77fee2d67720db0bcae4dd2c47"]
+
+[[invocation]]
+id = "tests/cases/sr_wu3_types_recursion/recursive_mapped.ts"
+kind = "single"
+source = ["tests/cases/sr_wu3_types_recursion/recursive_mapped.ts\td040e743774a78e588490d7bdacfcafd9b39603f10ae4d7836e548ece4ea4bac"]
+
+[[invocation]]
+id = "tests/cases/sr_rewrite_hotpath_wu0/computed_member_calls.ts"
+kind = "single"
+source = ["tests/cases/sr_rewrite_hotpath_wu0/computed_member_calls.ts\tabc3adefeead3eb01fd37a8465856459fe1965dbd66b138c85cbd99fc0062795"]
+
+[[invocation]]
+id = "tests/cases/sr_rewrite_hotpath_wu0/constraint_function_metadata.ts"
+kind = "single"
+source = ["tests/cases/sr_rewrite_hotpath_wu0/constraint_function_metadata.ts\t6debc041061a0126fc73b42140089d0d991b018dc7507d36165fed7c3167dead"]
+
+[[invocation]]
+id = "tests/cases/sr_rewrite_hotpath_wu0/generic_infer_metadata.ts"
+kind = "single"
+source = ["tests/cases/sr_rewrite_hotpath_wu0/generic_infer_metadata.ts\tb15b4131e13cc441fb6a6feb91b30d51992d7afbd8adff201ec2ba91dc6e6695"]
+
+[[invocation]]
+id = "tests/cases/sr_rewrite_hotpath_wu0/overload_trial_depth.ts"
+kind = "single"
+source = ["tests/cases/sr_rewrite_hotpath_wu0/overload_trial_depth.ts\t3ceb4f94b2f6397ed2d2d3b29c5c136eb3be786124a4412947e5988e70ae4c69"]
+
+[[invocation]]
+id = "tests/cases/sr_rewrite_hotpath_wu0/recursive_infer_rewrite.ts"
+kind = "single"
+source = ["tests/cases/sr_rewrite_hotpath_wu0/recursive_infer_rewrite.ts\tec7781a028836e777073be37899d8de5575eaf9f33f15fdd9150f7fd3285542a"]
+
+[[invocation]]
+id = "tests/cases/sr_rewrite_hotpath_wu0/recursive_infer_sibling.ts"
+kind = "single"
+source = ["tests/cases/sr_rewrite_hotpath_wu0/recursive_infer_sibling.ts\t866fcb1fdab40703e37d42354f5443bdf73a9010d6bff9bac4fd8ab11b098f4b"]
+
+[[invocation]]
+id = "tests/cases/sr_rewrite_hotpath_wu7/conditional_infer_metadata_depth.ts"
+kind = "single"
+source = ["tests/cases/sr_rewrite_hotpath_wu7/conditional_infer_metadata_depth.ts\tc18e445929ddf447138e1e0a48795febe7a4dfb257564d367842d9bd330a4c68"]
+
+[[invocation]]
+id = "tests/cases/sr_rewrite_hotpath_wu7/constraint_metadata_depth.ts"
+kind = "single"
+source = ["tests/cases/sr_rewrite_hotpath_wu7/constraint_metadata_depth.ts\tb683bc85586ec2d67908b29cd1ee946abf177968dea237c6246206e8e03420ba"]
+
+[[invocation]]
+id = "tests/cases/sr_rewrite_hotpath_wu8/mapped_value_depth.ts"
+kind = "single"
+source = ["tests/cases/sr_rewrite_hotpath_wu8/mapped_value_depth.ts\t41007257a1fa70447049f07a2b296fbfe08d623175b85e3378c2d5c66e4c3330"]
+
+[[invocation]]
+id = "tests/cases/sr_rewrite_hotpath_wu8/mapped_value_function_metadata.ts"
+kind = "single"
+source = ["tests/cases/sr_rewrite_hotpath_wu8/mapped_value_function_metadata.ts\t66288204954a0480602f1bfb538aff6ed09735546b22f30bda26e1419f99f3d1"]
+
+[[invocation]]
+id = "tests/cases/sr_semantic_duplication/class_application_contract.ts"
+kind = "single"
+source = ["tests/cases/sr_semantic_duplication/class_application_contract.ts\t6357ec071b78e317e08a3fcd67305ff8c9484924ddc598d9617fb108b667a724"]
+
+[[invocation]]
+id = "tests/cases/sr_semantic_duplication/class_initializer_poison.ts"
+kind = "single"
+source = ["tests/cases/sr_semantic_duplication/class_initializer_poison.ts\t62957e653dac38ec25139374faf88e05b979be1cdd88400aac8644f8bb37b3cd"]
+
+[[invocation]]
+id = "tests/cases/sr_semantic_duplication/class_initializer_supported.ts"
+kind = "single"
+source = ["tests/cases/sr_semantic_duplication/class_initializer_supported.ts\t05e952e39f92e3e62510f4e94deca5ca0ffbf1130e3d2a46000882838c352eb1"]
+
+[[invocation]]
+id = "tests/cases/sr_semantic_duplication/class_initializer_unsupported.ts"
+kind = "single"
+source = ["tests/cases/sr_semantic_duplication/class_initializer_unsupported.ts\t41341910dc2fbf469c7fddb4ccab01562838626751bedbf1c7e2c1c1c294b69b"]
+
+[[invocation]]
+id = "tests/cases/sr_semantic_duplication/class_member_surfaces.ts"
+kind = "single"
+source = ["tests/cases/sr_semantic_duplication/class_member_surfaces.ts\t3866e9b62248a08dfa94fd6daa1e68835b20a52b47922f41def083b3d1b60eb0"]
+
+[[invocation]]
+id = "tests/cases/sr_semantic_duplication/class_projection_exhaustion.ts"
+kind = "single"
+source = ["tests/cases/sr_semantic_duplication/class_projection_exhaustion.ts\t02ef35568a0d34d358d19c826c5b8fcfcbe36f0c1439d78ab2e844f9775648a2"]
+
+[[invocation]]
+id = "tests/cases/sr_semantic_duplication/class_scheduling_shapes.ts"
+kind = "single"
+source = ["tests/cases/sr_semantic_duplication/class_scheduling_shapes.ts\t5e7dedd18fdfe2b6338e27c89d087a122daf2abed908fddb42a733f9810bfa5b"]
+
+[[invocation]]
+id = "tests/cases/sr_semantic_duplication/recursive_class_applications.ts"
+kind = "single"
+source = ["tests/cases/sr_semantic_duplication/recursive_class_applications.ts\ta3c75cf7a95a7dbe72a1b5f66f0bc468ca355f5bfba7884c0459aa7795b7fce8"]
+
+[[invocation]]
+id = "tests/cases/sr_semantic_duplication/selector_precedence.ts"
+kind = "single"
+source = ["tests/cases/sr_semantic_duplication/selector_precedence.ts\tebb3573fc89aebc0a0e0c3effe4a62ca9c192aca00f16d5bb895b8d33e4e877c"]
+
+[[invocation]]
+id = "tests/cases/sr_semantic_duplication_project/opposite_order"
+kind = "project"
+source = ["tests/cases/sr_semantic_duplication_project/opposite_order/00_derived.ts\t97ad614d812b4e467c54c6cfbbafd530abfee5324c036449d8b2d8935be9e832", "tests/cases/sr_semantic_duplication_project/opposite_order/99_base.ts\tb99c0aebea79df4d0d82ec6365bf3e994b35307551ee98254790ddbed803add5"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/ambient_external_module.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/ambient_external_module.ts\te24f032f6fb30db0d506df6a6475395836be5cfca2a6dc6dbaf1d6c92f7dcccd"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/annotation_keywords.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/annotation_keywords.ts\tc9b09fc7dca26fea0711b63ebe83973a76f8f625bd8f5ead44c90152b82bcde9"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/array_spread.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/array_spread.ts\tc85d405464fdd61109057ddf9d815fedfd8014c134919d0ae7fe4d7ff1b60ea7"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/assertion_compatibility.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/assertion_compatibility.ts\t319bbd2d60e6a0b45d678c4a0eb610ce3b0260881f41d2abb49291ffaf3893f8"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/assertion_compatibility_deferred_targets.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/assertion_compatibility_deferred_targets.ts\t934419c2ee614e6eddbc8c896be94a0ac721f0bec9467c846b025a8158f5a966"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/assignment_expression_nested_scope_target.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/assignment_expression_nested_scope_target.ts\t8adec395d8280d39c5763718288b0237b05399305b097846a60acca1f7657ffa"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/class_heritage.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/class_heritage.ts\t7bee744a2b4b218d5d975b68ccc7089aeb236e7acc7c3fb152d92a2610754e10"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/class_implicit_any.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/class_implicit_any.ts\t956873effd9c787b418455b167a29ebd3825d4dceee3c0be8fa5ed835ca52802"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/class_members.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/class_members.ts\teeb11d7105009759c697848bea8f1cd7fe8514dc65ccbfeb7efbeccd8ea0ffd4"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/computed_key.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/computed_key.ts\t9e8e4b5f92d192c56a239d82c62742b3378583b65d04510acf354d19ac00b59c"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/for_of_assign_target.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/for_of_assign_target.ts\tb65d7547151b6e1144c554ad62aa4f84197029bb1769595f3d2fba2646c30893"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/signature_computed_key.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/signature_computed_key.ts\tddc5c685fe15c30d815c3a6c7e5c7fd2300ec124439e3937d0187823f7d3fa78"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/supported_annotations.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/supported_annotations.ts\tc6181f35e5c59025b2393383ea60439dfd458dacce8c9f6364ca4786da070a30"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/template_interpolation.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/template_interpolation.ts\t9d9424c28bf70bfc7591b0c911950883d1c543937accf2cb661c9d294a95cdcb"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/try_catch_finally.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/try_catch_finally.ts\td719e61fc5319bebbc439eaa3b87381ab0be423f7090b7277b0feb03e0c14af1"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/tuple_members.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/tuple_members.ts\t49da3c74656fbbb374e88daf27259dcd04aa3c76db8415f3a16d4ddb370d2d93"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/type_name_qualified.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/type_name_qualified.ts\t11c617be56c9755f9ffdbcfd349d6342084a903c400a0031fffdcee797377a14"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/type_param_default.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/type_param_default.ts\t516340a0b47872d584b5e5b18499f66c8f093cb43307519981f8db1e1a855b3e"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/typeof_query.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/typeof_query.ts\t299eaafe618884eee0eec53f6f807c9f51078d7c09f9b76089630bea88debe8e"]
+
+[[invocation]]
+id = "tests/cases/b73_surface_accounting/update_expression_nested_scope_target.ts"
+kind = "single"
+source = ["tests/cases/b73_surface_accounting/update_expression_nested_scope_target.ts\t3eadb36e1b8445dfb81d1cb6b8bcc35dcee59ab699f9909ec0ba5d3f428d1d58"]
+
+[[invocation]]
+id = "tests/cases/b73_expression_shape_tail/await.ts"
+kind = "single"
+source = ["tests/cases/b73_expression_shape_tail/await.ts\t4988dc6539f294c7f62a6f57d3b5c29a07371546eee56500d921723686583c1e"]
+
+[[invocation]]
+id = "tests/cases/b73_expression_shape_tail/bigint_literal.ts"
+kind = "single"
+source = ["tests/cases/b73_expression_shape_tail/bigint_literal.ts\t9f58ac0d8960dce4253bad8cecdfed33b62b8002a21a8e9ea865c3c2c0be730e"]
+
+[[invocation]]
+id = "tests/cases/b73_expression_shape_tail/class_expression.ts"
+kind = "single"
+source = ["tests/cases/b73_expression_shape_tail/class_expression.ts\t1dba914b4d788d6b0c3553ed1572547db860de3a096f549c7b272ad983856368"]
+
+[[invocation]]
+id = "tests/cases/b73_expression_shape_tail/dynamic_import.ts"
+kind = "single"
+source = ["tests/cases/b73_expression_shape_tail/dynamic_import.ts\t290fa83993177b2f0a7939b5aaef1352c19768bdf03db21da236a8a679a3066b"]
+
+[[invocation]]
+id = "tests/cases/b73_expression_shape_tail/instantiation.ts"
+kind = "single"
+source = ["tests/cases/b73_expression_shape_tail/instantiation.ts\t093afd4d8b8738b6fc37e2439ba8c01355d47b65ea87894e60187eea8aaa407c"]
+
+[[invocation]]
+id = "tests/cases/b73_expression_shape_tail/non_null.ts"
+kind = "single"
+source = ["tests/cases/b73_expression_shape_tail/non_null.ts\t856e6d4be9bcee37efe2df521354e5f4848f560cb2e4edf1436fa5b4551a5302"]
+
+[[invocation]]
+id = "tests/cases/b73_expression_shape_tail/optional_chain.ts"
+kind = "single"
+source = ["tests/cases/b73_expression_shape_tail/optional_chain.ts\tbc042d5fffa50517de97a2774476fffeac3a46149037cf63bc3705ac57efee5e"]
+
+[[invocation]]
+id = "tests/cases/b73_expression_shape_tail/private_field_access.ts"
+kind = "single"
+source = ["tests/cases/b73_expression_shape_tail/private_field_access.ts\t308fade961848f0b5983789d0a065cb70edfde4851ac439966a70ef626e1f0c3"]
+
+[[invocation]]
+id = "tests/cases/b73_expression_shape_tail/private_in.ts"
+kind = "single"
+source = ["tests/cases/b73_expression_shape_tail/private_in.ts\tdcf18f16440d2645d93735548a5db63fde8f04b7d090a99cb7da8c032106775c"]
+
+[[invocation]]
+id = "tests/cases/b73_expression_shape_tail/regexp_literal.ts"
+kind = "single"
+source = ["tests/cases/b73_expression_shape_tail/regexp_literal.ts\t2f6ee8cbdb7565da343a4a6afe93cf3ddae0cdaa349b95b8f02a9015852f8cea"]
+
+[[invocation]]
+id = "tests/cases/b73_expression_shape_tail/satisfies.ts"
+kind = "single"
+source = ["tests/cases/b73_expression_shape_tail/satisfies.ts\t7ac82faedd21dffc1409383c4eda5fa649c0d2d9bd4dbef078d248dd3f25b9ba"]
+
+[[invocation]]
+id = "tests/cases/b73_expression_shape_tail/tagged_template.ts"
+kind = "single"
+source = ["tests/cases/b73_expression_shape_tail/tagged_template.ts\t41a08500d60a5e5eda6a14199d71bc76c8a1726da0fc8df26e934c35fab0d6bc"]
+
+[[invocation]]
+id = "tests/cases/b73_expression_shape_tail/update_operand.ts"
+kind = "single"
+source = ["tests/cases/b73_expression_shape_tail/update_operand.ts\t62e742a69ecfda4f50a0a79a7aacdde7ea774511b092064faa7bec2e080773c3"]
+
+[[invocation]]
+id = "tests/cases/b73_expression_shape_tail/update_wrappers.ts"
+kind = "single"
+source = ["tests/cases/b73_expression_shape_tail/update_wrappers.ts\ta5e7cd9db502e4c5896c5f4c67263f8343d054efce907b000bf08e6e45021f73"]
+
+[[invocation]]
+id = "tests/cases/b73_expression_shape_tail/yield.ts"
+kind = "single"
+source = ["tests/cases/b73_expression_shape_tail/yield.ts\te108a35f292de5ed0bfd176c4c651e547da3b007e813cb99e91218fe59baa9db"]
+
+[[invocation]]
+id = "tests/cases/b74_declaration_hoisting/forward_functions.ts"
+kind = "single"
+source = ["tests/cases/b74_declaration_hoisting/forward_functions.ts\t77d279e21056ad83830b42e4a8ed47a0a4d907d6acef7f0d9618c9a452d0dfb6"]
+
+[[invocation]]
+id = "tests/cases/b74_declaration_hoisting/forward_overloads.ts"
+kind = "single"
+source = ["tests/cases/b74_declaration_hoisting/forward_overloads.ts\td523a44ef1ec669ed4126e34691c604740f85b200646d4e1064cc98acc157b42"]
+
+[[invocation]]
+id = "tests/cases/b74_declaration_hoisting/unannotated_forward_returns.ts"
+kind = "single"
+source = ["tests/cases/b74_declaration_hoisting/unannotated_forward_returns.ts\t674dd42000781a40c6f9df7ee54fecbdf9a549aa8bbf435a0c6913bc8d793cbe"]
+
+[[invocation]]
+id = "tests/cases/b74_declaration_hoisting/var_loops_boundaries.ts"
+kind = "single"
+source = ["tests/cases/b74_declaration_hoisting/var_loops_boundaries.ts\t09e575bdbad7793e3f2bb9860e50c3f8f396fd817c6af39457398a65e3f2a5c0"]
+
+[[invocation]]
+id = "tests/cases/b74_declaration_hoisting/var_redeclaration_surfaces.ts"
+kind = "single"
+source = ["tests/cases/b74_declaration_hoisting/var_redeclaration_surfaces.ts\tf5af308b2d1850059efc936485d4131ec0015d452c1fda91fd6ec44f3863ffe2"]
+
+[[invocation]]
+id = "tests/cases/b74_declaration_hoisting/var_scopes.ts"
+kind = "single"
+source = ["tests/cases/b74_declaration_hoisting/var_scopes.ts\tbc338b720ece0b21fa4bfde01d23b381a2f89c09836385ed5d85aed8d519252b"]
+
+[[invocation]]
+id = "tests/cases/b43_namespaces_declaration_merging/degraded_chimera.ts"
+kind = "single"
+source = ["tests/cases/b43_namespaces_declaration_merging/degraded_chimera.ts\tb5bf738661a22f09cb41cefdf90abf12307c8b92eccef5812f7d89a00b2cc566"]
+
+[[invocation]]
+id = "tests/cases/b43_namespaces_declaration_merging/interface_members.ts"
+kind = "single"
+source = ["tests/cases/b43_namespaces_declaration_merging/interface_members.ts\t8e1e47c0a28f6ecb0c764fa5fc9491cc3d70076d8247f2fbe693a2aa575dc91b"]
+
+[[invocation]]
+id = "tests/cases/b43_namespaces_declaration_merging/namespace_forms.ts"
+kind = "single"
+source = ["tests/cases/b43_namespaces_declaration_merging/namespace_forms.ts\tb57f592e53fceef6601754cf6c79b46e47b9ba7f720b9439922129150198d7c2"]
+
+[[invocation]]
+id = "tests/cases/b43_namespaces_declaration_merging/umd_export.d.ts"
+kind = "single"
+source = ["tests/cases/b43_namespaces_declaration_merging/umd_export.d.ts\td7b4a5cbc1ae3b092e5a4dea424a4df74ca361e534a5a43d7d4cbf5b5cf84307"]
+
+[[invocation]]
+id = "tests/cases/b43_namespaces_declaration_merging/wu6a_mutability.ts"
+kind = "single"
+source = ["tests/cases/b43_namespaces_declaration_merging/wu6a_mutability.ts\t3188b1e2f311656eeb6cfaad90a35a3707442255933ba002e318cd79bce587c9"]
+
+[[invocation]]
+id = "tests/cases/b43_namespaces_declaration_merging/wu6a_project_forward"
+kind = "project"
+source = ["tests/cases/b43_namespaces_declaration_merging/wu6a_project_forward/00_consume.ts\t125867d0fcc2c6d15e5fba3b4d3d2439a64eb9a7edefefb821a8b1d9a3a55886", "tests/cases/b43_namespaces_declaration_merging/wu6a_project_forward/99_reopen.ts\ta3d51427e751c08f50e855577dddac21da41fd176fe2ca7f83509e3479e3c736"]
+
+[[invocation]]
+id = "tests/cases/b43_namespaces_declaration_merging/wu6a_project_reverse"
+kind = "project"
+source = ["tests/cases/b43_namespaces_declaration_merging/wu6a_project_reverse/00_reopen.ts\td24edb754515b1fe31350247b2aaf541b05a6e8c8429ca50d12e4941daabd8e4", "tests/cases/b43_namespaces_declaration_merging/wu6a_project_reverse/99_consume.ts\tb936b567d3ceff839b7c4c6c460cdf38928b365fb2204d5bc17de0cb7a19f262"]

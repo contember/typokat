@@ -1,0 +1,56 @@
+schema = 1
+status = "PENDING"
+profile_sha256 = "1edef1b5e870024834762267ec532c3054f3b2279e9181844e21648243eb1407"
+collector_revision = "PENDING"
+classifier = "binder::ModuleBindingContext::for_program"
+candidate_collector = "binder-shared-preflight-candidate-collector"
+route = []
+
+[summary]
+invocation_count = 0
+source_count = 0
+private_count = 0
+expected_rebuild_count = 0
+private_fraction_ppm = 0
+projected_suite_ms = 0
+observed_suite_ms = 0
+
+[approval]
+decision = "PENDING"
+approver = "PENDING"
+date = "PENDING"
+evidence_manifest_sha256 = "PENDING"
+
+[[corpus]]
+id = "committed-conformance"
+status = "PENDING"
+input_manifest_sha256 = "PENDING"
+invocation_count = 0
+source_count = 0
+candidate_count = 0
+private_count = 0
+expected_rebuild_count = 0
+collision_count = 0
+unique_global_object_count = 0
+declare_global_count = 0
+namespace_umd_count = 0
+classifier_uncertain_count = 0
+projected_suite_ms = 0
+observed_suite_ms = 0
+
+[[corpus]]
+id = "official-suite"
+status = "PENDING"
+input_manifest_sha256 = "PENDING"
+invocation_count = 0
+source_count = 0
+candidate_count = 0
+private_count = 0
+expected_rebuild_count = 0
+collision_count = 0
+unique_global_object_count = 0
+declare_global_count = 0
+namespace_umd_count = 0
+classifier_uncertain_count = 0
+projected_suite_ms = 0
+observed_suite_ms = 0

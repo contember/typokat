@@ -1,0 +1,215 @@
+schema = 1
+status = "PENDING"
+profile_sha256 = "1edef1b5e870024834762267ec532c3054f3b2279e9181844e21648243eb1407"
+collector_revision = "PENDING"
+candidate_count = 9
+consumer_count = 0
+unexplained_consumer_count = 0
+matrix_sha256 = "PENDING"
+
+[[candidate]]
+id = "mutable-array-tuple"
+status = "PENDING"
+decision = "PENDING"
+identity_role = "PENDING"
+declaration_identity = "PENDING"
+declaration_file = "PENDING"
+declaration_start = 0
+declaration_end = 0
+consumers = []
+good_witness = { path = "PENDING", sha256 = "PENDING" }
+bad_witness = { path = "PENDING", sha256 = "PENDING" }
+shadowing_witness = { path = "PENDING", sha256 = "PENDING" }
+missing_member_witness = { path = "PENDING", sha256 = "PENDING" }
+shared_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+private_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+oracle_good = "PENDING"
+oracle_bad = "PENDING"
+typokat_current = "PENDING"
+owner = "PENDING"
+rationale = "PENDING"
+falsifier = "PENDING"
+
+[[candidate]]
+id = "readonly-array-tuple"
+status = "PENDING"
+decision = "PENDING"
+identity_role = "PENDING"
+declaration_identity = "PENDING"
+declaration_file = "PENDING"
+declaration_start = 0
+declaration_end = 0
+consumers = []
+good_witness = { path = "PENDING", sha256 = "PENDING" }
+bad_witness = { path = "PENDING", sha256 = "PENDING" }
+shadowing_witness = { path = "PENDING", sha256 = "PENDING" }
+missing_member_witness = { path = "PENDING", sha256 = "PENDING" }
+shared_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+private_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+oracle_good = "PENDING"
+oracle_bad = "PENDING"
+typokat_current = "PENDING"
+owner = "PENDING"
+rationale = "PENDING"
+falsifier = "PENDING"
+
+[[candidate]]
+id = "primitive-wrapper-members"
+status = "PENDING"
+decision = "PENDING"
+identity_role = "PENDING"
+declaration_identity = "PENDING"
+declaration_file = "PENDING"
+declaration_start = 0
+declaration_end = 0
+consumers = []
+good_witness = { path = "PENDING", sha256 = "PENDING" }
+bad_witness = { path = "PENDING", sha256 = "PENDING" }
+shadowing_witness = { path = "PENDING", sha256 = "PENDING" }
+missing_member_witness = { path = "PENDING", sha256 = "PENDING" }
+shared_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+private_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+oracle_good = "PENDING"
+oracle_bad = "PENDING"
+typokat_current = "PENDING"
+owner = "PENDING"
+rationale = "PENDING"
+falsifier = "PENDING"
+
+[[candidate]]
+id = "object-apparent-members"
+status = "PENDING"
+decision = "PENDING"
+identity_role = "PENDING"
+declaration_identity = "PENDING"
+declaration_file = "PENDING"
+declaration_start = 0
+declaration_end = 0
+consumers = []
+good_witness = { path = "PENDING", sha256 = "PENDING" }
+bad_witness = { path = "PENDING", sha256 = "PENDING" }
+shadowing_witness = { path = "PENDING", sha256 = "PENDING" }
+missing_member_witness = { path = "PENDING", sha256 = "PENDING" }
+shared_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+private_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+oracle_good = "PENDING"
+oracle_bad = "PENDING"
+typokat_current = "PENDING"
+owner = "PENDING"
+rationale = "PENDING"
+falsifier = "PENDING"
+
+[[candidate]]
+id = "callable-function-members"
+status = "PENDING"
+decision = "PENDING"
+identity_role = "PENDING"
+declaration_identity = "PENDING"
+declaration_file = "PENDING"
+declaration_start = 0
+declaration_end = 0
+consumers = []
+good_witness = { path = "PENDING", sha256 = "PENDING" }
+bad_witness = { path = "PENDING", sha256 = "PENDING" }
+shadowing_witness = { path = "PENDING", sha256 = "PENDING" }
+missing_member_witness = { path = "PENDING", sha256 = "PENDING" }
+shared_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+private_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+oracle_good = "PENDING"
+oracle_bad = "PENDING"
+typokat_current = "PENDING"
+owner = "PENDING"
+rationale = "PENDING"
+falsifier = "PENDING"
+
+[[candidate]]
+id = "regexp-literal"
+status = "PENDING"
+decision = "PENDING"
+identity_role = "PENDING"
+declaration_identity = "PENDING"
+declaration_file = "PENDING"
+declaration_start = 0
+declaration_end = 0
+consumers = []
+good_witness = { path = "PENDING", sha256 = "PENDING" }
+bad_witness = { path = "PENDING", sha256 = "PENDING" }
+shadowing_witness = { path = "PENDING", sha256 = "PENDING" }
+missing_member_witness = { path = "PENDING", sha256 = "PENDING" }
+shared_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+private_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+oracle_good = "PENDING"
+oracle_bad = "PENDING"
+typokat_current = "PENDING"
+owner = "PENDING"
+rationale = "PENDING"
+falsifier = "PENDING"
+
+[[candidate]]
+id = "global-this"
+status = "PENDING"
+decision = "PENDING"
+identity_role = "PENDING"
+declaration_identity = "PENDING"
+declaration_file = "PENDING"
+declaration_start = 0
+declaration_end = 0
+consumers = []
+good_witness = { path = "PENDING", sha256 = "PENDING" }
+bad_witness = { path = "PENDING", sha256 = "PENDING" }
+shadowing_witness = { path = "PENDING", sha256 = "PENDING" }
+missing_member_witness = { path = "PENDING", sha256 = "PENDING" }
+shared_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+private_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+oracle_good = "PENDING"
+oracle_bad = "PENDING"
+typokat_current = "PENDING"
+owner = "PENDING"
+rationale = "PENDING"
+falsifier = "PENDING"
+
+[[candidate]]
+id = "string-intrinsics"
+status = "PENDING"
+decision = "PENDING"
+identity_role = "PENDING"
+declaration_identity = "PENDING"
+declaration_file = "PENDING"
+declaration_start = 0
+declaration_end = 0
+consumers = []
+good_witness = { path = "PENDING", sha256 = "PENDING" }
+bad_witness = { path = "PENDING", sha256 = "PENDING" }
+shadowing_witness = { path = "PENDING", sha256 = "PENDING" }
+missing_member_witness = { path = "PENDING", sha256 = "PENDING" }
+shared_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+private_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+oracle_good = "PENDING"
+oracle_bad = "PENDING"
+typokat_current = "PENDING"
+owner = "PENDING"
+rationale = "PENDING"
+falsifier = "PENDING"
+
+[[candidate]]
+id = "this-type-omit-this-parameter"
+status = "PENDING"
+decision = "PENDING"
+identity_role = "PENDING"
+declaration_identity = "PENDING"
+declaration_file = "PENDING"
+declaration_start = 0
+declaration_end = 0
+consumers = []
+good_witness = { path = "PENDING", sha256 = "PENDING" }
+bad_witness = { path = "PENDING", sha256 = "PENDING" }
+shadowing_witness = { path = "PENDING", sha256 = "PENDING" }
+missing_member_witness = { path = "PENDING", sha256 = "PENDING" }
+shared_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+private_universe_witness = { path = "PENDING", sha256 = "PENDING" }
+oracle_good = "PENDING"
+oracle_bad = "PENDING"
+typokat_current = "PENDING"
+owner = "PENDING"
+rationale = "PENDING"
+falsifier = "PENDING"
