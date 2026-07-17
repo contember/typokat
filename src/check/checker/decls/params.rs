@@ -14,7 +14,7 @@ pub(in crate::check::checker) struct LoweredSignatureTypeParams {
     pub(in crate::check::checker) unavailable: bool,
 }
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Build a source-name to type-parameter-id frame from pre-allocated ids.
     /// Unnameable parameters are skipped; named ones resolve to stable ids in bodies.
     pub(in crate::check::checker) fn build_type_param_frame(
@@ -441,7 +441,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     pub(in crate::check::checker) fn with_type_params<R>(
         &mut self,
         frame: FxHashMap<String, TypeId>,
-        body: impl FnOnce(&mut Pass) -> R,
+        body: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.type_param_scopes.push(frame);
         let result = body(self);
@@ -454,7 +454,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     pub(in crate::check::checker) fn with_static_class_type_param_barrier<R>(
         &mut self,
         class_type_params: &[TypeParamId],
-        body: impl FnOnce(&mut Pass) -> R,
+        body: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.static_class_type_param_barriers
             .push(class_type_params.iter().copied().collect());

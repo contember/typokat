@@ -72,7 +72,7 @@ pub(super) fn interface_heritage_root<'name>(
     }
 }
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     pub(super) fn validate_interface_heritage_application_without_resolution(
         &mut self,
         scope: ScopeId,

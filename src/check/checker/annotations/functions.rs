@@ -3,7 +3,7 @@ use super::super::decls::alloc_type_param_ids;
 use super::*;
 use oxc_ast::ast::TSTypeParameterDeclaration;
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Lower a constructor-type annotation (`new (x: T) => U`) to an object carrying
     /// a single construct signature, making it equivalent to `{ new (x: T): U }` in
     /// relation while preserving named object members for the object-literal form.

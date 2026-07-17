@@ -33,7 +33,7 @@ mod functions;
 mod signatures;
 mod type_operators;
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Lower an annotation type to its `TypeId`. Type references resolve to stored
     /// declaration ids, never inlined structures, so recursive aliases/interfaces
     /// terminate by pointing at the reserved id (mvp-plan M5, §3, §6.3).

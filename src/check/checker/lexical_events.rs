@@ -2408,7 +2408,7 @@ interface Combined extends First, Second {
             .unwrap();
         super::super::attach_type_decl_owners(
             &mut reservations,
-            ModuleOrdinal::new(0),
+            SourceOrdinal::User(ModuleOrdinal::new(0)),
             &binder,
             binder.module,
             &parsed.program,
@@ -2555,7 +2555,7 @@ interface Combined extends First, Second {
             .unwrap();
         super::super::attach_type_decl_owners(
             &mut reservations,
-            module,
+            SourceOrdinal::User(module),
             &binder,
             binder.module,
             &parsed.program,
@@ -2598,7 +2598,7 @@ interface Combined extends First, Second {
             .unwrap();
         super::super::attach_type_decl_owners(
             &mut reservations,
-            module,
+            SourceOrdinal::User(module),
             &binder,
             binder.module,
             &parsed.program,
@@ -2680,7 +2680,7 @@ interface Combined extends First, Second {
             .unwrap();
         super::super::attach_type_decl_owners(
             &mut reservations,
-            module,
+            SourceOrdinal::User(module),
             &binder,
             binder.module,
             &parsed.program,
@@ -2735,7 +2735,7 @@ interface Combined extends First, Second {
             .unwrap();
         super::super::attach_type_decl_owners(
             &mut reservations,
-            module,
+            SourceOrdinal::User(module),
             &binder,
             binder.module,
             &parsed.program,

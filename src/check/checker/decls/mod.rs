@@ -29,16 +29,25 @@ mod interface;
 mod params;
 mod resolve;
 
-#[derive(Default)]
-struct InterfaceOwnMemberOwners {
-    properties: BTreeMap<String, (super::events::UserRecordTicket, Span)>,
-    string_index: Option<(super::events::UserRecordTicket, Span)>,
-    number_index: Option<(super::events::UserRecordTicket, Span)>,
+struct InterfaceOwnMemberOwners<Ticket: Copy> {
+    properties: BTreeMap<String, (Ticket, Span)>,
+    string_index: Option<(Ticket, Span)>,
+    number_index: Option<(Ticket, Span)>,
+}
+
+impl<Ticket: Copy> Default for InterfaceOwnMemberOwners<Ticket> {
+    fn default() -> Self {
+        Self {
+            properties: BTreeMap::new(),
+            string_index: None,
+            number_index: None,
+        }
+    }
 }
 
 #[derive(Copy, Clone)]
-struct InterfaceHeritageDiagnostic<'name> {
-    owner: super::events::UserRecordTicket,
+struct InterfaceHeritageDiagnostic<'name, Ticket: Copy> {
+    owner: Ticket,
     span: Span,
     derived_name: &'name str,
 }
@@ -134,23 +143,23 @@ struct InterfaceHeritageTopology {
 }
 
 #[derive(Clone)]
-pub(in crate::check::checker) struct PreparedClassInstanceHeritage {
+pub(in crate::check::checker) struct PreparedClassInstanceHeritage<Ticket: Copy> {
     pub(in crate::check::checker) base_name: String,
-    pub(in crate::check::checker) dependency: HeritageDependency<super::events::UserRecordTicket>,
+    pub(in crate::check::checker) dependency: HeritageDependency<Ticket>,
     pub(in crate::check::checker) span: Span,
 }
 
 #[derive(Clone)]
-pub(in crate::check::checker) struct PreparedClassInterfaceFragment<'ast> {
+pub(in crate::check::checker) struct PreparedClassInterfaceFragment<'ast, Ticket: Copy> {
     pub(in crate::check::checker) fragment: InterfaceFragment<'ast>,
     pub(in crate::check::checker) object: crate::types::repr::ObjectType,
     pub(in crate::check::checker) method_names: BTreeSet<String>,
     pub(in crate::check::checker) heritage_surfaces: Vec<(String, crate::types::repr::ObjectType)>,
-    pub(in crate::check::checker) instance_heritage: Vec<PreparedClassInstanceHeritage>,
+    pub(in crate::check::checker) instance_heritage: Vec<PreparedClassInstanceHeritage<Ticket>>,
 }
 
-pub(in crate::check::checker) type PreparedClassInterfaceGroups<'ast> =
-    BTreeMap<TypeGroupId, Vec<PreparedClassInterfaceFragment<'ast>>>;
+pub(in crate::check::checker) type PreparedClassInterfaceGroups<'ast, Ticket> =
+    BTreeMap<TypeGroupId, Vec<PreparedClassInterfaceFragment<'ast, Ticket>>>;
 
 impl InterfaceHeritageTopology {
     fn plan(
@@ -165,13 +174,13 @@ impl InterfaceHeritageTopology {
     }
 }
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     fn merged_header_owner(
         &self,
         index: usize,
         declaration: crate::binder::declaration::DeclId,
         source_start: u32,
-    ) -> super::events::UserRecordTicket {
+    ) -> Ticket {
         if matches!(
             self.type_decls.get(index),
             Some(TypeDecl::Class {
@@ -586,8 +595,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &self,
         ty: TypeId,
         objects: &mut Vec<crate::types::repr::ObjectType>,
-        classes: &mut Vec<PreparedClassInstanceHeritage>,
-        owner: super::events::UserRecordTicket,
+        classes: &mut Vec<PreparedClassInstanceHeritage<Ticket>>,
+        owner: Ticket,
         base_name: &str,
         span: Span,
     ) -> bool {
@@ -712,7 +721,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     /// The returned objects are merged into their class instance before publication.
     pub(in crate::check::checker) fn prepare_class_interface_groups(
         &mut self,
-    ) -> PreparedClassInterfaceGroups<'ast> {
+    ) -> PreparedClassInterfaceGroups<'ast, Ticket> {
         let groups = self
             .type_decls
             .iter()
@@ -832,7 +841,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         group: TypeGroupId,
         class_object: &crate::types::repr::ObjectType,
         heritage_own: &crate::types::repr::ObjectType,
-        interfaces: &[PreparedClassInterfaceFragment<'ast>],
+        interfaces: &[PreparedClassInterfaceFragment<'ast, Ticket>],
     ) {
         #[derive(Copy, Clone, PartialEq, Eq)]
         enum DeclarationKind {
@@ -847,7 +856,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Interface,
         }
         #[derive(Clone)]
-        struct Member {
+        struct Member<Ticket: Copy> {
             name: String,
             declaration_kind: DeclarationKind,
             declaration_origin: DeclarationOrigin,
@@ -857,12 +866,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             optional: bool,
             readonly: bool,
             visibility: Visibility,
-            owner: super::events::UserRecordTicket,
+            owner: Ticket,
             span: Span,
             order: (SourceUnitKey, u32, u32),
         }
 
-        impl Member {
+        impl<Ticket: Copy> Member<Ticket> {
             fn is_property_declaration(&self) -> bool {
                 self.declaration_kind != DeclarationKind::Method
             }
@@ -1089,7 +1098,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         }
         members.sort_by_key(|member| (member.order, member.span.end));
-        let mut by_name: BTreeMap<String, Vec<Member>> = BTreeMap::new();
+        let mut by_name: BTreeMap<String, Vec<Member<Ticket>>> = BTreeMap::new();
         let mut modifier_reports = BTreeSet::new();
         let mut duplicate_reports = BTreeSet::new();
         let mut accessibility_reports = BTreeSet::new();
@@ -1212,7 +1221,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         group: TypeGroupId,
         class_object: &crate::types::repr::ObjectType,
-        prepared: &PreparedClassInterfaceFragment<'ast>,
+        prepared: &PreparedClassInterfaceFragment<'ast, Ticket>,
         derived_name: &str,
         base_name: &str,
         base: &crate::types::repr::ObjectType,
@@ -2015,8 +2024,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             Method,
         }
         #[derive(Clone)]
-        struct Member {
-            owner: super::events::UserRecordTicket,
+        struct Member<Ticket: Copy> {
+            owner: Ticket,
             span: Span,
             kind: MemberKind,
             ty: TypeId,
@@ -2025,16 +2034,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             name: String,
         }
         #[derive(Clone)]
-        struct Index {
-            owner: super::events::UserRecordTicket,
+        struct Index<Ticket: Copy> {
+            owner: Ticket,
             span: Span,
             ty: TypeId,
         }
 
-        let mut members: BTreeMap<String, Vec<Member>> = BTreeMap::new();
+        let mut members: BTreeMap<String, Vec<Member<Ticket>>> = BTreeMap::new();
         let mut all_properties = Vec::new();
-        let mut string_index: Option<Index> = None;
-        let mut number_index: Option<Index> = None;
+        let mut string_index: Option<Index<Ticket>> = None;
+        let mut number_index: Option<Index<Ticket>> = None;
         let mut string_indices = Vec::new();
         let mut number_indices = Vec::new();
         let mut records = Vec::new();
@@ -2357,14 +2366,9 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
     fn validate_interface_heritage_conflicts(
         &mut self,
-        surfaces: &[(
-            super::events::UserRecordTicket,
-            Span,
-            String,
-            crate::types::repr::ObjectType,
-        )],
+        surfaces: &[(Ticket, Span, String, crate::types::repr::ObjectType)],
         own: &crate::types::repr::ObjectType,
-        diagnostic_owner: super::events::UserRecordTicket,
+        diagnostic_owner: Ticket,
         diagnostic_span: Span,
     ) -> Vec<InterfaceTypedAlternative> {
         let mut alternatives = Vec::new();
@@ -2427,7 +2431,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn interface_own_member_owners(
         &self,
         fragments: &[InterfaceFragment<'ast>],
-    ) -> InterfaceOwnMemberOwners {
+    ) -> InterfaceOwnMemberOwners<Ticket> {
         let mut owners = InterfaceOwnMemberOwners::default();
         for fragment in fragments {
             for member in fragment.members {
@@ -2489,15 +2493,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn validate_interface_heritage_indices(
         &mut self,
         complete: &crate::types::repr::ObjectType,
-        surfaces: &[(
-            super::events::UserRecordTicket,
-            Span,
-            String,
-            crate::types::repr::ObjectType,
-        )],
-        diagnostic: InterfaceHeritageDiagnostic<'_>,
+        surfaces: &[(Ticket, Span, String, crate::types::repr::ObjectType)],
+        diagnostic: InterfaceHeritageDiagnostic<'_, Ticket>,
         own: &crate::types::repr::ObjectType,
-        own_owners: &InterfaceOwnMemberOwners,
+        own_owners: &InterfaceOwnMemberOwners<Ticket>,
     ) -> Vec<InterfaceTypedAlternative> {
         let mut alternatives = Vec::new();
         for (_, _, base_name, base) in surfaces {

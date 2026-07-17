@@ -90,7 +90,7 @@ impl<'ast> Visit<'ast> for NamespaceAliasCandidateCollector<'_> {
     }
 }
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     pub(in crate::check::checker) fn precompute_standalone_namespace_value_aliases(
         &mut self,
         modules: &[(ScopeId, &'ast [Statement<'ast>])],
@@ -154,11 +154,15 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         name: &str,
-        payload: FunctionNamespacePayload,
+        payload: FunctionNamespacePayload<Ticket>,
     ) -> bool {
-        let Some(identity) = super::function_groups::FunctionGroupRegistry::<
-            super::events::UserRecordTicket,
-        >::function_namespace_identity(self.binder, scope, name) else {
+        let Some(identity) =
+            super::function_groups::FunctionGroupRegistry::<Ticket>::function_namespace_identity(
+                self.binder,
+                scope,
+                name,
+            )
+        else {
             return false;
         };
         let symbol = identity.symbol;
@@ -219,7 +223,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         statements: &[Statement<'_>],
         declared_ret: Option<TypeId>,
         inferred: &mut Option<TypeId>,
-        surfaces: &mut FxHashMap<u32, FunctionReservation>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
     ) {
         let mut index = 0;
         while index < statements.len() {
@@ -1157,7 +1161,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         statements: &[Statement<'_>],
-    ) -> FxHashMap<u32, FunctionReservation> {
+    ) -> FxHashMap<u32, FunctionReservation<Ticket>> {
         let mut surfaces = FxHashMap::default();
         self.reserve_function_surfaces_into(scope, statements, &mut surfaces);
         surfaces
@@ -1169,7 +1173,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         statement_lists: &[&[Statement<'_>]],
-    ) -> FxHashMap<u32, FunctionReservation> {
+    ) -> FxHashMap<u32, FunctionReservation<Ticket>> {
         let mut surfaces = FxHashMap::default();
         for statements in statement_lists {
             self.reserve_function_surfaces_into(scope, statements, &mut surfaces);
@@ -1181,7 +1185,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         statements: &[Statement<'_>],
-        surfaces: &mut FxHashMap<u32, FunctionReservation>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
     ) {
         let mut index = 0;
         while index < statements.len() {
@@ -1231,9 +1235,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         name: &str,
     ) -> Option<FunctionGroupIdentity> {
-        let identity = super::function_groups::FunctionGroupRegistry::<
-            super::events::UserRecordTicket,
-        >::function_namespace_identity(self.binder, scope, name)?;
+        let identity =
+            super::function_groups::FunctionGroupRegistry::<Ticket>::function_namespace_identity(
+                self.binder,
+                scope,
+                name,
+            )?;
         self.function_groups.register(identity.clone());
         Some(identity)
     }
@@ -1242,7 +1249,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         group: FunctionGroupIdentity,
         func: &Function<'_>,
-        surfaces: &FxHashMap<u32, FunctionReservation>,
+        surfaces: &FxHashMap<u32, FunctionReservation<Ticket>>,
     ) {
         let Some(declaration) = self.function_decl_id(func) else {
             return;
@@ -1277,7 +1284,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         group: FunctionGroupIdentity,
         statements: &[Statement<'_>],
-        surfaces: &FxHashMap<u32, FunctionReservation>,
+        surfaces: &FxHashMap<u32, FunctionReservation<Ticket>>,
     ) {
         for func in statements.iter().filter_map(function_decl_from_statement) {
             let Some(declaration) = self.function_decl_id(func) else {
@@ -1318,7 +1325,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         func: &Function<'_>,
-        surfaces: &mut FxHashMap<u32, FunctionReservation>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
         publish_value: bool,
     ) {
         let tickets = self
@@ -1346,7 +1353,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         func: &Function<'_>,
-        surfaces: &mut FxHashMap<u32, FunctionReservation>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
         publish_value: bool,
     ) -> bool {
         let declaration = self.function_decl_id(func);
@@ -1505,7 +1512,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         statements: &[Statement<'_>],
         name: &str,
-        surfaces: &FxHashMap<u32, FunctionReservation>,
+        surfaces: &FxHashMap<u32, FunctionReservation<Ticket>>,
     ) {
         let mut signatures = Vec::new();
         for func in statements.iter().filter_map(function_decl_from_statement) {
@@ -1576,7 +1583,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         func: &Function<'_>,
-        surfaces: &mut FxHashMap<u32, FunctionReservation>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
     ) {
         if !self.fill_reserved_function_body(scope, func, surfaces, true) {
             return;
@@ -1607,7 +1614,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         statements: &[Statement<'_>],
         name: &str,
-        surfaces: &mut FxHashMap<u32, FunctionReservation>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
     ) {
         self.finalize_function_declaration_group_with_publication(
             scope, statements, name, surfaces, true, false,
@@ -1619,7 +1626,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         statements: &[Statement<'_>],
-        surfaces: &mut FxHashMap<u32, FunctionReservation>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
         ambient: bool,
     ) -> bool {
         let Some(first) = statements.first().and_then(function_decl_from_statement) else {
@@ -1647,7 +1654,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         scope: ScopeId,
         statements: &[Statement<'_>],
         name: &str,
-        surfaces: &mut FxHashMap<u32, FunctionReservation>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
         publish_value: bool,
         ambient: bool,
     ) {
@@ -1819,7 +1826,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn check_overload_implementation_compatibility(
         &mut self,
         implementation_ty: TypeId,
-        signatures: &[(TypeId, Span, Option<super::events::UserRecordTicket>)],
+        signatures: &[(TypeId, Span, Option<Ticket>)],
     ) {
         for (signature_ty, span, ticket) in signatures {
             let check = |pass: &mut Self| {

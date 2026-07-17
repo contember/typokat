@@ -14,7 +14,7 @@ enum LoweredTupleElement {
     Rest(TypeId),
 }
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Lower `A | B | …` to a canonical interned union. Any unlowerable member
     /// aborts the whole annotation; dropping it would mis-state the union.
     pub(super) fn lower_union_annotation(

@@ -25,7 +25,7 @@ use oxc_ast::ast::{
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Infer the type of an expression in `scope`, returning `(TypeId, span)`. The
     /// span is the expression's own span — the primary span for any diagnostic on it.
     /// Returns `None` for expression shapes outside the subset (those positions are

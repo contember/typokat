@@ -1,6 +1,6 @@
 use super::*;
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Lower a conditional type `check extends extends_ty ? true : false` (M25, WU1).
     ///
     /// The node's [`CondFrame`] is pushed for the WHOLE call (check/extends/true/false

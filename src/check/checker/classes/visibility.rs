@@ -6,7 +6,7 @@ use crate::span::Span;
 use crate::types::repr::Visibility;
 use oxc_ast::ast::{Class, ClassElement, MethodDefinitionKind, TSAccessibility};
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Gate direct `new C(...)` on constructor accessibility.
     /// Emits `TK2673`/`TK2674`, returns whether to suppress `TK2511`, and checks
     /// private/protected reachability against the constructor's declaring class.

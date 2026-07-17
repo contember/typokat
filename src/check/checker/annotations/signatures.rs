@@ -2,7 +2,7 @@ use super::super::decls::alloc_type_param_ids;
 use super::*;
 use oxc_ast::ast::TSTypeParameterDeclaration;
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Record the incomplete surface for a skipped computed property-signature key
     /// (`{ [expr]: T }`, owner 75). Shared by object-type and interface member
     /// collection so a computed key is accounted before the member is dropped (WU5).

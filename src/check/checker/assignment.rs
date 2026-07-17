@@ -31,8 +31,8 @@ struct MemberAssignmentTarget {
 }
 
 /// Find only assertion expressions embedded in an otherwise deferred assignment target.
-struct AssignmentTargetAssertionWalker<'pass, 'a, 'ast> {
-    pass: &'pass mut Pass<'a, 'ast>,
+struct AssignmentTargetAssertionWalker<'pass, 'a, 'ast, Ticket: Copy + PartialEq> {
+    pass: &'pass mut Pass<'a, 'ast, Ticket>,
     scope: ScopeId,
     syntax_only_depth: u32,
 }
@@ -77,7 +77,9 @@ pub(in crate::check::checker) fn update_target_contains_nested_scope(
     finder.found
 }
 
-impl<'node, 'a, 'ast> Visit<'node> for AssignmentTargetAssertionWalker<'_, 'a, 'ast> {
+impl<'node, 'a, 'ast, Ticket: Copy + PartialEq> Visit<'node>
+    for AssignmentTargetAssertionWalker<'_, 'a, 'ast, Ticket>
+{
     fn visit_expression(&mut self, expression: &Expression<'node>) {
         if self.syntax_only_depth > 0 {
             if let Expression::ClassExpression(class) = expression {
@@ -199,7 +201,7 @@ impl<'node, 'a, 'ast> Visit<'node> for AssignmentTargetAssertionWalker<'_, 'a, '
     }
 }
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Check `NAME = expr` against the target's declared type, returning the
     /// assignment expression's **value** (the RHS type + the assignment span) so a
     /// nested assignment (`cond ? (a = e) : …`, `[a = e]`, `s = (a = e)`) is both

@@ -95,6 +95,16 @@ fn user_original_module(origin: CompilationOrigin) -> Option<OriginalModuleOrdin
     }
 }
 
+fn source_ordinal_from_origin(origin: CompilationOrigin) -> SourceOrdinal {
+    match origin {
+        CompilationOrigin::User(original_module) => {
+            SourceOrdinal::User(ModuleOrdinal::new(original_module.index()))
+        }
+        #[cfg(test)]
+        CompilationOrigin::Library(file_ordinal) => SourceOrdinal::Library(file_ordinal),
+    }
+}
+
 fn reserve_internal_reporting(
     program: &Program<'_>,
     module_ordinal: ModuleOrdinal,
@@ -233,14 +243,14 @@ fn bootstrap_trusted_prelude(
         reserve_internal_reporting(&parsed.program, prelude_ordinal, prelude_slot);
     attach_type_decl_owners(
         &mut reporting.lexical_events,
-        prelude_ordinal,
+        SourceOrdinal::User(prelude_ordinal),
         &binder,
         binder.prelude_module,
         &parsed.program,
     );
     attach_class_bindings(
         &mut reporting.lexical_events,
-        prelude_ordinal,
+        SourceOrdinal::User(prelude_ordinal),
         &binder,
         binder.prelude_module,
         &parsed.program,
@@ -426,14 +436,14 @@ where
     );
     attach_type_decl_owners(
         &mut lexical_events,
-        module_ordinal,
+        SourceOrdinal::User(module_ordinal),
         &binder,
         binder.module,
         program,
     );
     attach_class_bindings(
         &mut lexical_events,
-        module_ordinal,
+        SourceOrdinal::User(module_ordinal),
         &binder,
         binder.module,
         program,
@@ -771,14 +781,14 @@ where
         );
         attach_type_decl_owners(
             &mut lexical_events,
-            unit.module_ordinal,
+            SourceOrdinal::User(unit.module_ordinal),
             &binder,
             scope,
             unit.program,
         );
         attach_class_bindings(
             &mut lexical_events,
-            unit.module_ordinal,
+            SourceOrdinal::User(unit.module_ordinal),
             &binder,
             scope,
             unit.program,
@@ -837,21 +847,13 @@ where
 
     pass.fill_type_decls_range(binder.module, user_type_start, pass.type_decls.len());
 
-    for (scope, unit) in module_scopes.iter().copied().zip(units.iter()) {
-        pass.current_module = scope;
-        pass.current_source = SourceUnit::User {
-            module_ordinal: unit.module_ordinal,
-            unit_slot: unit.unit_slot,
-        };
-        pass.prepare_attached_namespace_values(scope, &unit.program.body);
-    }
-
     let standalone_modules = module_scopes
         .iter()
         .copied()
         .zip(units.iter())
         .map(|(scope, unit)| (scope, unit.program.body.as_slice()))
         .collect::<Vec<_>>();
+    pass.prepare_project_attached_namespace_values(&standalone_modules);
     pass.prepare_project_standalone_namespace_values(&standalone_modules);
 
     pass.publish_class_surfaces();
@@ -1339,9 +1341,9 @@ fn seed_prelude_intrinsics(
     }
 }
 
-fn attach_type_decl_owners(
-    reservations: &mut LexicalReservations,
-    module_ordinal: ModuleOrdinal,
+fn attach_type_decl_owners<Ticket: Copy + PartialEq>(
+    reservations: &mut LexicalReservations<Ticket>,
+    source_ordinal: SourceOrdinal,
     binder: &Binder,
     scope: ScopeId,
     program: &Program<'_>,
@@ -1354,7 +1356,7 @@ fn attach_type_decl_owners(
         reservations
             .attach_declaration_owner(
                 declaration.id,
-                SourceOrdinal::User(module_ordinal),
+                source_ordinal,
                 declaration.kind,
                 declaration.site.declaration_span,
                 declaration.site.binding_span,
@@ -1365,9 +1367,9 @@ fn attach_type_decl_owners(
     let _ = program;
 }
 
-fn attach_class_bindings(
-    reservations: &mut LexicalReservations,
-    module_ordinal: ModuleOrdinal,
+fn attach_class_bindings<Ticket: Copy + PartialEq>(
+    reservations: &mut LexicalReservations<Ticket>,
+    source_ordinal: SourceOrdinal,
     binder: &Binder,
     scope: ScopeId,
     program: &Program<'_>,
@@ -1385,9 +1387,7 @@ fn attach_class_bindings(
             let Some(name) = class.id.as_ref().map(|id| id.name.as_str()) else {
                 return;
             };
-            let Some(site) =
-                reservations.class_at(SourceOrdinal::User(module_ordinal), class.span.start)
-            else {
+            let Some(site) = reservations.class_at(source_ordinal, class.span.start) else {
                 return;
             };
             let Some((type_decl, _, _)) = decls::exact_type_fragment_at(
@@ -1780,7 +1780,7 @@ impl UserReportingAdapter {
     }
 }
 
-impl Pass<'_, '_> {
+impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     /// Run one lexically owned producer and retain its effects until deferred work
     /// has resolved. Nested lexical sites keep distinct preallocated owners.
     pub(in crate::check::checker) fn with_lexical_effects<R>(

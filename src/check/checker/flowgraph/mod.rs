@@ -18,7 +18,7 @@ use oxc_ast::ast::{
 use super::context::*;
 use super::narrowing::clause_terminates;
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     // =======================================================================
     // Construction — the flow-graph pre-pass.
     // =======================================================================

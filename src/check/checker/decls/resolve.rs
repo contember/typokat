@@ -65,7 +65,7 @@ fn flatten_qualified_type_name<'a>(
     }
 }
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Resolve one type declaration to a memoized `TypeId`.
     /// Surface alias cycles report `TK2456` at every alias in the cycle and become
     /// error types; legal recursion through members uses seeded reserved ids instead

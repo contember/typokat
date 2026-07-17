@@ -11,7 +11,7 @@ use super::super::context::*;
 use super::super::narrowing::GuardFact;
 use super::*;
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Append a flow node, returning its id.
     pub(super) fn new_flow(&mut self, node: FlowNode) -> FlowNodeId {
         let id = FlowNodeId(self.flow_nodes.len() as u32);

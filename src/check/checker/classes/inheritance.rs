@@ -3,7 +3,7 @@
 use super::super::context::Pass;
 use crate::types::repr::ClassId;
 
-impl Pass<'_, '_> {
+impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     pub(super) fn declaring_class_name(&self, class_id: ClassId) -> &str {
         self.class_names
             .get(&class_id)

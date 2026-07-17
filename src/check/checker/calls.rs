@@ -301,14 +301,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 }
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Run speculative candidate work against a child semantic-query state.
     /// Diagnostics and obligations travel in `CheckerEffects`; query memo/cache
     /// writes are discarded independently when the candidate is not decisive.
     fn capture_speculative_candidate_effects<R>(
         &mut self,
         produce: impl FnOnce(&mut Self) -> R,
-    ) -> (R, CheckerEffects) {
+    ) -> (R, CheckerEffects<Ticket>) {
         #[cfg(test)]
         let parent_lengths = self.semantic_queries.durable_lengths();
         let child_queries = self.semantic_queries.fork();
@@ -746,8 +746,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
         let mut arity_failures: Vec<CallArity> = Vec::new();
         let mut saw_non_arity_failure = false;
-        let mut first_constraint_failure: Option<CheckerEffects> = None;
-        let mut first_other_failure: Option<CheckerEffects> = None;
+        let mut first_constraint_failure: Option<CheckerEffects<Ticket>> = None;
+        let mut first_other_failure: Option<CheckerEffects<Ticket>> = None;
 
         for signature in signatures {
             let (built, effects) = self.capture_speculative_candidate_effects(|pass| {
@@ -2231,7 +2231,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         enclosing: ScopeId,
         func: &Function<'_>,
-    ) -> FunctionReservation {
+    ) -> FunctionReservation<Ticket> {
         let retained = self
             .lexical_events
             .callable_at(
@@ -2340,7 +2340,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         enclosing: ScopeId,
         func: &Function<'_>,
-        surface: &FunctionSurface,
+        surface: &FunctionSurface<Ticket>,
     ) -> TypeId {
         match surface.tickets {
             Some(tickets) => self.with_ticket_effects(tickets.body, |pass| {
@@ -2354,7 +2354,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         enclosing: ScopeId,
         func: &Function<'_>,
-        surface: &FunctionSurface,
+        surface: &FunctionSurface<Ticket>,
     ) -> TypeId {
         let params = surface.params.clone();
         let receiver = surface.receiver;
@@ -2394,7 +2394,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         enclosing: ScopeId,
         func: &Function<'_>,
-        surface: &RetainedFunctionBodySurface,
+        surface: &RetainedFunctionBodySurface<Ticket>,
     ) {
         let type_param_frame = surface.type_param_frame.clone();
         let receiver = surface.receiver;

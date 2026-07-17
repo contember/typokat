@@ -81,9 +81,9 @@ fn class_instance_method_names(class: &Class<'_>) -> BTreeSet<String> {
 }
 
 #[derive(Clone)]
-struct ExplicitStaticMember {
+struct ExplicitStaticMember<Ticket: Copy> {
     kind: ExplicitStaticMemberKind,
-    owner: UserRecordTicket,
+    owner: Ticket,
     span: CheckSpan,
     source_order: ClassNamespacePropertySourceOrder,
 }
@@ -249,8 +249,8 @@ struct StagedClassApplicationCheck<Ticket: Copy = UserRecordTicket> {
     explicit_spans: Vec<CheckSpan>,
 }
 
-impl TicketRecord<UserRecordTicket> {
-    fn diagnostic(owner: UserRecordTicket, diagnostic: Diagnostic) -> Self {
+impl<Ticket: Copy> TicketRecord<Ticket> {
+    fn diagnostic(owner: Ticket, diagnostic: Diagnostic) -> Self {
         Self {
             owner,
             source_start: diagnostic.span.start,
@@ -258,7 +258,7 @@ impl TicketRecord<UserRecordTicket> {
         }
     }
 
-    fn incomplete(owner: UserRecordTicket, incomplete: IncompleteSurface) -> Self {
+    fn incomplete(owner: Ticket, incomplete: IncompleteSurface) -> Self {
         Self {
             owner,
             source_start: incomplete.span.start,
@@ -267,21 +267,21 @@ impl TicketRecord<UserRecordTicket> {
     }
 }
 
-struct Resolver<'a, 'ast> {
+struct Resolver<'a, 'ast, Ticket: Copy> {
     binder: &'a crate::binder::Binder,
     scope: ScopeId,
     declarations: &'a [TypeDecl<'ast>],
     resolved: &'a [Option<TypeId>],
-    reservations: &'a LexicalReservations,
+    reservations: &'a LexicalReservations<Ticket>,
     source: SourceOrdinal,
-    fallback: UserRecordTicket,
+    fallback: Ticket,
     error: TypeId,
     qualified_outer_type_parameters_visible: bool,
-    application_checks: Vec<StagedClassApplicationCheck<UserRecordTicket>>,
+    application_checks: Vec<StagedClassApplicationCheck<Ticket>>,
 }
 
-impl Resolver<'_, '_> {
-    fn class_default_owner(&self, class: ClassId, index: usize) -> UserRecordTicket {
+impl<Ticket: Copy + PartialEq> Resolver<'_, '_, Ticket> {
+    fn class_default_owner(&self, class: ClassId, index: usize) -> Ticket {
         self.reservations
             .classes()
             .iter()
@@ -300,10 +300,7 @@ impl Resolver<'_, '_> {
             .map_or(self.fallback, |default| default.owner)
     }
 
-    fn class_parameters(
-        &self,
-        declaration: &TypeDecl<'_>,
-    ) -> Vec<ClassTypeParameter<UserRecordTicket>> {
+    fn class_parameters(&self, declaration: &TypeDecl<'_>) -> Vec<ClassTypeParameter<Ticket>> {
         let TypeDecl::Class {
             class_id,
             params,
@@ -352,7 +349,7 @@ impl Resolver<'_, '_> {
         params: &[TypeParamId],
         defaults: &[Option<TypeId>],
         declaration: Option<&oxc_ast::ast::TSTypeParameterDeclaration<'_>>,
-    ) -> Vec<ClassTypeParameter<UserRecordTicket>> {
+    ) -> Vec<ClassTypeParameter<Ticket>> {
         params
             .iter()
             .enumerate()
@@ -375,7 +372,7 @@ impl Resolver<'_, '_> {
         &self,
         params: &[TypeParamId],
         defaults: &[PublishedTypeParameterDefault],
-    ) -> Vec<ClassTypeParameter<UserRecordTicket>> {
+    ) -> Vec<ClassTypeParameter<Ticket>> {
         params
             .iter()
             .enumerate()
@@ -401,7 +398,7 @@ impl Resolver<'_, '_> {
     fn resolve_group(
         &self,
         id: crate::binder::declaration::TypeGroupId,
-    ) -> SurfaceNameResolution<UserRecordTicket> {
+    ) -> SurfaceNameResolution<Ticket> {
         let Some(declaration) = self.declarations.get(id.index()) else {
             return SurfaceNameResolution::Unavailable(self.fallback);
         };
@@ -473,18 +470,15 @@ impl Resolver<'_, '_> {
     }
 }
 
-impl SurfaceTypeResolver<UserRecordTicket> for Resolver<'_, '_> {
-    fn resolve_name(&mut self, name: &str) -> SurfaceNameResolution<UserRecordTicket> {
+impl<Ticket: Copy + PartialEq> SurfaceTypeResolver<Ticket> for Resolver<'_, '_, Ticket> {
+    fn resolve_name(&mut self, name: &str) -> SurfaceNameResolution<Ticket> {
         let Some(id) = type_decl_id(self.binder, self.scope, name) else {
             return SurfaceNameResolution::Unavailable(self.fallback);
         };
         self.resolve_group(id)
     }
 
-    fn resolve_qualified_name(
-        &mut self,
-        segments: &[&str],
-    ) -> SurfaceNameResolution<UserRecordTicket> {
+    fn resolve_qualified_name(&mut self, segments: &[&str]) -> SurfaceNameResolution<Ticket> {
         let resolution = self
             .binder
             .resolve_qualified_type_path(self.scope, segments);
@@ -542,7 +536,7 @@ impl SurfaceTypeResolver<UserRecordTicket> for Resolver<'_, '_> {
             .copied()
     }
 
-    fn unsupported_ticket(&mut self, _span: Span) -> UserRecordTicket {
+    fn unsupported_ticket(&mut self, _span: Span) -> Ticket {
         self.fallback
     }
 }
@@ -574,11 +568,11 @@ impl SurfaceInitializerContext for InitializerContext {
     }
 }
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     pub(in crate::check::checker) fn install_class_namespace_payload(
         &mut self,
         group: crate::binder::declaration::TypeGroupId,
-        properties: Vec<ClassNamespacePropertyPayload>,
+        properties: Vec<ClassNamespacePropertyPayload<Ticket>>,
     ) -> bool {
         self.class_namespace_payloads
             .insert(group, properties)
@@ -589,10 +583,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         annotation: &TSType<'_>,
-        owner: UserRecordTicket,
+        owner: Ticket,
     ) -> (
-        Result<TypeId, SurfaceTypeFailure<UserRecordTicket>>,
-        Vec<SurfaceTypeFailure<UserRecordTicket>>,
+        Result<TypeId, SurfaceTypeFailure<Ticket>>,
+        Vec<SurfaceTypeFailure<Ticket>>,
     ) {
         let error = self.interner.well_known().error;
         let type_decls = self.type_decls.clone();
@@ -622,10 +616,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         function: &oxc_ast::ast::Function<'_>,
-        owner: UserRecordTicket,
+        owner: Ticket,
     ) -> (
-        LoweredCallableSyntax<UserRecordTicket>,
-        Vec<SurfaceTypeFailure<UserRecordTicket>>,
+        LoweredCallableSyntax<Ticket>,
+        Vec<SurfaceTypeFailure<Ticket>>,
     ) {
         let error = self.interner.well_known().error;
         let type_decls = self.type_decls.clone();
@@ -654,7 +648,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
     fn stage_namespace_surface_application_checks(
         &mut self,
-        application_checks: Vec<StagedClassApplicationCheck>,
+        application_checks: Vec<StagedClassApplicationCheck<Ticket>>,
     ) {
         for check in application_checks {
             let substitutions = check
@@ -689,8 +683,8 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
     pub(in crate::check::checker) fn record_namespace_surface_failure(
         &mut self,
-        failure: SurfaceTypeFailure<UserRecordTicket>,
-        owner: UserRecordTicket,
+        failure: SurfaceTypeFailure<Ticket>,
+        owner: Ticket,
         span: CheckSpan,
     ) {
         let (record_owner, record) = own_surface_failure(
@@ -710,7 +704,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         });
     }
 
-    pub(in crate::check::checker) fn publish_class_surfaces(&mut self) {
+    pub(in crate::check::checker) fn publish_class_surfaces(&mut self)
+    where
+        Ticket: Ord,
+    {
         let prepared_interface_groups = self.prepare_class_interface_groups();
         let class_groups: Vec<crate::binder::declaration::TypeGroupId> = self
             .type_decls
@@ -728,7 +725,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         }
         let type_decls = self.type_decls.clone();
         let type_resolved = self.type_resolved.clone();
-        let reservations: Vec<ClassReservation> = self.lexical_events.classes().to_vec();
+        let reservations: Vec<ClassReservation<Ticket>> = self.lexical_events.classes().to_vec();
         let mut construction = ClassConstruction::default();
         let mut default_checks = Vec::new();
         let mut application_checks = Vec::new();
@@ -794,7 +791,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     crate::binder::namespace::SourceUnitKey::SINGLE_SOURCE,
                     |fragment| fragment.source,
                 );
-            let mut explicit_static_members: BTreeMap<String, Vec<ExplicitStaticMember>> =
+            let mut explicit_static_members: BTreeMap<String, Vec<ExplicitStaticMember<Ticket>>> =
                 BTreeMap::new();
             for (index, element) in class.body.body.iter().enumerate() {
                 let Some((name, span, kind)) = explicit_static_member(element) else {
@@ -984,65 +981,62 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     }
                 }
 
-                let type_parameters: Vec<DraftClassTypeParameter<UserRecordTicket>> =
-                    if merged_header {
-                        params
-                            .iter()
-                            .enumerate()
-                            .map(|(index, id)| {
-                                let default = match recovery_defaults
-                                    .get(index)
-                                    .copied()
-                                    .unwrap_or(PublishedTypeParameterDefault::Absent)
-                                {
-                                    PublishedTypeParameterDefault::Absent => {
-                                        ClassTypeParameterDefault::Absent
-                                    }
-                                    PublishedTypeParameterDefault::Ready(default) => {
-                                        ClassTypeParameterDefault::Ready(default)
-                                    }
-                                    PublishedTypeParameterDefault::Unsupported => {
-                                        ClassTypeParameterDefault::Unsupported(
-                                            reservation.tickets.incomplete,
-                                        )
-                                    }
-                                };
-                                DraftClassTypeParameter::merged(
-                                    *id,
-                                    constraints.get(index).copied().flatten(),
-                                    default,
-                                )
-                            })
-                            .collect()
-                    } else {
-                        params
-                            .iter()
-                            .enumerate()
-                            .map(|(index, id)| {
-                                DraftClassTypeParameter::source(
-                                    *id,
-                                    constraints.get(index).copied().flatten(),
-                                    param_decl
-                                        .and_then(|declaration| declaration.params.get(index))
-                                        .and_then(|parameter| parameter.default.as_ref())
-                                        .map(|_| {
-                                            reservation
-                                                .defaults
-                                                .iter()
-                                                .find(|default| default.parameter_index == index)
-                                                .map_or(reservation.tickets.incomplete, |default| {
-                                                    default.owner
-                                                })
-                                        }),
-                                )
-                            })
-                            .collect()
-                    };
+                let type_parameters: Vec<DraftClassTypeParameter<Ticket>> = if merged_header {
+                    params
+                        .iter()
+                        .enumerate()
+                        .map(|(index, id)| {
+                            let default = match recovery_defaults
+                                .get(index)
+                                .copied()
+                                .unwrap_or(PublishedTypeParameterDefault::Absent)
+                            {
+                                PublishedTypeParameterDefault::Absent => {
+                                    ClassTypeParameterDefault::Absent
+                                }
+                                PublishedTypeParameterDefault::Ready(default) => {
+                                    ClassTypeParameterDefault::Ready(default)
+                                }
+                                PublishedTypeParameterDefault::Unsupported => {
+                                    ClassTypeParameterDefault::Unsupported(
+                                        reservation.tickets.incomplete,
+                                    )
+                                }
+                            };
+                            DraftClassTypeParameter::merged(
+                                *id,
+                                constraints.get(index).copied().flatten(),
+                                default,
+                            )
+                        })
+                        .collect()
+                } else {
+                    params
+                        .iter()
+                        .enumerate()
+                        .map(|(index, id)| {
+                            DraftClassTypeParameter::source(
+                                *id,
+                                constraints.get(index).copied().flatten(),
+                                param_decl
+                                    .and_then(|declaration| declaration.params.get(index))
+                                    .and_then(|parameter| parameter.default.as_ref())
+                                    .map(|_| {
+                                        reservation
+                                            .defaults
+                                            .iter()
+                                            .find(|default| default.parameter_index == index)
+                                            .map_or(reservation.tickets.incomplete, |default| {
+                                                default.owner
+                                            })
+                                    }),
+                            )
+                        })
+                        .collect()
+                };
                 let application_parameters = type_parameters
                     .iter()
-                    .map(|parameter: &DraftClassTypeParameter<UserRecordTicket>| {
-                        *parameter.application()
-                    })
+                    .map(|parameter: &DraftClassTypeParameter<Ticket>| *parameter.application())
                     .collect::<Vec<_>>();
 
                 let LoweredClassSurface {
@@ -1513,7 +1507,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         });
     }
 
-    pub(in crate::check::checker) fn validate_published_class_surfaces(&mut self) {
+    pub(in crate::check::checker) fn validate_published_class_surfaces(&mut self)
+    where
+        Ticket: Ord,
+    {
         assert!(
             self.type_environment.is_published(),
             "class validation requires the complete immutable type-group registry"
@@ -1800,28 +1797,28 @@ fn effective_constructor_access(
     (Visibility::Public, class_id)
 }
 
-type DefaultConstraintCheck = (UserRecordTicket, TypeId, TypeId, CheckSpan);
+type DefaultConstraintCheck<Ticket> = (Ticket, TypeId, TypeId, CheckSpan);
 
-struct ClassLoweringInput<'a, 'ast> {
+struct ClassLoweringInput<'a, 'ast, Ticket: Copy> {
     class_id: ClassId,
-    application_parameters: &'a [ClassTypeParameter<UserRecordTicket>],
+    application_parameters: &'a [ClassTypeParameter<Ticket>],
     application_types: &'a [TypeId],
     class: &'a Class<'ast>,
     frame: &'a [(String, TypeId)],
-    reservation: &'a ClassReservation,
-    reservations: &'a LexicalReservations,
+    reservation: &'a ClassReservation<Ticket>,
+    reservations: &'a LexicalReservations<Ticket>,
 }
 
-struct LoweredClassSurface {
+struct LoweredClassSurface<Ticket: Copy> {
     instance: TypeId,
     static_side: TypeId,
     body_view: BodyClassView,
     constructor: Option<TypeId>,
-    initializer_poison: Vec<UserRecordTicket>,
-    surface_poison: Vec<UserRecordTicket>,
-    callables: Vec<RetainedClassCallable<UserRecordTicket>>,
-    records: Vec<TicketRecord>,
-    default_checks: Vec<DefaultConstraintCheck>,
+    initializer_poison: Vec<Ticket>,
+    surface_poison: Vec<Ticket>,
+    callables: Vec<RetainedClassCallable<Ticket>>,
+    records: Vec<TicketRecord<Ticket>>,
+    default_checks: Vec<DefaultConstraintCheck<Ticket>>,
 }
 
 struct AccessorSurface {
@@ -1831,11 +1828,11 @@ struct AccessorSurface {
     is_static: bool,
 }
 
-fn lower_class<'ast>(
+fn lower_class<'ast, Ticket: Copy + PartialEq>(
     factory: &mut SurfaceTypeFactory<'_>,
-    resolver: &mut Resolver<'_, '_>,
-    input: ClassLoweringInput<'_, 'ast>,
-) -> LoweredClassSurface {
+    resolver: &mut Resolver<'_, '_, Ticket>,
+    input: ClassLoweringInput<'_, 'ast, Ticket>,
+) -> LoweredClassSurface<Ticket> {
     let ClassLoweringInput {
         class_id,
         application_parameters,
@@ -2690,16 +2687,16 @@ fn collect_static_class_parameter_diagnostics(
     }
 }
 
-struct AbstractClassInfo<'ast> {
+struct AbstractClassInfo<'ast, Ticket: Copy> {
     class: &'ast Class<'ast>,
-    owner: UserRecordTicket,
+    owner: Ticket,
 }
 
-fn abstract_completeness_records<'ast>(
-    reservations: &LexicalReservations,
+fn abstract_completeness_records<'ast, Ticket: Copy + PartialEq>(
+    reservations: &LexicalReservations<Ticket>,
     declarations: &[TypeDecl<'ast>],
     parents: &FxHashMap<ClassId, ClassId>,
-) -> Vec<TicketRecord> {
+) -> Vec<TicketRecord<Ticket>> {
     let mut classes = FxHashMap::default();
     for reservation in reservations.classes() {
         let Some(binding) = reservation.binding.as_ref() else {
@@ -2720,9 +2717,9 @@ fn abstract_completeness_records<'ast>(
         );
     }
 
-    fn pending_for(
+    fn pending_for<Ticket: Copy>(
         class_id: ClassId,
-        classes: &FxHashMap<ClassId, AbstractClassInfo<'_>>,
+        classes: &FxHashMap<ClassId, AbstractClassInfo<'_, Ticket>>,
         parents: &FxHashMap<ClassId, ClassId>,
         visiting: &mut BTreeSet<ClassId>,
         memo: &mut FxHashMap<ClassId, Vec<String>>,
@@ -2935,13 +2932,13 @@ fn class_member_has_explicit_surface(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn register_reserved_surface_roots<'ast>(
-    construction: &mut ClassConstruction<UserRecordTicket>,
+fn register_reserved_surface_roots<'ast, Ticket: Copy + PartialEq>(
+    construction: &mut ClassConstruction<Ticket>,
     factory: &mut SurfaceTypeFactory<'_>,
     binder: &crate::binder::Binder,
     declarations: &[TypeDecl<'ast>],
     resolved: &[Option<TypeId>],
-    reservations: &LexicalReservations,
+    reservations: &LexicalReservations<Ticket>,
     error: TypeId,
 ) {
     for (index, declaration) in declarations.iter().enumerate() {
@@ -3077,28 +3074,28 @@ fn register_reserved_surface_roots<'ast>(
     }
 }
 
-fn lower_type(
+fn lower_type<Ticket: Copy + PartialEq>(
     factory: &mut SurfaceTypeFactory<'_>,
-    resolver: &mut Resolver<'_, '_>,
+    resolver: &mut Resolver<'_, '_, Ticket>,
     annotation: &TSType<'_>,
     frame: &[(String, TypeId)],
 ) -> (
-    Result<TypeId, SurfaceTypeFailure<UserRecordTicket>>,
-    Vec<SurfaceTypeFailure<UserRecordTicket>>,
+    Result<TypeId, SurfaceTypeFailure<Ticket>>,
+    Vec<SurfaceTypeFailure<Ticket>>,
 ) {
     let mut lowerer = TypeSyntaxLowerer::new(factory, resolver);
     let result = lowerer.lower_with_type_parameters(annotation, frame.iter().cloned());
     (result, lowerer.take_child_failures())
 }
 
-fn lower_callable(
+fn lower_callable<Ticket: Copy + PartialEq>(
     factory: &mut SurfaceTypeFactory<'_>,
-    resolver: &mut Resolver<'_, '_>,
+    resolver: &mut Resolver<'_, '_, Ticket>,
     function: &oxc_ast::ast::Function<'_>,
     frame: &[(String, TypeId)],
 ) -> (
-    LoweredCallableSyntax<UserRecordTicket>,
-    Vec<SurfaceTypeFailure<UserRecordTicket>>,
+    LoweredCallableSyntax<Ticket>,
+    Vec<SurfaceTypeFailure<Ticket>>,
 ) {
     let mut lowerer = TypeSyntaxLowerer::new(factory, resolver);
     let result = lowerer.lower_callable_syntax_with_type_parameters(
@@ -3115,9 +3112,9 @@ fn lower_callable(
     (result, lowerer.take_child_failures())
 }
 
-fn seed_initializer_annotations(
+fn seed_initializer_annotations<Ticket: Copy + PartialEq>(
     factory: &mut SurfaceTypeFactory<'_>,
-    resolver: &mut Resolver<'_, '_>,
+    resolver: &mut Resolver<'_, '_, Ticket>,
     expression: &Expression<'_>,
     frame: &[(String, TypeId)],
     context: &mut InitializerContext,
@@ -3170,20 +3167,18 @@ fn resolve_parent(
     }
 }
 
-type HeritageApplicationResult = (
-    Option<(ClassId, TypeId)>,
-    Vec<SurfaceTypeFailure<UserRecordTicket>>,
-);
+type HeritageApplicationResult<Ticket> =
+    (Option<(ClassId, TypeId)>, Vec<SurfaceTypeFailure<Ticket>>);
 
-fn lower_heritage_application(
+fn lower_heritage_application<Ticket: Copy + PartialEq>(
     factory: &mut SurfaceTypeFactory<'_>,
-    resolver: &mut Resolver<'_, '_>,
+    resolver: &mut Resolver<'_, '_, Ticket>,
     binder: &crate::binder::Binder,
     scope: ScopeId,
     declarations: &[TypeDecl<'_>],
     class: &Class<'_>,
     frame: &[(String, TypeId)],
-) -> HeritageApplicationResult {
+) -> HeritageApplicationResult<Ticket> {
     if class.super_class.is_none() {
         return (None, Vec::new());
     }
@@ -3235,14 +3230,14 @@ fn lower_heritage_application(
     )
 }
 
-fn own_surface_failure(
-    failure: SurfaceTypeFailure<UserRecordTicket>,
-    diagnostic_owner: UserRecordTicket,
-    incomplete_owner: UserRecordTicket,
+fn own_surface_failure<Ticket: Copy>(
+    failure: SurfaceTypeFailure<Ticket>,
+    diagnostic_owner: Ticket,
+    incomplete_owner: Ticket,
     fallback_span: CheckSpan,
     incomplete_id: &str,
     incomplete_context: &str,
-) -> (UserRecordTicket, Option<TicketRecord>) {
+) -> (Ticket, Option<TicketRecord<Ticket>>) {
     match failure {
         SurfaceTypeFailure::Unresolved { span, name, .. } => {
             let diagnostic = Diagnostic::cannot_find_name(CheckSpan::from_oxc(span), &name);

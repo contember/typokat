@@ -24,7 +24,7 @@ struct ClassBodySurfaces {
     member_view: Option<BodyClassView>,
 }
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Check class member bodies after type-only class lowering has completed.
     ///
     /// Per-class context is save/restored so `this`, `super`, access-control context,
@@ -187,7 +187,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         class: &Class<'_>,
         surfaces: ClassBodySurfaces,
         class_type_params: &[TypeParamId],
-        retained: &[RetainedClassCallable<super::super::events::UserRecordTicket>],
+        retained: &[RetainedClassCallable<Ticket>],
     ) {
         let ClassBodySurfaces {
             instance: instance_surface,
@@ -327,7 +327,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &mut self,
         scope: ScopeId,
         function: &oxc_ast::ast::Function<'_>,
-        retained: &[RetainedClassCallable<super::super::events::UserRecordTicket>],
+        retained: &[RetainedClassCallable<Ticket>],
     ) {
         let retained = self
             .lexical_events
@@ -379,7 +379,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn check_class_overload_implementations(
         &mut self,
         class: &Class<'_>,
-        retained: &[RetainedClassCallable<super::super::events::UserRecordTicket>],
+        retained: &[RetainedClassCallable<Ticket>],
     ) {
         let mut index = 0;
         while index < class.body.body.len() {
@@ -463,7 +463,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn retained_callable_type(
         &self,
         function: &oxc_ast::ast::Function<'_>,
-        retained: &[RetainedClassCallable<super::super::events::UserRecordTicket>],
+        retained: &[RetainedClassCallable<Ticket>],
     ) -> Option<TypeId> {
         let site = self.lexical_events.callable_at(
             super::super::lexical_events::source_ordinal(self.current_source),

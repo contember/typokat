@@ -15,7 +15,7 @@ use oxc_ast::ast::{
 
 use super::super::context::*;
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Build the flow for an expression: record each identifier reference at the
     /// current cursor, apply `&&`/`||`/ternary branch narrowing to their RHS/arms,
     /// handle an inline assignment, and recurse into nested constructs (calls, member

@@ -28,7 +28,7 @@ pub(in crate::check::checker) struct GuardFact {
     pub(in crate::check::checker) then_positive: bool,
 }
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Check an `if`/`else` statement (M23: the narrowing itself lives in the flow
     /// graph). Walk the condition (so its operands resolve and nested constructs are
     /// checked) and both branches; a reference inside a branch resolves its narrowed

@@ -8,8 +8,8 @@ use super::context::{
 use super::events::UserRecordTicket;
 use super::function_groups::FunctionNamespacePayload;
 use super::lexical_events::{source_ordinal, LexicalOwnerPhase};
+use super::source_ordinal_from_origin;
 use super::statements::{function_decl_from_statement, function_overload_group};
-use super::user_original_module;
 use crate::binder::declaration::{DeclId, TypeGroupId, ValueStorageId};
 use crate::binder::namespace::{
     DeclarationOwner, MergeDeclarationKind, NamespaceId, NamespacePublication,
@@ -18,7 +18,7 @@ use crate::binder::namespace::{
 use crate::binder::scope::ScopeId;
 use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::Diagnostic;
-use crate::source::{ModuleOrdinal, SourceOrdinal};
+use crate::source::SourceOrdinal;
 use crate::span::Span;
 use crate::types::repr::{ClassId, FunctionType, ObjectType, PropertyType};
 use crate::types::store::TypeId;
@@ -134,7 +134,10 @@ struct OwnedMemberInput {
     declaration: DeclId,
     storage: ValueStorageId,
     scope: ScopeId,
+    module: ScopeId,
     source: crate::binder::namespace::SourceUnitKey,
+    source_ordinal: SourceOrdinal,
+    source_unit: crate::source::SourceUnit,
     source_start: u32,
     span: Span,
     owner_span: Span,
@@ -163,6 +166,10 @@ struct UnavailableMemberInput {
 struct PrivateMemberInput {
     declaration: DeclId,
     scope: ScopeId,
+    module: ScopeId,
+    source: crate::binder::namespace::SourceUnitKey,
+    source_ordinal: SourceOrdinal,
+    source_unit: crate::source::SourceUnit,
     source_start: u32,
     kind: PreparedNamespaceValueKind,
 }
@@ -187,11 +194,40 @@ struct NamespaceSyntaxIndex<'stmt, 'ast> {
 }
 
 #[derive(Default)]
-struct StandaloneSyntaxIndex<'stmt, 'ast> {
+struct ProjectSyntaxIndex<'stmt, 'ast> {
     variables:
         FxHashMap<(ScopeId, u32), (VariableDeclarationKind, &'stmt VariableDeclarator<'ast>)>,
     functions: FxHashMap<(ScopeId, u32), &'stmt Function<'ast>>,
     classes: FxHashMap<(ScopeId, u32), &'stmt Class<'ast>>,
+}
+
+fn project_syntax_index<'stmt, 'ast>(
+    modules: &[(ScopeId, &'stmt [Statement<'ast>])],
+) -> ProjectSyntaxIndex<'stmt, 'ast> {
+    let mut syntax = ProjectSyntaxIndex::default();
+    for (module, statements) in modules {
+        let mut local = NamespaceSyntaxIndex::default();
+        index_namespace_statements(statements, false, &mut local);
+        syntax.variables.extend(
+            local
+                .variables
+                .into_iter()
+                .map(|(start, item)| ((*module, start), item)),
+        );
+        syntax.functions.extend(
+            local
+                .functions
+                .into_iter()
+                .map(|(start, item)| ((*module, start), item)),
+        );
+        syntax.classes.extend(
+            local
+                .classes
+                .into_iter()
+                .map(|(start, item)| ((*module, start), item)),
+        );
+    }
+    syntax
 }
 
 struct StandaloneAttachmentInput {
@@ -211,7 +247,7 @@ struct StandaloneMemberInput {
     source_start: u32,
     span: Span,
     local_span: Option<Span>,
-    module_ordinal: ModuleOrdinal,
+    source_ordinal: SourceOrdinal,
     value_storage: Option<ValueStorageId>,
     alias_target_storage: Option<ValueStorageId>,
     ambient: bool,
@@ -239,7 +275,7 @@ impl<Ticket: Copy> Default for NamespaceValueRegistry<Ticket> {
     }
 }
 
-impl NamespaceValueRegistry<UserRecordTicket> {
+impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
     pub(in crate::check::checker) fn standalone_terminal(
         &self,
         namespace: NamespaceId,
@@ -255,7 +291,7 @@ impl NamespaceValueRegistry<UserRecordTicket> {
     fn insert_standalone_plan(
         &mut self,
         namespace: NamespaceId,
-        plan: StandaloneNamespacePlan<UserRecordTicket>,
+        plan: StandaloneNamespacePlan<Ticket>,
     ) {
         assert!(
             self.standalone_plans.insert(namespace, plan).is_none(),
@@ -284,7 +320,7 @@ impl NamespaceValueRegistry<UserRecordTicket> {
         &mut self,
         module: ScopeId,
         source_start: u32,
-        member: PreparedNamespaceMember,
+        member: PreparedNamespaceMember<Ticket>,
     ) {
         assert!(
             self.prepared
@@ -298,7 +334,7 @@ impl NamespaceValueRegistry<UserRecordTicket> {
         &mut self,
         module: ScopeId,
         source_start: u32,
-    ) -> Option<PreparedNamespaceMember> {
+    ) -> Option<PreparedNamespaceMember<Ticket>> {
         self.prepared.remove(&(module, source_start))
     }
 
@@ -316,7 +352,7 @@ impl NamespaceValueRegistry<UserRecordTicket> {
         &mut self,
         module: ScopeId,
         source_start: u32,
-    ) -> Option<(ScopeId, FunctionReservation)> {
+    ) -> Option<(ScopeId, FunctionReservation<Ticket>)> {
         match self.prepared.remove(&(module, source_start)) {
             Some(PreparedNamespaceMember::Function { scope, reservation }) => {
                 Some((scope, reservation))
@@ -384,26 +420,33 @@ impl NamespaceValueRegistry<UserRecordTicket> {
     }
 }
 
-impl<'a, 'ast> Pass<'a, 'ast> {
+impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Prepare one module's attached namespace values before class/callable publication.
     pub(in crate::check::checker) fn prepare_attached_namespace_values(
         &mut self,
         scope: ScopeId,
-        statements: &[Statement<'_>],
+        statements: &'ast [Statement<'ast>],
     ) {
-        let mut syntax = NamespaceSyntaxIndex::default();
-        index_namespace_statements(statements, false, &mut syntax);
-        let attachments = collect_attachment_inputs(self, scope);
-        for attachment in attachments {
+        self.prepare_project_attached_namespace_values(&[(scope, statements)]);
+    }
+
+    pub(in crate::check::checker) fn prepare_project_attached_namespace_values(
+        &mut self,
+        modules: &[(ScopeId, &'ast [Statement<'ast>])],
+    ) {
+        let syntax = project_syntax_index(modules);
+        let module_scopes: FxHashSet<ScopeId> = modules.iter().map(|(module, _)| *module).collect();
+        for attachment in collect_attachment_inputs(self, &module_scopes) {
             if self
                 .namespace_values
                 .is_prepared_owner(attachment.owner_scope, &attachment.name)
             {
                 continue;
             }
-            self.namespace_values
-                .mark_prepared_owner(attachment.owner_scope, attachment.name.clone());
+            let owner_scope = attachment.owner_scope;
+            let name = attachment.name.clone();
             self.prepare_namespace_attachment(attachment, &syntax);
+            self.namespace_values.mark_prepared_owner(owner_scope, name);
         }
     }
 
@@ -422,29 +465,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     ) {
         #[cfg(test)]
         let query_roots_before = crate::check::query::query_demand_measure().root_calls;
-        let mut syntax = StandaloneSyntaxIndex::default();
-        for (module, statements) in modules {
-            let mut local = NamespaceSyntaxIndex::default();
-            index_namespace_statements(statements, false, &mut local);
-            syntax.variables.extend(
-                local
-                    .variables
-                    .into_iter()
-                    .map(|(start, item)| ((*module, start), item)),
-            );
-            syntax.functions.extend(
-                local
-                    .functions
-                    .into_iter()
-                    .map(|(start, item)| ((*module, start), item)),
-            );
-            syntax.classes.extend(
-                local
-                    .classes
-                    .into_iter()
-                    .map(|(start, item)| ((*module, start), item)),
-            );
-        }
+        let syntax = project_syntax_index(modules);
         for attachment in collect_all_standalone_attachment_inputs(self) {
             self.prepare_standalone_namespace_attachment(attachment, &syntax);
         }
@@ -458,7 +479,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn prepare_standalone_namespace_attachment(
         &mut self,
         attachment: StandaloneAttachmentInput,
-        syntax: &StandaloneSyntaxIndex<'_, '_>,
+        syntax: &ProjectSyntaxIndex<'_, '_>,
     ) {
         for fragment in &attachment.fragments {
             if fragment.ambient {
@@ -627,7 +648,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                             declaration: member.declaration.expect("function declaration"),
                             storage,
                             scope,
+                            module: member.module,
                             source: member.source,
+                            source_ordinal: member.source_ordinal,
+                            source_unit: self.current_source,
                             source_start: member.source_start,
                             span: member.span,
                             owner_span: member.span,
@@ -762,10 +786,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     let alias_failure = AliasDependencyFailure {
                         owner: self
                             .lexical_events
-                            .export_alias_owner(
-                                SourceOrdinal::User(member.module_ordinal),
-                                local_span,
-                            )
+                            .export_alias_owner(member.source_ordinal, local_span)
                             .expect("namespace export alias has one exact lexical owner")
                             .ticket,
                         span: local_span,
@@ -916,7 +937,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn prepare_standalone_private_members(
         &mut self,
         attachment: &StandaloneAttachmentInput,
-        syntax: &StandaloneSyntaxIndex<'_, '_>,
+        syntax: &ProjectSyntaxIndex<'_, '_>,
     ) -> bool {
         let private = attachment
             .members
@@ -1059,7 +1080,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 let mut waiting = false;
                 let mut unavailable = None;
                 let mut static_cycles = Vec::new();
-                let mut alias_failures: Vec<AliasDependencyFailure<UserRecordTicket>> = Vec::new();
+                let mut alias_failures: Vec<AliasDependencyFailure<Ticket>> = Vec::new();
                 for dependency in &plan.dependencies {
                     let ty = match &dependency.kind {
                         StandaloneNamespaceDependencyKind::Class {
@@ -1208,7 +1229,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn prepare_namespace_attachment(
         &mut self,
         attachment: AttachmentInput,
-        syntax: &NamespaceSyntaxIndex<'_, '_>,
+        syntax: &ProjectSyntaxIndex<'_, '_>,
     ) {
         for fragment in &attachment.fragments {
             if fragment.ambient {
@@ -1259,10 +1280,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         let mut variables = Vec::new();
         let mut functions = Vec::new();
         for member in &attachment.members {
+            self.select_attached_member_source(member);
             match member.kind {
                 PreparedNamespaceValueKind::Variable => {
-                    let Some((kind, declarator)) =
-                        syntax.variables.get(&member.source_start).copied()
+                    let Some((kind, declarator)) = syntax
+                        .variables
+                        .get(&(member.module, member.source_start))
+                        .copied()
                     else {
                         // The binder and syntax index share exact declaration starts.
                         unavailable = true;
@@ -1314,7 +1338,11 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     });
                 }
                 PreparedNamespaceValueKind::Function => {
-                    let Some(function) = syntax.functions.get(&member.source_start).copied() else {
+                    let Some(function) = syntax
+                        .functions
+                        .get(&(member.module, member.source_start))
+                        .copied()
+                    else {
                         // The binder and syntax index share exact declaration starts.
                         unavailable = true;
                         continue;
@@ -1329,7 +1357,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 PreparedNamespaceValueKind::Class => {
                     let span = syntax
                         .classes
-                        .get(&member.source_start)
+                        .get(&(member.module, member.source_start))
                         .map_or(member_span(member), |class| Span::from_oxc(class.span));
                     if !has_duplicates {
                         self.record_namespace_attachment_unavailable(
@@ -1340,9 +1368,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         );
                     }
                     unavailable = true;
-                    if syntax.classes.contains_key(&member.source_start) {
+                    if syntax
+                        .classes
+                        .contains_key(&(member.module, member.source_start))
+                    {
                         self.namespace_values.insert_member(
-                            self.current_module,
+                            member.module,
                             member.source_start,
                             PreparedNamespaceMember::Class {
                                 scope: member.scope,
@@ -1372,7 +1403,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 self.decl_types.set(variable.input.storage, variable.ty);
             }
             self.namespace_values.insert_member(
-                self.current_module,
+                variable.input.module,
                 variable.input.source_start,
                 PreparedNamespaceMember::Variable {
                     scope: variable.input.scope,
@@ -1391,7 +1422,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                 }
             }
             self.namespace_values.insert_member(
-                self.current_module,
+                function.input.module,
                 function.input.source_start,
                 PreparedNamespaceMember::Function {
                     scope: function.input.scope,
@@ -1440,7 +1471,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     fn prepare_private_namespace_members(
         &mut self,
         attachment: &AttachmentInput,
-        syntax: &NamespaceSyntaxIndex<'_, '_>,
+        syntax: &ProjectSyntaxIndex<'_, '_>,
     ) -> bool {
         let mut invalid = false;
         if !attachment.private_members.is_empty() {
@@ -1450,10 +1481,13 @@ impl<'a, 'ast> Pass<'a, 'ast> {
             }
         }
         for member in &attachment.private_members {
+            self.select_private_attached_member_source(member);
             match member.kind {
                 PreparedNamespaceValueKind::Variable => {
-                    let Some((kind, declarator)) =
-                        syntax.variables.get(&member.source_start).copied()
+                    let Some((kind, declarator)) = syntax
+                        .variables
+                        .get(&(member.module, member.source_start))
+                        .copied()
                     else {
                         continue;
                     };
@@ -1475,7 +1509,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                         None => None,
                     };
                     self.namespace_values.insert_member(
-                        self.current_module,
+                        member.module,
                         member.source_start,
                         PreparedNamespaceMember::Variable {
                             scope: member.scope,
@@ -1484,12 +1518,16 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     );
                 }
                 PreparedNamespaceValueKind::Function => {
-                    let Some(function) = syntax.functions.get(&member.source_start).copied() else {
+                    let Some(function) = syntax
+                        .functions
+                        .get(&(member.module, member.source_start))
+                        .copied()
+                    else {
                         continue;
                     };
                     let reservation = self.reserve_namespace_function(member.scope, function);
                     self.namespace_values.insert_member(
-                        self.current_module,
+                        member.module,
                         member.source_start,
                         PreparedNamespaceMember::Function {
                             scope: member.scope,
@@ -1498,9 +1536,12 @@ impl<'a, 'ast> Pass<'a, 'ast> {
                     );
                 }
                 PreparedNamespaceValueKind::Class => {
-                    if syntax.classes.contains_key(&member.source_start) {
+                    if syntax
+                        .classes
+                        .contains_key(&(member.module, member.source_start))
+                    {
                         self.namespace_values.insert_member(
-                            self.current_module,
+                            member.module,
                             member.source_start,
                             PreparedNamespaceMember::Class {
                                 scope: member.scope,
@@ -1513,11 +1554,23 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         invalid
     }
 
+    fn select_attached_member_source(&mut self, member: &OwnedMemberInput) {
+        debug_assert_eq!(source_ordinal(member.source_unit), member.source_ordinal);
+        self.current_module = member.module;
+        self.current_source = member.source_unit;
+    }
+
+    fn select_private_attached_member_source(&mut self, member: &PrivateMemberInput) {
+        debug_assert_eq!(source_ordinal(member.source_unit), member.source_ordinal);
+        self.current_module = member.module;
+        self.current_source = member.source_unit;
+    }
+
     fn reserve_namespace_function(
         &mut self,
         scope: ScopeId,
         function: &Function<'_>,
-    ) -> FunctionReservation {
+    ) -> FunctionReservation<Ticket> {
         let tickets = self
             .lexical_events
             .callable_at(source_ordinal(self.current_source), function.span.start)
@@ -1632,7 +1685,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
         &self,
         attachment: &AttachmentInput,
         properties: Vec<PropertyType>,
-    ) -> Vec<ClassNamespacePropertyPayload> {
+    ) -> Vec<ClassNamespacePropertyPayload<Ticket>> {
         properties
             .into_iter()
             .map(|property| {
@@ -1663,7 +1716,7 @@ impl<'a, 'ast> Pass<'a, 'ast> {
 
     fn stage_namespace_function_properties(
         &mut self,
-        functions: &[StagedFunction<'_, '_>],
+        functions: &[StagedFunction<'_, '_, Ticket>],
     ) -> Option<Vec<PropertyType>> {
         let mut order = Vec::new();
         let mut groups: FxHashMap<String, Vec<usize>> = FxHashMap::default();
@@ -1989,7 +2042,10 @@ impl<'a, 'ast> Pass<'a, 'ast> {
     }
 }
 
-fn collect_attachment_inputs(pass: &Pass<'_, '_>, module: ScopeId) -> Vec<AttachmentInput> {
+fn collect_attachment_inputs<Ticket: Copy + PartialEq>(
+    pass: &Pass<'_, '_, Ticket>,
+    modules: &FxHashSet<ScopeId>,
+) -> Vec<AttachmentInput> {
     let mut inputs = Vec::new();
     for record in pass.binder.namespaces.merges() {
         let Some(owner_scope) = declaration_owner_scope(pass, record.owner) else {
@@ -2009,18 +2065,19 @@ fn collect_attachment_inputs(pass: &Pass<'_, '_>, module: ScopeId) -> Vec<Attach
             | NamespaceValueAttachmentDisposition::Rejected(_) => false,
         };
         if !exposes_value_attachment
-            || !attachment.fragments.iter().any(|fragment| {
-                fragment.module == module && user_original_module(fragment.origin).is_some()
-            })
+            || !attachment
+                .fragments
+                .iter()
+                .any(|fragment| modules.contains(&fragment.module))
         {
             continue;
         }
         let value_member_count = attachment
             .fragments
             .iter()
+            .filter(|fragment| modules.contains(&fragment.module))
             .flat_map(|fragment| fragment.members.iter())
             .filter_map(|member| pass.binder.namespaces.member(*member))
-            .filter(|member| user_original_module(member.origin).is_some())
             .filter(|member| {
                 namespace_member_participates_in_payload(member.spaces.value, member.publication)
             })
@@ -2028,9 +2085,9 @@ fn collect_attachment_inputs(pass: &Pass<'_, '_>, module: ScopeId) -> Vec<Attach
         let mut private_members = attachment
             .fragments
             .iter()
+            .filter(|fragment| modules.contains(&fragment.module))
             .flat_map(|fragment| fragment.members.iter())
             .filter_map(|member| pass.binder.namespaces.member(*member))
-            .filter(|member| user_original_module(member.origin).is_some())
             .filter(|member| {
                 member.spaces.value
                     && matches!(member.publication, NamespacePublication::Private)
@@ -2044,18 +2101,27 @@ fn collect_attachment_inputs(pass: &Pass<'_, '_>, module: ScopeId) -> Vec<Attach
             .filter_map(|member| {
                 let declaration = member.declaration?;
                 let site = pass.binder.declarations.get(declaration)?.site;
+                let source = pass.lexical_events.declaration_source(declaration)?;
+                let ordinal = source_ordinal_from_origin(member.origin);
+                debug_assert_eq!(source_ordinal(source.unit), ordinal);
                 Some((
                     declaration,
                     PrivateMemberInput {
                         declaration,
                         scope: site.scope?,
+                        module: site.module,
+                        source: member.source,
+                        source_ordinal: ordinal,
+                        source_unit: source.unit,
                         source_start: site.declaration_span.start,
                         kind: prepared_namespace_value_kind(member.kind)?,
                     },
                 ))
             })
             .collect::<Vec<_>>();
-        private_members.sort_by_key(|(declaration, member)| (member.source_start, declaration.0));
+        private_members.sort_by_key(|(declaration, member)| {
+            (member.source, member.source_start, declaration.0)
+        });
         private_members.dedup_by_key(|(declaration, _)| *declaration);
         let private_members = private_members
             .into_iter()
@@ -2064,7 +2130,7 @@ fn collect_attachment_inputs(pass: &Pass<'_, '_>, module: ScopeId) -> Vec<Attach
         let mut members = Vec::new();
         let mut unavailable_members = Vec::new();
         for member in &attachment.members {
-            if user_original_module(member.origin).is_none() {
+            if !modules.contains(&member.site.module) {
                 continue;
             }
             let Some(storage) = member.value_storage else {
@@ -2083,11 +2149,20 @@ fn collect_attachment_inputs(pass: &Pass<'_, '_>, module: ScopeId) -> Vec<Attach
                 });
                 continue;
             };
+            let source = pass
+                .lexical_events
+                .declaration_source(member.declaration)
+                .expect("attached namespace member has exact source reservation");
+            let ordinal = source_ordinal_from_origin(member.origin);
+            debug_assert_eq!(source_ordinal(source.unit), ordinal);
             members.push(OwnedMemberInput {
                 declaration: member.declaration,
                 storage,
                 scope: member.scope,
+                module: member.site.module,
                 source: member.source,
+                source_ordinal: ordinal,
+                source_unit: source.unit,
                 source_start: member.site.declaration_span.start,
                 span: member.site.declaration_span,
                 owner_span: member.site.binding_span,
@@ -2104,12 +2179,12 @@ fn collect_attachment_inputs(pass: &Pass<'_, '_>, module: ScopeId) -> Vec<Attach
             .symbols
             .get(attachment.symbol)
             .and_then(|symbol| symbol.ty);
-        let user_member_count = attachment
+        let selected_member_count = attachment
             .members
             .iter()
-            .filter(|member| user_original_module(member.origin).is_some())
+            .filter(|member| modules.contains(&member.site.module))
             .count();
-        let has_unavailable_metadata = value_member_count != user_member_count;
+        let has_unavailable_metadata = value_member_count != selected_member_count;
         inputs.push(AttachmentInput {
             owner_scope,
             name: attachment.name.to_owned(),
@@ -2118,7 +2193,7 @@ fn collect_attachment_inputs(pass: &Pass<'_, '_>, module: ScopeId) -> Vec<Attach
             fragments: attachment
                 .fragments
                 .iter()
-                .filter(|fragment| user_original_module(fragment.origin).is_some())
+                .filter(|fragment| modules.contains(&fragment.module))
                 .map(|fragment| FragmentInput {
                     module: fragment.module,
                     source_start: fragment.source_start,
@@ -2135,7 +2210,9 @@ fn collect_attachment_inputs(pass: &Pass<'_, '_>, module: ScopeId) -> Vec<Attach
     inputs
 }
 
-fn collect_all_standalone_attachment_inputs(pass: &Pass<'_, '_>) -> Vec<StandaloneAttachmentInput> {
+fn collect_all_standalone_attachment_inputs<Ticket: Copy + PartialEq>(
+    pass: &Pass<'_, '_, Ticket>,
+) -> Vec<StandaloneAttachmentInput> {
     pass.binder
         .standalone_namespace_value_attachments()
         .into_iter()
@@ -2143,20 +2220,15 @@ fn collect_all_standalone_attachment_inputs(pass: &Pass<'_, '_>) -> Vec<Standalo
         .collect()
 }
 
-fn standalone_attachment_input(
-    pass: &Pass<'_, '_>,
+fn standalone_attachment_input<Ticket: Copy + PartialEq>(
+    pass: &Pass<'_, '_, Ticket>,
     attachment: StandaloneNamespaceValueAttachment<'_>,
 ) -> Option<StandaloneAttachmentInput> {
     pass.binder.namespaces.get(attachment.namespace)?;
-    let fallback_module = attachment
-        .fragments
-        .iter()
-        .find(|fragment| user_original_module(fragment.origin).is_some())?
-        .module;
+    let fallback_module = attachment.fragments.first()?.module;
     let fragments = attachment
         .fragments
         .iter()
-        .filter(|fragment| user_original_module(fragment.origin).is_some())
         .map(|fragment| FragmentInput {
             module: fragment.module,
             source_start: fragment.source_start,
@@ -2167,30 +2239,27 @@ fn standalone_attachment_input(
     let members = attachment
         .members
         .into_iter()
-        .filter_map(|member| {
-            let original_module = user_original_module(member.origin)?;
-            Some(StandaloneMemberInput {
-                declaration: member.declaration,
-                name: member.name.map(str::to_owned),
-                scope: member.site.and_then(|site| site.scope),
-                module: member.site.map_or(fallback_module, |site| site.module),
-                source: member.source,
-                source_start: member.site.map_or(member.declaration_span.start, |site| {
-                    site.declaration_span.start
-                }),
-                span: member
-                    .site
-                    .map_or(member.declaration_span, |site| site.declaration_span),
-                local_span: member.local_span,
-                module_ordinal: ModuleOrdinal::new(original_module.index()),
-                value_storage: member.value_storage,
-                alias_target_storage: member.alias_target_storage,
-                ambient: member.ambient,
-                child_namespace: member.child_namespace,
-                kind: member.kind,
-                publication: member.publication,
-                has_value_space: member.spaces.value,
-            })
+        .map(|member| StandaloneMemberInput {
+            declaration: member.declaration,
+            name: member.name.map(str::to_owned),
+            scope: member.site.and_then(|site| site.scope),
+            module: member.site.map_or(fallback_module, |site| site.module),
+            source: member.source,
+            source_start: member.site.map_or(member.declaration_span.start, |site| {
+                site.declaration_span.start
+            }),
+            span: member
+                .site
+                .map_or(member.declaration_span, |site| site.declaration_span),
+            local_span: member.local_span,
+            source_ordinal: source_ordinal_from_origin(member.origin),
+            value_storage: member.value_storage,
+            alias_target_storage: member.alias_target_storage,
+            ambient: member.ambient,
+            child_namespace: member.child_namespace,
+            kind: member.kind,
+            publication: member.publication,
+            has_value_space: member.spaces.value,
         })
         .collect();
     Some(StandaloneAttachmentInput {
@@ -2479,7 +2548,10 @@ fn namespace_member_participates_in_payload(
     has_value_space && !matches!(publication, NamespacePublication::Private)
 }
 
-fn standalone_member_participates(pass: &Pass<'_, '_>, member: &StandaloneMemberInput) -> bool {
+fn standalone_member_participates<Ticket: Copy + PartialEq>(
+    pass: &Pass<'_, '_, Ticket>,
+    member: &StandaloneMemberInput,
+) -> bool {
     member.has_value_space
         || member.kind == MergeDeclarationKind::DeferredExport
         || (member.kind == MergeDeclarationKind::Namespace
@@ -2525,7 +2597,10 @@ fn invalid_namespace_using(
     }
 }
 
-fn declaration_owner_scope(pass: &Pass<'_, '_>, owner: DeclarationOwner) -> Option<ScopeId> {
+fn declaration_owner_scope<Ticket: Copy + PartialEq>(
+    pass: &Pass<'_, '_, Ticket>,
+    owner: DeclarationOwner,
+) -> Option<ScopeId> {
     match owner {
         DeclarationOwner::Lexical(scope) => Some(scope),
         DeclarationOwner::NamespacePublic(namespace) => pass
@@ -2543,8 +2618,8 @@ fn declaration_owner_scope(pass: &Pass<'_, '_>, owner: DeclarationOwner) -> Opti
     }
 }
 
-fn query_free_initializer_type(
-    pass: &mut Pass<'_, '_>,
+fn query_free_initializer_type<Ticket: Copy + PartialEq>(
+    pass: &mut Pass<'_, '_, Ticket>,
     kind: VariableDeclarationKind,
     initializer: &Expression<'_>,
 ) -> Option<TypeId> {
@@ -2653,16 +2728,97 @@ mod tests {
     use super::{
         duplicate_property_kind, namespace_member_participates_in_payload,
         namespace_payload_duplicate, namespace_payload_unavailable, prepared_namespace_value_kind,
-        MergeDeclarationKind, NamespacePublication, PreparedNamespaceValueKind,
-        StandaloneNamespaceTerminal,
+        project_syntax_index, MergeDeclarationKind, NamespacePublication,
+        PreparedNamespaceValueKind, StandaloneNamespaceTerminal,
     };
     use crate::binder::namespace::NamespaceInstanceState;
+    use crate::binder::scope::ScopeId;
+    use crate::check::checker::events_library::LibraryEventLedger;
+    use crate::check::checker::lexical_events::LexicalReservations;
     use crate::check::query::reset_query_demand_measure;
     use crate::driver::check_source;
+    use crate::source::{LibraryFileOrdinal, SourceOrdinal, SourceUnit};
     use crate::types::Interner;
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
+
+    #[test]
+    fn project_attached_callables_keep_exact_sources_at_identical_offsets() {
+        let alpha_source = "declare namespace Attached { function alpha(value: string): string; }";
+        let bravo_source = "declare namespace Attached { function bravo(value: number): number; }";
+        let alpha_allocator = Allocator::default();
+        let bravo_allocator = Allocator::default();
+        let alpha = Parser::new(&alpha_allocator, alpha_source, SourceType::ts()).parse();
+        let bravo = Parser::new(&bravo_allocator, bravo_source, SourceType::ts()).parse();
+        assert!(!alpha.panicked);
+        assert!(!bravo.panicked);
+
+        let alpha_scope = ScopeId(10);
+        let bravo_scope = ScopeId(20);
+        let alpha_file = LibraryFileOrdinal::new(4);
+        let bravo_file = LibraryFileOrdinal::new(9);
+        let alpha_start = alpha_source.find("function").expect("alpha function") as u32;
+        let bravo_start = bravo_source.find("function").expect("bravo function") as u32;
+        assert_eq!(alpha_start, bravo_start);
+
+        let forward = project_syntax_index(&[
+            (alpha_scope, alpha.program.body.as_slice()),
+            (bravo_scope, bravo.program.body.as_slice()),
+        ]);
+        let reverse = project_syntax_index(&[
+            (bravo_scope, bravo.program.body.as_slice()),
+            (alpha_scope, alpha.program.body.as_slice()),
+        ]);
+        for syntax in [&forward, &reverse] {
+            assert_eq!(
+                syntax
+                    .functions
+                    .get(&(alpha_scope, alpha_start))
+                    .and_then(|function| function.id.as_ref())
+                    .map(|id| id.name.as_str()),
+                Some("alpha")
+            );
+            assert_eq!(
+                syntax
+                    .functions
+                    .get(&(bravo_scope, bravo_start))
+                    .and_then(|function| function.id.as_ref())
+                    .map(|id| id.name.as_str()),
+                Some("bravo")
+            );
+        }
+
+        let mut ledger = LibraryEventLedger::default();
+        let mut reservations = LexicalReservations::default();
+        reservations
+            .reserve_library_program(bravo_file, &bravo.program, &mut ledger)
+            .expect("reserve bravo first");
+        reservations
+            .reserve_library_program(alpha_file, &alpha.program, &mut ledger)
+            .expect("reserve alpha second");
+        let alpha_callable = reservations
+            .callable_at(SourceOrdinal::Library(alpha_file), alpha_start)
+            .and_then(|site| reservations.callable(site))
+            .expect("alpha callable");
+        let bravo_callable = reservations
+            .callable_at(SourceOrdinal::Library(bravo_file), bravo_start)
+            .and_then(|site| reservations.callable(site))
+            .expect("bravo callable");
+        assert_eq!(
+            alpha_callable.source.unit,
+            SourceUnit::Library {
+                file_ordinal: alpha_file
+            }
+        );
+        assert_eq!(
+            bravo_callable.source.unit,
+            SourceUnit::Library {
+                file_ordinal: bravo_file
+            }
+        );
+        assert_ne!(alpha_callable.tickets, bravo_callable.tickets);
+    }
 
     #[test]
     fn standalone_terminals_are_atomic_distinct_nested_and_query_free() {
