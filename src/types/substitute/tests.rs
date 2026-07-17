@@ -811,10 +811,12 @@ fn measure_substitution_distinguishes_exact_blocked_context_repeats() {
     let mut map = FxHashMap::default();
     map.insert(id, wk.number);
 
-    super::reset_substitution_measure();
-    let mut substitution = Substitution::new(&map);
-    assert_ne!(substitution.apply(&mut interner, root), root);
-    let same_context = super::substitution_measure();
+    let same_context = {
+        let _scope = super::start_substitution_measure();
+        let mut substitution = Substitution::new(&map);
+        assert_ne!(substitution.apply(&mut interner, root), root);
+        super::substitution_measure().expect("the counter scope must remain enabled")
+    };
     assert_eq!(same_context.runs, 1);
     assert_eq!(same_context.apply_visits, 5);
     assert_eq!(same_context.type_id_repeats, 2);
@@ -837,10 +839,13 @@ fn measure_substitution_distinguishes_exact_blocked_context_repeats() {
         ret: wk.void,
     });
     let adversary = interner.intern_tuple(vec![shared, wrapper, shared]);
-    super::reset_substitution_measure();
-    let mut substitution = Substitution::new(&map);
-    let result = substitution.apply(&mut interner, adversary);
-    let measure = super::substitution_measure();
+    let (result, measure) = {
+        let _scope = super::start_substitution_measure();
+        let mut substitution = Substitution::new(&map);
+        let result = substitution.apply(&mut interner, adversary);
+        let measure = super::substitution_measure().expect("the counter scope must remain enabled");
+        (result, measure)
+    };
     assert_ne!(result, adversary);
     assert_eq!(measure.apply_visits, 10);
     assert_eq!(measure.type_id_repeats, 5);
@@ -864,10 +869,12 @@ fn measure_substitution_distinguishes_exact_blocked_context_repeats() {
             ..Default::default()
         },
     );
-    super::reset_substitution_measure();
-    let mut substitution = Substitution::new(&map);
-    assert_eq!(substitution.apply(&mut interner, recursive), recursive);
-    let cycle = super::substitution_measure();
+    let cycle = {
+        let _scope = super::start_substitution_measure();
+        let mut substitution = Substitution::new(&map);
+        assert_eq!(substitution.apply(&mut interner, recursive), recursive);
+        super::substitution_measure().expect("the counter scope must remain enabled")
+    };
     assert_eq!(cycle.apply_visits, 2);
     assert_eq!(cycle.type_id_repeats, 1);
     assert_eq!(cycle.exact_context_repeats, 1);
@@ -896,10 +903,11 @@ fn measure_substitution_hotpaths_counter_only() {
             let root = interner.intern_tuple(vec![shared; count]);
             let mut map = FxHashMap::default();
             map.insert(id, wk.number);
-            super::reset_substitution_measure();
+            let _scope = super::start_substitution_measure();
             let mut substitution = Substitution::new(&map);
             assert_ne!(substitution.apply(&mut interner, root), root);
-            let measure = super::substitution_measure();
+            let measure =
+                super::substitution_measure().expect("the counter scope must remain enabled");
             assert_eq!(measure.apply_visits, (count + 3) as u64);
             assert_eq!(measure.type_id_repeats, count as u64);
             assert_eq!(measure.exact_context_repeats, count as u64);

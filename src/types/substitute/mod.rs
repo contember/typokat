@@ -46,43 +46,85 @@ impl std::fmt::Debug for SubstitutionMeasure {
 
 #[cfg(test)]
 thread_local! {
-    static SUBSTITUTION_MEASURE: std::cell::RefCell<SubstitutionMeasure> = std::cell::RefCell::new(SubstitutionMeasure::default());
+    static SUBSTITUTION_MEASURE: std::cell::RefCell<Option<SubstitutionMeasureCollector>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
-pub(super) fn reset_substitution_measure() {
-    SUBSTITUTION_MEASURE.with(|measure| *measure.borrow_mut() = SubstitutionMeasure::default());
+type SubstitutionMeasureCollector = std::rc::Rc<std::cell::RefCell<SubstitutionMeasure>>;
+
+#[cfg(test)]
+pub(super) struct SubstitutionMeasureScope {
+    previous: Option<SubstitutionMeasureCollector>,
+    _thread_affine: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
 #[cfg(test)]
-pub(super) fn substitution_measure() -> SubstitutionMeasure {
-    SUBSTITUTION_MEASURE.with(|measure| measure.borrow().clone())
+impl Drop for SubstitutionMeasureScope {
+    fn drop(&mut self) {
+        SUBSTITUTION_MEASURE.with(|measure| {
+            measure.replace(self.previous.take());
+        });
+    }
 }
 
 #[cfg(test)]
-fn measure_substitution_visit(ty: TypeId, blocked: &FxHashSet<TypeParamId>) {
-    SUBSTITUTION_MEASURE.with(|measure| {
-        let mut measure = measure.borrow_mut();
-        measure.apply_visits += 1;
-        if !measure.seen_type_ids.insert(ty) {
-            measure.type_id_repeats += 1;
-        }
-        let mut context: Vec<TypeParamId> = blocked.iter().copied().collect();
-        context.sort_unstable();
-        if !measure.seen_contexts.insert((ty, context)) {
-            measure.exact_context_repeats += 1;
-        }
-    });
+pub(super) fn start_substitution_measure() -> SubstitutionMeasureScope {
+    let collector = std::rc::Rc::new(std::cell::RefCell::new(SubstitutionMeasure::default()));
+    let previous =
+        SUBSTITUTION_MEASURE.with(|current| current.replace(Some(std::rc::Rc::clone(&collector))));
+    SubstitutionMeasureScope {
+        previous,
+        _thread_affine: std::marker::PhantomData,
+    }
 }
 
 #[cfg(test)]
-pub(super) fn measure_substitution(update: impl FnOnce(&mut SubstitutionMeasure)) {
-    SUBSTITUTION_MEASURE.with(|measure| update(&mut measure.borrow_mut()));
+pub(super) fn substitution_measure() -> Option<SubstitutionMeasure> {
+    let collector = SUBSTITUTION_MEASURE.with(|current| current.borrow().clone())?;
+    let measure = collector.borrow().clone();
+    Some(measure)
+}
+
+#[cfg(test)]
+fn capture_substitution_measurement() -> Option<SubstitutionMeasureCollector> {
+    let collector = SUBSTITUTION_MEASURE.with(|current| current.borrow().clone());
+    if let Some(collector) = collector.as_ref() {
+        collector.borrow_mut().runs += 1;
+    }
+    collector
+}
+
+#[cfg(test)]
+fn measure_substitution_visit(
+    collector: &SubstitutionMeasureCollector,
+    ty: TypeId,
+    blocked: &FxHashSet<TypeParamId>,
+) {
+    let mut measure = collector.borrow_mut();
+    measure.apply_visits += 1;
+    if !measure.seen_type_ids.insert(ty) {
+        measure.type_id_repeats += 1;
+    }
+    let mut context: Vec<TypeParamId> = blocked.iter().copied().collect();
+    context.sort_unstable();
+    if !measure.seen_contexts.insert((ty, context)) {
+        measure.exact_context_repeats += 1;
+    }
+}
+
+#[cfg(test)]
+fn measure_substitution(
+    collector: &SubstitutionMeasureCollector,
+    update: impl FnOnce(&mut SubstitutionMeasure),
+) {
+    update(&mut collector.borrow_mut());
 }
 
 mod apply;
 #[cfg(test)]
 mod completed_memo_spec;
+#[cfg(test)]
+mod measurement_scope_spec;
 #[cfg(test)]
 mod tests;
 
@@ -100,19 +142,24 @@ pub struct Substitution<'a> {
     completed: FxHashMap<(TypeId, Vec<TypeParamId>), TypeId>,
     /// Incremented by every raw-`TypeId` re-entry to taint all active ancestors.
     cycle_epoch: u64,
+    /// Captured at construction so each run keeps one stable measurement owner.
+    #[cfg(test)]
+    measurement: Option<SubstitutionMeasureCollector>,
 }
 
 impl<'a> Substitution<'a> {
     /// Build a substitution from a `TypeParamId → TypeId` map.
     pub fn new(map: &'a FxHashMap<TypeParamId, TypeId>) -> Self {
         #[cfg(test)]
-        measure_substitution(|measure| measure.runs += 1);
+        let measurement = capture_substitution_measurement();
         Substitution {
             map,
             in_progress: FxHashSet::default(),
             blocked: FxHashSet::default(),
             completed: FxHashMap::default(),
             cycle_epoch: 0,
+            #[cfg(test)]
+            measurement,
         }
     }
 
@@ -127,21 +174,27 @@ impl<'a> Substitution<'a> {
         }
 
         #[cfg(test)]
-        measure_substitution_visit(ty, &self.blocked);
+        if let Some(collector) = self.measurement.as_ref() {
+            measure_substitution_visit(collector, ty, &self.blocked);
+        }
 
         // Raw-id re-entry must win over a completed result under any blocked
         // context; returning the original id is the existing cycle semantics.
         if self.in_progress.contains(&ty) {
             self.cycle_epoch += 1;
             #[cfg(test)]
-            measure_substitution(|measure| measure.cycle_reentries += 1);
+            if let Some(collector) = self.measurement.as_ref() {
+                measure_substitution(collector, |measure| measure.cycle_reentries += 1);
+            }
             return ty;
         }
 
         let key = (ty, self.canonical_blocked_context());
         if let Some(&result) = self.completed.get(&key) {
             #[cfg(test)]
-            measure_substitution(|measure| measure.completed_memo_hits += 1);
+            if let Some(collector) = self.measurement.as_ref() {
+                measure_substitution(collector, |measure| measure.completed_memo_hits += 1);
+            }
             return result;
         }
 
@@ -153,8 +206,12 @@ impl<'a> Substitution<'a> {
             TypeTag::TypeParam => {
                 let param_id = interner.store().type_param(ty).map(|p| p.id);
                 #[cfg(test)]
-                if param_id.is_some_and(|id| self.blocked.contains(&id)) {
-                    measure_substitution(|measure| measure.blocked_type_param_hits += 1);
+                if let Some(collector) = self.measurement.as_ref() {
+                    if param_id.is_some_and(|id| self.blocked.contains(&id)) {
+                        measure_substitution(collector, |measure| {
+                            measure.blocked_type_param_hits += 1;
+                        });
+                    }
                 }
                 match param_id
                     .filter(|id| !self.blocked.contains(id))
@@ -162,7 +219,11 @@ impl<'a> Substitution<'a> {
                 {
                     Some(arg) => {
                         #[cfg(test)]
-                        measure_substitution(|measure| measure.type_param_map_hits += 1);
+                        if let Some(collector) = self.measurement.as_ref() {
+                            measure_substitution(collector, |measure| {
+                                measure.type_param_map_hits += 1;
+                            });
+                        }
                         arg
                     }
                     None => ty,
@@ -194,10 +255,14 @@ impl<'a> Substitution<'a> {
         if self.cycle_epoch == start_cycle_epoch {
             self.completed.insert(key, result);
             #[cfg(test)]
-            measure_substitution(|measure| measure.completed_memo_entries += 1);
+            if let Some(collector) = self.measurement.as_ref() {
+                measure_substitution(collector, |measure| measure.completed_memo_entries += 1);
+            }
         } else {
             #[cfg(test)]
-            measure_substitution(|measure| measure.cycle_tainted_skips += 1);
+            if let Some(collector) = self.measurement.as_ref() {
+                measure_substitution(collector, |measure| measure.cycle_tainted_skips += 1);
+            }
         }
 
         result

@@ -229,8 +229,10 @@ fn substitution_run_keeps_its_outer_collector_while_nested_scope_is_current() {
 
         let outer_scope = start_substitution_measure();
         let mut substitution = Substitution::new(&map);
-        let mut constructed = SubstitutionMeasure::default();
-        constructed.runs = 1;
+        let constructed = SubstitutionMeasure {
+            runs: 1,
+            ..Default::default()
+        };
         assert_eq!(substitution_measure(), Some(constructed));
 
         assert_eq!(substitution.apply(&mut interner, root), expected);

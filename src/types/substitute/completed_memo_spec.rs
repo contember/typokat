@@ -35,10 +35,10 @@ fn completed_memo_reuses_same_context_shared_dag() {
     let expected = interner.intern_tuple(vec![expected_shared; FANOUT]);
     let map = FxHashMap::from_iter([(id, wk.number)]);
 
-    reset_substitution_measure();
+    let _scope = start_substitution_measure();
     let mut substitution = Substitution::new(&map);
     let result = substitution.apply(&mut interner, root);
-    let measure = substitution_measure();
+    let measure = substitution_measure().expect("the counter scope must remain enabled");
 
     assert_eq!(
         result, expected,
@@ -107,10 +107,10 @@ fn completed_memo_canonicalizes_irrelevant_blockers_and_binder_order() {
         (mapped_blocker_b, wk.boolean),
     ]);
 
-    reset_substitution_measure();
+    let _scope = start_substitution_measure();
     let mut substitution = Substitution::new(&map);
     let result = substitution.apply(&mut interner, root);
-    let measure = substitution_measure();
+    let measure = substitution_measure().expect("the counter scope must remain enabled");
 
     assert_ne!(result, root);
     let tuple = interner
@@ -174,10 +174,10 @@ fn completed_memo_keys_include_blocked_generic_binder_context() {
     let expected = interner.intern_tuple(vec![shared_number, generic_wrapper, shared_number]);
     let map = FxHashMap::from_iter([(id, wk.number)]);
 
-    reset_substitution_measure();
+    let _scope = start_substitution_measure();
     let mut substitution = Substitution::new(&map);
     let result = substitution.apply(&mut interner, root);
-    let measure = substitution_measure();
+    let measure = substitution_measure().expect("the counter scope must remain enabled");
 
     assert_eq!(result, expected);
     let tuple = interner
@@ -221,11 +221,11 @@ fn completed_memo_lifetime_is_one_substitution_run() {
     let number_map = FxHashMap::from_iter([(id, wk.number)]);
     let string_map = FxHashMap::from_iter([(id, wk.string)]);
 
-    reset_substitution_measure();
+    let _scope = start_substitution_measure();
     let number_result = Substitution::new(&number_map).apply(&mut interner, root);
-    let after_number = substitution_measure();
+    let after_number = substitution_measure().expect("the counter scope must remain enabled");
     let string_result = Substitution::new(&string_map).apply(&mut interner, root);
-    let after_string = substitution_measure();
+    let after_string = substitution_measure().expect("the counter scope must remain enabled");
 
     assert_eq!(number_result, expected_number);
     assert_eq!(string_result, expected_string);
@@ -274,10 +274,10 @@ fn completed_memo_never_publishes_cross_context_cycle_ancestors() {
     let root = interner.intern_tuple(vec![recursive_array]);
     let map = FxHashMap::from_iter([(id, wk.number)]);
 
-    reset_substitution_measure();
+    let _scope = start_substitution_measure();
     let mut substitution = Substitution::new(&map);
     let first = substitution.apply(&mut interner, root);
-    let after_first = substitution_measure();
+    let after_first = substitution_measure().expect("the counter scope must remain enabled");
 
     assert_ne!(first, root, "the mapped acyclic sibling still rewrites");
     assert_eq!(after_first.cycle_reentries, 1);
@@ -292,7 +292,7 @@ fn completed_memo_never_publishes_cross_context_cycle_ancestors() {
     assert_eq!(after_first.completed_memo_hits, 0);
 
     let second = substitution.apply(&mut interner, root);
-    let after_second = substitution_measure();
+    let after_second = substitution_measure().expect("the counter scope must remain enabled");
     assert_eq!(
         second, first,
         "re-entry must preserve the existing result shape"
@@ -383,10 +383,10 @@ fn completed_memo_bounds_message_event_target_fanout_by_unique_contexts() {
     });
     let map = FxHashMap::from_iter([(id, wk.string)]);
 
-    reset_substitution_measure();
+    let _scope = start_substitution_measure();
     let mut substitution = Substitution::new(&map);
     let result = substitution.apply(&mut interner, target);
-    let measure = substitution_measure();
+    let measure = substitution_measure().expect("the counter scope must remain enabled");
 
     assert_ne!(result, target);
     assert_eq!(measure.completed_memo_entries, UNIQUE_EXACT_CONTEXTS);
