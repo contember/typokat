@@ -93,14 +93,15 @@ use crate::driver::check_source;
 use crate::source::LibraryFileOrdinal;
 use crate::types::repr::TypeParamId;
 use crate::types::store::TypeId;
+use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 
 const PREFIX: &str = "typokat-wu0c-attribution-v1";
 const FAMILY: &str = "d2fc0cfa7ac50102b2e63833c7796b799df9624b43d5ddb7ac007f1b7972ee54";
 const MAP: &str = "7:11,9:13";
-const MAP_SHA: &str = "d62a60bee90eda8d67dbde1b1d71b2ec363b9d21ba4733bcff6fa1a0f2e274b9";
+const MAP_SHA: &str = "ae219c29ce76dd5c300ec075eb78b9b16ab6bb46a043be21ea1e5333d11387aa";
 const APPLICATION: &str = "41|7:11,9:13";
-const APPLICATION_SHA: &str = "5e1e44ffc010fc8755645200c653e56777926a5116817c6a3c294a04d1107bb8";
+const APPLICATION_SHA: &str = "cc5c98b4f99d962cb822d64ad6ac266f08d3dae6c3551c98b351c69d16195e2d";
 const MERGED_INTERFACE_FAMILY: &str =
     "9c3d9c271d267440c318fb152ddd4b3124e613279057cb2c5bac978a8f8608bd";
 const BINARY_IDENTITY: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -220,6 +221,29 @@ fn concrete_family_token_canonicalizes_every_merged_participant() {
     changed = participants;
     changed[0] = FamilyParticipant::new(LibraryFileOrdinal::new(2), 40, TypeFragmentKind::Class);
     assert_ne!(canonical_family_token(&changed), token);
+}
+
+#[test]
+fn exact_state_digest_fixtures_match_canonical_protocol_bytes() {
+    let mut entries = [(9_u32, 13_u32), (7, 11)];
+    entries.sort_unstable_by_key(|entry| entry.0);
+    let canonical_map = entries
+        .iter()
+        .map(|(source, target)| format!("{source}:{target}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let canonical_application = format!("41|{canonical_map}");
+
+    assert_eq!(canonical_map, MAP);
+    assert_eq!(canonical_application, APPLICATION);
+    assert_eq!(
+        format!("{:x}", Sha256::digest(canonical_map.as_bytes())),
+        MAP_SHA,
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(canonical_application.as_bytes())),
+        APPLICATION_SHA,
+    );
 }
 
 #[test]
