@@ -85,26 +85,41 @@
 //! summary. Missing, duplicate, malformed, noncanonical, or saturated summaries are
 //! evidence failures. Libtest's unrelated harness lines are ignored; any line with
 //! the WU0D prefix is parsed strictly, and exactly one such line must exist.
+//!
+//! The checked-in validator consumes one bounded canonical evidence file selected by
+//! the dedicated `TYPOKAT_WU0D_RELEASE_EVIDENCE_PATH` environment variable. The path
+//! must be absolute and name a regular non-symlink file. The artifact is ASCII with
+//! LF-only lines and a final LF: one version/count header followed by exactly thirty
+//! launch-ordered process records (primary, non-cycle, reporter-control). Every
+//! externally owned process fact is present in fixed field order. Text and raw stdout
+//! are lossless lowercase hex with explicit byte lengths; unknown, duplicate,
+//! reordered, oversized, or noncanonical evidence rejects. The validator prints one
+//! stable decision line and authorizes Candidate B only for `GateDecision::Go`.
 
 use super::wu0b_library::{
-    canonical_wu0d_semantic_identity_from_components_for_test, Wu0dSemanticComponents,
-    Wu0dSemanticIdentity,
+    canonical_wu0d_semantic_identity_from_components_for_test, run_injected_profile,
+    InjectedLibrarySource, InjectedProfileRun, Wu0dDecodedClassTerminal, Wu0dFrozenProductSection,
+    Wu0dSemanticComponents, Wu0dSemanticIdentity,
 };
 use super::wu0d_candidate_release::{
-    evaluate_candidate_b_release, parse_candidate_stdout,
-    resolve_candidate_environment_bytes_for_test, resolve_candidate_environment_for_test,
+    evaluate_candidate_b_release, parse_candidate_release_evidence, parse_candidate_stdout,
+    render_candidate_release_validation, resolve_candidate_environment_bytes_for_test,
+    resolve_candidate_environment_for_test, validate_candidate_b_release_evidence_file,
     CacheMetrics, CandidateEnvironment, CandidateSummary, CandidateWorkload, ControlEvidence,
-    GateDecision, NoGoReason, PairedReleaseRun, ProcessObservation,
+    GateDecision, NoGoReason, PairedReleaseRun, ProcessObservation, MAX_RELEASE_EVIDENCE_BYTES,
+    MAX_RELEASE_STDOUT_BYTES, NON_CYCLE_WORKLOAD_SOURCES, REPORTER_CONTROL_WORKLOAD_SOURCES,
 };
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 
 const ENABLE_KEY: &str = "TYPOKAT_WU0D_CANDIDATE";
 const ENABLE_VALUE: &str = "candidate-b-v1";
 const BINARY: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 const HOST: &str = "2222222222222222222222222222222222222222222222222222222222222222";
-const PRIMARY_PROFILE: &str = "3333333333333333333333333333333333333333333333333333333333333333";
-const NON_CYCLE_PROFILE: &str = "4444444444444444444444444444444444444444444444444444444444444444";
+const PRIMARY_PROFILE: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
+const NON_CYCLE_PROFILE: &str = "1c664166f4c307f032958836642008c90c28cb21ff33215144c9188ac8afdd19";
 const REPORTER_CONTROL_PROFILE: &str =
-    "5555555555555555555555555555555555555555555555555555555555555555";
+    "9f5e4ab6a334154e67fe1ead6e7e1038d9433f5fd66f7ed897a73cfd1d058d0b";
 const SEMANTIC: &str = "740c77fa0237ef4bde7f5b0031d3d0a7c977a39d6fd75325148a636c0595f08d";
 const NON_CYCLE: &str = "non-cycle";
 const REPORTER_CONTROL: &str = "reporter-control";
@@ -114,11 +129,30 @@ const NON_CYCLE_PROBE: &str =
     "check::checker::wu0d_candidate_release::wu0d_candidate_non_cycle_probe_once";
 const REPORTER_CONTROL_PROBE: &str =
     "check::checker::wu0d_candidate_release::wu0d_candidate_reporter_control_probe_once";
+const EVIDENCE_PATH_KEY: &str = "TYPOKAT_WU0D_RELEASE_EVIDENCE_PATH";
+const EXPECTED_MAX_RELEASE_EVIDENCE_BYTES: usize = 4 * 1_024 * 1_024;
+const EXPECTED_MAX_RELEASE_STDOUT_BYTES: usize = 128 * 1_024;
 const MIB: u64 = 1_024 * 1_024;
 
 fn environment(entries: &[(&str, &str)]) -> Result<CandidateEnvironment, String> {
     resolve_candidate_environment_for_test(entries.iter().copied())
         .map_err(|error| error.to_string())
+}
+
+fn length_framed_profile_identity(
+    sources: &[super::wu0b_library::InjectedLibrarySource<'_>],
+) -> String {
+    let mut digest = Sha256::new();
+    for source in sources {
+        let name_len = u64::try_from(source.name.len()).expect("test profile name length fits u64");
+        let source_len =
+            u64::try_from(source.source.len()).expect("test profile source length fits u64");
+        digest.update(name_len.to_be_bytes());
+        digest.update(source_len.to_be_bytes());
+        digest.update(source.name.as_bytes());
+        digest.update(source.source.as_bytes());
+    }
+    format!("{:x}", digest.finalize())
 }
 
 fn semantic_components() -> Wu0dSemanticComponents {
@@ -198,35 +232,40 @@ fn captured_stdout(summary: &CandidateSummary, probe_filter: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+#[derive(Copy, Clone)]
+struct WorkloadFixture<'a> {
+    workload: CandidateWorkload,
+    probe_filter: &'a str,
+    profile: &'a str,
+}
+
 fn process(
     set: &str,
     sequence: u8,
     launch_ordinal: u8,
     candidate: bool,
-    workload: CandidateWorkload,
-    probe_filter: &str,
-    profile: &str,
+    fixture: WorkloadFixture<'_>,
     elapsed_us: u64,
 ) -> ProcessObservation {
-    let summary = match workload {
+    let summary = match fixture.workload {
         CandidateWorkload::Primary => summary(candidate),
         CandidateWorkload::NonCycle | CandidateWorkload::ReporterControl => {
-            control_summary(candidate, workload)
+            control_summary(candidate, fixture.workload)
         }
     };
     ProcessObservation {
         process_identity: format!("{set}-fresh-{sequence}"),
         launch_ordinal,
-        probe_filter: probe_filter.into(),
+        probe_filter: fixture.probe_filter.into(),
         binary_identity: BINARY.into(),
         host_identity: HOST.into(),
-        profile_identity: profile.into(),
+        profile_identity: fixture.profile.into(),
         warm_filesystem_cache: true,
         release_libtest: true,
         exit_code: 0,
         elapsed_us,
         peak_rss_bytes: 400 * MIB,
-        captured_stdout: captured_stdout(&summary, probe_filter),
+        captured_stdout: captured_stdout(&summary, fixture.probe_filter),
     }
 }
 
@@ -239,6 +278,11 @@ fn pair(
     baseline_us: u64,
     candidate_us: u64,
 ) -> PairedReleaseRun {
+    let fixture = WorkloadFixture {
+        workload,
+        probe_filter,
+        profile,
+    };
     let (baseline_launch, candidate_launch) = match index {
         1 => (1, 2),
         2 => (4, 3),
@@ -249,24 +293,13 @@ fn pair(
     };
     PairedReleaseRun {
         pair: index,
-        baseline: process(
-            set,
-            index * 2,
-            baseline_launch,
-            false,
-            workload,
-            probe_filter,
-            profile,
-            baseline_us,
-        ),
+        baseline: process(set, index * 2, baseline_launch, false, fixture, baseline_us),
         candidate: process(
             set,
             index * 2 + 1,
             candidate_launch,
             true,
-            workload,
-            probe_filter,
-            profile,
+            fixture,
             candidate_us,
         ),
     }
@@ -366,6 +399,91 @@ fn passing_controls() -> Vec<ControlEvidence> {
     ]
 }
 
+fn lower_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        encoded.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
+fn evidence_process_line(
+    set: &str,
+    pair: u8,
+    variant: &str,
+    process: &ProcessObservation,
+) -> String {
+    format!(
+        "process set={set} pair={pair} variant={variant} process_identity_len={} process_identity_hex={} launch_ordinal={} probe_filter_len={} probe_filter_hex={} binary_identity={} host_identity={} profile_identity={} warm_filesystem_cache={} release_libtest={} exit_code={} elapsed_us={} peak_rss_bytes={} stdout_len={} stdout_hex={}",
+        process.process_identity.len(),
+        lower_hex(process.process_identity.as_bytes()),
+        process.launch_ordinal,
+        process.probe_filter.len(),
+        lower_hex(process.probe_filter.as_bytes()),
+        process.binary_identity,
+        process.host_identity,
+        process.profile_identity,
+        u8::from(process.warm_filesystem_cache),
+        u8::from(process.release_libtest),
+        process.exit_code,
+        process.elapsed_us,
+        process.peak_rss_bytes,
+        process.captured_stdout.len(),
+        lower_hex(&process.captured_stdout),
+    )
+}
+
+fn evidence_set_lines(set: &str, pairs: &[PairedReleaseRun]) -> Vec<String> {
+    let mut launches = pairs
+        .iter()
+        .flat_map(|pair| {
+            [
+                (
+                    pair.baseline.launch_ordinal,
+                    pair.pair,
+                    "off",
+                    &pair.baseline,
+                ),
+                (
+                    pair.candidate.launch_ordinal,
+                    pair.pair,
+                    "candidate-b",
+                    &pair.candidate,
+                ),
+            ]
+        })
+        .collect::<Vec<_>>();
+    launches.sort_by_key(|(launch, _, _, _)| *launch);
+    launches
+        .into_iter()
+        .map(|(_, pair, variant, process)| evidence_process_line(set, pair, variant, process))
+        .collect()
+}
+
+fn evidence_artifact(primary: &[PairedReleaseRun], controls: &[ControlEvidence]) -> Vec<u8> {
+    let non_cycle = controls
+        .iter()
+        .find(|control| control.name == NON_CYCLE)
+        .expect("non-cycle fixture");
+    let reporter = controls
+        .iter()
+        .find(|control| control.name == REPORTER_CONTROL)
+        .expect("reporter-control fixture");
+    let mut lines = vec!["typokat-wu0d-release-evidence-v1 process_count=30".to_owned()];
+    lines.extend(evidence_set_lines("primary", primary));
+    lines.extend(evidence_set_lines(NON_CYCLE, &non_cycle.pairs));
+    lines.extend(evidence_set_lines(REPORTER_CONTROL, &reporter.pairs));
+    format!("{}\n", lines.join("\n")).into_bytes()
+}
+
+fn changed_semantic_identity(marker: u8) -> Wu0dSemanticIdentity {
+    let mut components = semantic_components();
+    components.frozen_library_product.push(marker);
+    canonical_wu0d_semantic_identity_from_components_for_test(&components)
+}
+
 fn replace_summary(process: &mut ProcessObservation, summary: CandidateSummary) {
     process.captured_stdout = captured_stdout(&summary, &process.probe_filter);
 }
@@ -398,6 +516,23 @@ fn environment_is_strict_default_off_and_has_one_switch() {
     }
     assert!(
         resolve_candidate_environment_bytes_for_test(&[(ENABLE_KEY.as_bytes(), &[0xff])]).is_err()
+    );
+}
+
+#[test]
+fn fixed_workload_profile_identities_are_independently_derived() {
+    let primary = super::wu0b_profile::load_strict_profile().unwrap();
+    assert_eq!(
+        length_framed_profile_identity(&primary.injected_sources()),
+        PRIMARY_PROFILE,
+    );
+    assert_eq!(
+        length_framed_profile_identity(NON_CYCLE_WORKLOAD_SOURCES),
+        NON_CYCLE_PROFILE,
+    );
+    assert_eq!(
+        length_framed_profile_identity(REPORTER_CONTROL_WORKLOAD_SOURCES),
+        REPORTER_CONTROL_PROFILE,
     );
 }
 
@@ -563,6 +698,7 @@ fn five_primary_pairs_and_both_exact_controls_pass() {
             assert_eq!(candidate.mode, CandidateEnvironment::CandidateB);
             for summary in [baseline, candidate] {
                 assert_eq!(summary.tainted_cache_hits, 0);
+                assert_eq!(summary.tainted_outcomes, 0);
                 assert_eq!(summary.tainted_cache_entries, 0);
                 assert_eq!(summary.avoided_visits, 0);
                 assert_eq!(summary.executed_runs, summary.eligible_requests);
@@ -719,6 +855,34 @@ fn process_pair_identity_resource_and_variant_failures_are_evaluated() {
 }
 
 #[test]
+fn process_identity_is_unique_across_primary_and_both_controls() {
+    let primary = passing_pairs();
+    let controls = passing_controls();
+    assert_eq!(
+        evaluate_candidate_b_release(&primary, &controls),
+        GateDecision::Go,
+    );
+
+    for control_index in 0..2 {
+        let mut reused = passing_controls();
+        reused[control_index].pairs[0].baseline.process_identity =
+            primary[0].baseline.process_identity.clone();
+        assert!(
+            !evaluate_candidate_b_release(&primary, &reused).authorizes_candidate_b(),
+            "a process identity reused across workload sets must reject",
+        );
+    }
+
+    let mut reused = passing_controls();
+    let reused_identity = reused[0].pairs[4].candidate.process_identity.clone();
+    reused[1].pairs[4].candidate.process_identity = reused_identity;
+    assert!(
+        !evaluate_candidate_b_release(&primary, &reused).authorizes_candidate_b(),
+        "a process identity reused across the two controls must reject",
+    );
+}
+
+#[test]
 fn semantic_counter_cache_and_improvement_failures_are_evaluated() {
     let controls = passing_controls();
 
@@ -788,6 +952,37 @@ fn semantic_counter_cache_and_improvement_failures_are_evaluated() {
 }
 
 #[test]
+fn semantic_identity_is_stable_across_all_ten_processes_per_workload() {
+    let controls = passing_controls();
+    let mut primary = passing_pairs();
+    let drift = changed_semantic_identity(b'P');
+    let pair = &mut primary[2];
+    for process in [&mut pair.baseline, &mut pair.candidate] {
+        let mut changed = parse_candidate_stdout(&process.captured_stdout).unwrap();
+        changed.semantic = drift.clone();
+        replace_summary(process, changed);
+    }
+    assert_reason(&primary, &controls, NoGoReason::SemanticMismatch);
+
+    for (control_index, marker) in [(0, b'N'), (1, b'R')] {
+        let primary = passing_pairs();
+        let mut controls = passing_controls();
+        let drift = changed_semantic_identity(marker);
+        let pair = &mut controls[control_index].pairs[3];
+        for process in [&mut pair.baseline, &mut pair.candidate] {
+            let mut changed = parse_candidate_stdout(&process.captured_stdout).unwrap();
+            changed.semantic = drift.clone();
+            replace_summary(process, changed);
+        }
+        assert_reason(
+            &primary,
+            &controls,
+            NoGoReason::ControlIdentityOrSemanticMismatch,
+        );
+    }
+}
+
+#[test]
 fn exact_named_control_sets_are_mandatory_and_independently_validated() {
     let pairs = passing_pairs();
 
@@ -817,6 +1012,20 @@ fn exact_named_control_sets_are_mandatory_and_independently_validated() {
 
     let mut controls = passing_controls();
     controls[0].pairs[0].candidate.profile_identity = PRIMARY_PROFILE.into();
+    assert_reason(
+        &pairs,
+        &controls,
+        NoGoReason::ControlIdentityOrSemanticMismatch,
+    );
+
+    let mut controls = passing_controls();
+    let pair = &mut controls[0].pairs[0];
+    for process in [&mut pair.baseline, &mut pair.candidate] {
+        let mut changed = parse_candidate_stdout(&process.captured_stdout).unwrap();
+        changed.clean_outcomes = 99;
+        changed.tainted_outcomes = 1;
+        replace_summary(process, changed);
+    }
     assert_reason(
         &pairs,
         &controls,
@@ -883,6 +1092,383 @@ fn exact_named_control_sets_are_mandatory_and_independently_validated() {
     );
 }
 
+#[test]
+fn canonical_evidence_artifact_round_trips_all_external_process_facts() {
+    assert_eq!(
+        MAX_RELEASE_EVIDENCE_BYTES,
+        EXPECTED_MAX_RELEASE_EVIDENCE_BYTES,
+    );
+    assert_eq!(MAX_RELEASE_STDOUT_BYTES, EXPECTED_MAX_RELEASE_STDOUT_BYTES,);
+    let primary = passing_pairs();
+    let controls = passing_controls();
+    let artifact = evidence_artifact(&primary, &controls);
+    assert!(artifact.len() <= MAX_RELEASE_EVIDENCE_BYTES);
+    assert!(primary
+        .iter()
+        .chain(controls.iter().flat_map(|control| control.pairs.iter()))
+        .flat_map(|pair| [&pair.baseline, &pair.candidate])
+        .all(|process| process.captured_stdout.len() <= MAX_RELEASE_STDOUT_BYTES));
+
+    let parsed = parse_candidate_release_evidence(&artifact).unwrap();
+    assert_eq!(parsed.primary, primary);
+    assert_eq!(parsed.controls, controls);
+    assert_eq!(
+        evaluate_candidate_b_release(&parsed.primary, &parsed.controls),
+        GateDecision::Go,
+    );
+}
+
+#[test]
+fn evidence_artifact_rejects_malformed_truncated_duplicate_unknown_and_misordered_input() {
+    let artifact = evidence_artifact(&passing_pairs(), &passing_controls());
+    let text = std::str::from_utf8(&artifact).unwrap();
+    let lines = text
+        .strip_suffix('\n')
+        .expect("canonical fixture has final LF")
+        .split('\n')
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len(), 31);
+
+    let mut truncated = lines.clone();
+    truncated.pop();
+    let mut duplicate_process = lines.clone();
+    duplicate_process.insert(2, duplicate_process[1].clone());
+    let mut unknown_field = lines.clone();
+    unknown_field[1].push_str(" unknown=0");
+    let mut duplicate_field = lines.clone();
+    duplicate_field[1] = duplicate_field[1].replacen(" pair=1", " pair=1 pair=1", 1);
+    let mut misordered = lines.clone();
+    misordered.swap(1, 2);
+    let mut wrong_count = lines.clone();
+    wrong_count[0] = "typokat-wu0d-release-evidence-v1 process_count=29".to_owned();
+    let mut length_mismatch = lines.clone();
+    length_mismatch[1] = length_mismatch[1].replacen(" stdout_len=", " stdout_len=999", 1);
+    let mut oversized_stdout = passing_pairs();
+    oversized_stdout[0].baseline.captured_stdout = vec![b'x'; MAX_RELEASE_STDOUT_BYTES + 1];
+
+    let mut malformed = vec![
+        truncated.join("\n").into_bytes(),
+        format!("{}\n", duplicate_process.join("\n")).into_bytes(),
+        format!("{}\n", unknown_field.join("\n")).into_bytes(),
+        format!("{}\n", duplicate_field.join("\n")).into_bytes(),
+        format!("{}\n", misordered.join("\n")).into_bytes(),
+        format!("{}\n", wrong_count.join("\n")).into_bytes(),
+        format!("{}\n", length_mismatch.join("\n")).into_bytes(),
+        text.replace('\n', "\r\n").into_bytes(),
+        artifact[..artifact.len() - 1].to_vec(),
+        vec![b'x'; MAX_RELEASE_EVIDENCE_BYTES + 1],
+        evidence_artifact(&oversized_stdout, &passing_controls()),
+    ];
+    let mut non_utf8 = artifact.clone();
+    non_utf8[0] = 0xff;
+    malformed.push(non_utf8);
+    let mut odd_hex = artifact.clone();
+    let stdout_hex = text.find("stdout_hex=").expect("stdout hex field") + "stdout_hex=".len();
+    odd_hex.remove(stdout_hex);
+    malformed.push(odd_hex);
+
+    for malformed in malformed {
+        assert!(
+            parse_candidate_release_evidence(&malformed).is_err(),
+            "malformed evidence must reject",
+        );
+    }
+}
+
+#[test]
+fn evidence_file_path_is_absolute_regular_non_symlink_and_validation_output_is_stable() {
+    assert!(validate_candidate_b_release_evidence_file(Path::new("relative.evidence")).is_err());
+    let temp_dir = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+    assert!(temp_dir.is_absolute());
+    assert!(validate_candidate_b_release_evidence_file(&temp_dir).is_err());
+
+    let path = temp_dir.join(format!(
+        "typokat-wu0d-release-evidence-{}-{}.txt",
+        std::process::id(),
+        line!(),
+    ));
+    std::fs::write(
+        &path,
+        evidence_artifact(&passing_pairs(), &passing_controls()),
+    )
+    .unwrap();
+    let decision = validate_candidate_b_release_evidence_file(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(decision, GateDecision::Go);
+
+    let oversized = temp_dir.join(format!(
+        "typokat-wu0d-release-oversized-{}-{}.txt",
+        std::process::id(),
+        line!(),
+    ));
+    let oversized_file = std::fs::File::create(&oversized).unwrap();
+    oversized_file
+        .set_len(u64::try_from(MAX_RELEASE_EVIDENCE_BYTES + 1).unwrap())
+        .unwrap();
+    drop(oversized_file);
+    assert!(
+        validate_candidate_b_release_evidence_file(&oversized).is_err(),
+        "a sparse oversized artifact must reject before an unbounded read",
+    );
+    std::fs::remove_file(&oversized).unwrap();
+
+    assert_eq!(
+        render_candidate_release_validation(&decision),
+        "typokat-wu0d-release-validation-v1 decision=go reasons=none",
+    );
+    assert_eq!(
+        render_candidate_release_validation(&GateDecision::NoGo(vec![
+            NoGoReason::SemanticMismatch,
+        ])),
+        "typokat-wu0d-release-validation-v1 decision=no-go reasons=semantic-mismatch",
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let target = temp_dir.join(format!(
+            "typokat-wu0d-release-target-{}-{}.txt",
+            std::process::id(),
+            line!(),
+        ));
+        let link = temp_dir.join(format!(
+            "typokat-wu0d-release-link-{}-{}.txt",
+            std::process::id(),
+            line!(),
+        ));
+        std::fs::write(
+            &target,
+            evidence_artifact(&passing_pairs(), &passing_controls()),
+        )
+        .unwrap();
+        symlink(&target, &link).unwrap();
+        assert!(validate_candidate_b_release_evidence_file(&link).is_err());
+        std::fs::remove_file(&link).unwrap();
+        std::fs::remove_file(&target).unwrap();
+    }
+}
+
+#[test]
+#[ignore = "release-only WU0D external evidence validator"]
+fn wu0d_candidate_release_validate_evidence_file() {
+    let path = std::env::var_os(EVIDENCE_PATH_KEY)
+        .map(PathBuf::from)
+        .expect("TYPOKAT_WU0D_RELEASE_EVIDENCE_PATH is required");
+    let decision = validate_candidate_b_release_evidence_file(&path)
+        .expect("strict WU0D release evidence must parse and validate");
+    let rendered = render_candidate_release_validation(&decision);
+    println!("{rendered}");
+    assert!(decision.authorizes_candidate_b(), "{rendered}");
+}
+
+fn frozen_product_run(file_ordinal: usize, name: &str, source: &str) -> InjectedProfileRun {
+    run_injected_profile(&[InjectedLibrarySource {
+        file_ordinal: crate::source::LibraryFileOrdinal::new(file_ordinal),
+        name,
+        source,
+    }])
+    .expect("frozen-product witness profile")
+}
+
+fn frozen_product_section(run: &InjectedProfileRun, section: Wu0dFrozenProductSection) -> &[u8] {
+    let product = &run.wu0d_semantic_components.frozen_library_product;
+    let section = run.wu0d_frozen_product_section_for_test(section);
+    assert!(!section.is_empty(), "a framed section cannot be empty");
+    let start = product
+        .windows(section.len())
+        .position(|window| std::ptr::eq(window.as_ptr(), section.as_ptr()))
+        .expect("section accessor must return a range of the actual final product buffer");
+    assert_eq!(
+        &product[start..start + section.len()],
+        section,
+        "section range must resolve exactly inside the final product",
+    );
+    section
+}
+
+fn frozen_product_section_range(
+    run: &InjectedProfileRun,
+    section: Wu0dFrozenProductSection,
+) -> std::ops::Range<usize> {
+    let product = &run.wu0d_semantic_components.frozen_library_product;
+    let section = run.wu0d_frozen_product_section_for_test(section);
+    let start = product
+        .windows(section.len())
+        .position(|window| std::ptr::eq(window.as_ptr(), section.as_ptr()))
+        .expect("section must be borrowed from the final product");
+    let end = start + section.len();
+    assert_eq!(
+        &product[start..end],
+        section,
+        "section range must identify its exact framed bytes",
+    );
+    start..end
+}
+
+#[test]
+fn frozen_product_includes_source_ordinal_provenance_for_identical_bytes() {
+    let source = "declare const Wu0dProvenance: number;\n";
+    let first = frozen_product_run(0, "same.d.ts", source);
+    let second = frozen_product_run(7, "same.d.ts", source);
+    assert_eq!(
+        frozen_product_section(&first, Wu0dFrozenProductSection::TypeStore),
+        frozen_product_section(&second, Wu0dFrozenProductSection::TypeStore),
+        "changing only provenance must not be smuggled through TypeStore rows",
+    );
+    assert_ne!(
+        frozen_product_section(&first, Wu0dFrozenProductSection::SourceRecords),
+        frozen_product_section(&second, Wu0dFrozenProductSection::SourceRecords),
+        "LibraryFileOrdinal is semantic publication provenance",
+    );
+    assert_ne!(
+        first.wu0d_semantic_components.frozen_library_product,
+        second.wu0d_semantic_components.frozen_library_product,
+    );
+}
+
+#[test]
+fn frozen_product_includes_value_placement_and_namespace_publication_surfaces() {
+    let global_left = frozen_product_run(0, "value.d.ts", "declare const Wu0dLeft: number;\n");
+    let global_right = frozen_product_run(0, "value.d.ts", "declare const Wu0dRight: number;\n");
+    assert_eq!(
+        frozen_product_section(&global_left, Wu0dFrozenProductSection::TypeStore),
+        frozen_product_section(&global_right, Wu0dFrozenProductSection::TypeStore),
+    );
+    assert_ne!(
+        frozen_product_section(&global_left, Wu0dFrozenProductSection::GlobalValues),
+        frozen_product_section(&global_right, Wu0dFrozenProductSection::GlobalValues),
+        "global value keys must be encoded from the production collector",
+    );
+
+    let global = frozen_product_run(
+        0,
+        "placement.d.ts",
+        "declare const Wu0dPlacement: number;\n",
+    );
+    let module = frozen_product_run(
+        0,
+        "placement.d.ts",
+        "export declare const Wu0dPlacement: number;\n",
+    );
+    assert_eq!(
+        frozen_product_section(&global, Wu0dFrozenProductSection::TypeStore),
+        frozen_product_section(&module, Wu0dFrozenProductSection::TypeStore),
+    );
+    assert_ne!(
+        frozen_product_section(&global, Wu0dFrozenProductSection::GlobalValues),
+        frozen_product_section(&module, Wu0dFrozenProductSection::GlobalValues),
+    );
+    assert_ne!(
+        frozen_product_section(&global, Wu0dFrozenProductSection::ModuleValues),
+        frozen_product_section(&module, Wu0dFrozenProductSection::ModuleValues),
+        "module value ownership must be encoded from the production collector",
+    );
+
+    let namespace_left = frozen_product_run(
+        0,
+        "namespace.d.ts",
+        "declare namespace Wu0dLeft { const marker: number; }\n",
+    );
+    let namespace_right = frozen_product_run(
+        0,
+        "namespace.d.ts",
+        "declare namespace Wu0dRight { const marker: number; }\n",
+    );
+    assert_eq!(
+        frozen_product_section(&namespace_left, Wu0dFrozenProductSection::TypeStore),
+        frozen_product_section(&namespace_right, Wu0dFrozenProductSection::TypeStore),
+    );
+    assert_ne!(
+        frozen_product_section(&namespace_left, Wu0dFrozenProductSection::NamespaceValues,),
+        frozen_product_section(&namespace_right, Wu0dFrozenProductSection::NamespaceValues,),
+        "namespace ownership must be encoded from the production collector",
+    );
+}
+
+#[test]
+fn every_frozen_product_section_is_a_named_frame_inside_the_final_product() {
+    let run = frozen_product_run(0, "sections.d.ts", "declare const value: number;\n");
+    let sections = [
+        Wu0dFrozenProductSection::SourceRecords,
+        Wu0dFrozenProductSection::TypeStore,
+        Wu0dFrozenProductSection::TypePublications,
+        Wu0dFrozenProductSection::GlobalValues,
+        Wu0dFrozenProductSection::ModuleValues,
+        Wu0dFrozenProductSection::NamespaceValues,
+        Wu0dFrozenProductSection::Classes,
+    ];
+    let ranges = sections.map(|section| frozen_product_section_range(&run, section));
+    for left in 0..ranges.len() {
+        for right in left + 1..ranges.len() {
+            assert_ne!(ranges[left], ranges[right], "named sections cannot alias");
+            assert!(
+                ranges[left].end <= ranges[right].start || ranges[right].end <= ranges[left].start,
+                "named section ranges must not overlap",
+            );
+        }
+    }
+}
+
+#[test]
+fn class_section_distinguishes_ready_and_each_canonical_poison_terminal_in_class_id_order() {
+    let ready = frozen_product_run(0, "class.ts", "class Ready { value!: number; }\n");
+    let initializer = frozen_product_run(
+        0,
+        "class.ts",
+        "const seed = 1; class InitializerPoison { value = seed; }\n",
+    );
+    let heritage = frozen_product_run(
+        0,
+        "class.ts",
+        "class HeritagePoison extends HeritagePoison {}\n",
+    );
+    let surface = frozen_product_run(
+        0,
+        "class.ts",
+        "declare const key: unique symbol; class SurfacePoison { [key]!: number; }\n",
+    );
+    let class_sections = [&ready, &initializer, &heritage, &surface]
+        .map(|run| frozen_product_section(run, Wu0dFrozenProductSection::Classes));
+    for left in 0..class_sections.len() {
+        for right in left + 1..class_sections.len() {
+            assert_ne!(
+                class_sections[left], class_sections[right],
+                "ready/heritage/initializer/surface terminals must remain distinct",
+            );
+        }
+    }
+
+    for (run, expected) in [
+        (&ready, Wu0dDecodedClassTerminal::Ready),
+        (&heritage, Wu0dDecodedClassTerminal::HeritagePoison),
+        (&initializer, Wu0dDecodedClassTerminal::InitializerPoison),
+        (&surface, Wu0dDecodedClassTerminal::SurfacePoison),
+    ] {
+        assert_eq!(
+            run.wu0d_decoded_class_terminals_for_test().unwrap(),
+            vec![(crate::types::repr::ClassId(0), expected)],
+        );
+    }
+
+    let lexical = frozen_product_run(0, "order.ts", "class First {} class Second {}\n");
+    assert_eq!(
+        lexical.wu0d_decoded_class_terminals_for_test().unwrap(),
+        vec![
+            (
+                crate::types::repr::ClassId(0),
+                Wu0dDecodedClassTerminal::Ready,
+            ),
+            (
+                crate::types::repr::ClassId(1),
+                Wu0dDecodedClassTerminal::Ready,
+            ),
+        ],
+        "class terminals must decode in stable ClassId order",
+    );
+}
+
 fn without_whitespace(source: &str) -> String {
     source.chars().filter(|ch| !ch.is_whitespace()).collect()
 }
@@ -901,6 +1487,16 @@ fn source_window<'a>(source: &'a str, needle: &str, length: usize) -> &'a str {
     &source[start..source.len().min(start + length)]
 }
 
+fn source_top_level_function<'a>(source: &'a str, signature: &str) -> &'a str {
+    let start = source.find(signature).expect("top-level function start");
+    let remainder = &source[start..];
+    let end = remainder
+        .find("\n}\n")
+        .map(|offset| offset + 3)
+        .expect("top-level function end");
+    &remainder[..end]
+}
+
 fn assert_exact_ignored_probe(source: &str, probe: &str, workload_runner: &str) {
     let signature = format!("fn {probe}()");
     assert_eq!(source.matches(&signature).count(), 1);
@@ -909,7 +1505,12 @@ fn assert_exact_ignored_probe(source: &str, probe: &str, workload_runner: &str) 
     assert!(attributes.contains("#[test]"));
     assert!(attributes.contains("#[ignore"));
 
-    let probe = source_window(source, &signature, 700);
+    let remainder = &source[start..];
+    let end = remainder
+        .find("\n}\n")
+        .map(|offset| offset + 3)
+        .expect("exact ignored probe body");
+    let probe = &remainder[..end];
     assert!(probe.contains(&format!("{workload_runner}(")));
     for other in [
         "run_candidate_primary_workload(",
@@ -922,6 +1523,235 @@ fn assert_exact_ignored_probe(source: &str, probe: &str, workload_runner: &str) 
     }
     assert!(probe.contains("resolve_candidate_environment"));
     assert!(probe.contains(".render()"));
+}
+
+#[test]
+fn frozen_projection_is_post_semantic_and_encodes_every_observable_owner_and_terminal() {
+    let wu0b = include_str!("wu0b_library.rs");
+    let run = source_section(
+        wu0b,
+        "pub(crate) fn run_injected_profile(",
+        "fn validate_parser_export_claims(",
+    );
+    let finish = run
+        .find("finish_semantic_effects(&mut pass)")
+        .expect("semantic effects must finish");
+    let projection = run
+        .find("canonical_frozen_library_product(")
+        .expect("frozen product projection call");
+    let return_product = run
+        .find("wu0d_semantic_components")
+        .expect("semantic components return");
+    assert!(
+        finish < projection && projection < return_product,
+        "the projection must observe finished semantics while Pass/interner are still alive",
+    );
+    let projection_call = &run[projection..run.len().min(projection + 2_000)];
+    assert!(projection_call.contains("pass.interner.store()"));
+    assert!(projection_call.contains("pass.type_environment.published()"));
+    if let Some(drop_pass) = run.find("drop(pass)") {
+        assert!(projection < drop_pass);
+    }
+    for collector in [
+        "collect_type_probes(",
+        "collect_value_probes(",
+        "collect_module_value_probes(",
+    ] {
+        let collected = run
+            .find(collector)
+            .unwrap_or_else(|| panic!("missing post-semantic {collector}"));
+        assert!(
+            finish < collected && collected < projection,
+            "{collector} must observe the finished Pass",
+        );
+    }
+
+    let projection_body = source_section(
+        wu0b,
+        "fn canonical_frozen_library_product(",
+        "fn canonical_input_for_record(",
+    );
+    let compact = without_whitespace(projection_body);
+    for received in [
+        "source_records:",
+        "type_publications:",
+        "global_values:",
+        "module_values:",
+        "namespace_values:",
+        "classes:",
+        "store:",
+    ] {
+        assert!(
+            compact.contains(received),
+            "frozen projection does not explicitly receive {received}",
+        );
+    }
+    for encoded in [
+        "file_ordinal",
+        "source_sha256",
+        "source_bytes",
+        "declaration_count",
+        "participant_identities",
+        "callable_members",
+        "group_id",
+        "TypeGroupUnavailableCause::UnsupportedComposition",
+        "classes.canonical_terminals()",
+        "CanonicalPublishedClassTerminal::Ready",
+        "CanonicalPublishedClassTerminal::HeritagePoison",
+        "CanonicalPublishedClassTerminal::InitializerPoison",
+        "CanonicalPublishedClassTerminal::SurfacePoison",
+        "class.0",
+    ] {
+        assert!(
+            projection_body.contains(encoded),
+            "frozen projection does not encode {encoded}",
+        );
+    }
+    assert!(
+        projection_body.contains("PublishedTypeGroupTerminal::Unavailable(unavailable)"),
+        "unavailable group identity and cause must not collapse to one tag",
+    );
+
+    for section in [
+        "SourceRecords",
+        "TypeStore",
+        "TypePublications",
+        "GlobalValues",
+        "ModuleValues",
+        "NamespaceValues",
+        "Classes",
+    ] {
+        assert!(
+            projection_body.contains(&format!("Wu0dFrozenProductSection::{section}")),
+            "missing named frozen-product section {section}",
+        );
+    }
+    let frame = source_window(wu0b, "fn push_frozen_product_section(", 1_500);
+    assert!(frame.contains("section.tag()"));
+    assert!(frame.contains("u64::try_from"));
+    assert!(frame.contains("payload.len()"));
+    assert!(frame.contains("to_be_bytes()"));
+    assert!(projection_body.contains("Wu0dFrozenLibraryProduct"));
+    assert!(projection_body.contains("Wu0dFrozenProductSectionDescriptor"));
+    assert!(projection_body.contains("Range<usize>"));
+
+    let accessor = source_window(wu0b, "fn wu0d_frozen_product_section_for_test(", 1_500);
+    assert!(accessor.contains("frozen_library_product"));
+    assert!(accessor.contains("parse_frozen_product_section_range"));
+    let compact_accessor = without_whitespace(accessor);
+    assert!(compact_accessor.contains("parse_frozen_product_section_range(product,section)"));
+    assert!(compact_accessor.contains("&product[range]"));
+    assert!(!accessor.contains("to_vec()"));
+    assert!(!accessor.contains("CanonicalBytes::new"));
+
+    let range_parser = source_window(wu0b, "fn parse_frozen_product_section_range(", 2_500);
+    assert!(range_parser.contains("requested.tag()"));
+    assert!(range_parser.contains("u64::from_be_bytes"));
+    assert!(range_parser.contains("Wu0dFrozenProductSection::ALL"));
+
+    let class_accessor = source_window(wu0b, "fn wu0d_decoded_class_terminals_for_test(", 1_500);
+    let compact_class_accessor = without_whitespace(class_accessor);
+    assert!(compact_class_accessor.contains(
+        "letsection=self.wu0d_frozen_product_section_for_test(Wu0dFrozenProductSection::Classes)"
+    ));
+    assert!(compact_class_accessor.contains("decode_wu0d_class_terminals_for_test(section)"));
+
+    let class_decoder = source_top_level_function(wu0b, "fn decode_wu0d_class_terminals_for_test(");
+    assert!(without_whitespace(class_decoder)
+        .contains("fndecode_wu0d_class_terminals_for_test(section:&[u8])"));
+    assert!(class_decoder.contains("u32::from_be_bytes"));
+    assert!(class_decoder.contains("u64::from_be_bytes"));
+    for terminal in [
+        "Wu0dDecodedClassTerminal::Ready",
+        "Wu0dDecodedClassTerminal::HeritagePoison",
+        "Wu0dDecodedClassTerminal::InitializerPoison",
+        "Wu0dDecodedClassTerminal::SurfacePoison",
+    ] {
+        assert!(class_decoder.contains(terminal));
+    }
+    for forbidden in [
+        "canonical_terminals",
+        "CanonicalPublishedClassTerminal",
+        "PublishedClasses",
+        "CanonicalBytes::new",
+        "push_frozen_product_section",
+    ] {
+        assert!(
+            !class_decoder.contains(forbidden),
+            "class decoder must not consult side data or an alternate encoder: {forbidden}",
+        );
+    }
+}
+
+#[test]
+fn evidence_validator_source_shape_is_bounded_strict_and_has_one_real_entry_point() {
+    let implementation = include_str!("wu0d_candidate_release.rs");
+    for required in [
+        "MAX_RELEASE_EVIDENCE_BYTES",
+        "MAX_RELEASE_STDOUT_BYTES",
+        "fn parse_candidate_release_evidence(",
+        "fn validate_candidate_b_release_evidence_file(",
+        "fn render_candidate_release_validation(",
+        "symlink_metadata",
+        "is_absolute",
+        "is_file",
+        "evaluate_candidate_b_release(",
+    ] {
+        assert!(
+            implementation.contains(required),
+            "release evidence seam misses {required}",
+        );
+    }
+    assert_eq!(
+        implementation
+            .matches("fn validate_candidate_b_release_evidence_file(")
+            .count(),
+        1,
+    );
+    let implementation_validator = source_window(
+        implementation,
+        "fn validate_candidate_b_release_evidence_file(",
+        5_000,
+    );
+    let metadata_gate = implementation_validator
+        .find("symlink_metadata")
+        .and_then(|metadata| {
+            implementation_validator[metadata..]
+                .find("metadata.len()")
+                .map(|length| metadata + length)
+        })
+        .and_then(|length| {
+            [
+                "std::fs::read(",
+                "fs::read(",
+                "std::fs::File::open(",
+                "File::open(",
+            ]
+            .into_iter()
+            .filter_map(|needle| implementation_validator.find(needle))
+            .min()
+            .map(|read| (length, read))
+        })
+        .is_some_and(|(length, read)| {
+            length < read
+                && implementation_validator[length..read].contains("MAX_RELEASE_EVIDENCE_BYTES")
+        });
+    let bounded_reader = implementation_validator.contains(".take(")
+        && implementation_validator.contains("MAX_RELEASE_EVIDENCE_BYTES")
+        && implementation_validator.contains("read_to_end");
+    assert!(
+        metadata_gate || bounded_reader,
+        "evidence bytes must be bounded before or during the first file read",
+    );
+    let validator = source_window(
+        include_str!("wu0d_candidate_release_spec.rs"),
+        "fn wu0d_candidate_release_validate_evidence_file()",
+        1_200,
+    );
+    assert!(validator.contains("TYPOKAT_WU0D_RELEASE_EVIDENCE_PATH"));
+    assert!(validator.contains("validate_candidate_b_release_evidence_file"));
+    assert!(validator.contains("render_candidate_release_validation"));
+    assert!(validator.contains("authorizes_candidate_b"));
 }
 
 #[test]
@@ -961,10 +1791,7 @@ fn candidate_is_cfg_test_only_and_three_exact_ignored_probes_own_fixed_workloads
     assert!(!implementation.contains("fn wu0d_candidate_release_probe_once()"));
 
     for (runner, embedded_profile) in [
-        (
-            "fn run_candidate_primary_workload(",
-            "PRIMARY_WORKLOAD_SOURCES",
-        ),
+        ("fn run_candidate_primary_workload(", "load_strict_profile"),
         (
             "fn run_candidate_non_cycle_workload(",
             "NON_CYCLE_WORKLOAD_SOURCES",
