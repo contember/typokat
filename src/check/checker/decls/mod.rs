@@ -428,16 +428,40 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         start: usize,
         end: usize,
     ) {
+        self.fill_type_group_parameter_metadata_range(start, end);
+        self.construct_pending_interface_sccs_range(start, end);
+        self.fill_conditional_aliases_range(start, end);
+        self.fill_mapped_aliases_range(start, end);
+        self.fill_object_aliases_range(scope, start, end);
+        self.fill_remaining_aliases_range(scope, start, end);
+    }
+
+    pub(in crate::check::checker) fn fill_type_group_parameter_metadata_range(
+        &mut self,
+        start: usize,
+        end: usize,
+    ) {
         // Template lowering keeps conditionals lazy until value-position demand.
         self.building_template = true;
-
         for index in start..end {
             self.lower_type_group_parameter_metadata(index);
         }
+    }
 
+    pub(in crate::check::checker) fn construct_pending_interface_sccs_range(
+        &mut self,
+        start: usize,
+        end: usize,
+    ) {
         // Freeze interface dependency components before aliases can observe them.
         self.construct_pending_interface_sccs(start, end);
+    }
 
+    pub(in crate::check::checker) fn fill_conditional_aliases_range(
+        &mut self,
+        start: usize,
+        end: usize,
+    ) {
         // Fill conditional-alias placeholders before ordinary aliases can instantiate them.
         for index in start..end {
             let (scope, placeholder, params, param_decl, annotation, name, name_span) =
@@ -497,7 +521,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             self.freeze_type_group(decl_id);
         }
+    }
 
+    pub(in crate::check::checker) fn fill_mapped_aliases_range(
+        &mut self,
+        start: usize,
+        end: usize,
+    ) {
         // Fill mapped-alias placeholders before ordinary aliases can instantiate them.
         for index in start..end {
             let (scope, placeholder, params, param_decl, annotation, name, name_span) =
@@ -565,12 +595,26 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             self.freeze_type_group(decl_id);
         }
+    }
 
+    pub(in crate::check::checker) fn fill_object_aliases_range(
+        &mut self,
+        scope: ScopeId,
+        start: usize,
+        end: usize,
+    ) {
         // Fill seeded object aliases so legal member recursion resolves to the reserved id.
         for index in start..end {
             self.ensure_object_alias_filled(scope, index);
         }
+    }
 
+    pub(in crate::check::checker) fn fill_remaining_aliases_range(
+        &mut self,
+        scope: ScopeId,
+        start: usize,
+        end: usize,
+    ) {
         // Touch remaining aliases to resolve the whole memoized DAG.
         for index in start..end {
             if matches!(self.type_decls[index], TypeDecl::Alias { .. }) {
@@ -583,6 +627,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         // Value-position annotations may evaluate conditionals after fill.
         self.building_template = false;
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn fill_type_decls_range_observed_for_wu0e(
+        &self,
+        scope: ScopeId,
+        start: usize,
+        end: usize,
+    ) -> (ScopeId, usize, usize) {
+        (scope, start, end)
     }
 
     pub(in crate::check::checker) fn fill_pending_interfaces_range(

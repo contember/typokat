@@ -16,6 +16,7 @@ use super::type_groups::{
     InterfaceAlternativeKind, PublishedTypeEnvironment, PublishedTypeGroupSurface,
     PublishedTypeGroupTerminal, PublishedTypeParameterDefault, TypeGroupUnavailableCause,
 };
+use super::wu0e_diagnostic::{DiagnosticBoundaryAdapter, DiagnosticPhase};
 use super::{
     build_pass_with_tickets, finish_semantic_effects, reserve_type_decls, PassReporting,
     PassReportingPlan,
@@ -1184,7 +1185,16 @@ fn canonical_wu0d_semantic_components(
 pub(crate) fn run_injected_profile(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<InjectedProfileRun, InjectedProfileError> {
+    let mut boundary = DiagnosticBoundaryAdapter::disabled();
+    run_injected_profile_observed(sources, &mut boundary).map(|(run, _)| run)
+}
+
+pub(super) fn run_injected_profile_observed(
+    sources: &[InjectedLibrarySource<'_>],
+    boundary: &mut DiagnosticBoundaryAdapter,
+) -> Result<(InjectedProfileRun, String), InjectedProfileError> {
     let parse_started = Instant::now();
+    boundary.enter_phase(DiagnosticPhase::Parse, None)?;
     let canonical = canonical_inputs(sources)?;
     let allocators = (0..canonical.len())
         .map(|_| Allocator::default())
@@ -1259,9 +1269,11 @@ pub(crate) fn run_injected_profile(
         .collect::<Result<Vec<_>, _>>()?;
     let (parsed, claims): (Vec<_>, Vec<_>) = parsed_and_claims.into_iter().unzip();
     let parser_export_claims = claims.into_iter().flatten().collect::<Vec<_>>();
+    boundary.exit_phase(DiagnosticPhase::Parse, None)?;
     let parse_elapsed = parse_started.elapsed();
 
     let bind_started = Instant::now();
+    boundary.enter_phase(DiagnosticPhase::Bind, None)?;
     let units = parsed
         .iter()
         .zip(&canonical)
@@ -1293,10 +1305,12 @@ pub(crate) fn run_injected_profile(
             }
         })
         .collect::<Vec<_>>();
+    boundary.exit_phase(DiagnosticPhase::Bind, None)?;
     let bind_elapsed = bind_started.elapsed();
 
     super::wu0c_attribution::register_wu0c_family_tokens(&binder);
     let reserve_fill_started = Instant::now();
+    boundary.enter_phase(DiagnosticPhase::LexicalReservation, None)?;
     let mut ledger = LibraryEventLedger::default();
     let mut lexical_events: LexicalReservations<LibraryRecordTicket> =
         LexicalReservations::default();
@@ -1305,7 +1319,9 @@ pub(crate) fn run_injected_profile(
             .reserve_library_program(input.file_ordinal, &parsed.program, &mut ledger)
             .map_err(InjectedProfileError::Reporting)?;
     }
+    boundary.exit_phase(DiagnosticPhase::LexicalReservation, None)?;
 
+    boundary.enter_phase(DiagnosticPhase::TypeReservation, None)?;
     let mut interner = Interner::with_intrinsics();
     let mut next_type_param = 0;
     let mut next_class_id = 0;
@@ -1343,7 +1359,9 @@ pub(crate) fn run_injected_profile(
     lexical_events
         .reserve_callable_type_params(&mut next_type_param)
         .map_err(|error| InjectedProfileError::Reservation(format!("{error:?}")))?;
+    boundary.exit_phase(DiagnosticPhase::TypeReservation, None)?;
 
+    boundary.enter_phase(DiagnosticPhase::PassConstruction, None)?;
     let pending_tickets = lexical_events.library_semantic_tickets();
     let mut pass = build_pass_with_tickets(
         &mut interner,
@@ -1361,9 +1379,29 @@ pub(crate) fn run_injected_profile(
             pending_tickets,
         },
     );
+    boundary.exit_phase(DiagnosticPhase::PassConstruction, None)?;
 
     let declaration_count = pass.type_decls.len();
-    pass.fill_type_decls_range(binder.module, 0, declaration_count);
+    let (fill_scope, fill_start, fill_end) =
+        pass.fill_type_decls_range_observed_for_wu0e(binder.module, 0, declaration_count);
+    boundary.enter_phase(DiagnosticPhase::FillParameterMetadata, None)?;
+    pass.fill_type_group_parameter_metadata_range(fill_start, fill_end);
+    boundary.exit_phase(DiagnosticPhase::FillParameterMetadata, None)?;
+    boundary.enter_phase(DiagnosticPhase::FillInterfaceScc, None)?;
+    pass.construct_pending_interface_sccs_range(fill_start, fill_end);
+    boundary.exit_phase(DiagnosticPhase::FillInterfaceScc, None)?;
+    boundary.enter_phase(DiagnosticPhase::FillConditional, None)?;
+    pass.fill_conditional_aliases_range(fill_start, fill_end);
+    boundary.exit_phase(DiagnosticPhase::FillConditional, None)?;
+    boundary.enter_phase(DiagnosticPhase::FillMapped, None)?;
+    pass.fill_mapped_aliases_range(fill_start, fill_end);
+    boundary.exit_phase(DiagnosticPhase::FillMapped, None)?;
+    boundary.enter_phase(DiagnosticPhase::FillObject, None)?;
+    pass.fill_object_aliases_range(fill_scope, fill_start, fill_end);
+    boundary.exit_phase(DiagnosticPhase::FillObject, None)?;
+    boundary.enter_phase(DiagnosticPhase::FillRemaining, None)?;
+    pass.fill_remaining_aliases_range(fill_scope, fill_start, fill_end);
+    boundary.exit_phase(DiagnosticPhase::FillRemaining, None)?;
     let reserve_fill_elapsed = reserve_fill_started.elapsed();
 
     super::wu0c_attribution::enter_wu0c_phase(
@@ -1376,20 +1414,38 @@ pub(crate) fn run_injected_profile(
         .zip(parsed.iter())
         .map(|(scope, parsed)| (scope, parsed.program.body.as_slice()))
         .collect::<Vec<_>>();
+    boundary.enter_phase(DiagnosticPhase::PrepareAttachedNamespaceValues, None)?;
     pass.prepare_project_attached_namespace_values(&module_programs);
+    boundary.exit_phase(DiagnosticPhase::PrepareAttachedNamespaceValues, None)?;
+    boundary.enter_phase(DiagnosticPhase::PrepareStandaloneNamespaceValues, None)?;
     pass.prepare_project_standalone_namespace_values(&module_programs);
+    boundary.exit_phase(DiagnosticPhase::PrepareStandaloneNamespaceValues, None)?;
+    boundary.enter_phase(DiagnosticPhase::PublishClassSurfaces, None)?;
     pass.publish_class_surfaces();
+    boundary.exit_phase(DiagnosticPhase::PublishClassSurfaces, None)?;
+    boundary.enter_phase(DiagnosticPhase::FinalizeStandaloneNamespaceValues, None)?;
     pass.finalize_standalone_namespace_values();
+    boundary.exit_phase(DiagnosticPhase::FinalizeStandaloneNamespaceValues, None)?;
+    boundary.enter_phase(DiagnosticPhase::PrecomputeStandaloneNamespaceAliases, None)?;
     pass.precompute_standalone_namespace_value_aliases(&module_programs);
+    boundary.exit_phase(DiagnosticPhase::PrecomputeStandaloneNamespaceAliases, None)?;
+    boundary.enter_phase(DiagnosticPhase::FillPendingInterfaces, None)?;
     pass.fill_pending_interfaces_range(binder.module, 0, declaration_count);
+    boundary.exit_phase(DiagnosticPhase::FillPendingInterfaces, None)?;
+    boundary.enter_phase(DiagnosticPhase::PublishTypeGroups, None)?;
     let publication_validations = pass.publish_type_groups();
+    boundary.exit_phase(DiagnosticPhase::PublishTypeGroups, None)?;
+    boundary.enter_phase(DiagnosticPhase::ValidatePublishedClassSurfaces, None)?;
     pass.validate_published_class_surfaces();
+    boundary.exit_phase(DiagnosticPhase::ValidatePublishedClassSurfaces, None)?;
+    boundary.enter_phase(DiagnosticPhase::CaptureLexicalEvidence, None)?;
     let lexical_source_units = pass
         .lexical_events
         .library_lexical_evidence()
         .iter()
         .copied()
         .collect::<Vec<_>>();
+    boundary.exit_phase(DiagnosticPhase::CaptureLexicalEvidence, None)?;
     let publication_validation_elapsed = publication_validation_started.elapsed();
 
     super::wu0c_attribution::enter_wu0c_phase(
@@ -1403,13 +1459,23 @@ pub(crate) fn run_injected_profile(
         .zip(module_scopes.iter().copied())
         .zip(semantic_scopes.iter().copied())
     {
+        let statement_ordinal = u32::try_from(input.file_ordinal.index()).map_err(|_| {
+            InjectedProfileError::CanonicalProjection(
+                "statement file ordinal does not fit u32".to_owned(),
+            )
+        })?;
+        boundary.enter_phase(DiagnosticPhase::StatementFile, Some(statement_ordinal))?;
         pass.current_module = module;
         pass.current_source = library_unit(input.file_ordinal);
         pass_source_units.push(pass.current_source);
         pass.build_flow_graph(semantic_scope, &parsed.program.body);
         pass.check_statements(semantic_scope, &parsed.program.body);
+        boundary.exit_phase(DiagnosticPhase::StatementFile, Some(statement_ordinal))?;
     }
+    boundary.enter_phase(DiagnosticPhase::SemanticFinalization, None)?;
     let batches = finish_semantic_effects(&mut pass);
+    boundary.exit_phase(DiagnosticPhase::SemanticFinalization, None)?;
+    boundary.enter_phase(DiagnosticPhase::CollectTypeProbes, None)?;
     let (global_types, module_types) = collect_type_probes(
         &binder,
         pass.type_environment.published(),
@@ -1417,12 +1483,16 @@ pub(crate) fn run_injected_profile(
         &canonical,
         &module_scopes,
     );
+    boundary.exit_phase(DiagnosticPhase::CollectTypeProbes, None)?;
+    boundary.enter_phase(DiagnosticPhase::CollectGlobalValueProbes, None)?;
     let global_values = collect_value_probes(
         &binder,
         &pass.decl_types,
         pass.interner.store(),
         &pass.namespace_values,
     );
+    boundary.exit_phase(DiagnosticPhase::CollectGlobalValueProbes, None)?;
+    boundary.enter_phase(DiagnosticPhase::CollectModuleValueProbes, None)?;
     let module_values = collect_module_value_probes(
         &binder,
         &pass.decl_types,
@@ -1431,12 +1501,16 @@ pub(crate) fn run_injected_profile(
         &canonical,
         &module_scopes,
     );
+    boundary.exit_phase(DiagnosticPhase::CollectModuleValueProbes, None)?;
+    boundary.enter_phase(DiagnosticPhase::CollectNamespaceValueProbes, None)?;
     let namespace_values = collect_namespace_value_probes(
         &binder,
         &pass.decl_types,
         pass.interner.store(),
         &pass.namespace_values,
     );
+    boundary.exit_phase(DiagnosticPhase::CollectNamespaceValueProbes, None)?;
+    boundary.enter_phase(DiagnosticPhase::FreezeLibraryProduct, None)?;
     let frozen_library_product = canonical_frozen_library_product(Wu0dFrozenLibraryProductInput {
         source_records: &canonical,
         type_publications: pass.type_environment.published(),
@@ -1448,47 +1522,63 @@ pub(crate) fn run_injected_profile(
         classes: pass.type_environment.published().classes(),
         store: pass.interner.store(),
     })?;
+    boundary.exit_phase(DiagnosticPhase::FreezeLibraryProduct, None)?;
+    boundary.enter_phase(DiagnosticPhase::CompleteSemanticBatches, None)?;
     LibrarySemanticReportingAdapter::new(&mut ledger)
         .complete_semantic_batches(batches)
         .map_err(InjectedProfileError::Reporting)?;
+    boundary.exit_phase(DiagnosticPhase::CompleteSemanticBatches, None)?;
+    boundary.enter_phase(DiagnosticPhase::ConsumeBinderOutcomes, None)?;
     let reporting_receipts = LibraryReportingConsumer::new(&mut ledger)
         .consume_binder_outcomes(&binder)
         .map_err(InjectedProfileError::Reporting)?;
+    boundary.exit_phase(DiagnosticPhase::ConsumeBinderOutcomes, None)?;
+    boundary.enter_phase(DiagnosticPhase::FinishLedger, None)?;
     let snapshot = ledger.snapshot();
     let library_records = ledger.finish().map_err(InjectedProfileError::Reporting)?;
+    boundary.exit_phase(DiagnosticPhase::FinishLedger, None)?;
+    boundary.enter_phase(DiagnosticPhase::BuildSemanticComponents, None)?;
     let wu0d_semantic_components = canonical_wu0d_semantic_components(
         &canonical,
         &library_records,
         frozen_library_product.bytes,
     )?;
+    boundary.exit_phase(DiagnosticPhase::BuildSemanticComponents, None)?;
+    boundary.enter_phase(DiagnosticPhase::SemanticDigest, None)?;
+    let semantic_sha256 =
+        canonical_wu0d_semantic_identity(&wu0d_semantic_components).aggregate_sha256;
+    boundary.exit_phase(DiagnosticPhase::SemanticDigest, None)?;
     let statement_check_elapsed = statement_check_started.elapsed();
 
-    Ok(InjectedProfileRun {
-        phase_counts: LibraryPhaseCounts {
-            parse_units: parsed.len(),
-            bind_units: module_scopes.len(),
-            reserved_records: snapshot.reserved_records,
-            filled_records: snapshot.filled_records,
-            publication_validations,
-            statement_check_units: pass_source_units.len(),
+    Ok((
+        InjectedProfileRun {
+            phase_counts: LibraryPhaseCounts {
+                parse_units: parsed.len(),
+                bind_units: module_scopes.len(),
+                reserved_records: snapshot.reserved_records,
+                filled_records: snapshot.filled_records,
+                publication_validations,
+                statement_check_units: pass_source_units.len(),
+            },
+            phase_timings: LibraryPhaseTimings {
+                parse: parse_elapsed,
+                bind: bind_elapsed,
+                reserve_fill: reserve_fill_elapsed,
+                publication_validation: publication_validation_elapsed,
+                statement_check: statement_check_elapsed,
+            },
+            reserved_file_ordinals: snapshot.reserved_file_ordinals,
+            reporting_receipts,
+            library_records,
+            pass_source_units,
+            lexical_source_units,
+            wu0d_semantic_components,
+            global_types,
+            module_types,
+            global_values,
         },
-        phase_timings: LibraryPhaseTimings {
-            parse: parse_elapsed,
-            bind: bind_elapsed,
-            reserve_fill: reserve_fill_elapsed,
-            publication_validation: publication_validation_elapsed,
-            statement_check: statement_check_elapsed,
-        },
-        reserved_file_ordinals: snapshot.reserved_file_ordinals,
-        reporting_receipts,
-        library_records,
-        pass_source_units,
-        lexical_source_units,
-        wu0d_semantic_components,
-        global_types,
-        module_types,
-        global_values,
-    })
+        semantic_sha256,
+    ))
 }
 
 fn validate_parser_export_claims(
