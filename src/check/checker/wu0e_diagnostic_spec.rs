@@ -1893,12 +1893,12 @@ fn exact_ignored_workload_and_validator_probes_are_closed_and_self_identifying()
             .count(),
         1
     );
-    let [profile_exit] = adapter_call_positions(
+    let profile_exit_positions = adapter_call_positions(
         primary,
         "boundary.exit_phase(",
         DiagnosticPhase::ProfileLoad,
-    )
-    .as_slice() else {
+    );
+    let [profile_exit] = profile_exit_positions.as_slice() else {
         panic!("exact shared-adapter profile-load exit")
     };
     let eager_scope = primary
