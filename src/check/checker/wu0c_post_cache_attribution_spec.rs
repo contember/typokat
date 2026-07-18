@@ -493,6 +493,194 @@ fn validate_deadline(lines: &[String]) -> Result<ValidatedSessionEvidence, Strin
     .map_err(|error| error.to_string())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReleaseEvidenceValidationSummary {
+    process: usize,
+    session_sha256: String,
+    binary_sha256: String,
+    host_sha256: String,
+    workload_profile_sha256: String,
+    termination: Termination,
+    checkpoint_elapsed_us: u64,
+    family_sha256: String,
+    reserve_fill_us: u64,
+    family_exclusive_us: u64,
+    visits: u64,
+    family_visits: u64,
+    family_cycle_tainted: bool,
+    exact_repeats: u64,
+    exact_visits: u64,
+    replay_repeated_visits: u64,
+    replay_removable_repeated_visits: u64,
+}
+
+impl ReleaseEvidenceValidationSummary {
+    fn render(&self) -> String {
+        let termination = match self.termination {
+            Termination::Normal => "normal".to_owned(),
+            Termination::Deadline { elapsed_us } => format!("deadline:{elapsed_us}"),
+        };
+        format!(
+            "typokat-wu0c-validation-v1 process={} session_sha256={} binary_sha256={} host_sha256={} workload_profile_sha256={} termination={termination} checkpoint_elapsed_us={} family_sha256={} reserve_fill_us={} family_exclusive_us={} visits={} family_visits={} family_cycle_tainted={} exact_repeats={} exact_visits={} replay_repeated_visits={} replay_removable_repeated_visits={}",
+            self.process,
+            self.session_sha256,
+            self.binary_sha256,
+            self.host_sha256,
+            self.workload_profile_sha256,
+            self.checkpoint_elapsed_us,
+            self.family_sha256,
+            self.reserve_fill_us,
+            self.family_exclusive_us,
+            self.visits,
+            self.family_visits,
+            u8::from(self.family_cycle_tainted),
+            self.exact_repeats,
+            self.exact_visits,
+            self.replay_repeated_visits,
+            self.replay_removable_repeated_visits,
+        )
+    }
+}
+
+fn validate_release_evidence_bytes(
+    bytes: &[u8],
+    termination: Termination,
+) -> Result<ReleaseEvidenceValidationSummary, String> {
+    if bytes.is_empty() {
+        return Err("WU0C evidence file is empty".to_owned());
+    }
+    if bytes.last() != Some(&b'\n') {
+        return Err("WU0C evidence file is not LF-terminated".to_owned());
+    }
+    if bytes.contains(&b'\r') {
+        return Err("WU0C evidence file contains CR bytes".to_owned());
+    }
+    let text = std::str::from_utf8(bytes)
+        .map_err(|error| format!("WU0C evidence file is not strict UTF-8: {error}"))?;
+    let body = text
+        .strip_suffix('\n')
+        .expect("LF termination was checked above");
+    let lines = body.split('\n').map(str::to_owned).collect::<Vec<_>>();
+    if lines.is_empty() || lines.iter().any(String::is_empty) {
+        return Err("WU0C evidence file contains an empty line".to_owned());
+    }
+
+    let validated = validate_session_evidence(&lines, termination)?;
+    let replay = replay_exact_trace(validated.replay_input())?;
+    let sample = validated.sample();
+    Ok(ReleaseEvidenceValidationSummary {
+        process: validated.process(),
+        session_sha256: validated.session_identity_sha256().to_owned(),
+        binary_sha256: validated.binary_identity_sha256().to_owned(),
+        host_sha256: validated.host_identity_sha256().to_owned(),
+        workload_profile_sha256: validated.workload_profile_identity_sha256().to_owned(),
+        termination: validated.termination(),
+        checkpoint_elapsed_us: validated.checkpoint_elapsed_us(),
+        family_sha256: sample.family_sha256.clone(),
+        reserve_fill_us: sample.reserve_fill_us,
+        family_exclusive_us: sample.family_exclusive_us,
+        visits: sample.visits,
+        family_visits: sample.family_visits,
+        family_cycle_tainted: sample.family_cycle_tainted,
+        exact_repeats: sample.exact_repeats,
+        exact_visits: sample.exact_visits,
+        replay_repeated_visits: replay.repeated_visits,
+        replay_removable_repeated_visits: replay.removable_repeated_visits,
+    })
+}
+
+fn parse_release_evidence_termination(value: &str) -> Result<Termination, String> {
+    match value {
+        "normal" => Ok(Termination::Normal),
+        "deadline:5000000" => Ok(Termination::Deadline {
+            elapsed_us: 5_000_000,
+        }),
+        _ => Err(
+            "TYPOKAT_WU0C_EVIDENCE_TERMINATION must be exactly normal or deadline:5000000"
+                .to_owned(),
+        ),
+    }
+}
+
+fn validate_release_evidence_path(value: &str) -> Result<&std::path::Path, String> {
+    let path = std::path::Path::new(value);
+    if !path.is_absolute() {
+        return Err("TYPOKAT_WU0C_EVIDENCE_PATH must be absolute".to_owned());
+    }
+    Ok(path)
+}
+
+#[test]
+fn release_evidence_file_validator_pins_bytes_replay_and_summary() {
+    let mut bytes = exact_session_lines(3, false).join("\n").into_bytes();
+    bytes.push(b'\n');
+    let summary = validate_release_evidence_bytes(
+        &bytes,
+        Termination::Deadline {
+            elapsed_us: 5_000_000,
+        },
+    )
+    .expect("synthetic deadline evidence is valid");
+    assert_eq!(
+        summary.render(),
+        format!(
+            "typokat-wu0c-validation-v1 process=3 session_sha256={} binary_sha256={BINARY_IDENTITY} host_sha256={HOST_IDENTITY} workload_profile_sha256={WORKLOAD_PROFILE_IDENTITY} termination=deadline:5000000 checkpoint_elapsed_us=4800000 family_sha256={FAMILY} reserve_fill_us=4000000 family_exclusive_us=2600000 visits=4096 family_visits=4096 family_cycle_tainted=1 exact_repeats=4095 exact_visits=4096 replay_repeated_visits=4095 replay_removable_repeated_visits=4095",
+            exact_session_identity(3),
+        )
+    );
+
+    assert!(validate_release_evidence_bytes(&[], Termination::Normal).is_err());
+    let mut truncated = bytes.clone();
+    truncated.pop();
+    assert!(validate_release_evidence_bytes(&truncated, Termination::Normal).is_err());
+    assert!(validate_release_evidence_bytes(&[0xff, b'\n'], Termination::Normal).is_err());
+    let mut with_cr = bytes.clone();
+    with_cr.insert(1, b'\r');
+    assert!(validate_release_evidence_bytes(&with_cr, Termination::Normal).is_err());
+    let mut with_empty_line = bytes.clone();
+    with_empty_line.extend_from_slice(b"\n");
+    assert!(validate_release_evidence_bytes(&with_empty_line, Termination::Normal).is_err());
+
+    assert_eq!(
+        parse_release_evidence_termination("normal"),
+        Ok(Termination::Normal)
+    );
+    assert_eq!(
+        parse_release_evidence_termination("deadline:5000000"),
+        Ok(Termination::Deadline {
+            elapsed_us: 5_000_000,
+        })
+    );
+    for invalid in ["", "deadline", "deadline:5", "deadline:5000001", "Normal"] {
+        assert!(parse_release_evidence_termination(invalid).is_err());
+    }
+
+    for relative in ["", ".", "exact.log", "evidence/exact.log"] {
+        assert!(validate_release_evidence_path(relative).is_err());
+    }
+    assert_eq!(
+        validate_release_evidence_path("/tmp/typokat-wu0c/exact.log"),
+        Ok(std::path::Path::new("/tmp/typokat-wu0c/exact.log"))
+    );
+}
+
+#[test]
+#[ignore = "release-only WU0C Exact evidence-file validation"]
+fn wu0c_validate_release_evidence_file() {
+    let path_value = std::env::var("TYPOKAT_WU0C_EVIDENCE_PATH")
+        .expect("TYPOKAT_WU0C_EVIDENCE_PATH must name one Exact progress file");
+    let path = validate_release_evidence_path(&path_value)
+        .expect("TYPOKAT_WU0C_EVIDENCE_PATH must be absolute");
+    let termination = std::env::var("TYPOKAT_WU0C_EVIDENCE_TERMINATION")
+        .map_err(|_| "TYPOKAT_WU0C_EVIDENCE_TERMINATION is required".to_owned())
+        .and_then(|value| parse_release_evidence_termination(&value))
+        .expect("valid explicit WU0C evidence termination");
+    let bytes = std::fs::read(path).expect("read WU0C Exact evidence file");
+    let summary = validate_release_evidence_bytes(&bytes, termination)
+        .expect("validate WU0C Exact evidence file and replay");
+    println!("{}", summary.render());
+}
+
 fn resequence(lines: &mut [String]) {
     for (sequence, line) in lines.iter_mut().enumerate() {
         let marker = " seq=";
