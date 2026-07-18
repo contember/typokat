@@ -101,6 +101,8 @@ use super::wu0b_library::{
     InjectedLibrarySource, InjectedProfileRun, Wu0dDecodedClassTerminal, Wu0dFrozenProductSection,
     Wu0dSemanticComponents, Wu0dSemanticIdentity,
 };
+#[cfg(windows)]
+use super::wu0d_candidate_release::resolve_candidate_environment_os_for_test;
 use super::wu0d_candidate_release::{
     evaluate_candidate_b_release, parse_candidate_release_evidence, parse_candidate_stdout,
     render_candidate_release_validation, resolve_candidate_environment_bytes_for_test,
@@ -517,6 +519,83 @@ fn environment_is_strict_default_off_and_has_one_switch() {
     assert!(
         resolve_candidate_environment_bytes_for_test(&[(ENABLE_KEY.as_bytes(), &[0xff])]).is_err()
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_environment_classifies_raw_key_prefix_before_strict_unicode_decode() {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    let unrelated_non_unicode_key = OsString::from_wide(
+        &"UNRELATED_"
+            .encode_utf16()
+            .chain(std::iter::once(0xd800))
+            .collect::<Vec<_>>(),
+    );
+    let unrelated_non_unicode_value = OsString::from_wide(&[0xd800]);
+    let entries = vec![
+        (unrelated_non_unicode_key.clone(), OsString::from("ignored")),
+        (
+            OsString::from("UNRELATED_VALUE"),
+            unrelated_non_unicode_value.clone(),
+        ),
+    ];
+    assert_eq!(
+        resolve_candidate_environment_os_for_test(entries.clone()).unwrap(),
+        CandidateEnvironment::Off,
+    );
+
+    let mut enabled = entries;
+    enabled.push((OsString::from(ENABLE_KEY), OsString::from(ENABLE_VALUE)));
+    assert_eq!(
+        resolve_candidate_environment_os_for_test(enabled).unwrap(),
+        CandidateEnvironment::CandidateB,
+    );
+    assert!(resolve_candidate_environment_os_for_test(vec![(
+        OsString::from(ENABLE_KEY),
+        unrelated_non_unicode_value,
+    )])
+    .is_err());
+
+    let invalid_wu0d_key = OsString::from_wide(
+        &"TYPOKAT_WU0D_"
+            .encode_utf16()
+            .chain(std::iter::once(0xd800))
+            .collect::<Vec<_>>(),
+    );
+    assert!(resolve_candidate_environment_os_for_test(vec![(
+        invalid_wu0d_key,
+        OsString::from("ignored"),
+    )])
+    .is_err());
+}
+
+#[test]
+fn windows_environment_source_classifies_prefix_before_decoding_key_or_value() {
+    let implementation = include_str!("wu0d_candidate_release.rs");
+    let entry = source_top_level_function(
+        implementation,
+        "#[cfg(windows)]\nfn wu0d_environment_entry(",
+    );
+    let raw_key = entry.find("encode_wide").expect("raw Windows key units");
+    let prefix = entry
+        .find("starts_with")
+        .expect("raw Windows WU0D prefix classification");
+    let decode = entry
+        .find("into_string")
+        .expect("strict WU0D Unicode decode");
+    assert!(raw_key < prefix && prefix < decode);
+    assert!(entry.contains("\"TYPOKAT_WU0D_\".encode_utf16()"));
+    assert!(entry.contains("return None"));
+    assert!(!entry.contains("to_string_lossy"));
+
+    let test_seam = source_top_level_function(
+        implementation,
+        "pub(super) fn resolve_candidate_environment_os_for_test(",
+    );
+    assert!(test_seam.contains("wu0d_environment_entry"));
+    assert!(test_seam.contains("resolve_candidate_environment_bytes"));
 }
 
 #[test]
@@ -1177,6 +1256,7 @@ fn evidence_artifact_rejects_malformed_truncated_duplicate_unknown_and_misordere
 }
 
 #[test]
+#[cfg(unix)]
 fn evidence_file_path_is_absolute_regular_non_symlink_and_validation_output_is_stable() {
     assert!(validate_candidate_b_release_evidence_file(Path::new("relative.evidence")).is_err());
     let temp_dir = std::fs::canonicalize(std::env::temp_dir()).unwrap();
@@ -1213,18 +1293,6 @@ fn evidence_file_path_is_absolute_regular_non_symlink_and_validation_output_is_s
     );
     std::fs::remove_file(&oversized).unwrap();
 
-    assert_eq!(
-        render_candidate_release_validation(&decision),
-        "typokat-wu0d-release-validation-v1 decision=go reasons=none",
-    );
-    assert_eq!(
-        render_candidate_release_validation(&GateDecision::NoGo(vec![
-            NoGoReason::SemanticMismatch,
-        ])),
-        "typokat-wu0d-release-validation-v1 decision=no-go reasons=semantic-mismatch",
-    );
-
-    #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
 
@@ -1248,6 +1316,95 @@ fn evidence_file_path_is_absolute_regular_non_symlink_and_validation_output_is_s
         std::fs::remove_file(&link).unwrap();
         std::fs::remove_file(&target).unwrap();
     }
+
+    #[cfg(target_os = "linux")]
+    {
+        use rustix::fs::{mkfifoat, open, Mode, OFlags};
+        use std::sync::mpsc::{channel, RecvTimeoutError};
+        use std::time::Duration;
+
+        let directory = open(
+            &temp_dir,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+        let fifo_name = format!(
+            "typokat-wu0d-release-fifo-{}-{}.txt",
+            std::process::id(),
+            line!(),
+        );
+        let fifo = temp_dir.join(&fifo_name);
+        mkfifoat(&directory, fifo_name, Mode::RUSR | Mode::WUSR).unwrap();
+        let worker_path = fifo.clone();
+        let (sender, receiver) = channel();
+        let worker = std::thread::spawn(move || {
+            let rejected = validate_candidate_b_release_evidence_file(&worker_path).is_err();
+            let _ = sender.send(rejected);
+        });
+        match receiver.recv_timeout(Duration::from_secs(1)) {
+            Ok(rejected) => {
+                worker.join().unwrap();
+                assert!(rejected, "FIFO evidence must reject");
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                let writer = open(
+                    &fifo,
+                    OFlags::RDWR | OFlags::NONBLOCK | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .expect("FIFO rescue handle must open without a scheduled reader");
+                worker.join().unwrap();
+                drop(writer);
+                std::fs::remove_file(&fifo).unwrap();
+                panic!("FIFO evidence validation blocked before handle fstat");
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                let joined = worker.join();
+                std::fs::remove_file(&fifo).unwrap();
+                assert!(joined.is_ok(), "FIFO evidence validator worker panicked");
+                panic!("FIFO evidence validator worker disconnected");
+            }
+        }
+        std::fs::remove_file(fifo).unwrap();
+    }
+}
+
+#[test]
+fn release_validation_output_is_stable_on_every_host() {
+    assert_eq!(
+        render_candidate_release_validation(&GateDecision::Go),
+        "typokat-wu0d-release-validation-v1 decision=go reasons=none",
+    );
+    assert_eq!(
+        render_candidate_release_validation(&GateDecision::NoGo(vec![
+            NoGoReason::SemanticMismatch,
+        ])),
+        "typokat-wu0d-release-validation-v1 decision=no-go reasons=semantic-mismatch",
+    );
+}
+
+#[cfg(not(unix))]
+#[test]
+fn evidence_file_validation_fails_closed_on_unsupported_non_unix_hosts() {
+    let temp_dir = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+    let evidence = temp_dir.join(format!(
+        "typokat-wu0d-release-non-unix-{}-{}.txt",
+        std::process::id(),
+        line!(),
+    ));
+    assert!(evidence.is_absolute());
+    std::fs::write(
+        &evidence,
+        evidence_artifact(&passing_pairs(), &passing_controls()),
+    )
+    .unwrap();
+    let error = validate_candidate_b_release_evidence_file(&evidence).unwrap_err();
+    std::fs::remove_file(evidence).unwrap();
+    assert_eq!(
+        error.to_string(),
+        "WU0D release evidence validation is unsupported on non-Unix hosts",
+    );
 }
 
 #[test]
@@ -1414,11 +1571,8 @@ fn every_frozen_product_section_is_a_named_frame_inside_the_final_product() {
 #[test]
 fn class_section_distinguishes_ready_and_each_canonical_poison_terminal_in_class_id_order() {
     let ready = frozen_product_run(0, "class.ts", "class Ready { value!: number; }\n");
-    let initializer = frozen_product_run(
-        0,
-        "class.ts",
-        "const seed = 1; class InitializerPoison { value = seed; }\n",
-    );
+    let initializer =
+        frozen_product_run(0, "class.ts", "class InitializerPoison { value = +1; }\n");
     let heritage = frozen_product_run(
         0,
         "class.ts",
@@ -1427,7 +1581,7 @@ fn class_section_distinguishes_ready_and_each_canonical_poison_terminal_in_class
     let surface = frozen_product_run(
         0,
         "class.ts",
-        "declare const key: unique symbol; class SurfacePoison { [key]!: number; }\n",
+        "declare const seed: number; class SurfacePoison { value!: typeof seed; }\n",
     );
     let class_sections = [&ready, &initializer, &heritage, &surface]
         .map(|run| frozen_product_section(run, Wu0dFrozenProductSection::Classes));
@@ -1692,9 +1846,7 @@ fn evidence_validator_source_shape_is_bounded_strict_and_has_one_real_entry_poin
         "fn parse_candidate_release_evidence(",
         "fn validate_candidate_b_release_evidence_file(",
         "fn render_candidate_release_validation(",
-        "symlink_metadata",
         "is_absolute",
-        "is_file",
         "evaluate_candidate_b_release(",
     ] {
         assert!(
@@ -1708,41 +1860,67 @@ fn evidence_validator_source_shape_is_bounded_strict_and_has_one_real_entry_poin
             .count(),
         1,
     );
-    let implementation_validator = source_window(
+    let unix_reader = source_top_level_function(
+        implementation,
+        "#[cfg(unix)]\nfn read_candidate_release_evidence_file_bounded(",
+    );
+    for required in [
+        "#[cfg(unix)]",
+        "rustix::fs",
+        "OFlags::RDONLY",
+        "OFlags::NOFOLLOW",
+        "OFlags::NONBLOCK",
+        "OFlags::CLOEXEC",
+        "Mode::empty()",
+        "fstat(&descriptor)",
+        "FileType::from_raw_mode(stat.st_mode).is_file()",
+        "u64::try_from(stat.st_size)",
+        "MAX_RELEASE_EVIDENCE_BYTES",
+        "Read::take",
+        "read_to_end",
+    ] {
+        assert!(
+            unix_reader.contains(required),
+            "Unix evidence reader misses {required}",
+        );
+    }
+    let open = unix_reader.find("let descriptor = open(").unwrap();
+    let fstat = unix_reader.find("fstat(&descriptor)").unwrap();
+    let read = unix_reader.find("read_to_end").unwrap();
+    assert!(
+        open < fstat && fstat < read,
+        "the path must be opened safely before handle metadata and bounded reads",
+    );
+    for forbidden in [
+        "symlink_metadata",
+        "std::fs::read(",
+        "fs::read(",
+        "std::fs::File::open(",
+        "File::open(",
+    ] {
+        assert!(
+            !unix_reader.contains(forbidden),
+            "Unix evidence reader must not perform a blocking path operation: {forbidden}",
+        );
+    }
+
+    let non_unix_reader = source_window(
+        implementation,
+        "#[cfg(not(unix))]\nfn read_candidate_release_evidence_file_bounded(",
+        1_000,
+    );
+    assert!(non_unix_reader
+        .contains("WU0D release evidence validation is unsupported on non-Unix hosts"));
+    assert!(!non_unix_reader.contains("std::fs::read"));
+    assert!(!non_unix_reader.contains("File::open"));
+
+    let implementation_validator = source_top_level_function(
         implementation,
         "fn validate_candidate_b_release_evidence_file(",
-        5_000,
     );
-    let metadata_gate = implementation_validator
-        .find("symlink_metadata")
-        .and_then(|metadata| {
-            implementation_validator[metadata..]
-                .find("metadata.len()")
-                .map(|length| metadata + length)
-        })
-        .and_then(|length| {
-            [
-                "std::fs::read(",
-                "fs::read(",
-                "std::fs::File::open(",
-                "File::open(",
-            ]
-            .into_iter()
-            .filter_map(|needle| implementation_validator.find(needle))
-            .min()
-            .map(|read| (length, read))
-        })
-        .is_some_and(|(length, read)| {
-            length < read
-                && implementation_validator[length..read].contains("MAX_RELEASE_EVIDENCE_BYTES")
-        });
-    let bounded_reader = implementation_validator.contains(".take(")
-        && implementation_validator.contains("MAX_RELEASE_EVIDENCE_BYTES")
-        && implementation_validator.contains("read_to_end");
-    assert!(
-        metadata_gate || bounded_reader,
-        "evidence bytes must be bounded before or during the first file read",
-    );
+    assert!(implementation_validator.contains("read_candidate_release_evidence_file_bounded"));
+    assert!(!implementation_validator.contains("symlink_metadata"));
+    assert!(!implementation_validator.contains("File::open"));
     let validator = source_window(
         include_str!("wu0d_candidate_release_spec.rs"),
         "fn wu0d_candidate_release_validate_evidence_file()",
