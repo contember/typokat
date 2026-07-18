@@ -68,6 +68,10 @@ mod wu0c_attribution;
 #[cfg(test)]
 mod wu0c_post_cache_attribution_spec;
 #[cfg(test)]
+mod wu0d_candidate_release;
+#[cfg(test)]
+mod wu0d_candidate_release_spec;
+#[cfg(test)]
 pub(crate) use wu0c_attribution::{capture_wu0c_substitution_attribution, SubstitutionAttribution};
 
 use context::{
