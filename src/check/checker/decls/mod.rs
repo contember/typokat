@@ -27,6 +27,8 @@ use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+mod eager_application_cache_spec;
 mod interface;
 mod params;
 mod resolve;

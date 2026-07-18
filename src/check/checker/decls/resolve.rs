@@ -20,7 +20,7 @@ use crate::diagnostics::{
 use crate::span::Span;
 use crate::types::repr::{TypeParamId, TypeTag};
 use crate::types::store::TypeId;
-use crate::types::substitute;
+use crate::types::{substitute, substitute_with_outcome, SubstitutionOutcome};
 use oxc_ast::ast::{TSTypeName, TSTypeParameterInstantiation};
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
@@ -1011,6 +1011,96 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.instantiate_type_group_arguments(scope, decl_id, arg_infos, Span::from_oxc(args.span))
     }
 
+    pub(super) fn substitute_ready_type_group_application(
+        &mut self,
+        template: TypeId,
+        parameters: &[TypeParamId],
+        map: &FxHashMap<TypeParamId, TypeId>,
+    ) -> TypeId {
+        if parameters.is_empty() || map.len() != parameters.len() {
+            #[cfg(test)]
+            record_eager_application_cache_measure(
+                &self.eager_application_cache_measure,
+                |measure| measure.unready_bypasses += 1,
+            );
+            return substitute(self.interner, template, map);
+        }
+        let Some(arguments) = parameters
+            .iter()
+            .map(|parameter| {
+                map.get(parameter)
+                    .copied()
+                    .map(|argument| (*parameter, argument))
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            #[cfg(test)]
+            record_eager_application_cache_measure(
+                &self.eager_application_cache_measure,
+                |measure| measure.unready_bypasses += 1,
+            );
+            return substitute(self.interner, template, map);
+        };
+
+        let tag = self.interner.store().tag(template);
+        let well_known = self.interner.well_known();
+        if matches!(
+            tag,
+            TypeTag::Conditional
+                | TypeTag::Mapped
+                | TypeTag::Instantiation
+                | TypeTag::ClassInstance
+        ) || well_known.is_string_intrinsic_marker(template)
+            || template == well_known.this_type
+            || template == well_known.omit_this_parameter
+        {
+            #[cfg(test)]
+            record_eager_application_cache_measure(
+                &self.eager_application_cache_measure,
+                |measure| measure.lazy_bypasses += 1,
+            );
+            return substitute(self.interner, template, map);
+        }
+
+        let key = (template, arguments);
+        #[cfg(test)]
+        record_eager_application_cache_measure(&self.eager_application_cache_measure, |measure| {
+            measure.lookups += 1;
+        });
+        if let Some(result) = self.eager_application_cache.get(&key).copied() {
+            #[cfg(test)]
+            record_eager_application_cache_measure(
+                &self.eager_application_cache_measure,
+                |measure| measure.hits += 1,
+            );
+            return result;
+        }
+
+        #[cfg(test)]
+        record_eager_application_cache_measure(&self.eager_application_cache_measure, |measure| {
+            measure.misses += 1;
+        });
+        match substitute_with_outcome(self.interner, template, map) {
+            SubstitutionOutcome::CycleClean(result) => {
+                self.eager_application_cache.insert(key, result);
+                #[cfg(test)]
+                record_eager_application_cache_measure(
+                    &self.eager_application_cache_measure,
+                    |measure| measure.insertions += 1,
+                );
+                result
+            }
+            SubstitutionOutcome::CycleTainted(result) => {
+                #[cfg(test)]
+                record_eager_application_cache_measure(
+                    &self.eager_application_cache_measure,
+                    |measure| measure.cycle_tainted_skips += 1,
+                );
+                result
+            }
+        }
+    }
+
     fn instantiate_type_group_arguments(
         &mut self,
         scope: ScopeId,
@@ -1084,14 +1174,30 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // object before it is filled; eager substitution would collapse the recursive
         // edge to that empty template and lose its type arguments.
         let template_tag = self.interner.store().tag(template);
-        let unfinished_interface = !is_published
-            && matches!(
-                self.type_decls.get(decl_id.index()),
-                Some(TypeDecl::Interface { .. })
-            )
-            && !self.type_group_construction_is_frozen(decl_id);
-        if unfinished_interface
-            || template_tag == TypeTag::Conditional
+        let unfinished_interface =
+            !is_published && !self.type_group_construction_is_frozen(decl_id);
+        if unfinished_interface {
+            #[cfg(test)]
+            record_eager_application_cache_measure(
+                &self.eager_application_cache_measure,
+                |measure| measure.unfinished_bypasses += 1,
+            );
+            let args: Vec<(TypeParamId, TypeId)> = params
+                .iter()
+                .filter_map(|param| map.get(param).copied().map(|arg| (*param, arg)))
+                .collect();
+            return Some(self.interner.intern_instantiation(template, args));
+        }
+        if template_tag == TypeTag::Instantiation {
+            #[cfg(test)]
+            record_eager_application_cache_measure(
+                &self.eager_application_cache_measure,
+                |measure| measure.lazy_bypasses += 1,
+            );
+            let instantiated = substitute(self.interner, template, &map);
+            return Some(instantiated);
+        }
+        if template_tag == TypeTag::Conditional
             || template_tag == TypeTag::Mapped
             || self
                 .interner
@@ -1100,6 +1206,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             || template == self.interner.well_known().this_type
             || template == self.interner.well_known().omit_this_parameter
         {
+            #[cfg(test)]
+            record_eager_application_cache_measure(
+                &self.eager_application_cache_measure,
+                |measure| measure.lazy_bypasses += 1,
+            );
             let args: Vec<(TypeParamId, TypeId)> = params
                 .iter()
                 .filter_map(|param| map.get(param).copied().map(|arg| (*param, arg)))
@@ -1107,7 +1218,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return Some(self.interner.intern_instantiation(template, args));
         }
 
-        Some(substitute(self.interner, template, &map))
+        Some(self.substitute_ready_type_group_application(template, &params, &map))
+    }
+
+    #[cfg(test)]
+    pub(super) fn instantiate_type_group_arguments_for_test(
+        &mut self,
+        scope: ScopeId,
+        decl_id: TypeGroupId,
+        arg_infos: Vec<(TypeId, Span)>,
+        application_span: Span,
+    ) -> Option<TypeId> {
+        self.instantiate_type_group_arguments(scope, decl_id, arg_infos, application_span)
     }
 
     fn type_decl_defaults(&self, decl_id: TypeGroupId) -> Vec<PublishedTypeParameterDefault> {

@@ -2036,6 +2036,9 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
     let mut pass = Pass {
         interner,
         binder,
+        eager_application_cache: FxHashMap::default(),
+        #[cfg(test)]
+        eager_application_cache_measure: context::capture_eager_application_cache_measure(),
         // Overwritten before each module's fill/flow/check phase; the user module is
         // the single-file default (backlog 58).
         current_module: binder.module,

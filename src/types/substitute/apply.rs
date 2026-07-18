@@ -405,7 +405,13 @@ impl<'a> Substitution<'a> {
                         .map(|member| {
                             let mut member_map = self.map.clone();
                             member_map.insert(param, member);
-                            substitute(interner, ty, &member_map)
+                            match substitute_with_outcome(interner, ty, &member_map) {
+                                SubstitutionOutcome::CycleClean(result) => result,
+                                SubstitutionOutcome::CycleTainted(result) => {
+                                    self.cycle_epoch += 1;
+                                    result
+                                }
+                            }
                         })
                         .collect();
                     return interner.union(per_member);

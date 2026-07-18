@@ -326,7 +326,7 @@ fn cfg_test_item_ranges(source: &str) -> Vec<(usize, usize)> {
             };
             let brace = lines[header_end].find('{');
             let semicolon = lines[header_end].find(';');
-            if semicolon.is_some_and(|semicolon| brace.map_or(true, |brace| semicolon < brace)) {
+            if semicolon.is_some_and(|semicolon| brace.is_none_or(|brace| semicolon < brace)) {
                 header_end
             } else {
                 (header_end..lines.len())
@@ -340,8 +340,7 @@ fn cfg_test_item_ranges(source: &str) -> Vec<(usize, usize)> {
                     let at_item_depth = depths[*index].0 <= base.0
                         && depths[*index].1 <= base.1
                         && depths[*index].2 <= base.2;
-                    (at_item_depth && trimmed.contains(';'))
-                        || (at_item_depth && trimmed.ends_with(','))
+                    (trimmed.ends_with(',') || trimmed.contains(';')) && at_item_depth
                         || depths[index + 1].0 < base.0
                 })
                 .unwrap_or(target)

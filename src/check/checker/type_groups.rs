@@ -196,6 +196,16 @@ impl PublishedTypeEnvironment {
         }
     }
 
+    #[cfg(test)]
+    pub(in crate::check::checker) fn from_explicit_terminals_for_test(
+        entries: Vec<PublishedTypeGroupTerminal>,
+    ) -> Self {
+        Self {
+            classes: PublishedClasses::empty(),
+            groups: PublishedTypeGroups { entries },
+        }
+    }
+
     pub(in crate::check::checker) fn classes(&self) -> &PublishedClasses {
         &self.classes
     }

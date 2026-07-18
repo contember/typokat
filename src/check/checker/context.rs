@@ -501,6 +501,81 @@ pub(in crate::check::checker) struct ConstructionDrafts<'ast> {
     pub(in crate::check::checker) template_fill: Vec<ClassFillState>,
 }
 
+#[cfg(test)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(in crate::check::checker) struct EagerApplicationCacheMeasure {
+    pub(in crate::check::checker) lookups: u64,
+    pub(in crate::check::checker) hits: u64,
+    pub(in crate::check::checker) misses: u64,
+    pub(in crate::check::checker) insertions: u64,
+    pub(in crate::check::checker) cycle_tainted_skips: u64,
+    pub(in crate::check::checker) unready_bypasses: u64,
+    pub(in crate::check::checker) unfinished_bypasses: u64,
+    pub(in crate::check::checker) lazy_bypasses: u64,
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) type EagerApplicationCacheMeasureCollector =
+    std::rc::Rc<std::cell::RefCell<EagerApplicationCacheMeasure>>;
+
+#[cfg(test)]
+thread_local! {
+    static EAGER_APPLICATION_CACHE_MEASURE: std::cell::RefCell<Option<EagerApplicationCacheMeasureCollector>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) struct EagerApplicationCacheMeasureScope {
+    previous: Option<EagerApplicationCacheMeasureCollector>,
+    _thread_affine: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(test)]
+impl Drop for EagerApplicationCacheMeasureScope {
+    fn drop(&mut self) {
+        EAGER_APPLICATION_CACHE_MEASURE.with(|measure| {
+            measure.replace(self.previous.take());
+        });
+    }
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn start_eager_application_cache_measure(
+) -> EagerApplicationCacheMeasureScope {
+    let collector = std::rc::Rc::new(std::cell::RefCell::new(
+        EagerApplicationCacheMeasure::default(),
+    ));
+    let previous = EAGER_APPLICATION_CACHE_MEASURE
+        .with(|current| current.replace(Some(std::rc::Rc::clone(&collector))));
+    EagerApplicationCacheMeasureScope {
+        previous,
+        _thread_affine: std::marker::PhantomData,
+    }
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn eager_application_cache_measure(
+) -> Option<EagerApplicationCacheMeasure> {
+    let collector = EAGER_APPLICATION_CACHE_MEASURE.with(|current| current.borrow().clone())?;
+    let measure = collector.borrow().clone();
+    Some(measure)
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn capture_eager_application_cache_measure(
+) -> Option<EagerApplicationCacheMeasureCollector> {
+    EAGER_APPLICATION_CACHE_MEASURE.with(|current| current.borrow().clone())
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn record_eager_application_cache_measure(
+    collector: &Option<EagerApplicationCacheMeasureCollector>,
+    update: impl FnOnce(&mut EagerApplicationCacheMeasure),
+) {
+    if let Some(collector) = collector {
+        update(&mut collector.borrow_mut());
+    }
+}
+
 /// The phase-1 working set threaded through the walk: everything the inference
 /// pass writes to. Bundled into one struct so the many recursive `infer_*`/
 /// `lower_*` helpers take a single `&mut` rather than a long, churn-prone argument
@@ -508,6 +583,12 @@ pub(in crate::check::checker) struct ConstructionDrafts<'ast> {
 pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = UserRecordTicket> {
     pub(in crate::check::checker) interner: &'a mut Interner,
     pub(in crate::check::checker) binder: &'a Binder,
+    /// Completed eager generic applications in this pass's type universe.
+    pub(in crate::check::checker) eager_application_cache:
+        FxHashMap<(TypeId, Vec<(TypeParamId, TypeId)>), TypeId>,
+    #[cfg(test)]
+    pub(in crate::check::checker) eager_application_cache_measure:
+        Option<EagerApplicationCacheMeasureCollector>,
     /// The module scope currently being checked.
     /// Disambiguates span-start keyed lookups for scopes and flow. Correct only
     /// while bodies are walked per module; lazy cross-module inference would

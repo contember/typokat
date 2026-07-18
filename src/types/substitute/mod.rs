@@ -128,6 +128,15 @@ mod measurement_scope_spec;
 #[cfg(test)]
 mod tests;
 
+/// Whether a substitution completed without relying on the raw-id cycle guard.
+/// Cycle-tainted results remain valid for the current occurrence but must not be
+/// reused by a cache as though they were context-free completed values.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SubstitutionOutcome {
+    CycleClean(TypeId),
+    CycleTainted(TypeId),
+}
+
 /// A substitution `TypeParamId → TypeId` plus the cycle guard, applied over the
 /// type store. Built once per instantiation and dropped after.
 pub struct Substitution<'a> {
@@ -297,7 +306,26 @@ pub fn substitute(
     ty: TypeId,
     map: &FxHashMap<TypeParamId, TypeId>,
 ) -> TypeId {
-    Substitution::new(map).apply(interner, ty)
+    match substitute_with_outcome(interner, ty, map) {
+        SubstitutionOutcome::CycleClean(result) | SubstitutionOutcome::CycleTainted(result) => {
+            result
+        }
+    }
+}
+
+/// Substitute while retaining whether any recursive re-entry affected the run.
+pub(crate) fn substitute_with_outcome(
+    interner: &mut Interner,
+    ty: TypeId,
+    map: &FxHashMap<TypeParamId, TypeId>,
+) -> SubstitutionOutcome {
+    let mut substitution = Substitution::new(map);
+    let result = substitution.apply(interner, ty);
+    if substitution.cycle_epoch == 0 {
+        SubstitutionOutcome::CycleClean(result)
+    } else {
+        SubstitutionOutcome::CycleTainted(result)
+    }
 }
 
 /// Instantiate a generic function's own binders for one call candidate.
