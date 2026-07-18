@@ -2039,12 +2039,24 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
             _ => ClassFillState::Done,
         })
         .collect();
+    #[cfg(test)]
+    let cycle_tainted_application_cache_capture =
+        context::capture_cycle_tainted_application_cache_measure();
     let mut pass = Pass {
         interner,
         binder,
         eager_application_cache: FxHashMap::default(),
         #[cfg(test)]
         eager_application_cache_measure: context::capture_eager_application_cache_measure(),
+        #[cfg(test)]
+        cycle_tainted_application_cache: cycle_tainted_application_cache_capture
+            .as_ref()
+            .and_then(|capture| capture.cache_enabled.then(FxHashMap::default)),
+        #[cfg(test)]
+        cycle_tainted_application_cache_measure: cycle_tainted_application_cache_capture
+            .map(|capture| capture.collector),
+        #[cfg(test)]
+        panic_before_cycle_tainted_application_cache_publish: false,
         #[cfg(test)]
         wu0c_attribution: wu0c_attribution::capture_wu0c_pass_attribution(),
         // Overwritten before each module's fill/flow/check phase; the user module is

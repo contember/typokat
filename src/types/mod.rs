@@ -11,4 +11,9 @@ pub use intern::{Interner, WellKnown};
 pub use repr::{ClassId, GenericTypeParam, IntrinsicKind, LiteralValue, TypeParamId, Visibility};
 pub use store::TypeId;
 pub use substitute::{instantiate_function, substitute, Substitution};
+#[cfg(test)]
+pub(crate) use substitute::{
+    start_substitution_run_visit_measure, substitution_run_visit_measure,
+    SubstitutionRunVisitMeasure,
+};
 pub(crate) use substitute::{substitute_with_outcome, SubstitutionOutcome};

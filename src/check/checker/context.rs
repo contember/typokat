@@ -576,6 +576,198 @@ pub(in crate::check::checker) fn record_eager_application_cache_measure(
     }
 }
 
+#[cfg(test)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) struct CycleTaintedApplicationCacheEntry {
+    pub(in crate::check::checker) result: TypeId,
+    pub(in crate::check::checker) first_run_visit_weight: u64,
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) type CycleTaintedApplicationCache =
+    FxHashMap<(TypeId, Vec<(TypeParamId, TypeId)>), CycleTaintedApplicationCacheEntry>;
+
+#[cfg(test)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(in crate::check::checker) struct CycleTaintedApplicationCacheMeasure {
+    pub(in crate::check::checker) lookups: u64,
+    pub(in crate::check::checker) hits: u64,
+    pub(in crate::check::checker) misses: u64,
+    pub(in crate::check::checker) insertions: u64,
+    pub(in crate::check::checker) clean_skips: u64,
+    pub(in crate::check::checker) aborted_runs: u64,
+    pub(in crate::check::checker) eligible_requests: u64,
+    pub(in crate::check::checker) executed_runs: u64,
+    pub(in crate::check::checker) clean_outcomes: u64,
+    pub(in crate::check::checker) tainted_outcomes: u64,
+    pub(in crate::check::checker) executed_visits: u64,
+    pub(in crate::check::checker) memo_hits: u64,
+    pub(in crate::check::checker) expanded_visits: u64,
+    pub(in crate::check::checker) tainted_cache_hits: u64,
+    pub(in crate::check::checker) tainted_cache_entries: u64,
+    pub(in crate::check::checker) avoided_visits: u64,
+    pub(in crate::check::checker) saturated: bool,
+}
+
+#[cfg(test)]
+impl CycleTaintedApplicationCacheMeasure {
+    fn checked_add(counter: &mut u64, value: u64, saturated: &mut bool) {
+        match counter.checked_add(value) {
+            Some(sum) => *counter = sum,
+            None => {
+                *counter = u64::MAX;
+                *saturated = true;
+            }
+        }
+    }
+
+    pub(in crate::check::checker) fn eligible(&mut self) {
+        Self::checked_add(&mut self.eligible_requests, 1, &mut self.saturated);
+    }
+
+    pub(in crate::check::checker) fn lookup(&mut self) {
+        Self::checked_add(&mut self.lookups, 1, &mut self.saturated);
+    }
+
+    pub(in crate::check::checker) fn miss(&mut self) {
+        Self::checked_add(&mut self.misses, 1, &mut self.saturated);
+    }
+
+    pub(in crate::check::checker) fn hit(&mut self, avoided_visits: u64) {
+        Self::checked_add(&mut self.hits, 1, &mut self.saturated);
+        Self::checked_add(&mut self.tainted_cache_hits, 1, &mut self.saturated);
+        Self::checked_add(
+            &mut self.avoided_visits,
+            avoided_visits,
+            &mut self.saturated,
+        );
+    }
+
+    pub(in crate::check::checker) fn executed(
+        &mut self,
+        cycle_tainted: bool,
+        visits: u64,
+        memo_hits: u64,
+    ) {
+        Self::checked_add(&mut self.executed_runs, 1, &mut self.saturated);
+        Self::checked_add(&mut self.executed_visits, visits, &mut self.saturated);
+        Self::checked_add(&mut self.memo_hits, memo_hits, &mut self.saturated);
+        let Some(expanded_visits) = visits.checked_sub(memo_hits) else {
+            self.saturated = true;
+            return;
+        };
+        Self::checked_add(
+            &mut self.expanded_visits,
+            expanded_visits,
+            &mut self.saturated,
+        );
+        if cycle_tainted {
+            Self::checked_add(&mut self.tainted_outcomes, 1, &mut self.saturated);
+        } else {
+            Self::checked_add(&mut self.clean_outcomes, 1, &mut self.saturated);
+        }
+    }
+
+    pub(in crate::check::checker) fn clean_skip(&mut self) {
+        Self::checked_add(&mut self.clean_skips, 1, &mut self.saturated);
+    }
+
+    pub(in crate::check::checker) fn insert(&mut self) {
+        Self::checked_add(&mut self.insertions, 1, &mut self.saturated);
+        Self::checked_add(&mut self.tainted_cache_entries, 1, &mut self.saturated);
+    }
+
+    pub(in crate::check::checker) fn abort(&mut self) {
+        Self::checked_add(&mut self.aborted_runs, 1, &mut self.saturated);
+    }
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) type CycleTaintedApplicationCacheMeasureCollector =
+    std::rc::Rc<std::cell::RefCell<CycleTaintedApplicationCacheMeasure>>;
+
+#[cfg(test)]
+#[derive(Clone)]
+pub(in crate::check::checker) struct CycleTaintedApplicationCacheCapture {
+    pub(in crate::check::checker) collector: CycleTaintedApplicationCacheMeasureCollector,
+    pub(in crate::check::checker) cache_enabled: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    static CYCLE_TAINTED_APPLICATION_CACHE_CAPTURE: std::cell::RefCell<Option<CycleTaintedApplicationCacheCapture>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) struct CycleTaintedApplicationCacheMeasureScope {
+    previous: Option<CycleTaintedApplicationCacheCapture>,
+    _thread_affine: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(test)]
+impl Drop for CycleTaintedApplicationCacheMeasureScope {
+    fn drop(&mut self) {
+        CYCLE_TAINTED_APPLICATION_CACHE_CAPTURE.with(|capture| {
+            capture.replace(self.previous.take());
+        });
+    }
+}
+
+#[cfg(test)]
+fn start_cycle_tainted_application_cache_scope(
+    cache_enabled: bool,
+) -> CycleTaintedApplicationCacheMeasureScope {
+    let capture = CycleTaintedApplicationCacheCapture {
+        collector: std::rc::Rc::new(std::cell::RefCell::new(
+            CycleTaintedApplicationCacheMeasure::default(),
+        )),
+        cache_enabled,
+    };
+    let previous =
+        CYCLE_TAINTED_APPLICATION_CACHE_CAPTURE.with(|current| current.replace(Some(capture)));
+    CycleTaintedApplicationCacheMeasureScope {
+        previous,
+        _thread_affine: std::marker::PhantomData,
+    }
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn start_cycle_tainted_application_cache_measure(
+) -> CycleTaintedApplicationCacheMeasureScope {
+    start_cycle_tainted_application_cache_scope(true)
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn start_cycle_tainted_application_cache_baseline_measure(
+) -> CycleTaintedApplicationCacheMeasureScope {
+    start_cycle_tainted_application_cache_scope(false)
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn cycle_tainted_application_cache_measure(
+) -> Option<CycleTaintedApplicationCacheMeasure> {
+    let capture =
+        CYCLE_TAINTED_APPLICATION_CACHE_CAPTURE.with(|current| current.borrow().clone())?;
+    let measure = capture.collector.borrow().clone();
+    Some(measure)
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn capture_cycle_tainted_application_cache_measure(
+) -> Option<CycleTaintedApplicationCacheCapture> {
+    CYCLE_TAINTED_APPLICATION_CACHE_CAPTURE.with(|current| current.borrow().clone())
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn record_cycle_tainted_application_cache_measure(
+    collector: &Option<CycleTaintedApplicationCacheMeasureCollector>,
+    update: impl FnOnce(&mut CycleTaintedApplicationCacheMeasure),
+) {
+    if let Some(collector) = collector {
+        update(&mut collector.borrow_mut());
+    }
+}
+
 /// The phase-1 working set threaded through the walk: everything the inference
 /// pass writes to. Bundled into one struct so the many recursive `infer_*`/
 /// `lower_*` helpers take a single `&mut` rather than a long, churn-prone argument
@@ -589,6 +781,14 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     #[cfg(test)]
     pub(in crate::check::checker) eager_application_cache_measure:
         Option<EagerApplicationCacheMeasureCollector>,
+    #[cfg(test)]
+    pub(in crate::check::checker) cycle_tainted_application_cache:
+        Option<CycleTaintedApplicationCache>,
+    #[cfg(test)]
+    pub(in crate::check::checker) cycle_tainted_application_cache_measure:
+        Option<CycleTaintedApplicationCacheMeasureCollector>,
+    #[cfg(test)]
+    pub(in crate::check::checker) panic_before_cycle_tainted_application_cache_publish: bool,
     #[cfg(test)]
     pub(in crate::check::checker) wu0c_attribution:
         Option<super::wu0c_attribution::PassAttribution>,

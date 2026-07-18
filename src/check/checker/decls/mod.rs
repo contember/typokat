@@ -28,6 +28,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
+mod cycle_tainted_application_cache_spec;
+#[cfg(test)]
 mod eager_application_cache_spec;
 mod interface;
 mod params;

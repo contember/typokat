@@ -3,6 +3,7 @@
 
 use super::super::context::{
     cycle_tainted_application_cache_measure, eager_application_cache_measure,
+    start_cycle_tainted_application_cache_baseline_measure,
     start_cycle_tainted_application_cache_measure, start_eager_application_cache_measure,
     CycleTaintedApplicationCacheMeasure, Pass,
 };
@@ -150,6 +151,24 @@ fn default_off_then_clean_cache_precedes_tainted_cache_without_mutating_it() {
         assert!(default_off.cycle_tainted_application_cache.is_none());
     }
     assert_eq!(cycle_tainted_application_cache_measure(), None);
+    {
+        let _baseline_scope = start_cycle_tainted_application_cache_baseline_measure();
+        let mut baseline = pass(&mut interner, &binder);
+        assert!(baseline.cycle_tainted_application_cache.is_none());
+        for _ in 0..2 {
+            assert_eq!(
+                assert_tainted(apply(&mut baseline, 0, recursive, &[id], &map)),
+                expected
+            );
+        }
+        let measure = cycle_tainted_application_cache_measure().expect("baseline measure active");
+        assert_eq!((measure.eligible_requests, measure.executed_runs), (2, 2));
+        assert_eq!(
+            (measure.tainted_cache_hits, measure.tainted_cache_entries),
+            (0, 0)
+        );
+        assert_eq!(measure.tainted_outcomes, 2);
+    }
     let _clean_scope = start_eager_application_cache_measure();
     let _tainted_scope = start_cycle_tainted_application_cache_measure();
     let mut pass = pass(&mut interner, &binder);
@@ -313,7 +332,7 @@ fn nested_mapped_distribution_and_exact_complete_key_stay_whole_run_scoped() {
 }
 
 #[test]
-fn checker_path_completes_defaults_validates_each_occurrence_and_has_real_hits() {
+fn checker_path_completes_defaults_and_validates_each_clean_occurrence() {
     const SOURCE: &str = "
 interface Candidate<T = string> { self: Candidate<T>; value: T }
 declare const invalid: Candidate<string, number>;
@@ -329,7 +348,9 @@ let bad: Candidate<number> = explicit;
     assert_eq!(cached.incomplete, default_off.incomplete);
     assert!(!cached.diagnostics.is_empty());
     let measure = cycle_tainted_application_cache_measure().expect("scope active");
-    assert!(measure.insertions > 0 && measure.hits > 0);
+    assert!(measure.eligible_requests > 0 && measure.executed_runs > 0);
+    assert!(measure.clean_skips > 0);
+    assert_eq!((measure.insertions, measure.hits), (0, 0));
     assert_arithmetic(&measure);
 }
 

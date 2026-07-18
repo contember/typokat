@@ -120,6 +120,84 @@ fn measure_substitution(
     update(&mut collector.borrow_mut());
 }
 
+#[cfg(test)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SubstitutionRunVisitMeasure {
+    pub(crate) executed_visits: u64,
+    pub(crate) completed_memo_hits: u64,
+    pub(crate) saturated: bool,
+}
+
+#[cfg(test)]
+type SubstitutionRunVisitMeasureCollector =
+    std::rc::Rc<std::cell::RefCell<SubstitutionRunVisitMeasure>>;
+
+#[cfg(test)]
+thread_local! {
+    static SUBSTITUTION_RUN_VISIT_MEASURE: std::cell::RefCell<Option<SubstitutionRunVisitMeasureCollector>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) struct SubstitutionRunVisitMeasureScope {
+    previous: Option<SubstitutionRunVisitMeasureCollector>,
+    _thread_affine: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(test)]
+impl Drop for SubstitutionRunVisitMeasureScope {
+    fn drop(&mut self) {
+        SUBSTITUTION_RUN_VISIT_MEASURE.with(|measure| {
+            measure.replace(self.previous.take());
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn start_substitution_run_visit_measure() -> SubstitutionRunVisitMeasureScope {
+    let collector = std::rc::Rc::new(std::cell::RefCell::new(
+        SubstitutionRunVisitMeasure::default(),
+    ));
+    let previous = SUBSTITUTION_RUN_VISIT_MEASURE
+        .with(|current| current.replace(Some(std::rc::Rc::clone(&collector))));
+    SubstitutionRunVisitMeasureScope {
+        previous,
+        _thread_affine: std::marker::PhantomData,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn substitution_run_visit_measure() -> Option<SubstitutionRunVisitMeasure> {
+    let collector = SUBSTITUTION_RUN_VISIT_MEASURE.with(|current| current.borrow().clone())?;
+    let measure = collector.borrow().clone();
+    Some(measure)
+}
+
+#[cfg(test)]
+fn capture_substitution_run_visit_measure() -> Option<SubstitutionRunVisitMeasureCollector> {
+    SUBSTITUTION_RUN_VISIT_MEASURE.with(|current| current.borrow().clone())
+}
+
+#[cfg(test)]
+fn record_substitution_run_visit(collector: &SubstitutionRunVisitMeasureCollector, memo_hit: bool) {
+    let mut measure = collector.borrow_mut();
+    measure.executed_visits = match measure.executed_visits.checked_add(1) {
+        Some(value) => value,
+        None => {
+            measure.saturated = true;
+            u64::MAX
+        }
+    };
+    if memo_hit {
+        measure.completed_memo_hits = match measure.completed_memo_hits.checked_add(1) {
+            Some(value) => value,
+            None => {
+                measure.saturated = true;
+                u64::MAX
+            }
+        };
+    }
+}
+
 mod apply;
 #[cfg(test)]
 mod completed_memo_spec;
@@ -155,6 +233,8 @@ pub struct Substitution<'a> {
     #[cfg(test)]
     measurement: Option<SubstitutionMeasureCollector>,
     #[cfg(test)]
+    run_visit_measurement: Option<SubstitutionRunVisitMeasureCollector>,
+    #[cfg(test)]
     wu0c_attribution: Option<crate::check::checker::SubstitutionAttribution>,
 }
 
@@ -163,6 +243,8 @@ impl<'a> Substitution<'a> {
     pub fn new(map: &'a FxHashMap<TypeParamId, TypeId>) -> Self {
         #[cfg(test)]
         let measurement = capture_substitution_measurement();
+        #[cfg(test)]
+        let run_visit_measurement = capture_substitution_run_visit_measure();
         #[cfg(test)]
         let wu0c_attribution = crate::check::checker::capture_wu0c_substitution_attribution(map);
         Substitution {
@@ -173,6 +255,8 @@ impl<'a> Substitution<'a> {
             cycle_epoch: 0,
             #[cfg(test)]
             measurement,
+            #[cfg(test)]
+            run_visit_measurement,
             #[cfg(test)]
             wu0c_attribution,
         }
@@ -191,6 +275,10 @@ impl<'a> Substitution<'a> {
         #[cfg(test)]
         if let Some(collector) = self.measurement.as_ref() {
             measure_substitution_visit(collector, ty, &self.blocked);
+        }
+        #[cfg(test)]
+        if let Some(collector) = self.run_visit_measurement.as_ref() {
+            record_substitution_run_visit(collector, false);
         }
         #[cfg(test)]
         let wu0c_visit = self
@@ -218,6 +306,17 @@ impl<'a> Substitution<'a> {
             #[cfg(test)]
             if let Some(collector) = self.measurement.as_ref() {
                 measure_substitution(collector, |measure| measure.completed_memo_hits += 1);
+            }
+            #[cfg(test)]
+            if let Some(collector) = self.run_visit_measurement.as_ref() {
+                let mut measure = collector.borrow_mut();
+                measure.completed_memo_hits = match measure.completed_memo_hits.checked_add(1) {
+                    Some(value) => value,
+                    None => {
+                        measure.saturated = true;
+                        u64::MAX
+                    }
+                };
             }
             #[cfg(test)]
             if let (Some(attribution), Some(visit)) = (self.wu0c_attribution.as_ref(), wu0c_visit) {

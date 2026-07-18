@@ -20,10 +20,28 @@ use crate::diagnostics::{
 use crate::span::Span;
 use crate::types::repr::{TypeParamId, TypeTag};
 use crate::types::store::TypeId;
+#[cfg(test)]
+use crate::types::{
+    start_substitution_run_visit_measure, substitution_run_visit_measure,
+    SubstitutionRunVisitMeasure,
+};
 use crate::types::{substitute, substitute_with_outcome, SubstitutionOutcome};
 use oxc_ast::ast::{TSTypeName, TSTypeParameterInstantiation};
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
+
+#[cfg(test)]
+fn substitute_with_run_visit_measure(
+    interner: &mut crate::types::Interner,
+    template: TypeId,
+    map: &FxHashMap<TypeParamId, TypeId>,
+) -> (SubstitutionOutcome, SubstitutionRunVisitMeasure) {
+    let scope = start_substitution_run_visit_measure();
+    let outcome = substitute_with_outcome(interner, template, map);
+    let measure = substitution_run_visit_measure().expect("run visit measurement remains active");
+    drop(scope);
+    (outcome, measure)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct QualifiedTypeSegment<'a> {
@@ -1018,6 +1036,22 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         parameters: &[TypeParamId],
         map: &FxHashMap<TypeParamId, TypeId>,
     ) -> TypeId {
+        match self
+            .substitute_ready_type_group_application_with_outcome(group, template, parameters, map)
+        {
+            SubstitutionOutcome::CycleClean(result) | SubstitutionOutcome::CycleTainted(result) => {
+                result
+            }
+        }
+    }
+
+    fn substitute_ready_type_group_application_with_outcome(
+        &mut self,
+        group: TypeGroupId,
+        template: TypeId,
+        parameters: &[TypeParamId],
+        map: &FxHashMap<TypeParamId, TypeId>,
+    ) -> SubstitutionOutcome {
         #[cfg(not(test))]
         let _ = group;
         if parameters.is_empty() || map.len() != parameters.len() {
@@ -1026,7 +1060,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 &self.eager_application_cache_measure,
                 |measure| measure.unready_bypasses += 1,
             );
-            return substitute(self.interner, template, map);
+            return substitute_with_outcome(self.interner, template, map);
         }
         let Some(arguments) = parameters
             .iter()
@@ -1042,7 +1076,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 &self.eager_application_cache_measure,
                 |measure| measure.unready_bypasses += 1,
             );
-            return substitute(self.interner, template, map);
+            return substitute_with_outcome(self.interner, template, map);
         };
 
         let tag = self.interner.store().tag(template);
@@ -1062,7 +1096,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 &self.eager_application_cache_measure,
                 |measure| measure.lazy_bypasses += 1,
             );
-            return substitute(self.interner, template, map);
+            return substitute_with_outcome(self.interner, template, map);
         }
 
         let key = (template, arguments);
@@ -1080,7 +1114,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             if let Some(attribution) = &self.wu0c_attribution {
                 attribution.record_ready_group_hit(group);
             }
-            return result;
+            return SubstitutionOutcome::CycleClean(result);
         }
 
         #[cfg(test)]
@@ -1094,6 +1128,116 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 group,
                 template,
             );
+
+        #[cfg(test)]
+        if self.cycle_tainted_application_cache_measure.is_some() {
+            record_cycle_tainted_application_cache_measure(
+                &self.cycle_tainted_application_cache_measure,
+                CycleTaintedApplicationCacheMeasure::eligible,
+            );
+
+            if self.cycle_tainted_application_cache.is_some() {
+                let Some(cycle_tainted_application_cache) =
+                    self.cycle_tainted_application_cache.as_mut()
+                else {
+                    return substitute_with_outcome(self.interner, template, map);
+                };
+                record_cycle_tainted_application_cache_measure(
+                    &self.cycle_tainted_application_cache_measure,
+                    CycleTaintedApplicationCacheMeasure::lookup,
+                );
+                if let Some(entry) = cycle_tainted_application_cache.get(&key).copied() {
+                    record_cycle_tainted_application_cache_measure(
+                        &self.cycle_tainted_application_cache_measure,
+                        |measure| measure.hit(entry.first_run_visit_weight),
+                    );
+                    record_eager_application_cache_measure(
+                        &self.eager_application_cache_measure,
+                        |measure| measure.cycle_tainted_skips += 1,
+                    );
+                    if let Some(application) = &wu0c_application {
+                        application.finish_tainted();
+                    }
+                    return SubstitutionOutcome::CycleTainted(entry.result);
+                }
+                record_cycle_tainted_application_cache_measure(
+                    &self.cycle_tainted_application_cache_measure,
+                    CycleTaintedApplicationCacheMeasure::miss,
+                );
+            }
+
+            let (outcome, visit_measure) =
+                substitute_with_run_visit_measure(self.interner, template, map);
+            record_cycle_tainted_application_cache_measure(
+                &self.cycle_tainted_application_cache_measure,
+                |measure| {
+                    measure.executed(
+                        matches!(outcome, SubstitutionOutcome::CycleTainted(_)),
+                        visit_measure.executed_visits,
+                        visit_measure.completed_memo_hits,
+                    );
+                    measure.saturated |= visit_measure.saturated;
+                },
+            );
+            return match outcome {
+                SubstitutionOutcome::CycleClean(result) => {
+                    if self.cycle_tainted_application_cache.is_some() {
+                        record_cycle_tainted_application_cache_measure(
+                            &self.cycle_tainted_application_cache_measure,
+                            CycleTaintedApplicationCacheMeasure::clean_skip,
+                        );
+                    }
+                    self.eager_application_cache.insert(key, result);
+                    record_eager_application_cache_measure(
+                        &self.eager_application_cache_measure,
+                        |measure| measure.insertions += 1,
+                    );
+                    if let Some(application) = &wu0c_application {
+                        application.finish_clean();
+                    }
+                    SubstitutionOutcome::CycleClean(result)
+                }
+                SubstitutionOutcome::CycleTainted(result) => {
+                    record_eager_application_cache_measure(
+                        &self.eager_application_cache_measure,
+                        |measure| measure.cycle_tainted_skips += 1,
+                    );
+                    if self.cycle_tainted_application_cache.is_some() {
+                        if std::mem::replace(
+                            &mut self.panic_before_cycle_tainted_application_cache_publish,
+                            false,
+                        ) {
+                            record_cycle_tainted_application_cache_measure(
+                                &self.cycle_tainted_application_cache_measure,
+                                CycleTaintedApplicationCacheMeasure::abort,
+                            );
+                            if let Some(application) = &wu0c_application {
+                                application.finish_tainted();
+                            }
+                            panic!("test-only panic before cycle-tainted cache publication");
+                        }
+                        let entry = CycleTaintedApplicationCacheEntry {
+                            result,
+                            first_run_visit_weight: visit_measure.executed_visits,
+                        };
+                        if let Some(cycle_tainted_application_cache) =
+                            self.cycle_tainted_application_cache.as_mut()
+                        {
+                            cycle_tainted_application_cache.insert(key, entry);
+                            record_cycle_tainted_application_cache_measure(
+                                &self.cycle_tainted_application_cache_measure,
+                                CycleTaintedApplicationCacheMeasure::insert,
+                            );
+                        }
+                    }
+                    if let Some(application) = &wu0c_application {
+                        application.finish_tainted();
+                    }
+                    SubstitutionOutcome::CycleTainted(result)
+                }
+            };
+        }
+
         match substitute_with_outcome(self.interner, template, map) {
             SubstitutionOutcome::CycleClean(result) => {
                 self.eager_application_cache.insert(key, result);
@@ -1106,7 +1250,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 if let Some(application) = &wu0c_application {
                     application.finish_clean();
                 }
-                result
+                SubstitutionOutcome::CycleClean(result)
             }
             SubstitutionOutcome::CycleTainted(result) => {
                 #[cfg(test)]
@@ -1118,9 +1262,25 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 if let Some(application) = &wu0c_application {
                     application.finish_tainted();
                 }
-                result
+                SubstitutionOutcome::CycleTainted(result)
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn substitute_ready_type_group_application_with_outcome_for_test(
+        &mut self,
+        group: TypeGroupId,
+        template: TypeId,
+        parameters: &[TypeParamId],
+        map: &FxHashMap<TypeParamId, TypeId>,
+    ) -> SubstitutionOutcome {
+        self.substitute_ready_type_group_application_with_outcome(group, template, parameters, map)
+    }
+
+    #[cfg(test)]
+    pub(super) fn panic_before_cycle_tainted_application_cache_publish_for_test(&mut self) {
+        self.panic_before_cycle_tainted_application_cache_publish = true;
     }
 
     fn instantiate_type_group_arguments(
