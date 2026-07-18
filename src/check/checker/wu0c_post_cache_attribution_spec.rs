@@ -50,7 +50,10 @@
 //! All limits are explicit: lines, eager keys, runs, dictionary entries, trace events, queued
 //! checkpoint messages/bytes, rendered line bytes, total file bytes, map/context/application entry
 //! counts, and live exact bytes. Reporter-owned capacity reserves one invalid and one finish line.
-//! Saturation, coverage loss, or any exceeded limit rejects evidence.
+//! Saturation, coverage loss, or any exceeded limit rejects evidence. Enforcing collector limits
+//! before allocation, checkpoint limits before enqueue, and sending bounded delta/coalesced payloads
+//! rather than cumulative clones remain independent implementation/compiler-review gates; raw
+//! runtime counts below exercise the paths but do not self-certify those properties.
 //!
 //! ## Evidence
 //!
@@ -78,11 +81,11 @@
 //! only; they neither measure live wall-clock performance nor establish that Candidate B exists.
 
 use super::wu0c_attribution::{
-    canonical_family_token, exercise_limit_for_test, parse_attribution_line, replay_exact_trace,
-    resolve_mode_from_values_for_test, start_attribution_for_test, validate_session_evidence,
-    AttributionConfig, AttributionLimits, AttributionLine, AttributionMode, AttributionPhase,
-    AttributionTestClock, AttributionTestSink, FamilyParticipant, LimitKind, Termination,
-    ValidatedSessionEvidence,
+    canonical_family_token, parse_attribution_line, replay_exact_trace,
+    resolve_mode_from_values_for_test, resolve_release_config_from_values_for_test,
+    start_attribution_for_test, validate_session_evidence, AttributionConfig, AttributionLimits,
+    AttributionLine, AttributionMode, AttributionPhase, AttributionTestClock, AttributionTestSink,
+    FamilyParticipant, LimitKind, Termination, ValidatedSessionEvidence,
 };
 use crate::binder::declaration::TypeFragmentKind;
 use crate::check::checker::wu0b_library::{run_injected_profile, InjectedLibrarySource};
@@ -104,6 +107,8 @@ const BINARY_IDENTITY: &str = "1111111111111111111111111111111111111111111111111
 const HOST_IDENTITY: &str = "2222222222222222222222222222222222222222222222222222222222222222";
 const WORKLOAD_PROFILE_IDENTITY: &str =
     "5555555555555555555555555555555555555555555555555555555555555555";
+const RELEASE_SESSION_IDENTITY: &str =
+    "8888888888888888888888888888888888888888888888888888888888888888";
 
 fn exact_session_identity(process: u8) -> String {
     format!("{:064x}", 10_000_u64 + u64::from(process))
@@ -135,6 +140,43 @@ fn limits() -> AttributionLimits {
         terminal_reserve_lines: 2,
         terminal_reserve_bytes: 131_072,
     }
+}
+
+fn tiny_limits(limit: LimitKind) -> AttributionLimits {
+    let mut tiny = AttributionLimits {
+        lines: 64,
+        eager_keys: 32,
+        runs: 32,
+        dictionary_entries: 32,
+        trace_events: 128,
+        checkpoint_messages: 8,
+        checkpoint_bytes: 32_768,
+        rendered_line_bytes: 2_048,
+        file_bytes: 65_536,
+        map_entries: 32,
+        context_entries: 512,
+        application_entries: 32,
+        live_exact_bytes: 65_536,
+        terminal_reserve_lines: 2,
+        terminal_reserve_bytes: 4_096,
+    };
+    match limit {
+        LimitKind::Lines => tiny.lines = 5,
+        LimitKind::EagerKeys => tiny.eager_keys = 1,
+        LimitKind::Runs => tiny.runs = 1,
+        LimitKind::DictionaryEntries => tiny.dictionary_entries = 1,
+        LimitKind::TraceEvents => tiny.trace_events = 3,
+        LimitKind::CheckpointMessages => tiny.checkpoint_messages = 1,
+        LimitKind::CheckpointBytes => tiny.checkpoint_bytes = 1,
+        LimitKind::RenderedLineBytes => tiny.rendered_line_bytes = 1_024,
+        LimitKind::FileBytes => tiny.file_bytes = 8_192,
+        LimitKind::MapEntries => tiny.map_entries = 1,
+        LimitKind::ContextEntries => tiny.context_entries = 1,
+        LimitKind::ApplicationEntries => tiny.application_entries = 1,
+        LimitKind::LiveExactBytes => tiny.live_exact_bytes = 512,
+    }
+    tiny.terminal_reserve_bytes = 2 * tiny.rendered_line_bytes;
+    tiny
 }
 
 fn config(mode: AttributionMode, process: u8) -> AttributionConfig {
@@ -427,6 +469,18 @@ fn validate_deadline(lines: &[String]) -> Result<ValidatedSessionEvidence, Strin
     .map_err(|error| error.to_string())
 }
 
+fn resequence(lines: &mut [String]) {
+    for (sequence, line) in lines.iter_mut().enumerate() {
+        let marker = " seq=";
+        let value_start = line.find(marker).expect("fixture has sequence") + marker.len();
+        let value_end = line[value_start..]
+            .find(' ')
+            .map(|offset| value_start + offset)
+            .expect("sequence is followed by fields");
+        line.replace_range(value_start..value_end, &sequence.to_string());
+    }
+}
+
 #[test]
 fn whole_session_validator_accepts_only_a_clean_contiguous_evidence_prefix() {
     let deadline = exact_session_lines(1, false);
@@ -544,6 +598,61 @@ fn whole_session_validator_accepts_only_a_clean_contiguous_evidence_prefix() {
         .expect("first enter event");
     *first_enter = first_enter.replace("state=1", "state=2");
     assert!(validate_deadline(&missing_dictionary).is_err());
+    let mut wrong_map_digest = deadline.clone();
+    let state = wrong_map_digest
+        .iter_mut()
+        .find(|line| line.contains(" kind=state "))
+        .expect("state line");
+    *state = state.replace(MAP_SHA, FAMILY);
+    assert!(validate_deadline(&wrong_map_digest).is_err());
+    let mut wrong_application_digest = deadline.clone();
+    let state = wrong_application_digest
+        .iter_mut()
+        .find(|line| line.contains(" kind=state "))
+        .expect("state line");
+    *state = state.replace(APPLICATION_SHA, FAMILY);
+    assert!(validate_deadline(&wrong_application_digest).is_err());
+    let mut wrong_cycle_counter = deadline.clone();
+    let run = wrong_cycle_counter
+        .iter_mut()
+        .find(|line| line.contains(" kind=run "))
+        .expect("run line");
+    *run = run.replace("cycle_reentries=4095", "cycle_reentries=4094");
+    assert!(validate_deadline(&wrong_cycle_counter).is_err());
+    let mut wrong_tainted_counter = deadline.clone();
+    let run = wrong_tainted_counter
+        .iter_mut()
+        .find(|line| line.contains(" kind=run "))
+        .expect("run line");
+    *run = run.replace("tainted_ancestors=1", "tainted_ancestors=2");
+    assert!(validate_deadline(&wrong_tainted_counter).is_err());
+    let mut wrong_visit_counter = deadline.clone();
+    let run = wrong_visit_counter
+        .iter_mut()
+        .find(|line| line.contains(" kind=run "))
+        .expect("run line");
+    *run = run.replace("visits=4096", "visits=4095");
+    assert!(validate_deadline(&wrong_visit_counter).is_err());
+    let mut wrong_memo_counter = deadline.clone();
+    let run = wrong_memo_counter
+        .iter_mut()
+        .find(|line| line.contains(" kind=run "))
+        .expect("run line");
+    *run = run.replace("memo_hits=0", "memo_hits=1");
+    assert!(validate_deadline(&wrong_memo_counter).is_err());
+    let mut raw_reentry_without_matching_ancestor = deadline.clone();
+    let mut second_state = raw_reentry_without_matching_ancestor[1]
+        .replace(" state=1 ", " state=2 ")
+        .replace("type_id=73", "type_id=74");
+    second_state = second_state.replace(" seq=1 ", " seq=2 ");
+    raw_reentry_without_matching_ancestor.insert(2, second_state);
+    for line in &mut raw_reentry_without_matching_ancestor {
+        if line.contains("visit=2 ") {
+            *line = line.replace(" state=1 ", " state=2 ");
+        }
+    }
+    resequence(&mut raw_reentry_without_matching_ancestor);
+    assert!(validate_deadline(&raw_reentry_without_matching_ancestor).is_err());
 
     let baseline = validated.sample().clone();
     let mut raced = deadline.clone();
@@ -1352,6 +1461,135 @@ fn modes_default_off_and_reporter_control_never_capture_semantics() {
 }
 
 #[test]
+fn release_config_resolver_never_defaults_requested_exact_identity_or_universe() {
+    let complete = vec![
+        ("TYPOKAT_WU0C_PROGRESS_PATH", "progress.log"),
+        ("TYPOKAT_WU0C_MODE", "exact"),
+        ("TYPOKAT_WU0B_PROCESS", "1"),
+        ("TYPOKAT_WU0C_UNIVERSE", "73"),
+        ("TYPOKAT_WU0C_SESSION_SHA256", RELEASE_SESSION_IDENTITY),
+        ("TYPOKAT_WU0C_BINARY_SHA256", BINARY_IDENTITY),
+        ("TYPOKAT_WU0C_HOST_SHA256", HOST_IDENTITY),
+        (
+            "TYPOKAT_WU0C_WORKLOAD_PROFILE_SHA256",
+            WORKLOAD_PROFILE_IDENTITY,
+        ),
+    ];
+    assert!(resolve_release_config_from_values_for_test(&complete).is_ok());
+    for required in [
+        "TYPOKAT_WU0C_SESSION_SHA256",
+        "TYPOKAT_WU0C_BINARY_SHA256",
+        "TYPOKAT_WU0C_HOST_SHA256",
+        "TYPOKAT_WU0C_WORKLOAD_PROFILE_SHA256",
+        "TYPOKAT_WU0B_PROCESS",
+        "TYPOKAT_WU0C_UNIVERSE",
+    ] {
+        let missing = complete
+            .iter()
+            .copied()
+            .filter(|(name, _)| *name != required)
+            .collect::<Vec<_>>();
+        assert!(
+            resolve_release_config_from_values_for_test(&missing).is_err(),
+            "missing {required} must fail closed"
+        );
+    }
+    for (name, malformed) in [
+        ("TYPOKAT_WU0C_SESSION_SHA256", "not-opaque"),
+        ("TYPOKAT_WU0C_BINARY_SHA256", "not-opaque"),
+        ("TYPOKAT_WU0C_HOST_SHA256", "not-opaque"),
+        ("TYPOKAT_WU0C_WORKLOAD_PROFILE_SHA256", "not-opaque"),
+        ("TYPOKAT_WU0C_UNIVERSE", "not-a-universe"),
+    ] {
+        let mut invalid = complete.clone();
+        invalid
+            .iter_mut()
+            .find(|(candidate, _)| *candidate == name)
+            .expect("required value exists")
+            .1 = malformed;
+        assert!(
+            resolve_release_config_from_values_for_test(&invalid).is_err(),
+            "malformed {name} must fail closed"
+        );
+    }
+    for process in ["0", "6", "255", "not-a-process"] {
+        let mut invalid = complete.clone();
+        invalid
+            .iter_mut()
+            .find(|(candidate, _)| *candidate == "TYPOKAT_WU0B_PROCESS")
+            .expect("process exists")
+            .1 = process;
+        assert!(
+            resolve_release_config_from_values_for_test(&invalid).is_err(),
+            "release process {process} is outside 1..=5"
+        );
+    }
+}
+
+#[test]
+fn exact_checkpoint_at_4096_is_direct_reborrow_safe_and_emits_exact_shape() {
+    let clock = AttributionTestClock::default();
+    let sink = AttributionTestSink::default();
+    let scope = start_attribution_for_test(config(AttributionMode::Exact, 1), &clock, &sink)
+        .expect("exact scope");
+    let control = scope.control_for_test();
+    let pass = control.capture_pass_for_test().expect("exact Pass");
+    let run = pass.capture_substitution_for_test(
+        FAMILY,
+        &[(TypeParamId(7), TypeId(11)), (TypeParamId(9), TypeId(13))],
+        Some(TypeId(41)),
+    );
+    for _ in 0..4_096 {
+        run.record_visit_for_test(TypeId(73), &[TypeParamId(7), TypeParamId(9)]);
+    }
+    control.reporter_barrier_for_test();
+    let rendered = sink.rendered_lines();
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains(" kind=run ") && line.contains(" visits=4096 ")));
+    assert!(rendered.iter().any(|line| {
+        line.contains(" kind=state ")
+            && line.contains(" map=7:11,9:13 ")
+            && line.contains(" application=41|7:11,9:13 ")
+    }));
+    assert!(sink
+        .parsed_lines()
+        .iter()
+        .any(|line| { matches!(line, AttributionLine::Event(event) if event.is_exit()) }));
+    drop(scope);
+}
+
+#[test]
+fn recursive_crossing_of_exact_checkpoint_threshold_cannot_skip_4096() {
+    let clock = AttributionTestClock::default();
+    let sink = AttributionTestSink::default();
+    let scope = start_attribution_for_test(config(AttributionMode::Exact, 1), &clock, &sink)
+        .expect("exact scope");
+    let control = scope.control_for_test();
+    let pass = control.capture_pass_for_test().expect("exact Pass");
+    let run = pass.capture_substitution_for_test(FAMILY, &[], None);
+    for _ in 0..4_095 {
+        run.record_visit_for_test(TypeId(73), &[]);
+    }
+    let outer = run
+        .enter_visit_for_test(TypeId(73), &[])
+        .expect("visit 4096 enters");
+    let child = run
+        .enter_visit_for_test(TypeId(73), &[])
+        .expect("recursive visit 4097 enters before 4096 exits");
+    run.finish_cycle_visit_for_test(child);
+    run.finish_tainted_visit_for_test(outer);
+    control.reporter_barrier_for_test();
+    let checkpoint = sink
+        .rendered_lines()
+        .into_iter()
+        .find(|line| line.contains(" kind=run ") && line.contains(" checkpoint=1 "))
+        .expect("crossing 4096 emits a checkpoint");
+    assert!(checkpoint.contains(" visits=4097 "));
+    drop(scope);
+}
+
+#[test]
 fn progress_hot_path_is_local_and_batches_exactly_every_4096_visits() {
     let clock = AttributionTestClock::default();
     let sink = AttributionTestSink::default();
@@ -1361,7 +1599,11 @@ fn progress_hot_path_is_local_and_batches_exactly_every_4096_visits() {
     let pass = control
         .capture_pass_for_test()
         .expect("progress captures Pass");
-    let run = pass.capture_substitution_for_test(FAMILY, &[(TypeParamId(7), TypeId(11))], None);
+    let run = pass.capture_substitution_for_test(
+        FAMILY,
+        &[(TypeParamId(7), TypeId(11))],
+        Some(TypeId(41)),
+    );
     for _ in 0..8_193 {
         run.record_visit_for_test(TypeId(73), &[TypeParamId(7)]);
     }
@@ -1378,6 +1620,10 @@ fn progress_hot_path_is_local_and_batches_exactly_every_4096_visits() {
     assert!(checkpoint_runs
         .iter()
         .any(|line| line.contains(" visits=8192 ")));
+    assert!(sink
+        .parsed_lines()
+        .iter()
+        .all(|line| !matches!(line, AttributionLine::State(_) | AttributionLine::Event(_))));
     assert_eq!(sink.batch_count(), sink.flush_count());
     for line in rendered {
         assert!(!line.contains(" type_id="));
@@ -1390,6 +1636,84 @@ fn progress_hot_path_is_local_and_batches_exactly_every_4096_visits() {
         assert!(!line.contains(" event="));
         assert!(!line.contains(" universe="));
     }
+    drop(scope);
+}
+
+#[test]
+fn phase_updates_and_fixed_heartbeat_deadline_survive_continuous_traffic() {
+    let mut test_config = config(AttributionMode::Progress, 1);
+    test_config.checkpoint_visits = 1;
+    let clock = AttributionTestClock::default();
+    let sink = AttributionTestSink::default();
+    let scope = start_attribution_for_test(test_config, &clock, &sink).expect("progress scope");
+    let control = scope.control_for_test();
+    let pass = control.capture_pass_for_test().expect("progress Pass");
+    let run = pass.capture_substitution_for_test(FAMILY, &[], None);
+
+    control.enter_phase(AttributionPhase::ReserveFill);
+    for _ in 0..100 {
+        clock.advance_us(48_000);
+        run.record_visit_for_test(TypeId(73), &[]);
+        control.enqueue_control_traffic_for_test();
+    }
+    control.reporter_barrier_for_test();
+
+    clock.advance_us(20_000);
+    control.enter_phase(AttributionPhase::PublicationValidation);
+    control.enter_phase(AttributionPhase::StatementCheck);
+    control.reporter_barrier_for_test();
+    assert_eq!(control.coalesced_phase_updates_for_test(), 1);
+    let phase_update = sink
+        .parsed_lines()
+        .into_iter()
+        .rev()
+        .find_map(|line| match line {
+            AttributionLine::Heartbeat(heartbeat) => Some(heartbeat),
+            _ => None,
+        })
+        .expect("coalesced phase update reaches reporter immediately");
+    assert_eq!(phase_update.phase(), AttributionPhase::StatementCheck);
+    assert_eq!(phase_update.reporter_elapsed_us, 4_820_000);
+    assert_eq!(phase_update.checkpoint_elapsed_us, 4_800_000);
+
+    for _ in 0..180 {
+        clock.advance_us(1_000);
+        control.enqueue_control_traffic_for_test();
+    }
+    assert!(control.fire_due_heartbeat_for_test());
+    control.reporter_barrier_for_test();
+    let fixed_deadlines = sink
+        .parsed_lines()
+        .into_iter()
+        .filter_map(|line| match line {
+            AttributionLine::Heartbeat(heartbeat)
+                if heartbeat.reporter_elapsed_us.is_multiple_of(250_000) =>
+            {
+                Some(heartbeat.reporter_elapsed_us)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fixed_deadlines,
+        (1_u64..=20).map(|tick| tick * 250_000).collect::<Vec<_>>()
+    );
+    let heartbeat = sink
+        .parsed_lines()
+        .into_iter()
+        .rev()
+        .find_map(|line| match line {
+            AttributionLine::Heartbeat(heartbeat) => Some(heartbeat),
+            _ => None,
+        })
+        .expect("fixed 250ms heartbeat is not starved");
+    assert_eq!(heartbeat.phase(), AttributionPhase::StatementCheck);
+    assert_eq!(heartbeat.reporter_elapsed_us, 5_000_000);
+    assert_eq!(heartbeat.checkpoint_elapsed_us, 4_800_000);
+    assert_ne!(
+        heartbeat.reporter_elapsed_us,
+        heartbeat.checkpoint_elapsed_us
+    );
     drop(scope);
 }
 
@@ -1577,18 +1901,311 @@ fn scope_and_profile_run_share_one_thread_while_tiny_worker_is_unattributed() {
 
 #[test]
 fn every_finite_limit_reserves_reporter_terminal_capacity_and_rejects_evidence() {
-    assert_eq!(limits().terminal_reserve_lines, 2);
-    assert!(limits().terminal_reserve_bytes >= 2 * limits().rendered_line_bytes);
     for limit in LimitKind::ALL {
-        let lines = exercise_limit_for_test(limit, limits());
-        assert!(lines
+        let configured = tiny_limits(limit);
+        assert_eq!(configured.terminal_reserve_lines, 2);
+        assert!(configured.terminal_reserve_bytes >= 2 * configured.rendered_line_bytes);
+        let mode = match limit {
+            LimitKind::EagerKeys
+            | LimitKind::Runs
+            | LimitKind::CheckpointMessages
+            | LimitKind::CheckpointBytes
+            | LimitKind::Lines
+            | LimitKind::FileBytes => AttributionMode::Progress,
+            LimitKind::DictionaryEntries
+            | LimitKind::TraceEvents
+            | LimitKind::RenderedLineBytes
+            | LimitKind::MapEntries
+            | LimitKind::ContextEntries
+            | LimitKind::ApplicationEntries
+            | LimitKind::LiveExactBytes => AttributionMode::Exact,
+        };
+        let mut test_config = config(mode, 1);
+        test_config.limits = configured;
+        test_config.checkpoint_visits = 1;
+        let clock = AttributionTestClock::default();
+        let sink = AttributionTestSink::default();
+        let scope = start_attribution_for_test(test_config, &clock, &sink)
+            .expect("tiny real collector/reporter scope");
+        let control = scope.control_for_test();
+        let pass = control.capture_pass_for_test().expect("semantic Pass");
+
+        match limit {
+            LimitKind::EagerKeys => {
+                let first = pass.start_ready_application_for_test(&format!("{:064x}", 1));
+                first.finish_miss_tainted_for_test();
+                assert_eq!(control.collector_counts_for_test().eager_keys, 1);
+                let second = pass.start_ready_application_for_test(&format!("{:064x}", 2));
+                second.finish_miss_tainted_for_test();
+                let crossed = control.collector_counts_for_test();
+                assert_eq!(crossed.eager_keys, 1);
+                assert!(crossed.coverage_lost);
+                let third = pass.start_ready_application_for_test(&format!("{:064x}", 3));
+                third.finish_miss_tainted_for_test();
+                assert_eq!(control.collector_counts_for_test().eager_keys, 1);
+            }
+            LimitKind::Runs => {
+                let _first = pass.capture_substitution_for_test(&format!("{:064x}", 1), &[], None);
+                assert_eq!(control.collector_counts_for_test().runs, 1);
+                let _second = pass.capture_substitution_for_test(&format!("{:064x}", 2), &[], None);
+                let crossed = control.collector_counts_for_test();
+                assert_eq!(crossed.runs, 1);
+                assert!(crossed.coverage_lost);
+                let _third = pass.capture_substitution_for_test(&format!("{:064x}", 3), &[], None);
+                assert_eq!(control.collector_counts_for_test().runs, 1);
+            }
+            LimitKind::DictionaryEntries | LimitKind::TraceEvents => {
+                let first = pass.capture_substitution_for_test(&format!("{:064x}", 1), &[], None);
+                first.record_visit_for_test(TypeId(73), &[]);
+                let before = control.collector_counts_for_test();
+                assert_eq!(before.dictionary_entries, 1);
+                assert_eq!(before.trace_events, 3);
+                let second = pass.capture_substitution_for_test(&format!("{:064x}", 2), &[], None);
+                second.record_visit_for_test(TypeId(74), &[]);
+                let crossed = control.collector_counts_for_test();
+                assert!(crossed.coverage_lost);
+                if limit == LimitKind::DictionaryEntries {
+                    assert_eq!(crossed.dictionary_entries, 1);
+                } else {
+                    assert_eq!(crossed.trace_events, 3);
+                }
+                let third = pass.capture_substitution_for_test(&format!("{:064x}", 3), &[], None);
+                third.record_visit_for_test(TypeId(75), &[]);
+                let sticky = control.collector_counts_for_test();
+                assert_eq!(sticky.dictionary_entries, crossed.dictionary_entries);
+                assert_eq!(sticky.trace_events, crossed.trace_events);
+            }
+            LimitKind::MapEntries => {
+                let first = pass.capture_substitution_for_test(
+                    FAMILY,
+                    &[(TypeParamId(7), TypeId(11))],
+                    None,
+                );
+                first.record_visit_for_test(TypeId(73), &[]);
+                assert_eq!(control.collector_counts_for_test().map_entries, 1);
+                let second = pass.capture_substitution_for_test(
+                    FAMILY,
+                    &[(TypeParamId(7), TypeId(11)), (TypeParamId(9), TypeId(13))],
+                    None,
+                );
+                second.record_visit_for_test(TypeId(74), &[]);
+                let crossed = control.collector_counts_for_test();
+                assert_eq!(crossed.map_entries, 1);
+                assert!(crossed.coverage_lost);
+                second.record_visit_for_test(TypeId(75), &[]);
+                assert_eq!(control.collector_counts_for_test().map_entries, 1);
+            }
+            LimitKind::ContextEntries => {
+                let run = pass.capture_substitution_for_test(FAMILY, &[], None);
+                run.record_visit_for_test(TypeId(73), &[TypeParamId(7)]);
+                assert_eq!(control.collector_counts_for_test().context_entries, 1);
+                run.record_visit_for_test(TypeId(74), &[TypeParamId(7), TypeParamId(9)]);
+                let crossed = control.collector_counts_for_test();
+                assert_eq!(crossed.context_entries, 1);
+                assert!(crossed.coverage_lost);
+                run.record_visit_for_test(TypeId(75), &[TypeParamId(7), TypeParamId(9)]);
+                assert_eq!(control.collector_counts_for_test().context_entries, 1);
+            }
+            LimitKind::ApplicationEntries => {
+                let first = pass.capture_substitution_for_test(
+                    &format!("{:064x}", 1),
+                    &[],
+                    Some(TypeId(41)),
+                );
+                first.record_visit_for_test(TypeId(73), &[]);
+                assert_eq!(control.collector_counts_for_test().application_entries, 1);
+                let second = pass.capture_substitution_for_test(
+                    &format!("{:064x}", 2),
+                    &[],
+                    Some(TypeId(42)),
+                );
+                second.record_visit_for_test(TypeId(74), &[]);
+                let crossed = control.collector_counts_for_test();
+                assert_eq!(crossed.application_entries, 1);
+                assert!(crossed.coverage_lost);
+                let third = pass.capture_substitution_for_test(
+                    &format!("{:064x}", 3),
+                    &[],
+                    Some(TypeId(43)),
+                );
+                third.record_visit_for_test(TypeId(75), &[]);
+                assert_eq!(control.collector_counts_for_test().application_entries, 1);
+            }
+            LimitKind::LiveExactBytes => {
+                let mut retained = Vec::new();
+                for index in 1_u32..=16 {
+                    let run = pass.capture_substitution_for_test(
+                        &format!("{index:064x}"),
+                        &[],
+                        Some(TypeId(40 + index)),
+                    );
+                    run.record_visit_for_test(TypeId(70 + index), &[]);
+                    retained.push(run);
+                    if control.collector_counts_for_test().coverage_lost {
+                        break;
+                    }
+                }
+                let crossed = control.collector_counts_for_test();
+                assert!(
+                    retained.len() >= 2,
+                    "global bytes cross across distinct runs"
+                );
+                assert!(crossed.live_exact_bytes <= configured.live_exact_bytes);
+                assert!(crossed.coverage_lost);
+                let post = pass.capture_substitution_for_test(&format!("{:064x}", 99), &[], None);
+                post.record_visit_for_test(TypeId(99), &[]);
+                assert_eq!(
+                    control.collector_counts_for_test().live_exact_bytes,
+                    crossed.live_exact_bytes
+                );
+            }
+            LimitKind::CheckpointMessages | LimitKind::CheckpointBytes => {
+                control.pause_reporter_for_test();
+                let before = control.checkpoint_queue_counts_for_test();
+                let first = pass.capture_substitution_for_test(&format!("{:064x}", 1), &[], None);
+                first.record_visit_for_test(TypeId(73), &[]);
+                let after_first = control.checkpoint_queue_counts_for_test();
+                assert!(after_first.messages <= configured.checkpoint_messages);
+                assert!(after_first.bytes <= configured.checkpoint_bytes);
+                assert_eq!(
+                    after_first.messages - before.messages,
+                    usize::from(limit == LimitKind::CheckpointMessages)
+                );
+                let second = pass.capture_substitution_for_test(&format!("{:064x}", 2), &[], None);
+                second.record_visit_for_test(TypeId(74), &[]);
+                let crossed = control.checkpoint_queue_counts_for_test();
+                assert_eq!(crossed.messages, after_first.messages);
+                assert_eq!(crossed.bytes, after_first.bytes);
+                assert!(control.collector_counts_for_test().coverage_lost);
+                let third = pass.capture_substitution_for_test(&format!("{:064x}", 3), &[], None);
+                third.record_visit_for_test(TypeId(75), &[]);
+                let sticky = control.checkpoint_queue_counts_for_test();
+                assert_eq!(sticky.messages, crossed.messages);
+                assert_eq!(sticky.bytes, crossed.bytes);
+                control.resume_reporter_for_test();
+            }
+            LimitKind::RenderedLineBytes => {
+                let run = pass.capture_substitution_for_test(FAMILY, &[], Some(TypeId(41)));
+                let context = (0_u32..256).map(TypeParamId).collect::<Vec<_>>();
+                run.record_visit_for_test(TypeId(73), &context);
+            }
+            LimitKind::Lines | LimitKind::FileBytes => {
+                let count = if limit == LimitKind::Lines { 4 } else { 16 };
+                for index in 1..=count {
+                    let application =
+                        pass.start_ready_application_for_test(&format!("{index:064x}"));
+                    application.finish_miss_tainted_for_test();
+                }
+            }
+        }
+
+        control.report_now_and_wait_for_test();
+        control.reporter_barrier_for_test();
+        let after_invalid_lines = sink.rendered_lines();
+        let after_invalid_bytes = after_invalid_lines
+            .iter()
+            .map(|line| line.len() + 1)
+            .sum::<usize>();
+        assert!(after_invalid_lines
             .iter()
             .filter_map(|line| parse_attribution_line(line).ok())
             .any(
                 |line| matches!(line, AttributionLine::Invalid(invalid) if invalid.limit == limit)
             ));
+        control.report_now_and_wait_for_test();
+        control.reporter_barrier_for_test();
+        assert_eq!(
+            sink.rendered_lines(),
+            after_invalid_lines,
+            "invalidation is sticky"
+        );
+        assert_eq!(
+            sink.rendered_lines()
+                .iter()
+                .map(|line| line.len() + 1)
+                .sum::<usize>(),
+            after_invalid_bytes
+        );
+        drop(scope);
+
+        let lines = sink.rendered_lines();
+        let bytes = lines.iter().map(|line| line.len() + 1).sum::<usize>();
+        assert!(lines.len() <= configured.lines);
+        assert!(bytes <= configured.file_bytes);
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains(" kind=invalid "))
+                .count(),
+            1
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains(" kind=finish "))
+                .count(),
+            1
+        );
+        assert!(lines
+            .iter()
+            .any(|line| line.contains(" kind=finish ") && line.contains(" coverage_lost=1")));
         assert!(validate_session_evidence(&lines, Termination::Normal).is_err());
     }
+}
+
+#[test]
+fn one_shot_sink_failure_persists_invalidation_and_never_looks_like_clean_deadline() {
+    let clock = AttributionTestClock::default();
+    let sink = AttributionTestSink::default();
+    let scope = start_attribution_for_test(config(AttributionMode::Exact, 1), &clock, &sink)
+        .expect("exact scope");
+    let control = scope.control_for_test();
+    control.enter_phase(AttributionPhase::ReserveFill);
+    let pass = control.capture_pass_for_test().expect("exact Pass");
+    let application = pass.start_ready_application_for_test(FAMILY);
+    let run = application.capture_substitution_for_test(&[], Some(TypeId(41)));
+    let root = run
+        .enter_visit_for_test(TypeId(73), &[])
+        .expect("cycle root enters");
+    for _ in 0..4_095 {
+        let child = run
+            .enter_visit_for_test(TypeId(73), &[])
+            .expect("raw reentry child enters");
+        run.finish_cycle_visit_for_test(child);
+    }
+    clock.advance_us(4_800_000);
+    run.finish_tainted_visit_for_test(root);
+    control.reporter_barrier_for_test();
+    clock.advance_us(200_000);
+    assert!(control.fire_due_heartbeat_for_test());
+    control.reporter_barrier_for_test();
+    let clean_prefix = sink.rendered_lines();
+    assert!(validate_session_evidence(
+        &clean_prefix,
+        Termination::Deadline {
+            elapsed_us: 5_000_000
+        }
+    )
+    .is_ok());
+
+    sink.fail_next_write_for_test();
+    control.report_now_and_wait_for_test();
+    control.reporter_barrier_for_test();
+    assert_eq!(sink.write_failures_for_test(), 1);
+    let lines = sink.rendered_lines();
+    assert!(lines.iter().filter_map(|line| parse_attribution_line(line).ok()).any(
+        |line| matches!(line, AttributionLine::Invalid(invalid) if invalid.is_sink_write_failure())
+    ));
+    assert!(lines.starts_with(&clean_prefix));
+    assert!(validate_session_evidence(
+        &lines,
+        Termination::Deadline {
+            elapsed_us: 5_000_000
+        }
+    )
+    .is_err());
+    drop(application);
+    drop(scope);
 }
 
 #[test]
@@ -1598,6 +2215,7 @@ fn activation_has_exact_module_adjacency_named_hooks_and_direct_probe_install_or
     let substitute = include_str!("../../types/substitute/mod.rs");
     let resolve = include_str!("decls/resolve.rs");
     let wu0b = include_str!("wu0b_library.rs");
+    let attribution = include_str!("wu0c_attribution.rs");
     const ACTIVATION: &str =
         "#[cfg(test)]\nmod wu0c_attribution;\n#[cfg(test)]\nmod wu0c_post_cache_attribution_spec;";
     assert_eq!(checker_mod.matches(ACTIVATION).count(), 1);
@@ -1622,8 +2240,48 @@ fn activation_has_exact_module_adjacency_named_hooks_and_direct_probe_install_or
     );
     assert_eq!(wu0b.matches("register_wu0c_family_tokens").count(), 1);
 
+    assert!(!checker_context.contains("wu0c_ready_group"));
+    assert!(!resolve.contains("wu0c_ready_group"));
+    let ready_signature = resolve
+        .find("fn substitute_ready_type_group_application")
+        .map(|start| &resolve[start..])
+        .and_then(|tail| tail.split_once('{').map(|(signature, _)| signature))
+        .expect("Ready substitution has an explicit signature");
+    assert!(ready_signature.contains("group: TypeGroupId"));
+    let ready_call = resolve
+        .rfind("substitute_ready_type_group_application(")
+        .map(|start| &resolve[start..])
+        .expect("Ready path consumes its group at the callsite");
+    assert!(ready_call[..ready_call.find(')').expect("call closes")].contains("decl_id"));
+
+    let release_start = attribution
+        .find("pub(super) fn start_wu0c_attribution_from_env()")
+        .expect("real release entrypoint");
+    let release_end = attribution[release_start..]
+        .find("pub(in crate::check::checker) fn capture_wu0c_pass_attribution")
+        .map(|offset| release_start + offset)
+        .expect("release entrypoint has a bounded source slice");
+    let release_entrypoint = &attribution[release_start..release_end];
+    assert_eq!(
+        release_entrypoint
+            .matches("resolve_release_config_from_values(")
+            .count(),
+        1
+    );
+    let delegated = release_entrypoint
+        .find("resolve_release_config_from_values(")
+        .expect("real entrypoint delegates to pure resolver");
+    let opens_sink = release_entrypoint
+        .find("OpenOptions::new()")
+        .expect("sink opens only after validation");
+    assert!(delegated < opens_sink);
+    assert!(!release_entrypoint.contains("unwrap_or(1)"));
+    assert!(!release_entrypoint.contains("unwrap_or_else"));
+
     // Source occurrence checks are deliberately small; hot-path cost still requires review and
-    // compiler inspection before activation.
+    // compiler inspection before activation. The explicit Ready argument is the one-shot ownership
+    // boundary: partial, nongeneric, and lazy bypasses cannot leave an ambient family for a later
+    // Ready application.
 
     let bind_complete = wu0b
         .find("let bind_elapsed")
