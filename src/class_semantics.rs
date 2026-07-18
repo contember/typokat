@@ -130,6 +130,15 @@ pub(crate) enum PublishedClassPoison {
     Surface,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
+pub(crate) enum CanonicalPublishedClassTerminal<'a> {
+    Ready(&'a PublishedClassSurface),
+    HeritagePoison,
+    InitializerPoison,
+    SurfacePoison,
+}
+
 /// Immutable proof that every registered class reached a final state. Drafts
 /// and partially composed surfaces never enter this registry.
 #[derive(Clone)]
@@ -140,6 +149,39 @@ pub(crate) struct PublishedClasses {
 }
 
 impl PublishedClasses {
+    #[cfg(test)]
+    pub(crate) fn canonical_terminals(
+        &self,
+    ) -> Option<Vec<(ClassId, CanonicalPublishedClassTerminal<'_>)>> {
+        let mut classes = self.states.keys().copied().collect::<Vec<_>>();
+        classes.sort_by_key(|class| class.0);
+        classes
+            .into_iter()
+            .map(|class| {
+                let terminal = match self.states.get(&class)? {
+                    ClassConstructionState::Published => {
+                        CanonicalPublishedClassTerminal::Ready(self.surfaces.get(&class)?)
+                    }
+                    ClassConstructionState::Poisoned => match self.poison.get(&class)? {
+                        PublishedClassPoison::Heritage => {
+                            CanonicalPublishedClassTerminal::HeritagePoison
+                        }
+                        PublishedClassPoison::Initializer => {
+                            CanonicalPublishedClassTerminal::InitializerPoison
+                        }
+                        PublishedClassPoison::Surface => {
+                            CanonicalPublishedClassTerminal::SurfacePoison
+                        }
+                    },
+                    ClassConstructionState::Pending
+                    | ClassConstructionState::Building
+                    | ClassConstructionState::Built => return None,
+                };
+                Some((class, terminal))
+            })
+            .collect()
+    }
+
     pub(crate) fn extend(mut self, extension: Self) -> Option<Self> {
         if extension
             .states
