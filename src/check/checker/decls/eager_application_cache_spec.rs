@@ -433,16 +433,36 @@ fn ready_cache_misses_then_hits_and_uses_exact_declaration_order() {
 
     let scope = start_eager_application_cache_measure();
     let mut pass = empty_published_pass(&mut interner, &binder);
-    let first_result =
-        pass.substitute_ready_type_group_application(template, &parameters, &first_map);
-    let identical_result =
-        pass.substitute_ready_type_group_application(template, &parameters, &reverse_insertion_map);
-    let different_result =
-        pass.substitute_ready_type_group_application(template, &parameters, &different_arguments);
-    let reordered_key_result =
-        pass.substitute_ready_type_group_application(template, &reversed_parameters, &first_map);
-    let other_template_result =
-        pass.substitute_ready_type_group_application(other_template, &parameters, &first_map);
+    let first_result = pass.substitute_ready_type_group_application(
+        TypeGroupId(0),
+        template,
+        &parameters,
+        &first_map,
+    );
+    let identical_result = pass.substitute_ready_type_group_application(
+        TypeGroupId(0),
+        template,
+        &parameters,
+        &reverse_insertion_map,
+    );
+    let different_result = pass.substitute_ready_type_group_application(
+        TypeGroupId(0),
+        template,
+        &parameters,
+        &different_arguments,
+    );
+    let reordered_key_result = pass.substitute_ready_type_group_application(
+        TypeGroupId(0),
+        template,
+        &reversed_parameters,
+        &first_map,
+    );
+    let other_template_result = pass.substitute_ready_type_group_application(
+        TypeGroupId(0),
+        other_template,
+        &parameters,
+        &first_map,
+    );
 
     assert_eq!(first_result, identical_result);
     assert_ne!(first_result, different_result);
@@ -481,10 +501,18 @@ fn incomplete_parameter_pairs_bypass_without_publishing_a_partial_key() {
 
     let scope = start_eager_application_cache_measure();
     let mut pass = empty_published_pass(&mut interner, &binder);
-    let first_result =
-        pass.substitute_ready_type_group_application(template, &[first_id, second_id], &partial);
-    let second_result =
-        pass.substitute_ready_type_group_application(template, &[first_id, second_id], &partial);
+    let first_result = pass.substitute_ready_type_group_application(
+        TypeGroupId(0),
+        template,
+        &[first_id, second_id],
+        &partial,
+    );
+    let second_result = pass.substitute_ready_type_group_application(
+        TypeGroupId(0),
+        template,
+        &[first_id, second_id],
+        &partial,
+    );
     assert_eq!(first_result, second_result);
 
     let measure = eager_application_cache_measure().expect("measurement scope remains enabled");
@@ -515,11 +543,13 @@ fn cache_lifetime_is_one_pass_even_in_one_universe_and_never_crosses_universes()
     {
         let mut first_pass = empty_published_pass(&mut first_interner, &binder);
         let first = first_pass.substitute_ready_type_group_application(
+            TypeGroupId(0),
             first_template,
             &[param_id],
             &first_map,
         );
         let second = first_pass.substitute_ready_type_group_application(
+            TypeGroupId(0),
             first_template,
             &[param_id],
             &first_map,
@@ -529,6 +559,7 @@ fn cache_lifetime_is_one_pass_even_in_one_universe_and_never_crosses_universes()
     {
         let mut fresh_pass = empty_published_pass(&mut first_interner, &binder);
         let _ = fresh_pass.substitute_ready_type_group_application(
+            TypeGroupId(0),
             first_template,
             &[param_id],
             &first_map,
@@ -548,6 +579,7 @@ fn cache_lifetime_is_one_pass_even_in_one_universe_and_never_crosses_universes()
     assert_eq!(first_wk.string.0, second_wk.string.0);
     let mut second_universe_pass = empty_published_pass(&mut second_interner, &binder);
     let _ = second_universe_pass.substitute_ready_type_group_application(
+        TypeGroupId(0),
         second_template,
         &[param_id],
         &second_map,
@@ -588,8 +620,10 @@ fn cycle_tainted_results_repeat_the_miss_and_never_publish() {
 
     let scope = start_eager_application_cache_measure();
     let mut pass = empty_published_pass(&mut interner, &binder);
-    let first = pass.substitute_ready_type_group_application(recursive, &[param_id], &map);
-    let second = pass.substitute_ready_type_group_application(recursive, &[param_id], &map);
+    let first =
+        pass.substitute_ready_type_group_application(TypeGroupId(0), recursive, &[param_id], &map);
+    let second =
+        pass.substitute_ready_type_group_application(TypeGroupId(0), recursive, &[param_id], &map);
     assert_eq!(first, second);
 
     let measure = eager_application_cache_measure().expect("measurement scope remains enabled");
@@ -648,8 +682,10 @@ fn nested_mapped_distribution_propagates_cycle_taint_to_the_outer_application() 
 
     let scope = start_eager_application_cache_measure();
     let mut pass = empty_published_pass(&mut interner, &binder);
-    let first = pass.substitute_ready_type_group_application(eager_root, &[param_id], &map);
-    let second = pass.substitute_ready_type_group_application(eager_root, &[param_id], &map);
+    let first =
+        pass.substitute_ready_type_group_application(TypeGroupId(0), eager_root, &[param_id], &map);
+    let second =
+        pass.substitute_ready_type_group_application(TypeGroupId(0), eager_root, &[param_id], &map);
     assert_eq!(first, second);
 
     let measure = eager_application_cache_measure().expect("measurement scope remains enabled");
@@ -704,7 +740,12 @@ fn constructed_lazy_tags_and_trusted_markers_bypass_before_lookup() {
         wk.this_type,
         wk.omit_this_parameter,
     ] {
-        let _ = pass.substitute_ready_type_group_application(template, &[param_id], &map);
+        let _ = pass.substitute_ready_type_group_application(
+            TypeGroupId(0),
+            template,
+            &[param_id],
+            &map,
+        );
     }
 
     let measure = eager_application_cache_measure().expect("measurement scope remains enabled");

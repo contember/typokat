@@ -589,6 +589,9 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     #[cfg(test)]
     pub(in crate::check::checker) eager_application_cache_measure:
         Option<EagerApplicationCacheMeasureCollector>,
+    #[cfg(test)]
+    pub(in crate::check::checker) wu0c_attribution:
+        Option<super::wu0c_attribution::PassAttribution>,
     /// The module scope currently being checked.
     /// Disambiguates span-start keyed lookups for scopes and flow. Correct only
     /// while bodies are walked per module; lazy cross-module inference would

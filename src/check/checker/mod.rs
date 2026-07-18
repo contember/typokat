@@ -63,6 +63,12 @@ mod type_groups;
 pub(crate) mod wu0b_library;
 #[cfg(test)]
 pub(crate) mod wu0b_profile;
+#[cfg(test)]
+mod wu0c_attribution;
+#[cfg(test)]
+mod wu0c_post_cache_attribution_spec;
+#[cfg(test)]
+pub(crate) use wu0c_attribution::{capture_wu0c_substitution_attribution, SubstitutionAttribution};
 
 use context::{
     AssertionCompatibilityObligation, AssignObligation, CheckerEffects, CheckerRecordBatch,
@@ -2039,6 +2045,8 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         eager_application_cache: FxHashMap::default(),
         #[cfg(test)]
         eager_application_cache_measure: context::capture_eager_application_cache_measure(),
+        #[cfg(test)]
+        wu0c_attribution: wu0c_attribution::capture_wu0c_pass_attribution(),
         // Overwritten before each module's fill/flow/check phase; the user module is
         // the single-file default (backlog 58).
         current_module: binder.module,

@@ -287,6 +287,7 @@ pub(crate) fn run_injected_profile(
         .collect::<Vec<_>>();
     let bind_elapsed = bind_started.elapsed();
 
+    super::wu0c_attribution::register_wu0c_family_tokens(&binder);
     let reserve_fill_started = Instant::now();
     let mut ledger = LibraryEventLedger::default();
     let mut lexical_events: LexicalReservations<LibraryRecordTicket> =
@@ -357,6 +358,9 @@ pub(crate) fn run_injected_profile(
     pass.fill_type_decls_range(binder.module, 0, declaration_count);
     let reserve_fill_elapsed = reserve_fill_started.elapsed();
 
+    super::wu0c_attribution::enter_wu0c_phase(
+        super::wu0c_attribution::AttributionPhase::PublicationValidation,
+    );
     let publication_validation_started = Instant::now();
     let module_programs = module_scopes
         .iter()
@@ -387,6 +391,9 @@ pub(crate) fn run_injected_profile(
         .collect::<Vec<_>>();
     let publication_validation_elapsed = publication_validation_started.elapsed();
 
+    super::wu0c_attribution::enter_wu0c_phase(
+        super::wu0c_attribution::AttributionPhase::StatementCheck,
+    );
     let statement_check_started = Instant::now();
     let mut pass_source_units = Vec::with_capacity(canonical.len());
     for (((input, parsed), module), semantic_scope) in canonical
@@ -919,6 +926,7 @@ mod tests {
         let profile = load_strict_profile().expect("strict WU0B registry validation");
         let registry_validation = registry_started.elapsed();
         let injected = profile.injected_sources();
+        let _wu0c_attribution = super::super::wu0c_attribution::start_wu0c_attribution_from_env();
         let run = run_injected_profile(&injected).expect("exact WU0B profile execution");
 
         assert_eq!(run.phase_counts.parse_units, 82);

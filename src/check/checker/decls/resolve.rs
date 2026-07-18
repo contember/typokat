@@ -1013,10 +1013,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     pub(super) fn substitute_ready_type_group_application(
         &mut self,
+        group: TypeGroupId,
         template: TypeId,
         parameters: &[TypeParamId],
         map: &FxHashMap<TypeParamId, TypeId>,
     ) -> TypeId {
+        #[cfg(not(test))]
+        let _ = group;
         if parameters.is_empty() || map.len() != parameters.len() {
             #[cfg(test)]
             record_eager_application_cache_measure(
@@ -1073,6 +1076,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 &self.eager_application_cache_measure,
                 |measure| measure.hits += 1,
             );
+            #[cfg(test)]
+            if let Some(attribution) = &self.wu0c_attribution {
+                attribution.record_ready_group_hit(group);
+            }
             return result;
         }
 
@@ -1080,6 +1087,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         record_eager_application_cache_measure(&self.eager_application_cache_measure, |measure| {
             measure.misses += 1;
         });
+        #[cfg(test)]
+        let wu0c_application =
+            super::super::wu0c_attribution::start_wu0c_ready_application_attribution(
+                &self.wu0c_attribution,
+                group,
+                template,
+            );
         match substitute_with_outcome(self.interner, template, map) {
             SubstitutionOutcome::CycleClean(result) => {
                 self.eager_application_cache.insert(key, result);
@@ -1088,6 +1102,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     &self.eager_application_cache_measure,
                     |measure| measure.insertions += 1,
                 );
+                #[cfg(test)]
+                if let Some(application) = &wu0c_application {
+                    application.finish_clean();
+                }
                 result
             }
             SubstitutionOutcome::CycleTainted(result) => {
@@ -1096,6 +1114,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     &self.eager_application_cache_measure,
                     |measure| measure.cycle_tainted_skips += 1,
                 );
+                #[cfg(test)]
+                if let Some(application) = &wu0c_application {
+                    application.finish_tainted();
+                }
                 result
             }
         }
@@ -1218,7 +1240,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return Some(self.interner.intern_instantiation(template, args));
         }
 
-        Some(self.substitute_ready_type_group_application(template, &params, &map))
+        Some(self.substitute_ready_type_group_application(decl_id, template, &params, &map))
     }
 
     #[cfg(test)]
