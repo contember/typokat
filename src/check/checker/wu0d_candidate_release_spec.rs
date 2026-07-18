@@ -480,6 +480,16 @@ fn evidence_artifact(primary: &[PairedReleaseRun], controls: &[ControlEvidence])
     format!("{}\n", lines.join("\n")).into_bytes()
 }
 
+fn evidence_artifact_authorizes(
+    primary: &[PairedReleaseRun],
+    controls: &[ControlEvidence],
+) -> bool {
+    let artifact = evidence_artifact(primary, controls);
+    let parsed = parse_candidate_release_evidence(&artifact)
+        .expect("structural evidence fixture must remain canonical");
+    evaluate_candidate_b_release(&parsed.primary, &parsed.controls).authorizes_candidate_b()
+}
+
 fn changed_semantic_identity(marker: u8) -> Wu0dSemanticIdentity {
     let mut components = semantic_components();
     components.frozen_library_product.push(marker);
@@ -962,6 +972,59 @@ fn process_identity_is_unique_across_primary_and_both_controls() {
 }
 
 #[test]
+fn raw_evidence_requires_nonempty_identity_and_nonzero_timing_and_rss_for_every_process() {
+    let mut authorized = Vec::new();
+
+    let mut primary = passing_pairs();
+    primary[0].candidate.process_identity.clear();
+    if evidence_artifact_authorizes(&primary, &passing_controls()) {
+        authorized.push("primary empty process identity".to_owned());
+    }
+
+    let mut primary = passing_pairs();
+    primary[0].candidate.elapsed_us = 0;
+    if evidence_artifact_authorizes(&primary, &passing_controls()) {
+        authorized.push("primary zero elapsed time".to_owned());
+    }
+
+    let mut primary = passing_pairs();
+    primary[0].candidate.peak_rss_bytes = 0;
+    if evidence_artifact_authorizes(&primary, &passing_controls()) {
+        authorized.push("primary zero peak RSS".to_owned());
+    }
+
+    for control_index in 0..2 {
+        let control_name = passing_controls()[control_index].name.clone();
+
+        let mut controls = passing_controls();
+        controls[control_index].pairs[0]
+            .candidate
+            .process_identity
+            .clear();
+        if evidence_artifact_authorizes(&passing_pairs(), &controls) {
+            authorized.push(format!("{control_name} empty process identity"));
+        }
+
+        let mut controls = passing_controls();
+        controls[control_index].pairs[0].candidate.elapsed_us = 0;
+        if evidence_artifact_authorizes(&passing_pairs(), &controls) {
+            authorized.push(format!("{control_name} zero elapsed time"));
+        }
+
+        let mut controls = passing_controls();
+        controls[control_index].pairs[0].candidate.peak_rss_bytes = 0;
+        if evidence_artifact_authorizes(&passing_pairs(), &controls) {
+            authorized.push(format!("{control_name} zero peak RSS"));
+        }
+    }
+
+    assert!(
+        authorized.is_empty(),
+        "incomplete external process facts authorized: {authorized:?}",
+    );
+}
+
+#[test]
 fn semantic_counter_cache_and_improvement_failures_are_evaluated() {
     let controls = passing_controls();
 
@@ -1027,6 +1090,45 @@ fn semantic_counter_cache_and_improvement_failures_are_evaluated() {
         &evidence,
         &controls,
         NoGoReason::AffectedVisitReductionBelowEightyPercent,
+    );
+}
+
+#[test]
+fn zero_elapsed_denominators_never_authorize_primary_or_controls() {
+    let mut authorized = Vec::new();
+
+    let mut primary = passing_pairs();
+    for index in [0, 3, 4] {
+        primary[index].baseline.elapsed_us = 0;
+        primary[index].candidate.elapsed_us = 0;
+    }
+    if evaluate_candidate_b_release(&primary, &passing_controls()).authorizes_candidate_b() {
+        authorized.push("primary");
+    }
+
+    for control_index in 0..2 {
+        let mut controls = passing_controls();
+        let name = controls[control_index].name.clone();
+        for pair_index in [0, 3, 4] {
+            controls[control_index].pairs[pair_index]
+                .baseline
+                .elapsed_us = 0;
+            controls[control_index].pairs[pair_index]
+                .candidate
+                .elapsed_us = 0;
+        }
+        if evaluate_candidate_b_release(&passing_pairs(), &controls).authorizes_candidate_b() {
+            authorized.push(match name.as_str() {
+                NON_CYCLE => "non-cycle control",
+                REPORTER_CONTROL => "reporter control",
+                _ => unreachable!("fixed control name"),
+            });
+        }
+    }
+
+    assert!(
+        authorized.is_empty(),
+        "zero-denominator timing evidence authorized: {authorized:?}",
     );
 }
 
@@ -1223,6 +1325,11 @@ fn evidence_artifact_rejects_malformed_truncated_duplicate_unknown_and_misordere
     wrong_count[0] = "typokat-wu0d-release-evidence-v1 process_count=29".to_owned();
     let mut length_mismatch = lines.clone();
     length_mismatch[1] = length_mismatch[1].replacen(" stdout_len=", " stdout_len=999", 1);
+    let mut leading_plus_pair = lines.clone();
+    leading_plus_pair[1] = leading_plus_pair[1].replacen(" pair=1", " pair=+1", 1);
+    let mut leading_plus_elapsed = lines.clone();
+    leading_plus_elapsed[1] =
+        leading_plus_elapsed[1].replacen(" elapsed_us=4000000", " elapsed_us=+4000000", 1);
     let mut oversized_stdout = passing_pairs();
     oversized_stdout[0].baseline.captured_stdout = vec![b'x'; MAX_RELEASE_STDOUT_BYTES + 1];
 
@@ -1234,6 +1341,8 @@ fn evidence_artifact_rejects_malformed_truncated_duplicate_unknown_and_misordere
         format!("{}\n", misordered.join("\n")).into_bytes(),
         format!("{}\n", wrong_count.join("\n")).into_bytes(),
         format!("{}\n", length_mismatch.join("\n")).into_bytes(),
+        format!("{}\n", leading_plus_pair.join("\n")).into_bytes(),
+        format!("{}\n", leading_plus_elapsed.join("\n")).into_bytes(),
         text.replace('\n', "\r\n").into_bytes(),
         artifact[..artifact.len() - 1].to_vec(),
         vec![b'x'; MAX_RELEASE_EVIDENCE_BYTES + 1],
