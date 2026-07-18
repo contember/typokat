@@ -450,3 +450,55 @@ keeps specs, implementation, scoreboard, and docs lifecycle changes separate.
   path, and the namespace refactor remains out of scope. The readiness manifest remains
   **PENDING**, this sprint remains active, and backlog 14 remains open. User direction is required
   before selecting or planning any replacement architecture or separately approved follow-up.
+
+### 2026-07-18 — WU0E first contained diagnostic: interface-fill substitution blow-up
+
+- **Diagnostic implementation.** Commits `23ece95`, `aa182b5`, `2e6e4fe`, and `df639c2` added the
+  test-only WU0E observer, exact trace validator, frozen-binary scheduler, and delegated-cgroup
+  containment. Independent review passed after correcting two retained-lifecycle/identity gaps.
+  WU0E remains measurement-only and cannot authorize WU0D, alter its fixed 5-second/512-MiB gate,
+  or enable WU1. Production still uses `src/prelude.ts`.
+- **Frozen run.** Local artifacts:
+  `target/wu0e-diagnostic/runs/20260718T200858Z-2267198/`. Release libtest identity
+  `d086aca708db7dc563f4f387363caa3ed11d9c7ae156b7a191a2fcaa7440d039`; host identity
+  `e06e1572a971db4a09f3c40a3db7e0da69f1848c6b06478d08463253443ab7b9`; profile identity
+  `ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d`; inventory identity
+  `bd4a7e8d3ae3facc5bfac2d2b906fcf75e6c456358f78b33a3bcd08992a3ecb5`. Dossier SHA-256 is
+  `f226996069ed079406bb2a0d7d3167b570ae058e9afc8015686208e33f146987`.
+- **Contained outcome.** `plain`, `measured-off`, and `candidate-b` each reached the 180-second
+  coordinator deadline at 180.012, 180.012, and 180.011 seconds respectively. Sampled peak RSS was
+  54,706,176, 54,722,560, and 54,870,016 bytes; all cgroups were removed, all OOM deltas were zero,
+  and all same-binary partial validators completed in 35–45 ms. No mode produced a semantic digest.
+- **Phase localization.** Every mode completed profile load, parse, bind, reservation, pass
+  construction, and parameter metadata in about 126 ms, then remained in
+  `fill-interface-scc` until containment. Statement checking was never reached. This falsifies
+  binder cost and per-file statement accumulation as the first bottleneck. It also strongly
+  falsifies broad provisional relation-cache starvation as this first barrier: interface-relation
+  obligations are queued rather than evaluated in this phase, and relation work was not dominant in
+  any of three profiles. The narrower cache-starvation hypothesis remains untested for later phases
+  after interface construction becomes finite; it is not the first optimization.
+- **Anchored profiles.** Three 20-second `cycles:u`, 99-Hz, DWARF-callgraph profiles were captured
+  while their traces remained in `fill-interface-scc`; each contained about 2,000 samples with zero
+  lost samples. `Substitution::apply` used 19.46% self cycles in plain, 17.49% in measured-off, and
+  15.42% in candidate B. `Copied::next`, `Vec`/`String` cloning, malloc consolidation, allocation,
+  and free dominated the remainder; glibc allocation/free internals accounted for about 38–40% of
+  self cycles in every mode. Candidate B still reached no later phase, so the observed share shift
+  is at most a local constant-factor signal, not authorization. A 10-second candidate-B
+  `perf stat` window retired 126,031,873,160 instructions over 32,369,706,867 cycles (3.89 IPC),
+  with 0.62% branch misses, 1.34% cache misses, and no page faults. The hotspot is instruction-heavy
+  repeated semantic/copy work rather than a memory-latency or RSS failure.
+- **Instrumentation confound.** Independent audit found that release libtests run global relation,
+  inference, query/evaluator, mapped-type, and overload TLS counters even in WU0E `plain`;
+  `measured-off` additionally measures every eligible substitution application, and mapped-type
+  measurement maintains a real hash set. These hooks do not create recursive blow-up, but can
+  amplify it and bias allocator/hash/self-time and candidate-B benefit. The next control is a
+  separate compile-time, plain-only, diagnostic sidecar with identical profile and semantic digest;
+  it remains ineligible for WU0D evidence.
+- **Next evidence gate.** Before choosing an optimization, add bounded counters that distinguish
+  repeated identical application keys, unique-key growth, cycle-tainted versus clean outcomes,
+  total/deep apply visits, cloned properties/signatures/string bytes, and interner hit/insert rates.
+  Run them over dependency-closed completing library ladders, not arbitrary file prefixes. The first
+  optimization must explain at least 30% of cycles on repeated profiles, predict at least 20%
+  end-to-end improvement, preserve the exact semantic digest, and demonstrate at least 20% median
+  improvement across five interleaved fresh-process pairs without regressing controls by more than
+  2%. WU0 remains **NO-GO** and WU1 remains blocked.
