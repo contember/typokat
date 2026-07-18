@@ -63,7 +63,16 @@
 //! create a deterministic kernel task state. That injected drain expiry persists both bounded
 //! emergency attempts, launches no validator, records `cgroup_retained=1`, requests scope abort,
 //! and stops. Separate process fixtures exercise real cleanup and identity disappearance. Scope
-//! disappearance is verified only as the later outcome of aborting the enclosing scope.
+//! disappearance is verified only by the Rust parent after the evidence process exits.
+//!
+//! A retained production failure durably persists its process metadata, re-verifies the delegated
+//! scope identity, and then executes exactly
+//! `/usr/bin/systemctl --user --no-block stop UNIT`. Evidence mode exercises the same command
+//! construction and identity policy through a Rust-owned injected spy exactly once. The spy removes
+//! no real scope; the injected callback removes and verifies only the synthetic retained launch
+//! cgroup. Its runner-owned outcome leaves outer scope disappearance `pending`; a separate
+//! Rust-parent outcome may record disappearance after independently observing the real scope path
+//! absent. Normal evidence-scope completion is never attributed to the injected abort request.
 //!
 //! Delegated-root teardown disables only a controller enabled by this runner, moves the coordinator
 //! from `supervisor/` back to the delegated root, proves `supervisor/` empty, and removes it. Any
@@ -220,6 +229,14 @@ fn create_append_probe(path: &Path) {
     create_exclusive(
         path,
         b"#!/usr/bin/perl\nuse strict; use warnings; use Fcntl qw(O_WRONLY O_APPEND O_NOFOLLOW); my $sink = shift @ARGV; if (defined $ENV{TYPOKAT_WU0E_REQUIRE_FILE}) { -f $ENV{TYPOKAT_WU0E_REQUIRE_FILE} or die \"required evidence missing\\n\"; } sysopen my $h, $sink, O_WRONLY | O_APPEND | O_NOFOLLOW or die $!; print {$h} join(' ', @ARGV), \"\\n\" or die $!; close $h or die $!; exit(($ENV{TYPOKAT_WU0E_CALLBACK_EXIT} // 0) + 0);\n",
+        true,
+    );
+}
+
+fn create_scope_abort_spy(path: &Path) {
+    create_exclusive(
+        path,
+        b"#!/usr/bin/perl\nuse strict; use warnings; use Fcntl qw(O_RDONLY O_WRONLY O_APPEND O_NOFOLLOW); my ($sink, $meta, $unit, $control_group, @command) = @ARGV; defined $control_group && @command == 5 or die \"scope abort spy argv\n\"; $command[0] eq '/usr/bin/systemctl' && $command[1] eq '--user' && $command[2] eq '--no-block' && $command[3] eq 'stop' or die \"scope abort command prefix\n\"; $command[4] eq $unit or die \"scope abort unit mismatch\n\"; sysopen my $m, $meta, O_RDONLY | O_NOFOLLOW or die $!; local $/; my $bytes = <$m>; close $m or die $!; $bytes =~ /(?:\\A|\\n)cgroup_retained=1\\n/ or die \"retained metadata missing\n\"; sysopen my $h, $sink, O_WRONLY | O_APPEND | O_NOFOLLOW or die $!; print {$h} \"callback=1 unit=$unit control_group=$control_group argv=\", join('|', @command), \"\\n\" or die $!; close $h or die $!;\n",
         true,
     );
 }
@@ -661,6 +678,12 @@ seq=6 event=failure-status-published status=73\n",
     )
 }
 
+fn exact_scope_abort_spy(unit: &str, control_group: &str) -> String {
+    format!(
+        "callback=1 unit={unit} control_group={control_group} argv=/usr/bin/systemctl|--user|--no-block|stop|{unit}\n"
+    )
+}
+
 const REQUIRED_PROCESS_META: &[&str] = &[
     "kind",
     "mode",
@@ -751,6 +774,8 @@ fn runner_hardening_produces_independently_verifiable_evidence() {
     let schedule_complete_sink = scratch.fixtures.join("schedule-complete.sink");
     let schedule_stop_sink = scratch.fixtures.join("schedule-stop.sink");
     let failure_order_sink = scratch.fixtures.join("failure-order.sink");
+    let scope_abort_spy = scratch.fixtures.join("scope-abort-spy.pl");
+    let scope_abort_spy_sink = scratch.fixtures.join("scope-abort-spy.sink");
     let synthetic_drain_view = scratch.fixtures.join("synthetic-drain-view.fixture");
     let synthetic_drain_view_bytes = b"typokat-wu0e-synthetic-drain-view-v1\nsource=rust-owned-injected-policy-input\ncgroup_populated=1\npgid_empty=0\ndrain_expired=1\n";
     create_exclusive(
@@ -773,6 +798,8 @@ fn runner_hardening_produces_independently_verifiable_evidence() {
     create_exclusive(&schedule_complete_sink, b"", false);
     create_exclusive(&schedule_stop_sink, b"", false);
     create_exclusive(&failure_order_sink, b"", false);
+    create_scope_abort_spy(&scope_abort_spy);
+    create_exclusive(&scope_abort_spy_sink, b"", false);
     create_exclusive(&synthetic_drain_view, synthetic_drain_view_bytes, false);
 
     let real_parent = scratch.fixtures.join("real-parent");
@@ -1076,10 +1103,6 @@ fn runner_hardening_produces_independently_verifiable_evidence() {
     ] {
         assert_eq!(numeric(&synthetic_drain, key), 1);
     }
-    assert_eq!(
-        read_bounded_regular(&scratch.evidence.join("scope-abort.outcome"), 1_024),
-        b"typokat-wu0e-scope-abort-v1 retained_at_process_meta=1 abort_requested=1 scope_disappeared=1\n"
-    );
     assert!(!Path::new(synthetic_drain.get("launch_cgroup").unwrap()).exists());
 
     let low_memory = assert_process_metadata(
@@ -1107,6 +1130,7 @@ fn runner_hardening_produces_independently_verifiable_evidence() {
         "typokat-wu0e-delegation-meta-v1",
     );
     let proc_control_group = delegation.get("proc_control_group").unwrap();
+    let scope_unit = delegation.get("scope_unit").unwrap();
     assert!(proc_control_group.starts_with('/') && !proc_control_group.contains(".."));
     assert_eq!(
         delegation.get("systemctl_control_group"),
@@ -1126,11 +1150,32 @@ fn runner_hardening_produces_independently_verifiable_evidence() {
         delegation.get("controllers_before"),
         delegation.get("controllers_after")
     );
+    assert_eq!(
+        read_bounded_regular(&scope_abort_spy_sink, 4 * 1_024),
+        exact_scope_abort_spy(scope_unit, proc_control_group).as_bytes()
+    );
+    assert_eq!(
+        read_bounded_regular(&scratch.evidence.join("scope-abort.outcome"), 4 * 1_024),
+        format!(
+            "typokat-wu0e-scope-abort-v2 retained_at_process_meta=1 abort_request_observed=1 abort_request_callback_count=1 systemctl_argv=/usr/bin/systemctl|--user|--no-block|stop|{scope_unit} retained_launch_removed=1 outer_scope_observation=deferred-to-rust-parent\n"
+        )
+        .as_bytes()
+    );
     let scope_path = Path::new("/sys/fs/cgroup").join(proc_control_group.trim_start_matches('/'));
     let supervisor_path = Path::new(delegation.get("supervisor_cgroup").unwrap());
     assert_eq!(supervisor_path, scope_path.join("supervisor"));
     assert!(!supervisor_path.exists());
-    assert!(!scope_path.exists());
+    assert_eq!(
+        std::fs::symlink_metadata(&scope_path).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    let parent_scope_outcome = b"typokat-wu0e-scope-abort-parent-v1 outer_scope_disappearance_observed_by_parent=1 exit_cause=normal-evidence-scope-completion-not-attributed-to-abort\n";
+    let parent_scope_outcome_path = scratch.evidence.join("scope-abort.parent-outcome");
+    create_exclusive(&parent_scope_outcome_path, parent_scope_outcome, false);
+    assert_eq!(
+        read_bounded_regular(&parent_scope_outcome_path, 1_024),
+        parent_scope_outcome
+    );
     assert_eq!(
         delegation.get("teardown_termination").map(String::as_str),
         Some("normal")
@@ -1276,6 +1321,7 @@ seq=9 event=supervisor-removed path={}\n",
         "schedule-complete.journal",
         "schedule-stop.journal",
         "scope-abort.outcome",
+        "scope-abort.parent-outcome",
         "stable-exec.path-drift.stderr",
         "stable-exec.stdout",
         "synthetic-drain-retention.process-meta",
