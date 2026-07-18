@@ -417,3 +417,36 @@ keeps specs, implementation, scoreboard, and docs lifecycle changes separate.
 
 <!-- Append discoveries/deviations/blockers. Graduate changed rationale to an ADR and future work
      to backlog. Do not weaken a hard gate in this log. -->
+
+### 2026-07-18 — WU0 hard NO-GO: primary/off cold deadline
+
+- **Frozen inputs.** Commit `da0b42025ddfa4a606390bbd665b5547b1cdfdb7`; release libtest
+  `d6179df550804179b0f2e29359deef3ac8c68a6e14533ce9050ce5a72dc7f3c0`; primary profile
+  `ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d`; host
+  `741df2394607d2a16861ffe57588c7d4d39420c6a6d98c59c21ccb7293daabb2`. Host: Linux
+  6.17.0-40-generic x86_64, AMD Ryzen 7 PRO 8840HS w/ Radeon 780M Graphics, 16 logical CPUs,
+  rustc 1.95.0, cargo 1.95.0. This was a fresh-process cold in-process library initialization;
+  immediately before launch the coordinator traversed, revalidated, and read all 88 runtime-profile
+  files / 3,022,530 bytes into the filesystem cache.
+- **Evidence.** Local artifacts:
+  `target/wu0d-release/runs/20260718T102841Z-1606417/`. Verified SHA-256:
+  `probe-01-primary-off.meta` =
+  `339f7cf6ba25fb28cde4209a9d532d63f47b684f5dfe136ba8b4b280a89f9e9b`; stdout =
+  `daf071121a9ffe32bbce44190e37a068c96d08bff63fd7b660dd95b77d786dca`; `run-facts.txt` =
+  `9305ddce17dbea4acb7cfb6c0df5f3ae703b67d1d73cc8c45fe8670e4933c023`; Cargo JSON =
+  `e0d342bc510f40cb294c2e72cba2b318477f20fb222650d37068b0944eb1e505`.
+- **Observed stop.** The exact `primary/off` process failed the 5.00 s cold deadline. The
+  coordinator sent TERM; the wrapper exited 143; after the 250 ms grace it attempted group KILL;
+  no direct-PID KILL was attempted; the bounded drain completed. Supervisor elapsed was 5,255,404
+  us total, including containment and reap; it is not a workload-completion time. Stdout was
+  exactly 16 bytes (`\nrunning 1 test\n`); stderr and GNU time output were empty. Peak RSS, GNU
+  elapsed time, phase checkpoint, and semantic identity are **UNAVAILABLE**; semantic equality was
+  **NOT EVALUATED**. Candidate mode and every other probe were **NOT RUN**. The canonical
+  30-process schedule — all five pairs across all three sets — and same-binary validator were
+  not started.
+- **Verdict and stop.** **HARD NO-GO:** WU0's cold `<=5.00 s` acceptance gate failed before a
+  semantic result existed. No candidate comparison or release evidence may be inferred, and the
+  full schedule was skipped. WU1–WU8 are not authorized; `src/prelude.ts` remains the production
+  path, and the namespace refactor remains out of scope. The readiness manifest remains
+  **PENDING**, this sprint remains active, and backlog 14 remains open. User direction is required
+  before selecting or planning any replacement architecture or separately approved follow-up.
