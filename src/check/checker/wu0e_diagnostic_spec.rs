@@ -133,8 +133,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 const PREFIX: &str = "typokat-wu0e-diagnostic-v1";
-const SHA_A: &str = "1111111111111111111111111111111111111111111111111111111111111111";
-const SHA_B: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 const PHASES: [(DiagnosticPhase, &str); 33] = [
     (DiagnosticPhase::ProfileLoad, "profile-load"),
@@ -1283,11 +1283,11 @@ fn tiny_real_profile_crosses_the_actual_canonical_boundaries_in_all_modes() {
 }
 
 #[test]
-fn recursive_generic_witness_proves_mode_fidelity_and_candidate_hits() {
+fn cycle_bearing_generic_witness_proves_mode_fidelity_and_candidate_hits() {
     const SOURCES: &[InjectedLibrarySource<'static>] = &[InjectedLibrarySource {
         file_ordinal: LibraryFileOrdinal::new(0),
-        name: "recursive-generic.d.ts",
-        source: "type Wu0eRecursive<T> = { self: Wu0eRecursive<T>; value: T };\ndeclare const wu0eFirst: Wu0eRecursive<string>;\ndeclare const wu0eSecond: Wu0eRecursive<string>;\ntype Wu0eAgain = Wu0eRecursive<string>;\n",
+        name: "cycle-bearing-generic.d.ts",
+        source: "type Wu0eCycle = { self: Wu0eCycle };\ntype Wu0eCarrier<T> = { cycle: Wu0eCycle; value: T };\ndeclare const wu0eFirst: Wu0eCarrier<string>;\ndeclare const wu0eSecond: Wu0eCarrier<string>;\n",
     }];
     let scratch = ScratchDir::new("recursive-mode-fidelity");
     let off = run_observed_profile_for_test(
