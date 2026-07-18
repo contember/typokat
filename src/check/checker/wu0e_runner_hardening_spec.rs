@@ -73,6 +73,9 @@
 //! cgroup. Its runner-owned outcome leaves outer scope disappearance `pending`; a separate
 //! Rust-parent outcome may record disappearance after independently observing the real scope path
 //! absent. Normal evidence-scope completion is never attributed to the injected abort request.
+//! This also applies when an exception escapes after fork: if exception cleanup retains the launch
+//! cgroup, complete mandatory process metadata is fsynced before the verified abort request, and
+//! only then may the original exception propagate.
 //!
 //! Delegated-root teardown disables only a controller enabled by this runner, moves the coordinator
 //! from `supervisor/` back to the delegated root, proves `supervisor/` empty, and removes it. Any
@@ -97,6 +100,16 @@
 //! execute `trusted_marker=1`, never `replacement_marker=1`, and path drift must reject. Temporary
 //! publication is exclusive, no-follow, and no-replace beneath verified real directories. Artifact
 //! inode replacement rejects and the Rust-owned victim's inode and digest remain unchanged.
+//! Path identity is reverified after every completed workload and validator launch. The acceptance
+//! replaces the final candidate-b validator pathname only after that validator completes and proves
+//! both stable-handle execution and rejection before the schedule can succeed.
+//!
+//! Self-test schedule, environment, identity, and preflight observations travel through the same
+//! production descriptor and hardened-launch hooks as an ordinary run. A Rust-owned dynamic seed
+//! and executable observation probe make those hook inputs externally visible. The preflight action
+//! ordering is a real child/parent trace tied by digest to `preflight.meta`, not a string literal.
+//! The former v1 workload/validator/dossier production route is absent. The independent containment
+//! self-test and its supervisor remain a separate active diagnostic contract.
 //!
 //! The acceptance itself never uses unbounded `Command::output()`. A Rust-owned watchdog runs the
 //! runner in a fresh session. Two bounded pipe readers accept at most limit+1 bytes and then close,
@@ -237,6 +250,30 @@ fn create_scope_abort_spy(path: &Path) {
     create_exclusive(
         path,
         b"#!/usr/bin/perl\nuse strict; use warnings; use Fcntl qw(O_RDONLY O_WRONLY O_APPEND O_NOFOLLOW); my ($sink, $meta, $unit, $control_group, @command) = @ARGV; defined $control_group && @command == 5 or die \"scope abort spy argv\n\"; $command[0] eq '/usr/bin/systemctl' && $command[1] eq '--user' && $command[2] eq '--no-block' && $command[3] eq 'stop' or die \"scope abort command prefix\n\"; $command[4] eq $unit or die \"scope abort unit mismatch\n\"; sysopen my $m, $meta, O_RDONLY | O_NOFOLLOW or die $!; local $/; my $bytes = <$m>; close $m or die $!; $bytes =~ /(?:\\A|\\n)cgroup_retained=1\\n/ or die \"retained metadata missing\n\"; sysopen my $h, $sink, O_WRONLY | O_APPEND | O_NOFOLLOW or die $!; print {$h} \"callback=1 unit=$unit control_group=$control_group argv=\", join('|', @command), \"\\n\" or die $!; close $h or die $!;\n",
+        true,
+    );
+}
+
+fn create_retained_exception_abort_spy(path: &Path) {
+    let required = REQUIRED_PROCESS_META.join(" ");
+    let source = format!(
+        "#!/usr/bin/perl\nuse strict; use warnings; use Fcntl qw(O_RDONLY O_WRONLY O_APPEND O_NOFOLLOW); my ($sink, $meta, $unit, $control_group, @command) = @ARGV; defined $control_group && @command == 5 or die \"scope abort spy argv\\n\"; $command[0] eq '/usr/bin/systemctl' && $command[1] eq '--user' && $command[2] eq '--no-block' && $command[3] eq 'stop' && $command[4] eq $unit or die \"scope abort command mismatch\\n\"; sysopen my $m, $meta, O_RDONLY | O_NOFOLLOW or die $!; local $/; my $bytes = <$m>; close $m or die $!; my @lines = split /\\n/, $bytes; shift(@lines) eq 'typokat-wu0e-process-meta-v2' or die \"process meta header\\n\"; my %field; for my $line (@lines) {{ my ($key, $value) = split /=/, $line, 2; defined $value && !exists $field{{$key}} or die \"process meta field\\n\"; $field{{$key}} = $value; }} for my $key (qw({required})) {{ exists $field{{$key}} or die \"mandatory process meta missing\\n\"; }} $field{{cgroup_retained}} eq '1' && $field{{meta_fsync_completed}} eq '1' or die \"retained metadata not durable\\n\"; sysopen my $h, $sink, O_WRONLY | O_APPEND | O_NOFOLLOW or die $!; print {{$h}} \"callback=1 unit=$unit control_group=$control_group argv=\", join('|', @command), \"\\n\" or die $!; close $h or die $!;\n"
+    );
+    create_exclusive(path, source.as_bytes(), true);
+}
+
+fn create_production_hook_probe(path: &Path) {
+    create_exclusive(
+        path,
+        b"#!/usr/bin/perl\nuse strict; use warnings; use Digest::SHA qw(sha256_hex); use Fcntl qw(O_RDONLY O_WRONLY O_APPEND O_NOFOLLOW); my ($sink, $seed, @fields) = @ARGV; @fields or die \"production hook fields missing\\n\"; sysopen my $s, $seed, O_RDONLY | O_NOFOLLOW or die $!; local $/; my $bytes = <$s>; close $s or die $!; sysopen my $h, $sink, O_WRONLY | O_APPEND | O_NOFOLLOW or die $!; print {$h} \"seed_sha256=\", sha256_hex($bytes), \" \", join(' ', @fields), \"\\n\" or die $!; close $h or die $!;\n",
+        true,
+    );
+}
+
+fn create_validator_probe(path: &Path) {
+    create_exclusive(
+        path,
+        b"#!/usr/bin/perl\nuse strict; use warnings; my $mode = $ENV{TYPOKAT_WU0E_VALIDATE_MODE} // 'workload'; my $termination = $ENV{TYPOKAT_WU0E_VALIDATE_TERMINATION} // 'normal'; print \"trusted_validator_marker=1\\n\"; if ($mode ne 'workload') { print \"typokat-wu0e-validation-v1 mode=$mode termination=$termination status=complete semantic_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n\"; }\n",
         true,
     );
 }
@@ -684,6 +721,80 @@ fn exact_scope_abort_spy(unit: &str, control_group: &str) -> String {
     )
 }
 
+fn exact_retained_exception_order(meta_path: &Path, unit: &str, control_group: &str) -> String {
+    format!(
+        "typokat-wu0e-retained-exception-order-v1\n\
+seq=0 event=outer-exception phase=post-fork error=synthetic-retained-lifecycle-exception\n\
+seq=1 event=process-meta-fsynced path={} mandatory_fields=complete cgroup_retained=1\n\
+seq=2 event=scope-identity-reverified unit={unit} control_group={control_group} delegate=yes\n\
+seq=3 event=scope-abort-requested argv=/usr/bin/systemctl|--user|--no-block|stop|{unit}\n\
+seq=4 event=outer-exception-propagated error=synthetic-retained-lifecycle-exception\n",
+        meta_path.display()
+    )
+}
+
+fn exact_production_hook_routing(
+    binary: &Path,
+    trace_root: &Path,
+    seed_sha: &str,
+    binary_sha: &str,
+) -> String {
+    let mut lines = Vec::new();
+    let mut seq = 0_u8;
+    for mode in ["plain", "measured-off", "candidate-b"] {
+        let trace = trace_root.join(format!("production-hook-{mode}.trace"));
+        let workload_argv = format!(
+            "{}|--ignored|--exact|check::checker::wu0e_diagnostic::wu0e_primary_probe_once|--nocapture",
+            binary.display()
+        );
+        let workload_env = format!(
+            "TYPOKAT_WU0E_MODE={mode}|TYPOKAT_WU0E_TRACE_PATH={}",
+            trace.display()
+        );
+        lines.push(format!(
+            "seed_sha256={seed_sha} seq={seq} hook=production-launch kind=workload mode={mode} argv={workload_argv} env={workload_env} identities={binary_sha}|{HOST_SHA}|{PROFILE_SHA}|{INVENTORY_SHA} preflight=admitted launch=confirmed"
+        ));
+        seq += 1;
+
+        let validator_argv = format!(
+            "{}|--ignored|--exact|check::checker::wu0e_diagnostic::wu0e_validate_trace_once|--nocapture",
+            binary.display()
+        );
+        let validator_env = format!(
+            "TYPOKAT_WU0E_VALIDATE_MODE={mode}|TYPOKAT_WU0E_VALIDATE_TERMINATION=normal|TYPOKAT_WU0E_VALIDATE_TRACE_PATH={}",
+            trace.display()
+        );
+        lines.push(format!(
+            "seed_sha256={seed_sha} seq={seq} hook=production-launch kind=validator mode={mode} argv={validator_argv} env={validator_env} identities={binary_sha}|{HOST_SHA}|{PROFILE_SHA}|{INVENTORY_SHA} preflight=admitted launch=confirmed"
+        ));
+        seq += 1;
+    }
+    lines.join("\n") + "\n"
+}
+
+fn exact_preflight_action_trace() -> &'static str {
+    "typokat-wu0e-preflight-action-trace-v1\n\
+actor=child seq=0 action=self-move\n\
+actor=child seq=1 action=setsid\n\
+actor=child seq=2 action=readiness\n\
+actor=child seq=3 action=environment\n\
+actor=child seq=4 action=stable-exec\n\
+actor=parent seq=0 action=configure-and-readback outcome=admitted\n\
+actor=parent seq=1 action=readiness-observed\n\
+actor=parent seq=2 action=membership-verify\n\
+actor=parent seq=3 action=pgid-verify\n\
+actor=parent seq=4 action=completion\n"
+}
+
+fn exact_candidate_b_validator_path_drift() -> &'static str {
+    "typokat-wu0e-candidate-b-validator-path-v1\n\
+seq=0 event=scheduler-dispatch kind=validator mode=candidate-b final_validator=1\n\
+seq=1 event=launch-confirmed membership=1 setsid=1\n\
+seq=2 event=trusted-handle-completed exit_code=0\n\
+seq=3 event=pathname-replaced phase=post-completion\n\
+seq=4 event=path-revalidation outcome=rejected error=frozen-executable-pathname-identity-drifted\n"
+}
+
 const REQUIRED_PROCESS_META: &[&str] = &[
     "kind",
     "mode",
@@ -776,6 +887,21 @@ fn runner_hardening_produces_independently_verifiable_evidence() {
     let failure_order_sink = scratch.fixtures.join("failure-order.sink");
     let scope_abort_spy = scratch.fixtures.join("scope-abort-spy.pl");
     let scope_abort_spy_sink = scratch.fixtures.join("scope-abort-spy.sink");
+    let retained_exception_abort_spy = scratch
+        .fixtures
+        .join("retained-exception-scope-abort-spy.pl");
+    let retained_exception_abort_sink =
+        scratch.fixtures.join("retained-exception-scope-abort.sink");
+    let production_hook_probe = scratch.fixtures.join("production-hook-probe.pl");
+    let production_hook_sink = scratch.fixtures.join("production-hook-routing.sink");
+    let production_hook_seed = scratch.fixtures.join("production-hook-seed.fixture");
+    let validator_trusted = scratch.fixtures.join("candidate-b-validator-trusted.pl");
+    let validator_replacement = scratch
+        .fixtures
+        .join("candidate-b-validator-replacement.pl");
+    let validator_replacement_marker = scratch
+        .fixtures
+        .join("candidate-b-validator-replacement.marker");
     let synthetic_drain_view = scratch.fixtures.join("synthetic-drain-view.fixture");
     let synthetic_drain_view_bytes = b"typokat-wu0e-synthetic-drain-view-v1\nsource=rust-owned-injected-policy-input\ncgroup_populated=1\npgid_empty=0\ndrain_expired=1\n";
     create_exclusive(
@@ -800,6 +926,28 @@ fn runner_hardening_produces_independently_verifiable_evidence() {
     create_exclusive(&failure_order_sink, b"", false);
     create_scope_abort_spy(&scope_abort_spy);
     create_exclusive(&scope_abort_spy_sink, b"", false);
+    create_retained_exception_abort_spy(&retained_exception_abort_spy);
+    create_exclusive(&retained_exception_abort_sink, b"", false);
+    create_production_hook_probe(&production_hook_probe);
+    create_exclusive(&production_hook_sink, b"", false);
+    let production_hook_seed_bytes = format!(
+        "typokat-wu0e-production-hook-seed-v1\nnonce={nonce}\nsource=rust-owned-dynamic-input\n"
+    );
+    create_exclusive(
+        &production_hook_seed,
+        production_hook_seed_bytes.as_bytes(),
+        false,
+    );
+    create_validator_probe(&validator_trusted);
+    let validator_replacement_source = format!(
+        "#!/usr/bin/perl\nuse strict; use warnings; open my $h, '>', '{}' or die $!; print {{$h}} \"replacement-executed\\n\"; close $h; print \"replacement_validator_marker=1\\n\";\n",
+        validator_replacement_marker.display()
+    );
+    create_exclusive(
+        &validator_replacement,
+        validator_replacement_source.as_bytes(),
+        true,
+    );
     create_exclusive(&synthetic_drain_view, synthetic_drain_view_bytes, false);
 
     let real_parent = scratch.fixtures.join("real-parent");
@@ -821,6 +969,8 @@ fn runner_hardening_produces_independently_verifiable_evidence() {
     let publication_target_before = file_identity(&publication_target);
     let precreated_temp_before = std::fs::symlink_metadata(&precreated_temp).unwrap();
     let symlink_parent_before = std::fs::symlink_metadata(&symlink_parent).unwrap();
+    let validator_trusted_sha = sha256_hex(&read_bounded_regular(&validator_trusted, 16 * 1_024));
+    let production_hook_seed_sha = sha256_hex(production_hook_seed_bytes.as_bytes());
 
     let bounded = run_bounded_self_test(&scratch, &nonce);
     assert!(
@@ -890,6 +1040,27 @@ fn runner_hardening_produces_independently_verifiable_evidence() {
     assert_eq!(
         read_bounded_regular(&schedule_stop_sink, 64 * 1_024),
         exact_schedule_stop().as_bytes()
+    );
+    let production_hook_routing = exact_production_hook_routing(
+        &validator_trusted,
+        &scratch.fixtures,
+        &production_hook_seed_sha,
+        &validator_trusted_sha,
+    );
+    assert_eq!(
+        read_bounded_regular(
+            &scratch.evidence.join("production-hook-routing.journal"),
+            64 * 1_024,
+        ),
+        production_hook_routing.as_bytes()
+    );
+    assert_eq!(
+        read_bounded_regular(&production_hook_sink, 64 * 1_024),
+        production_hook_routing.as_bytes()
+    );
+    assert_eq!(
+        read_bounded_regular(&production_hook_seed, 4 * 1_024),
+        production_hook_seed_bytes.as_bytes()
     );
     let nested_failure_meta_path = scratch.evidence.join("nested-failure.process-meta");
     let failure_order = exact_failure_order(&nested_failure_meta_path);
@@ -971,6 +1142,32 @@ fn runner_hardening_produces_independently_verifiable_evidence() {
         ),
         b"wu0e-diagnostic: frozen executable pathname identity drifted\n"
     );
+    assert_eq!(
+        read_bounded_regular(
+            &scratch
+                .evidence
+                .join("candidate-b-validator-path-drift.stderr"),
+            1_024,
+        ),
+        b"wu0e-diagnostic: frozen executable pathname identity drifted\n"
+    );
+    assert_eq!(
+        read_bounded_regular(
+            &scratch.evidence.join("candidate-b-validator.stdout"),
+            4 * 1_024,
+        ),
+        b"trusted_validator_marker=1\ntypokat-wu0e-validation-v1 mode=candidate-b termination=normal status=complete semantic_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+    );
+    assert_eq!(
+        read_bounded_regular(
+            &scratch
+                .evidence
+                .join("candidate-b-validator-launch.journal"),
+            4 * 1_024,
+        ),
+        exact_candidate_b_validator_path_drift().as_bytes()
+    );
+    assert!(!validator_replacement_marker.exists());
     assert_eq!(
         read_bounded_regular(&scratch.evidence.join("artifact-replacement.stderr"), 1_024),
         b"wu0e-diagnostic: artifact inode changed during bounded access\n"
@@ -1104,6 +1301,52 @@ fn runner_hardening_produces_independently_verifiable_evidence() {
         assert_eq!(numeric(&synthetic_drain, key), 1);
     }
     assert!(!Path::new(synthetic_drain.get("launch_cgroup").unwrap()).exists());
+
+    let retained_exception_meta_path = scratch.evidence.join("retained-exception.process-meta");
+    let retained_exception = assert_process_metadata(&retained_exception_meta_path, 1_073_741_824);
+    assert_eq!(
+        retained_exception.get("termination").map(String::as_str),
+        Some("infrastructure")
+    );
+    assert_eq!(
+        retained_exception
+            .get("infrastructure_error")
+            .map(String::as_str),
+        Some("synthetic-retained-lifecycle-exception")
+    );
+    assert_eq!(
+        retained_exception
+            .get("exception_phase")
+            .map(String::as_str),
+        Some("post-fork")
+    );
+    assert_eq!(numeric(&retained_exception, "meta_fsync_completed"), 1);
+    assert_eq!(numeric(&retained_exception, "cgroup_retained"), 1);
+    assert_eq!(numeric(&retained_exception, "scope_abort_requested"), 1);
+    assert_eq!(numeric(&retained_exception, "validator_launched"), 0);
+    let retained_unit = retained_exception.get("scope_unit").unwrap();
+    let retained_control_group = retained_exception.get("scope_control_group").unwrap();
+    assert_eq!(
+        read_bounded_regular(&retained_exception_abort_sink, 4 * 1_024),
+        exact_scope_abort_spy(retained_unit, retained_control_group).as_bytes()
+    );
+    assert_eq!(
+        read_bounded_regular(
+            &scratch.evidence.join("retained-exception-order.journal"),
+            16 * 1_024,
+        ),
+        exact_retained_exception_order(
+            &retained_exception_meta_path,
+            retained_unit,
+            retained_control_group,
+        )
+        .as_bytes()
+    );
+    assert_eq!(
+        read_bounded_regular(&scratch.evidence.join("retained-exception.stderr"), 1_024,),
+        b"wu0e-diagnostic: synthetic-retained-lifecycle-exception\n"
+    );
+    assert!(!Path::new(retained_exception.get("launch_cgroup").unwrap()).exists());
 
     let low_memory = assert_process_metadata(
         &scratch.evidence.join("low-memory.process-meta"),
@@ -1242,6 +1485,27 @@ seq=9 event=supervisor-removed path={}\n",
         numeric(&preflight, "unresolved_churn_termination_infrastructure"),
         1
     );
+    let preflight_action_trace = read_bounded_regular(
+        &scratch.evidence.join("preflight-action.journal"),
+        16 * 1_024,
+    );
+    assert_eq!(
+        preflight_action_trace,
+        exact_preflight_action_trace().as_bytes()
+    );
+    assert_eq!(
+        preflight.get("action_trace_source").map(String::as_str),
+        Some("real-hardened-child")
+    );
+    assert_eq!(
+        preflight.get("action_trace_artifact").map(String::as_str),
+        Some("preflight-action.journal")
+    );
+    assert_eq!(
+        preflight.get("action_trace_sha256").map(String::as_str),
+        Some(sha256_hex(&preflight_action_trace).as_str())
+    );
+    assert_eq!(numeric(&preflight, "action_trace_launch_count"), 1);
     assert!(!Path::new(preflight.get("launch_cgroup").unwrap()).exists());
 
     let teardown_failure = assert_process_metadata(
@@ -1266,6 +1530,7 @@ seq=9 event=supervisor-removed path={}\n",
         &low_memory,
         &nested_failure,
         &teardown_failure,
+        &retained_exception,
     ] {
         assert_eq!(fields.get("scope_unit"), delegation.get("scope_unit"));
         assert_eq!(
@@ -1284,7 +1549,7 @@ seq=9 event=supervisor-removed path={}\n",
                 .is_some_and(|extension| extension == "process-meta")
         })
         .collect::<Vec<_>>();
-    assert_eq!(metadata_files.len(), 5);
+    assert_eq!(metadata_files.len(), 6);
     for path in metadata_files {
         let expected = if path
             .file_name()
@@ -1299,6 +1564,9 @@ seq=9 event=supervisor-removed path={}\n",
 
     let expected_files = [
         "artifact-replacement.stderr",
+        "candidate-b-validator-launch.journal",
+        "candidate-b-validator-path-drift.stderr",
+        "candidate-b-validator.stdout",
         "delegation.journal",
         "delegation.meta",
         "dossier-equal.sha256",
@@ -1315,8 +1583,13 @@ seq=9 event=supervisor-removed path={}\n",
         "nested-failure.stderr",
         "nested-marker.stderr",
         "preflight-failures.txt",
+        "preflight-action.journal",
         "preflight.meta",
+        "production-hook-routing.journal",
         "reexec-argv.txt",
+        "retained-exception-order.journal",
+        "retained-exception.process-meta",
+        "retained-exception.stderr",
         "rss-churn-cases.txt",
         "schedule-complete.journal",
         "schedule-stop.journal",
@@ -1370,5 +1643,17 @@ fn hardening_remains_diagnostic_only_and_leaves_wu0d_unchanged() {
         "authorizes_candidate_b",
     ] {
         assert!(!wu0e_runner.contains(forbidden));
+    }
+    for obsolete_v1_route in [
+        "\nsub run_workload {",
+        "\nsub run_validator {",
+        "\nsub write_process_meta {",
+        "\nsub write_dossier {",
+        "typokat-wu0e-diagnostic-dossier-v1",
+    ] {
+        assert!(
+            !wu0e_runner.contains(obsolete_v1_route),
+            "obsolete WU0E v1 route remains: {obsolete_v1_route}"
+        );
     }
 }
