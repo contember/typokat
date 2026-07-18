@@ -664,17 +664,28 @@ fn whole_session_validator_accepts_only_a_clean_contiguous_evidence_prefix() {
         .expect("run line");
     *run = run.replace("memo_hits=0", "memo_hits=1");
     assert!(validate_deadline(&wrong_memo_counter).is_err());
-    let mut raw_reentry_without_matching_ancestor = deadline.clone();
-    let mut second_state = raw_reentry_without_matching_ancestor[1]
+    let mut raw_reentry_under_different_context = deadline.clone();
+    let second_state = raw_reentry_under_different_context[1]
         .replace(" state=1 ", " state=2 ")
-        .replace("type_id=73", "type_id=74");
-    second_state = second_state.replace(" seq=1 ", " seq=2 ");
-    raw_reentry_without_matching_ancestor.insert(2, second_state);
-    for line in &mut raw_reentry_without_matching_ancestor {
+        .replace(" context=7 ", " context=9 ");
+    raw_reentry_under_different_context.insert(2, second_state);
+    for line in &mut raw_reentry_under_different_context {
         if line.contains("visit=2 ") {
             *line = line.replace(" state=1 ", " state=2 ");
         }
     }
+    resequence(&mut raw_reentry_under_different_context);
+    let distinct_context = validate_deadline(&raw_reentry_under_different_context)
+        .expect("raw reentry keys on raw TypeId, not blocked-context dictionary identity");
+    replay_exact_trace(distinct_context.replay_input())
+        .expect("same raw TypeId under a different context is replayable");
+
+    let mut raw_reentry_without_matching_ancestor = raw_reentry_under_different_context;
+    let second_state = raw_reentry_without_matching_ancestor
+        .iter_mut()
+        .find(|line| line.contains(" kind=state ") && line.contains(" state=2 "))
+        .expect("second dictionary state");
+    *second_state = second_state.replace("type_id=73", "type_id=74");
     resequence(&mut raw_reentry_without_matching_ancestor);
     assert!(validate_deadline(&raw_reentry_without_matching_ancestor).is_err());
 
@@ -1614,6 +1625,111 @@ fn recursive_crossing_of_exact_checkpoint_threshold_cannot_skip_4096() {
 }
 
 #[test]
+fn exact_root_closure_after_subthreshold_visits_persists_a_replayable_trace() {
+    let clock = AttributionTestClock::default();
+    let sink = AttributionTestSink::default();
+    let scope = start_attribution_for_test(config(AttributionMode::Exact, 1), &clock, &sink)
+        .expect("exact scope");
+    let control = scope.control_for_test();
+    control.enter_phase(AttributionPhase::ReserveFill);
+    let pass = control.capture_pass_for_test().expect("exact Pass");
+    let application = pass.start_ready_application_for_test(FAMILY);
+    let run = application.capture_substitution_for_test(&[], Some(TypeId(41)));
+    let root = run
+        .enter_visit_for_test(TypeId(73), &[])
+        .expect("root enters");
+    for _ in 0..4_095 {
+        let child = run
+            .enter_visit_for_test(TypeId(73), &[])
+            .expect("raw reentry child enters");
+        run.finish_cycle_visit_for_test(child);
+    }
+    control.reporter_barrier_for_test();
+
+    clock.advance_us(4_800_000);
+    let below_next_threshold = run
+        .enter_visit_for_test(TypeId(73), &[])
+        .expect("subthreshold raw reentry enters");
+    run.finish_cycle_visit_for_test(below_next_threshold);
+    run.finish_tainted_visit_for_test(root);
+    control.reporter_barrier_for_test();
+    clock.advance_us(200_000);
+    assert!(control.fire_due_heartbeat_for_test());
+    control.reporter_barrier_for_test();
+
+    let lines = sink.rendered_lines();
+    assert!(lines.iter().any(|line| {
+        line.contains(" kind=event ")
+            && line.contains(" action=outcome visit=1 ")
+            && line.contains(" disposition=tainted ")
+    }));
+    assert!(lines.iter().any(|line| {
+        line.contains(" kind=event ")
+            && line.contains(" action=exit visit=1 ")
+            && line.contains(" parent=none ")
+    }));
+    let validated = validate_session_evidence(
+        &lines,
+        Termination::Deadline {
+            elapsed_us: 5_000_000,
+        },
+    )
+    .expect("the post-threshold closure delta completes exact evidence");
+    let replay = replay_exact_trace(validated.replay_input()).expect("complete trace replays");
+    assert_eq!(replay.repeated_visits, 4_096);
+    assert_eq!(replay.removable_repeated_visits, 4_096);
+    drop(application);
+    drop(scope);
+}
+
+#[test]
+fn exact_writer_emits_nonempty_closure_delta_when_run_summary_is_unchanged() {
+    let clock = AttributionTestClock::default();
+    let sink = AttributionTestSink::default();
+    let scope = start_attribution_for_test(config(AttributionMode::Exact, 1), &clock, &sink)
+        .expect("exact scope");
+    let control = scope.control_for_test();
+    let pass = control.capture_pass_for_test().expect("exact Pass");
+    let run = pass.capture_substitution_for_test(FAMILY, &[], None);
+    let root = run
+        .enter_visit_for_test(TypeId(73), &[])
+        .expect("root enters");
+    for _ in 0..4_095 {
+        run.record_visit_for_test(TypeId(73), &[]);
+    }
+    control.reporter_barrier_for_test();
+    let before = sink
+        .parsed_lines()
+        .iter()
+        .filter(|line| matches!(line, AttributionLine::Event(_)))
+        .count();
+
+    run.finish_clean_visit_for_test(root);
+    control.reporter_barrier_for_test();
+    let parsed = sink.parsed_lines();
+    assert_eq!(
+        parsed
+            .iter()
+            .filter(|line| matches!(line, AttributionLine::Event(_)))
+            .count(),
+        before + 2,
+        "clean outcome and exit are due output even without summary movement",
+    );
+    let rendered = sink.rendered_lines();
+    assert!(rendered.iter().any(|line| {
+        line.contains(" kind=event ")
+            && line.contains(" action=outcome visit=1 ")
+            && line.contains(" disposition=clean ")
+    }));
+    assert!(rendered.iter().any(|line| {
+        line.contains(" kind=event ")
+            && line.contains(" action=exit visit=1 ")
+            && line.contains(" parent=none ")
+    }));
+    drop(scope);
+}
+
+#[test]
 fn progress_hot_path_is_local_and_batches_exactly_every_4096_visits() {
     let clock = AttributionTestClock::default();
     let sink = AttributionTestSink::default();
@@ -1660,6 +1776,34 @@ fn progress_hot_path_is_local_and_batches_exactly_every_4096_visits() {
         assert!(!line.contains(" event="));
         assert!(!line.contains(" universe="));
     }
+    drop(scope);
+}
+
+#[test]
+fn production_phase_message_consumes_slot_before_later_independent_transition() {
+    let clock = AttributionTestClock::default();
+    let sink = AttributionTestSink::default();
+    let scope = start_attribution_for_test(config(AttributionMode::Progress, 1), &clock, &sink)
+        .expect("progress scope");
+    let control = scope.control_for_test();
+
+    control.enter_phase(AttributionPhase::ReserveFill);
+    let _ = control.fire_due_heartbeat_for_test();
+    control.enter_phase(AttributionPhase::StatementCheck);
+    let _ = control.fire_due_heartbeat_for_test();
+    clock.advance_us(250_000);
+    assert!(control.fire_due_heartbeat_for_test());
+
+    let heartbeat = sink
+        .parsed_lines()
+        .into_iter()
+        .rev()
+        .find_map(|line| match line {
+            AttributionLine::Heartbeat(heartbeat) => Some(heartbeat),
+            _ => None,
+        })
+        .expect("later independent phase transition reaches the reporter");
+    assert_eq!(heartbeat.phase(), AttributionPhase::StatementCheck);
     drop(scope);
 }
 
