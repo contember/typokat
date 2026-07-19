@@ -138,6 +138,7 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - **M** · [`68`](68-contravariant-infer-intersection.md) — intersect same-name contravariant `infer` candidates instead of collapsing to `never`.
 - **M** · [`69`](69-signature-rest-parity-tail.md) — embedded tuple-rest and variadic source-tuple inference.
 - **M** · [`83`](83-contextual-generic-signature-relation.md) — contextual generic-signature instantiation under a cache-safe query-local relation environment.
+- **S** · [`84`](84-distribution-guards-respect-blocked.md) — conditional/mapped distribution guards must filter binder-blocked parameters (residual over-wrap; ledger `substitution/distribution-guard-ignores-blocked`).
 - **L** · [`63`](63-review-parity-tail.md) — batched evaluator/relation/checker FPs, messages, and residual parser-depth guard.
 - **XL** · [`82`](82-declare-global-value-space.md) — legal `declare global` value-space
   publication for variables, functions, complete class type/constructor pairs, and cross-file

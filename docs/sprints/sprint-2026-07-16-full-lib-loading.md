@@ -549,3 +549,25 @@ keeps specs, implementation, scoreboard, and docs lifecycle changes separate.
   ≥30%-of-cycles / ≥20%-end-to-end gate. Second (separate WU): lazy diagnostic rendering with
   depth/size caps and nominal display. Relation-cache H1 stays deferred. WU0 remains **NO-GO**;
   no gate is altered.
+
+### 2026-07-19 — first optimizations shipped: substitution barrier removed
+
+- **Shipped.** `5916b5f` (RED spec) + `fbde2aa` (cycle-scoped tainted memo) and `8f89d53` (RED
+  spec) + `5f6408e` (param-relevant prefilter + internal-cycle fold), each behind an independent
+  adversarial review (40k/60k-seed differential fuzz, official-suite reports byte-identical,
+  conformance corpus byte-identical).
+- **Effect.** The synthetic depth-26 cyclic diamond drops 7.4 s → 4 ms; the lib.dom knee workload
+  (declaration-snapped 16,993-line prefix whose one heavy constraint-check run did 54.7M visits)
+  drops 3.2 s → **0.13 s (~24×)**; the whole substitution phase disappears from the full-dom and
+  82-file-concat profiles. fill-interface-scc is no longer the first barrier.
+- **Divergence.** The prefilter surfaced a pre-existing guard bug (distribution guards ignore
+  blocked binders); the fully-shadowed corner now resolves toward `tsc --strict` (removes a
+  spurious `TK2322` + corrupted display). Residual recorded as ledger
+  `substitution/distribution-guard-ignores-blocked`, fix owned by backlog 84.
+- **Next barrier (re-confirmed on both full workloads).** Eager, unbounded diagnostic type
+  rendering (`render_type`: no memo, no depth/size cap, no nominal naming; single messages ≥15.5 MB)
+  dominates full lib.dom and the 82-file concat. Fixing it needs a display-format decision
+  (nominal names + truncation vs the current structural corpus convention in
+  `tests/cases/README.md`) — leader/user input required before the next WU. The WU0G runner
+  hardening thread (uncommitted `tooling/wu0e-diagnostic/run.pl` work) is unaffected by these
+  commits. WU0 remains **NO-GO**; the 5 s / 512 MiB gate is unchanged and unmet.
