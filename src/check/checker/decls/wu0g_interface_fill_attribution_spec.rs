@@ -3253,6 +3253,11 @@ fn feature_surface_is_reverse_closed_and_preserves_the_original_apply_call_graph
     assert_eq!(apply.matches("wu0g_record!(object_copy").count(), 1);
     assert_eq!(apply.matches("wu0g_record!(interner_attempt").count(), 16);
     assert_eq!(apply.matches("wu0g_record!(mapped_nested").count(), 1);
+    assert_eq!(
+        apply.matches("interner.store().len()").count(),
+        0,
+        "before/after Store length reads must remain wholly feature-owned"
+    );
 
     let fallback_guard_end = attribute_blocks(substitution, b"cfg")
         .into_iter()
