@@ -299,8 +299,8 @@ interface CopyNumber extends CopyTemplate<number> {}
 "#;
 
 const CYCLE_TAINTED: &str = r#"
-type Cycle = { self: Cycle };
-interface CycleTemplate<T> { cycle: Cycle; value: T }
+interface CycleRoot { self: CycleRoot }
+interface CycleTemplate<T> extends CycleRoot { value: T }
 interface CycleFirst extends CycleTemplate<string> {}
 interface CycleSecond extends CycleTemplate<string> {}
 "#;
@@ -2985,7 +2985,7 @@ fn attribution_is_explicit_bounded_and_default_absent() {
     let compact_guard = compact(HOT_GUARD);
     let compact_decls = compact(decls);
     assert!(compact_decls.contains(&format!(
-        "{compact_guard}modwu0g_interface_fill_attribution;"
+        "{compact_guard}pub(incrate::check::checker)modwu0g_interface_fill_attribution;"
     )));
     assert!(compact_decls.contains(&format!(
         "{compact_guard}modwu0g_interface_fill_attribution_spec;"
@@ -4674,12 +4674,13 @@ fn every_canonical_prefix_section_changes_independently_hashed_raw_bytes() {
     let profile = synthetic_82_source_profile();
     let ladder =
         build_dom_heritage_prefix_ladder_for_test(&profile).expect("real synthetic ladder");
-    let measured = measure_dom_rung_for_test(
-        &profile,
-        ladder.last().expect("full rung"),
-        InterfaceFillAttributionMode::Baseline,
-    )
-    .expect("real full-rung measurement");
+    let rung = ladder
+        .iter()
+        .find(|rung| rung.target_basis_points == 7_500)
+        .expect("75% rung");
+    let measured =
+        measure_dom_rung_for_test(&profile, rung, InterfaceFillAttributionMode::Baseline)
+            .expect("real 75%-rung measurement");
     let base = measured.measurement.raw_canonical_sections.clone();
     assert_eq!(
         base.dense_type_store
@@ -4866,7 +4867,7 @@ fn checkpoints_remain_map_free_and_share_the_real_aggregate_limit() {
         [
             "completed_component_identity_sha256:[u8;32],",
             "completed_group_membership_sha256:[u8;32],",
-            "cumulative:InterfaceFillAttributionSnapshot,",
+            "pub(super)cumulative:InterfaceFillAttributionSnapshot,",
             "retained_bytes:usize,",
         ]
         .into_iter()
@@ -5798,24 +5799,30 @@ fn experiment_identity_is_length_framed_and_binds_every_dossier() {
         base.experiment_identity
     );
     let mut shifted = base.clone();
-    let original_left = shifted.profile_identity.canonical_bytes.clone();
-    let original_right = shifted.universe_identity.canonical_bytes.clone();
-    let byte = shifted
-        .universe_identity
-        .canonical_bytes
-        .first()
-        .copied()
-        .expect("nonempty adjacent identity");
-    shifted.profile_identity.canonical_bytes.push(byte);
-    shifted.universe_identity.canonical_bytes.remove(0);
+    let launch = &mut shifted.performance_pairs[0].launches[0];
+    let original_left = launch.perf_version.as_bytes().to_vec();
+    let original_right = launch.perf_event.as_bytes().to_vec();
+    let byte = launch
+        .perf_event
+        .chars()
+        .next()
+        .expect("nonempty adjacent perf event");
+    assert!(byte.is_ascii(), "the perf protocol is ASCII");
+    launch.perf_version.push(byte);
+    launch.perf_event.remove(0);
     assert_eq!(
         [original_left, original_right].concat(),
         [
-            shifted.profile_identity.canonical_bytes.clone(),
-            shifted.universe_identity.canonical_bytes.clone(),
+            launch.perf_version.as_bytes().to_vec(),
+            launch.perf_event.as_bytes().to_vec(),
         ]
         .concat(),
         "unframed concatenation would collide"
+    );
+    assert_eq!(
+        plan_identity_from_raw(&shifted),
+        base.plan_identity,
+        "per-launch observed perf strings are post-plan evidence"
     );
     assert_ne!(
         experiment_identity_from_raw(&shifted),
