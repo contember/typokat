@@ -135,6 +135,10 @@
 //! `/proc/self/limits`. Libtest, `/usr/bin/prlimit`, `/usr/bin/perf`, and any setup helper are opened
 //! and revalidated as stable executable handles. Performance alone uses authenticated perf in
 //! command mode with the exact pinned `instructions:u` argv and default descendant inheritance.
+//! The supervised session leader remains the process the parent waits and reaps: causal execs
+//! libtest in that PID, while performance execs perf there and perf forks the libtest child. The
+//! completion sentinel binds the actual libtest PID, start time, process group, and launch cgroup;
+//! the outer acceptance independently observes both identities and never conflates them.
 //! Its exclusive no-follow <=4 KiB artifact must be one seven-semicolon-field row. The count is
 //! unavailable unless the outer result is normal, perf itself exited zero without signal, the
 //! checker sentinel/artifact authenticate, and OOM, containment, reap, and cleanup are clean.
@@ -207,6 +211,10 @@ const WU0G_ENV_ALLOWLIST: &[&str] = &[
 ];
 const WU0G_SENTINEL_FIELDS: &[&str] = &[
     "argv",
+    "child_cgroup",
+    "child_pgid",
+    "child_pid",
+    "child_start_ticks",
     "environment",
     "fd_inventory",
     "nofile_hard",
@@ -362,6 +370,7 @@ impl AcceptanceScratch {
 #[derive(Clone, Debug)]
 struct ProcFacts {
     parent: u32,
+    pgrp: u32,
     start_ticks: u64,
     rss_bytes: u64,
 }
@@ -397,6 +406,7 @@ struct StableReplacement {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ObservedLaunchFacts {
     pid: u32,
+    pgrp: u32,
     start_ticks: u64,
     launch_cgroup: PathBuf,
     scope_cgroup: PathBuf,
@@ -411,6 +421,7 @@ struct BoundedRun {
     observed_identities: BTreeMap<u32, u64>,
     observed_launches: BTreeSet<(u32, u64)>,
     observed_launch_facts: BTreeSet<ObservedLaunchFacts>,
+    observed_leader_facts: BTreeSet<ObservedLaunchFacts>,
     observed_launch_cgroups: BTreeSet<PathBuf>,
     replacement_performed: bool,
 }
@@ -803,6 +814,242 @@ fn exact_decimal(fields: &BTreeMap<String, String>, key: &str) -> u64 {
     value.parse().expect("bounded protocol integer")
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ClaimedChildFacts {
+    pid: u32,
+    pgrp: u32,
+    start_ticks: u64,
+    cgroup: String,
+}
+
+fn canonical_positive_decimal(value: &str) -> Option<u64> {
+    if value.is_empty()
+        || value.starts_with('+')
+        || value.starts_with('-')
+        || (value.len() > 1 && value.starts_with('0'))
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    value.parse::<u64>().ok().filter(|value| *value > 0)
+}
+
+fn canonical_cgroup_value(value: &str) -> bool {
+    value.starts_with('/')
+        && !value.ends_with('/')
+        && value[1..].split('/').all(|component| {
+            !component.is_empty()
+                && !matches!(component, "." | "..")
+                && component.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'@' | b'-')
+                })
+        })
+}
+
+fn canonical_child_identity(
+    child_pid: u32,
+    child_pgid: u32,
+    child_start_ticks: u64,
+    launch_cgroup: &str,
+    scope_cgroup: &str,
+) -> String {
+    let canonical = format!(
+        "typokat-wu0g-observed-child-v1\nchild_pgid={child_pgid}\nchild_pid={child_pid}\nchild_start_ticks={child_start_ticks}\nlaunch_cgroup={launch_cgroup}\nscope_cgroup={scope_cgroup}\n"
+    );
+    framed_identity("wu0g-child-v1", canonical.as_bytes())
+}
+
+fn validate_claimed_child_boundary(
+    kind: Wu0gRequestKind,
+    sentinel: &BTreeMap<String, String>,
+    result: &BTreeMap<String, String>,
+    launch_cgroup: &str,
+    scope_cgroup: &str,
+) -> Option<ClaimedChildFacts> {
+    if !canonical_cgroup_value(launch_cgroup)
+        || !canonical_cgroup_value(scope_cgroup)
+        || launch_cgroup == scope_cgroup
+        || !launch_cgroup.starts_with(&format!("{scope_cgroup}/"))
+    {
+        return None;
+    }
+    let child_cgroup = sentinel.get("child_cgroup")?;
+    if !canonical_cgroup_value(child_cgroup) || child_cgroup != launch_cgroup {
+        return None;
+    }
+    let child_pid = u32::try_from(canonical_positive_decimal(sentinel.get("child_pid")?)?).ok()?;
+    let child_pgid =
+        u32::try_from(canonical_positive_decimal(sentinel.get("child_pgid")?)?).ok()?;
+    let child_start_ticks = canonical_positive_decimal(sentinel.get("child_start_ticks")?)?;
+    let leader_pid = u32::try_from(canonical_positive_decimal(result.get("leader_pid")?)?).ok()?;
+    let leader_start_ticks = canonical_positive_decimal(result.get("leader_start_ticks")?)?;
+    let pgid = u32::try_from(canonical_positive_decimal(result.get("pgid")?)?).ok()?;
+    if leader_pid != pgid || child_pgid != leader_pid {
+        return None;
+    }
+    match kind {
+        Wu0gRequestKind::Causal
+            if child_pid != leader_pid || child_start_ticks != leader_start_ticks =>
+        {
+            return None;
+        }
+        Wu0gRequestKind::Performance if child_pid == leader_pid => return None,
+        Wu0gRequestKind::Causal | Wu0gRequestKind::Performance => {}
+    }
+    let identity = canonical_child_identity(
+        child_pid,
+        child_pgid,
+        child_start_ticks,
+        launch_cgroup,
+        scope_cgroup,
+    );
+    if result.get("child_identity") != Some(&identity) {
+        return None;
+    }
+    Some(ClaimedChildFacts {
+        pid: child_pid,
+        pgrp: child_pgid,
+        start_ticks: child_start_ticks,
+        cgroup: child_cgroup.clone(),
+    })
+}
+
+fn claimed_child_contract_fixture(
+    kind: Wu0gRequestKind,
+) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
+    let leader_pid = 1_234_u32;
+    let leader_start_ticks = 5_678_u64;
+    let (child_pid, child_start_ticks) = match kind {
+        Wu0gRequestKind::Causal => (leader_pid, leader_start_ticks),
+        Wu0gRequestKind::Performance => (1_235, 5_679),
+    };
+    let launch_cgroup = "/user.slice/fixture.scope/wu0g-launch";
+    let scope_cgroup = "/user.slice/fixture.scope";
+    let sentinel = BTreeMap::from([
+        ("child_cgroup".to_owned(), launch_cgroup.to_owned()),
+        ("child_pgid".to_owned(), leader_pid.to_string()),
+        ("child_pid".to_owned(), child_pid.to_string()),
+        (
+            "child_start_ticks".to_owned(),
+            child_start_ticks.to_string(),
+        ),
+    ]);
+    let result = BTreeMap::from([
+        (
+            "child_identity".to_owned(),
+            canonical_child_identity(
+                child_pid,
+                leader_pid,
+                child_start_ticks,
+                launch_cgroup,
+                scope_cgroup,
+            ),
+        ),
+        ("leader_pid".to_owned(), leader_pid.to_string()),
+        (
+            "leader_start_ticks".to_owned(),
+            leader_start_ticks.to_string(),
+        ),
+        ("pgid".to_owned(), leader_pid.to_string()),
+    ]);
+    (sentinel, result)
+}
+
+#[test]
+fn wu0g_child_boundary_claims_fail_closed() {
+    let launch_cgroup = "/user.slice/fixture.scope/wu0g-launch";
+    let scope_cgroup = "/user.slice/fixture.scope";
+    for kind in [Wu0gRequestKind::Causal, Wu0gRequestKind::Performance] {
+        let (sentinel, result) = claimed_child_contract_fixture(kind);
+        assert!(validate_claimed_child_boundary(
+            kind,
+            &sentinel,
+            &result,
+            launch_cgroup,
+            scope_cgroup,
+        )
+        .is_some());
+    }
+
+    let (sentinel, result) = claimed_child_contract_fixture(Wu0gRequestKind::Performance);
+    for (label, key, value) in [
+        ("zero child PID", "child_pid", "0"),
+        ("noncanonical child PID", "child_pid", "01235"),
+        ("zero child PGID", "child_pgid", "0"),
+        ("mismatched child PGID", "child_pgid", "1236"),
+        ("zero child start", "child_start_ticks", "0"),
+        (
+            "unsafe child cgroup",
+            "child_cgroup",
+            "/user.slice/fixture.scope/../wu0g-launch",
+        ),
+        (
+            "mismatched child cgroup",
+            "child_cgroup",
+            "/user.slice/fixture.scope/other-launch",
+        ),
+    ] {
+        let mut mutation = sentinel.clone();
+        mutation.insert(key.to_owned(), value.to_owned());
+        assert!(
+            validate_claimed_child_boundary(
+                Wu0gRequestKind::Performance,
+                &mutation,
+                &result,
+                launch_cgroup,
+                scope_cgroup,
+            )
+            .is_none(),
+            "accepted {label}"
+        );
+    }
+    for (label, key, value) in [
+        ("zero leader PID", "leader_pid", "0"),
+        ("leader/PGID mismatch", "pgid", "1236"),
+        ("zero leader start", "leader_start_ticks", "0"),
+        ("child identity mismatch", "child_identity", A_SHA),
+    ] {
+        let mut mutation = result.clone();
+        mutation.insert(key.to_owned(), value.to_owned());
+        assert!(
+            validate_claimed_child_boundary(
+                Wu0gRequestKind::Performance,
+                &sentinel,
+                &mutation,
+                launch_cgroup,
+                scope_cgroup,
+            )
+            .is_none(),
+            "accepted {label}"
+        );
+    }
+    assert!(validate_claimed_child_boundary(
+        Wu0gRequestKind::Causal,
+        &sentinel,
+        &result,
+        launch_cgroup,
+        scope_cgroup,
+    )
+    .is_none());
+    let (causal_sentinel, causal_result) = claimed_child_contract_fixture(Wu0gRequestKind::Causal);
+    assert!(validate_claimed_child_boundary(
+        Wu0gRequestKind::Performance,
+        &causal_sentinel,
+        &causal_result,
+        launch_cgroup,
+        scope_cgroup,
+    )
+    .is_none());
+    assert!(validate_claimed_child_boundary(
+        Wu0gRequestKind::Performance,
+        &sentinel,
+        &result,
+        "/other.scope/wu0g-launch",
+        "/other.scope",
+    )
+    .is_none());
+}
+
 fn file_identity(path: &Path) -> FileIdentity {
     let metadata = std::fs::symlink_metadata(path).expect("identity target exists");
     assert!(metadata.is_file() && !metadata.file_type().is_symlink());
@@ -838,7 +1085,7 @@ fn read_bounded_regular(path: &Path, limit: u64) -> Vec<u8> {
     bytes
 }
 
-fn parse_proc_stat(pid: u32) -> Option<(u32, u64)> {
+fn parse_proc_stat(pid: u32) -> Option<(u32, u32, u64)> {
     let bytes = std::fs::read(format!("/proc/{pid}/stat")).ok()?;
     let text = std::str::from_utf8(&bytes).ok()?;
     let tail = text.rsplit_once(") ")?.1;
@@ -846,7 +1093,11 @@ fn parse_proc_stat(pid: u32) -> Option<(u32, u64)> {
     if fields.len() < 20 {
         return None;
     }
-    Some((fields[1].parse().ok()?, fields[19].parse().ok()?))
+    Some((
+        fields[1].parse().ok()?,
+        fields[2].parse().ok()?,
+        fields[19].parse().ok()?,
+    ))
 }
 
 fn proc_snapshot() -> BTreeMap<u32, ProcFacts> {
@@ -859,7 +1110,7 @@ fn proc_snapshot() -> BTreeMap<u32, ProcFacts> {
         let Ok(pid) = name.parse::<u32>() else {
             continue;
         };
-        let Some((parent, start_ticks)) = parse_proc_stat(pid) else {
+        let Some((parent, pgrp, start_ticks)) = parse_proc_stat(pid) else {
             continue;
         };
         let Ok(statm) = std::fs::read_to_string(format!("/proc/{pid}/statm")) else {
@@ -877,6 +1128,7 @@ fn proc_snapshot() -> BTreeMap<u32, ProcFacts> {
             pid,
             ProcFacts {
                 parent,
+                pgrp,
                 start_ticks,
                 rss_bytes,
             },
@@ -976,7 +1228,7 @@ fn live_known_identities(known: &BTreeMap<u32, u64>) -> Vec<u32> {
         .iter()
         .filter_map(|(pid, expected_start)| {
             parse_proc_stat(*pid)
-                .is_some_and(|(_, actual_start)| actual_start == *expected_start)
+                .is_some_and(|(_, _, actual_start)| actual_start == *expected_start)
                 .then_some(*pid)
         })
         .collect()
@@ -1029,14 +1281,13 @@ fn observed_cgroup_identity(domain: &str, path: &Path) -> String {
 }
 
 fn observed_child_identity(facts: &ObservedLaunchFacts) -> String {
-    let canonical = format!(
-        "typokat-wu0g-observed-child-v1\nleader_pid={}\nleader_start_ticks={}\nlaunch_cgroup={}\nscope_cgroup={}\n",
+    canonical_child_identity(
         facts.pid,
+        facts.pgrp,
         facts.start_ticks,
-        canonical_observed_cgroup_path(&facts.launch_cgroup),
-        canonical_observed_cgroup_path(&facts.scope_cgroup),
-    );
-    framed_identity("wu0g-child-v1", canonical.as_bytes())
+        &canonical_observed_cgroup_path(&facts.launch_cgroup),
+        &canonical_observed_cgroup_path(&facts.scope_cgroup),
+    )
 }
 
 fn process_has_open_identity(pid: u32, identity: (u64, u64)) -> bool {
@@ -1046,6 +1297,26 @@ fn process_has_open_identity(pid: u32, identity: (u64, u64)) -> bool {
     entries.filter_map(Result::ok).any(|entry| {
         std::fs::metadata(entry.path())
             .is_ok_and(|metadata| (metadata.dev(), metadata.ino()) == identity)
+    })
+}
+
+fn observed_group_leader_facts(
+    pgrp: u32,
+    root: u32,
+    snapshot: &BTreeMap<u32, ProcFacts>,
+) -> Option<ObservedLaunchFacts> {
+    let leader = snapshot.get(&pgrp)?;
+    if !belongs_to_tree(pgrp, root, snapshot) || leader.pgrp != pgrp {
+        return None;
+    }
+    let launch_cgroup = proc_cgroup_v2_path(pgrp)?;
+    let scope_cgroup = observed_scope_cgroup(&launch_cgroup)?;
+    Some(ObservedLaunchFacts {
+        pid: pgrp,
+        pgrp: leader.pgrp,
+        start_ticks: leader.start_ticks,
+        launch_cgroup,
+        scope_cgroup,
     })
 }
 
@@ -1097,6 +1368,7 @@ fn run_bounded_command(
     let mut known_identities = BTreeMap::new();
     let mut observed_launches = BTreeSet::new();
     let mut observed_launch_facts = BTreeSet::new();
+    let mut observed_leader_facts = BTreeSet::new();
     let mut observed_launch_cgroups = BTreeSet::new();
     let mut replacement_performed = false;
     loop {
@@ -1132,13 +1404,15 @@ fn run_bounded_command(
                 observed_identities: known_identities,
                 observed_launches,
                 observed_launch_facts,
+                observed_leader_facts,
                 observed_launch_cgroups,
                 replacement_performed,
             };
         }
         let snapshot = proc_snapshot();
         for pid in tree_members(root, &snapshot) {
-            let start_ticks = snapshot.get(&pid).unwrap().start_ticks;
+            let process = snapshot.get(&pid).unwrap();
+            let start_ticks = process.start_ticks;
             known_identities.insert(pid, start_ticks);
             if launch_executable.is_some_and(|expected| {
                 proc_executable_identity(pid).is_some_and(|actual| actual == expected)
@@ -1149,11 +1423,16 @@ fn run_bounded_command(
                     if let Some(scope_cgroup) = observed_scope_cgroup(&cgroup) {
                         observed_launch_facts.insert(ObservedLaunchFacts {
                             pid,
+                            pgrp: process.pgrp,
                             start_ticks,
                             launch_cgroup: cgroup,
                             scope_cgroup,
                         });
                     }
+                }
+                if let Some(leader) = observed_group_leader_facts(process.pgrp, root, &snapshot) {
+                    observed_launch_cgroups.insert(leader.launch_cgroup.clone());
+                    observed_leader_facts.insert(leader);
                 }
             }
             if !replacement_performed
@@ -1533,7 +1812,7 @@ fn assert_process_metadata(path: &Path, expected_memory_max: u64) -> BTreeMap<St
 }
 
 fn assert_pid_identity_gone(pid: u32, start_ticks: u64) {
-    if let Some((_, current_start_ticks)) = parse_proc_stat(pid) {
+    if let Some((_, _, current_start_ticks)) = parse_proc_stat(pid) {
         assert_ne!(
             current_start_ticks, start_ticks,
             "fixture child still exists"
@@ -1647,34 +1926,57 @@ fn assert_valid_wu0g_run(fixture: &Wu0gFixture, kind: Wu0gRequestKind, bounded: 
     assert_eq!(
         bounded.observed_launch_facts.len(),
         1,
-        "watchdog must capture exact launch and scope facts"
+        "watchdog must capture exact libtest child and scope facts"
     );
-    let observed = bounded.observed_launch_facts.iter().next().unwrap();
+    assert_eq!(
+        bounded.observed_leader_facts.len(),
+        1,
+        "watchdog must capture exact process-group leader and scope facts"
+    );
+    let observed_child = bounded.observed_launch_facts.iter().next().unwrap();
+    let observed_leader = bounded.observed_leader_facts.iter().next().unwrap();
     assert_eq!(
         bounded.observed_launches,
-        [(observed.pid, observed.start_ticks)].into_iter().collect()
+        [(observed_child.pid, observed_child.start_ticks)]
+            .into_iter()
+            .collect()
     );
-    assert_ne!(observed.launch_cgroup, observed.scope_cgroup);
-    assert!(observed.launch_cgroup.starts_with(&observed.scope_cgroup));
+    assert_eq!(observed_child.pgrp, observed_leader.pid);
+    assert_eq!(observed_leader.pgrp, observed_leader.pid);
+    assert_eq!(observed_child.launch_cgroup, observed_leader.launch_cgroup);
+    assert_eq!(observed_child.scope_cgroup, observed_leader.scope_cgroup);
+    assert_ne!(observed_child.launch_cgroup, observed_child.scope_cgroup);
+    assert!(observed_child
+        .launch_cgroup
+        .starts_with(&observed_child.scope_cgroup));
+    match kind {
+        Wu0gRequestKind::Causal => {
+            assert_eq!(observed_child.pid, observed_leader.pid);
+            assert_eq!(observed_child.start_ticks, observed_leader.start_ticks);
+        }
+        Wu0gRequestKind::Performance => {
+            assert_ne!(observed_child.pid, observed_leader.pid);
+        }
+    }
     assert_eq!(
         exact_decimal(&result, "leader_pid"),
-        u64::from(observed.pid)
+        u64::from(observed_leader.pid)
     );
     assert_eq!(
         exact_decimal(&result, "leader_start_ticks"),
-        observed.start_ticks
+        observed_leader.start_ticks
     );
     assert_eq!(
         result.get("child_identity").unwrap(),
-        &observed_child_identity(observed)
+        &observed_child_identity(observed_child)
     );
     assert_eq!(
         result.get("cgroup_identity").unwrap(),
-        &observed_cgroup_identity("wu0g-cgroup-v1", &observed.launch_cgroup)
+        &observed_cgroup_identity("wu0g-cgroup-v1", &observed_child.launch_cgroup)
     );
     assert_eq!(
         result.get("scope_identity").unwrap(),
-        &observed_cgroup_identity("wu0g-scope-v1", &observed.scope_cgroup)
+        &observed_cgroup_identity("wu0g-scope-v1", &observed_child.scope_cgroup)
     );
     for key in [
         "binary_identity",
@@ -1756,6 +2058,15 @@ fn assert_valid_wu0g_run(fixture: &Wu0gFixture, kind: Wu0gRequestKind, bounded: 
         "typokat-wu0g-child-completion-sentinel-v1",
         WU0G_SENTINEL_FIELDS,
     );
+    let launch_cgroup = canonical_observed_cgroup_path(&observed_child.launch_cgroup);
+    let scope_cgroup = canonical_observed_cgroup_path(&observed_child.scope_cgroup);
+    let claimed_child =
+        validate_claimed_child_boundary(kind, &sentinel, &result, &launch_cgroup, &scope_cgroup)
+            .expect("sentinel binds the libtest child separately from the supervised leader");
+    assert_eq!(claimed_child.pid, observed_child.pid);
+    assert_eq!(claimed_child.pgrp, observed_child.pgrp);
+    assert_eq!(claimed_child.start_ticks, observed_child.start_ticks);
+    assert_eq!(claimed_child.cgroup, launch_cgroup);
     let exact_env = WU0G_ENV_ALLOWLIST.join("|");
     assert_eq!(
         sentinel.get("argv").map(String::as_str),

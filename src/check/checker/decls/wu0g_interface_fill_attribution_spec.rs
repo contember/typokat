@@ -111,8 +111,9 @@
 //! `--wu0g-child-v1 REQUEST RESULT_DIR` runner invocation. Performance launches additionally bind
 //! authenticated perf/prlimit executables, host, CPU affinity, perf version/event, raw perf wait
 //! status, and the strict seven-field counter artifact. The outer WU0E supervisor remains the sole
-//! termination adjudicator; a perf count is usable only after normal whole-tree cleanup and an
-//! independently authenticated checker completion sentinel.
+//! termination adjudicator and waits/reaps its perf leader; the checker sentinel separately binds
+//! the libtest child which perf forks in the same PGID and launch cgroup. A perf count is usable only
+//! after normal whole-tree cleanup and an independently authenticated checker completion sentinel.
 //! Timeout, memory kill, or no-progress is NO-GO/inconclusive, never positive evidence.
 //! Identities are recomputed from domain-separated raw canonical bytes rather than accepted because
 //! a caller supplied 64 lowercase hex characters. Valid-looking cross-domain substitutions,
@@ -6200,6 +6201,13 @@ fn child_request_result_and_perf_parsers_fail_closed_on_raw_bytes() {
         ("malformed size", "artifact_size", "-1".to_owned()),
         ("malformed status", "termination", "complete".to_owned()),
         ("zero limit", "deadline_ms", "0".to_owned()),
+        ("zero leader PID", "leader_pid", "0".to_owned()),
+        (
+            "zero leader start ticks",
+            "leader_start_ticks",
+            "0".to_owned(),
+        ),
+        ("leader/PGID mismatch", "pgid", "1235".to_owned()),
         (
             "limit readback mismatch",
             "memory_limit_readback_bytes",
