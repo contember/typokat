@@ -1044,10 +1044,33 @@ fn process_has_open_identity(pid: u32, identity: (u64, u64)) -> bool {
         return false;
     };
     entries.filter_map(Result::ok).any(|entry| {
-        entry
-            .metadata()
+        std::fs::metadata(entry.path())
             .is_ok_and(|metadata| (metadata.dev(), metadata.ino()) == identity)
     })
+}
+
+#[test]
+fn wu0g_fd_identity_observer_follows_proc_fd_symlinks() {
+    let scratch = AcceptanceScratch::create();
+    let opened_path = scratch.fixtures.join("opened-fd-target");
+    let unopened_path = scratch.fixtures.join("unopened-fd-target");
+    create_exclusive(&opened_path, b"opened\n", false);
+    create_exclusive(&unopened_path, b"unopened\n", false);
+    let opened = OpenOptions::new().read(true).open(&opened_path).unwrap();
+    let opened_metadata = opened.metadata().unwrap();
+    let unopened_metadata = std::fs::metadata(&unopened_path).unwrap();
+
+    assert!(process_has_open_identity(
+        std::process::id(),
+        (opened_metadata.dev(), opened_metadata.ino())
+    ));
+    assert!(!process_has_open_identity(
+        std::process::id(),
+        (unopened_metadata.dev(), unopened_metadata.ino())
+    ));
+
+    drop(opened);
+    scratch.finish();
 }
 
 fn run_bounded_command(
