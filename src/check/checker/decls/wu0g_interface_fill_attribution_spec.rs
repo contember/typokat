@@ -3018,6 +3018,13 @@ fn dom_fallback_keeps_full_universe_and_uses_minimal_dependency_first_whole_scc_
             | InterfaceFillExternalTerminalKind::UnavailableAbsorbed => {
                 assert!(!terminal.is_topology_terminal)
             }
+            InterfaceFillExternalTerminalKind::OutOfRange => {
+                assert!(terminal.is_topology_terminal);
+                assert_eq!(
+                    terminal.construction_state,
+                    InterfaceFillExternalConstructionState::OutOfRange
+                );
+            }
             InterfaceFillExternalTerminalKind::ClassTerminal
             | InterfaceFillExternalTerminalKind::InterfaceComponent => {}
         }
