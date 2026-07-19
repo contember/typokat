@@ -3273,7 +3273,6 @@ fn feature_surface_is_reverse_closed_and_preserves_the_original_apply_call_graph
         "visit_exit",
         "cycle_reentry",
         "object_copy",
-        "interner_attempt",
     ] {
         assert_eq!(
             compact(macro_arm_body(fallback, counter_arm)),
@@ -3281,6 +3280,11 @@ fn feature_surface_is_reverse_closed_and_preserves_the_original_apply_call_graph
             "fallback counter arm {counter_arm} is structurally empty"
         );
     }
+    assert_eq!(
+        compact(macro_arm_body(fallback, "interner_attempt")),
+        "{{$expression}}",
+        "default/control interner attempts are exactly the original expression"
+    );
     let mapped_fallback = compact(macro_arm_body(fallback, "mapped_nested"));
     assert_eq!(
         mapped_fallback, "{substitute_with_outcome(interner,ty,&member_map)}",
