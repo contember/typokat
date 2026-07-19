@@ -22,6 +22,9 @@ pub(super) struct SubstitutionMeasure {
     pub completed_memo_hits: u64,
     pub completed_memo_entries: u64,
     pub cycle_tainted_skips: u64,
+    pub tainted_memo_entries: u64,
+    pub tainted_memo_hits: u64,
+    pub tainted_memo_stale_misses: u64,
     seen_type_ids: FxHashSet<TypeId>,
     seen_contexts: FxHashSet<(TypeId, Vec<TypeParamId>)>,
 }
@@ -40,6 +43,9 @@ impl std::fmt::Debug for SubstitutionMeasure {
             .field("completed_memo_hits", &self.completed_memo_hits)
             .field("completed_memo_entries", &self.completed_memo_entries)
             .field("cycle_tainted_skips", &self.cycle_tainted_skips)
+            .field("tainted_memo_entries", &self.tainted_memo_entries)
+            .field("tainted_memo_hits", &self.tainted_memo_hits)
+            .field("tainted_memo_stale_misses", &self.tainted_memo_stale_misses)
             .finish()
     }
 }
@@ -296,6 +302,8 @@ mod apply;
 #[cfg(test)]
 mod completed_memo_spec;
 #[cfg(test)]
+mod cycle_scoped_memo_spec;
+#[cfg(test)]
 mod measurement_scope_spec;
 #[cfg(test)]
 mod tests;
@@ -307,6 +315,25 @@ mod tests;
 pub(crate) enum SubstitutionOutcome {
     CycleClean(TypeId),
     CycleTainted(TypeId),
+}
+
+/// A cycle-tainted result plus the stack cut it depends on: reusable only while
+/// every `reentered` id is still in progress and no `visited` id became one.
+#[derive(Clone)]
+struct TaintedEntry {
+    result: TypeId,
+    reentered: FxHashSet<TypeId>,
+    visited: FxHashSet<TypeId>,
+}
+
+/// Whether an id of this tag can ever appear in `in_progress` (only these arms
+/// insert it). Other tags can never cut a walk, so recording them in `visited`
+/// would be dead weight — keep this in sync with the `apply_*` arms.
+fn tag_can_reenter(tag: TypeTag) -> bool {
+    matches!(
+        tag,
+        TypeTag::Object | TypeTag::Function | TypeTag::Union | TypeTag::Intersection
+    )
 }
 
 /// A substitution `TypeParamId → TypeId` plus the cycle guard, applied over the
@@ -321,6 +348,12 @@ pub struct Substitution<'a> {
     blocked: FxHashSet<TypeParamId>,
     /// Results completed without observing a recursive re-entry, scoped to this run.
     completed: FxHashMap<(TypeId, Vec<TypeParamId>), TypeId>,
+    /// Cycle-tainted results with their dependency records, scoped to this run.
+    tainted: FxHashMap<(TypeId, Vec<TypeParamId>), TaintedEntry>,
+    /// Ids the current frame's subtree re-entered (raw-id cycle guard hits).
+    frame_reentered: FxHashSet<TypeId>,
+    /// Ids the current frame's subtree walked while they were not in progress.
+    frame_visited: FxHashSet<TypeId>,
     /// Incremented by every raw-`TypeId` re-entry to taint all active ancestors.
     cycle_epoch: u64,
     /// Captured at construction so each run keeps one stable measurement owner.
@@ -352,6 +385,9 @@ impl<'a> Substitution<'a> {
             in_progress: FxHashSet::default(),
             blocked: FxHashSet::default(),
             completed: FxHashMap::default(),
+            tainted: FxHashMap::default(),
+            frame_reentered: FxHashSet::default(),
+            frame_visited: FxHashSet::default(),
             cycle_epoch: 0,
             #[cfg(test)]
             measurement,
@@ -398,6 +434,9 @@ impl<'a> Substitution<'a> {
             // context; returning the original id is the existing cycle semantics.
             if self.in_progress.contains(&ty) {
                 self.cycle_epoch += 1;
+                // This branch never opens a frame, so this lands in the caller's
+                // accumulator: the caller's result depends on `ty` being live.
+                self.frame_reentered.insert(ty);
                 wu0g_record!(cycle_reentry self);
                 #[cfg(test)]
                 if let Some(collector) = self.measurement.as_ref() {
@@ -413,6 +452,8 @@ impl<'a> Substitution<'a> {
             }
 
             let key = (ty, self.canonical_blocked_context());
+            // A clean result observed no re-entry, so its closure is acyclic and a
+            // reuse walk short-circuits here — no dependency record is needed.
             if let Some(&result) = self.completed.get(&key) {
                 #[cfg(test)]
                 if let Some(collector) = self.measurement.as_ref() {
@@ -438,7 +479,52 @@ impl<'a> Substitution<'a> {
                 break 'apply result;
             }
 
+            // Tainted-memo lookup: a stored cycle-tainted result is reusable iff
+            // the current stack still cuts the graph identically — every id it
+            // re-entered is still in progress, and nothing it walked plainly is.
+            if let Some(entry) = self.tainted.get(&key) {
+                if entry
+                    .reentered
+                    .iter()
+                    .all(|id| self.in_progress.contains(id))
+                    && self
+                        .in_progress
+                        .iter()
+                        .all(|id| !entry.visited.contains(id))
+                {
+                    // The reuse is as cycle-dependent as the original walk: taint
+                    // the consumer and inherit the record (plus the reused node
+                    // itself), keeping the consumer out of `completed`.
+                    self.cycle_epoch += 1;
+                    let result = entry.result;
+                    self.frame_reentered.extend(entry.reentered.iter().copied());
+                    self.frame_visited.extend(entry.visited.iter().copied());
+                    if tag_can_reenter(interner.store().tag(ty)) {
+                        self.frame_visited.insert(ty);
+                    }
+                    #[cfg(test)]
+                    if let Some(collector) = self.measurement.as_ref() {
+                        measure_substitution(collector, |measure| measure.tainted_memo_hits += 1);
+                    }
+                    #[cfg(test)]
+                    if let (Some(attribution), Some(visit)) =
+                        (self.wu0c_attribution.as_ref(), wu0c_visit)
+                    {
+                        attribution.finish_tainted_visit(visit);
+                    }
+                    break 'apply result;
+                }
+                #[cfg(test)]
+                if let Some(collector) = self.measurement.as_ref() {
+                    measure_substitution(collector, |measure| {
+                        measure.tainted_memo_stale_misses += 1;
+                    });
+                }
+            }
+
             let start_cycle_epoch = self.cycle_epoch;
+            let saved_reentered = std::mem::take(&mut self.frame_reentered);
+            let saved_visited = std::mem::take(&mut self.frame_visited);
             let result = match interner.store().tag(ty) {
                 // A type parameter: replace it with its argument if mapped; otherwise
                 // (a parameter from an *outer* scope, not part of this substitution)
@@ -492,8 +578,16 @@ impl<'a> Substitution<'a> {
                 TypeTag::Infer | TypeTag::MappedValue => ty,
             };
 
+            let frame_reentered = std::mem::replace(&mut self.frame_reentered, saved_reentered);
+            let frame_visited = std::mem::replace(&mut self.frame_visited, saved_visited);
             if self.cycle_epoch == start_cycle_epoch {
+                // A clean subtree's record is discardable: reuse walks stop at the
+                // `completed` hit above and never reach its closure again.
+                debug_assert!(frame_reentered.is_empty());
                 self.completed.insert(key, result);
+                if tag_can_reenter(interner.store().tag(ty)) {
+                    self.frame_visited.insert(ty);
+                }
                 #[cfg(test)]
                 if let Some(collector) = self.measurement.as_ref() {
                     measure_substitution(collector, |measure| measure.completed_memo_entries += 1);
@@ -505,9 +599,26 @@ impl<'a> Substitution<'a> {
                     attribution.finish_clean_visit(visit);
                 }
             } else {
+                // The caller depends on everything this frame depended on.
+                self.frame_reentered.extend(frame_reentered.iter().copied());
+                self.frame_visited.extend(frame_visited.iter().copied());
+                if tag_can_reenter(interner.store().tag(ty)) {
+                    self.frame_visited.insert(ty);
+                }
+                self.tainted.insert(
+                    key,
+                    TaintedEntry {
+                        result,
+                        reentered: frame_reentered,
+                        visited: frame_visited,
+                    },
+                );
                 #[cfg(test)]
                 if let Some(collector) = self.measurement.as_ref() {
-                    measure_substitution(collector, |measure| measure.cycle_tainted_skips += 1);
+                    measure_substitution(collector, |measure| {
+                        measure.cycle_tainted_skips += 1;
+                        measure.tainted_memo_entries += 1;
+                    });
                 }
                 #[cfg(test)]
                 if let (Some(attribution), Some(visit)) =

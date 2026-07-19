@@ -297,18 +297,21 @@ fn completed_memo_never_publishes_cross_context_cycle_ancestors() {
         second, first,
         "re-entry must preserve the existing result shape"
     );
+    // The cycle-scoped tainted memo replays the back-edge frame on the second
+    // apply (its re-entered cycle root is live again), so no second re-entry.
     assert_eq!(
-        after_second.cycle_reentries, 2,
-        "the differently-blocked back-edge must re-enter on the second apply"
+        after_second.cycle_reentries, 1,
+        "the tainted-memo hit replays the back-edge without a second re-entry"
     );
-    assert_eq!(after_second.cycle_tainted_skips, 8);
+    assert_eq!(after_second.cycle_tainted_skips, 7);
     assert_eq!(
         after_second.completed_memo_entries, after_first.completed_memo_entries,
         "no tainted ancestor was published between top-level applies"
     );
+    // The blocked-context T leaf stays behind the tainted hit on the second walk.
     assert_eq!(
-        after_second.completed_memo_hits, 2,
-        "only the two safe T contexts are reusable on the second traversal"
+        after_second.completed_memo_hits, 1,
+        "only the empty-context T leaf is re-walked on the second traversal"
     );
     assert!(after_second.apply_visits > after_first.apply_visits);
 
