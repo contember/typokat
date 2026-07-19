@@ -118,6 +118,27 @@
 //! deadline, and kills the outer process tree on failure; it does not misdescribe polling as an
 //! absolute hard RSS cap. Once reexeced, the launch fixtures additionally have their real cgroup
 //! memory backstops. Scratch is removed only after success, so failure artifacts survive.
+//!
+//! ## WU0G single-child protocol
+//!
+//! `--wu0g-child-v1 REQUEST_FILE RESULT_DIR` admits exactly one canonical, sorted,
+//! length/domain-framed request and one hardened launch. It accepts only causal or performance,
+//! baseline or candidate, the kind-appropriate exact rung/pair/launch ordinal and identities, a
+//! frozen libtest digest, unique request/sentinel/artifact identities, and conservative nonzero
+//! deadline, memory, RSS, and nofile limits. Missing, duplicate, unknown, reordered, or inapplicable
+//! fields reject. The runner derives the sole exact ignored libtest filter and its fixed WU0G
+//! environment after scrubbing inherited WU0B through WU0G variables; the request cannot supply
+//! argv, commands, shell text, or environment keys.
+//!
+//! The existing hardened supervisor owns termination, PGID/cgroup containment, bounded output,
+//! reap, and cleanup. It reads back deadline, memory, RSS, and nofile; the child independently reads
+//! `/proc/self/limits`. Libtest, `/usr/bin/prlimit`, `/usr/bin/perf`, and any setup helper are opened
+//! and revalidated as stable executable handles. Performance alone uses authenticated perf in
+//! command mode with the exact pinned `instructions:u` argv and default descendant inheritance.
+//! Its exclusive no-follow <=4 KiB artifact must be one seven-semicolon-field row. The count is
+//! unavailable unless the outer result is normal, perf itself exited zero without signal, the
+//! checker sentinel/artifact authenticate, and OOM, containment, reap, and cleanup are clean.
+//! Partial counts never authorize, and perf never selectively finalizes a killed workload.
 
 #![cfg(target_os = "linux")]
 
@@ -126,10 +147,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -143,6 +165,161 @@ const BINARY_SHA: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccc
 const HOST_SHA: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 const PROFILE_SHA: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 const INVENTORY_SHA: &str = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+const WU0G_CHILD_FILTER: &str =
+    "check::checker::decls::wu0g_interface_fill_attribution_spec::wu0g_hardened_child_once";
+const WU0G_REQUEST_FIELDS: &[&str] = &[
+    "artifact_relative_path",
+    "binary_identity",
+    "candidate_identity",
+    "cpu_affinity",
+    "deadline_ms",
+    "host_identity",
+    "kind",
+    "launch_identity",
+    "launch_ordinal",
+    "libtest_relative_path",
+    "memory_limit_bytes",
+    "mode",
+    "nofile_hard",
+    "nofile_soft",
+    "nonce",
+    "pair_identity",
+    "pair_ordinal",
+    "perf_event",
+    "perf_identity",
+    "perf_version",
+    "plan_identity",
+    "prlimit_identity",
+    "request_relative_path",
+    "result_identity",
+    "result_relative_path",
+    "rss_limit_bytes",
+    "rung_identity",
+    "rung_ordinal",
+    "semantic_artifact_relative_path",
+    "sentinel_relative_path",
+    "workload_identity",
+];
+const WU0G_ENV_ALLOWLIST: &[&str] = &[
+    "TYPOKAT_WU0G_CHILD_REQUEST_FD",
+    "TYPOKAT_WU0G_CHILD_REQUEST_SHA256",
+    "TYPOKAT_WU0G_CHILD_RESULT_DIR_FD",
+];
+const WU0G_SENTINEL_FIELDS: &[&str] = &[
+    "argv",
+    "environment",
+    "fd_inventory",
+    "nofile_hard",
+    "nofile_soft",
+    "request_content_identity",
+    "semantic_artifact_identity",
+    "semantic_artifact_size",
+];
+const WU0G_RESULT_FIELDS: &[&str] = &[
+    "artifact_identity",
+    "artifact_size",
+    "binary_identity",
+    "cgroup_identity",
+    "cgroup_populated_zero",
+    "cgroup_removed",
+    "cgroup_retained",
+    "child_argv",
+    "child_env",
+    "child_fd_inventory",
+    "child_identity",
+    "cleanup_succeeded",
+    "containment_failures",
+    "deadline_ms",
+    "deadline_readback_ms",
+    "drain_complete",
+    "exit_code",
+    "host_identity",
+    "launch_identity",
+    "leader_pid",
+    "leader_reaped",
+    "leader_start_ticks",
+    "max_rss_bytes",
+    "memory_limit_bytes",
+    "memory_limit_readback_bytes",
+    "membership_verified",
+    "nofile_hard",
+    "nofile_hard_readback",
+    "nofile_soft",
+    "nofile_soft_readback",
+    "oom_delta",
+    "oom_kill_delta",
+    "outer_raw_wait_status",
+    "perf_artifact_identity",
+    "perf_artifact_size",
+    "perf_event",
+    "perf_exit_code",
+    "perf_identity",
+    "perf_invocation",
+    "perf_raw_wait_status",
+    "perf_term_signal",
+    "perf_version",
+    "pgid",
+    "pgid_empty",
+    "plan_identity",
+    "prlimit_identity",
+    "readiness_seen",
+    "request_content_identity",
+    "result_identity",
+    "rss_limit_bytes",
+    "rss_limit_readback_bytes",
+    "scope_abort_observed",
+    "scope_abort_requested",
+    "scope_identity",
+    "sentinel_identity",
+    "sentinel_size",
+    "stderr_identity",
+    "stderr_size",
+    "stdout_identity",
+    "stdout_size",
+    "term_signal",
+    "termination",
+];
+const WU0G_REQUEST_CAP_BYTES: u64 = 64 * 1_024;
+const WU0G_RESULT_CAP_BYTES: u64 = 64 * 1_024;
+const WU0G_STDIO_CAP_BYTES: u64 = 128 * 1_024;
+const WU0G_SENTINEL_CAP_BYTES: u64 = 4 * 1_024;
+const WU0G_ARTIFACT_CAP_BYTES: u64 = 256 * 1_024;
+const WU0G_PERF_ARTIFACT_CAP_BYTES: u64 = 4 * 1_024;
+const WU0G_FORBIDDEN_ENV: &[(&str, &str)] = &[
+    ("TYPOKAT_WU0B_FORBIDDEN_CANARY", "wu0b-must-be-scrubbed"),
+    ("TYPOKAT_WU0C_FORBIDDEN_CANARY", "wu0c-must-be-scrubbed"),
+    ("TYPOKAT_WU0D_FORBIDDEN_CANARY", "wu0d-must-be-scrubbed"),
+    ("TYPOKAT_WU0E_FORBIDDEN_CANARY", "wu0e-must-be-scrubbed"),
+    ("TYPOKAT_WU0F_FORBIDDEN_CANARY", "wu0f-must-be-scrubbed"),
+    ("TYPOKAT_WU0G_FORBIDDEN_CANARY", "wu0g-must-be-scrubbed"),
+];
+const WU0G_CHILD_ARGV: &str = "--ignored|--exact|check::checker::decls::wu0g_interface_fill_attribution_spec::wu0g_hardened_child_once|--nocapture";
+const WU0G_LEGACY_SELF_TEST_INVENTORY: &[u8] = b"setsid-containment\n\
+pre-setsid-direct-kill\n\
+zombie-leader-reservation\n\
+leader-exit-descendant-kill\n\
+summed-live-group-rss\n\
+rss-sampling-interval\n\
+stdout-flood\n\
+stderr-flood\n\
+trace-flood\n\
+bounded-drain\n\
+bounded-post-read\n\
+rss-sampling-failure\n\
+rss-arithmetic-overflow\n\
+binary-swap\n\
+environment-scrub\n\
+workload-allowlist\n\
+validator-allowlist\n\
+validator-after-each-workload\n\
+exact-primary-probe\n\
+no-alternate-compiler\n\
+same-binary-validator\n\
+pre-post-binary-digest\n\
+one-frozen-binary\n\
+warm-inventory-before-every-launch\n\
+same-binary-host-profile-inventory\n\
+cross-mode-identity-parity\n";
 
 static NEXT_SCRATCH: AtomicU64 = AtomicU64::new(0);
 
@@ -196,11 +373,46 @@ struct FileIdentity {
     digest: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wu0gRequestKind {
+    Causal,
+    Performance,
+}
+
+struct Wu0gFixture {
+    root: PathBuf,
+    request_path: PathBuf,
+    result_dir: PathBuf,
+    frozen_libtest: PathBuf,
+    request_bytes: Vec<u8>,
+    request_fields: BTreeMap<String, String>,
+}
+
+struct StableReplacement {
+    target: PathBuf,
+    replacement: PathBuf,
+    opened_identity: (u64, u64),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ObservedLaunchFacts {
+    pid: u32,
+    start_ticks: u64,
+    launch_cgroup: PathBuf,
+    scope_cgroup: PathBuf,
+}
+
 struct BoundedRun {
     status: ExitStatus,
+    raw_wait_status: i32,
     max_descendant_rss: u64,
     stdout_oversized: bool,
     stderr_oversized: bool,
+    observed_identities: BTreeMap<u32, u64>,
+    observed_launches: BTreeSet<(u32, u64)>,
+    observed_launch_facts: BTreeSet<ObservedLaunchFacts>,
+    observed_launch_cgroups: BTreeSet<PathBuf>,
+    replacement_performed: bool,
 }
 
 struct CaptureThread {
@@ -315,6 +527,280 @@ fn start_bounded_capture<R: Read + Send + 'static>(mut reader: R, path: PathBuf)
 
 fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn sha256_path(path: &Path) -> String {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open(path)
+        .expect("open digest input");
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1_024];
+    loop {
+        let count = file.read(&mut buffer).expect("read digest input");
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    format!("{:x}", digest.finalize())
+}
+
+fn exact_perf_version() -> &'static str {
+    static VERSION: OnceLock<String> = OnceLock::new();
+    VERSION.get_or_init(|| {
+        let mut child = Command::new("/usr/bin/perf")
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("launch bounded perf version probe");
+        let stdout = child.stdout.take().expect("perf version stdout");
+        let reader = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout
+                .take(4_097)
+                .read_to_end(&mut bytes)
+                .expect("read bounded perf version");
+            bytes
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("poll perf version") {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("perf version probe deadline expired");
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert!(status.success());
+        let bytes = reader.join().expect("join perf version reader");
+        assert!(bytes.len() <= 4_096 && bytes.ends_with(b"\n"));
+        let version = std::str::from_utf8(&bytes[..bytes.len() - 1]).unwrap();
+        assert!(!version.is_empty() && !version.contains(['\n', '\r']));
+        version.to_owned()
+    })
+}
+
+fn framed_identity(domain: &str, bytes: &[u8]) -> String {
+    let mut framed = Vec::new();
+    framed.extend_from_slice(&u64::try_from(domain.len()).unwrap().to_be_bytes());
+    framed.extend_from_slice(domain.as_bytes());
+    framed.extend_from_slice(&u64::try_from(bytes.len()).unwrap().to_be_bytes());
+    framed.extend_from_slice(bytes);
+    sha256_hex(&framed)
+}
+
+fn protocol_record_bytes(
+    header: &str,
+    schema: &[&str],
+    fields: &BTreeMap<String, String>,
+) -> Vec<u8> {
+    assert_eq!(
+        fields.keys().map(String::as_str).collect::<Vec<_>>(),
+        schema
+    );
+    let mut bytes = format!("{header}\n").into_bytes();
+    for key in schema {
+        let value = fields.get(*key).expect("protocol field");
+        bytes.extend_from_slice(format!("{key}={}:{}\n", value.len(), value).as_bytes());
+    }
+    bytes
+}
+
+fn wu0g_request_fields(kind: Wu0gRequestKind, frozen_libtest: &Path) -> BTreeMap<String, String> {
+    let mut fields = WU0G_REQUEST_FIELDS
+        .iter()
+        .map(|field| ((*field).to_owned(), "none".to_owned()))
+        .collect::<BTreeMap<_, _>>();
+    for (key, value) in [
+        ("artifact_relative_path", "artifacts/child.bin".to_owned()),
+        ("binary_identity", sha256_path(frozen_libtest)),
+        ("candidate_identity", sha256_hex(b"candidate-b-v1")),
+        ("cpu_affinity", "0".to_owned()),
+        ("deadline_ms", "30000".to_owned()),
+        ("host_identity", sha256_hex(b"fixture-host")),
+        ("libtest_relative_path", "tools/frozen-libtest".to_owned()),
+        ("memory_limit_bytes", "536870912".to_owned()),
+        ("mode", "baseline".to_owned()),
+        ("nofile_hard", "256".to_owned()),
+        ("nofile_soft", "256".to_owned()),
+        ("nonce", "0123456789abcdef0123456789abcdef".to_owned()),
+        ("plan_identity", sha256_hex(b"fixture-plan")),
+        (
+            "prlimit_identity",
+            sha256_path(Path::new("/usr/bin/prlimit")),
+        ),
+        (
+            "request_relative_path",
+            "requests/launch-0.request".to_owned(),
+        ),
+        ("result_identity", sha256_hex(b"fixture-result-0")),
+        ("result_relative_path", "results/launch-0".to_owned()),
+        ("rss_limit_bytes", "402653184".to_owned()),
+        (
+            "semantic_artifact_relative_path",
+            "artifacts/semantic.bin".to_owned(),
+        ),
+        (
+            "sentinel_relative_path",
+            "artifacts/completion.sentinel".to_owned(),
+        ),
+        ("workload_identity", sha256_hex(b"fixture-workload")),
+    ] {
+        fields.insert(key.to_owned(), value);
+    }
+    match kind {
+        Wu0gRequestKind::Causal => {
+            fields.insert("kind".to_owned(), "causal".to_owned());
+            fields.insert("rung_identity".to_owned(), sha256_hex(b"fixture-rung-0"));
+            fields.insert("rung_ordinal".to_owned(), "0".to_owned());
+        }
+        Wu0gRequestKind::Performance => {
+            fields.insert("kind".to_owned(), "performance".to_owned());
+            fields.insert(
+                "launch_identity".to_owned(),
+                sha256_hex(b"fixture-launch-0"),
+            );
+            fields.insert("launch_ordinal".to_owned(), "0".to_owned());
+            fields.insert("pair_identity".to_owned(), sha256_hex(b"fixture-pair-0"));
+            fields.insert("pair_ordinal".to_owned(), "0".to_owned());
+            fields.insert("perf_event".to_owned(), "instructions:u".to_owned());
+            fields.insert(
+                "perf_identity".to_owned(),
+                sha256_path(Path::new("/usr/bin/perf")),
+            );
+            fields.insert("perf_version".to_owned(), exact_perf_version().to_owned());
+        }
+    }
+    assert_eq!(
+        fields.keys().map(String::as_str).collect::<Vec<_>>(),
+        WU0G_REQUEST_FIELDS
+    );
+    fields
+}
+
+fn spec_owned_wu0g_request_bytes(
+    kind: Wu0gRequestKind,
+    frozen_libtest: &Path,
+) -> (BTreeMap<String, String>, Vec<u8>) {
+    let fields = wu0g_request_fields(kind, frozen_libtest);
+    let bytes = protocol_record_bytes(
+        "typokat-wu0g-child-request-v1",
+        WU0G_REQUEST_FIELDS,
+        &fields,
+    );
+    assert!(u64::try_from(bytes.len()).unwrap() <= WU0G_REQUEST_CAP_BYTES);
+    (fields, bytes)
+}
+
+fn replace_wu0g_request_field(bytes: &[u8], key: &str, value: &str) -> Vec<u8> {
+    let text = std::str::from_utf8(bytes).expect("request fixture UTF-8");
+    let prefix = format!("{key}=");
+    let mut found = false;
+    let mut output = String::new();
+    for line in text.lines() {
+        if line.starts_with(&prefix) {
+            assert!(!found);
+            found = true;
+            output.push_str(&format!("{key}={}:{}\n", value.len(), value));
+        } else {
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+    assert!(found);
+    output.into_bytes()
+}
+
+fn prepare_wu0g_fixture(parent: &Path, name: &str, kind: Wu0gRequestKind) -> Wu0gFixture {
+    let root = parent.join(name);
+    std::fs::create_dir(&root).expect("create WU0G fixture root");
+    for relative in ["requests", "results", "tools"] {
+        std::fs::create_dir(root.join(relative)).expect("create WU0G fixture directory");
+    }
+    let frozen_libtest = root.join("tools/frozen-libtest");
+    let source = std::env::current_exe().expect("current libtest path");
+    std::fs::copy(&source, &frozen_libtest).expect("freeze current libtest");
+    let mut permissions = std::fs::metadata(&frozen_libtest).unwrap().permissions();
+    permissions.set_mode(0o500);
+    std::fs::set_permissions(&frozen_libtest, permissions).unwrap();
+    let (request_fields, request_bytes) = spec_owned_wu0g_request_bytes(kind, &frozen_libtest);
+    let request_path = root.join("requests/launch-0.request");
+    create_exclusive(&request_path, &request_bytes, false);
+    Wu0gFixture {
+        result_dir: root.join("results/launch-0"),
+        root,
+        request_path,
+        frozen_libtest,
+        request_bytes,
+        request_fields,
+    }
+}
+
+fn parse_framed_record(
+    path: &Path,
+    cap: u64,
+    expected_header: &str,
+    expected_fields: &[&str],
+) -> BTreeMap<String, String> {
+    let bytes = read_bounded_regular(path, cap);
+    assert!(bytes.is_ascii() && !bytes.contains(&b'\r'));
+    let header_end = bytes
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .expect("framed record header newline");
+    assert_eq!(&bytes[..header_end], expected_header.as_bytes());
+    let mut cursor = header_end + 1;
+    let mut fields = BTreeMap::new();
+    for expected in expected_fields {
+        let prefix = format!("{expected}=");
+        assert_eq!(
+            bytes.get(cursor..cursor + prefix.len()),
+            Some(prefix.as_bytes()),
+            "noncanonical field order for {expected}"
+        );
+        cursor += prefix.len();
+        let colon = bytes[cursor..]
+            .iter()
+            .position(|byte| *byte == b':')
+            .map(|offset| cursor + offset)
+            .expect("framed value length delimiter");
+        let length_text = std::str::from_utf8(&bytes[cursor..colon]).unwrap();
+        assert!(!length_text.is_empty() && !length_text.starts_with('+'));
+        assert!(length_text == "0" || !length_text.starts_with('0'));
+        assert!(length_text.bytes().all(|byte| byte.is_ascii_digit()));
+        let length = length_text.parse::<usize>().expect("framed value length");
+        let value_start = colon + 1;
+        let value_end = value_start.checked_add(length).expect("framed value end");
+        assert_eq!(bytes.get(value_end), Some(&b'\n'));
+        let value = std::str::from_utf8(
+            bytes
+                .get(value_start..value_end)
+                .expect("complete framed value"),
+        )
+        .unwrap();
+        assert!(!value
+            .chars()
+            .any(|character| matches!(character, '\n' | '\r' | '\0')));
+        assert!(fields
+            .insert((*expected).to_owned(), value.to_owned())
+            .is_none());
+        cursor = value_end + 1;
+    }
+    assert_eq!(cursor, bytes.len(), "trailing framed record bytes");
+    fields
+}
+
+fn exact_decimal(fields: &BTreeMap<String, String>, key: &str) -> u64 {
+    let value = fields.get(key).expect("numeric protocol field");
+    assert!(value == "0" || !value.starts_with('0'));
+    assert!(value.bytes().all(|byte| byte.is_ascii_digit()));
+    value.parse().expect("bounded protocol integer")
 }
 
 fn file_identity(path: &Path) -> FileIdentity {
@@ -507,37 +993,91 @@ fn known_identity_rss(known: &BTreeMap<u32, u64>, snapshot: &BTreeMap<u32, ProcF
         .expect("final watchdog RSS sum fits u64")
 }
 
-fn run_bounded_self_test(scratch: &AcceptanceScratch, nonce: &str) -> BoundedRun {
-    let runner = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tooling")
-        .join("wu0e-diagnostic")
-        .join("run.pl");
-    let mut child = Command::new("/usr/bin/setsid")
-        .arg("/usr/bin/perl")
-        .arg(runner)
-        .arg("--self-test-evidence")
-        .arg(&scratch.evidence)
-        .arg(&scratch.fixtures)
-        .arg(nonce)
+fn proc_executable_identity(pid: u32) -> Option<(u64, u64)> {
+    let metadata = std::fs::metadata(format!("/proc/{pid}/exe")).ok()?;
+    Some((metadata.dev(), metadata.ino()))
+}
+
+fn proc_cgroup_v2_path(pid: u32) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).ok()?;
+    let relative = text
+        .lines()
+        .find_map(|line| line.strip_prefix("0::"))?
+        .trim_start_matches('/');
+    Some(Path::new("/sys/fs/cgroup").join(relative))
+}
+
+fn observed_scope_cgroup(launch_cgroup: &Path) -> Option<PathBuf> {
+    launch_cgroup.ancestors().find_map(|ancestor| {
+        ancestor
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".scope"))
+            .then(|| ancestor.to_owned())
+    })
+}
+
+fn canonical_observed_cgroup_path(path: &Path) -> String {
+    let relative = path
+        .strip_prefix("/sys/fs/cgroup")
+        .expect("observed cgroup is below the cgroup-v2 mount");
+    format!("/{}", relative.display())
+}
+
+fn observed_cgroup_identity(domain: &str, path: &Path) -> String {
+    framed_identity(domain, canonical_observed_cgroup_path(path).as_bytes())
+}
+
+fn observed_child_identity(facts: &ObservedLaunchFacts) -> String {
+    let canonical = format!(
+        "typokat-wu0g-observed-child-v1\nleader_pid={}\nleader_start_ticks={}\nlaunch_cgroup={}\nscope_cgroup={}\n",
+        facts.pid,
+        facts.start_ticks,
+        canonical_observed_cgroup_path(&facts.launch_cgroup),
+        canonical_observed_cgroup_path(&facts.scope_cgroup),
+    );
+    framed_identity("wu0g-child-v1", canonical.as_bytes())
+}
+
+fn process_has_open_identity(pid: u32, identity: (u64, u64)) -> bool {
+    let Ok(entries) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        entry
+            .metadata()
+            .is_ok_and(|metadata| (metadata.dev(), metadata.ino()) == identity)
+    })
+}
+
+fn run_bounded_command(
+    mut command: Command,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+    launch_executable: Option<(u64, u64)>,
+    replacement: Option<&StableReplacement>,
+    artifact_root: &Path,
+) -> BoundedRun {
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("launch bounded WU0E self-test");
-    let stdout_capture = start_bounded_capture(
-        child.stdout.take().expect("take child stdout"),
-        scratch.stdout.clone(),
-    );
-    let stderr_capture = start_bounded_capture(
-        child.stderr.take().expect("take child stderr"),
-        scratch.stderr.clone(),
-    );
+        .expect("launch bounded command");
+    let stdout_capture =
+        start_bounded_capture(child.stdout.take().expect("take child stdout"), stdout_path);
+    let stderr_capture =
+        start_bounded_capture(child.stderr.take().expect("take child stderr"), stderr_path);
     let root = child.id();
     let started = Instant::now();
     let mut max_descendant_rss = 0;
     let mut known_identities = BTreeMap::new();
+    let mut observed_launches = BTreeSet::new();
+    let mut observed_launch_facts = BTreeSet::new();
+    let mut observed_launch_cgroups = BTreeSet::new();
+    let mut replacement_performed = false;
     loop {
-        if let Some(status) = child.try_wait().expect("poll WU0E self-test") {
+        if let Some(status) = child.try_wait().expect("poll bounded command") {
             let drain_deadline = Instant::now() + OUTER_DRAIN;
             loop {
                 let final_snapshot = proc_snapshot();
@@ -553,23 +1093,55 @@ fn run_bounded_self_test(scratch: &AcceptanceScratch, nonce: &str) -> BoundedRun
                     }
                     panic!(
                         "outer watchdog observed surviving descendants; artifacts: {}",
-                        scratch.root.display()
+                        artifact_root.display()
                     );
                 }
-                std::thread::sleep(Duration::from_millis(5));
+                std::thread::sleep(Duration::from_millis(1));
             }
             let stdout_oversized = stdout_capture.finish();
             let stderr_oversized = stderr_capture.finish();
             return BoundedRun {
+                raw_wait_status: status.into_raw(),
                 status,
                 max_descendant_rss,
                 stdout_oversized,
                 stderr_oversized,
+                observed_identities: known_identities,
+                observed_launches,
+                observed_launch_facts,
+                observed_launch_cgroups,
+                replacement_performed,
             };
         }
         let snapshot = proc_snapshot();
         for pid in tree_members(root, &snapshot) {
-            known_identities.insert(pid, snapshot.get(&pid).unwrap().start_ticks);
+            let start_ticks = snapshot.get(&pid).unwrap().start_ticks;
+            known_identities.insert(pid, start_ticks);
+            if launch_executable.is_some_and(|expected| {
+                proc_executable_identity(pid).is_some_and(|actual| actual == expected)
+            }) {
+                observed_launches.insert((pid, start_ticks));
+                if let Some(cgroup) = proc_cgroup_v2_path(pid) {
+                    observed_launch_cgroups.insert(cgroup.clone());
+                    if let Some(scope_cgroup) = observed_scope_cgroup(&cgroup) {
+                        observed_launch_facts.insert(ObservedLaunchFacts {
+                            pid,
+                            start_ticks,
+                            launch_cgroup: cgroup,
+                            scope_cgroup,
+                        });
+                    }
+                }
+            }
+            if !replacement_performed
+                && replacement
+                    .is_some_and(|attack| process_has_open_identity(pid, attack.opened_identity))
+            {
+                let attack = replacement.expect("replacement attack exists");
+                std::fs::rename(&attack.replacement, &attack.target)
+                    .expect("replace executable after stable open");
+                replacement_performed = true;
+            }
         }
         let rss = tree_rss(root, &snapshot);
         max_descendant_rss = max_descendant_rss.max(rss);
@@ -590,11 +1162,89 @@ fn run_bounded_self_test(scratch: &AcceptanceScratch, nonce: &str) -> BoundedRun
             let _ = stderr_capture.finish();
             panic!(
                 "outer watchdog hit {reason}; artifacts: {}",
-                scratch.root.display()
+                artifact_root.display()
             );
         }
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(1));
     }
+}
+
+fn runner_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tooling/wu0e-diagnostic/run.pl")
+}
+
+fn direct_wu0g_command(fixture: &Wu0gFixture) -> Command {
+    let mut command = Command::new("/usr/bin/perl");
+    command
+        .arg(runner_path())
+        .arg("--wu0g-child-v1")
+        .arg(&fixture.request_path)
+        .arg(&fixture.result_dir);
+    for (key, value) in WU0G_FORBIDDEN_ENV {
+        command.env(key, value);
+    }
+    command
+}
+
+fn run_direct_wu0g_with(
+    fixture: &Wu0gFixture,
+    label: &str,
+    injected_tool: Option<(&str, &Path)>,
+    replacement: Option<&StableReplacement>,
+) -> BoundedRun {
+    let canary_path = fixture.root.join(format!("{label}.inherited-fd-canary"));
+    create_exclusive(&canary_path, b"must-not-reach-wu0g-child\n", false);
+    let canary = OpenOptions::new()
+        .read(true)
+        .open(&canary_path)
+        .expect("open inherited FD canary");
+    let flags = rustix::io::fcntl_getfd(&canary).expect("read FD flags");
+    rustix::io::fcntl_setfd(&canary, flags & !rustix::io::FdFlags::CLOEXEC)
+        .expect("make FD canary inheritable");
+    assert_eq!(
+        rustix::io::fcntl_getfd(&canary).unwrap() & rustix::io::FdFlags::CLOEXEC,
+        rustix::io::FdFlags::empty()
+    );
+    let frozen = std::fs::metadata(&fixture.frozen_libtest).expect("frozen libtest identity");
+    let stdout = fixture.root.join(format!("{label}.runner.stdout"));
+    let stderr = fixture.root.join(format!("{label}.runner.stderr"));
+    let mut command = direct_wu0g_command(fixture);
+    if let Some((key, path)) = injected_tool {
+        command.env(key, path);
+    }
+    let bounded = run_bounded_command(
+        command,
+        stdout,
+        stderr,
+        Some((frozen.dev(), frozen.ino())),
+        replacement,
+        &fixture.root,
+    );
+    drop(canary);
+    bounded
+}
+
+fn run_direct_wu0g(fixture: &Wu0gFixture, label: &str) -> BoundedRun {
+    run_direct_wu0g_with(fixture, label, None, None)
+}
+
+fn run_bounded_self_test(scratch: &AcceptanceScratch, nonce: &str) -> BoundedRun {
+    let mut command = Command::new("/usr/bin/setsid");
+    command
+        .arg("/usr/bin/perl")
+        .arg(runner_path())
+        .arg("--self-test-evidence")
+        .arg(&scratch.evidence)
+        .arg(&scratch.fixtures)
+        .arg(nonce);
+    run_bounded_command(
+        command,
+        scratch.stdout.clone(),
+        scratch.stderr.clone(),
+        None,
+        None,
+        &scratch.root,
+    )
 }
 
 fn parse_record(path: &Path, prefix: &str) -> BTreeMap<String, String> {
@@ -866,6 +1516,885 @@ fn assert_pid_identity_gone(pid: u32, start_ticks: u64) {
             "fixture child still exists"
         );
     }
+}
+
+fn assert_all_observed_identities_gone(bounded: &BoundedRun) {
+    for (pid, start_ticks) in &bounded.observed_identities {
+        assert_pid_identity_gone(*pid, *start_ticks);
+    }
+}
+
+fn assert_observed_cgroups_eventually_absent(paths: &BTreeSet<PathBuf>) {
+    assert!(
+        !paths.is_empty(),
+        "no launch cgroup was independently observed"
+    );
+    let deadline = Instant::now() + OUTER_DRAIN;
+    loop {
+        let remaining = paths
+            .iter()
+            .filter(|path| path.exists())
+            .collect::<Vec<_>>();
+        if remaining.is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "launch cgroup survived: {remaining:?}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn assert_no_forbidden_child_data(bytes: &[u8], canary_path: &Path) {
+    for (key, value) in WU0G_FORBIDDEN_ENV {
+        assert!(!bytes
+            .windows(key.len())
+            .any(|window| window == key.as_bytes()));
+        assert!(!bytes
+            .windows(value.len())
+            .any(|window| window == value.as_bytes()));
+    }
+    let canary = canary_path.to_string_lossy();
+    assert!(!bytes
+        .windows(canary.len())
+        .any(|window| window == canary.as_bytes()));
+}
+
+fn exact_child_fd_inventory(kind: Wu0gRequestKind) -> &'static str {
+    match kind {
+        Wu0gRequestKind::Causal => "stderr|stdin|stdout|request|result|libtest|prlimit",
+        Wu0gRequestKind::Performance => {
+            "stderr|stdin|stdout|request|result|libtest|prlimit|perf|perf-log"
+        }
+    }
+}
+
+fn parse_perf_row(bytes: &[u8]) -> (u64, u64) {
+    assert!(u64::try_from(bytes.len()).unwrap() <= WU0G_PERF_ARTIFACT_CAP_BYTES);
+    assert!(bytes.ends_with(b"\n") && !bytes[..bytes.len() - 1].contains(&b'\n'));
+    assert_eq!(bytes.iter().filter(|byte| **byte == b';').count(), 6);
+    let line = std::str::from_utf8(&bytes[..bytes.len() - 1]).unwrap();
+    let fields = line.split(';').collect::<Vec<_>>();
+    assert_eq!(fields.len(), 7);
+    assert_eq!(
+        &fields[1..],
+        ["", "instructions:u", fields[3], "100.00", "", ""]
+    );
+    let instructions = fields[0]
+        .parse::<u64>()
+        .expect("canonical instruction count");
+    let runtime = fields[3].parse::<u64>().expect("canonical perf runtime");
+    assert!(instructions > 0 && runtime > 0);
+    (instructions, runtime)
+}
+
+fn assert_valid_wu0g_run(fixture: &Wu0gFixture, kind: Wu0gRequestKind, bounded: &BoundedRun) {
+    assert!(bounded.status.success());
+    assert_eq!(bounded.raw_wait_status, 0);
+    assert!(!bounded.stdout_oversized && !bounded.stderr_oversized);
+    assert!(bounded.max_descendant_rss <= MAX_OUTER_RSS_BYTES);
+    assert_eq!(
+        bounded.observed_launches.len(),
+        1,
+        "exactly one libtest launch"
+    );
+    assert_all_observed_identities_gone(bounded);
+    assert_observed_cgroups_eventually_absent(&bounded.observed_launch_cgroups);
+
+    let outer_stdout = read_bounded_regular(
+        &fixture.root.join("valid.runner.stdout"),
+        WU0G_STDIO_CAP_BYTES,
+    );
+    let outer_stderr = read_bounded_regular(
+        &fixture.root.join("valid.runner.stderr"),
+        WU0G_STDIO_CAP_BYTES,
+    );
+    let canary_path = fixture.root.join("valid.inherited-fd-canary");
+    assert_no_forbidden_child_data(&outer_stdout, &canary_path);
+    assert_no_forbidden_child_data(&outer_stderr, &canary_path);
+
+    let result_path = fixture.result_dir.join("result.v1");
+    let result = parse_framed_record(
+        &result_path,
+        WU0G_RESULT_CAP_BYTES,
+        "typokat-wu0g-child-result-v1",
+        WU0G_RESULT_FIELDS,
+    );
+    assert_eq!(
+        bounded.observed_launch_facts.len(),
+        1,
+        "watchdog must capture exact launch and scope facts"
+    );
+    let observed = bounded.observed_launch_facts.iter().next().unwrap();
+    assert_eq!(
+        bounded.observed_launches,
+        [(observed.pid, observed.start_ticks)].into_iter().collect()
+    );
+    assert_ne!(observed.launch_cgroup, observed.scope_cgroup);
+    assert!(observed.launch_cgroup.starts_with(&observed.scope_cgroup));
+    assert_eq!(
+        exact_decimal(&result, "leader_pid"),
+        u64::from(observed.pid)
+    );
+    assert_eq!(
+        exact_decimal(&result, "leader_start_ticks"),
+        observed.start_ticks
+    );
+    assert_eq!(
+        result.get("child_identity").unwrap(),
+        &observed_child_identity(observed)
+    );
+    assert_eq!(
+        result.get("cgroup_identity").unwrap(),
+        &observed_cgroup_identity("wu0g-cgroup-v1", &observed.launch_cgroup)
+    );
+    assert_eq!(
+        result.get("scope_identity").unwrap(),
+        &observed_cgroup_identity("wu0g-scope-v1", &observed.scope_cgroup)
+    );
+    for key in [
+        "binary_identity",
+        "host_identity",
+        "launch_identity",
+        "perf_event",
+        "perf_identity",
+        "perf_version",
+        "plan_identity",
+        "prlimit_identity",
+        "result_identity",
+    ] {
+        assert_eq!(result.get(key), fixture.request_fields.get(key));
+    }
+    assert_eq!(
+        result.get("request_content_identity").unwrap(),
+        &framed_identity("wu0g-request-content-v1", &fixture.request_bytes)
+    );
+    for key in [
+        "deadline_ms",
+        "memory_limit_bytes",
+        "rss_limit_bytes",
+        "nofile_soft",
+        "nofile_hard",
+    ] {
+        assert_eq!(result.get(key), fixture.request_fields.get(key));
+    }
+    for (configured, readback) in [
+        ("deadline_ms", "deadline_readback_ms"),
+        ("memory_limit_bytes", "memory_limit_readback_bytes"),
+        ("rss_limit_bytes", "rss_limit_readback_bytes"),
+        ("nofile_soft", "nofile_soft_readback"),
+        ("nofile_hard", "nofile_hard_readback"),
+    ] {
+        assert_eq!(result.get(configured), result.get(readback));
+    }
+    for key in [
+        "cgroup_populated_zero",
+        "cgroup_removed",
+        "cleanup_succeeded",
+        "drain_complete",
+        "leader_reaped",
+        "membership_verified",
+        "pgid_empty",
+        "readiness_seen",
+    ] {
+        assert_eq!(result.get(key).map(String::as_str), Some("1"));
+    }
+    for key in [
+        "cgroup_retained",
+        "containment_failures",
+        "oom_delta",
+        "oom_kill_delta",
+        "scope_abort_observed",
+        "scope_abort_requested",
+    ] {
+        assert_eq!(result.get(key).map(String::as_str), Some("0"));
+    }
+    assert_eq!(
+        result.get("termination").map(String::as_str),
+        Some("normal")
+    );
+    assert_eq!(result.get("exit_code").map(String::as_str), Some("0"));
+    assert_eq!(result.get("term_signal").map(String::as_str), Some("none"));
+    assert_eq!(
+        result.get("outer_raw_wait_status").map(String::as_str),
+        Some("0")
+    );
+    assert_eq!(
+        exact_decimal(&result, "leader_pid"),
+        exact_decimal(&result, "pgid")
+    );
+    assert!(exact_decimal(&result, "max_rss_bytes") <= exact_decimal(&result, "rss_limit_bytes"));
+
+    let sentinel_path = fixture.result_dir.join("artifacts/completion.sentinel");
+    let sentinel = parse_framed_record(
+        &sentinel_path,
+        WU0G_SENTINEL_CAP_BYTES,
+        "typokat-wu0g-child-completion-sentinel-v1",
+        WU0G_SENTINEL_FIELDS,
+    );
+    let exact_env = WU0G_ENV_ALLOWLIST.join("|");
+    assert_eq!(
+        sentinel.get("argv").map(String::as_str),
+        Some(WU0G_CHILD_ARGV)
+    );
+    assert!(sentinel
+        .get("argv")
+        .unwrap()
+        .split('|')
+        .any(|argument| argument == WU0G_CHILD_FILTER));
+    assert_eq!(sentinel.get("environment"), Some(&exact_env));
+    assert_eq!(
+        sentinel.get("fd_inventory").map(String::as_str),
+        Some(exact_child_fd_inventory(kind))
+    );
+    assert_eq!(
+        sentinel.get("nofile_soft"),
+        fixture.request_fields.get("nofile_soft")
+    );
+    assert_eq!(
+        sentinel.get("nofile_hard"),
+        fixture.request_fields.get("nofile_hard")
+    );
+    assert_eq!(
+        sentinel.get("request_content_identity"),
+        result.get("request_content_identity")
+    );
+    let semantic_path = fixture.result_dir.join("artifacts/semantic.bin");
+    let semantic = read_bounded_regular(&semantic_path, WU0G_ARTIFACT_CAP_BYTES);
+    assert_eq!(
+        sentinel.get("semantic_artifact_identity").unwrap(),
+        &framed_identity("wu0g-semantic-artifact-v1", &semantic)
+    );
+    assert_eq!(
+        exact_decimal(&sentinel, "semantic_artifact_size"),
+        u64::try_from(semantic.len()).unwrap()
+    );
+    let sentinel_bytes = read_bounded_regular(&sentinel_path, WU0G_SENTINEL_CAP_BYTES);
+    assert_eq!(
+        result.get("sentinel_identity").unwrap(),
+        &framed_identity("wu0g-child-completion-sentinel-v1", &sentinel_bytes)
+    );
+    assert_eq!(
+        exact_decimal(&result, "sentinel_size"),
+        u64::try_from(sentinel_bytes.len()).unwrap()
+    );
+    assert_eq!(result.get("child_argv"), sentinel.get("argv"));
+    assert_eq!(result.get("child_env"), sentinel.get("environment"));
+    assert_eq!(
+        result.get("child_fd_inventory"),
+        sentinel.get("fd_inventory")
+    );
+    assert_no_forbidden_child_data(&sentinel_bytes, &canary_path);
+
+    let child_artifact = read_bounded_regular(
+        &fixture.result_dir.join("artifacts/child.bin"),
+        WU0G_ARTIFACT_CAP_BYTES,
+    );
+    assert_eq!(
+        result.get("artifact_identity").unwrap(),
+        &framed_identity("wu0g-child-artifact-v1", &child_artifact)
+    );
+    assert_eq!(
+        exact_decimal(&result, "artifact_size"),
+        u64::try_from(child_artifact.len()).unwrap()
+    );
+    let child_stdout =
+        read_bounded_regular(&fixture.result_dir.join("stdout.bin"), WU0G_STDIO_CAP_BYTES);
+    let child_stderr =
+        read_bounded_regular(&fixture.result_dir.join("stderr.bin"), WU0G_STDIO_CAP_BYTES);
+    assert_eq!(
+        exact_decimal(&result, "stdout_size"),
+        u64::try_from(child_stdout.len()).unwrap()
+    );
+    assert_eq!(
+        exact_decimal(&result, "stderr_size"),
+        u64::try_from(child_stderr.len()).unwrap()
+    );
+    assert_no_forbidden_child_data(&child_stdout, &canary_path);
+    assert_no_forbidden_child_data(&child_stderr, &canary_path);
+
+    match kind {
+        Wu0gRequestKind::Causal => {
+            for key in [
+                "perf_artifact_identity",
+                "perf_artifact_size",
+                "perf_event",
+                "perf_exit_code",
+                "perf_identity",
+                "perf_invocation",
+                "perf_raw_wait_status",
+                "perf_term_signal",
+                "perf_version",
+            ] {
+                assert_eq!(result.get(key).map(String::as_str), Some("none"));
+            }
+        }
+        Wu0gRequestKind::Performance => {
+            let exact_perf = format!(
+                "/usr/bin/perf|stat|--no-big-num|--no-scale|-x|;|-e|instructions:u|--log-fd|198|--|/proc/self/fd/197|{WU0G_CHILD_ARGV}"
+            );
+            assert_eq!(result.get("perf_invocation"), Some(&exact_perf));
+            assert_eq!(result.get("perf_exit_code").map(String::as_str), Some("0"));
+            assert_eq!(
+                result.get("perf_raw_wait_status").map(String::as_str),
+                Some("0")
+            );
+            assert_eq!(
+                result.get("perf_term_signal").map(String::as_str),
+                Some("none")
+            );
+            let perf = read_bounded_regular(
+                &fixture.result_dir.join("artifacts/perf.csv"),
+                WU0G_PERF_ARTIFACT_CAP_BYTES,
+            );
+            parse_perf_row(&perf);
+            assert_eq!(
+                result.get("perf_artifact_identity").unwrap(),
+                &framed_identity("wu0g-perf-artifact-v1", &perf)
+            );
+            assert_eq!(
+                exact_decimal(&result, "perf_artifact_size"),
+                u64::try_from(perf.len()).unwrap()
+            );
+        }
+    }
+}
+
+fn assert_rejected_before_launch(fixture: &Wu0gFixture, label: &str, bounded: &BoundedRun) {
+    assert_ne!(bounded.raw_wait_status, 0, "{label} was admitted");
+    assert!(!bounded.stdout_oversized && !bounded.stderr_oversized);
+    assert!(
+        bounded.observed_launches.is_empty(),
+        "{label} launched libtest"
+    );
+    assert_all_observed_identities_gone(bounded);
+    assert!(!fixture.result_dir.join("result.v1").exists());
+    assert!(!fixture
+        .result_dir
+        .join("artifacts/completion.sentinel")
+        .exists());
+}
+
+fn run_direct_legacy(scratch: &AcceptanceScratch, label: &str, argument: &str) -> BoundedRun {
+    let canary_path = scratch.root.join(format!("legacy-{label}.fd-canary"));
+    create_exclusive(&canary_path, b"legacy-inherited-fd-canary\n", false);
+    let canary = OpenOptions::new().read(true).open(&canary_path).unwrap();
+    let flags = rustix::io::fcntl_getfd(&canary).unwrap();
+    rustix::io::fcntl_setfd(&canary, flags & !rustix::io::FdFlags::CLOEXEC).unwrap();
+    let mut command = Command::new("/usr/bin/perl");
+    command.arg(runner_path()).arg(argument);
+    for (key, value) in WU0G_FORBIDDEN_ENV {
+        command.env(key, value);
+    }
+    command.env("TYPOKAT_WU0G_CHILD_REQUEST_FD", "forged-legacy-value");
+    let bounded = run_bounded_command(
+        command,
+        scratch.root.join(format!("legacy-{label}.stdout")),
+        scratch.root.join(format!("legacy-{label}.stderr")),
+        None,
+        None,
+        &scratch.root,
+    );
+    drop(canary);
+    bounded
+}
+
+fn legacy_self_test_inventory(bytes: &[u8]) -> Vec<u8> {
+    let text = std::str::from_utf8(bytes).expect("legacy self-test output UTF-8");
+    let mut inventory = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix("typokat-wu0e-self-test-observation-v1 case=") else {
+            continue;
+        };
+        let case = rest.split_once(' ').map_or(rest, |(case, _)| case);
+        inventory.extend_from_slice(case.as_bytes());
+        inventory.push(b'\n');
+    }
+    inventory
+}
+
+#[test]
+#[ignore = "WU0E legacy dry-run/self-test inventory; direct and hard-bounded"]
+fn wu0g_route_leaves_legacy_diagnostics_byte_for_byte_unchanged() {
+    let scratch = AcceptanceScratch::create();
+    let dry = run_direct_legacy(&scratch, "dry", "--dry-run");
+    assert!(dry.status.success() && dry.raw_wait_status == 0);
+    assert!(!dry.stdout_oversized && !dry.stderr_oversized);
+    let dry_stdout = read_bounded_regular(
+        &scratch.root.join("legacy-dry.stdout"),
+        WU0G_STDIO_CAP_BYTES,
+    );
+    let dry_stderr = read_bounded_regular(
+        &scratch.root.join("legacy-dry.stderr"),
+        WU0G_STDIO_CAP_BYTES,
+    );
+    assert_eq!(
+        dry_stdout,
+        b"typokat-wu0e-runner-dry-v1 mode_order=plain,measured-off,candidate-b build_count=1 workload_count=3 validator_count=3 profile_files=82 warm_regular_files=88 deadline_us=180000000 max_process_group_rss_bytes=1073741824 max_stdout_bytes=131072 max_stderr_bytes=131072 max_trace_bytes=262144\n"
+    );
+    assert!(dry_stderr.is_empty());
+
+    let self_test = run_direct_legacy(&scratch, "self-test", "--self-test");
+    assert!(self_test.status.success() && self_test.raw_wait_status == 0);
+    assert!(!self_test.stdout_oversized && !self_test.stderr_oversized);
+    let self_stdout = read_bounded_regular(
+        &scratch.root.join("legacy-self-test.stdout"),
+        WU0G_STDIO_CAP_BYTES,
+    );
+    let self_stderr = read_bounded_regular(
+        &scratch.root.join("legacy-self-test.stderr"),
+        WU0G_STDIO_CAP_BYTES,
+    );
+    assert_eq!(
+        legacy_self_test_inventory(&self_stdout),
+        WU0G_LEGACY_SELF_TEST_INVENTORY
+    );
+    assert!(self_stderr.is_empty());
+    for output in [&dry_stdout, &dry_stderr, &self_stdout, &self_stderr] {
+        assert!(!String::from_utf8_lossy(output)
+            .to_ascii_lowercase()
+            .contains("wu0g"));
+    }
+    assert_all_observed_identities_gone(&dry);
+    assert_all_observed_identities_gone(&self_test);
+    assert!(std::fs::read_dir(&scratch.evidence)
+        .unwrap()
+        .next()
+        .is_none());
+    scratch.finish();
+}
+
+#[test]
+#[ignore = "WU0G actual direct CLI request/result/sentinel and cgroup acceptance"]
+fn wu0g_actual_direct_cli_route_is_independently_observed() {
+    let scratch = AcceptanceScratch::create();
+    for (name, kind) in [
+        ("causal-valid", Wu0gRequestKind::Causal),
+        ("performance-valid", Wu0gRequestKind::Performance),
+    ] {
+        let fixture = prepare_wu0g_fixture(&scratch.root, name, kind);
+        let bounded = run_direct_wu0g(&fixture, "valid");
+        assert_valid_wu0g_run(&fixture, kind, &bounded);
+    }
+    scratch.finish();
+}
+
+#[test]
+#[ignore = "WU0G actual invalid canonical request matrix; hard-bounded and zero launch"]
+fn wu0g_actual_direct_cli_rejects_invalid_request_matrix() {
+    let scratch = AcceptanceScratch::create();
+    let causal_seed = prepare_wu0g_fixture(&scratch.root, "causal-seed", Wu0gRequestKind::Causal);
+    let performance_seed = prepare_wu0g_fixture(
+        &scratch.root,
+        "performance-seed",
+        Wu0gRequestKind::Performance,
+    );
+    let causal = causal_seed.request_bytes.clone();
+    let performance = performance_seed.request_bytes.clone();
+    std::fs::remove_dir_all(&causal_seed.root).unwrap();
+    std::fs::remove_dir_all(&performance_seed.root).unwrap();
+    let mut cases = vec![
+        (
+            Wu0gRequestKind::Causal,
+            "invalid-kind",
+            replace_wu0g_request_field(&causal, "kind", "control"),
+        ),
+        (
+            Wu0gRequestKind::Causal,
+            "invalid-mode",
+            replace_wu0g_request_field(&causal, "mode", "plain"),
+        ),
+        (
+            Wu0gRequestKind::Causal,
+            "causal-launch-field",
+            replace_wu0g_request_field(
+                &causal,
+                "launch_identity",
+                &sha256_hex(b"forbidden-launch"),
+            ),
+        ),
+        (
+            Wu0gRequestKind::Causal,
+            "causal-pair-field",
+            replace_wu0g_request_field(&causal, "pair_ordinal", "0"),
+        ),
+        (
+            Wu0gRequestKind::Causal,
+            "causal-perf-field",
+            replace_wu0g_request_field(&causal, "perf_event", "instructions:u"),
+        ),
+        (
+            Wu0gRequestKind::Performance,
+            "performance-rung-field",
+            replace_wu0g_request_field(
+                &performance,
+                "rung_identity",
+                &sha256_hex(b"forbidden-rung"),
+            ),
+        ),
+        (
+            Wu0gRequestKind::Causal,
+            "causal-rung-none",
+            replace_wu0g_request_field(&causal, "rung_ordinal", "none"),
+        ),
+        (
+            Wu0gRequestKind::Causal,
+            "causal-rung-five",
+            replace_wu0g_request_field(&causal, "rung_ordinal", "5"),
+        ),
+        (
+            Wu0gRequestKind::Performance,
+            "performance-pair-none",
+            replace_wu0g_request_field(&performance, "pair_ordinal", "none"),
+        ),
+        (
+            Wu0gRequestKind::Performance,
+            "performance-pair-five",
+            replace_wu0g_request_field(&performance, "pair_ordinal", "5"),
+        ),
+        (
+            Wu0gRequestKind::Performance,
+            "performance-launch-none",
+            replace_wu0g_request_field(&performance, "launch_ordinal", "none"),
+        ),
+        (
+            Wu0gRequestKind::Performance,
+            "performance-launch-ten",
+            replace_wu0g_request_field(&performance, "launch_ordinal", "10"),
+        ),
+        (
+            Wu0gRequestKind::Causal,
+            "rss-over-memory",
+            replace_wu0g_request_field(
+                &replace_wu0g_request_field(&causal, "memory_limit_bytes", "268435456"),
+                "rss_limit_bytes",
+                "314572800",
+            ),
+        ),
+        (
+            Wu0gRequestKind::Causal,
+            "nofile-soft-over-hard",
+            replace_wu0g_request_field(
+                &replace_wu0g_request_field(&causal, "nofile_soft", "256"),
+                "nofile_hard",
+                "128",
+            ),
+        ),
+    ];
+    for (key, maximum) in [
+        ("deadline_ms", 30_000),
+        ("memory_limit_bytes", 536_870_912),
+        ("rss_limit_bytes", 402_653_184),
+        ("nofile_soft", 256),
+        ("nofile_hard", 256),
+    ] {
+        cases.push((
+            Wu0gRequestKind::Causal,
+            "zero-limit",
+            replace_wu0g_request_field(&causal, key, "0"),
+        ));
+        cases.push((
+            Wu0gRequestKind::Causal,
+            "over-limit",
+            replace_wu0g_request_field(&causal, key, &(maximum + 1).to_string()),
+        ));
+    }
+    for key in [
+        "binary_identity",
+        "candidate_identity",
+        "host_identity",
+        "plan_identity",
+        "prlimit_identity",
+        "result_identity",
+        "rung_identity",
+        "workload_identity",
+    ] {
+        cases.push((
+            Wu0gRequestKind::Causal,
+            "malformed-causal-identity",
+            replace_wu0g_request_field(&causal, key, &"f".repeat(63)),
+        ));
+        cases.push((
+            Wu0gRequestKind::Causal,
+            "mismatched-causal-identity",
+            replace_wu0g_request_field(&causal, key, &"e".repeat(64)),
+        ));
+    }
+    for key in ["launch_identity", "pair_identity", "perf_identity"] {
+        cases.push((
+            Wu0gRequestKind::Performance,
+            "malformed-performance-identity",
+            replace_wu0g_request_field(&performance, key, &"f".repeat(63)),
+        ));
+        cases.push((
+            Wu0gRequestKind::Performance,
+            "mismatched-performance-identity",
+            replace_wu0g_request_field(&performance, key, &"e".repeat(64)),
+        ));
+    }
+    let lines = causal.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+    let mut missing = lines.clone();
+    missing.remove(2);
+    cases.push((Wu0gRequestKind::Causal, "missing", missing.join(&b'\n')));
+    let mut duplicate = lines.clone();
+    duplicate.insert(2, duplicate[1]);
+    cases.push((Wu0gRequestKind::Causal, "duplicate", duplicate.join(&b'\n')));
+    let mut unknown = lines.clone();
+    unknown.insert(2, b"unknown=1:x");
+    cases.push((Wu0gRequestKind::Causal, "unknown", unknown.join(&b'\n')));
+    let mut reordered = lines;
+    reordered.swap(1, 2);
+    cases.push((Wu0gRequestKind::Causal, "reordered", reordered.join(&b'\n')));
+
+    for (index, (kind, label, request)) in cases.into_iter().enumerate() {
+        let fixture = prepare_wu0g_fixture(&scratch.root, &format!("invalid-{index}"), kind);
+        std::fs::write(&fixture.request_path, request).expect("install invalid request");
+        let bounded = run_direct_wu0g(&fixture, "invalid");
+        assert_rejected_before_launch(&fixture, label, &bounded);
+    }
+    scratch.finish();
+}
+
+fn replace_fixture_request_field(fixture: &mut Wu0gFixture, key: &str, value: &str) {
+    fixture.request_bytes = replace_wu0g_request_field(&fixture.request_bytes, key, value);
+    fixture
+        .request_fields
+        .insert(key.to_owned(), value.to_owned());
+    std::fs::write(&fixture.request_path, &fixture.request_bytes).unwrap();
+}
+
+fn install_replacement_attacker(path: &Path, marker: &Path) {
+    let source = format!(
+        "#!/usr/bin/perl\nuse strict; use warnings; open my $h, '>', '{}' or die $!; print {{$h}} \"replacement-executed\\n\"; close $h or die $!; exit 97;\n",
+        marker.display()
+    );
+    create_exclusive(path, source.as_bytes(), true);
+}
+
+fn assert_stable_tool_replacement(
+    scratch: &AcceptanceScratch,
+    name: &str,
+    kind: Wu0gRequestKind,
+    source: Option<&Path>,
+    identity_field: &str,
+    injected_environment: Option<&str>,
+) {
+    let mut fixture = prepare_wu0g_fixture(&scratch.root, name, kind);
+    let target = if let Some(source) = source {
+        let target = fixture.root.join(format!("tools/{name}"));
+        std::fs::copy(source, &target).expect("copy stable tool fixture");
+        let mut permissions = std::fs::metadata(&target).unwrap().permissions();
+        permissions.set_mode(0o500);
+        std::fs::set_permissions(&target, permissions).unwrap();
+        let digest = sha256_path(&target);
+        replace_fixture_request_field(&mut fixture, identity_field, &digest);
+        target
+    } else {
+        fixture.frozen_libtest.clone()
+    };
+    let before = std::fs::metadata(&target).unwrap();
+    let opened_identity = (before.dev(), before.ino());
+    let opened_digest = sha256_path(&target);
+    let retained = fixture.root.join(format!("{name}.opened-victim"));
+    std::fs::hard_link(&target, &retained).expect("retain Rust-owned opened inode");
+    let marker = fixture.root.join(format!("{name}.replacement.marker"));
+    let replacement = fixture.root.join(format!("{name}.replacement"));
+    install_replacement_attacker(&replacement, &marker);
+    let replacement_identity = file_identity(&replacement);
+    let attack = StableReplacement {
+        target: target.clone(),
+        replacement,
+        opened_identity,
+    };
+    let injected = injected_environment.map(|key| (key, target.as_path()));
+    let bounded = run_direct_wu0g_with(&fixture, "replacement", injected, Some(&attack));
+    assert!(
+        bounded.replacement_performed,
+        "{name} was not replaced after open"
+    );
+    assert_ne!(
+        bounded.raw_wait_status, 0,
+        "path drift must be inconclusive"
+    );
+    assert_eq!(
+        bounded.observed_launches.len(),
+        1,
+        "{name} stable handle was not executed"
+    );
+    assert!(!marker.exists(), "{name} attacker executable ran");
+    let retained_after = std::fs::metadata(&retained).unwrap();
+    assert_eq!(
+        (retained_after.dev(), retained_after.ino()),
+        opened_identity
+    );
+    assert_eq!(sha256_path(&retained), opened_digest);
+    let target_after = std::fs::metadata(&target).unwrap();
+    assert_eq!(
+        (target_after.dev(), target_after.ino()),
+        (replacement_identity.device, replacement_identity.inode)
+    );
+    assert_eq!(sha256_path(&target), replacement_identity.digest);
+    assert_all_observed_identities_gone(&bounded);
+    assert_observed_cgroups_eventually_absent(&bounded.observed_launch_cgroups);
+}
+
+#[test]
+#[ignore = "WU0G stable libtest/prlimit/perf handles; Rust-owned post-open replacements"]
+fn wu0g_direct_route_executes_stable_tool_handles_and_rejects_path_drift() {
+    let scratch = AcceptanceScratch::create();
+    assert_stable_tool_replacement(
+        &scratch,
+        "libtest",
+        Wu0gRequestKind::Causal,
+        None,
+        "binary_identity",
+        None,
+    );
+    assert_stable_tool_replacement(
+        &scratch,
+        "prlimit",
+        Wu0gRequestKind::Causal,
+        Some(Path::new("/usr/bin/prlimit")),
+        "prlimit_identity",
+        Some("TYPOKAT_WU0E_TEST_WU0G_PRLIMIT_PATH"),
+    );
+    assert_stable_tool_replacement(
+        &scratch,
+        "perf",
+        Wu0gRequestKind::Performance,
+        Some(Path::new("/usr/bin/perf")),
+        "perf_identity",
+        Some("TYPOKAT_WU0E_TEST_WU0G_PERF_PATH"),
+    );
+    scratch.finish();
+}
+
+fn assert_unchanged_path_victim(path: &Path, expected: &FileIdentity) {
+    assert_eq!(&file_identity(path), expected);
+}
+
+#[test]
+#[ignore = "WU0G real CLI path attacks; hard-bounded, zero launch, victim unchanged"]
+fn wu0g_direct_route_rejects_path_alias_special_file_and_replacement_attacks() {
+    use std::os::unix::fs::symlink;
+
+    let scratch = AcceptanceScratch::create();
+    let victim = scratch.root.join("path-attack-victim");
+    create_exclusive(&victim, b"rust-owned-path-victim-v1\n", false);
+    let victim_identity = file_identity(&victim);
+
+    for (index, (label, key, value)) in [
+        ("absolute", "artifact_relative_path", "/tmp/wu0g-escape"),
+        (
+            "traversal",
+            "semantic_artifact_relative_path",
+            "../path-attack-victim",
+        ),
+        ("alias", "artifact_relative_path", "artifacts/semantic.bin"),
+        (
+            "duplicate-path",
+            "result_relative_path",
+            "requests/launch-0.request",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut fixture = prepare_wu0g_fixture(
+            &scratch.root,
+            &format!("path-field-{index}"),
+            Wu0gRequestKind::Causal,
+        );
+        replace_fixture_request_field(&mut fixture, key, value);
+        let bounded = run_direct_wu0g(&fixture, "path");
+        assert_rejected_before_launch(&fixture, label, &bounded);
+        assert_unchanged_path_victim(&victim, &victim_identity);
+    }
+
+    let leaf = prepare_wu0g_fixture(&scratch.root, "path-symlink-leaf", Wu0gRequestKind::Causal);
+    std::fs::remove_file(&leaf.request_path).unwrap();
+    symlink(&victim, &leaf.request_path).unwrap();
+    let bounded = run_direct_wu0g(&leaf, "path");
+    assert_rejected_before_launch(&leaf, "symlink leaf", &bounded);
+
+    let parent = prepare_wu0g_fixture(
+        &scratch.root,
+        "path-symlink-parent",
+        Wu0gRequestKind::Causal,
+    );
+    let real_requests = scratch.root.join("real-symlink-parent-requests");
+    std::fs::create_dir(&real_requests).unwrap();
+    create_exclusive(
+        &real_requests.join("launch-0.request"),
+        &parent.request_bytes,
+        false,
+    );
+    std::fs::remove_file(&parent.request_path).unwrap();
+    std::fs::remove_dir(parent.root.join("requests")).unwrap();
+    symlink(&real_requests, parent.root.join("requests")).unwrap();
+    let bounded = run_direct_wu0g(&parent, "path");
+    assert_rejected_before_launch(&parent, "symlink parent", &bounded);
+
+    let fifo = prepare_wu0g_fixture(&scratch.root, "path-fifo", Wu0gRequestKind::Causal);
+    std::fs::remove_file(&fifo.request_path).unwrap();
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &fifo.request_path,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )
+    .unwrap();
+    let bounded = run_direct_wu0g(&fifo, "path");
+    assert_rejected_before_launch(&fifo, "FIFO", &bounded);
+
+    let mut device = prepare_wu0g_fixture(&scratch.root, "path-device", Wu0gRequestKind::Causal);
+    device.request_path = PathBuf::from("/dev/null");
+    let bounded = run_direct_wu0g(&device, "path");
+    assert_rejected_before_launch(&device, "device", &bounded);
+
+    for (label, extra) in [("preexisting", false), ("extra-result", true)] {
+        let fixture = prepare_wu0g_fixture(
+            &scratch.root,
+            &format!("path-{label}"),
+            Wu0gRequestKind::Causal,
+        );
+        std::fs::create_dir(&fixture.result_dir).unwrap();
+        if extra {
+            create_exclusive(
+                &fixture.result_dir.join("attacker.extra"),
+                b"extra\n",
+                false,
+            );
+        }
+        let bounded = run_direct_wu0g(&fixture, "path");
+        assert_rejected_before_launch(&fixture, label, &bounded);
+    }
+
+    let oversized = prepare_wu0g_fixture(&scratch.root, "path-oversized", Wu0gRequestKind::Causal);
+    std::fs::write(
+        &oversized.request_path,
+        vec![b'x'; usize::try_from(WU0G_REQUEST_CAP_BYTES + 1).unwrap()],
+    )
+    .unwrap();
+    let bounded = run_direct_wu0g(&oversized, "path");
+    assert_rejected_before_launch(&oversized, "oversized request", &bounded);
+
+    let replacement =
+        prepare_wu0g_fixture(&scratch.root, "path-replacement", Wu0gRequestKind::Causal);
+    let request_meta = std::fs::metadata(&replacement.request_path).unwrap();
+    let attacker = replacement.root.join("replacement-request.attacker");
+    create_exclusive(&attacker, b"attacker-request\n", false);
+    let attack = StableReplacement {
+        target: replacement.request_path.clone(),
+        replacement: attacker,
+        opened_identity: (request_meta.dev(), request_meta.ino()),
+    };
+    let bounded = run_direct_wu0g_with(&replacement, "path", None, Some(&attack));
+    assert!(bounded.replacement_performed);
+    assert_rejected_before_launch(&replacement, "request replacement", &bounded);
+
+    assert_unchanged_path_victim(&victim, &victim_identity);
+    scratch.finish();
 }
 
 #[test]

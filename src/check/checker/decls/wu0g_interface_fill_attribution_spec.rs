@@ -106,7 +106,13 @@
 //! product; timing evidence is five ordered AB/BA pairs of one fixed end-to-end workload. Raw cycle,
 //! prediction, and control dossiers bind their own report/profile/workload/candidate/artifact inputs.
 //! All dossiers share one framed experiment identity, and each process binds its binary, child,
-//! artifact, deadline, memory, mode, invocation, cgroup, exit, wait, reap, and cleanup state.
+//! request, sentinel, artifact, deadline, memory, RSS, nofile, mode, invocation, cgroup, exit, wait,
+//! reap, and cleanup state. Every launch is delegated to exactly one canonical
+//! `--wu0g-child-v1 REQUEST RESULT_DIR` runner invocation. Performance launches additionally bind
+//! authenticated perf/prlimit executables, host, CPU affinity, perf version/event, raw perf wait
+//! status, and the strict seven-field counter artifact. The outer WU0E supervisor remains the sole
+//! termination adjudicator; a perf count is usable only after normal whole-tree cleanup and an
+//! independently authenticated checker completion sentinel.
 //! Timeout, memory kill, or no-progress is NO-GO/inconclusive, never positive evidence.
 //! Identities are recomputed from domain-separated raw canonical bytes rather than accepted because
 //! a caller supplied 64 lowercase hex characters. Valid-looking cross-domain substitutions,
@@ -125,7 +131,9 @@ use super::wu0g_interface_fill_attribution::{
     measure_external_disposition_readiness_for_test,
     measure_interface_fill_cooperative_partial_for_test, measure_interface_fill_source_for_test,
     measure_manifest_closure_for_test, observe_wu0e_phase_snapshots_for_test,
-    run_pinned_dom_authorization_probe_for_test, run_selected_component_plan_for_test,
+    parse_wu0g_child_request_for_test, parse_wu0g_child_result_for_test,
+    parse_wu0g_perf_artifact_for_test, run_pinned_dom_authorization_probe_for_test,
+    run_selected_component_plan_for_test, run_wu0g_hardened_child_once_for_test,
     validate_interface_fill_authorization_from_raw_for_test,
     validate_measured_ladder_row_from_raw_for_test, validate_raw_completion_inventory_for_test,
     InterfaceFillAttributionLimits, InterfaceFillAttributionMode, InterfaceFillAttributionReport,
@@ -142,6 +150,115 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const ATTRIBUTION_FEATURE: &str = "wu0-interface-fill-attribution";
 const CONTROL_FEATURE: &str = "wu0-uninstrumented-control";
+const WU0G_DEADLINE_MS: u64 = 30_000;
+const WU0G_MEMORY_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
+const WU0G_RSS_LIMIT_BYTES: u64 = 384 * 1024 * 1024;
+const WU0G_NOFILE_LIMIT: u64 = 256;
+const WU0G_PERF_EVENT: &str = "instructions:u";
+const WU0G_STDOUT_CAP_BYTES: u64 = 128 * 1024;
+const WU0G_STDERR_CAP_BYTES: u64 = 128 * 1024;
+const WU0G_REQUEST_CAP_BYTES: u64 = 64 * 1024;
+const WU0G_RESULT_CAP_BYTES: u64 = 64 * 1024;
+const WU0G_SENTINEL_CAP_BYTES: u64 = 4 * 1024;
+const WU0G_ARTIFACT_CAP_BYTES: u64 = 256 * 1024;
+const WU0G_PERF_ARTIFACT_CAP_BYTES: u64 = 4 * 1024;
+const WU0G_REQUEST_PROTOCOL_FIELDS: &[&str] = &[
+    "artifact_relative_path",
+    "binary_identity",
+    "candidate_identity",
+    "cpu_affinity",
+    "deadline_ms",
+    "host_identity",
+    "kind",
+    "launch_identity",
+    "launch_ordinal",
+    "libtest_relative_path",
+    "memory_limit_bytes",
+    "mode",
+    "nofile_hard",
+    "nofile_soft",
+    "nonce",
+    "pair_identity",
+    "pair_ordinal",
+    "perf_event",
+    "perf_identity",
+    "perf_version",
+    "plan_identity",
+    "prlimit_identity",
+    "request_relative_path",
+    "result_identity",
+    "result_relative_path",
+    "rss_limit_bytes",
+    "rung_identity",
+    "rung_ordinal",
+    "semantic_artifact_relative_path",
+    "sentinel_relative_path",
+    "workload_identity",
+];
+const WU0G_RESULT_PROTOCOL_FIELDS: &[&str] = &[
+    "artifact_identity",
+    "artifact_size",
+    "binary_identity",
+    "cgroup_identity",
+    "cgroup_populated_zero",
+    "cgroup_removed",
+    "cgroup_retained",
+    "child_argv",
+    "child_env",
+    "child_fd_inventory",
+    "child_identity",
+    "cleanup_succeeded",
+    "containment_failures",
+    "deadline_ms",
+    "deadline_readback_ms",
+    "drain_complete",
+    "exit_code",
+    "host_identity",
+    "launch_identity",
+    "leader_pid",
+    "leader_reaped",
+    "leader_start_ticks",
+    "max_rss_bytes",
+    "memory_limit_bytes",
+    "memory_limit_readback_bytes",
+    "membership_verified",
+    "nofile_hard",
+    "nofile_hard_readback",
+    "nofile_soft",
+    "nofile_soft_readback",
+    "oom_delta",
+    "oom_kill_delta",
+    "outer_raw_wait_status",
+    "perf_artifact_identity",
+    "perf_artifact_size",
+    "perf_event",
+    "perf_exit_code",
+    "perf_identity",
+    "perf_invocation",
+    "perf_raw_wait_status",
+    "perf_term_signal",
+    "perf_version",
+    "pgid",
+    "pgid_empty",
+    "plan_identity",
+    "prlimit_identity",
+    "readiness_seen",
+    "request_content_identity",
+    "result_identity",
+    "rss_limit_bytes",
+    "rss_limit_readback_bytes",
+    "scope_abort_observed",
+    "scope_abort_requested",
+    "scope_identity",
+    "sentinel_identity",
+    "sentinel_size",
+    "stderr_identity",
+    "stderr_size",
+    "stdout_identity",
+    "stdout_size",
+    "term_signal",
+    "termination",
+];
 const HOT_GUARD: &str = "#[cfg(all(test, feature = \"wu0-interface-fill-attribution\", not(feature = \"wu0-uninstrumented-control\")))]";
 const HOT_FALLBACK_GUARD: &str = "#[cfg(not(all(test, feature = \"wu0-interface-fill-attribution\", not(feature = \"wu0-uninstrumented-control\"))))]";
 
@@ -187,7 +304,7 @@ interface CycleFirst extends CycleTemplate<string> {}
 interface CycleSecond extends CycleTemplate<string> {}
 "#;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct RawIdentityEvidence {
     pub(super) domain: String,
     pub(super) canonical_bytes: Vec<u8>,
@@ -212,6 +329,55 @@ pub(super) enum RawProbeTermination {
     Deadline,
     MemoryLimit,
     NoProgress,
+    StdoutLimit,
+    StderrLimit,
+    Infrastructure,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RawBoundedObservation {
+    pub(super) cap_bytes: u64,
+    pub(super) observed_bytes: u64,
+    pub(super) truncated: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RawProcessStatus<'a> {
+    scope_identity: &'a RawIdentityEvidence,
+    cgroup_identity: &'a RawIdentityEvidence,
+    leader_pid: u32,
+    leader_start_ticks: u64,
+    pgid: u32,
+    readiness_seen: bool,
+    membership_verified: bool,
+    drain_complete: bool,
+    cgroup_populated_zero: bool,
+    pgid_empty: bool,
+    cgroup_removed: bool,
+    cgroup_retained: bool,
+    scope_abort_requested: bool,
+    scope_abort_observed: bool,
+    termination: RawProbeTermination,
+    deadline_ms: u64,
+    deadline_readback_ms: u64,
+    memory_limit_bytes: u64,
+    memory_limit_readback_bytes: u64,
+    rss_limit_bytes: u64,
+    rss_limit_readback_bytes: u64,
+    nofile_soft_limit: u64,
+    nofile_hard_limit: u64,
+    nofile_soft_readback: u64,
+    nofile_hard_readback: u64,
+    max_rss_bytes: u64,
+    containment_failures: u64,
+    cgroup_oom_delta: u64,
+    cgroup_oom_kill_delta: u64,
+    exit_code: Option<i32>,
+    term_signal: Option<i32>,
+    raw_wait_status: Option<i32>,
+    waited: bool,
+    reaped: bool,
+    cleanup_succeeded: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -233,7 +399,7 @@ pub(super) struct RawLadderCounterRow {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RawFreshProcessDossier {
-    pub(super) experiment_identity: RawIdentityEvidence,
+    pub(super) plan_identity: RawIdentityEvidence,
     pub(super) profile_identity: RawIdentityEvidence,
     pub(super) universe_identity: RawIdentityEvidence,
     pub(super) workload_identity: RawIdentityEvidence,
@@ -242,10 +408,33 @@ pub(super) struct RawFreshProcessDossier {
     pub(super) rung_identity: RawIdentityEvidence,
     pub(super) report_identity: RawIdentityEvidence,
     pub(super) semantic_identity: RawIdentityEvidence,
+    pub(super) rung_ordinal: u8,
     pub(super) mode: RawProbeMode,
     pub(super) canonical_invocation: Vec<String>,
+    pub(super) scope_identity: RawIdentityEvidence,
+    pub(super) cgroup_identity: RawIdentityEvidence,
+    pub(super) leader_pid: u32,
+    pub(super) leader_start_ticks: u64,
+    pub(super) pgid: u32,
+    pub(super) readiness_seen: bool,
+    pub(super) membership_verified: bool,
+    pub(super) drain_complete: bool,
+    pub(super) cgroup_populated_zero: bool,
+    pub(super) pgid_empty: bool,
+    pub(super) cgroup_removed: bool,
+    pub(super) cgroup_retained: bool,
+    pub(super) scope_abort_requested: bool,
+    pub(super) scope_abort_observed: bool,
     pub(super) deadline_ms: u64,
+    pub(super) deadline_readback_ms: u64,
     pub(super) memory_limit_bytes: u64,
+    pub(super) memory_limit_readback_bytes: u64,
+    pub(super) rss_limit_bytes: u64,
+    pub(super) rss_limit_readback_bytes: u64,
+    pub(super) nofile_soft_limit: u64,
+    pub(super) nofile_hard_limit: u64,
+    pub(super) nofile_soft_readback: u64,
+    pub(super) nofile_hard_readback: u64,
     pub(super) termination: RawProbeTermination,
     pub(super) max_rss_bytes: u64,
     pub(super) containment_failures: u64,
@@ -253,16 +442,76 @@ pub(super) struct RawFreshProcessDossier {
     pub(super) cgroup_oom_kill_delta: u64,
     pub(super) exit_code: Option<i32>,
     pub(super) term_signal: Option<i32>,
+    pub(super) raw_wait_status: Option<i32>,
     pub(super) waited: bool,
     pub(super) reaped: bool,
     pub(super) cleanup_succeeded: bool,
+    pub(super) request_content_identity: RawIdentityEvidence,
+    pub(super) request_path_identity: RawIdentityEvidence,
+    pub(super) result_identity: RawIdentityEvidence,
+    pub(super) result_content_identity: RawIdentityEvidence,
+    pub(super) result_path_identity: RawIdentityEvidence,
+    pub(super) result_bound_plan_identity: RawIdentityEvidence,
+    pub(super) result_bound_request_content_identity: RawIdentityEvidence,
+    pub(super) stdout_identity: RawIdentityEvidence,
+    pub(super) stderr_identity: RawIdentityEvidence,
     pub(super) child_identity: RawIdentityEvidence,
+    pub(super) completion_sentinel_identity: RawIdentityEvidence,
     pub(super) child_artifact_identity: RawIdentityEvidence,
+    pub(super) prlimit_identity: RawIdentityEvidence,
+    pub(super) stdout_observation: RawBoundedObservation,
+    pub(super) stderr_observation: RawBoundedObservation,
+    pub(super) request_observation: RawBoundedObservation,
+    pub(super) result_observation: RawBoundedObservation,
+    pub(super) sentinel_observation: RawBoundedObservation,
+    pub(super) semantic_artifact_observation: RawBoundedObservation,
+}
+
+impl RawFreshProcessDossier {
+    fn process_status(&self) -> RawProcessStatus<'_> {
+        RawProcessStatus {
+            scope_identity: &self.scope_identity,
+            cgroup_identity: &self.cgroup_identity,
+            leader_pid: self.leader_pid,
+            leader_start_ticks: self.leader_start_ticks,
+            pgid: self.pgid,
+            readiness_seen: self.readiness_seen,
+            membership_verified: self.membership_verified,
+            drain_complete: self.drain_complete,
+            cgroup_populated_zero: self.cgroup_populated_zero,
+            pgid_empty: self.pgid_empty,
+            cgroup_removed: self.cgroup_removed,
+            cgroup_retained: self.cgroup_retained,
+            scope_abort_requested: self.scope_abort_requested,
+            scope_abort_observed: self.scope_abort_observed,
+            termination: self.termination,
+            deadline_ms: self.deadline_ms,
+            deadline_readback_ms: self.deadline_readback_ms,
+            memory_limit_bytes: self.memory_limit_bytes,
+            memory_limit_readback_bytes: self.memory_limit_readback_bytes,
+            rss_limit_bytes: self.rss_limit_bytes,
+            rss_limit_readback_bytes: self.rss_limit_readback_bytes,
+            nofile_soft_limit: self.nofile_soft_limit,
+            nofile_hard_limit: self.nofile_hard_limit,
+            nofile_soft_readback: self.nofile_soft_readback,
+            nofile_hard_readback: self.nofile_hard_readback,
+            max_rss_bytes: self.max_rss_bytes,
+            containment_failures: self.containment_failures,
+            cgroup_oom_delta: self.cgroup_oom_delta,
+            cgroup_oom_kill_delta: self.cgroup_oom_kill_delta,
+            exit_code: self.exit_code,
+            term_signal: self.term_signal,
+            raw_wait_status: self.raw_wait_status,
+            waited: self.waited,
+            reaped: self.reaped,
+            cleanup_succeeded: self.cleanup_succeeded,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RawCycleProfileDossier {
-    pub(super) experiment_identity: RawIdentityEvidence,
+    pub(super) plan_identity: RawIdentityEvidence,
     pub(super) profile_identity: RawIdentityEvidence,
     pub(super) workload_identity: RawIdentityEvidence,
     pub(super) candidate_identity: RawIdentityEvidence,
@@ -278,7 +527,7 @@ pub(super) struct RawCycleProfileDossier {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RawPredictionDossier {
-    pub(super) experiment_identity: RawIdentityEvidence,
+    pub(super) plan_identity: RawIdentityEvidence,
     pub(super) report_identity: RawIdentityEvidence,
     pub(super) profile_identity: RawIdentityEvidence,
     pub(super) workload_identity: RawIdentityEvidence,
@@ -296,7 +545,7 @@ pub(super) struct RawPredictionDossier {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RawControlPairDossier {
-    pub(super) experiment_identity: RawIdentityEvidence,
+    pub(super) plan_identity: RawIdentityEvidence,
     pub(super) profile_identity: RawIdentityEvidence,
     pub(super) workload_identity: RawIdentityEvidence,
     pub(super) candidate_identity: RawIdentityEvidence,
@@ -322,36 +571,134 @@ pub(super) enum RawLaunchOrder {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RawPerformanceLaunch {
-    pub(super) experiment_identity: RawIdentityEvidence,
+    pub(super) plan_identity: RawIdentityEvidence,
     pub(super) representative_workload_identity: RawIdentityEvidence,
     pub(super) candidate_identity: RawIdentityEvidence,
     pub(super) binary_identity: RawIdentityEvidence,
     pub(super) report_identity: RawIdentityEvidence,
     pub(super) semantic_identity: RawIdentityEvidence,
+    pub(super) pair_identity: RawIdentityEvidence,
+    pub(super) launch_identity: RawIdentityEvidence,
+    pub(super) request_content_identity: RawIdentityEvidence,
+    pub(super) request_path_identity: RawIdentityEvidence,
+    pub(super) result_identity: RawIdentityEvidence,
+    pub(super) result_content_identity: RawIdentityEvidence,
+    pub(super) result_path_identity: RawIdentityEvidence,
+    pub(super) result_bound_plan_identity: RawIdentityEvidence,
+    pub(super) result_bound_request_content_identity: RawIdentityEvidence,
     pub(super) child_identity: RawIdentityEvidence,
+    pub(super) completion_sentinel_identity: RawIdentityEvidence,
     pub(super) child_artifact_identity: RawIdentityEvidence,
+    pub(super) perf_artifact_identity: RawIdentityEvidence,
+    pub(super) prlimit_identity: RawIdentityEvidence,
+    pub(super) perf_identity: RawIdentityEvidence,
+    pub(super) host_identity: RawIdentityEvidence,
+    pub(super) perf_version: String,
+    pub(super) perf_event: String,
+    pub(super) cpu_affinity: String,
     pub(super) pair_ordinal: u8,
     pub(super) launch_ordinal: u8,
     pub(super) mode: RawProbeMode,
     pub(super) canonical_invocation: Vec<String>,
+    pub(super) perf_invocation: Vec<String>,
+    pub(super) scope_identity: RawIdentityEvidence,
+    pub(super) cgroup_identity: RawIdentityEvidence,
+    pub(super) leader_pid: u32,
+    pub(super) leader_start_ticks: u64,
+    pub(super) pgid: u32,
+    pub(super) readiness_seen: bool,
+    pub(super) membership_verified: bool,
+    pub(super) drain_complete: bool,
+    pub(super) cgroup_populated_zero: bool,
+    pub(super) pgid_empty: bool,
+    pub(super) cgroup_removed: bool,
+    pub(super) cgroup_retained: bool,
+    pub(super) scope_abort_requested: bool,
+    pub(super) scope_abort_observed: bool,
     pub(super) deadline_ms: u64,
+    pub(super) deadline_readback_ms: u64,
     pub(super) memory_limit_bytes: u64,
+    pub(super) memory_limit_readback_bytes: u64,
+    pub(super) rss_limit_bytes: u64,
+    pub(super) rss_limit_readback_bytes: u64,
+    pub(super) nofile_soft_limit: u64,
+    pub(super) nofile_hard_limit: u64,
+    pub(super) nofile_soft_readback: u64,
+    pub(super) nofile_hard_readback: u64,
     pub(super) termination: RawProbeTermination,
     pub(super) wall_ns: u64,
     pub(super) instructions: u64,
+    pub(super) perf_runtime: u64,
     pub(super) max_rss_bytes: u64,
     pub(super) containment_failures: u64,
     pub(super) cgroup_oom_delta: u64,
     pub(super) cgroup_oom_kill_delta: u64,
     pub(super) exit_code: Option<i32>,
     pub(super) term_signal: Option<i32>,
+    pub(super) raw_wait_status: Option<i32>,
+    pub(super) perf_raw_wait_status: Option<i32>,
+    pub(super) perf_exit_code: Option<i32>,
+    pub(super) perf_term_signal: Option<i32>,
+    pub(super) perf_waited: bool,
     pub(super) waited: bool,
     pub(super) reaped: bool,
     pub(super) cleanup_succeeded: bool,
+    pub(super) stdout_identity: RawIdentityEvidence,
+    pub(super) stderr_identity: RawIdentityEvidence,
+    pub(super) stdout_observation: RawBoundedObservation,
+    pub(super) stderr_observation: RawBoundedObservation,
+    pub(super) request_observation: RawBoundedObservation,
+    pub(super) result_observation: RawBoundedObservation,
+    pub(super) sentinel_observation: RawBoundedObservation,
+    pub(super) semantic_artifact_observation: RawBoundedObservation,
+    pub(super) perf_artifact_observation: RawBoundedObservation,
+}
+
+impl RawPerformanceLaunch {
+    fn process_status(&self) -> RawProcessStatus<'_> {
+        RawProcessStatus {
+            scope_identity: &self.scope_identity,
+            cgroup_identity: &self.cgroup_identity,
+            leader_pid: self.leader_pid,
+            leader_start_ticks: self.leader_start_ticks,
+            pgid: self.pgid,
+            readiness_seen: self.readiness_seen,
+            membership_verified: self.membership_verified,
+            drain_complete: self.drain_complete,
+            cgroup_populated_zero: self.cgroup_populated_zero,
+            pgid_empty: self.pgid_empty,
+            cgroup_removed: self.cgroup_removed,
+            cgroup_retained: self.cgroup_retained,
+            scope_abort_requested: self.scope_abort_requested,
+            scope_abort_observed: self.scope_abort_observed,
+            termination: self.termination,
+            deadline_ms: self.deadline_ms,
+            deadline_readback_ms: self.deadline_readback_ms,
+            memory_limit_bytes: self.memory_limit_bytes,
+            memory_limit_readback_bytes: self.memory_limit_readback_bytes,
+            rss_limit_bytes: self.rss_limit_bytes,
+            rss_limit_readback_bytes: self.rss_limit_readback_bytes,
+            nofile_soft_limit: self.nofile_soft_limit,
+            nofile_hard_limit: self.nofile_hard_limit,
+            nofile_soft_readback: self.nofile_soft_readback,
+            nofile_hard_readback: self.nofile_hard_readback,
+            max_rss_bytes: self.max_rss_bytes,
+            containment_failures: self.containment_failures,
+            cgroup_oom_delta: self.cgroup_oom_delta,
+            cgroup_oom_kill_delta: self.cgroup_oom_kill_delta,
+            exit_code: self.exit_code,
+            term_signal: self.term_signal,
+            raw_wait_status: self.raw_wait_status,
+            waited: self.waited,
+            reaped: self.reaped,
+            cleanup_succeeded: self.cleanup_succeeded,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RawPerformancePairDossier {
+    pub(super) pair_identity: RawIdentityEvidence,
     pub(super) pair_ordinal: u8,
     pub(super) order: RawLaunchOrder,
     pub(super) launches: Vec<RawPerformanceLaunch>,
@@ -360,6 +707,7 @@ pub(super) struct RawPerformancePairDossier {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RawThresholdEvidence {
     pub(super) experiment_identity: RawIdentityEvidence,
+    pub(super) plan_identity: RawIdentityEvidence,
     pub(super) profile_identity: RawIdentityEvidence,
     pub(super) universe_identity: RawIdentityEvidence,
     pub(super) workload_identity: RawIdentityEvidence,
@@ -367,6 +715,12 @@ pub(super) struct RawThresholdEvidence {
     pub(super) candidate_identity: RawIdentityEvidence,
     pub(super) baseline_binary_identity: RawIdentityEvidence,
     pub(super) candidate_binary_identity: RawIdentityEvidence,
+    pub(super) prlimit_identity: RawIdentityEvidence,
+    pub(super) perf_identity: RawIdentityEvidence,
+    pub(super) host_identity: RawIdentityEvidence,
+    pub(super) perf_version: String,
+    pub(super) perf_event: String,
+    pub(super) cpu_affinity: String,
     pub(super) ladder_rows: Vec<RawLadderCounterRow>,
     pub(super) cycle_profiles: Vec<RawCycleProfileDossier>,
     pub(super) predictions: Vec<RawPredictionDossier>,
@@ -514,6 +868,207 @@ fn raw_identity(domain: &str, canonical_bytes: impl Into<Vec<u8>>) -> RawIdentit
     }
 }
 
+fn bounded_observation(cap_bytes: u64, observed_bytes: u64) -> RawBoundedObservation {
+    assert!(observed_bytes <= cap_bytes);
+    RawBoundedObservation {
+        cap_bytes,
+        observed_bytes,
+        truncated: false,
+    }
+}
+
+fn protocol_record_bytes(
+    header: &str,
+    schema: &[&str],
+    fields: &BTreeMap<String, String>,
+) -> Vec<u8> {
+    assert_eq!(
+        fields.keys().map(String::as_str).collect::<Vec<_>>(),
+        schema
+    );
+    let mut bytes = format!("{header}\n").into_bytes();
+    for key in schema {
+        let value = fields.get(*key).expect("schema field exists");
+        bytes.extend_from_slice(format!("{key}={}:{}\n", value.len(), value).as_bytes());
+    }
+    bytes
+}
+
+fn spec_owned_request_fields(kind: &str) -> BTreeMap<String, String> {
+    let mut request = WU0G_REQUEST_PROTOCOL_FIELDS
+        .iter()
+        .enumerate()
+        .map(|(index, key)| {
+            (
+                (*key).to_owned(),
+                format!("{:064x}", index.checked_add(1).expect("field index")),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (key, value) in [
+        ("artifact_relative_path", "artifacts/child.bin"),
+        ("cpu_affinity", "0"),
+        ("deadline_ms", "30000"),
+        ("libtest_relative_path", "tools/frozen-libtest"),
+        ("memory_limit_bytes", "536870912"),
+        ("mode", "baseline"),
+        ("nofile_hard", "256"),
+        ("nofile_soft", "256"),
+        ("nonce", "0123456789abcdef0123456789abcdef"),
+        ("request_relative_path", "requests/launch-0.request"),
+        ("result_relative_path", "results/launch-0"),
+        ("rss_limit_bytes", "402653184"),
+        ("semantic_artifact_relative_path", "artifacts/semantic.bin"),
+        ("sentinel_relative_path", "artifacts/completion.sentinel"),
+    ] {
+        request.insert(key.to_owned(), value.to_owned());
+    }
+    request.insert("kind".to_owned(), kind.to_owned());
+    match kind {
+        "causal" => {
+            for key in [
+                "launch_identity",
+                "launch_ordinal",
+                "pair_identity",
+                "pair_ordinal",
+                "perf_event",
+                "perf_identity",
+                "perf_version",
+            ] {
+                request.insert(key.to_owned(), "none".to_owned());
+            }
+            request.insert("rung_ordinal".to_owned(), "0".to_owned());
+        }
+        "performance" => {
+            request.insert("launch_ordinal".to_owned(), "0".to_owned());
+            request.insert("pair_ordinal".to_owned(), "0".to_owned());
+            request.insert("perf_event".to_owned(), WU0G_PERF_EVENT.to_owned());
+            request.insert("perf_version".to_owned(), "perf version fixture".to_owned());
+            request.insert("rung_identity".to_owned(), "none".to_owned());
+            request.insert("rung_ordinal".to_owned(), "none".to_owned());
+        }
+        _ => panic!("spec-owned request kind must be canonical"),
+    }
+    request
+}
+
+fn spec_owned_request_bytes(kind: &str) -> Vec<u8> {
+    protocol_record_bytes(
+        "typokat-wu0g-child-request-v1",
+        WU0G_REQUEST_PROTOCOL_FIELDS,
+        &spec_owned_request_fields(kind),
+    )
+}
+
+fn spec_owned_protocol_exchange() -> (Vec<u8>, Vec<u8>) {
+    let request = spec_owned_request_fields("performance");
+    let request_bytes = protocol_record_bytes(
+        "typokat-wu0g-child-request-v1",
+        WU0G_REQUEST_PROTOCOL_FIELDS,
+        &request,
+    );
+    let request_content_identity = raw_identity("wu0g-request-content-v1", request_bytes.clone());
+
+    let mut result = WU0G_RESULT_PROTOCOL_FIELDS
+        .iter()
+        .enumerate()
+        .map(|(index, key)| {
+            (
+                (*key).to_owned(),
+                format!("{:064x}", index.checked_add(101).expect("field index")),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (key, value) in [
+        ("artifact_size", "4096"),
+        ("cgroup_populated_zero", "1"),
+        ("cgroup_removed", "1"),
+        ("cgroup_retained", "0"),
+        (
+            "child_argv",
+            "--ignored|--exact|check::checker::decls::wu0g_interface_fill_attribution_spec::wu0g_hardened_child_once|--nocapture",
+        ),
+        (
+            "child_env",
+            "TYPOKAT_WU0G_CHILD_REQUEST_FD|TYPOKAT_WU0G_CHILD_REQUEST_SHA256|TYPOKAT_WU0G_CHILD_RESULT_DIR_FD",
+        ),
+        (
+            "child_fd_inventory",
+            "stderr|stdin|stdout|request|result|libtest|prlimit|perf|perf-log",
+        ),
+        ("cleanup_succeeded", "1"),
+        ("containment_failures", "0"),
+        ("deadline_ms", "30000"),
+        ("deadline_readback_ms", "30000"),
+        ("drain_complete", "1"),
+        ("exit_code", "0"),
+        ("leader_pid", "1234"),
+        ("leader_reaped", "1"),
+        ("leader_start_ticks", "5678"),
+        ("max_rss_bytes", "134217728"),
+        ("memory_limit_bytes", "536870912"),
+        ("memory_limit_readback_bytes", "536870912"),
+        ("membership_verified", "1"),
+        ("nofile_hard", "256"),
+        ("nofile_hard_readback", "256"),
+        ("nofile_soft", "256"),
+        ("nofile_soft_readback", "256"),
+        ("oom_delta", "0"),
+        ("oom_kill_delta", "0"),
+        ("outer_raw_wait_status", "0"),
+        ("perf_artifact_size", "48"),
+        ("perf_event", "instructions:u"),
+        ("perf_exit_code", "0"),
+        (
+            "perf_invocation",
+            "/usr/bin/perf|stat|--no-big-num|--no-scale|-x|;|-e|instructions:u|--log-fd|198|--|/proc/self/fd/197|--ignored|--exact|check::checker::decls::wu0g_interface_fill_attribution_spec::wu0g_hardened_child_once|--nocapture",
+        ),
+        ("perf_raw_wait_status", "0"),
+        ("perf_term_signal", "none"),
+        ("perf_version", "perf version fixture"),
+        ("pgid", "1234"),
+        ("pgid_empty", "1"),
+        ("readiness_seen", "1"),
+        ("rss_limit_bytes", "402653184"),
+        ("rss_limit_readback_bytes", "402653184"),
+        ("scope_abort_observed", "0"),
+        ("scope_abort_requested", "0"),
+        ("sentinel_size", "512"),
+        ("stderr_size", "0"),
+        ("stdout_size", "128"),
+        ("term_signal", "none"),
+        ("termination", "normal"),
+    ] {
+        result.insert(key.to_owned(), value.to_owned());
+    }
+    for key in [
+        "binary_identity",
+        "host_identity",
+        "launch_identity",
+        "perf_event",
+        "perf_identity",
+        "perf_version",
+        "plan_identity",
+        "prlimit_identity",
+        "result_identity",
+    ] {
+        result.insert(
+            key.to_owned(),
+            request.get(key).expect("request binding field").clone(),
+        );
+    }
+    result.insert(
+        "request_content_identity".to_owned(),
+        request_content_identity.claimed_sha256,
+    );
+    let result_bytes = protocol_record_bytes(
+        "typokat-wu0g-child-result-v1",
+        WU0G_RESULT_PROTOCOL_FIELDS,
+        &result,
+    );
+    (request_bytes, result_bytes)
+}
+
 fn synthetic_82_source_profile() -> StrictLibraryProfile {
     let weights = [13_usize, 12, 25, 25, 25];
     let names = ["One", "Two", "Three", "Four", "Five"];
@@ -587,49 +1142,68 @@ fn frame_strings(output: &mut Vec<u8>, strings: &[String]) {
     }
 }
 
-fn frame_process_status(
-    output: &mut Vec<u8>,
-    termination: RawProbeTermination,
-    deadline_ms: u64,
-    memory_limit_bytes: u64,
-    max_rss_bytes: u64,
-    containment_failures: u64,
-    cgroup_oom_delta: u64,
-    cgroup_oom_kill_delta: u64,
-    exit_code: Option<i32>,
-    term_signal: Option<i32>,
-    waited: bool,
-    reaped: bool,
-    cleanup_succeeded: bool,
-) {
-    output.push(match termination {
+fn frame_bounded_observation(output: &mut Vec<u8>, observation: RawBoundedObservation) {
+    output.extend_from_slice(&observation.cap_bytes.to_be_bytes());
+    output.extend_from_slice(&observation.observed_bytes.to_be_bytes());
+    output.push(u8::from(observation.truncated));
+}
+
+fn frame_process_status(output: &mut Vec<u8>, status: RawProcessStatus<'_>) {
+    frame_identity(output, status.scope_identity);
+    frame_identity(output, status.cgroup_identity);
+    output.extend_from_slice(&status.leader_pid.to_be_bytes());
+    output.extend_from_slice(&status.leader_start_ticks.to_be_bytes());
+    output.extend_from_slice(&status.pgid.to_be_bytes());
+    output.extend([
+        u8::from(status.readiness_seen),
+        u8::from(status.membership_verified),
+        u8::from(status.drain_complete),
+        u8::from(status.cgroup_populated_zero),
+        u8::from(status.pgid_empty),
+        u8::from(status.cgroup_removed),
+        u8::from(status.cgroup_retained),
+        u8::from(status.scope_abort_requested),
+        u8::from(status.scope_abort_observed),
+    ]);
+    output.push(match status.termination {
         RawProbeTermination::Complete => 0,
         RawProbeTermination::Deadline => 1,
         RawProbeTermination::MemoryLimit => 2,
         RawProbeTermination::NoProgress => 3,
+        RawProbeTermination::StdoutLimit => 4,
+        RawProbeTermination::StderrLimit => 5,
+        RawProbeTermination::Infrastructure => 6,
     });
     for value in [
-        deadline_ms,
-        memory_limit_bytes,
-        max_rss_bytes,
-        containment_failures,
-        cgroup_oom_delta,
-        cgroup_oom_kill_delta,
+        status.deadline_ms,
+        status.deadline_readback_ms,
+        status.memory_limit_bytes,
+        status.memory_limit_readback_bytes,
+        status.rss_limit_bytes,
+        status.rss_limit_readback_bytes,
+        status.nofile_soft_limit,
+        status.nofile_hard_limit,
+        status.nofile_soft_readback,
+        status.nofile_hard_readback,
+        status.max_rss_bytes,
+        status.containment_failures,
+        status.cgroup_oom_delta,
+        status.cgroup_oom_kill_delta,
     ] {
         output.extend_from_slice(&value.to_be_bytes());
     }
-    for value in [exit_code, term_signal] {
+    for value in [status.exit_code, status.term_signal, status.raw_wait_status] {
         output.push(u8::from(value.is_some()));
         output.extend_from_slice(&value.unwrap_or_default().to_be_bytes());
     }
     output.extend([
-        u8::from(waited),
-        u8::from(reaped),
-        u8::from(cleanup_succeeded),
+        u8::from(status.waited),
+        u8::from(status.reaped),
+        u8::from(status.cleanup_succeeded),
     ]);
 }
 
-fn experiment_identity_from_raw(raw: &RawThresholdEvidence) -> RawIdentityEvidence {
+fn plan_identity_from_raw(raw: &RawThresholdEvidence) -> RawIdentityEvidence {
     let mut bytes = Vec::new();
     for identity in [
         &raw.profile_identity,
@@ -639,9 +1213,77 @@ fn experiment_identity_from_raw(raw: &RawThresholdEvidence) -> RawIdentityEviden
         &raw.candidate_identity,
         &raw.baseline_binary_identity,
         &raw.candidate_binary_identity,
+        &raw.prlimit_identity,
+        &raw.perf_identity,
+        &raw.host_identity,
     ] {
         frame_identity(&mut bytes, identity);
     }
+    for value in [&raw.perf_version, &raw.perf_event, &raw.cpu_affinity] {
+        frame_bytes(&mut bytes, value.as_bytes());
+    }
+    for (rung_ordinal, row) in raw.ladder_rows.iter().enumerate() {
+        bytes.push(u8::try_from(rung_ordinal).expect("rung ordinal fits u8"));
+        frame_identity(&mut bytes, &row.baseline.rung_identity);
+        frame_identity(&mut bytes, &row.candidate.rung_identity);
+    }
+    for dossier in &raw.causal_process_dossiers {
+        bytes.push(dossier.rung_ordinal);
+        bytes.push(match dossier.mode {
+            RawProbeMode::Baseline => 0,
+            RawProbeMode::CandidateB => 1,
+        });
+        frame_identity(&mut bytes, &dossier.binary_identity);
+        frame_strings(&mut bytes, &dossier.canonical_invocation);
+        for value in [
+            dossier.deadline_ms,
+            dossier.memory_limit_bytes,
+            dossier.rss_limit_bytes,
+            dossier.nofile_soft_limit,
+            dossier.nofile_hard_limit,
+        ] {
+            bytes.extend_from_slice(&value.to_be_bytes());
+        }
+    }
+    for pair in &raw.performance_pairs {
+        frame_identity(&mut bytes, &pair.pair_identity);
+        bytes.push(pair.pair_ordinal);
+        bytes.push(match pair.order {
+            RawLaunchOrder::Ab => 0,
+            RawLaunchOrder::Ba => 1,
+        });
+        for launch in &pair.launches {
+            for identity in [
+                &launch.pair_identity,
+                &launch.launch_identity,
+                &launch.binary_identity,
+            ] {
+                frame_identity(&mut bytes, identity);
+            }
+            bytes.extend([launch.pair_ordinal, launch.launch_ordinal]);
+            bytes.push(match launch.mode {
+                RawProbeMode::Baseline => 0,
+                RawProbeMode::CandidateB => 1,
+            });
+            frame_strings(&mut bytes, &launch.canonical_invocation);
+            frame_strings(&mut bytes, &launch.perf_invocation);
+            for value in [
+                launch.deadline_ms,
+                launch.memory_limit_bytes,
+                launch.rss_limit_bytes,
+                launch.nofile_soft_limit,
+                launch.nofile_hard_limit,
+            ] {
+                bytes.extend_from_slice(&value.to_be_bytes());
+            }
+        }
+    }
+    raw_identity("wu0g-plan-v1", bytes)
+}
+
+fn experiment_identity_from_raw(raw: &RawThresholdEvidence) -> RawIdentityEvidence {
+    let mut bytes = Vec::new();
+    frame_identity(&mut bytes, &raw.plan_identity);
     for row in &raw.ladder_rows {
         for point in [&row.baseline, &row.candidate] {
             for identity in [
@@ -736,8 +1378,19 @@ fn experiment_identity_from_raw(raw: &RawThresholdEvidence) -> RawIdentityEviden
             &dossier.rung_identity,
             &dossier.report_identity,
             &dossier.semantic_identity,
+            &dossier.request_content_identity,
+            &dossier.request_path_identity,
+            &dossier.result_identity,
+            &dossier.result_content_identity,
+            &dossier.result_path_identity,
+            &dossier.result_bound_plan_identity,
+            &dossier.result_bound_request_content_identity,
+            &dossier.stdout_identity,
+            &dossier.stderr_identity,
             &dossier.child_identity,
+            &dossier.completion_sentinel_identity,
             &dossier.child_artifact_identity,
+            &dossier.prlimit_identity,
         ] {
             frame_identity(&mut bytes, identity);
         }
@@ -745,24 +1398,22 @@ fn experiment_identity_from_raw(raw: &RawThresholdEvidence) -> RawIdentityEviden
             RawProbeMode::Baseline => 0,
             RawProbeMode::CandidateB => 1,
         });
+        bytes.push(dossier.rung_ordinal);
         frame_strings(&mut bytes, &dossier.canonical_invocation);
-        frame_process_status(
-            &mut bytes,
-            dossier.termination,
-            dossier.deadline_ms,
-            dossier.memory_limit_bytes,
-            dossier.max_rss_bytes,
-            dossier.containment_failures,
-            dossier.cgroup_oom_delta,
-            dossier.cgroup_oom_kill_delta,
-            dossier.exit_code,
-            dossier.term_signal,
-            dossier.waited,
-            dossier.reaped,
-            dossier.cleanup_succeeded,
-        );
+        for observation in [
+            dossier.stdout_observation,
+            dossier.stderr_observation,
+            dossier.request_observation,
+            dossier.result_observation,
+            dossier.sentinel_observation,
+            dossier.semantic_artifact_observation,
+        ] {
+            frame_bounded_observation(&mut bytes, observation);
+        }
+        frame_process_status(&mut bytes, dossier.process_status());
     }
     for pair in &raw.performance_pairs {
+        frame_identity(&mut bytes, &pair.pair_identity);
         bytes.push(pair.pair_ordinal);
         bytes.push(match pair.order {
             RawLaunchOrder::Ab => 0,
@@ -775,10 +1426,33 @@ fn experiment_identity_from_raw(raw: &RawThresholdEvidence) -> RawIdentityEviden
                 &launch.binary_identity,
                 &launch.report_identity,
                 &launch.semantic_identity,
+                &launch.pair_identity,
+                &launch.launch_identity,
+                &launch.request_content_identity,
+                &launch.request_path_identity,
+                &launch.result_identity,
+                &launch.result_content_identity,
+                &launch.result_path_identity,
+                &launch.result_bound_plan_identity,
+                &launch.result_bound_request_content_identity,
                 &launch.child_identity,
+                &launch.completion_sentinel_identity,
                 &launch.child_artifact_identity,
+                &launch.perf_artifact_identity,
+                &launch.prlimit_identity,
+                &launch.perf_identity,
+                &launch.host_identity,
+                &launch.stdout_identity,
+                &launch.stderr_identity,
             ] {
                 frame_identity(&mut bytes, identity);
+            }
+            for value in [
+                &launch.perf_version,
+                &launch.perf_event,
+                &launch.cpu_affinity,
+            ] {
+                frame_bytes(&mut bytes, value.as_bytes());
             }
             bytes.extend([launch.pair_ordinal, launch.launch_ordinal]);
             bytes.push(match launch.mode {
@@ -786,48 +1460,61 @@ fn experiment_identity_from_raw(raw: &RawThresholdEvidence) -> RawIdentityEviden
                 RawProbeMode::CandidateB => 1,
             });
             frame_strings(&mut bytes, &launch.canonical_invocation);
+            frame_strings(&mut bytes, &launch.perf_invocation);
             bytes.extend_from_slice(&launch.wall_ns.to_be_bytes());
             bytes.extend_from_slice(&launch.instructions.to_be_bytes());
-            frame_process_status(
-                &mut bytes,
-                launch.termination,
-                launch.deadline_ms,
-                launch.memory_limit_bytes,
-                launch.max_rss_bytes,
-                launch.containment_failures,
-                launch.cgroup_oom_delta,
-                launch.cgroup_oom_kill_delta,
-                launch.exit_code,
-                launch.term_signal,
-                launch.waited,
-                launch.reaped,
-                launch.cleanup_succeeded,
-            );
+            bytes.extend_from_slice(&launch.perf_runtime.to_be_bytes());
+            for value in [
+                launch.perf_exit_code,
+                launch.perf_term_signal,
+                launch.perf_raw_wait_status,
+            ] {
+                bytes.push(u8::from(value.is_some()));
+                bytes.extend_from_slice(&value.unwrap_or_default().to_be_bytes());
+            }
+            bytes.push(u8::from(launch.perf_waited));
+            for observation in [
+                launch.stdout_observation,
+                launch.stderr_observation,
+                launch.request_observation,
+                launch.result_observation,
+                launch.sentinel_observation,
+                launch.semantic_artifact_observation,
+                launch.perf_artifact_observation,
+            ] {
+                frame_bounded_observation(&mut bytes, observation);
+            }
+            frame_process_status(&mut bytes, launch.process_status());
         }
     }
     raw_identity("wu0g-experiment-v1", bytes)
 }
 
-fn bind_experiment_identity(raw: &mut RawThresholdEvidence) {
-    let experiment = experiment_identity_from_raw(raw);
-    raw.experiment_identity = experiment.clone();
+fn bind_plan_and_experiment_identities(raw: &mut RawThresholdEvidence) {
+    let plan = plan_identity_from_raw(raw);
+    raw.plan_identity = plan.clone();
     for dossier in &mut raw.cycle_profiles {
-        dossier.experiment_identity = experiment.clone();
+        dossier.plan_identity = plan.clone();
     }
     for dossier in &mut raw.predictions {
-        dossier.experiment_identity = experiment.clone();
+        dossier.plan_identity = plan.clone();
     }
     for dossier in &mut raw.controls {
-        dossier.experiment_identity = experiment.clone();
+        dossier.plan_identity = plan.clone();
     }
     for dossier in &mut raw.causal_process_dossiers {
-        dossier.experiment_identity = experiment.clone();
+        dossier.plan_identity = plan.clone();
+        dossier.result_bound_plan_identity = plan.clone();
+        dossier.result_bound_request_content_identity = dossier.request_content_identity.clone();
     }
     for pair in &mut raw.performance_pairs {
         for launch in &mut pair.launches {
-            launch.experiment_identity = experiment.clone();
+            launch.plan_identity = plan.clone();
+            launch.result_bound_plan_identity = plan.clone();
+            launch.result_bound_request_content_identity = launch.request_content_identity.clone();
         }
     }
+    raw.experiment_identity = experiment_identity_from_raw(raw);
 }
 
 fn visit_raw_identity_locations_mut(
@@ -835,6 +1522,7 @@ fn visit_raw_identity_locations_mut(
     visitor: &mut impl FnMut(String, &mut RawIdentityEvidence),
 ) {
     visitor("top.experiment".to_owned(), &mut raw.experiment_identity);
+    visitor("top.plan".to_owned(), &mut raw.plan_identity);
     visitor("top.profile".to_owned(), &mut raw.profile_identity);
     visitor("top.universe".to_owned(), &mut raw.universe_identity);
     visitor("top.workload".to_owned(), &mut raw.workload_identity);
@@ -851,6 +1539,9 @@ fn visit_raw_identity_locations_mut(
         "top.candidate_binary".to_owned(),
         &mut raw.candidate_binary_identity,
     );
+    visitor("top.prlimit".to_owned(), &mut raw.prlimit_identity);
+    visitor("top.perf".to_owned(), &mut raw.perf_identity);
+    visitor("top.host".to_owned(), &mut raw.host_identity);
     for (row_index, row) in raw.ladder_rows.iter_mut().enumerate() {
         for (mode, point) in [
             ("baseline", &mut row.baseline),
@@ -880,7 +1571,7 @@ fn visit_raw_identity_locations_mut(
     }
     for (index, dossier) in raw.cycle_profiles.iter_mut().enumerate() {
         for (name, identity) in [
-            ("experiment", &mut dossier.experiment_identity),
+            ("plan", &mut dossier.plan_identity),
             ("profile", &mut dossier.profile_identity),
             ("workload", &mut dossier.workload_identity),
             ("candidate", &mut dossier.candidate_identity),
@@ -895,7 +1586,7 @@ fn visit_raw_identity_locations_mut(
     }
     for (index, dossier) in raw.predictions.iter_mut().enumerate() {
         for (name, identity) in [
-            ("experiment", &mut dossier.experiment_identity),
+            ("plan", &mut dossier.plan_identity),
             ("report", &mut dossier.report_identity),
             ("profile", &mut dossier.profile_identity),
             ("workload", &mut dossier.workload_identity),
@@ -910,7 +1601,7 @@ fn visit_raw_identity_locations_mut(
     }
     for (index, dossier) in raw.controls.iter_mut().enumerate() {
         for (name, identity) in [
-            ("experiment", &mut dossier.experiment_identity),
+            ("plan", &mut dossier.plan_identity),
             ("profile", &mut dossier.profile_identity),
             ("workload", &mut dossier.workload_identity),
             ("candidate", &mut dossier.candidate_identity),
@@ -942,7 +1633,7 @@ fn visit_raw_identity_locations_mut(
     }
     for (index, dossier) in raw.causal_process_dossiers.iter_mut().enumerate() {
         for (name, identity) in [
-            ("experiment", &mut dossier.experiment_identity),
+            ("plan", &mut dossier.plan_identity),
             ("profile", &mut dossier.profile_identity),
             ("universe", &mut dossier.universe_identity),
             ("workload", &mut dossier.workload_identity),
@@ -951,16 +1642,39 @@ fn visit_raw_identity_locations_mut(
             ("rung", &mut dossier.rung_identity),
             ("report", &mut dossier.report_identity),
             ("semantic", &mut dossier.semantic_identity),
+            ("request_content", &mut dossier.request_content_identity),
+            ("request_path", &mut dossier.request_path_identity),
+            ("result", &mut dossier.result_identity),
+            ("result_content", &mut dossier.result_content_identity),
+            ("result_path", &mut dossier.result_path_identity),
+            ("result_bound_plan", &mut dossier.result_bound_plan_identity),
+            (
+                "result_bound_request",
+                &mut dossier.result_bound_request_content_identity,
+            ),
+            ("stdout", &mut dossier.stdout_identity),
+            ("stderr", &mut dossier.stderr_identity),
+            ("scope", &mut dossier.scope_identity),
+            ("cgroup", &mut dossier.cgroup_identity),
             ("child", &mut dossier.child_identity),
+            (
+                "completion_sentinel",
+                &mut dossier.completion_sentinel_identity,
+            ),
             ("child_artifact", &mut dossier.child_artifact_identity),
+            ("prlimit", &mut dossier.prlimit_identity),
         ] {
             visitor(format!("causal.{index}.{name}"), identity);
         }
     }
     for (pair_index, pair) in raw.performance_pairs.iter_mut().enumerate() {
+        visitor(
+            format!("performance.{pair_index}.pair"),
+            &mut pair.pair_identity,
+        );
         for (launch_index, launch) in pair.launches.iter_mut().enumerate() {
             for (name, identity) in [
-                ("experiment", &mut launch.experiment_identity),
+                ("plan", &mut launch.plan_identity),
                 (
                     "representative_workload",
                     &mut launch.representative_workload_identity,
@@ -969,8 +1683,32 @@ fn visit_raw_identity_locations_mut(
                 ("binary", &mut launch.binary_identity),
                 ("report", &mut launch.report_identity),
                 ("semantic", &mut launch.semantic_identity),
+                ("pair", &mut launch.pair_identity),
+                ("launch", &mut launch.launch_identity),
+                ("request_content", &mut launch.request_content_identity),
+                ("request_path", &mut launch.request_path_identity),
+                ("result", &mut launch.result_identity),
+                ("result_content", &mut launch.result_content_identity),
+                ("result_path", &mut launch.result_path_identity),
+                ("result_bound_plan", &mut launch.result_bound_plan_identity),
+                (
+                    "result_bound_request",
+                    &mut launch.result_bound_request_content_identity,
+                ),
+                ("stdout", &mut launch.stdout_identity),
+                ("stderr", &mut launch.stderr_identity),
+                ("scope", &mut launch.scope_identity),
+                ("cgroup", &mut launch.cgroup_identity),
                 ("child", &mut launch.child_identity),
+                (
+                    "completion_sentinel",
+                    &mut launch.completion_sentinel_identity,
+                ),
                 ("child_artifact", &mut launch.child_artifact_identity),
+                ("perf_artifact", &mut launch.perf_artifact_identity),
+                ("prlimit", &mut launch.prlimit_identity),
+                ("perf", &mut launch.perf_identity),
+                ("host", &mut launch.host_identity),
             ] {
                 visitor(
                     format!("performance.{pair_index}.{launch_index}.{name}"),
@@ -991,6 +1729,12 @@ fn passing_raw_threshold_evidence() -> RawThresholdEvidence {
     let candidate_identity = raw_identity("wu0g-candidate-v1", b"candidate-b-v1".to_vec());
     let baseline_binary_identity = raw_identity("wu0g-binary-v1", b"baseline-binary".to_vec());
     let candidate_binary_identity = raw_identity("wu0g-binary-v1", b"candidate-binary".to_vec());
+    let prlimit_identity =
+        raw_identity("wu0g-executable-v1", b"/usr/bin/prlimit synthetic".to_vec());
+    let perf_identity = raw_identity("wu0g-executable-v1", b"/usr/bin/perf synthetic".to_vec());
+    let host_identity = raw_identity("wu0g-host-v1", b"synthetic-host".to_vec());
+    let perf_version = "perf version synthetic".to_owned();
+    let cpu_affinity = "0".to_owned();
     let targets = [1_250_u16, 2_500, 5_000, 7_500, 10_000];
     let baseline_targets = [100_u64, 200, 300, 400, 500];
     let baseline_totals = [200_u64, 400, 600, 800, 1_000];
@@ -1058,14 +1802,22 @@ fn passing_raw_threshold_evidence() -> RawThresholdEvidence {
                     let candidate_identity = candidate_identity.clone();
                     let baseline_binary_identity = baseline_binary_identity.clone();
                     let candidate_binary_identity = candidate_binary_identity.clone();
+                    let prlimit_identity = prlimit_identity.clone();
                     let row = row.clone();
                     move |mode| {
                         let point = match mode {
                             RawProbeMode::Baseline => &row.baseline,
                             RawProbeMode::CandidateB => &row.candidate,
                         };
+                        let mode_ordinal = match mode {
+                            RawProbeMode::Baseline => 0_u32,
+                            RawProbeMode::CandidateB => 1,
+                        };
+                        let leader_pid = 1_000
+                            + u32::try_from(index).expect("causal index fits u32") * 2
+                            + mode_ordinal;
                         RawFreshProcessDossier {
-                            experiment_identity: placeholder.clone(),
+                            plan_identity: placeholder.clone(),
                             profile_identity: profile_identity.clone(),
                             universe_identity: universe_identity.clone(),
                             workload_identity: workload_identity.clone(),
@@ -1077,14 +1829,45 @@ fn passing_raw_threshold_evidence() -> RawThresholdEvidence {
                             rung_identity: point.rung_identity.clone(),
                             report_identity: point.report_identity.clone(),
                             semantic_identity: point.semantic_identity.clone(),
+                            rung_ordinal: u8::try_from(index).expect("rung ordinal fits u8"),
                             mode,
                             canonical_invocation: vec![
-                                "typokat-wu0g".to_owned(),
-                                format!("--rung={}", index + 1),
-                                format!("--mode={mode:?}"),
+                                "/usr/bin/perl".to_owned(),
+                                "/fixture/tooling/wu0e-diagnostic/run.pl".to_owned(),
+                                "--wu0g-child-v1".to_owned(),
+                                format!("/fixture/request-causal-{index}-{mode:?}"),
+                                format!("/fixture/result-causal-{index}-{mode:?}"),
                             ],
-                            deadline_ms: 30_000,
-                            memory_limit_bytes: 512 * 1024 * 1024,
+                            scope_identity: raw_identity(
+                                "wu0g-scope-v1",
+                                format!("causal-scope-{index}-{mode:?}").into_bytes(),
+                            ),
+                            cgroup_identity: raw_identity(
+                                "wu0g-cgroup-v1",
+                                format!("causal-cgroup-{index}-{mode:?}").into_bytes(),
+                            ),
+                            leader_pid,
+                            leader_start_ticks: 10_000 + u64::from(leader_pid),
+                            pgid: leader_pid,
+                            readiness_seen: true,
+                            membership_verified: true,
+                            drain_complete: true,
+                            cgroup_populated_zero: true,
+                            pgid_empty: true,
+                            cgroup_removed: true,
+                            cgroup_retained: false,
+                            scope_abort_requested: false,
+                            scope_abort_observed: false,
+                            deadline_ms: WU0G_DEADLINE_MS,
+                            deadline_readback_ms: WU0G_DEADLINE_MS,
+                            memory_limit_bytes: WU0G_MEMORY_LIMIT_BYTES,
+                            memory_limit_readback_bytes: WU0G_MEMORY_LIMIT_BYTES,
+                            rss_limit_bytes: WU0G_RSS_LIMIT_BYTES,
+                            rss_limit_readback_bytes: WU0G_RSS_LIMIT_BYTES,
+                            nofile_soft_limit: WU0G_NOFILE_LIMIT,
+                            nofile_hard_limit: WU0G_NOFILE_LIMIT,
+                            nofile_soft_readback: WU0G_NOFILE_LIMIT,
+                            nofile_hard_readback: WU0G_NOFILE_LIMIT,
                             termination: RawProbeTermination::Complete,
                             max_rss_bytes: 128 * 1024 * 1024,
                             containment_failures: 0,
@@ -1092,16 +1875,64 @@ fn passing_raw_threshold_evidence() -> RawThresholdEvidence {
                             cgroup_oom_kill_delta: 0,
                             exit_code: Some(0),
                             term_signal: None,
+                            raw_wait_status: Some(0),
                             waited: true,
                             reaped: true,
                             cleanup_succeeded: true,
+                            request_content_identity: raw_identity(
+                                "wu0g-request-content-v1",
+                                format!("causal-request-{index}-{mode:?}").into_bytes(),
+                            ),
+                            request_path_identity: raw_identity(
+                                "wu0g-relative-path-v1",
+                                format!("request-causal-{index}-{mode:?}").into_bytes(),
+                            ),
+                            result_identity: raw_identity(
+                                "wu0g-result-v1",
+                                format!("causal-result-{index}-{mode:?}").into_bytes(),
+                            ),
+                            result_content_identity: raw_identity(
+                                "wu0g-result-content-v1",
+                                format!("causal-result-content-{index}-{mode:?}").into_bytes(),
+                            ),
+                            result_path_identity: raw_identity(
+                                "wu0g-relative-path-v1",
+                                format!("result-causal-{index}-{mode:?}").into_bytes(),
+                            ),
+                            result_bound_plan_identity: placeholder.clone(),
+                            result_bound_request_content_identity: raw_identity(
+                                "wu0g-request-content-v1",
+                                format!("causal-request-{index}-{mode:?}").into_bytes(),
+                            ),
+                            stdout_identity: raw_identity(
+                                "wu0g-stdout-v1",
+                                format!("causal-stdout-{index}-{mode:?}").into_bytes(),
+                            ),
+                            stderr_identity: raw_identity(
+                                "wu0g-stderr-v1",
+                                format!("causal-stderr-{index}-{mode:?}").into_bytes(),
+                            ),
                             child_identity: raw_identity(
                                 "wu0g-child-v1",
                                 format!("causal-{index}-{mode:?}").into_bytes(),
                             ),
+                            completion_sentinel_identity: raw_identity(
+                                "wu0g-child-completion-sentinel-v1",
+                                format!("causal-sentinel-{index}-{mode:?}").into_bytes(),
+                            ),
                             child_artifact_identity: raw_identity(
                                 "wu0g-child-artifact-v1",
                                 format!("causal-artifact-{index}-{mode:?}").into_bytes(),
+                            ),
+                            prlimit_identity: prlimit_identity.clone(),
+                            stdout_observation: bounded_observation(WU0G_STDOUT_CAP_BYTES, 128),
+                            stderr_observation: bounded_observation(WU0G_STDERR_CAP_BYTES, 0),
+                            request_observation: bounded_observation(WU0G_REQUEST_CAP_BYTES, 1_024),
+                            result_observation: bounded_observation(WU0G_RESULT_CAP_BYTES, 2_048),
+                            sentinel_observation: bounded_observation(WU0G_SENTINEL_CAP_BYTES, 512),
+                            semantic_artifact_observation: bounded_observation(
+                                WU0G_ARTIFACT_CAP_BYTES,
+                                4_096,
                             ),
                         }
                     }
@@ -1112,7 +1943,7 @@ fn passing_raw_threshold_evidence() -> RawThresholdEvidence {
         .into_iter()
         .enumerate()
         .map(|(index, explained)| RawCycleProfileDossier {
-            experiment_identity: placeholder.clone(),
+            plan_identity: placeholder.clone(),
             profile_identity: raw_identity(
                 "wu0g-profile-v1",
                 format!("cycle-profile-{index}").into_bytes(),
@@ -1145,7 +1976,7 @@ fn passing_raw_threshold_evidence() -> RawThresholdEvidence {
         })
         .collect::<Vec<_>>();
     let prediction = RawPredictionDossier {
-        experiment_identity: placeholder.clone(),
+        plan_identity: placeholder.clone(),
         report_identity: raw_identity("wu0g-report-v1", b"prediction-report".to_vec()),
         profile_identity: profile_identity.clone(),
         workload_identity: representative_workload_identity.clone(),
@@ -1167,7 +1998,7 @@ fn passing_raw_threshold_evidence() -> RawThresholdEvidence {
         .into_iter()
         .enumerate()
         .map(|(index, candidate_measurement)| RawControlPairDossier {
-            experiment_identity: placeholder.clone(),
+            plan_identity: placeholder.clone(),
             profile_identity: raw_identity(
                 "wu0g-profile-v1",
                 format!("control-profile-{index}").into_bytes(),
@@ -1222,6 +2053,10 @@ fn passing_raw_threshold_evidence() -> RawThresholdEvidence {
             } else {
                 RawLaunchOrder::Ba
             };
+            let pair_identity = raw_identity(
+                "wu0g-performance-pair-v1",
+                format!("performance-pair-{pair_ordinal}").into_bytes(),
+            );
             let modes = match order {
                 RawLaunchOrder::Ab => [RawProbeMode::Baseline, RawProbeMode::CandidateB],
                 RawLaunchOrder::Ba => [RawProbeMode::CandidateB, RawProbeMode::Baseline],
@@ -1237,7 +2072,7 @@ fn passing_raw_threshold_evidence() -> RawThresholdEvidence {
                         })
                         .expect("launch ordinal fits u8");
                     RawPerformanceLaunch {
-                        experiment_identity: placeholder.clone(),
+                        plan_identity: placeholder.clone(),
                         representative_workload_identity: representative_workload_identity.clone(),
                         candidate_identity: candidate_identity.clone(),
                         binary_identity: match mode {
@@ -1252,25 +2087,116 @@ fn passing_raw_threshold_evidence() -> RawThresholdEvidence {
                             "wu0g-end-to-end-semantic-v1",
                             b"fixed-end-to-end-semantic".to_vec(),
                         ),
+                        pair_identity: pair_identity.clone(),
+                        launch_identity: raw_identity(
+                            "wu0g-performance-launch-v1",
+                            format!("performance-launch-{launch_ordinal}").into_bytes(),
+                        ),
+                        request_content_identity: raw_identity(
+                            "wu0g-request-content-v1",
+                            format!("performance-request-{launch_ordinal}").into_bytes(),
+                        ),
+                        request_path_identity: raw_identity(
+                            "wu0g-relative-path-v1",
+                            format!("request-performance-{launch_ordinal}").into_bytes(),
+                        ),
+                        result_identity: raw_identity(
+                            "wu0g-result-v1",
+                            format!("performance-result-{launch_ordinal}").into_bytes(),
+                        ),
+                        result_content_identity: raw_identity(
+                            "wu0g-result-content-v1",
+                            format!("performance-result-content-{launch_ordinal}").into_bytes(),
+                        ),
+                        result_path_identity: raw_identity(
+                            "wu0g-relative-path-v1",
+                            format!("result-performance-{launch_ordinal}").into_bytes(),
+                        ),
+                        result_bound_plan_identity: placeholder.clone(),
+                        result_bound_request_content_identity: raw_identity(
+                            "wu0g-request-content-v1",
+                            format!("performance-request-{launch_ordinal}").into_bytes(),
+                        ),
                         child_identity: raw_identity(
                             "wu0g-child-v1",
                             format!("performance-child-{launch_ordinal}").into_bytes(),
+                        ),
+                        completion_sentinel_identity: raw_identity(
+                            "wu0g-child-completion-sentinel-v1",
+                            format!("performance-sentinel-{launch_ordinal}").into_bytes(),
                         ),
                         child_artifact_identity: raw_identity(
                             "wu0g-child-artifact-v1",
                             format!("performance-artifact-{launch_ordinal}").into_bytes(),
                         ),
+                        perf_artifact_identity: raw_identity(
+                            "wu0g-perf-artifact-v1",
+                            format!("performance-count-{launch_ordinal}").into_bytes(),
+                        ),
+                        prlimit_identity: prlimit_identity.clone(),
+                        perf_identity: perf_identity.clone(),
+                        host_identity: host_identity.clone(),
+                        perf_version: perf_version.clone(),
+                        perf_event: WU0G_PERF_EVENT.to_owned(),
+                        cpu_affinity: cpu_affinity.clone(),
                         pair_ordinal,
                         launch_ordinal,
                         mode,
                         canonical_invocation: vec![
-                            "typokat-wu0g-e2e".to_owned(),
-                            format!("--pair={pair_ordinal}"),
-                            format!("--launch={launch_ordinal}"),
-                            format!("--mode={mode:?}"),
+                            "/usr/bin/perl".to_owned(),
+                            "/fixture/tooling/wu0e-diagnostic/run.pl".to_owned(),
+                            "--wu0g-child-v1".to_owned(),
+                            format!("/fixture/request-performance-{launch_ordinal}"),
+                            format!("/fixture/result-performance-{launch_ordinal}"),
                         ],
-                        deadline_ms: 30_000,
-                        memory_limit_bytes: 512 * 1024 * 1024,
+                        perf_invocation: vec![
+                            "/usr/bin/perf".to_owned(),
+                            "stat".to_owned(),
+                            "--no-big-num".to_owned(),
+                            "--no-scale".to_owned(),
+                            "-x".to_owned(),
+                            ";".to_owned(),
+                            "-e".to_owned(),
+                            WU0G_PERF_EVENT.to_owned(),
+                            "--log-fd".to_owned(),
+                            "198".to_owned(),
+                            "--".to_owned(),
+                            "/proc/self/fd/197".to_owned(),
+                            "--ignored".to_owned(),
+                            "--exact".to_owned(),
+                            "check::checker::decls::wu0g_interface_fill_attribution_spec::wu0g_hardened_child_once".to_owned(),
+                            "--nocapture".to_owned(),
+                        ],
+                        scope_identity: raw_identity(
+                            "wu0g-scope-v1",
+                            format!("performance-scope-{launch_ordinal}").into_bytes(),
+                        ),
+                        cgroup_identity: raw_identity(
+                            "wu0g-cgroup-v1",
+                            format!("performance-cgroup-{launch_ordinal}").into_bytes(),
+                        ),
+                        leader_pid: 2_000 + u32::from(launch_ordinal),
+                        leader_start_ticks: 20_000 + u64::from(launch_ordinal),
+                        pgid: 2_000 + u32::from(launch_ordinal),
+                        readiness_seen: true,
+                        membership_verified: true,
+                        drain_complete: true,
+                        cgroup_populated_zero: true,
+                        pgid_empty: true,
+                        cgroup_removed: true,
+                        cgroup_retained: false,
+                        scope_abort_requested: false,
+                        scope_abort_observed: false,
+                        deadline_ms: WU0G_DEADLINE_MS,
+                        deadline_readback_ms: WU0G_DEADLINE_MS,
+                        memory_limit_bytes: WU0G_MEMORY_LIMIT_BYTES,
+                        memory_limit_readback_bytes: WU0G_MEMORY_LIMIT_BYTES,
+                        rss_limit_bytes: WU0G_RSS_LIMIT_BYTES,
+                        rss_limit_readback_bytes: WU0G_RSS_LIMIT_BYTES,
+                        nofile_soft_limit: WU0G_NOFILE_LIMIT,
+                        nofile_hard_limit: WU0G_NOFILE_LIMIT,
+                        nofile_soft_readback: WU0G_NOFILE_LIMIT,
+                        nofile_hard_readback: WU0G_NOFILE_LIMIT,
                         termination: RawProbeTermination::Complete,
                         wall_ns: match mode {
                             RawProbeMode::Baseline => 1_000,
@@ -1280,19 +2206,47 @@ fn passing_raw_threshold_evidence() -> RawThresholdEvidence {
                             RawProbeMode::Baseline => 10_000,
                             RawProbeMode::CandidateB => 8_000,
                         },
+                        perf_runtime: 1_000,
                         max_rss_bytes: 128 * 1024 * 1024,
                         containment_failures: 0,
                         cgroup_oom_delta: 0,
                         cgroup_oom_kill_delta: 0,
                         exit_code: Some(0),
                         term_signal: None,
+                        raw_wait_status: Some(0),
+                        perf_raw_wait_status: Some(0),
+                        perf_exit_code: Some(0),
+                        perf_term_signal: None,
+                        perf_waited: true,
                         waited: true,
                         reaped: true,
                         cleanup_succeeded: true,
+                        stdout_identity: raw_identity(
+                            "wu0g-stdout-v1",
+                            format!("performance-stdout-{launch_ordinal}").into_bytes(),
+                        ),
+                        stderr_identity: raw_identity(
+                            "wu0g-stderr-v1",
+                            format!("performance-stderr-{launch_ordinal}").into_bytes(),
+                        ),
+                        stdout_observation: bounded_observation(WU0G_STDOUT_CAP_BYTES, 128),
+                        stderr_observation: bounded_observation(WU0G_STDERR_CAP_BYTES, 0),
+                        request_observation: bounded_observation(WU0G_REQUEST_CAP_BYTES, 1_024),
+                        result_observation: bounded_observation(WU0G_RESULT_CAP_BYTES, 2_048),
+                        sentinel_observation: bounded_observation(WU0G_SENTINEL_CAP_BYTES, 512),
+                        semantic_artifact_observation: bounded_observation(
+                            WU0G_ARTIFACT_CAP_BYTES,
+                            4_096,
+                        ),
+                        perf_artifact_observation: bounded_observation(
+                            WU0G_PERF_ARTIFACT_CAP_BYTES,
+                            48,
+                        ),
                     }
                 })
                 .collect();
             RawPerformancePairDossier {
+                pair_identity,
                 pair_ordinal,
                 order,
                 launches,
@@ -1301,6 +2255,7 @@ fn passing_raw_threshold_evidence() -> RawThresholdEvidence {
         .collect::<Vec<_>>();
     let mut raw = RawThresholdEvidence {
         experiment_identity: placeholder,
+        plan_identity: raw_identity("wu0g-plan-v1", Vec::new()),
         profile_identity,
         universe_identity,
         workload_identity,
@@ -1308,6 +2263,12 @@ fn passing_raw_threshold_evidence() -> RawThresholdEvidence {
         candidate_identity,
         baseline_binary_identity,
         candidate_binary_identity,
+        prlimit_identity,
+        perf_identity,
+        host_identity,
+        perf_version,
+        perf_event: WU0G_PERF_EVENT.to_owned(),
+        cpu_affinity,
         ladder_rows,
         cycle_profiles,
         predictions: vec![prediction],
@@ -1315,7 +2276,7 @@ fn passing_raw_threshold_evidence() -> RawThresholdEvidence {
         causal_process_dossiers,
         performance_pairs,
     };
-    bind_experiment_identity(&mut raw);
+    bind_plan_and_experiment_identities(&mut raw);
     raw
 }
 
@@ -3375,12 +4336,11 @@ fn runner_rejects_every_mutated_framed_rung_input() {
         .dependency_first_components
         .iter_mut()
         .flat_map(|component| component.heritage_dependencies.iter_mut())
-        .find_map(|dependency| match dependency {
+        .map(|dependency| match dependency {
             InterfaceHeritageDependency::InterfaceComponent { disposition, .. }
-            | InterfaceHeritageDependency::ExternalTerminal { disposition, .. } => {
-                Some(disposition)
-            }
+            | InterfaceHeritageDependency::ExternalTerminal { disposition, .. } => disposition,
         })
+        .next()
         .expect("fixture has a heritage dependency");
     *disposition = match *disposition {
         InterfaceHeritageEdgeDisposition::CompleteRequired => {
@@ -3396,10 +4356,11 @@ fn runner_rejects_every_mutated_framed_rung_input() {
         .dependency_first_components
         .iter_mut()
         .flat_map(|component| component.heritage_dependencies.iter_mut())
-        .find_map(|dependency| match dependency {
+        .map(|dependency| match dependency {
             InterfaceHeritageDependency::InterfaceComponent { identity, .. }
-            | InterfaceHeritageDependency::ExternalTerminal { identity, .. } => Some(identity),
+            | InterfaceHeritageDependency::ExternalTerminal { identity, .. } => identity,
         })
+        .next()
         .expect("fixture has dependency identity");
     *identity = "c".repeat(64);
     mutations.push(("dependency identity", dependency_identity));
@@ -3951,71 +4912,138 @@ fn assert_thresholds_rejected(label: &str, raw: &RawThresholdEvidence) {
     );
 }
 
-fn assert_successful_process_status(
-    termination: RawProbeTermination,
-    max_rss_bytes: u64,
-    memory_limit_bytes: u64,
-    containment_failures: u64,
-    cgroup_oom_delta: u64,
-    cgroup_oom_kill_delta: u64,
-    exit_code: Option<i32>,
-    term_signal: Option<i32>,
-    waited: bool,
-    reaped: bool,
-    cleanup_succeeded: bool,
-) {
-    assert_eq!(termination, RawProbeTermination::Complete);
-    assert!(max_rss_bytes <= memory_limit_bytes);
-    assert_eq!(containment_failures, 0);
-    assert_eq!(cgroup_oom_delta, 0);
-    assert_eq!(cgroup_oom_kill_delta, 0);
-    assert_eq!(exit_code, Some(0));
-    assert_eq!(term_signal, None);
-    assert!(waited && reaped && cleanup_succeeded);
+fn assert_successful_process_status(status: RawProcessStatus) {
+    assert_ne!(status.scope_identity, status.cgroup_identity);
+    assert!(status.leader_pid > 0 && status.leader_start_ticks > 0);
+    assert_eq!(status.pgid, status.leader_pid);
+    assert!(status.readiness_seen && status.membership_verified);
+    assert!(status.drain_complete && status.cgroup_populated_zero && status.pgid_empty);
+    assert!(status.cgroup_removed && !status.cgroup_retained);
+    assert!(!status.scope_abort_requested && !status.scope_abort_observed);
+    assert_eq!(status.termination, RawProbeTermination::Complete);
+    assert_eq!(status.deadline_readback_ms, status.deadline_ms);
+    assert_eq!(
+        status.memory_limit_readback_bytes,
+        status.memory_limit_bytes
+    );
+    assert_eq!(status.rss_limit_readback_bytes, status.rss_limit_bytes);
+    assert_eq!(status.nofile_soft_readback, status.nofile_soft_limit);
+    assert_eq!(status.nofile_hard_readback, status.nofile_hard_limit);
+    assert!(status.deadline_ms > 0 && status.deadline_ms <= WU0G_DEADLINE_MS);
+    assert!(status.memory_limit_bytes > 0 && status.memory_limit_bytes <= WU0G_MEMORY_LIMIT_BYTES);
+    assert!(status.rss_limit_bytes > 0 && status.rss_limit_bytes <= status.memory_limit_bytes);
+    assert!(status.max_rss_bytes <= status.rss_limit_bytes);
+    assert!(status.nofile_soft_limit > 0);
+    assert!(status.nofile_soft_limit <= status.nofile_hard_limit);
+    assert!(status.nofile_hard_limit <= WU0G_NOFILE_LIMIT);
+    assert_eq!(status.containment_failures, 0);
+    assert_eq!(status.cgroup_oom_delta, 0);
+    assert_eq!(status.cgroup_oom_kill_delta, 0);
+    assert_eq!(status.exit_code, Some(0));
+    assert_eq!(status.term_signal, None);
+    assert_eq!(status.raw_wait_status, Some(0));
+    assert!(status.waited && status.reaped && status.cleanup_succeeded);
+}
+
+fn assert_bounded_observation(observation: RawBoundedObservation, expected_cap: u64) {
+    assert_eq!(observation.cap_bytes, expected_cap);
+    assert!(observation.observed_bytes <= observation.cap_bytes);
+    assert!(!observation.truncated);
+}
+
+fn assert_hardened_runner_invocation(invocation: &[String]) {
+    assert_eq!(invocation.len(), 5);
+    assert_eq!(invocation[0], "/usr/bin/perl");
+    assert!(invocation[1].ends_with("/tooling/wu0e-diagnostic/run.pl"));
+    assert_eq!(invocation[2], "--wu0g-child-v1");
+    assert!(!invocation[3].is_empty(), "one canonical request file");
+    assert!(!invocation[4].is_empty(), "one canonical result directory");
+}
+
+fn assert_exact_perf_invocation(invocation: &[String]) {
+    assert_eq!(
+        invocation,
+        [
+            "/usr/bin/perf",
+            "stat",
+            "--no-big-num",
+            "--no-scale",
+            "-x",
+            ";",
+            "-e",
+            WU0G_PERF_EVENT,
+            "--log-fd",
+            "198",
+            "--",
+            "/proc/self/fd/197",
+            "--ignored",
+            "--exact",
+            "check::checker::decls::wu0g_interface_fill_attribution_spec::wu0g_hardened_child_once",
+            "--nocapture",
+        ]
+    );
 }
 
 fn assert_exact_causal_process_matrix(raw: &RawThresholdEvidence, expected_rungs: &[String]) {
     let expected = expected_rungs
         .iter()
-        .flat_map(|rung| {
+        .enumerate()
+        .flat_map(|(rung_ordinal, rung)| {
             [RawProbeMode::Baseline, RawProbeMode::CandidateB]
                 .into_iter()
-                .map(|mode| (rung.clone(), mode))
+                .map(move |mode| {
+                    (
+                        u8::try_from(rung_ordinal).expect("rung ordinal fits u8"),
+                        rung.clone(),
+                        mode,
+                    )
+                })
         })
         .collect::<BTreeSet<_>>();
     assert_eq!(expected.len(), 10);
     let observed = raw
         .causal_process_dossiers
         .iter()
-        .map(|dossier| (dossier.rung_identity.claimed_sha256.clone(), dossier.mode))
+        .map(|dossier| {
+            (
+                dossier.rung_ordinal,
+                dossier.rung_identity.claimed_sha256.clone(),
+                dossier.mode,
+            )
+        })
         .collect::<BTreeSet<_>>();
     assert_eq!(observed, expected);
     assert_eq!(raw.causal_process_dossiers.len(), expected.len());
     let mut children = BTreeSet::new();
+    let mut requests = BTreeSet::new();
+    let mut sentinels = BTreeSet::new();
     let mut artifacts = BTreeSet::new();
     for dossier in &raw.causal_process_dossiers {
-        assert_eq!(dossier.experiment_identity, raw.experiment_identity);
+        assert_eq!(dossier.plan_identity, raw.plan_identity);
         assert_eq!(dossier.profile_identity, raw.profile_identity);
         assert_eq!(dossier.universe_identity, raw.universe_identity);
         assert_eq!(dossier.workload_identity, raw.workload_identity);
         assert_eq!(dossier.candidate_identity, raw.candidate_identity);
-        assert_eq!(dossier.deadline_ms, 30_000);
-        assert_eq!(dossier.memory_limit_bytes, 512 * 1024 * 1024);
+        assert_eq!(dossier.prlimit_identity, raw.prlimit_identity);
+        assert_hardened_runner_invocation(&dossier.canonical_invocation);
+        assert!(requests.insert(dossier.request_content_identity.claimed_sha256.clone()));
         assert!(children.insert(dossier.child_identity.claimed_sha256.clone()));
+        assert!(sentinels.insert(dossier.completion_sentinel_identity.claimed_sha256.clone()));
         assert!(artifacts.insert(dossier.child_artifact_identity.claimed_sha256.clone()));
-        assert_successful_process_status(
-            dossier.termination,
-            dossier.max_rss_bytes,
-            dossier.memory_limit_bytes,
-            dossier.containment_failures,
-            dossier.cgroup_oom_delta,
-            dossier.cgroup_oom_kill_delta,
-            dossier.exit_code,
-            dossier.term_signal,
-            dossier.waited,
-            dossier.reaped,
-            dossier.cleanup_succeeded,
-        );
+        for (observation, cap) in [
+            (dossier.stdout_observation, WU0G_STDOUT_CAP_BYTES),
+            (dossier.stderr_observation, WU0G_STDERR_CAP_BYTES),
+            (dossier.request_observation, WU0G_REQUEST_CAP_BYTES),
+            (dossier.result_observation, WU0G_RESULT_CAP_BYTES),
+            (dossier.sentinel_observation, WU0G_SENTINEL_CAP_BYTES),
+            (
+                dossier.semantic_artifact_observation,
+                WU0G_ARTIFACT_CAP_BYTES,
+            ),
+        ] {
+            assert_bounded_observation(observation, cap);
+        }
+        assert_successful_process_status(dossier.process_status());
         let row = raw
             .ladder_rows
             .iter()
@@ -4036,6 +5064,8 @@ fn assert_exact_causal_process_matrix(raw: &RawThresholdEvidence, expected_rungs
         );
     }
     assert_eq!(children.len(), 10);
+    assert_eq!(requests.len(), 10);
+    assert_eq!(sentinels.len(), 10);
     assert_eq!(artifacts.len(), 10);
 }
 
@@ -4072,32 +5102,61 @@ fn assert_exact_performance_schedule(raw: &RawThresholdEvidence) {
     );
     assert_eq!(raw.performance_pairs.len(), 5);
     let mut children = BTreeSet::new();
+    let mut launches = BTreeSet::new();
+    let mut requests = BTreeSet::new();
+    let mut sentinels = BTreeSet::new();
     let mut artifacts = BTreeSet::new();
+    let mut perf_artifacts = BTreeSet::new();
+    let mut pairs = BTreeSet::new();
     for pair in &raw.performance_pairs {
         assert_eq!(pair.launches.len(), 2);
+        assert!(pairs.insert(pair.pair_identity.claimed_sha256.clone()));
         for launch in &pair.launches {
             assert_eq!(launch.pair_ordinal, pair.pair_ordinal);
-            assert_eq!(launch.experiment_identity, raw.experiment_identity);
+            assert_eq!(launch.pair_identity, pair.pair_identity);
+            assert_eq!(launch.plan_identity, raw.plan_identity);
             assert_eq!(
                 launch.representative_workload_identity,
                 raw.representative_workload_identity
             );
             assert_eq!(launch.candidate_identity, raw.candidate_identity);
+            assert_eq!(launch.prlimit_identity, raw.prlimit_identity);
+            assert_eq!(launch.perf_identity, raw.perf_identity);
+            assert_eq!(launch.host_identity, raw.host_identity);
+            assert_eq!(launch.perf_version, raw.perf_version);
+            assert_eq!(launch.perf_event, raw.perf_event);
+            assert_eq!(launch.cpu_affinity, raw.cpu_affinity);
+            assert_hardened_runner_invocation(&launch.canonical_invocation);
+            assert_exact_perf_invocation(&launch.perf_invocation);
+            assert!(launches.insert(launch.launch_identity.claimed_sha256.clone()));
+            assert!(requests.insert(launch.request_content_identity.claimed_sha256.clone()));
             assert!(children.insert(launch.child_identity.claimed_sha256.clone()));
+            assert!(sentinels.insert(launch.completion_sentinel_identity.claimed_sha256.clone()));
             assert!(artifacts.insert(launch.child_artifact_identity.claimed_sha256.clone()));
-            assert_successful_process_status(
-                launch.termination,
-                launch.max_rss_bytes,
-                launch.memory_limit_bytes,
-                launch.containment_failures,
-                launch.cgroup_oom_delta,
-                launch.cgroup_oom_kill_delta,
-                launch.exit_code,
-                launch.term_signal,
-                launch.waited,
-                launch.reaped,
-                launch.cleanup_succeeded,
-            );
+            assert!(perf_artifacts.insert(launch.perf_artifact_identity.claimed_sha256.clone()));
+            for (observation, cap) in [
+                (launch.stdout_observation, WU0G_STDOUT_CAP_BYTES),
+                (launch.stderr_observation, WU0G_STDERR_CAP_BYTES),
+                (launch.request_observation, WU0G_REQUEST_CAP_BYTES),
+                (launch.result_observation, WU0G_RESULT_CAP_BYTES),
+                (launch.sentinel_observation, WU0G_SENTINEL_CAP_BYTES),
+                (
+                    launch.semantic_artifact_observation,
+                    WU0G_ARTIFACT_CAP_BYTES,
+                ),
+                (
+                    launch.perf_artifact_observation,
+                    WU0G_PERF_ARTIFACT_CAP_BYTES,
+                ),
+            ] {
+                assert_bounded_observation(observation, cap);
+            }
+            assert!(launch.instructions > 0 && launch.perf_runtime > 0);
+            assert_eq!(launch.perf_exit_code, Some(0));
+            assert_eq!(launch.perf_term_signal, None);
+            assert_eq!(launch.perf_raw_wait_status, Some(0));
+            assert!(launch.perf_waited);
+            assert_successful_process_status(launch.process_status());
         }
         assert_eq!(
             pair.launches[0].semantic_identity,
@@ -4105,7 +5164,22 @@ fn assert_exact_performance_schedule(raw: &RawThresholdEvidence) {
         );
     }
     assert_eq!(children.len(), 10);
+    assert_eq!(launches.len(), 10);
+    assert_eq!(requests.len(), 10);
+    assert_eq!(sentinels.len(), 10);
     assert_eq!(artifacts.len(), 10);
+    assert_eq!(perf_artifacts.len(), 10);
+    assert_eq!(pairs.len(), 5);
+    assert_eq!(
+        raw.performance_pairs
+            .iter()
+            .flat_map(|pair| &pair.launches)
+            .map(|launch| &launch.semantic_identity)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        1,
+        "all five AB/BA pairs share one semantic identity"
+    );
 }
 
 #[test]
@@ -4135,6 +5209,37 @@ fn raw_authenticated_dossiers_derive_thresholds_and_synthetic_never_authorizes()
         .collect::<Vec<_>>();
     assert_exact_causal_process_matrix(&raw, &expected_rungs);
     assert_exact_performance_schedule(&raw);
+    let mut launch_owned_identities = BTreeSet::new();
+    for dossier in &raw.causal_process_dossiers {
+        for identity in [
+            &dossier.request_content_identity,
+            &dossier.request_path_identity,
+            &dossier.result_identity,
+            &dossier.result_content_identity,
+            &dossier.result_path_identity,
+            &dossier.child_identity,
+            &dossier.completion_sentinel_identity,
+            &dossier.child_artifact_identity,
+        ] {
+            assert!(launch_owned_identities.insert(identity.claimed_sha256.clone()));
+        }
+    }
+    for launch in raw.performance_pairs.iter().flat_map(|pair| &pair.launches) {
+        for identity in [
+            &launch.request_content_identity,
+            &launch.request_path_identity,
+            &launch.result_identity,
+            &launch.result_content_identity,
+            &launch.result_path_identity,
+            &launch.launch_identity,
+            &launch.child_identity,
+            &launch.completion_sentinel_identity,
+            &launch.child_artifact_identity,
+            &launch.perf_artifact_identity,
+        ] {
+            assert!(launch_owned_identities.insert(identity.claimed_sha256.clone()));
+        }
+    }
     for identities in [
         raw.cycle_profiles
             .iter()
@@ -4268,7 +5373,7 @@ fn all_counter_series_and_raw_dossier_families_fail_closed() {
     mutations.push(("control regression above 200bp", regressed_control));
     for (label, mut raw) in mutations {
         assert_ne!(raw, base, "{label} mutation is non-noop");
-        bind_experiment_identity(&mut raw);
+        bind_plan_and_experiment_identities(&mut raw);
         assert_thresholds_rejected(label, &raw);
     }
 }
@@ -4296,6 +5401,54 @@ fn exact_process_schedule_and_containment_status_fail_closed() {
     let mut order = base.clone();
     order.performance_pairs[1].order = RawLaunchOrder::Ab;
     mutations.push(("AB/BA order", order));
+    let mut missing_launch = base.clone();
+    missing_launch.performance_pairs[0].launches.pop();
+    mutations.push(("missing performance launch", missing_launch));
+    let mut duplicate_launch = base.clone();
+    let repeated_launch = duplicate_launch.performance_pairs[0].launches[0].clone();
+    duplicate_launch.performance_pairs[0]
+        .launches
+        .push(repeated_launch);
+    mutations.push(("duplicate performance launch", duplicate_launch));
+    let mut causal_rung_ordinal = base.clone();
+    causal_rung_ordinal.causal_process_dossiers[0].rung_ordinal = 5;
+    mutations.push(("invalid causal rung ordinal", causal_rung_ordinal));
+    let mut pair_ordinal = base.clone();
+    pair_ordinal.performance_pairs[0].pair_ordinal = 5;
+    mutations.push(("invalid pair ordinal", pair_ordinal));
+    let mut launch_ordinal = base.clone();
+    launch_ordinal.performance_pairs[0].launches[0].launch_ordinal = 10;
+    mutations.push(("invalid launch ordinal", launch_ordinal));
+    let mut duplicate_pair_identity = base.clone();
+    duplicate_pair_identity.performance_pairs[1].pair_identity = duplicate_pair_identity
+        .performance_pairs[0]
+        .pair_identity
+        .clone();
+    mutations.push(("duplicate pair identity", duplicate_pair_identity));
+    let mut duplicate_launch_identity = base.clone();
+    duplicate_launch_identity.performance_pairs[0].launches[1].launch_identity =
+        duplicate_launch_identity.performance_pairs[0].launches[0]
+            .launch_identity
+            .clone();
+    mutations.push(("duplicate launch identity", duplicate_launch_identity));
+    let mut duplicate_request = base.clone();
+    duplicate_request.performance_pairs[0].launches[1].request_content_identity =
+        duplicate_request.performance_pairs[0].launches[0]
+            .request_content_identity
+            .clone();
+    mutations.push(("duplicate request identity", duplicate_request));
+    let mut duplicate_sentinel = base.clone();
+    duplicate_sentinel.performance_pairs[0].launches[1].completion_sentinel_identity =
+        duplicate_sentinel.performance_pairs[0].launches[0]
+            .completion_sentinel_identity
+            .clone();
+    mutations.push(("duplicate completion sentinel", duplicate_sentinel));
+    let mut duplicate_perf_artifact = base.clone();
+    duplicate_perf_artifact.performance_pairs[0].launches[1].perf_artifact_identity =
+        duplicate_perf_artifact.performance_pairs[0].launches[0]
+            .perf_artifact_identity
+            .clone();
+    mutations.push(("duplicate perf artifact", duplicate_perf_artifact));
     let mut child = base.clone();
     child.performance_pairs[0].launches[1].child_identity = child.performance_pairs[0].launches[0]
         .child_identity
@@ -4342,6 +5495,256 @@ fn exact_process_schedule_and_containment_status_fail_closed() {
     workload.performance_pairs[0].launches[0].representative_workload_identity =
         workload.workload_identity.clone();
     mutations.push(("causal workload masquerades as repetition", workload));
+    let mut zero_deadline = base.clone();
+    zero_deadline.causal_process_dossiers[0].deadline_ms = 0;
+    mutations.push(("zero deadline", zero_deadline));
+    let mut oversized_deadline = base.clone();
+    oversized_deadline.causal_process_dossiers[0].deadline_ms = WU0G_DEADLINE_MS + 1;
+    mutations.push(("oversized deadline", oversized_deadline));
+    let mut deadline_readback = base.clone();
+    deadline_readback.performance_pairs[0].launches[0].deadline_readback_ms -= 1;
+    mutations.push(("deadline readback mismatch", deadline_readback));
+    let mut zero_memory = base.clone();
+    zero_memory.causal_process_dossiers[0].memory_limit_bytes = 0;
+    mutations.push(("zero memory limit", zero_memory));
+    let mut oversized_memory = base.clone();
+    oversized_memory.performance_pairs[0].launches[0].memory_limit_bytes =
+        WU0G_MEMORY_LIMIT_BYTES + 1;
+    mutations.push(("oversized memory limit", oversized_memory));
+    let mut memory_readback = base.clone();
+    memory_readback.causal_process_dossiers[0].memory_limit_readback_bytes -= 1;
+    mutations.push(("memory readback mismatch", memory_readback));
+    let mut zero_rss = base.clone();
+    zero_rss.performance_pairs[0].launches[0].rss_limit_bytes = 0;
+    mutations.push(("zero RSS limit", zero_rss));
+    let mut oversized_rss = base.clone();
+    oversized_rss.causal_process_dossiers[0].rss_limit_bytes = WU0G_MEMORY_LIMIT_BYTES + 1;
+    mutations.push(("oversized RSS limit", oversized_rss));
+    let mut rss_readback = base.clone();
+    rss_readback.performance_pairs[0].launches[0].rss_limit_readback_bytes -= 1;
+    mutations.push(("RSS readback mismatch", rss_readback));
+    let mut zero_nofile = base.clone();
+    zero_nofile.causal_process_dossiers[0].nofile_soft_limit = 0;
+    mutations.push(("zero nofile limit", zero_nofile));
+    let mut oversized_nofile = base.clone();
+    oversized_nofile.performance_pairs[0].launches[0].nofile_hard_limit = WU0G_NOFILE_LIMIT + 1;
+    mutations.push(("oversized nofile limit", oversized_nofile));
+    let mut nofile_readback = base.clone();
+    nofile_readback.causal_process_dossiers[0].nofile_soft_readback -= 1;
+    mutations.push(("nofile readback mismatch", nofile_readback));
+    let mut nofile_hard_readback = base.clone();
+    nofile_hard_readback.causal_process_dossiers[0].nofile_hard_readback -= 1;
+    mutations.push(("nofile hard readback mismatch", nofile_hard_readback));
+    let mut max_rss_over_limit = base.clone();
+    max_rss_over_limit.performance_pairs[0].launches[0].max_rss_bytes = WU0G_RSS_LIMIT_BYTES + 1;
+    mutations.push(("max RSS exceeds RSS limit", max_rss_over_limit));
+    let mut inserted_runner_arg = base.clone();
+    inserted_runner_arg.causal_process_dossiers[0]
+        .canonical_invocation
+        .insert(2, "--verbose".to_owned());
+    mutations.push(("inserted runner invocation argument", inserted_runner_arg));
+    let mut deleted_runner_arg = base.clone();
+    deleted_runner_arg.causal_process_dossiers[0]
+        .canonical_invocation
+        .remove(2);
+    mutations.push(("deleted runner invocation argument", deleted_runner_arg));
+    let mut trailing_runner_arg = base.clone();
+    trailing_runner_arg.causal_process_dossiers[0]
+        .canonical_invocation
+        .push("--extra".to_owned());
+    mutations.push(("trailing runner invocation argument", trailing_runner_arg));
+    for (label, position, replacement) in [
+        ("altered perf command", 0, "/tmp/perf"),
+        ("altered perf subcommand", 1, "record"),
+        ("removed no-big-num", 2, "--quiet"),
+        ("altered no-scale", 3, "--scale"),
+        ("altered separator", 5, ","),
+        ("altered perf event", 7, "cycles:u"),
+        ("altered perf log fd", 8, "--output"),
+        ("perf attach mode", 10, "-p"),
+        ("perf shell payload", 11, "/bin/sh"),
+    ] {
+        let mut raw = base.clone();
+        raw.performance_pairs[0].launches[0].perf_invocation[position] = replacement.to_owned();
+        mutations.push((label, raw));
+    }
+    for (label, token) in [
+        ("insert perf system-wide", "-a"),
+        ("insert perf pid", "--pid"),
+        ("insert perf tid", "--tid"),
+        ("insert perf cgroup", "--cgroup"),
+        ("insert perf no-inherit", "--no-inherit"),
+    ] {
+        let mut raw = base.clone();
+        raw.performance_pairs[0].launches[0]
+            .perf_invocation
+            .insert(2, token.to_owned());
+        mutations.push((label, raw));
+    }
+    let mut deleted_perf_arg = base.clone();
+    deleted_perf_arg.performance_pairs[0].launches[0]
+        .perf_invocation
+        .remove(2);
+    mutations.push(("deleted perf argv", deleted_perf_arg));
+    let mut trailing_perf_arg = base.clone();
+    trailing_perf_arg.performance_pairs[0].launches[0]
+        .perf_invocation
+        .push("-a".to_owned());
+    mutations.push(("trailing perf argv", trailing_perf_arg));
+    let mut perf_version = base.clone();
+    perf_version.performance_pairs[0].launches[0]
+        .perf_version
+        .push_str(" drift");
+    mutations.push(("perf version drift", perf_version));
+    let mut perf_event = base.clone();
+    perf_event.performance_pairs[0].launches[0].perf_event = "cycles:u".to_owned();
+    mutations.push(("perf event drift", perf_event));
+    let mut affinity = base.clone();
+    affinity.performance_pairs[0].launches[0].cpu_affinity = "1".to_owned();
+    mutations.push(("CPU affinity drift", affinity));
+    let mut perf_identity = base.clone();
+    perf_identity.performance_pairs[0].launches[0].perf_identity = raw_identity(
+        "wu0g-executable-v1",
+        b"different authenticated perf".to_vec(),
+    );
+    mutations.push(("perf identity drift", perf_identity));
+    let mut prlimit_identity = base.clone();
+    prlimit_identity.causal_process_dossiers[0].prlimit_identity = raw_identity(
+        "wu0g-executable-v1",
+        b"different authenticated prlimit".to_vec(),
+    );
+    mutations.push(("prlimit identity drift", prlimit_identity));
+    let mut libtest_identity = base.clone();
+    libtest_identity.performance_pairs[0].launches[0].binary_identity = raw_identity(
+        "wu0g-binary-v1",
+        b"different authenticated libtest".to_vec(),
+    );
+    mutations.push(("libtest identity drift", libtest_identity));
+    let mut host_identity = base.clone();
+    host_identity.performance_pairs[0].launches[0].host_identity =
+        raw_identity("wu0g-host-v1", b"different host".to_vec());
+    mutations.push(("host identity drift", host_identity));
+    let mut result_binding = base.clone();
+    result_binding.causal_process_dossiers[0].result_bound_request_content_identity =
+        result_binding.causal_process_dossiers[1]
+            .request_content_identity
+            .clone();
+    mutations.push(("result request binding replay", result_binding));
+    let mut leader_identity = base.clone();
+    leader_identity.causal_process_dossiers[0].leader_start_ticks = 0;
+    mutations.push(("missing leader start", leader_identity));
+    let mut pgid = base.clone();
+    pgid.causal_process_dossiers[0].pgid += 1;
+    mutations.push(("PGID mismatch", pgid));
+    let mut readiness = base.clone();
+    readiness.causal_process_dossiers[0].readiness_seen = false;
+    mutations.push(("readiness missing", readiness));
+    let mut membership = base.clone();
+    membership.performance_pairs[0].launches[0].membership_verified = false;
+    mutations.push(("membership missing", membership));
+    let mut drain = base.clone();
+    drain.causal_process_dossiers[0].drain_complete = false;
+    mutations.push(("drain incomplete", drain));
+    let mut populated = base.clone();
+    populated.performance_pairs[0].launches[0].cgroup_populated_zero = false;
+    mutations.push(("cgroup still populated", populated));
+    let mut pgid_empty = base.clone();
+    pgid_empty.causal_process_dossiers[0].pgid_empty = false;
+    mutations.push(("PGID not empty", pgid_empty));
+    let mut retained = base.clone();
+    retained.performance_pairs[0].launches[0].cgroup_removed = false;
+    retained.performance_pairs[0].launches[0].cgroup_retained = true;
+    retained.performance_pairs[0].launches[0].scope_abort_requested = true;
+    retained.performance_pairs[0].launches[0].scope_abort_observed = true;
+    mutations.push(("retained cgroup is inconclusive", retained));
+    let mut raw_wait = base.clone();
+    raw_wait.causal_process_dossiers[0].raw_wait_status = Some(1);
+    mutations.push(("raw wait mismatch", raw_wait));
+    let mut perf_raw_wait = base.clone();
+    perf_raw_wait.performance_pairs[0].launches[0].perf_raw_wait_status = Some(1);
+    mutations.push(("perf raw wait mismatch", perf_raw_wait));
+    let mut output_cap = base.clone();
+    output_cap.causal_process_dossiers[0]
+        .stdout_observation
+        .cap_bytes -= 1;
+    mutations.push(("stdout cap mismatch", output_cap));
+    let mut result_size = base.clone();
+    result_size.performance_pairs[0].launches[0]
+        .result_observation
+        .observed_bytes = WU0G_RESULT_CAP_BYTES + 1;
+    mutations.push(("result size over cap", result_size));
+    let mut sentinel_truncated = base.clone();
+    sentinel_truncated.causal_process_dossiers[0]
+        .sentinel_observation
+        .truncated = true;
+    mutations.push(("sentinel truncated", sentinel_truncated));
+    let mut coherent_all_five_semantic_mismatch = base.clone();
+    let mut distinct_pair_semantics = BTreeSet::new();
+    for pair in &mut coherent_all_five_semantic_mismatch.performance_pairs {
+        let alternate_semantic = raw_identity(
+            "wu0g-semantic-v1",
+            format!("coherent-pair-{}-semantic-mismatch", pair.pair_ordinal).into_bytes(),
+        );
+        assert!(distinct_pair_semantics.insert(alternate_semantic.claimed_sha256.clone()));
+        for launch in &mut pair.launches {
+            launch.semantic_identity = alternate_semantic.clone();
+        }
+    }
+    assert_eq!(distinct_pair_semantics.len(), 5);
+    assert!(coherent_all_five_semantic_mismatch
+        .performance_pairs
+        .iter()
+        .all(|pair| pair.launches[0].semantic_identity == pair.launches[1].semantic_identity));
+    mutations.push((
+        "coherent all-five semantic mismatch",
+        coherent_all_five_semantic_mismatch,
+    ));
+    let mut zero_instructions = base.clone();
+    zero_instructions.performance_pairs[0].launches[0].instructions = 0;
+    mutations.push(("zero perf count", zero_instructions));
+    let mut zero_perf_runtime = base.clone();
+    zero_perf_runtime.performance_pairs[0].launches[0].perf_runtime = 0;
+    mutations.push(("zero perf runtime", zero_perf_runtime));
+    let mut zero_candidate_instructions = base.clone();
+    zero_candidate_instructions.performance_pairs[0].launches[1].instructions = 0;
+    mutations.push(("zero candidate instructions", zero_candidate_instructions));
+    let mut zero_candidate_wall = base.clone();
+    zero_candidate_wall.performance_pairs[0].launches[1].wall_ns = 0;
+    mutations.push(("zero candidate wall", zero_candidate_wall));
+    let mut perf_exit = base.clone();
+    perf_exit.performance_pairs[0].launches[0].perf_exit_code = Some(1);
+    mutations.push(("perf exit contradicts sentinel", perf_exit));
+    let mut perf_signal = base.clone();
+    perf_signal.performance_pairs[0].launches[0].perf_term_signal = Some(9);
+    mutations.push(("perf signal contradicts sentinel", perf_signal));
+    let mut perf_wait = base.clone();
+    perf_wait.performance_pairs[0].launches[0].perf_waited = false;
+    mutations.push(("perf wait missing", perf_wait));
+    for (label, termination) in [
+        ("deadline partial perf count", RawProbeTermination::Deadline),
+        ("OOM partial perf count", RawProbeTermination::MemoryLimit),
+        (
+            "no-progress partial perf count",
+            RawProbeTermination::NoProgress,
+        ),
+        (
+            "stdout partial perf count",
+            RawProbeTermination::StdoutLimit,
+        ),
+        (
+            "stderr partial perf count",
+            RawProbeTermination::StderrLimit,
+        ),
+        (
+            "infrastructure partial perf count",
+            RawProbeTermination::Infrastructure,
+        ),
+    ] {
+        let mut raw = base.clone();
+        raw.performance_pairs[0].launches[0].termination = termination;
+        assert!(raw.performance_pairs[0].launches[0].instructions > 0);
+        mutations.push((label, raw));
+    }
     let mut oom = base.clone();
     oom.causal_process_dossiers[0].cgroup_oom_delta = 1;
     mutations.push(("cgroup oom delta", oom));
@@ -4363,9 +5766,13 @@ fn exact_process_schedule_and_containment_status_fail_closed() {
     let mut cleanup = base.clone();
     cleanup.causal_process_dossiers[0].cleanup_succeeded = false;
     mutations.push(("child cleanup", cleanup));
+    let mut perf_cleanup = base.clone();
+    perf_cleanup.performance_pairs[0].launches[0].cleanup_succeeded = false;
+    assert!(perf_cleanup.performance_pairs[0].launches[0].instructions > 0);
+    mutations.push(("perf count after cleanup failure", perf_cleanup));
     for (label, mut raw) in mutations {
         assert_ne!(raw, base);
-        bind_experiment_identity(&mut raw);
+        bind_plan_and_experiment_identities(&mut raw);
         assert_thresholds_rejected(label, &raw);
     }
 }
@@ -4373,6 +5780,7 @@ fn exact_process_schedule_and_containment_status_fail_closed() {
 #[test]
 fn experiment_identity_is_length_framed_and_binds_every_dossier() {
     let base = passing_raw_threshold_evidence();
+    assert_eq!(plan_identity_from_raw(&base), base.plan_identity);
     assert_eq!(
         experiment_identity_from_raw(&base),
         base.experiment_identity
@@ -4402,6 +5810,68 @@ fn experiment_identity_is_length_framed_and_binds_every_dossier() {
         base.experiment_identity
     );
     assert_thresholds_rejected("boundary-shift identity collision", &shifted);
+
+    let mut post_launch_rehash = base.clone();
+    post_launch_rehash.causal_process_dossiers[0].result_content_identity = raw_identity(
+        "wu0g-result-content-v1",
+        b"coherent different result bytes".to_vec(),
+    );
+    assert_eq!(
+        plan_identity_from_raw(&post_launch_rehash),
+        base.plan_identity
+    );
+    assert_ne!(
+        experiment_identity_from_raw(&post_launch_rehash),
+        base.experiment_identity
+    );
+
+    let mut cross_request_replay = base.clone();
+    cross_request_replay.performance_pairs[0].launches[0].request_content_identity = base
+        .causal_process_dossiers[0]
+        .request_content_identity
+        .clone();
+    cross_request_replay.performance_pairs[0].launches[0].result_bound_request_content_identity =
+        cross_request_replay.performance_pairs[0].launches[0]
+            .request_content_identity
+            .clone();
+    bind_plan_and_experiment_identities(&mut cross_request_replay);
+    assert_thresholds_rejected(
+        "coherent cross-family request replay",
+        &cross_request_replay,
+    );
+
+    let mut cross_sentinel_replay = base.clone();
+    cross_sentinel_replay.performance_pairs[0].launches[0].completion_sentinel_identity = base
+        .causal_process_dossiers[0]
+        .completion_sentinel_identity
+        .clone();
+    bind_plan_and_experiment_identities(&mut cross_sentinel_replay);
+    assert_thresholds_rejected(
+        "coherent cross-family completion sentinel replay",
+        &cross_sentinel_replay,
+    );
+
+    let mut cross_semantic_artifact_replay = base.clone();
+    cross_semantic_artifact_replay.performance_pairs[0].launches[0].child_artifact_identity = base
+        .causal_process_dossiers[0]
+        .child_artifact_identity
+        .clone();
+    bind_plan_and_experiment_identities(&mut cross_semantic_artifact_replay);
+    assert_thresholds_rejected(
+        "coherent cross-family semantic artifact replay",
+        &cross_semantic_artifact_replay,
+    );
+
+    let mut cross_perf_artifact_replay = base.clone();
+    cross_perf_artifact_replay.performance_pairs[1].launches[0].perf_artifact_identity =
+        base.performance_pairs[0].launches[0]
+            .perf_artifact_identity
+            .clone();
+    bind_plan_and_experiment_identities(&mut cross_perf_artifact_replay);
+    assert_thresholds_rejected(
+        "coherent cross-pair perf artifact replay",
+        &cross_perf_artifact_replay,
+    );
 }
 
 #[test]
@@ -4529,6 +5999,274 @@ fn authorization_evidence_constructors_and_fields_are_private() {
             "no implementation-owned oracle {forbidden}"
         );
     }
+}
+
+fn replace_protocol_field(bytes: &[u8], key: &str, value: &str) -> Vec<u8> {
+    let text = std::str::from_utf8(bytes).expect("protocol fixture is UTF-8");
+    let prefix = format!("{key}=");
+    let mut replaced = false;
+    let mut output = String::new();
+    for line in text.lines() {
+        if line.starts_with(&prefix) {
+            assert!(!replaced, "protocol key is unique");
+            replaced = true;
+            output.push_str(&format!("{key}={}:{}\n", value.len(), value));
+        } else {
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+    assert!(replaced, "protocol key exists");
+    output.into_bytes()
+}
+
+#[test]
+fn child_request_result_and_perf_parsers_fail_closed_on_raw_bytes() {
+    let (request, result) = spec_owned_protocol_exchange();
+    let causal_request = spec_owned_request_bytes("causal");
+    assert!(!String::from_utf8_lossy(&request).contains("experiment_identity"));
+    assert!(!String::from_utf8_lossy(&request).contains("request_content_identity"));
+    assert!(parse_wu0g_child_request_for_test(&request).is_ok());
+    assert!(parse_wu0g_child_request_for_test(&causal_request).is_ok());
+    assert!(parse_wu0g_child_result_for_test(&request, &result).is_ok());
+
+    for (label, mutation) in [
+        ("missing", {
+            let mut lines = request.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+            lines.remove(2);
+            lines.join(&b'\n')
+        }),
+        ("duplicate", {
+            let mut lines = request.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+            lines.insert(2, lines[1]);
+            lines.join(&b'\n')
+        }),
+        ("unknown", {
+            let mut lines = request.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+            lines.insert(2, b"unknown=1:x");
+            lines.join(&b'\n')
+        }),
+        ("reordered", {
+            let mut lines = request.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+            lines.swap(1, 2);
+            lines.join(&b'\n')
+        }),
+    ] {
+        assert!(
+            parse_wu0g_child_request_for_test(&mutation).is_err(),
+            "request parser accepts {label} field mutation"
+        );
+    }
+
+    let mut request_mutations = vec![
+        (
+            "invalid kind",
+            replace_protocol_field(&request, "kind", "validator"),
+        ),
+        (
+            "invalid causal mode",
+            replace_protocol_field(&causal_request, "mode", "plain"),
+        ),
+        (
+            "invalid performance mode",
+            replace_protocol_field(&request, "mode", "measured-off"),
+        ),
+        (
+            "causal rung ordinal absent",
+            replace_protocol_field(&causal_request, "rung_ordinal", "none"),
+        ),
+        (
+            "causal rung ordinal out of range",
+            replace_protocol_field(&causal_request, "rung_ordinal", "5"),
+        ),
+        (
+            "performance pair ordinal absent",
+            replace_protocol_field(&request, "pair_ordinal", "none"),
+        ),
+        (
+            "performance pair ordinal out of range",
+            replace_protocol_field(&request, "pair_ordinal", "5"),
+        ),
+        (
+            "performance launch ordinal absent",
+            replace_protocol_field(&request, "launch_ordinal", "none"),
+        ),
+        (
+            "performance launch ordinal out of range",
+            replace_protocol_field(&request, "launch_ordinal", "10"),
+        ),
+        (
+            "RSS exceeds memory below both maxima",
+            replace_protocol_field(
+                &replace_protocol_field(&request, "memory_limit_bytes", "268435456"),
+                "rss_limit_bytes",
+                "314572800",
+            ),
+        ),
+        (
+            "nofile soft exceeds hard",
+            replace_protocol_field(&request, "nofile_hard", "128"),
+        ),
+    ];
+    for (key, value) in [
+        ("launch_identity", "f".repeat(64)),
+        ("launch_ordinal", "0".to_owned()),
+        ("pair_identity", "f".repeat(64)),
+        ("pair_ordinal", "0".to_owned()),
+        ("perf_event", WU0G_PERF_EVENT.to_owned()),
+        ("perf_identity", "f".repeat(64)),
+        ("perf_version", "perf version fixture".to_owned()),
+    ] {
+        request_mutations.push((
+            "causal field is inapplicable",
+            replace_protocol_field(&causal_request, key, &value),
+        ));
+    }
+    for (key, value) in [
+        ("rung_identity", "f".repeat(64)),
+        ("rung_ordinal", "0".to_owned()),
+    ] {
+        request_mutations.push((
+            "performance field is inapplicable",
+            replace_protocol_field(&request, key, &value),
+        ));
+    }
+    for (key, source) in [
+        ("binary_identity", &causal_request),
+        ("candidate_identity", &causal_request),
+        ("host_identity", &causal_request),
+        ("plan_identity", &causal_request),
+        ("prlimit_identity", &causal_request),
+        ("result_identity", &causal_request),
+        ("rung_identity", &causal_request),
+        ("workload_identity", &causal_request),
+        ("launch_identity", &request),
+        ("pair_identity", &request),
+        ("perf_identity", &request),
+    ] {
+        request_mutations.push((
+            "malformed identity",
+            replace_protocol_field(source, key, &"f".repeat(63)),
+        ));
+    }
+    for (key, maximum) in [
+        ("deadline_ms", WU0G_DEADLINE_MS),
+        ("memory_limit_bytes", WU0G_MEMORY_LIMIT_BYTES),
+        ("rss_limit_bytes", WU0G_RSS_LIMIT_BYTES),
+        ("nofile_soft", WU0G_NOFILE_LIMIT),
+        ("nofile_hard", WU0G_NOFILE_LIMIT),
+    ] {
+        request_mutations.push((
+            "zero request limit",
+            replace_protocol_field(&request, key, "0"),
+        ));
+        request_mutations.push((
+            "oversized request limit",
+            replace_protocol_field(
+                &request,
+                key,
+                &maximum.checked_add(1).expect("limit increment").to_string(),
+            ),
+        ));
+    }
+    for (label, mutation) in request_mutations {
+        assert!(
+            parse_wu0g_child_request_for_test(&mutation).is_err(),
+            "request parser accepts {label}"
+        );
+    }
+
+    for (label, key, value) in [
+        ("forged plan", "plan_identity", "f".repeat(64)),
+        (
+            "forged request binding",
+            "request_content_identity",
+            "e".repeat(64),
+        ),
+        ("forged result", "result_identity", "d".repeat(64)),
+        ("forged tool", "perf_identity", "c".repeat(64)),
+        ("forged artifact", "artifact_identity", "b".repeat(64)),
+        ("malformed size", "artifact_size", "-1".to_owned()),
+        ("malformed status", "termination", "complete".to_owned()),
+        ("zero limit", "deadline_ms", "0".to_owned()),
+        (
+            "limit readback mismatch",
+            "memory_limit_readback_bytes",
+            "1".to_owned(),
+        ),
+    ] {
+        let mutation = replace_protocol_field(&result, key, &value);
+        assert!(
+            parse_wu0g_child_result_for_test(&request, &mutation).is_err(),
+            "result parser accepts {label}"
+        );
+    }
+    for (label, mutation) in [
+        ("missing", {
+            let mut lines = result.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+            lines.remove(2);
+            lines.join(&b'\n')
+        }),
+        ("duplicate", {
+            let mut lines = result.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+            lines.insert(2, lines[1]);
+            lines.join(&b'\n')
+        }),
+        ("unknown", {
+            let mut lines = result.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+            lines.insert(2, b"unknown=1:x");
+            lines.join(&b'\n')
+        }),
+        ("reordered", {
+            let mut lines = result.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+            lines.swap(1, 2);
+            lines.join(&b'\n')
+        }),
+    ] {
+        assert!(
+            parse_wu0g_child_result_for_test(&request, &mutation).is_err(),
+            "result parser accepts {label} field mutation"
+        );
+    }
+
+    let valid_perf = b"12345;;instructions:u;67890;100.00;;\n";
+    assert_eq!(valid_perf.iter().filter(|byte| **byte == b';').count(), 6);
+    assert_eq!(
+        parse_wu0g_perf_artifact_for_test(valid_perf),
+        Ok((12_345, 67_890))
+    );
+    for invalid in [
+        b"<not-supported>;;instructions:u;67890;100.00;;\n".as_slice(),
+        b"<not-counted>;;instructions:u;67890;100.00;;\n",
+        b"+12345;;instructions:u;67890;100.00;;\n",
+        b"12345;;instructions:u;+67890;100.00;;\n",
+        b"012345;;instructions:u;67890;100.00;;\n",
+        b"12345;;instructions:u;067890;100.00;;\n",
+        b"0;;instructions:u;67890;100.00;;\n",
+        b"12345;;instructions:u;0;100.00;;\n",
+        b"18446744073709551616;;instructions:u;67890;100.00;;\n",
+        b"12345;;instructions:u;18446744073709551616;100.00;;\n",
+        b"12345;;cycles:u;67890;100.00;;\n",
+        b"12345;;instructions:u;67890;99.99;;\n",
+        b"12345;;instructions:u;67890;100.00;\n",
+        b"12345;;instructions:u;67890;100.00;;;\n",
+        b"12345;;instructions:u;67890;100.00;;\r\n",
+        b"12345;;instructions:u;67890;100.00;;",
+        b"12345;;instructions:u;67890;100.00;;\n# comment\n",
+        b"12345;;instructions:u;67890;100.00;;\n12345;;instructions:u;67890;100.00;;\n",
+    ] {
+        assert!(parse_wu0g_perf_artifact_for_test(invalid).is_err());
+    }
+    let exactly_oversized = vec![b'0'; 4_097];
+    assert_eq!(exactly_oversized.len(), 4_097);
+    assert!(parse_wu0g_perf_artifact_for_test(&exactly_oversized).is_err());
+}
+
+#[test]
+#[ignore = "invoked exactly once by the authenticated WU0G child runner"]
+fn wu0g_hardened_child_once() {
+    run_wu0g_hardened_child_once_for_test()
+        .expect("authenticated child writes one canonical sentinel and artifact");
 }
 
 #[test]
