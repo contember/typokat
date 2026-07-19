@@ -143,6 +143,17 @@
 //! unavailable unless the outer result is normal, perf itself exited zero without signal, the
 //! checker sentinel/artifact authenticate, and OOM, containment, reap, and cleanup are clean.
 //! Partial counts never authorize, and perf never selectively finalizes a killed workload.
+//!
+//! Successful supervision is necessary but insufficient: delegated-root teardown must also
+//! complete before `result.v1` may be published. Deadline and RSS readbacks come from the effective
+//! supervisor configuration, and scope-abort fields come from observed cleanup state; request
+//! echoes or constants reject. The post-exec child environment and descriptor inventory is
+//! independently observed rather than copied from the launch plan, so injected extras reject.
+//!
+//! Result and artifact directories remain anchored by stable directory handles for every child and
+//! coordinator read, write, and publication. A Rust-owned rename/swap after each handle opens cannot
+//! redirect output. Stable executable handles and their pathnames are rehashed after the run, so an
+//! in-place same-inode, same-size mutation rejects before result publication.
 
 #![cfg(target_os = "linux")]
 
@@ -397,10 +408,29 @@ struct Wu0gFixture {
     request_fields: BTreeMap<String, String>,
 }
 
-struct StableReplacement {
+enum StablePathAttackKind {
+    Rename,
+    SwapDirectory { retained: PathBuf },
+    RewriteSameSize,
+}
+
+struct StablePathAttack {
+    watched_path: PathBuf,
+    watched_identity: Option<(u64, u64)>,
+    nested_identity_path: Option<PathBuf>,
     target: PathBuf,
     replacement: PathBuf,
+    kind: StablePathAttackKind,
+}
+
+struct PathAttackObservation {
     opened_identity: (u64, u64),
+    nested_identity: Option<(u64, u64)>,
+}
+
+struct PostExecBoundaryProbe {
+    environment_entry: Option<Vec<u8>>,
+    fd_identity: Option<(u64, u64)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -423,6 +453,10 @@ struct BoundedRun {
     observed_launch_facts: BTreeSet<ObservedLaunchFacts>,
     observed_leader_facts: BTreeSet<ObservedLaunchFacts>,
     observed_launch_cgroups: BTreeSet<PathBuf>,
+    observed_post_exec_environment: bool,
+    observed_post_exec_fd: bool,
+    attack_opened_identity: Option<(u64, u64)>,
+    attack_nested_identity: Option<(u64, u64)>,
     replacement_performed: bool,
 }
 
@@ -1300,6 +1334,107 @@ fn process_has_open_identity(pid: u32, identity: (u64, u64)) -> bool {
     })
 }
 
+fn process_has_environment_entry(pid: u32, expected: &[u8]) -> bool {
+    const ENVIRONMENT_CAP_BYTES: u64 = 64 * 1_024;
+    let Ok(file) = OpenOptions::new()
+        .read(true)
+        .open(format!("/proc/{pid}/environ"))
+    else {
+        return false;
+    };
+    let mut bytes = Vec::new();
+    if file
+        .take(ENVIRONMENT_CAP_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+        || u64::try_from(bytes.len()).unwrap() > ENVIRONMENT_CAP_BYTES
+    {
+        return false;
+    }
+    bytes
+        .split(|byte| *byte == 0)
+        .any(|entry| entry == expected)
+}
+
+fn bounded_cgroup_members(path: &Path) -> Vec<u32> {
+    const CGROUP_PROCS_CAP_BYTES: u64 = 64 * 1_024;
+    let Ok(file) = OpenOptions::new()
+        .read(true)
+        .open(path.join("cgroup.procs"))
+    else {
+        return Vec::new();
+    };
+    let mut bytes = Vec::new();
+    if file
+        .take(CGROUP_PROCS_CAP_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+        || u64::try_from(bytes.len()).unwrap() > CGROUP_PROCS_CAP_BYTES
+    {
+        return Vec::new();
+    }
+    std::str::from_utf8(&bytes)
+        .ok()
+        .into_iter()
+        .flat_map(str::lines)
+        .filter_map(|line| line.parse().ok())
+        .collect()
+}
+
+fn perform_path_attack_if_open(
+    attack: &StablePathAttack,
+    pid: u32,
+) -> Option<PathAttackObservation> {
+    let watched_identity = attack.watched_identity.or_else(|| {
+        std::fs::metadata(&attack.watched_path)
+            .ok()
+            .map(|metadata| (metadata.dev(), metadata.ino()))
+    })?;
+    if !process_has_open_identity(pid, watched_identity) {
+        return None;
+    }
+    let nested_identity = attack.nested_identity_path.as_ref().map(|path| {
+        let metadata = std::fs::metadata(path).expect("inspect nested directory before swap");
+        assert!(metadata.is_dir());
+        (metadata.dev(), metadata.ino())
+    });
+    match &attack.kind {
+        StablePathAttackKind::Rename => {
+            std::fs::rename(&attack.replacement, &attack.target)
+                .expect("replace path after stable open");
+        }
+        StablePathAttackKind::SwapDirectory { retained } => {
+            std::fs::rename(&attack.target, retained)
+                .expect("retain opened directory after stable open");
+            std::fs::rename(&attack.replacement, &attack.target)
+                .expect("install replacement directory after stable open");
+        }
+        StablePathAttackKind::RewriteSameSize => {
+            let replacement =
+                std::fs::read(&attack.replacement).expect("read same-size replacement bytes");
+            let before =
+                std::fs::metadata(&attack.target).expect("inspect same-inode mutation target");
+            assert_eq!(u64::try_from(replacement.len()).unwrap(), before.len());
+            let mut target = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&attack.target)
+                .expect("open same-inode mutation target");
+            target
+                .write_all(&replacement)
+                .and_then(|_| target.sync_all())
+                .expect("rewrite same-inode mutation target");
+            let after = target.metadata().expect("inspect mutated target handle");
+            assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+            assert_eq!(after.len(), before.len());
+        }
+    }
+    Some(PathAttackObservation {
+        opened_identity: watched_identity,
+        nested_identity,
+    })
+}
+
 fn observed_group_leader_facts(
     pgrp: u32,
     root: u32,
@@ -1349,7 +1484,8 @@ fn run_bounded_command(
     stdout_path: PathBuf,
     stderr_path: PathBuf,
     launch_executable: Option<(u64, u64)>,
-    replacement: Option<&StableReplacement>,
+    path_attack: Option<&StablePathAttack>,
+    post_exec_probe: Option<&PostExecBoundaryProbe>,
     artifact_root: &Path,
 ) -> BoundedRun {
     let mut child = command
@@ -1370,6 +1506,10 @@ fn run_bounded_command(
     let mut observed_launch_facts = BTreeSet::new();
     let mut observed_leader_facts = BTreeSet::new();
     let mut observed_launch_cgroups = BTreeSet::new();
+    let mut observed_post_exec_environment = false;
+    let mut observed_post_exec_fd = false;
+    let mut attack_opened_identity = None;
+    let mut attack_nested_identity = None;
     let mut replacement_performed = false;
     loop {
         if let Some(status) = child.try_wait().expect("poll bounded command") {
@@ -1406,6 +1546,10 @@ fn run_bounded_command(
                 observed_launch_facts,
                 observed_leader_facts,
                 observed_launch_cgroups,
+                observed_post_exec_environment,
+                observed_post_exec_fd,
+                attack_opened_identity,
+                attack_nested_identity,
                 replacement_performed,
             };
         }
@@ -1417,6 +1561,15 @@ fn run_bounded_command(
             if launch_executable.is_some_and(|expected| {
                 proc_executable_identity(pid).is_some_and(|actual| actual == expected)
             }) {
+                if let Some(probe) = post_exec_probe {
+                    observed_post_exec_environment |= probe
+                        .environment_entry
+                        .as_deref()
+                        .is_some_and(|entry| process_has_environment_entry(pid, entry));
+                    observed_post_exec_fd |= probe
+                        .fd_identity
+                        .is_some_and(|identity| process_has_open_identity(pid, identity));
+                }
                 observed_launches.insert((pid, start_ticks));
                 if let Some(cgroup) = proc_cgroup_v2_path(pid) {
                     observed_launch_cgroups.insert(cgroup.clone());
@@ -1435,14 +1588,32 @@ fn run_bounded_command(
                     observed_leader_facts.insert(leader);
                 }
             }
-            if !replacement_performed
-                && replacement
-                    .is_some_and(|attack| process_has_open_identity(pid, attack.opened_identity))
-            {
-                let attack = replacement.expect("replacement attack exists");
-                std::fs::rename(&attack.replacement, &attack.target)
-                    .expect("replace executable after stable open");
-                replacement_performed = true;
+            if !replacement_performed {
+                if let Some(observation) =
+                    path_attack.and_then(|attack| perform_path_attack_if_open(attack, pid))
+                {
+                    attack_opened_identity = Some(observation.opened_identity);
+                    attack_nested_identity = observation.nested_identity;
+                    replacement_performed = true;
+                }
+            }
+        }
+        if !replacement_performed {
+            if let Some(attack) = path_attack {
+                let supervisor_pids = observed_launch_facts
+                    .iter()
+                    .flat_map(|facts| {
+                        bounded_cgroup_members(&facts.scope_cgroup.join("supervisor"))
+                    })
+                    .collect::<BTreeSet<_>>();
+                for pid in supervisor_pids {
+                    if let Some(observation) = perform_path_attack_if_open(attack, pid) {
+                        attack_opened_identity = Some(observation.opened_identity);
+                        attack_nested_identity = observation.nested_identity;
+                        replacement_performed = true;
+                        break;
+                    }
+                }
             }
         }
         let rss = tree_rss(root, &snapshot);
@@ -1491,8 +1662,18 @@ fn direct_wu0g_command(fixture: &Wu0gFixture) -> Command {
 fn run_direct_wu0g_with(
     fixture: &Wu0gFixture,
     label: &str,
-    injected_tool: Option<(&str, &Path)>,
-    replacement: Option<&StableReplacement>,
+    injected_environment: &[(&str, &Path)],
+    path_attack: Option<&StablePathAttack>,
+) -> BoundedRun {
+    run_direct_wu0g_with_probe(fixture, label, injected_environment, path_attack, None)
+}
+
+fn run_direct_wu0g_with_probe(
+    fixture: &Wu0gFixture,
+    label: &str,
+    injected_environment: &[(&str, &Path)],
+    path_attack: Option<&StablePathAttack>,
+    post_exec_probe: Option<&PostExecBoundaryProbe>,
 ) -> BoundedRun {
     let canary_path = fixture.root.join(format!("{label}.inherited-fd-canary"));
     create_exclusive(&canary_path, b"must-not-reach-wu0g-child\n", false);
@@ -1511,7 +1692,7 @@ fn run_direct_wu0g_with(
     let stdout = fixture.root.join(format!("{label}.runner.stdout"));
     let stderr = fixture.root.join(format!("{label}.runner.stderr"));
     let mut command = direct_wu0g_command(fixture);
-    if let Some((key, path)) = injected_tool {
+    for (key, path) in injected_environment {
         command.env(key, path);
     }
     let bounded = run_bounded_command(
@@ -1519,7 +1700,8 @@ fn run_direct_wu0g_with(
         stdout,
         stderr,
         Some((frozen.dev(), frozen.ino())),
-        replacement,
+        path_attack,
+        post_exec_probe,
         &fixture.root,
     );
     drop(canary);
@@ -1527,7 +1709,7 @@ fn run_direct_wu0g_with(
 }
 
 fn run_direct_wu0g(fixture: &Wu0gFixture, label: &str) -> BoundedRun {
-    run_direct_wu0g_with(fixture, label, None, None)
+    run_direct_wu0g_with(fixture, label, &[], None)
 }
 
 fn run_bounded_self_test(scratch: &AcceptanceScratch, nonce: &str) -> BoundedRun {
@@ -1543,6 +1725,7 @@ fn run_bounded_self_test(scratch: &AcceptanceScratch, nonce: &str) -> BoundedRun
         command,
         scratch.stdout.clone(),
         scratch.stderr.clone(),
+        None,
         None,
         None,
         &scratch.root,
@@ -2210,6 +2393,80 @@ fn assert_rejected_before_launch(fixture: &Wu0gFixture, label: &str, bounded: &B
         .exists());
 }
 
+fn assert_rejected_after_supervision(fixture: &Wu0gFixture, label: &str, bounded: &BoundedRun) {
+    assert_ne!(bounded.raw_wait_status, 0, "{label} published success");
+    assert!(!bounded.stdout_oversized && !bounded.stderr_oversized);
+    assert_eq!(
+        bounded.observed_launches.len(),
+        1,
+        "{label} did not exercise the supervised libtest"
+    );
+    assert_all_observed_identities_gone(bounded);
+    assert_observed_cgroups_eventually_absent(&bounded.observed_launch_cgroups);
+    assert!(
+        !fixture.result_dir.join("result.v1").exists(),
+        "{label} published an authorizing result"
+    );
+}
+
+fn assert_exact_runner_error(fixture: &Wu0gFixture, label: &str, message: &str) {
+    assert_eq!(
+        read_bounded_regular(
+            &fixture.root.join(format!("{label}.runner.stdout")),
+            WU0G_STDIO_CAP_BYTES,
+        ),
+        b""
+    );
+    assert_eq!(
+        read_bounded_regular(
+            &fixture.root.join(format!("{label}.runner.stderr")),
+            WU0G_STDIO_CAP_BYTES,
+        ),
+        format!("wu0e-diagnostic: {message}\n").as_bytes()
+    );
+}
+
+fn assert_rejected_after_path_attack(fixture: &Wu0gFixture, label: &str, bounded: &BoundedRun) {
+    assert_ne!(bounded.raw_wait_status, 0, "{label} published success");
+    assert!(!bounded.stdout_oversized && !bounded.stderr_oversized);
+    assert_all_observed_identities_gone(bounded);
+    if !bounded.observed_launch_cgroups.is_empty() {
+        assert_observed_cgroups_eventually_absent(&bounded.observed_launch_cgroups);
+    }
+    assert!(
+        !fixture.result_dir.join("result.v1").exists(),
+        "{label} published an authorizing result"
+    );
+}
+
+fn exact_directory_entries(path: &Path) -> BTreeSet<String> {
+    const MAX_ENTRIES: usize = 16;
+    const MAX_TOTAL_NAME_BYTES: usize = 512;
+    let mut entries = BTreeSet::new();
+    let mut total_name_bytes = 0_usize;
+    for entry in std::fs::read_dir(path).expect("read attacked directory") {
+        assert!(
+            entries.len() < MAX_ENTRIES,
+            "attacked directory has too many entries"
+        );
+        let name = entry
+            .expect("read attacked directory entry")
+            .file_name()
+            .into_string()
+            .expect("UTF-8 attacked directory entry");
+        assert!(name.is_ascii(), "non-ASCII attacked directory entry");
+        total_name_bytes = total_name_bytes
+            .checked_add(name.len())
+            .expect("attacked directory name-byte sum overflow");
+        assert!(
+            total_name_bytes <= MAX_TOTAL_NAME_BYTES,
+            "attacked directory names exceed their byte bound"
+        );
+        assert!(entries.insert(name), "duplicate attacked directory entry");
+    }
+    entries
+}
+
 fn run_direct_legacy(scratch: &AcceptanceScratch, label: &str, argument: &str) -> BoundedRun {
     let canary_path = scratch.root.join(format!("legacy-{label}.fd-canary"));
     create_exclusive(&canary_path, b"legacy-inherited-fd-canary\n", false);
@@ -2226,6 +2483,7 @@ fn run_direct_legacy(scratch: &AcceptanceScratch, label: &str, argument: &str) -
         command,
         scratch.root.join(format!("legacy-{label}.stdout")),
         scratch.root.join(format!("legacy-{label}.stderr")),
+        None,
         None,
         None,
         &scratch.root,
@@ -2312,6 +2570,441 @@ fn wu0g_actual_direct_cli_route_is_independently_observed() {
         assert_valid_wu0g_run(&fixture, kind, &bounded);
     }
     scratch.finish();
+}
+
+#[test]
+#[ignore = "WU0G teardown/readback/scope-abort observations; direct and hard-bounded"]
+fn wu0g_clean_supervision_requires_teardown_and_effective_supervisor_observations() {
+    let scratch = AcceptanceScratch::create();
+    for (name, key, value, expected_error) in [
+        (
+            "post-teardown-failure",
+            "TYPOKAT_WU0E_TEST_WU0G_POST_TEARDOWN_FAILURE",
+            "1",
+            "synthetic WU0G delegated-root teardown failure",
+        ),
+        (
+            "effective-deadline-mismatch",
+            "TYPOKAT_WU0E_TEST_WU0G_EFFECTIVE_DEADLINE_MS",
+            "29999",
+            "WU0G effective deadline readback mismatch",
+        ),
+        (
+            "effective-rss-mismatch",
+            "TYPOKAT_WU0E_TEST_WU0G_EFFECTIVE_RSS_LIMIT_BYTES",
+            "402653183",
+            "WU0G effective RSS readback mismatch",
+        ),
+        (
+            "scope-abort-observation",
+            "TYPOKAT_WU0E_TEST_WU0G_SCOPE_ABORT_OBSERVED",
+            "1",
+            "WU0G scope-abort observation mismatch",
+        ),
+    ] {
+        let fixture = prepare_wu0g_fixture(&scratch.root, name, Wu0gRequestKind::Causal);
+        let bounded = run_direct_wu0g_with(
+            &fixture,
+            "supervisor-observation",
+            &[(key, Path::new(value))],
+            None,
+        );
+        assert_rejected_after_supervision(&fixture, name, &bounded);
+        assert_exact_runner_error(&fixture, "supervisor-observation", expected_error);
+    }
+    scratch.finish();
+}
+
+#[test]
+#[ignore = "WU0G actual post-exec child environment/FD inventory; direct and hard-bounded"]
+fn wu0g_post_exec_child_boundary_rejects_unplanned_environment_and_descriptors() {
+    let scratch = AcceptanceScratch::create();
+    for (name, key, environment_entry, expected_error) in [
+        (
+            "boundary-extra-environment",
+            "TYPOKAT_WU0E_TEST_WU0G_EXTRA_CHILD_ENV",
+            Some(b"TYPOKAT_WU0G_UNEXPECTED=present".as_slice()),
+            "WU0G observed child environment differs from the launch plan",
+        ),
+        (
+            "boundary-extra-descriptor",
+            "TYPOKAT_WU0E_TEST_WU0G_EXTRA_CHILD_FD_PATH",
+            None,
+            "WU0G observed child descriptor inventory differs from the launch plan",
+        ),
+    ] {
+        let fixture = prepare_wu0g_fixture(&scratch.root, name, Wu0gRequestKind::Causal);
+        let injected_value = if let Some(entry) = environment_entry {
+            PathBuf::from(std::str::from_utf8(entry).unwrap())
+        } else {
+            let path = fixture.root.join("extra-child-fd");
+            create_exclusive(&path, b"unexpected-open-file\n", false);
+            path
+        };
+        let probe = PostExecBoundaryProbe {
+            environment_entry: environment_entry.map(<[u8]>::to_vec),
+            fd_identity: environment_entry.is_none().then(|| {
+                let metadata = std::fs::metadata(&injected_value).unwrap();
+                (metadata.dev(), metadata.ino())
+            }),
+        };
+        let bounded = run_direct_wu0g_with_probe(
+            &fixture,
+            "post-exec-boundary",
+            &[(key, &injected_value)],
+            None,
+            Some(&probe),
+        );
+        if environment_entry.is_some() {
+            assert!(
+                bounded.observed_post_exec_environment,
+                "the actual post-exec checker never contained the injected environment entry"
+            );
+        } else {
+            assert!(
+                bounded.observed_post_exec_fd,
+                "the actual post-exec checker never held the injected descriptor"
+            );
+        }
+        assert_rejected_after_supervision(&fixture, name, &bounded);
+        assert_exact_runner_error(&fixture, "post-exec-boundary", expected_error);
+    }
+    scratch.finish();
+}
+
+#[test]
+#[ignore = "WU0G test hooks are bound to one exact synthetic fixture identity"]
+fn wu0g_synthetic_hook_identity_negative_matrix_rejects_before_launch() {
+    let scratch = AcceptanceScratch::create();
+    let hooks = [
+        (
+            "TYPOKAT_WU0E_TEST_WU0G_POST_TEARDOWN_FAILURE",
+            "post-teardown-failure",
+            "1",
+        ),
+        (
+            "TYPOKAT_WU0E_TEST_WU0G_EFFECTIVE_DEADLINE_MS",
+            "effective-deadline-mismatch",
+            "29999",
+        ),
+        (
+            "TYPOKAT_WU0E_TEST_WU0G_EFFECTIVE_RSS_LIMIT_BYTES",
+            "effective-rss-mismatch",
+            "402653183",
+        ),
+        (
+            "TYPOKAT_WU0E_TEST_WU0G_SCOPE_ABORT_OBSERVED",
+            "scope-abort-observation",
+            "1",
+        ),
+        (
+            "TYPOKAT_WU0E_TEST_WU0G_EXTRA_CHILD_ENV",
+            "boundary-extra-environment",
+            "TYPOKAT_WU0G_UNEXPECTED=present",
+        ),
+        (
+            "TYPOKAT_WU0E_TEST_WU0G_EXTRA_CHILD_FD_PATH",
+            "boundary-extra-descriptor",
+            "extra-child-fd",
+        ),
+    ];
+    let mut shared_causal_request = None;
+    for (index, (key, _, value)) in hooks.iter().enumerate() {
+        let canonical_fixture_name = hooks[index].1;
+        let wrong_fixture_name = hooks[(index + 1) % hooks.len()].1;
+        assert_ne!(wrong_fixture_name, canonical_fixture_name);
+        let case_parent = scratch.root.join(format!("hook-identity-{index}"));
+        std::fs::create_dir(&case_parent).unwrap();
+        let fixture =
+            prepare_wu0g_fixture(&case_parent, wrong_fixture_name, Wu0gRequestKind::Causal);
+        assert_eq!(
+            fixture.root.file_name().and_then(|leaf| leaf.to_str()),
+            Some(wrong_fixture_name)
+        );
+        assert_eq!(
+            fixture.request_path.strip_prefix(&fixture.root).unwrap(),
+            Path::new("requests/launch-0.request")
+        );
+        assert_eq!(
+            fixture.result_dir.strip_prefix(&fixture.root).unwrap(),
+            Path::new("results/launch-0")
+        );
+        if let Some(expected) = &shared_causal_request {
+            assert_eq!(
+                &fixture.request_bytes, expected,
+                "hook authentication must use the canonical root leaf/path tuple, not causal request bytes"
+            );
+        } else {
+            shared_causal_request = Some(fixture.request_bytes.clone());
+        }
+        let injected_value = if *key == "TYPOKAT_WU0E_TEST_WU0G_EXTRA_CHILD_FD_PATH" {
+            let path = fixture.root.join(value);
+            create_exclusive(&path, b"unauthenticated-extra-fd\n", false);
+            path
+        } else {
+            PathBuf::from(value)
+        };
+        let bounded = run_direct_wu0g_with(
+            &fixture,
+            "unauthenticated-hook",
+            &[(key, &injected_value)],
+            None,
+        );
+        assert_rejected_before_launch(&fixture, key, &bounded);
+        assert_exact_runner_error(
+            &fixture,
+            "unauthenticated-hook",
+            &format!("unauthenticated WU0G test hook {key}"),
+        );
+    }
+    scratch.finish();
+}
+
+fn directory_swap_attack(
+    fixture: &Wu0gFixture,
+    name: &str,
+    watched_path: PathBuf,
+    target: PathBuf,
+    capture_nested_artifacts: bool,
+) -> (StablePathAttack, PathBuf, (u64, u64), FileIdentity) {
+    let replacement = fixture.root.join(format!("{name}.replacement"));
+    std::fs::create_dir(&replacement).expect("create replacement directory");
+    let victim = replacement.join("rust-owned-victim");
+    create_exclusive(&victim, b"must-remain-unchanged\n", false);
+    let victim_identity = file_identity(&victim);
+    let replacement_metadata = std::fs::metadata(&replacement).unwrap();
+    let replacement_identity = (replacement_metadata.dev(), replacement_metadata.ino());
+    let retained = fixture.root.join(format!("{name}.opened"));
+    let retained_for_attack = retained.clone();
+    (
+        StablePathAttack {
+            watched_path,
+            watched_identity: None,
+            nested_identity_path: capture_nested_artifacts.then(|| target.join("artifacts")),
+            target,
+            replacement,
+            kind: StablePathAttackKind::SwapDirectory {
+                retained: retained_for_attack,
+            },
+        },
+        retained,
+        replacement_identity,
+        victim_identity,
+    )
+}
+
+fn assert_directory_swap_is_contained(
+    scratch: &AcceptanceScratch,
+    name: &str,
+    target_is_result: bool,
+) {
+    let fixture = prepare_wu0g_fixture(&scratch.root, name, Wu0gRequestKind::Causal);
+    let target = if target_is_result {
+        fixture.result_dir.clone()
+    } else {
+        fixture.result_dir.join("artifacts")
+    };
+    let (attack, retained, replacement_identity, victim_identity) = directory_swap_attack(
+        &fixture,
+        name,
+        target.clone(),
+        target.clone(),
+        target_is_result,
+    );
+    let bounded = run_direct_wu0g_with(&fixture, "directory-swap", &[], Some(&attack));
+    assert!(
+        bounded.replacement_performed,
+        "{name} did not observe the stable directory handle: {:?}",
+        bounded.observed_launch_facts
+    );
+    assert_rejected_after_path_attack(&fixture, name, &bounded);
+    assert_exact_runner_error(
+        &fixture,
+        "directory-swap",
+        if target_is_result {
+            "WU0G result directory pathname identity drifted"
+        } else {
+            "WU0G artifact directory pathname identity drifted"
+        },
+    );
+    let original_identity = bounded
+        .attack_opened_identity
+        .expect("directory attack did not record the opened identity");
+    let retained_metadata = std::fs::metadata(&retained).unwrap();
+    assert_eq!(
+        (retained_metadata.dev(), retained_metadata.ino()),
+        original_identity
+    );
+    let installed_metadata = std::fs::metadata(&target).unwrap();
+    assert_eq!(
+        (installed_metadata.dev(), installed_metadata.ino()),
+        replacement_identity
+    );
+    let installed_victim = target.join("rust-owned-victim");
+    assert_eq!(file_identity(&installed_victim), victim_identity);
+    assert_eq!(
+        read_bounded_regular(&installed_victim, 1_024),
+        b"must-remain-unchanged\n"
+    );
+    assert_eq!(
+        exact_directory_entries(&target),
+        ["rust-owned-victim".to_owned()].into_iter().collect(),
+        "{name} redirected coordinator or child writes"
+    );
+    let expected_retained = if target_is_result {
+        ["artifacts", "stderr.bin", "stdout.bin"].as_slice()
+    } else {
+        ["child.bin", "completion.sentinel", "semantic.bin"].as_slice()
+    };
+    assert_eq!(
+        exact_directory_entries(&retained),
+        expected_retained
+            .iter()
+            .map(|entry| (*entry).to_owned())
+            .collect(),
+        "{name} did not keep all output beneath the opened directory"
+    );
+    if target_is_result {
+        let retained_artifacts = retained.join("artifacts");
+        let retained_artifacts_metadata = std::fs::metadata(&retained_artifacts).unwrap();
+        assert_eq!(
+            (
+                retained_artifacts_metadata.dev(),
+                retained_artifacts_metadata.ino()
+            ),
+            bounded
+                .attack_nested_identity
+                .expect("result-directory attack did not capture the nested artifacts identity")
+        );
+        assert_eq!(
+            exact_directory_entries(&retained_artifacts),
+            ["child.bin", "completion.sentinel", "semantic.bin"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            "result-directory swap did not retain exact artifact output"
+        );
+    } else {
+        assert!(
+            bounded.attack_nested_identity.is_none(),
+            "artifact-directory swap captured an inapplicable nested identity"
+        );
+    }
+}
+
+#[test]
+#[ignore = "WU0G stable artifact directory handle; Rust-owned post-open swap"]
+fn wu0g_artifact_directory_swap_cannot_redirect_io_or_publication() {
+    let scratch = AcceptanceScratch::create();
+    assert_directory_swap_is_contained(&scratch, "artifact-directory-swap", false);
+    scratch.finish();
+}
+
+#[test]
+#[ignore = "WU0G stable result directory handle; Rust-owned post-open swap"]
+fn wu0g_result_directory_swap_cannot_redirect_io_or_publication() {
+    let scratch = AcceptanceScratch::create();
+    assert_directory_swap_is_contained(&scratch, "result-directory-swap", true);
+    scratch.finish();
+}
+
+#[test]
+#[ignore = "WU0G stable executable digest revalidation; same-inode same-size mutation"]
+fn wu0g_same_inode_same_size_executable_mutation_rejects_before_publication() {
+    let scratch = AcceptanceScratch::create();
+    for (role, kind, source, identity_field, injected_environment) in [
+        (
+            "libtest",
+            Wu0gRequestKind::Causal,
+            None,
+            "binary_identity",
+            None,
+        ),
+        (
+            "prlimit",
+            Wu0gRequestKind::Causal,
+            Some(Path::new("/usr/bin/prlimit")),
+            "prlimit_identity",
+            Some("TYPOKAT_WU0E_TEST_WU0G_PRLIMIT_PATH"),
+        ),
+        (
+            "perf",
+            Wu0gRequestKind::Performance,
+            Some(Path::new("/usr/bin/perf")),
+            "perf_identity",
+            Some("TYPOKAT_WU0E_TEST_WU0G_PERF_PATH"),
+        ),
+    ] {
+        assert_same_inode_same_size_revalidation(
+            &scratch,
+            role,
+            kind,
+            source,
+            identity_field,
+            injected_environment,
+        );
+    }
+    scratch.finish();
+}
+
+fn assert_same_inode_same_size_revalidation(
+    scratch: &AcceptanceScratch,
+    role: &str,
+    kind: Wu0gRequestKind,
+    source: Option<&Path>,
+    identity_field: &str,
+    injected_environment: Option<&str>,
+) {
+    let mut fixture = prepare_wu0g_fixture(&scratch.root, role, kind);
+    let target = if let Some(source) = source {
+        let target = fixture.root.join(format!("tools/{role}"));
+        std::fs::copy(source, &target).expect("copy executable mutation fixture");
+        let mut permissions = std::fs::metadata(&target).unwrap().permissions();
+        permissions.set_mode(0o500);
+        std::fs::set_permissions(&target, permissions).unwrap();
+        replace_fixture_request_field(&mut fixture, identity_field, &sha256_path(&target));
+        target
+    } else {
+        fixture.frozen_libtest.clone()
+    };
+    let before = std::fs::metadata(&target).unwrap();
+    let before_identity = (before.dev(), before.ino());
+    let mut mutated = std::fs::read(&target).expect("read executable mutation source");
+    let marker = b".shstrtab\0";
+    let marker_offset = mutated
+        .windows(marker.len())
+        .rposition(|window| window == marker)
+        .expect("ELF section-name table marker");
+    mutated[marker_offset + 1] = b'S';
+    assert_eq!(u64::try_from(mutated.len()).unwrap(), before.len());
+    let mutation = fixture.root.join(format!("tools/{role}.mutation"));
+    create_exclusive(&mutation, &mutated, false);
+    let attack = StablePathAttack {
+        watched_path: target.clone(),
+        watched_identity: Some(before_identity),
+        nested_identity_path: None,
+        target: target.clone(),
+        replacement: mutation,
+        kind: StablePathAttackKind::RewriteSameSize,
+    };
+    let injected = injected_environment
+        .map(|key| vec![(key, target.as_path())])
+        .unwrap_or_default();
+    let bounded = run_direct_wu0g_with(&fixture, "same-inode-mutation", &injected, Some(&attack));
+    assert!(
+        bounded.replacement_performed,
+        "{role} mutation did not observe the stable executable handle"
+    );
+    assert_rejected_after_supervision(&fixture, role, &bounded);
+    assert_exact_runner_error(
+        &fixture,
+        "same-inode-mutation",
+        "frozen executable pathname digest drifted",
+    );
+    let after = std::fs::metadata(&target).unwrap();
+    assert_eq!((after.dev(), after.ino()), before_identity);
+    assert_eq!(after.len(), before.len());
+    assert_eq!(sha256_path(&target), sha256_hex(&mutated));
 }
 
 #[test]
@@ -2536,13 +3229,18 @@ fn assert_stable_tool_replacement(
     let replacement = fixture.root.join(format!("{name}.replacement"));
     install_replacement_attacker(&replacement, &marker);
     let replacement_identity = file_identity(&replacement);
-    let attack = StableReplacement {
+    let attack = StablePathAttack {
+        watched_path: target.clone(),
+        watched_identity: Some(opened_identity),
+        nested_identity_path: None,
         target: target.clone(),
         replacement,
-        opened_identity,
+        kind: StablePathAttackKind::Rename,
     };
-    let injected = injected_environment.map(|key| (key, target.as_path()));
-    let bounded = run_direct_wu0g_with(&fixture, "replacement", injected, Some(&attack));
+    let injected = injected_environment
+        .map(|key| vec![(key, target.as_path())])
+        .unwrap_or_default();
+    let bounded = run_direct_wu0g_with(&fixture, "replacement", &injected, Some(&attack));
     assert!(
         bounded.replacement_performed,
         "{name} was not replaced after open"
@@ -2718,12 +3416,15 @@ fn wu0g_direct_route_rejects_path_alias_special_file_and_replacement_attacks() {
     let request_meta = std::fs::metadata(&replacement.request_path).unwrap();
     let attacker = replacement.root.join("replacement-request.attacker");
     create_exclusive(&attacker, b"attacker-request\n", false);
-    let attack = StableReplacement {
+    let attack = StablePathAttack {
+        watched_path: replacement.request_path.clone(),
+        watched_identity: Some((request_meta.dev(), request_meta.ino())),
+        nested_identity_path: None,
         target: replacement.request_path.clone(),
         replacement: attacker,
-        opened_identity: (request_meta.dev(), request_meta.ino()),
+        kind: StablePathAttackKind::Rename,
     };
-    let bounded = run_direct_wu0g_with(&replacement, "path", None, Some(&attack));
+    let bounded = run_direct_wu0g_with(&replacement, "path", &[], Some(&attack));
     assert!(bounded.replacement_performed);
     assert_rejected_before_launch(&replacement, "request replacement", &bounded);
 
