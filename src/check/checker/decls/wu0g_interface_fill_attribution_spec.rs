@@ -3268,12 +3268,7 @@ fn feature_surface_is_reverse_closed_and_preserves_the_original_apply_call_graph
         &substitution[fallback_guard_end..],
         "macro_rules! wu0g_record",
     );
-    for counter_arm in [
-        "visit_enter",
-        "visit_exit",
-        "cycle_reentry",
-        "object_copy",
-    ] {
+    for counter_arm in ["visit_enter", "visit_exit", "cycle_reentry", "object_copy"] {
         assert_eq!(
             compact(macro_arm_body(fallback, counter_arm)),
             "{}",

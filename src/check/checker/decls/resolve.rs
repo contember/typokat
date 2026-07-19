@@ -1034,11 +1034,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         group: TypeGroupId,
         template: TypeId,
         parameters: &[TypeParamId],
-        map: &FxHashMap<TypeParamId, TypeId>,
+        substitution_map: &FxHashMap<TypeParamId, TypeId>,
     ) -> TypeId {
-        match self
-            .substitute_ready_type_group_application_with_outcome(group, template, parameters, map)
-        {
+        match self.substitute_ready_type_group_application_with_outcome(
+            group,
+            template,
+            parameters,
+            substitution_map,
+        ) {
             SubstitutionOutcome::CycleClean(result) | SubstitutionOutcome::CycleTainted(result) => {
                 result
             }
@@ -1050,22 +1053,27 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         group: TypeGroupId,
         template: TypeId,
         parameters: &[TypeParamId],
-        map: &FxHashMap<TypeParamId, TypeId>,
+        ready_application_substitution_map: &FxHashMap<TypeParamId, TypeId>,
     ) -> SubstitutionOutcome {
         #[cfg(not(test))]
         let _ = group;
-        if parameters.is_empty() || map.len() != parameters.len() {
+        if parameters.is_empty() || ready_application_substitution_map.len() != parameters.len() {
             #[cfg(test)]
             record_eager_application_cache_measure(
                 &self.eager_application_cache_measure,
                 |measure| measure.unready_bypasses += 1,
             );
-            return substitute_with_outcome(self.interner, template, map);
+            return substitute_with_outcome(
+                self.interner,
+                template,
+                ready_application_substitution_map,
+            );
         }
         let Some(arguments) = parameters
             .iter()
             .map(|parameter| {
-                map.get(parameter)
+                ready_application_substitution_map
+                    .get(parameter)
                     .copied()
                     .map(|argument| (*parameter, argument))
             })
@@ -1076,7 +1084,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 &self.eager_application_cache_measure,
                 |measure| measure.unready_bypasses += 1,
             );
-            return substitute_with_outcome(self.interner, template, map);
+            return substitute_with_outcome(
+                self.interner,
+                template,
+                ready_application_substitution_map,
+            );
         };
 
         let tag = self.interner.store().tag(template);
@@ -1096,10 +1108,26 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 &self.eager_application_cache_measure,
                 |measure| measure.lazy_bypasses += 1,
             );
-            return substitute_with_outcome(self.interner, template, map);
+            return substitute_with_outcome(
+                self.interner,
+                template,
+                ready_application_substitution_map,
+            );
         }
 
         let key = (template, arguments);
+        #[cfg(all(
+            test,
+            feature = "wu0-interface-fill-attribution",
+            not(feature = "wu0-uninstrumented-control")
+        ))]
+        if let Some(outcome) = self.wu0g_application_resolve(
+            template,
+            key.1.clone(),
+            ready_application_substitution_map,
+        ) {
+            return outcome;
+        }
         #[cfg(test)]
         record_eager_application_cache_measure(&self.eager_application_cache_measure, |measure| {
             measure.lookups += 1;
@@ -1140,7 +1168,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 let Some(cycle_tainted_application_cache) =
                     self.cycle_tainted_application_cache.as_mut()
                 else {
-                    return substitute_with_outcome(self.interner, template, map);
+                    return substitute_with_outcome(
+                        self.interner,
+                        template,
+                        ready_application_substitution_map,
+                    );
                 };
                 record_cycle_tainted_application_cache_measure(
                     &self.cycle_tainted_application_cache_measure,
@@ -1166,8 +1198,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
             }
 
-            let (outcome, visit_measure) =
-                substitute_with_run_visit_measure(self.interner, template, map);
+            let (outcome, visit_measure) = substitute_with_run_visit_measure(
+                self.interner,
+                template,
+                ready_application_substitution_map,
+            );
             record_cycle_tainted_application_cache_measure(
                 &self.cycle_tainted_application_cache_measure,
                 |measure| {
@@ -1238,7 +1273,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             };
         }
 
-        match substitute_with_outcome(self.interner, template, map) {
+        match substitute_with_outcome(self.interner, template, ready_application_substitution_map) {
             SubstitutionOutcome::CycleClean(result) => {
                 self.eager_application_cache.insert(key, result);
                 #[cfg(test)]

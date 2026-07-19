@@ -13,6 +13,11 @@ edition = "2021"
 name = "typokat"
 path = "src/lib.rs"
 
+[features]
+default = []
+wu0-interface-fill-attribution = []
+wu0-uninstrumented-control = []
+
 [[bin]]
 name = "typokat"
 path = "src/main.rs"
@@ -48,4 +53,4 @@ sha2 = "0.10.9"
 toml = "0.8.23"
 
 [target.'cfg(unix)'.dev-dependencies]
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix = { version = "1.1.4", features = ["fs", "thread"] }

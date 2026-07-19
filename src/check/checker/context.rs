@@ -193,7 +193,7 @@ impl<Ticket: Copy> CheckerRecordBatch<Ticket> {
     }
 
     #[cfg(test)]
-    fn records(&self) -> &[CheckerRecord] {
+    pub(in crate::check::checker) fn records(&self) -> &[CheckerRecord] {
         &self.records
     }
 }
@@ -792,6 +792,13 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     #[cfg(test)]
     pub(in crate::check::checker) wu0c_attribution:
         Option<super::wu0c_attribution::PassAttribution>,
+    #[cfg(all(
+        test,
+        feature = "wu0-interface-fill-attribution",
+        not(feature = "wu0-uninstrumented-control")
+    ))]
+    pub(in crate::check::checker) wu0g_attribution:
+        Option<super::decls::wu0g_interface_fill_attribution::InterfaceFillAttributionCollector>,
     /// The module scope currently being checked.
     /// Disambiguates span-start keyed lookups for scopes and flow. Correct only
     /// while bodies are walked per module; lazy cross-module inference would

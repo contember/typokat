@@ -198,6 +198,100 @@ fn record_substitution_run_visit(collector: &SubstitutionRunVisitMeasureCollecto
     }
 }
 
+#[cfg(all(
+    test,
+    feature = "wu0-interface-fill-attribution",
+    not(feature = "wu0-uninstrumented-control")
+))]
+mod wu0g;
+
+#[cfg(all(
+    test,
+    feature = "wu0-interface-fill-attribution",
+    not(feature = "wu0-uninstrumented-control")
+))]
+macro_rules! wu0g_record {
+    (interner_attempt $substitution:expr, $interner:expr; $expression:expr) => {{
+        let before = $interner.store().len();
+        let result = $expression;
+        let after = $interner.store().len();
+        $substitution.wu0g.record_interner_attempt(before, after);
+        result
+    }};
+    (visit_enter $substitution:expr) => {{
+        $substitution.wu0g.record_visit_enter();
+    }};
+    (visit_exit $substitution:expr) => {{
+        $substitution.wu0g.record_visit_exit();
+    }};
+    (cycle_reentry $substitution:expr) => {{
+        $substitution.wu0g.record_cycle_reentry();
+    }};
+    (object_copy $substitution:expr, $name_lengths:expr, $properties:expr, $calls:expr, $constructs:expr) => {{
+        $substitution
+            .wu0g
+            .record_object_copy($name_lengths, $properties, $calls, $constructs);
+    }};
+    (mapped_nested) => {
+        substitute_with_outcome(interner, ty, &member_map)
+    };
+    (mapped_nested_runtime $substitution:expr, $interner:expr, $ty:expr, $member_map:expr) => {{
+        let mut nested = Substitution::new(&$member_map);
+        let result = nested.apply($interner, $ty);
+        if let Some(attribution) = nested.wu0c_attribution.as_ref() {
+            attribution.finish_run();
+        }
+        let outcome = if nested.cycle_epoch == 0 {
+            SubstitutionOutcome::CycleClean(result)
+        } else {
+            SubstitutionOutcome::CycleTainted(result)
+        };
+        $substitution.wu0g.merge_from(nested.wu0g);
+        outcome
+    }};
+    (define_application_entrypoint) => {
+        pub(crate) fn wu0g_application_substitute_with_outcome(
+            interner: &mut Interner,
+            ty: TypeId,
+            map: &FxHashMap<TypeParamId, TypeId>,
+        ) -> (SubstitutionOutcome, ([u64; 11], bool)) {
+            let mut substitution = Substitution::new(map);
+            let result = substitution.apply(interner, ty);
+            if let Some(attribution) = substitution.wu0c_attribution.as_ref() {
+                attribution.finish_run();
+            }
+            let outcome = if substitution.cycle_epoch == 0 {
+                SubstitutionOutcome::CycleClean(result)
+            } else {
+                SubstitutionOutcome::CycleTainted(result)
+            };
+            (outcome, substitution.wu0g.into_parts())
+        }
+    };
+}
+
+#[cfg(not(all(
+    test,
+    feature = "wu0-interface-fill-attribution",
+    not(feature = "wu0-uninstrumented-control")
+)))]
+macro_rules! wu0g_record {
+    (interner_attempt $substitution:expr, $interner:expr; $expression:expr) => {{
+        $expression
+    }};
+    (visit_enter $substitution:expr) => {};
+    (visit_exit $substitution:expr) => {};
+    (cycle_reentry $substitution:expr) => {};
+    (object_copy $substitution:expr, $name_lengths:expr, $properties:expr, $calls:expr, $constructs:expr) => {};
+    (mapped_nested) => {
+        substitute_with_outcome(interner, ty, &member_map)
+    };
+    (mapped_nested_runtime $substitution:expr, $interner:expr, $ty:expr, $member_map:expr) => {{
+        substitute_with_outcome($interner, $ty, &$member_map)
+    }};
+    (define_application_entrypoint) => {};
+}
+
 mod apply;
 #[cfg(test)]
 mod completed_memo_spec;
@@ -236,6 +330,12 @@ pub struct Substitution<'a> {
     run_visit_measurement: Option<SubstitutionRunVisitMeasureCollector>,
     #[cfg(test)]
     wu0c_attribution: Option<crate::check::checker::SubstitutionAttribution>,
+    #[cfg(all(
+        test,
+        feature = "wu0-interface-fill-attribution",
+        not(feature = "wu0-uninstrumented-control")
+    ))]
+    wu0g: wu0g::SubstitutionAccumulator,
 }
 
 impl<'a> Substitution<'a> {
@@ -259,6 +359,12 @@ impl<'a> Substitution<'a> {
             run_visit_measurement,
             #[cfg(test)]
             wu0c_attribution,
+            #[cfg(all(
+                test,
+                feature = "wu0-interface-fill-attribution",
+                not(feature = "wu0-uninstrumented-control")
+            ))]
+            wu0g: wu0g::SubstitutionAccumulator::default(),
         }
     }
 
@@ -272,134 +378,148 @@ impl<'a> Substitution<'a> {
             return ty;
         }
 
-        #[cfg(test)]
-        if let Some(collector) = self.measurement.as_ref() {
-            measure_substitution_visit(collector, ty, &self.blocked);
-        }
-        #[cfg(test)]
-        if let Some(collector) = self.run_visit_measurement.as_ref() {
-            record_substitution_run_visit(collector, false);
-        }
-        #[cfg(test)]
-        let wu0c_visit = self
-            .wu0c_attribution
-            .as_ref()
-            .and_then(|attribution| attribution.enter_visit(ty, &self.blocked));
-
-        // Raw-id re-entry must win over a completed result under any blocked
-        // context; returning the original id is the existing cycle semantics.
-        if self.in_progress.contains(&ty) {
-            self.cycle_epoch += 1;
+        wu0g_record!(visit_enter self);
+        let result = 'apply: {
             #[cfg(test)]
             if let Some(collector) = self.measurement.as_ref() {
-                measure_substitution(collector, |measure| measure.cycle_reentries += 1);
-            }
-            #[cfg(test)]
-            if let (Some(attribution), Some(visit)) = (self.wu0c_attribution.as_ref(), wu0c_visit) {
-                attribution.finish_cycle_visit(visit);
-            }
-            return ty;
-        }
-
-        let key = (ty, self.canonical_blocked_context());
-        if let Some(&result) = self.completed.get(&key) {
-            #[cfg(test)]
-            if let Some(collector) = self.measurement.as_ref() {
-                measure_substitution(collector, |measure| measure.completed_memo_hits += 1);
+                measure_substitution_visit(collector, ty, &self.blocked);
             }
             #[cfg(test)]
             if let Some(collector) = self.run_visit_measurement.as_ref() {
-                let mut measure = collector.borrow_mut();
-                measure.completed_memo_hits = match measure.completed_memo_hits.checked_add(1) {
-                    Some(value) => value,
-                    None => {
-                        measure.saturated = true;
-                        u64::MAX
-                    }
-                };
+                record_substitution_run_visit(collector, false);
             }
             #[cfg(test)]
-            if let (Some(attribution), Some(visit)) = (self.wu0c_attribution.as_ref(), wu0c_visit) {
-                attribution.finish_memo_visit(visit);
-            }
-            return result;
-        }
+            let wu0c_visit = self
+                .wu0c_attribution
+                .as_ref()
+                .and_then(|attribution| attribution.enter_visit(ty, &self.blocked));
 
-        let start_cycle_epoch = self.cycle_epoch;
-        let result = match interner.store().tag(ty) {
-            // A type parameter: replace it with its argument if mapped; otherwise
-            // (a parameter from an *outer* scope, not part of this substitution)
-            // leave it untouched.
-            TypeTag::TypeParam => {
-                let param_id = interner.store().type_param(ty).map(|p| p.id);
+            // Raw-id re-entry must win over a completed result under any blocked
+            // context; returning the original id is the existing cycle semantics.
+            if self.in_progress.contains(&ty) {
+                self.cycle_epoch += 1;
+                wu0g_record!(cycle_reentry self);
                 #[cfg(test)]
                 if let Some(collector) = self.measurement.as_ref() {
-                    if param_id.is_some_and(|id| self.blocked.contains(&id)) {
-                        measure_substitution(collector, |measure| {
-                            measure.blocked_type_param_hits += 1;
-                        });
-                    }
+                    measure_substitution(collector, |measure| measure.cycle_reentries += 1);
                 }
-                match param_id
-                    .filter(|id| !self.blocked.contains(id))
-                    .and_then(|id| self.map.get(&id).copied())
+                #[cfg(test)]
+                if let (Some(attribution), Some(visit)) =
+                    (self.wu0c_attribution.as_ref(), wu0c_visit)
                 {
-                    Some(arg) => {
-                        #[cfg(test)]
-                        if let Some(collector) = self.measurement.as_ref() {
+                    attribution.finish_cycle_visit(visit);
+                }
+                break 'apply ty;
+            }
+
+            let key = (ty, self.canonical_blocked_context());
+            if let Some(&result) = self.completed.get(&key) {
+                #[cfg(test)]
+                if let Some(collector) = self.measurement.as_ref() {
+                    measure_substitution(collector, |measure| measure.completed_memo_hits += 1);
+                }
+                #[cfg(test)]
+                if let Some(collector) = self.run_visit_measurement.as_ref() {
+                    let mut measure = collector.borrow_mut();
+                    measure.completed_memo_hits = match measure.completed_memo_hits.checked_add(1) {
+                        Some(value) => value,
+                        None => {
+                            measure.saturated = true;
+                            u64::MAX
+                        }
+                    };
+                }
+                #[cfg(test)]
+                if let (Some(attribution), Some(visit)) =
+                    (self.wu0c_attribution.as_ref(), wu0c_visit)
+                {
+                    attribution.finish_memo_visit(visit);
+                }
+                break 'apply result;
+            }
+
+            let start_cycle_epoch = self.cycle_epoch;
+            let result = match interner.store().tag(ty) {
+                // A type parameter: replace it with its argument if mapped; otherwise
+                // (a parameter from an *outer* scope, not part of this substitution)
+                // leave it untouched.
+                TypeTag::TypeParam => {
+                    let param_id = interner.store().type_param(ty).map(|p| p.id);
+                    #[cfg(test)]
+                    if let Some(collector) = self.measurement.as_ref() {
+                        if param_id.is_some_and(|id| self.blocked.contains(&id)) {
                             measure_substitution(collector, |measure| {
-                                measure.type_param_map_hits += 1;
+                                measure.blocked_type_param_hits += 1;
                             });
                         }
-                        arg
                     }
-                    None => ty,
+                    match param_id
+                        .filter(|id| !self.blocked.contains(id))
+                        .and_then(|id| self.map.get(&id).copied())
+                    {
+                        Some(arg) => {
+                            #[cfg(test)]
+                            if let Some(collector) = self.measurement.as_ref() {
+                                measure_substitution(collector, |measure| {
+                                    measure.type_param_map_hits += 1;
+                                });
+                            }
+                            arg
+                        }
+                        None => ty,
+                    }
+                }
+                // Intrinsics and literals contain no type parameter — identity.
+                TypeTag::Intrinsic | TypeTag::Literal => ty,
+                TypeTag::Object => self.apply_object(interner, ty),
+                TypeTag::Function => self.apply_function(interner, ty),
+                TypeTag::Union => self.apply_union(interner, ty),
+                TypeTag::Intersection => self.apply_intersection(interner, ty),
+                TypeTag::Array => self.apply_array(interner, ty),
+                TypeTag::Tuple => self.apply_tuple(interner, ty),
+                TypeTag::Readonly => self.apply_readonly(interner, ty),
+                TypeTag::Conditional => self.apply_conditional(interner, ty),
+                TypeTag::Instantiation => self.apply_instantiation(interner, ty),
+                TypeTag::ClassInstance => self.apply_class_instance(interner, ty),
+                TypeTag::Mapped => self.apply_mapped(interner, ty),
+                TypeTag::Template => self.apply_template(interner, ty),
+                TypeTag::Keyof => self.apply_keyof(interner, ty),
+                TypeTag::DeferredIndexedAccess => self.apply_deferred_indexed_access(interner, ty),
+                // An `infer` binder (M25) / a mapped-value placeholder (M26) is a **bound**
+                // node-scoped variable, never a free declaration parameter — the no-capture
+                // rule (ADR-0002): substitution must leave it alone (the evaluator resolves
+                // it, not this pass).
+                TypeTag::Infer | TypeTag::MappedValue => ty,
+            };
+
+            if self.cycle_epoch == start_cycle_epoch {
+                self.completed.insert(key, result);
+                #[cfg(test)]
+                if let Some(collector) = self.measurement.as_ref() {
+                    measure_substitution(collector, |measure| measure.completed_memo_entries += 1);
+                }
+                #[cfg(test)]
+                if let (Some(attribution), Some(visit)) =
+                    (self.wu0c_attribution.as_ref(), wu0c_visit)
+                {
+                    attribution.finish_clean_visit(visit);
+                }
+            } else {
+                #[cfg(test)]
+                if let Some(collector) = self.measurement.as_ref() {
+                    measure_substitution(collector, |measure| measure.cycle_tainted_skips += 1);
+                }
+                #[cfg(test)]
+                if let (Some(attribution), Some(visit)) =
+                    (self.wu0c_attribution.as_ref(), wu0c_visit)
+                {
+                    attribution.finish_tainted_visit(visit);
                 }
             }
-            // Intrinsics and literals contain no type parameter — identity.
-            TypeTag::Intrinsic | TypeTag::Literal => ty,
-            TypeTag::Object => self.apply_object(interner, ty),
-            TypeTag::Function => self.apply_function(interner, ty),
-            TypeTag::Union => self.apply_union(interner, ty),
-            TypeTag::Intersection => self.apply_intersection(interner, ty),
-            TypeTag::Array => self.apply_array(interner, ty),
-            TypeTag::Tuple => self.apply_tuple(interner, ty),
-            TypeTag::Readonly => self.apply_readonly(interner, ty),
-            TypeTag::Conditional => self.apply_conditional(interner, ty),
-            TypeTag::Instantiation => self.apply_instantiation(interner, ty),
-            TypeTag::ClassInstance => self.apply_class_instance(interner, ty),
-            TypeTag::Mapped => self.apply_mapped(interner, ty),
-            TypeTag::Template => self.apply_template(interner, ty),
-            TypeTag::Keyof => self.apply_keyof(interner, ty),
-            TypeTag::DeferredIndexedAccess => self.apply_deferred_indexed_access(interner, ty),
-            // An `infer` binder (M25) / a mapped-value placeholder (M26) is a **bound**
-            // node-scoped variable, never a free declaration parameter — the no-capture
-            // rule (ADR-0002): substitution must leave it alone (the evaluator resolves
-            // it, not this pass).
-            TypeTag::Infer | TypeTag::MappedValue => ty,
+
+            result
         };
-
-        if self.cycle_epoch == start_cycle_epoch {
-            self.completed.insert(key, result);
-            #[cfg(test)]
-            if let Some(collector) = self.measurement.as_ref() {
-                measure_substitution(collector, |measure| measure.completed_memo_entries += 1);
-            }
-            #[cfg(test)]
-            if let (Some(attribution), Some(visit)) = (self.wu0c_attribution.as_ref(), wu0c_visit) {
-                attribution.finish_clean_visit(visit);
-            }
-        } else {
-            #[cfg(test)]
-            if let Some(collector) = self.measurement.as_ref() {
-                measure_substitution(collector, |measure| measure.cycle_tainted_skips += 1);
-            }
-            #[cfg(test)]
-            if let (Some(attribution), Some(visit)) = (self.wu0c_attribution.as_ref(), wu0c_visit) {
-                attribution.finish_tainted_visit(visit);
-            }
-        }
-
+        wu0g_record!(visit_exit self);
         result
     }
 
@@ -457,6 +577,8 @@ pub(crate) fn substitute_with_outcome(
         SubstitutionOutcome::CycleTainted(result)
     }
 }
+
+wu0g_record!(define_application_entrypoint);
 
 /// Instantiate a generic function's own binders for one call candidate.
 ///

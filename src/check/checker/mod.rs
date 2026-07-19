@@ -2072,6 +2072,12 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         panic_before_cycle_tainted_application_cache_publish: false,
         #[cfg(test)]
         wu0c_attribution: wu0c_attribution::capture_wu0c_pass_attribution(),
+        #[cfg(all(
+            test,
+            feature = "wu0-interface-fill-attribution",
+            not(feature = "wu0-uninstrumented-control")
+        ))]
+        wu0g_attribution: None,
         // Overwritten before each module's fill/flow/check phase; the user module is
         // the single-file default (backlog 58).
         current_module: binder.module,

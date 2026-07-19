@@ -34,6 +34,18 @@ mod eager_application_cache_spec;
 mod interface;
 mod params;
 mod resolve;
+#[cfg(all(
+    test,
+    feature = "wu0-interface-fill-attribution",
+    not(feature = "wu0-uninstrumented-control")
+))]
+pub(in crate::check::checker) mod wu0g_interface_fill_attribution;
+#[cfg(all(
+    test,
+    feature = "wu0-interface-fill-attribution",
+    not(feature = "wu0-uninstrumented-control")
+))]
+mod wu0g_interface_fill_attribution_spec;
 
 struct InterfaceOwnMemberOwners<Ticket: Copy> {
     properties: BTreeMap<String, (Ticket, Span)>,
@@ -1350,9 +1362,25 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut deferred = Vec::new();
             for component in remaining {
                 if self.interface_component_is_ready(&component, &topology) {
+                    #[cfg(all(
+                        test,
+                        feature = "wu0-interface-fill-attribution",
+                        not(feature = "wu0-uninstrumented-control")
+                    ))]
+                    if !self.wu0g_admit_component_before_construction(&component) {
+                        return;
+                    }
                     let cyclic_heritage =
                         interface_component_has_cycle(&self.type_decls, &component, &topology);
                     self.construct_interface_component(&component, cyclic_heritage, &topology);
+                    #[cfg(all(
+                        test,
+                        feature = "wu0-interface-fill-attribution",
+                        not(feature = "wu0-uninstrumented-control")
+                    ))]
+                    if self.wu0g_record_component_boundary(&component) {
+                        return;
+                    }
                     progressed = true;
                 } else {
                     deferred.push(component);
