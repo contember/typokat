@@ -255,7 +255,11 @@ fn generic_binder_cross_context_cycle_is_cached_with_fresh_oracle_parity() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
     let id = TypeParamId(99_130);
+    let free_id = TypeParamId(99_131);
     let parameter = interner.intern_type_param(id, "T");
+    // A second mapped param that the binder does NOT shadow keeps the cycle
+    // param-relevant, so the substitution prefilter cannot prove it identity.
+    let free_parameter = interner.intern_type_param(free_id, "U");
     let recursive = interner.reserve_object();
     let back_edge = interner.intern_function(FunctionType {
         type_params: vec![GenericTypeParam {
@@ -264,7 +268,10 @@ fn generic_binder_cross_context_cycle_is_cached_with_fresh_oracle_parity() {
             default: None,
         }],
         receiver: None,
-        params: vec![ParameterType::required("self", recursive)],
+        params: vec![
+            ParameterType::required("self", recursive),
+            ParameterType::required("keep", free_parameter),
+        ],
         ret: parameter,
     });
     interner.fill_object(
@@ -276,12 +283,12 @@ fn generic_binder_cross_context_cycle_is_cached_with_fresh_oracle_parity() {
     );
     let array = interner.intern_array(recursive);
     let root = interner.intern_tuple(vec![array]);
-    let map = FxHashMap::from_iter([(id, wk.number)]);
+    let map = FxHashMap::from_iter([(id, wk.number), (free_id, wk.boolean)]);
     let oracle = substitute_with_outcome(&mut interner, root, &map);
     let _scope = start_cycle_tainted_application_cache_measure();
     let mut pass = pass(&mut interner, &binder);
-    let first = apply(&mut pass, 3, root, &[id], &map);
-    let hit = apply(&mut pass, 3, root, &[id], &map);
+    let first = apply(&mut pass, 3, root, &[id, free_id], &map);
+    let hit = apply(&mut pass, 3, root, &[id, free_id], &map);
     assert_eq!(assert_tainted(first), assert_tainted(oracle));
     assert_eq!(assert_tainted(hit), assert_tainted(oracle));
     let measure = cycle_tainted_application_cache_measure().expect("scope active");

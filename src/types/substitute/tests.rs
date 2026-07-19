@@ -847,18 +847,25 @@ fn measure_substitution_distinguishes_exact_blocked_context_repeats() {
         (result, measure)
     };
     assert_ne!(result, adversary);
-    assert_eq!(measure.apply_visits, 10);
-    assert_eq!(measure.type_id_repeats, 5);
-    assert_eq!(measure.exact_context_repeats, 3);
+    // Prefilter: the wrapper subtree is fully shadowed (free {T} − binder T = ∅)
+    // and skipped, dropping its 5 visits (wrapper, shared@[T], t@[T]×2, void).
+    assert_eq!(measure.apply_visits, 5);
+    // Prefilter: only t and shared repeat once each at the empty context now.
+    assert_eq!(measure.type_id_repeats, 2);
+    assert_eq!(measure.exact_context_repeats, 2);
     assert_eq!(measure.type_param_map_hits, 1);
-    assert_eq!(measure.blocked_type_param_hits, 1);
+    // Prefilter: the blocked leaf inside the skipped wrapper is never reached.
+    assert_eq!(measure.blocked_type_param_hits, 0);
     assert_eq!(measure.cycle_reentries, 0);
-    assert_eq!(measure.completed_memo_entries, 7);
-    assert_eq!(measure.completed_memo_hits, 3);
+    // Prefilter: the skipped subtree's 4 entries (wrapper, shared@[T], t@[T], void) are gone.
+    assert_eq!(measure.completed_memo_entries, 3);
+    // Prefilter: the former t@[T] reuse is now inside the skip (t@[] and shared@[] remain).
+    assert_eq!(measure.completed_memo_hits, 2);
     assert_eq!(measure.cycle_tainted_skips, 0);
-    assert!(
-        measure.exact_context_repeats < measure.type_id_repeats,
-        "the shared function is visited under both empty and blocked binder contexts"
+    // Prefilter: with no blocked-context revisit, both repeat counters agree.
+    assert_eq!(
+        measure.exact_context_repeats, measure.type_id_repeats,
+        "the shared function is only ever visited under the empty context now"
     );
 
     let recursive = interner.reserve_object();
@@ -875,13 +882,16 @@ fn measure_substitution_distinguishes_exact_blocked_context_repeats() {
         assert_eq!(substitution.apply(&mut interner, recursive), recursive);
         super::substitution_measure().expect("the counter scope must remain enabled")
     };
-    assert_eq!(cycle.apply_visits, 2);
-    assert_eq!(cycle.type_id_repeats, 1);
-    assert_eq!(cycle.exact_context_repeats, 1);
-    assert_eq!(cycle.cycle_reentries, 1);
+    // Prefilter: the param-free self-cycle is proven identity without opening a
+    // single frame, so every walk-derived counter drops to zero (was 2/1/1/1/0/0/1).
+    assert_eq!(cycle.apply_visits, 0);
+    assert_eq!(cycle.type_id_repeats, 0);
+    assert_eq!(cycle.exact_context_repeats, 0);
+    assert_eq!(cycle.cycle_reentries, 0);
     assert_eq!(cycle.completed_memo_entries, 0);
     assert_eq!(cycle.completed_memo_hits, 0);
-    assert_eq!(cycle.cycle_tainted_skips, 1);
+    assert_eq!(cycle.cycle_tainted_skips, 0);
+    assert!(cycle.prefilter_skips >= 1);
 }
 
 #[test]

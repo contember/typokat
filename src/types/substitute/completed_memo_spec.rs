@@ -125,15 +125,18 @@ fn completed_memo_canonicalizes_irrelevant_blockers_and_binder_order() {
             .expect("every tuple element remains a generic wrapper");
         assert_eq!(function.params[0].ty, expected_shared);
     }
+    // Prefilter: the param-free `void` leaf is skipped under both contexts (−2 entries).
     assert_eq!(
-        measure.completed_memo_entries, 11,
+        measure.completed_memo_entries, 9,
         "U/V share the empty context while A/B and B/A share one sorted context"
     );
+    // Prefilter: the two former `void` reuses are now skips, not memo hits (−2 hits).
     assert_eq!(
-        measure.completed_memo_hits, 4,
-        "each equal-context wrapper pair reuses the shared child and void leaf"
+        measure.completed_memo_hits, 2,
+        "each equal-context wrapper pair reuses the shared child"
     );
-    assert_eq!(measure.apply_visits, 15);
+    // 9 entries + 2 hits (the `void` leaf no longer counts as 4 of the old 15 visits).
+    assert_eq!(measure.apply_visits, 11);
     assert_eq!(
         measure.apply_visits,
         measure.completed_memo_entries + measure.completed_memo_hits,
@@ -191,11 +194,18 @@ fn completed_memo_keys_include_blocked_generic_binder_context() {
     );
     assert_eq!(tuple.elements[2], shared_number);
     assert!(measure.completed_memo_hits >= 1);
-    assert!(measure.blocked_type_param_hits >= 1);
+    // Prefilter: the wrapper's whole subtree is shadowed (free set {T} − binder T = ∅),
+    // so the blocked-context walk — and its blocked leaf hit — no longer happens.
+    assert_eq!(measure.blocked_type_param_hits, 0);
     assert!(measure.type_param_map_hits >= 1);
     assert!(
-        measure.type_id_repeats > measure.exact_context_repeats,
-        "one raw TypeId is visited under both empty and blocked contexts"
+        measure.prefilter_skips >= 1,
+        "the shadowed wrapper is skipped"
+    );
+    // Prefilter: with no blocked-context revisit, raw-id and exact-context repeats agree.
+    assert_eq!(
+        measure.type_id_repeats, measure.exact_context_repeats,
+        "the shared function is only ever visited under the empty context now"
     );
     assert_eq!(measure.cycle_tainted_skips, 0);
 }
@@ -280,15 +290,14 @@ fn completed_memo_never_publishes_cross_context_cycle_ancestors() {
     let after_first = substitution_measure().expect("the counter scope must remain enabled");
 
     assert_ne!(first, root, "the mapped acyclic sibling still rewrites");
-    assert_eq!(after_first.cycle_reentries, 1);
-    assert_eq!(
-        after_first.cycle_tainted_skips, 4,
-        "the generic function, recursive object, array, and root tuple are all tainted"
-    );
-    assert_eq!(
-        after_first.completed_memo_entries, 2,
-        "only T under the blocked and empty exact contexts may be memoized"
-    );
+    // Prefilter: at `self` the whole cycle is shadowed (recursive's free set {T}
+    // − blocked {T} = ∅), so the back edge is skipped and no re-entry remains.
+    assert_eq!(after_first.cycle_reentries, 0);
+    // Prefilter: with no re-entry, no frame is tainted (was 4).
+    assert_eq!(after_first.cycle_tainted_skips, 0);
+    // Prefilter: the run is clean, so back_edge/recursive/array/root complete
+    // alongside the empty-context T leaf (the blocked-context leaf is skipped).
+    assert_eq!(after_first.completed_memo_entries, 5);
     assert_eq!(after_first.completed_memo_hits, 0);
 
     let second = substitution.apply(&mut interner, root);
@@ -297,22 +306,16 @@ fn completed_memo_never_publishes_cross_context_cycle_ancestors() {
         second, first,
         "re-entry must preserve the existing result shape"
     );
-    // The cycle-scoped tainted memo replays the back-edge frame on the second
-    // apply (its re-entered cycle root is live again), so no second re-entry.
-    assert_eq!(
-        after_second.cycle_reentries, 1,
-        "the tainted-memo hit replays the back-edge without a second re-entry"
-    );
-    assert_eq!(after_second.cycle_tainted_skips, 7);
+    // Prefilter: still no re-entry on the second apply (was 1).
+    assert_eq!(after_second.cycle_reentries, 0);
+    // Prefilter: still no tainted frame on the second apply (was 7).
+    assert_eq!(after_second.cycle_tainted_skips, 0);
     assert_eq!(
         after_second.completed_memo_entries, after_first.completed_memo_entries,
-        "no tainted ancestor was published between top-level applies"
+        "no further entry was published between top-level applies"
     );
-    // The blocked-context T leaf stays behind the tainted hit on the second walk.
-    assert_eq!(
-        after_second.completed_memo_hits, 1,
-        "only the empty-context T leaf is re-walked on the second traversal"
-    );
+    // The second apply short-circuits at the completed root entry (one hit).
+    assert_eq!(after_second.completed_memo_hits, 1);
     assert!(after_second.apply_visits > after_first.apply_visits);
 
     let root_tuple = interner
@@ -343,7 +346,9 @@ fn completed_memo_never_publishes_cross_context_cycle_ancestors() {
 fn completed_memo_bounds_message_event_target_fanout_by_unique_contexts() {
     const HANDLER_COUNT: usize = 64;
     const HANDLER_COUNT_U64: u64 = 64;
-    const UNIQUE_EXACT_CONTEXTS: u64 = 9;
+    // Prefilter: port_method/void/message_port/message_ports are param-free and
+    // skipped without entries, leaving 5 of the former 9 unique contexts.
+    const UNIQUE_EXACT_CONTEXTS: u64 = 5;
 
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
@@ -393,9 +398,11 @@ fn completed_memo_bounds_message_event_target_fanout_by_unique_contexts() {
 
     assert_ne!(result, target);
     assert_eq!(measure.completed_memo_entries, UNIQUE_EXACT_CONTEXTS);
+    // Prefilter: the param-free port surface is skipped, not memo-reused, leaving
+    // the 63 repeated-handler reuses of the 64-handler fanout.
     assert!(
-        measure.completed_memo_hits >= HANDLER_COUNT_U64,
-        "registration fanout and the shared port surface must reuse completed contexts"
+        measure.completed_memo_hits >= HANDLER_COUNT_U64 - 1,
+        "registration fanout must reuse completed contexts"
     );
     assert_eq!(
         measure.apply_visits,

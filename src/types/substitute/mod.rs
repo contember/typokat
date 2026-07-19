@@ -5,7 +5,7 @@
 //! instantiation remains out of scope.
 
 use crate::types::repr::{FunctionType, TypeParamId, TypeTag};
-use crate::types::store::TypeId;
+use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -25,6 +25,7 @@ pub(super) struct SubstitutionMeasure {
     pub tainted_memo_entries: u64,
     pub tainted_memo_hits: u64,
     pub tainted_memo_stale_misses: u64,
+    pub prefilter_skips: u64,
     seen_type_ids: FxHashSet<TypeId>,
     seen_contexts: FxHashSet<(TypeId, Vec<TypeParamId>)>,
 }
@@ -46,6 +47,7 @@ impl std::fmt::Debug for SubstitutionMeasure {
             .field("tainted_memo_entries", &self.tainted_memo_entries)
             .field("tainted_memo_hits", &self.tainted_memo_hits)
             .field("tainted_memo_stale_misses", &self.tainted_memo_stale_misses)
+            .field("prefilter_skips", &self.prefilter_skips)
             .finish()
     }
 }
@@ -306,6 +308,8 @@ mod cycle_scoped_memo_spec;
 #[cfg(test)]
 mod measurement_scope_spec;
 #[cfg(test)]
+mod param_relevant_prefilter_spec;
+#[cfg(test)]
 mod tests;
 
 /// Whether a substitution completed without relying on the raw-id cycle guard.
@@ -336,6 +340,276 @@ fn tag_can_reenter(tag: TypeTag) -> bool {
     )
 }
 
+/// The prefilter tracks free params as a `u64` bitmask; larger maps walk instead.
+const PREFILTER_MAX_PARAMS: usize = 64;
+
+/// Visit exactly the child ids the `apply_*` arms recurse into — keep this in
+/// sync with `apply.rs` (like `tag_can_reenter`); the prefilter is only sound
+/// while these edges mirror the recursion.
+fn for_each_apply_child(store: &Store, ty: TypeId, mut visit: impl FnMut(TypeId)) {
+    match store.tag(ty) {
+        // Terminal arms: no recursion (a TypeParam's own id is handled by the caller).
+        TypeTag::TypeParam
+        | TypeTag::Intrinsic
+        | TypeTag::Literal
+        | TypeTag::Infer
+        | TypeTag::MappedValue => {}
+        TypeTag::Object => {
+            // Unfilled reserved objects have no accessor row → no children
+            // (sound: `apply_object` returns them untouched).
+            let Some(object) = store.object_type(ty) else {
+                return;
+            };
+            for property in &object.properties {
+                visit(property.ty);
+                if let Some(write_ty) = property.write_ty {
+                    visit(write_ty);
+                }
+            }
+            if let Some(index) = object.string_index {
+                visit(index);
+            }
+            if let Some(index) = object.number_index {
+                visit(index);
+            }
+            for &signature in object
+                .call_signatures
+                .iter()
+                .chain(&object.construct_signatures)
+            {
+                visit(signature);
+            }
+        }
+        TypeTag::Function => {
+            let Some(function) = store.function_type(ty) else {
+                return;
+            };
+            for param in &function.type_params {
+                if let Some(constraint) = param.constraint {
+                    visit(constraint);
+                }
+                if let Some(default) = param.default {
+                    visit(default);
+                }
+            }
+            for param in &function.params {
+                visit(param.ty);
+            }
+            if let Some(receiver) = function.receiver {
+                visit(receiver);
+            }
+            visit(function.ret);
+        }
+        TypeTag::Union => {
+            for &member in store.union_members(ty).unwrap_or(&[]) {
+                visit(member);
+            }
+        }
+        TypeTag::Intersection => {
+            for &member in store.intersection_members(ty).unwrap_or(&[]) {
+                visit(member);
+            }
+        }
+        TypeTag::Array => {
+            if let Some(array) = store.array_type(ty) {
+                visit(array.element);
+            }
+        }
+        TypeTag::Tuple => {
+            let Some(tuple) = store.tuple_type(ty) else {
+                return;
+            };
+            for &element in &tuple.elements {
+                visit(element);
+            }
+            if let Some(rest) = &tuple.rest {
+                visit(rest.ty);
+            }
+        }
+        TypeTag::Readonly => {
+            if let Some(operand) = store.readonly_operand(ty) {
+                visit(operand);
+            }
+        }
+        TypeTag::Keyof => {
+            if let Some(operand) = store.keyof_operand(ty) {
+                visit(operand);
+            }
+        }
+        TypeTag::DeferredIndexedAccess => {
+            if let Some(access) = store.deferred_indexed_access_type(ty) {
+                visit(access.object);
+                visit(access.index);
+            }
+        }
+        TypeTag::Template => {
+            if let Some(template) = store.template_type(ty) {
+                for &hole in &template.holes {
+                    visit(hole);
+                }
+            }
+        }
+        TypeTag::Conditional => {
+            if let Some(cond) = store.conditional_type(ty) {
+                visit(cond.check);
+                visit(cond.extends_ty);
+                visit(cond.true_branch);
+                visit(cond.false_branch);
+            }
+        }
+        TypeTag::Instantiation => {
+            // `apply_instantiation` composes into argument VALUES only — never the base.
+            if let Some(inst) = store.instantiation_type(ty) {
+                for &(_, value) in &inst.args {
+                    visit(value);
+                }
+            }
+        }
+        TypeTag::ClassInstance => {
+            if let Some(instance) = store.class_instance_type(ty) {
+                for &arg in &instance.args {
+                    visit(arg);
+                }
+            }
+        }
+        TypeTag::Mapped => {
+            if let Some(mapped) = store.mapped_type(ty) {
+                visit(mapped.key_source);
+                visit(mapped.value_template);
+                if let Some(modifiers_source) = mapped.modifiers_source {
+                    visit(modifiers_source);
+                }
+            }
+        }
+    }
+}
+
+/// One iterative-Tarjan DFS frame of [`compute_free_sets`].
+struct FreeSetFrame {
+    ty: TypeId,
+    children: Vec<TypeId>,
+    next_child: usize,
+    /// Bits of this node's own declared binders (Function only), masked at frame end.
+    binder_mask: u64,
+    bits: u64,
+    index: usize,
+    lowlink: usize,
+}
+
+/// Fill `free_sets` for every node reachable from `root` along the apply-child
+/// edges and return `root`'s mask: which `param_keys` occur free (a Function
+/// removes its own binder bits from its subtree; SCC members share their union,
+/// a sound over-approximation for binders inside a cycle). Iterative Tarjan —
+/// recursive DFS would risk stack overflow on deep graphs.
+fn compute_free_sets(
+    store: &Store,
+    param_keys: &[TypeParamId],
+    free_sets: &mut FxHashMap<TypeId, u64>,
+    root: TypeId,
+) -> u64 {
+    debug_assert!(param_keys.len() <= PREFILTER_MAX_PARAMS);
+    let bit_of = |id: TypeParamId| -> u64 {
+        param_keys
+            .binary_search(&id)
+            .map_or(0, |index| 1u64 << index)
+    };
+    let push_frame = |ty: TypeId, index: usize| -> FreeSetFrame {
+        let mut children = Vec::new();
+        for_each_apply_child(store, ty, |child| children.push(child));
+        let binder_mask = store.function_type(ty).map_or(0, |function| {
+            function
+                .type_params
+                .iter()
+                .fold(0, |mask, param| mask | bit_of(param.id))
+        });
+        // A TypeParam contributes its own bit iff its id is a map key.
+        let bits = store.type_param(ty).map_or(0, |param| bit_of(param.id));
+        FreeSetFrame {
+            ty,
+            children,
+            next_child: 0,
+            binder_mask,
+            bits,
+            index,
+            lowlink: index,
+        }
+    };
+
+    let mut next_index = 0_usize;
+    let mut frames: Vec<FreeSetFrame> = Vec::new();
+    let mut index_of: FxHashMap<TypeId, usize> = FxHashMap::default();
+    // Nodes discovered in this pass but not yet assigned their SCC union: the
+    // Tarjan stack plus each one's partial (post-binder-mask) contribution.
+    let mut scc_stack: Vec<TypeId> = Vec::new();
+    let mut on_stack: FxHashSet<TypeId> = FxHashSet::default();
+    let mut pending_bits: FxHashMap<TypeId, u64> = FxHashMap::default();
+
+    frames.push(push_frame(root, next_index));
+    index_of.insert(root, next_index);
+    next_index += 1;
+    scc_stack.push(root);
+    on_stack.insert(root);
+
+    while let Some(frame) = frames.last_mut() {
+        if let Some(&child) = frame.children.get(frame.next_child) {
+            frame.next_child += 1;
+            if let Some(&bits) = free_sets.get(&child) {
+                // Completed (this pass or an earlier one): final value.
+                frame.bits |= bits;
+            } else if let Some(&child_index) = index_of.get(&child) {
+                // In-stack back edge: the child is in this frame's own SCC
+                // (Tarjan invariant), so its partial contribution — already in
+                // `pending_bits` if its frame closed — is fixed up by the
+                // SCC-completion union, never taken from a cached final value.
+                debug_assert!(on_stack.contains(&child));
+                frame.lowlink = frame.lowlink.min(child_index);
+                frame.bits |= pending_bits.get(&child).copied().unwrap_or(0);
+            } else {
+                index_of.insert(child, next_index);
+                scc_stack.push(child);
+                on_stack.insert(child);
+                frames.push(push_frame(child, next_index));
+                next_index += 1;
+            }
+            continue;
+        }
+
+        let finished = frames.pop().expect("the loop condition saw a frame");
+        let contribution = (finished.bits) & !finished.binder_mask;
+        pending_bits.insert(finished.ty, contribution);
+        if finished.lowlink == finished.index {
+            // SCC root: every member gets the union over ALL members' contributions.
+            let first_member = scc_stack
+                .iter()
+                .rposition(|&member| member == finished.ty)
+                .expect("an unfinished node stays on the Tarjan stack");
+            let members = scc_stack.split_off(first_member);
+            let union = members.iter().fold(0, |union, member| {
+                union | pending_bits.get(member).copied().unwrap_or(0)
+            });
+            for member in members {
+                on_stack.remove(&member);
+                pending_bits.remove(&member);
+                free_sets.insert(member, union);
+            }
+        }
+        if let Some(parent) = frames.last_mut() {
+            parent.lowlink = parent.lowlink.min(finished.lowlink);
+            // Finalized child → its SCC union; still-pending child → its partial.
+            parent.bits |= free_sets
+                .get(&finished.ty)
+                .or_else(|| pending_bits.get(&finished.ty))
+                .copied()
+                .unwrap_or(0);
+        }
+    }
+
+    free_sets
+        .get(&root)
+        .copied()
+        .expect("the pass assigns every reachable node, including the root")
+}
+
 /// A substitution `TypeParamId → TypeId` plus the cycle guard, applied over the
 /// type store. Built once per instantiation and dropped after.
 pub struct Substitution<'a> {
@@ -356,6 +630,12 @@ pub struct Substitution<'a> {
     frame_visited: FxHashSet<TypeId>,
     /// Incremented by every raw-`TypeId` re-entry to taint all active ancestors.
     cycle_epoch: u64,
+    /// Sorted map keys giving each param its prefilter bit; `None` disables the
+    /// prefilter for this run (map too large — walking is always sound).
+    param_keys: Option<Vec<TypeParamId>>,
+    /// Per-node free-param bitmasks over `param_keys`, filled on demand by the
+    /// Tarjan pass in [`compute_free_sets`]. Scoped to this run.
+    free_sets: FxHashMap<TypeId, u64>,
     /// Captured at construction so each run keeps one stable measurement owner.
     #[cfg(test)]
     measurement: Option<SubstitutionMeasureCollector>,
@@ -380,6 +660,11 @@ impl<'a> Substitution<'a> {
         let run_visit_measurement = capture_substitution_run_visit_measure();
         #[cfg(test)]
         let wu0c_attribution = crate::check::checker::capture_wu0c_substitution_attribution(map);
+        let param_keys = (map.len() <= PREFILTER_MAX_PARAMS).then(|| {
+            let mut keys: Vec<TypeParamId> = map.keys().copied().collect();
+            keys.sort_unstable();
+            keys
+        });
         Substitution {
             map,
             in_progress: FxHashSet::default(),
@@ -389,6 +674,8 @@ impl<'a> Substitution<'a> {
             frame_reentered: FxHashSet::default(),
             frame_visited: FxHashSet::default(),
             cycle_epoch: 0,
+            param_keys,
+            free_sets: FxHashMap::default(),
             #[cfg(test)]
             measurement,
             #[cfg(test)]
@@ -414,6 +701,17 @@ impl<'a> Substitution<'a> {
             return ty;
         }
 
+        // Param-relevant prefilter: when every map key free in `ty` is blocked
+        // here (or none occurs at all), substitution is the identity — skip the
+        // walk before any visit hook, memo entry, or interning.
+        if self.effective_free_set_is_empty(interner, ty) {
+            #[cfg(test)]
+            if let Some(collector) = self.measurement.as_ref() {
+                measure_substitution(collector, |measure| measure.prefilter_skips += 1);
+            }
+            return ty;
+        }
+
         wu0g_record!(visit_enter self);
         let result = 'apply: {
             #[cfg(test)]
@@ -433,6 +731,8 @@ impl<'a> Substitution<'a> {
             // Raw-id re-entry must win over a completed result under any blocked
             // context; returning the original id is the existing cycle semantics.
             if self.in_progress.contains(&ty) {
+                // Drift guard: the arms must never track a tag the visited filter drops.
+                debug_assert!(tag_can_reenter(interner.store().tag(ty)));
                 self.cycle_epoch += 1;
                 // This branch never opens a frame, so this lands in the caller's
                 // accumulator: the caller's result depends on `ty` being live.
@@ -599,6 +899,12 @@ impl<'a> Substitution<'a> {
                     attribution.finish_clean_visit(visit);
                 }
             } else {
+                // Internal-cycle fold: a frame that opened and closed inside this
+                // subtree re-enters identically on any fresh walk, so `ty` leaves
+                // its own record — reuse still rejects while `ty` is live via the
+                // parent's `visited` (which receives `ty` below).
+                let mut frame_reentered = frame_reentered;
+                frame_reentered.remove(&ty);
                 // The caller depends on everything this frame depended on.
                 self.frame_reentered.extend(frame_reentered.iter().copied());
                 self.frame_visited.extend(frame_visited.iter().copied());
@@ -632,6 +938,28 @@ impl<'a> Substitution<'a> {
         };
         wu0g_record!(visit_exit self);
         result
+    }
+
+    /// Whether every map key free in `ty` is currently blocked (so `apply` may
+    /// answer `ty` without walking). `false` whenever the prefilter is disabled.
+    fn effective_free_set_is_empty(&mut self, interner: &Interner, ty: TypeId) -> bool {
+        let Some(param_keys) = self.param_keys.as_deref() else {
+            return false;
+        };
+        let bits = match self.free_sets.get(&ty) {
+            Some(&bits) => bits,
+            None => compute_free_sets(interner.store(), param_keys, &mut self.free_sets, ty),
+        };
+        // param_keys is tiny — walk the set bits and demand each one blocked.
+        let mut remaining = bits;
+        while remaining != 0 {
+            let index = remaining.trailing_zeros() as usize;
+            if !self.blocked.contains(&param_keys[index]) {
+                return false;
+            }
+            remaining &= remaining - 1;
+        }
+        true
     }
 
     fn canonical_blocked_context(&self) -> Vec<TypeParamId> {

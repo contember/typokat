@@ -298,12 +298,19 @@ interface CopyString extends CopyTemplate<string> {}
 interface CopyNumber extends CopyTemplate<number> {}
 "#;
 
-const CYCLE_TAINTED: &str = r#"
-interface CycleRoot { self: CycleRoot }
-interface CycleTemplate<T> extends CycleRoot { value: T }
-interface CycleFirst extends CycleTemplate<string> {}
-interface CycleSecond extends CycleTemplate<string> {}
-"#;
+// The substitution prefilter proves param-free cycles identity for maps of up
+// to 64 params, so this witness pins a 65-param template to keep the tainted
+// walk — and Candidate-B's cache — reachable (see param_relevant_prefilter_spec).
+static CYCLE_TAINTED: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let params = (0..65)
+        .map(|index| format!("T{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let arguments = vec!["string"; 65].join(", ");
+    format!(
+        "\ninterface CycleRoot {{ self: CycleRoot }}\ninterface CycleTemplate<{params}> extends CycleRoot {{ value: T0 }}\ninterface CycleFirst extends CycleTemplate<{arguments}> {{}}\ninterface CycleSecond extends CycleTemplate<{arguments}> {{}}\n"
+    )
+});
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct RawIdentityEvidence {
@@ -3636,7 +3643,7 @@ fn copy_heavy_witness_attributes_copy_and_substitution_only_interning_volume() {
 
 #[test]
 fn cycle_tainted_repeated_key_counts_candidate_b_hits_and_exact_avoided_visits() {
-    let baseline = measured(CYCLE_TAINTED, InterfaceFillAttributionMode::Baseline);
+    let baseline = measured(&CYCLE_TAINTED, InterfaceFillAttributionMode::Baseline);
     assert_cardinality(&baseline.attribution, 2, 1, 2);
     assert_eq!(baseline.attribution.clean_cache_hits, 0);
     assert_eq!(baseline.attribution.executed_substitutions, 2);
@@ -3645,7 +3652,7 @@ fn cycle_tainted_repeated_key_counts_candidate_b_hits_and_exact_avoided_visits()
     assert_eq!(baseline.attribution.cycle_reentries, 2);
     assert_eq!(baseline.attribution.candidate_b_hits, 0);
 
-    let candidate = measured(CYCLE_TAINTED, InterfaceFillAttributionMode::CandidateB);
+    let candidate = measured(&CYCLE_TAINTED, InterfaceFillAttributionMode::CandidateB);
     assert_eq!(candidate.semantic_sha256, baseline.semantic_sha256);
     assert_cardinality(&candidate.attribution, 2, 1, 2);
     assert_eq!(candidate.attribution.clean_cache_hits, 0);
@@ -3769,7 +3776,7 @@ fn every_counter_family_and_exact_key_budget_saturates_and_fails_closed() {
 #[test]
 fn cooperative_stop_is_identity_based_and_returns_exact_partial_construction_state() {
     let partial = measure_interface_fill_cooperative_partial_for_test(
-        CYCLE_TAINTED,
+        &CYCLE_TAINTED,
         InterfaceFillAttributionMode::Baseline,
     )
     .expect("cooperative identity-bound partial");
@@ -3827,7 +3834,7 @@ fn report_validation_derives_cross_counter_arithmetic_and_rejects_impossible_avo
     let mut interner_mismatch = baseline.attribution.clone();
     interner_mismatch.substitution_interner_attempts += 1;
     mutations.push(("interner arithmetic", interner_mismatch));
-    let real_candidate = measured(CYCLE_TAINTED, InterfaceFillAttributionMode::CandidateB);
+    let real_candidate = measured(&CYCLE_TAINTED, InterfaceFillAttributionMode::CandidateB);
     assert!(real_candidate.attribution.candidate_b_hits > 0);
     let mut inflated_avoidance = real_candidate.attribution.clone();
     inflated_avoidance.candidate_b_avoided_visits = inflated_avoidance
@@ -4824,7 +4831,7 @@ fn every_canonical_prefix_section_changes_independently_hashed_raw_bytes() {
 
 #[test]
 fn checkpoints_remain_map_free_and_share_the_real_aggregate_limit() {
-    let run = measured(CYCLE_TAINTED, InterfaceFillAttributionMode::Baseline);
+    let run = measured(&CYCLE_TAINTED, InterfaceFillAttributionMode::Baseline);
     assert!(run.component_checkpoints.len() <= MAX_COMPONENT_CHECKPOINTS);
     assert!(run.component_checkpoints_retained_bytes <= MAX_TRACKED_CHECKPOINT_BYTES);
     let sidecar = include_str!("wu0g_interface_fill_attribution.rs");

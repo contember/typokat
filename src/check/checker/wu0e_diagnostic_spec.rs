@@ -1284,21 +1284,30 @@ fn tiny_real_profile_crosses_the_actual_canonical_boundaries_in_all_modes() {
 
 #[test]
 fn cycle_bearing_generic_witness_proves_mode_fidelity_and_candidate_hits() {
-    const SOURCES: &[InjectedLibrarySource<'static>] = &[InjectedLibrarySource {
+    // The substitution prefilter proves the param-free cycle identity for maps of
+    // up to 64 params, so a 65-param carrier keeps the tainted walk — and with it
+    // the candidate cache path this witness exists to exercise — reachable.
+    let params: Vec<String> = (0..65).map(|index| format!("T{index}")).collect();
+    let arguments = vec!["string"; 65].join(", ");
+    let source = format!(
+        "type Wu0eCycle = {{ self: Wu0eCycle }};\ntype Wu0eCarrier<{}> = {{ cycle: Wu0eCycle; value: T0 }};\ndeclare const wu0eFirst: Wu0eCarrier<{arguments}>;\ndeclare const wu0eSecond: Wu0eCarrier<{arguments}>;\n",
+        params.join(", ")
+    );
+    let sources = [InjectedLibrarySource {
         file_ordinal: LibraryFileOrdinal::new(0),
         name: "cycle-bearing-generic.d.ts",
-        source: "type Wu0eCycle = { self: Wu0eCycle };\ntype Wu0eCarrier<T> = { cycle: Wu0eCycle; value: T };\ndeclare const wu0eFirst: Wu0eCarrier<string>;\ndeclare const wu0eSecond: Wu0eCarrier<string>;\n",
+        source: &source,
     }];
     let scratch = ScratchDir::new("recursive-mode-fidelity");
     let off = run_observed_profile_for_test(
         DiagnosticMode::MeasuredOff,
-        SOURCES,
+        &sources,
         &scratch.join("off.trace"),
     )
     .expect("recursive generic measured-off witness");
     let candidate = run_observed_profile_for_test(
         DiagnosticMode::CandidateB,
-        SOURCES,
+        &sources,
         &scratch.join("candidate.trace"),
     )
     .expect("recursive generic Candidate-B witness");
