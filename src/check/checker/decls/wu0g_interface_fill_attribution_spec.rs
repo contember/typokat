@@ -5624,12 +5624,6 @@ fn exact_process_schedule_and_containment_status_fail_closed() {
     host_identity.performance_pairs[0].launches[0].host_identity =
         raw_identity("wu0g-host-v1", b"different host".to_vec());
     mutations.push(("host identity drift", host_identity));
-    let mut result_binding = base.clone();
-    result_binding.causal_process_dossiers[0].result_bound_request_content_identity =
-        result_binding.causal_process_dossiers[1]
-            .request_content_identity
-            .clone();
-    mutations.push(("result request binding replay", result_binding));
     let mut leader_identity = base.clone();
     leader_identity.causal_process_dossiers[0].leader_start_ticks = 0;
     mutations.push(("missing leader start", leader_identity));
@@ -5775,6 +5769,23 @@ fn exact_process_schedule_and_containment_status_fail_closed() {
         bind_plan_and_experiment_identities(&mut raw);
         assert_thresholds_rejected(label, &raw);
     }
+
+    let mut result_binding = base.clone();
+    result_binding.causal_process_dossiers[0].result_bound_request_content_identity =
+        result_binding.causal_process_dossiers[1]
+            .request_content_identity
+            .clone();
+    assert_ne!(
+        result_binding.causal_process_dossiers[0].result_bound_request_content_identity,
+        result_binding.causal_process_dossiers[0].request_content_identity,
+    );
+    assert_eq!(plan_identity_from_raw(&result_binding), base.plan_identity);
+    result_binding.experiment_identity = experiment_identity_from_raw(&result_binding);
+    assert_eq!(
+        experiment_identity_from_raw(&result_binding),
+        result_binding.experiment_identity,
+    );
+    assert_thresholds_rejected("result request binding replay", &result_binding);
 }
 
 #[test]
