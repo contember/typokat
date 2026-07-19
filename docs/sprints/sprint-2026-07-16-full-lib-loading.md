@@ -502,3 +502,50 @@ keeps specs, implementation, scoreboard, and docs lifecycle changes separate.
   end-to-end improvement, preserve the exact semantic digest, and demonstrate at least 20% median
   improvement across five interleaved fresh-process pairs without regressing controls by more than
   2%. WU0 remains **NO-GO** and WU1 remains blocked.
+
+### 2026-07-19 — WU0 nonlinearity localized: within-run substitution cycle-taint blow-up
+
+- **Method.** Plain release binary (no libtest, no feature instrumentation — sidesteps the recorded
+  instrumentation confound), synthetic scaling fixtures, declaration-boundary-snapped real
+  `lib.dom.d.ts` prefixes, DWARF perf profiles, and temporary uncommitted in-process counters
+  (reverted; worktree clean).
+- **Mechanism.** `Substitution`'s run-wide completed memo refuses every cycle-tainted result
+  (`cycle_epoch` taint propagates to all open frames), and there is no free-type-param prefilter, so
+  a substitution whose map touches nothing in a subtree still walks it. On a hash-consed graph a
+  diamond (shared node) beneath a raw-id cycle therefore degenerates to path enumeration:
+  exponential visits, flat RSS. Three-way synthetic isolation: acyclic diamond linear (memo works),
+  cyclic chain without diamond linear (2,000 nodes / 0.13 s), cyclic diamond ×~4 per +2 depth
+  (depth 26: 7.39 s). Per-visit `apply_object` property-vector + `String` clones explain the
+  38–40% allocator share in the WU0E anchored profiles; the synthetic profile signature matches
+  those profiles symbol-for-symbol.
+- **Real-workload witness.** `lib.dom.d.ts` snapped-prefix ladder has its knee at
+  `interface GlobalEventHandlers` (16,762–16,992): its addition makes
+  `Document extends … GlobalEventHandlers` constructible and pulls the Document hub into the walked
+  component — 0.12 s → 2.88 s from that single declaration, unbounded shortly after. In the
+  2.88 s workload one deferred `check_constraint_arguments` substitution
+  (map `{E → Element}`, backtrace captured) performed **54,727,613 visits over 459 unique memo
+  keys** (~119,000× repetition; 6.9 M raw-id re-entries; 14.6 M tainted memo skips). The whole
+  dom-alone workload runs only 25 substitutions — the blow-up is within-run, so cross-run caching
+  (Candidate B) is not the first lever.
+- **Causal proof.** A deliberately unsound diagnostic variant that memoizes tainted results
+  unconditionally collapses that run to 2,656 visits (knee 2.88 s → 0.13 s; synthetic depth-26
+  7.39 s → instant; full `lib.dom.d.ts` substitution totals become negligible). It is not the fix —
+  stale reuse after a cycle root completes is semantically wrong — but it bounds the achievable win
+  and pins the mechanism.
+- **Second barrier unmasked: diagnostic type rendering.** With substitution neutralized,
+  `render_type` dominates: it expands the hash-consed DAG structurally with only a cycle guard — no
+  memo, no depth cap, no size cap, no nominal naming — and messages are formatted eagerly at
+  emission (`finish_semantic_effects`). Observed single renders of 498 KB and 15.5 MB, growing
+  unboundedly. With an emulated depth cap plus the memo experiment, the ordered 82-file
+  concatenation **terminates for the first time**: 106.99 s / 11.36 GB peak RSS / exit 3
+  (explicit incompletes, zero rendered errors — the render work was for messages never printed).
+  Residual barriers past the first two remain unattributed and re-profiling is required after the
+  first optimization lands.
+- **Selection.** First optimization: **cycle-scoped tainted memo** inside `Substitution` — memoize
+  cycle-tainted results keyed like the completed memo, tagged with the deepest re-entered
+  in-progress depth, evicted when that frame exits, and taint-propagating on reuse. Sound (reuse
+  only while every depended-on frame is live), local to `src/types/substitute/`, and semantics are
+  byte-for-byte unchanged; only visit counts change. Predicted effect far exceeds the recorded
+  ≥30%-of-cycles / ≥20%-end-to-end gate. Second (separate WU): lazy diagnostic rendering with
+  depth/size caps and nominal display. Relation-cache H1 stays deferred. WU0 remains **NO-GO**;
+  no gate is altered.
