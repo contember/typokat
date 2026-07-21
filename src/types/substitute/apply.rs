@@ -30,13 +30,6 @@ impl<'a> Substitution<'a> {
         // function-typed property.
         let call_signatures = object.call_signatures.clone();
         let construct_signatures = object.construct_signatures.clone();
-        wu0g_record!(object_copy
-            self,
-            props.iter().map(|property| property.name.len()),
-            props.len(),
-            call_signatures.len(),
-            construct_signatures.len()
-        );
 
         self.in_progress.insert(ty);
         let mut changed = false;
@@ -89,15 +82,13 @@ impl<'a> Substitution<'a> {
         // Unchanged → keep the original id (preserves nominal identity); changed →
         // intern the substituted structural object.
         if changed {
-            wu0g_record!(interner_attempt self, interner;
-                interner.intern_object(ObjectType {
-                    properties,
-                    string_index,
-                    number_index,
-                    call_signatures,
-                    construct_signatures,
-                })
-            )
+            interner.intern_object(ObjectType {
+                properties,
+                string_index,
+                number_index,
+                call_signatures,
+                construct_signatures,
+            })
         } else {
             ty
         }
@@ -156,14 +147,12 @@ impl<'a> Substitution<'a> {
         self.in_progress.remove(&ty);
 
         if changed {
-            wu0g_record!(interner_attempt self, interner;
-                interner.intern_function(FunctionType {
-                    type_params,
-                    receiver,
-                    params: lowered,
-                    ret: new_ret,
-                })
-            )
+            interner.intern_function(FunctionType {
+                type_params,
+                receiver,
+                params: lowered,
+                ret: new_ret,
+            })
         } else {
             ty
         }
@@ -192,7 +181,7 @@ impl<'a> Substitution<'a> {
         self.in_progress.remove(&ty);
 
         if changed {
-            wu0g_record!(interner_attempt self, interner; interner.union(substituted))
+            interner.union(substituted)
         } else {
             ty
         }
@@ -219,9 +208,7 @@ impl<'a> Substitution<'a> {
         self.in_progress.remove(&ty);
 
         if changed {
-            wu0g_record!(interner_attempt self, interner;
-                interner.intersection(substituted)
-            )
+            interner.intersection(substituted)
         } else {
             ty
         }
@@ -236,9 +223,7 @@ impl<'a> Substitution<'a> {
         let element = array.element;
         let new_element = self.apply(interner, element);
         if new_element != element {
-            wu0g_record!(interner_attempt self, interner;
-                interner.intern_array(new_element)
-            )
+            interner.intern_array(new_element)
         } else {
             ty
         }
@@ -269,9 +254,7 @@ impl<'a> Substitution<'a> {
         });
 
         if changed {
-            wu0g_record!(interner_attempt self, interner;
-                interner.intern_tuple_type(TupleType { elements, rest })
-            )
+            interner.intern_tuple_type(TupleType { elements, rest })
         } else {
             ty
         }
@@ -283,9 +266,7 @@ impl<'a> Substitution<'a> {
         };
         let new_operand = self.apply(interner, operand);
         if new_operand != operand {
-            wu0g_record!(interner_attempt self, interner;
-                interner.intern_readonly(new_operand)
-            )
+            interner.intern_readonly(new_operand)
         } else {
             ty
         }
@@ -317,9 +298,7 @@ impl<'a> Substitution<'a> {
                 if distributes_over(interner, arg) {
                     let args: Vec<(TypeParamId, TypeId)> =
                         self.map.iter().map(|(&p, &v)| (p, v)).collect();
-                    return wu0g_record!(interner_attempt self, interner;
-                        interner.intern_instantiation(ty, args)
-                    );
+                    return interner.intern_instantiation(ty, args);
                 }
             }
         }
@@ -334,17 +313,15 @@ impl<'a> Substitution<'a> {
         {
             return ty;
         }
-        wu0g_record!(interner_attempt self, interner;
-            interner.intern_conditional(ConditionalType {
-                check,
-                extends_ty,
-                true_branch,
-                false_branch,
-                infer_count: cond.infer_count,
-                distributive: cond.distributive,
-                poisoned: cond.poisoned,
-            })
-        )
+        interner.intern_conditional(ConditionalType {
+            check,
+            extends_ty,
+            true_branch,
+            false_branch,
+            infer_count: cond.infer_count,
+            distributive: cond.distributive,
+            poisoned: cond.poisoned,
+        })
     }
 
     /// Substitute through a lazy instantiation by composing into argument values
@@ -366,9 +343,7 @@ impl<'a> Substitution<'a> {
             })
             .collect();
         if changed {
-            wu0g_record!(interner_attempt self, interner;
-                interner.intern_instantiation(base, new_args)
-            )
+            interner.intern_instantiation(base, new_args)
         } else {
             ty
         }
@@ -392,9 +367,7 @@ impl<'a> Substitution<'a> {
             })
             .collect();
         if changed {
-            wu0g_record!(interner_attempt self, interner;
-                interner.intern_class_instance(class, args)
-            )
+            interner.intern_class_instance(class, args)
         } else {
             ty
         }
@@ -432,8 +405,7 @@ impl<'a> Substitution<'a> {
                         .map(|member| {
                             let mut member_map = self.map.clone();
                             member_map.insert(param, member);
-                            match wu0g_record!(mapped_nested_runtime self, interner, ty, member_map)
-                            {
+                            match substitute_with_outcome(interner, ty, &member_map) {
                                 SubstitutionOutcome::CycleClean(result) => result,
                                 SubstitutionOutcome::CycleTainted(result) => {
                                     self.cycle_epoch += 1;
@@ -442,9 +414,7 @@ impl<'a> Substitution<'a> {
                             }
                         })
                         .collect();
-                    return wu0g_record!(interner_attempt self, interner;
-                        interner.union(per_member)
-                    );
+                    return interner.union(per_member);
                 }
             }
         }
@@ -460,16 +430,14 @@ impl<'a> Substitution<'a> {
         {
             return ty;
         }
-        wu0g_record!(interner_attempt self, interner;
-            interner.intern_mapped(MappedType {
-                homomorphic: mapped.homomorphic,
-                key_source,
-                value_template,
-                modifiers_source,
-                optional_modifier: mapped.optional_modifier,
-                readonly_modifier: mapped.readonly_modifier,
-            })
-        )
+        interner.intern_mapped(MappedType {
+            homomorphic: mapped.homomorphic,
+            key_source,
+            value_template,
+            modifiers_source,
+            optional_modifier: mapped.optional_modifier,
+            readonly_modifier: mapped.readonly_modifier,
+        })
     }
 
     /// Substitute a deferred `keyof` operand and re-intern only on change. No eager
@@ -480,9 +448,7 @@ impl<'a> Substitution<'a> {
         };
         let new_operand = self.apply(interner, operand);
         if new_operand != operand {
-            wu0g_record!(interner_attempt self, interner;
-                interner.intern_keyof(new_operand)
-            )
+            interner.intern_keyof(new_operand)
         } else {
             ty
         }
@@ -502,9 +468,7 @@ impl<'a> Substitution<'a> {
         if object == access.object && index == access.index {
             ty
         } else {
-            wu0g_record!(interner_attempt self, interner;
-                interner.intern_deferred_indexed_access(object, index)
-            )
+            interner.intern_deferred_indexed_access(object, index)
         }
     }
 
@@ -528,12 +492,10 @@ impl<'a> Substitution<'a> {
             .collect();
 
         if changed {
-            wu0g_record!(interner_attempt self, interner;
-                interner.intern_template(TemplateType {
-                    texts,
-                    holes: new_holes,
-                })
-            )
+            interner.intern_template(TemplateType {
+                texts,
+                holes: new_holes,
+            })
         } else {
             ty
         }

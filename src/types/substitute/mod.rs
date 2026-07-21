@@ -206,100 +206,6 @@ fn record_substitution_run_visit(collector: &SubstitutionRunVisitMeasureCollecto
     }
 }
 
-#[cfg(all(
-    test,
-    feature = "wu0-interface-fill-attribution",
-    not(feature = "wu0-uninstrumented-control")
-))]
-mod wu0g;
-
-#[cfg(all(
-    test,
-    feature = "wu0-interface-fill-attribution",
-    not(feature = "wu0-uninstrumented-control")
-))]
-macro_rules! wu0g_record {
-    (interner_attempt $substitution:expr, $interner:expr; $expression:expr) => {{
-        let before = $interner.store().len();
-        let result = $expression;
-        let after = $interner.store().len();
-        $substitution.wu0g.record_interner_attempt(before, after);
-        result
-    }};
-    (visit_enter $substitution:expr) => {{
-        $substitution.wu0g.record_visit_enter();
-    }};
-    (visit_exit $substitution:expr) => {{
-        $substitution.wu0g.record_visit_exit();
-    }};
-    (cycle_reentry $substitution:expr) => {{
-        $substitution.wu0g.record_cycle_reentry();
-    }};
-    (object_copy $substitution:expr, $name_lengths:expr, $properties:expr, $calls:expr, $constructs:expr) => {{
-        $substitution
-            .wu0g
-            .record_object_copy($name_lengths, $properties, $calls, $constructs);
-    }};
-    (mapped_nested) => {
-        substitute_with_outcome(interner, ty, &member_map)
-    };
-    (mapped_nested_runtime $substitution:expr, $interner:expr, $ty:expr, $member_map:expr) => {{
-        let mut nested = Substitution::new(&$member_map);
-        let result = nested.apply($interner, $ty);
-        if let Some(attribution) = nested.wu0c_attribution.as_ref() {
-            attribution.finish_run();
-        }
-        let outcome = if nested.cycle_epoch == 0 {
-            SubstitutionOutcome::CycleClean(result)
-        } else {
-            SubstitutionOutcome::CycleTainted(result)
-        };
-        $substitution.wu0g.merge_from(nested.wu0g);
-        outcome
-    }};
-    (define_application_entrypoint) => {
-        pub(crate) fn wu0g_application_substitute_with_outcome(
-            interner: &mut Interner,
-            ty: TypeId,
-            map: &FxHashMap<TypeParamId, TypeId>,
-        ) -> (SubstitutionOutcome, ([u64; 11], bool)) {
-            let mut substitution = Substitution::new(map);
-            let result = substitution.apply(interner, ty);
-            if let Some(attribution) = substitution.wu0c_attribution.as_ref() {
-                attribution.finish_run();
-            }
-            let outcome = if substitution.cycle_epoch == 0 {
-                SubstitutionOutcome::CycleClean(result)
-            } else {
-                SubstitutionOutcome::CycleTainted(result)
-            };
-            (outcome, substitution.wu0g.into_parts())
-        }
-    };
-}
-
-#[cfg(not(all(
-    test,
-    feature = "wu0-interface-fill-attribution",
-    not(feature = "wu0-uninstrumented-control")
-)))]
-macro_rules! wu0g_record {
-    (interner_attempt $substitution:expr, $interner:expr; $expression:expr) => {{
-        $expression
-    }};
-    (visit_enter $substitution:expr) => {};
-    (visit_exit $substitution:expr) => {};
-    (cycle_reentry $substitution:expr) => {};
-    (object_copy $substitution:expr, $name_lengths:expr, $properties:expr, $calls:expr, $constructs:expr) => {};
-    (mapped_nested) => {
-        substitute_with_outcome(interner, ty, &member_map)
-    };
-    (mapped_nested_runtime $substitution:expr, $interner:expr, $ty:expr, $member_map:expr) => {{
-        substitute_with_outcome($interner, $ty, &$member_map)
-    }};
-    (define_application_entrypoint) => {};
-}
-
 mod apply;
 #[cfg(test)]
 mod completed_memo_spec;
@@ -643,12 +549,6 @@ pub struct Substitution<'a> {
     run_visit_measurement: Option<SubstitutionRunVisitMeasureCollector>,
     #[cfg(test)]
     wu0c_attribution: Option<crate::check::checker::SubstitutionAttribution>,
-    #[cfg(all(
-        test,
-        feature = "wu0-interface-fill-attribution",
-        not(feature = "wu0-uninstrumented-control")
-    ))]
-    wu0g: wu0g::SubstitutionAccumulator,
 }
 
 impl<'a> Substitution<'a> {
@@ -682,12 +582,6 @@ impl<'a> Substitution<'a> {
             run_visit_measurement,
             #[cfg(test)]
             wu0c_attribution,
-            #[cfg(all(
-                test,
-                feature = "wu0-interface-fill-attribution",
-                not(feature = "wu0-uninstrumented-control")
-            ))]
-            wu0g: wu0g::SubstitutionAccumulator::default(),
         }
     }
 
@@ -712,7 +606,6 @@ impl<'a> Substitution<'a> {
             return ty;
         }
 
-        wu0g_record!(visit_enter self);
         let result = 'apply: {
             #[cfg(test)]
             if let Some(collector) = self.measurement.as_ref() {
@@ -737,7 +630,6 @@ impl<'a> Substitution<'a> {
                 // This branch never opens a frame, so this lands in the caller's
                 // accumulator: the caller's result depends on `ty` being live.
                 self.frame_reentered.insert(ty);
-                wu0g_record!(cycle_reentry self);
                 #[cfg(test)]
                 if let Some(collector) = self.measurement.as_ref() {
                     measure_substitution(collector, |measure| measure.cycle_reentries += 1);
@@ -936,7 +828,6 @@ impl<'a> Substitution<'a> {
 
             result
         };
-        wu0g_record!(visit_exit self);
         result
     }
 
@@ -1016,8 +907,6 @@ pub(crate) fn substitute_with_outcome(
         SubstitutionOutcome::CycleTainted(result)
     }
 }
-
-wu0g_record!(define_application_entrypoint);
 
 /// Instantiate a generic function's own binders for one call candidate.
 ///

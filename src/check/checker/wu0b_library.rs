@@ -1,6 +1,6 @@
 //! Measurement-only compiler for injected declaration-library profiles.
 
-use super::context::{DeclTypes, Pass};
+use super::context::DeclTypes;
 use super::events_library::{
     LibraryEventKey, LibraryEventLedger, LibraryEventLedgerError, LibraryRecordTicket,
     LibrarySemanticReportingAdapter,
@@ -38,7 +38,6 @@ use crate::types::repr::{ClassId, IntrinsicKind, LiteralValue, ModifierOp, TypeT
 use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
 use oxc_allocator::Allocator;
-use oxc_ast::ast::Statement;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use sha2::{Digest, Sha256};
@@ -51,121 +50,6 @@ pub(crate) struct InjectedLibrarySource<'source> {
     pub(crate) file_ordinal: LibraryFileOrdinal,
     pub(crate) name: &'source str,
     pub(crate) source: &'source str,
-}
-
-pub(in crate::check::checker) trait Wu0eInterfaceObserver {
-    fn before_initial_interface_scc<'a, 'ast, Ticket: Copy + PartialEq>(
-        &mut self,
-        pass: &mut Pass<'a, 'ast, Ticket>,
-    );
-    fn after_initial_interface_scc<'a, 'ast, Ticket: Copy + PartialEq>(
-        &mut self,
-        pass: &mut Pass<'a, 'ast, Ticket>,
-    );
-    fn before_pending_interface_scc<'a, 'ast, Ticket: Copy + PartialEq>(
-        &mut self,
-        pass: &mut Pass<'a, 'ast, Ticket>,
-    );
-    fn after_pending_interface_scc<'a, 'ast, Ticket: Copy + PartialEq>(
-        &mut self,
-        pass: &mut Pass<'a, 'ast, Ticket>,
-    ) -> bool;
-}
-
-pub(in crate::check::checker) struct Wu0eFillSchedulePass<'borrow, 'a, 'ast> {
-    pub(in crate::check::checker) pass: &'borrow mut Pass<'a, 'ast, LibraryRecordTicket>,
-    pub(in crate::check::checker) module_programs: &'borrow [(ScopeId, &'ast [Statement<'ast>])],
-}
-
-impl Wu0eFillSchedulePass<'_, '_, '_> {
-    fn fill_type_group_parameter_metadata_range(&mut self, start: usize, end: usize) {
-        self.pass
-            .fill_type_group_parameter_metadata_range(start, end);
-    }
-
-    fn construct_pending_interface_sccs_range(&mut self, start: usize, end: usize) {
-        self.pass.construct_pending_interface_sccs_range(start, end);
-    }
-
-    fn fill_conditional_aliases_range(&mut self, start: usize, end: usize) {
-        self.pass.fill_conditional_aliases_range(start, end);
-    }
-
-    fn fill_mapped_aliases_range(&mut self, start: usize, end: usize) {
-        self.pass.fill_mapped_aliases_range(start, end);
-    }
-
-    fn fill_object_aliases_range(&mut self, scope: ScopeId, start: usize, end: usize) {
-        self.pass.fill_object_aliases_range(scope, start, end);
-    }
-
-    fn fill_remaining_aliases_range(&mut self, scope: ScopeId, start: usize, end: usize) {
-        self.pass.fill_remaining_aliases_range(scope, start, end);
-    }
-
-    fn prepare_project_attached_namespace_values(&mut self) {
-        self.pass
-            .prepare_project_attached_namespace_values(self.module_programs);
-    }
-
-    fn prepare_project_standalone_namespace_values(&mut self) {
-        self.pass
-            .prepare_project_standalone_namespace_values(self.module_programs);
-    }
-
-    fn publish_class_surfaces(&mut self) {
-        self.pass.publish_class_surfaces();
-    }
-
-    fn finalize_standalone_namespace_values(&mut self) {
-        self.pass.finalize_standalone_namespace_values();
-    }
-
-    fn precompute_standalone_namespace_value_aliases(&mut self) {
-        self.pass
-            .precompute_standalone_namespace_value_aliases(self.module_programs);
-    }
-
-    fn fill_pending_interfaces_range(&mut self, scope: ScopeId, start: usize, end: usize) {
-        self.pass.fill_pending_interfaces_range(scope, start, end);
-    }
-
-    fn publish_type_groups(&mut self) {
-        self.pass.publish_type_groups();
-    }
-
-    fn validate_published_class_surfaces(&mut self) {
-        self.pass.validate_published_class_surfaces();
-    }
-}
-
-pub(in crate::check::checker) fn run_wu0e_fill_schedule_with_interface_observer_for_test(
-    mut pass: Wu0eFillSchedulePass<'_, '_, '_>,
-    observer: &mut impl Wu0eInterfaceObserver,
-    fill_scope: ScopeId,
-    fill_start: usize,
-    fill_end: usize,
-) {
-    pass.fill_type_group_parameter_metadata_range(fill_start, fill_end);
-    observer.before_initial_interface_scc(pass.pass);
-    pass.construct_pending_interface_sccs_range(fill_start, fill_end);
-    observer.after_initial_interface_scc(pass.pass);
-    pass.fill_conditional_aliases_range(fill_start, fill_end);
-    pass.fill_mapped_aliases_range(fill_start, fill_end);
-    pass.fill_object_aliases_range(fill_scope, fill_start, fill_end);
-    pass.fill_remaining_aliases_range(fill_scope, fill_start, fill_end);
-    pass.prepare_project_attached_namespace_values();
-    pass.prepare_project_standalone_namespace_values();
-    pass.publish_class_surfaces();
-    pass.finalize_standalone_namespace_values();
-    pass.precompute_standalone_namespace_value_aliases();
-    observer.before_pending_interface_scc(pass.pass);
-    pass.fill_pending_interfaces_range(fill_scope, fill_start, fill_end);
-    if observer.after_pending_interface_scc(pass.pass) {
-        return;
-    }
-    pass.publish_type_groups();
-    pass.validate_published_class_surfaces();
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1258,28 +1142,6 @@ fn canonical_record_bytes(
     Ok(bytes.finish())
 }
 
-pub(in crate::check::checker) fn canonical_type_store_bytes_for_test(
-    store: &Store,
-) -> Result<Vec<Vec<u8>>, InjectedProfileError> {
-    let mut rows = Vec::with_capacity(store.len());
-    for raw in 0..store.len() {
-        let id = TypeId(u32::try_from(raw).map_err(|_| {
-            InjectedProfileError::CanonicalProjection("type id does not fit u32".to_owned())
-        })?);
-        let mut row = CanonicalBytes::domain(b"typokat-wu0d-type-store-row-v1");
-        encode_store_row(&mut row, store, id)?;
-        rows.push(row.finish());
-    }
-    Ok(rows)
-}
-
-pub(in crate::check::checker) fn canonical_library_record_bytes_for_test(
-    source: &str,
-    record: &CheckerRecord,
-) -> Result<Vec<u8>, InjectedProfileError> {
-    canonical_record_bytes(source, record)
-}
-
 fn canonical_wu0d_semantic_components(
     canonical: &[CanonicalInput<'_>],
     records: &[(LibraryEventKey, CheckerRecord)],
@@ -2201,70 +2063,6 @@ mod tests {
     fn assert_owned_terminal<T: Send + Sync + 'static>() {}
 
     const TINY_SOURCE: &str = "export const typokatWu0bProbe: number = 1;\n";
-
-    struct DefaultOffInterfaceObserver;
-
-    impl Wu0eInterfaceObserver for DefaultOffInterfaceObserver {
-        fn before_initial_interface_scc<'a, 'ast, Ticket: Copy + PartialEq>(
-            &mut self,
-            _pass: &mut Pass<'a, 'ast, Ticket>,
-        ) {
-        }
-
-        fn after_initial_interface_scc<'a, 'ast, Ticket: Copy + PartialEq>(
-            &mut self,
-            _pass: &mut Pass<'a, 'ast, Ticket>,
-        ) {
-        }
-
-        fn before_pending_interface_scc<'a, 'ast, Ticket: Copy + PartialEq>(
-            &mut self,
-            _pass: &mut Pass<'a, 'ast, Ticket>,
-        ) {
-        }
-
-        fn after_pending_interface_scc<'a, 'ast, Ticket: Copy + PartialEq>(
-            &mut self,
-            _pass: &mut Pass<'a, 'ast, Ticket>,
-        ) -> bool {
-            false
-        }
-    }
-
-    #[test]
-    fn default_off_interface_observer_and_projection_surfaces_remain_typed() {
-        let _runner: for<'borrow, 'a, 'ast> fn(
-            Wu0eFillSchedulePass<'borrow, 'a, 'ast>,
-            &mut DefaultOffInterfaceObserver,
-            ScopeId,
-            usize,
-            usize,
-        ) = run_wu0e_fill_schedule_with_interface_observer_for_test;
-        let interner = Interner::with_intrinsics();
-        let rows = canonical_type_store_bytes_for_test(interner.store())
-            .expect("intrinsic TypeStore rows are canonical");
-        assert_eq!(rows.len(), interner.store().len());
-        assert!(rows
-            .iter()
-            .all(|row| row.starts_with(b"typokat-wu0d-type-store-row-v1")));
-
-        let run = run_injected_profile(&[InjectedLibrarySource {
-            file_ordinal: LibraryFileOrdinal::new(14),
-            name: "projection-surface.d.ts",
-            source: "declare namespace Exported { export default function f(): void; }",
-        }])
-        .expect("projection surface profile");
-        let (_, record) = run
-            .library_records
-            .first()
-            .expect("profile emits one canonical record");
-        let bytes = canonical_library_record_bytes_for_test(
-            "declare namespace Exported { export default function f(): void; }",
-            record,
-        )
-        .expect("library record is canonical");
-        assert!(bytes.starts_with(b"typokat-wu0d-library-record-v1"));
-    }
 
     #[test]
     fn injected_results_are_ast_free_owned_terminals() {
