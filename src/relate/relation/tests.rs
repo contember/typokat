@@ -1758,6 +1758,67 @@ fn aligned_deferred_indexed_accesses_relate_by_map_and_binder() {
     );
 }
 
+/// An inner generic method binder shadows an outer reuse of the same persistent
+/// source id; deferred indexed access must observe only that effective alignment.
+#[test]
+fn deferred_indexed_access_uses_innermost_binder_alignment() {
+    use crate::types::repr::{GenericTypeParam, TypeParamId};
+
+    fn binder(id: TypeParamId) -> GenericTypeParam {
+        GenericTypeParam {
+            id,
+            constraint: None,
+            default: None,
+        }
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let map = interner.intern_object(ObjectType {
+        properties: vec![prop("change", wk.number)],
+        ..Default::default()
+    });
+    let source_id = TypeParamId(10_371);
+    let outer_target_id = TypeParamId(10_372);
+    let inner_target_id = TypeParamId(10_373);
+    let source_key = interner.intern_type_param(source_id, "S");
+    let outer_target_key = interner.intern_type_param(outer_target_id, "T1");
+    let inner_target_key = interner.intern_type_param(inner_target_id, "T2");
+    let source_access = interner.intern_deferred_indexed_access(map, source_key);
+    let outer_target_access = interner.intern_deferred_indexed_access(map, outer_target_key);
+    let inner_target_access = interner.intern_deferred_indexed_access(map, inner_target_key);
+    let source_binders = vec![binder(source_id)];
+    let outer_target_binders = vec![binder(outer_target_id)];
+    let inner_target_binders = vec![binder(inner_target_id)];
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+    let (effective_inner, stale_outer) = rel.with_binder_context(
+        BinderRelationContext::aligned(&source_binders, &outer_target_binders),
+        |relater| {
+            relater.with_binder_context(
+                BinderRelationContext::aligned(&source_binders, &inner_target_binders),
+                |relater| {
+                    (
+                        relater
+                            .is_assignable(source_access, inner_target_access)
+                            .is_yes(),
+                        relater
+                            .is_assignable(source_access, outer_target_access)
+                            .is_yes(),
+                    )
+                },
+            )
+        },
+    );
+
+    assert!(effective_inner, "the inner S -> T2 alignment is effective");
+    assert!(
+        !stale_outer,
+        "the shadowed outer S -> T1 alignment is not effective"
+    );
+}
+
 /// B41/WU4 — an in-flight raw object pair under one binder environment must
 /// not short-circuit the same pair under a nested environment that specializes
 /// its parameter differently. The nested result must match a standalone query.

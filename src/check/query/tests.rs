@@ -1572,11 +1572,14 @@ fn recursive_generic_listener_deferred_lookup_is_order_independent() {
             params: vec![ParameterType::required("listener", listener)],
             ret: interner.well_known().void,
         });
+        let string = interner.well_known().string;
         interner.fill_object(
             root,
             ObjectType {
                 properties: vec![
                     property("addEventListener", add_event_listener),
+                    property("align", string),
+                    property("base", string),
                     property("self", root),
                 ],
                 ..Default::default()
