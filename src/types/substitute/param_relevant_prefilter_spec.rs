@@ -138,6 +138,137 @@ fn prefilter_respects_binder_shadowing_not_raw_param_ids() {
 }
 
 #[test]
+fn prefilter_does_not_leak_a_function_binder_through_a_recursive_scc() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let id = TypeParamId(98_007);
+    let parameter = interner.intern_type_param(id, "P");
+    let root = interner.reserve_object();
+    let inner = interner.intern_object(ObjectType {
+        properties: vec![prop("back", root), prop("value", parameter)],
+        ..Default::default()
+    });
+    let method = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id,
+            constraint: None,
+            default: None,
+        }],
+        receiver: None,
+        params: vec![ParameterType::required("input", inner)],
+        ret: wk.void,
+    });
+    interner.fill_object(
+        root,
+        ObjectType {
+            properties: vec![prop("method", method)],
+            ..Default::default()
+        },
+    );
+    let map = FxHashMap::from_iter([(id, wk.number)]);
+
+    let store_len_before = interner.store().len();
+    let _scope = start_substitution_measure();
+    let result = Substitution::new(&map).apply(&mut interner, root);
+    let measure = substitution_measure().expect("the counter scope must remain enabled");
+
+    assert_eq!(result, root);
+    assert_eq!(interner.store().len(), store_len_before);
+    assert_eq!(measure.apply_visits, 0);
+    assert!(measure.prefilter_skips >= 1);
+    assert_eq!(measure.cycle_reentries, 0);
+    assert_eq!(measure.completed_memo_entries, 0);
+    assert_eq!(measure.tainted_memo_entries, 0);
+
+    // Consuming the outer binder makes the direct occurrence free, while the
+    // back-edge method opens a fresh binder and remains unchanged.
+    let instantiated = instantiate_function(&mut interner, method, &map);
+    let instantiated = interner
+        .store()
+        .function_type(instantiated)
+        .expect("instantiation remains a function");
+    assert!(instantiated.type_params.is_empty());
+    let rewritten_inner = interner
+        .store()
+        .object_type(instantiated.params[0].ty)
+        .expect("the parameter remains an object");
+    assert_eq!(
+        rewritten_inner
+            .property("value")
+            .map(|property| property.ty),
+        Some(wk.number)
+    );
+    assert_eq!(
+        rewritten_inner.property("back").map(|property| property.ty),
+        Some(root)
+    );
+
+    let free = interner.intern_object(ObjectType {
+        properties: vec![prop("value", parameter)],
+        ..Default::default()
+    });
+    let expected = interner.intern_object(ObjectType {
+        properties: vec![prop("value", wk.number)],
+        ..Default::default()
+    });
+    assert_eq!(Substitution::new(&map).apply(&mut interner, free), expected);
+}
+
+#[test]
+fn recursive_binder_prefilter_cost_is_independent_of_inner_diamond_fanout() {
+    const LEVELS: usize = 12;
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let id = TypeParamId(98_008);
+    let parameter = interner.intern_type_param(id, "P");
+    let root = interner.reserve_object();
+    let inner = interner.intern_object(ObjectType {
+        properties: vec![prop("back", root), prop("value", parameter)],
+        ..Default::default()
+    });
+    let mut payload = interner.intern_object(ObjectType {
+        properties: vec![prop("back", root)],
+        ..Default::default()
+    });
+    for _ in 0..LEVELS {
+        payload = interner.intern_object(ObjectType {
+            properties: vec![prop("left", payload), prop("right", payload)],
+            ..Default::default()
+        });
+    }
+    let method = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id,
+            constraint: None,
+            default: None,
+        }],
+        receiver: None,
+        params: vec![ParameterType::required("input", inner)],
+        ret: wk.void,
+    });
+    interner.fill_object(
+        root,
+        ObjectType {
+            properties: vec![prop("method", method), prop("payload", payload)],
+            ..Default::default()
+        },
+    );
+    let map = FxHashMap::from_iter([(id, wk.string)]);
+
+    let store_len_before = interner.store().len();
+    let _scope = start_substitution_measure();
+    let result = Substitution::new(&map).apply(&mut interner, root);
+    let measure = substitution_measure().expect("the counter scope must remain enabled");
+
+    assert_eq!(result, root);
+    assert_eq!(interner.store().len(), store_len_before);
+    assert_eq!(measure.apply_visits, 0);
+    assert!(measure.prefilter_skips >= 1);
+    assert_eq!(measure.cycle_reentries, 0);
+}
+
+#[test]
 fn prefilter_skips_only_the_param_free_branch_of_a_mixed_root() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
