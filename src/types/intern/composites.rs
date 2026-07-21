@@ -69,6 +69,17 @@ impl Interner {
             .expect("fill_object requires one pending reserved object");
     }
 
+    /// Close an unpublished object reservation without making it structural.
+    pub(crate) fn abandon_reserved_object(
+        &mut self,
+        id: TypeId,
+    ) -> Result<(), super::ReservedTypeFillError> {
+        self.fill_reserved_type_batch(vec![super::ReservedTypeFill::Object(
+            id,
+            ObjectType::default(),
+        )])
+    }
+
     /// Intern a function type. Generic binders and parameters are positional and
     /// never sorted; all call-observable fields participate in identity.
     pub fn intern_function(&mut self, function: FunctionType) -> TypeId {

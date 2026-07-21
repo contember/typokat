@@ -436,6 +436,93 @@ fn reserved_type_batch_rejects_target_kind_and_state_before_writing() {
 }
 
 #[test]
+fn reserved_terminalization_rejects_wrong_kind_and_double_use_without_mutation() {
+    let mut interner = Interner::with_intrinsics();
+    let error = interner.well_known().error;
+    let conditional = interner.reserve_conditional();
+    let mapped = interner.reserve_mapped();
+    let object = interner.reserve_object();
+
+    assert_eq!(
+        interner.poison_reserved_conditional(mapped),
+        Err(ReservedTypeFillError::KindMismatch {
+            id: mapped,
+            reserved: ReservedTypeKind::Mapped,
+            supplied: ReservedTypeKind::Conditional,
+        })
+    );
+    assert_eq!(
+        interner.poison_reserved_mapped(object),
+        Err(ReservedTypeFillError::KindMismatch {
+            id: object,
+            reserved: ReservedTypeKind::Object,
+            supplied: ReservedTypeKind::Mapped,
+        })
+    );
+    assert_eq!(
+        interner.abandon_reserved_object(conditional),
+        Err(ReservedTypeFillError::KindMismatch {
+            id: conditional,
+            reserved: ReservedTypeKind::Conditional,
+            supplied: ReservedTypeKind::Object,
+        })
+    );
+
+    interner
+        .poison_reserved_conditional(conditional)
+        .expect("wrong-kind attempt leaves conditional pending");
+    interner
+        .poison_reserved_mapped(mapped)
+        .expect("wrong-kind attempt leaves mapped pending");
+    interner
+        .abandon_reserved_object(object)
+        .expect("wrong-kind attempt leaves object pending");
+
+    let conditional_body = interner
+        .store()
+        .conditional_type(conditional)
+        .expect("poisoned conditional body");
+    assert_eq!(conditional_body.check, error);
+    assert_eq!(conditional_body.extends_ty, error);
+    assert_eq!(conditional_body.true_branch, error);
+    assert_eq!(conditional_body.false_branch, error);
+    assert!(conditional_body.poisoned);
+    let mapped_body = interner
+        .store()
+        .mapped_type(mapped)
+        .expect("poisoned mapped body");
+    assert_eq!(mapped_body.key_source, error);
+    assert_eq!(mapped_body.value_template, error);
+    assert!(interner
+        .store()
+        .object_type(object)
+        .expect("abandoned object row")
+        .properties
+        .is_empty());
+
+    assert_eq!(
+        interner.poison_reserved_conditional(conditional),
+        Err(ReservedTypeFillError::AlreadyFrozen(conditional))
+    );
+    assert_eq!(
+        interner.poison_reserved_mapped(mapped),
+        Err(ReservedTypeFillError::AlreadyFrozen(mapped))
+    );
+    assert_eq!(
+        interner.abandon_reserved_object(object),
+        Err(ReservedTypeFillError::AlreadyFrozen(object))
+    );
+    assert!(
+        interner
+            .store()
+            .conditional_type(conditional)
+            .expect("double terminalization preserves conditional")
+            .poisoned,
+        "double terminalization must not rewrite the frozen body"
+    );
+}
+
+#[test]
 fn accessor_write_type_is_part_of_object_identity() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();

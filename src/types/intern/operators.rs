@@ -222,6 +222,26 @@ impl Interner {
             .expect("fill_conditional requires one pending reserved conditional");
     }
 
+    /// Freeze a failed conditional-alias reservation as a deterministic error body.
+    pub(crate) fn poison_reserved_conditional(
+        &mut self,
+        id: TypeId,
+    ) -> Result<(), super::ReservedTypeFillError> {
+        let error = self.well_known.error;
+        self.fill_reserved_type_batch(vec![super::ReservedTypeFill::Conditional(
+            id,
+            ConditionalType {
+                check: error,
+                extends_ty: error,
+                true_branch: error,
+                false_branch: error,
+                infer_count: 0,
+                distributive: false,
+                poisoned: true,
+            },
+        )])
+    }
+
     /// Intern a **lazy instantiation** `substitute(base, args)` (M25). `args` are sorted
     /// by [`TypeParamId`] here so two equal instantiations share one id.
     pub fn intern_instantiation(
@@ -348,6 +368,25 @@ impl Interner {
     pub fn fill_mapped(&mut self, id: TypeId, mapped: MappedType) {
         self.fill_reserved_type_batch(vec![super::ReservedTypeFill::Mapped(id, mapped)])
             .expect("fill_mapped requires one pending reserved mapped type");
+    }
+
+    /// Freeze a failed mapped-alias reservation as a deterministic error body.
+    pub(crate) fn poison_reserved_mapped(
+        &mut self,
+        id: TypeId,
+    ) -> Result<(), super::ReservedTypeFillError> {
+        let error = self.well_known.error;
+        self.fill_reserved_type_batch(vec![super::ReservedTypeFill::Mapped(
+            id,
+            MappedType {
+                homomorphic: false,
+                key_source: error,
+                value_template: error,
+                modifiers_source: None,
+                optional_modifier: crate::types::repr::ModifierOp::Keep,
+                readonly_modifier: crate::types::repr::ModifierOp::Keep,
+            },
+        )])
     }
 
     /// Intern a **deferred `keyof`** node (M28). Identity is the operand id alone, so

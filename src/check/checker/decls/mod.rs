@@ -483,6 +483,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 // Circular check (`TK2456`) or out-of-subset body → the alias is the error
                 // type (silent downstream, m22 discipline).
                 _ => {
+                    self.interner
+                        .poison_reserved_conditional(placeholder)
+                        .expect("failed conditional alias owns one pending reservation");
                     if let Some(slot) = self.type_resolved.get_mut(index) {
                         *slot = Some(error_ty);
                     }
@@ -552,6 +555,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 // the error type (silent downstream, M22 discipline; overwrites the
                 // seeded reserved id).
                 _ => {
+                    self.interner
+                        .poison_reserved_mapped(placeholder)
+                        .expect("failed mapped alias owns one pending reservation");
                     if let Some(slot) = self.type_resolved.get_mut(index) {
                         *slot = Some(error_ty);
                     }
@@ -3502,8 +3508,10 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                                 fragments: vec![fragment],
                             };
                         }
-                        Some(TypeDecl::Alias { .. }) | Some(TypeDecl::Unavailable { .. }) => {
-                            decls[group.index()] = TypeDecl::Unavailable { declaration };
+                        Some(displaced @ TypeDecl::Alias { .. })
+                        | Some(displaced @ TypeDecl::Unavailable { .. }) => {
+                            terminalize_displaced_type_draft(interner, displaced);
+                            *displaced = TypeDecl::Unavailable { declaration };
                             if let Some(slot) = resolved.get_mut(group.index()) {
                                 *slot = None;
                             }
@@ -3527,69 +3535,56 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                     let params =
                         alloc_type_param_ids(alias.type_parameters.as_deref(), next_type_param);
                     let defaults = vec![None; params.len()];
-                    // M25: a top-level conditional-type body reserves a conditional template
-                    // id and seeds `type_resolved`, so a self-recursive reference resolves to
-                    // it (as a lazy instantiation) rather than expanding at lowering. The
-                    // placeholder is filled in the fill step.
-                    let conditional_template = if matches!(
-                        alias.type_annotation,
-                        oxc_ast::ast::TSType::TSConditionalType(_)
-                    ) {
-                        let reserved = interner.reserve_conditional();
-                        // M28 round 3: name the reserved row so a deferred
-                        // instantiation renders by alias NAME, not the raw body.
-                        interner.set_template_name(reserved, alias.id.name.as_str());
-                        if let Some(group) = group {
-                            if let Some(slot) = resolved.get_mut(group.index()) {
-                                *slot = Some(reserved);
-                            }
-                        }
-                        Some(reserved)
-                    } else {
-                        None
-                    };
-                    // Top-level mapped aliases reserve a template id so self-recursive
-                    // references resolve as lazy instantiations, not error types.
-                    let mapped_template =
-                        if matches!(alias.type_annotation, oxc_ast::ast::TSType::TSMappedType(_)) {
-                            let reserved = interner.reserve_mapped();
-                            // M28 round 3: named for rendering, like the conditional row.
-                            interner.set_template_name(reserved, alias.id.name.as_str());
-                            if let Some(group) = group {
-                                if let Some(slot) = resolved.get_mut(group.index()) {
-                                    *slot = Some(reserved);
-                                }
-                            }
-                            Some(reserved)
-                        } else {
-                            None
-                        };
-                    // Non-generic object-literal aliases reserve an object id so member
-                    // self-references are legal recursion. Generic object aliases remain
-                    // structural templates instantiated by substitution, so they are not seeded.
-                    let object_template = if alias.type_parameters.is_none()
-                        && matches!(
-                            alias.type_annotation,
-                            oxc_ast::ast::TSType::TSTypeLiteral(_)
-                        ) {
-                        let reserved = interner.reserve_object();
-                        if let Some(group) = group {
-                            if let Some(slot) = resolved.get_mut(group.index()) {
-                                *slot = Some(reserved);
-                            }
-                        }
-                        Some(reserved)
-                    } else {
-                        None
-                    };
                     if let (Some(group), Some(declaration)) = (group, declaration) {
                         ensure_type_group_slot(decls, group.index());
                         if !matches!(decls.get(group.index()), Some(TypeDecl::Resolved { .. })) {
+                            terminalize_displaced_type_draft(interner, &decls[group.index()]);
                             decls[group.index()] = TypeDecl::Unavailable { declaration };
                             if let Some(slot) = resolved.get_mut(group.index()) {
                                 *slot = None;
                             }
                         } else {
+                            // Reserve recursive templates only after the declaration wins its
+                            // group slot; rejected aliases never publish a draft identity.
+                            let conditional_template = if matches!(
+                                alias.type_annotation,
+                                oxc_ast::ast::TSType::TSConditionalType(_)
+                            ) {
+                                let reserved = interner.reserve_conditional();
+                                interner.set_template_name(reserved, alias.id.name.as_str());
+                                if let Some(slot) = resolved.get_mut(group.index()) {
+                                    *slot = Some(reserved);
+                                }
+                                Some(reserved)
+                            } else {
+                                None
+                            };
+                            let mapped_template = if matches!(
+                                alias.type_annotation,
+                                oxc_ast::ast::TSType::TSMappedType(_)
+                            ) {
+                                let reserved = interner.reserve_mapped();
+                                interner.set_template_name(reserved, alias.id.name.as_str());
+                                if let Some(slot) = resolved.get_mut(group.index()) {
+                                    *slot = Some(reserved);
+                                }
+                                Some(reserved)
+                            } else {
+                                None
+                            };
+                            let object_template = if alias.type_parameters.is_none()
+                                && matches!(
+                                    alias.type_annotation,
+                                    oxc_ast::ast::TSType::TSTypeLiteral(_)
+                                ) {
+                                let reserved = interner.reserve_object();
+                                if let Some(slot) = resolved.get_mut(group.index()) {
+                                    *slot = Some(reserved);
+                                }
+                                Some(reserved)
+                            } else {
+                                None
+                            };
                             decls[group.index()] = TypeDecl::Alias {
                                 declaration,
                                 scope,
@@ -3631,6 +3626,7 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                             ensure_type_group_slot(decls, group.index());
                             match decls.get(group.index()) {
                                 Some(TypeDecl::Interface {
+                                    reserved,
                                     recovery_params,
                                     recovery_names,
                                     recovery_defaults,
@@ -3672,6 +3668,9 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                                         binder,
                                         group,
                                         &mut header_fragments,
+                                    );
+                                    interner.abandon_reserved_object(*reserved).expect(
+                                        "class merge displaces one pending interface reservation",
                                     );
                                     decls[group.index()] = TypeDecl::Class {
                                         declaration,
@@ -3746,6 +3745,10 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                                         class.type_parameters.as_deref(),
                                         next_type_param,
                                     );
+                                    terminalize_displaced_type_draft(
+                                        interner,
+                                        &decls[group.index()],
+                                    );
                                     decls[group.index()] = TypeDecl::Unavailable { declaration };
                                     if let Some(slot) = resolved.get_mut(group.index()) {
                                         *slot = None;
@@ -3768,6 +3771,37 @@ fn ensure_type_group_slot<'ast>(decls: &mut Vec<TypeDecl<'ast>>, index: usize) {
     }
     if decls.len() == index {
         decls.push(TypeDecl::Resolved { params: Vec::new() });
+    }
+}
+
+fn terminalize_displaced_type_draft(interner: &mut Interner, declaration: &TypeDecl<'_>) {
+    match declaration {
+        TypeDecl::Interface { reserved, .. } => interner
+            .abandon_reserved_object(*reserved)
+            .expect("displaced interface owns one pending object reservation"),
+        TypeDecl::Alias {
+            conditional_template,
+            mapped_template,
+            object_template,
+            ..
+        } => {
+            if let Some(reserved) = conditional_template {
+                interner
+                    .poison_reserved_conditional(*reserved)
+                    .expect("displaced conditional alias owns one pending reservation");
+            }
+            if let Some(reserved) = mapped_template {
+                interner
+                    .poison_reserved_mapped(*reserved)
+                    .expect("displaced mapped alias owns one pending reservation");
+            }
+            if let Some(reserved) = object_template {
+                interner
+                    .abandon_reserved_object(*reserved)
+                    .expect("displaced object alias owns one pending reservation");
+            }
+        }
+        TypeDecl::Class { .. } | TypeDecl::Resolved { .. } | TypeDecl::Unavailable { .. } => {}
     }
 }
 
