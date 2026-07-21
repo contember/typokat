@@ -637,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn annotated_initializer_assignment_replays_at_diagnostic_span() {
+    fn annotated_initializer_assignment_replays_at_declaration_name_span() {
         use std::cell::RefCell;
 
         let source = "const value: number = \"wrong\";";
@@ -680,7 +680,41 @@ mod tests {
         );
         assert_eq!(
             diagnostic.span.start,
-            u32::try_from(source.find("\"wrong\"").expect("initializer literal"))
+            u32::try_from(source.find("value").expect("declaration name"))
+                .expect("source offset fits u32"),
+        );
+    }
+
+    #[test]
+    fn annotated_class_field_initializer_reports_at_field_name() {
+        let source = "class Example { field: number = \"wrong\"; }";
+        let output = check_source(source);
+        assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        let [diagnostic] = output.diagnostics.as_slice() else {
+            panic!("expected one class-field initializer diagnostic");
+        };
+        assert_eq!(diagnostic.code.as_str(), "TK2322");
+        assert_eq!(
+            diagnostic.span.start,
+            u32::try_from(source.find("field").expect("field name"))
+                .expect("source offset fits u32"),
+        );
+    }
+
+    #[test]
+    fn annotated_parameter_default_reports_at_parameter_name() {
+        let source = "function example(value: number = \"wrong\"): void {}";
+        let output = check_source(source);
+        assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        let [diagnostic] = output.diagnostics.as_slice() else {
+            panic!("expected one parameter-default initializer diagnostic");
+        };
+        assert_eq!(diagnostic.code.as_str(), "TK2322");
+        assert_eq!(
+            diagnostic.span.start,
+            u32::try_from(source.find("value").expect("parameter name"))
                 .expect("source offset fits u32"),
         );
     }

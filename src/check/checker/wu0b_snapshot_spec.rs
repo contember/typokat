@@ -472,6 +472,82 @@ fn snapshot_fast_errors_exercises_real_decoded_semantics() {
 }
 
 #[test]
+fn snapshot_array_map_preserves_receiver_and_callback_inference() {
+    let source = concat!(
+        "export {};\n",
+        "const values: number[] = [1, 2, 3];\n",
+        "const inferred = values.map((value) => value + 1);\n",
+        "const numberControl: number[] = inferred;\n",
+        "const wrong: string[] = inferred;\n",
+    );
+    let result = check_source_with_decoded_base_for_test(
+        decode_exact_profile(SnapshotDecodeStrategy::EagerComplete),
+        source,
+    );
+    assert!(result.parse_errors.is_empty(), "{:?}", result.parse_errors);
+    assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
+
+    let [diagnostic] = result.diagnostics.as_slice() else {
+        panic!(
+            "number[].map(number => number) must infer number[], not Array<any>: {:?}",
+            result.diagnostics
+        );
+    };
+    let position = LineIndex::new(source).line_col(diagnostic.span.start);
+    assert_eq!(
+        (position.line, position.column, diagnostic.code),
+        (5, 7, DiagnosticCode::TK2322),
+    );
+    assert_eq!(
+        diagnostic.message,
+        "Type 'number[]' is not assignable to type 'string[]'",
+    );
+}
+
+#[test]
+fn snapshot_promise_resolve_preserves_number_surface_and_variance() {
+    let source = concat!(
+        "export {};\n",
+        "const resolved = Promise.resolve(1);\n",
+        "const promiseControl: Promise<number> = resolved;\n",
+        "resolved.then((value) => {\n",
+        "const valueControl: number = value;\n",
+        "const wrongValue: string = value;\n",
+        "return value;\n",
+        "});\n",
+        "const wrongPromise: Promise<string> = resolved;\n",
+    );
+    let result = check_source_with_decoded_base_for_test(
+        decode_exact_profile(SnapshotDecodeStrategy::EagerComplete),
+        source,
+    );
+    assert!(result.parse_errors.is_empty(), "{:?}", result.parse_errors);
+    assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
+
+    let lines = LineIndex::new(source);
+    let actual = result
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let position = lines.line_col(diagnostic.span.start);
+            (position.line, position.column, diagnostic.code)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        [
+            (6, 7, DiagnosticCode::TK2322),
+            (9, 7, DiagnosticCode::TK2322),
+        ],
+        "Promise.resolve(1) must expose number to then() and reject Promise<string>",
+    );
+    assert_eq!(
+        result.diagnostics[0].message,
+        "Type 'number' is not assignable to type 'string'",
+    );
+}
+
+#[test]
 fn snapshot_roundtrip_preserves_runtime_projection() {
     let compiled = compile_exact_profile();
     let source_projection = compiled.runtime_projection().clone();
@@ -667,40 +743,6 @@ fn snapshot_preserves_nominal_and_structural_identity() {
         source.class_id("VarDate")
     );
 
-    let nominal_source = concat!(
-        "declare const safe: SafeArray<number>;\n",
-        "const same: SafeArray<number> = safe;\n",
-        "declare const date: VarDate;\n",
-        "const wrongDate: SafeArray<number> = date;\n",
-        "declare const structural: {};\n",
-        "const wrongShape: SafeArray<number> = structural;\n",
-    );
-    let nominal = check_source_with_decoded_base_for_test(
-        decode_exact_profile(SnapshotDecodeStrategy::EagerComplete),
-        nominal_source,
-    );
-    assert!(
-        nominal.parse_errors.is_empty(),
-        "{:?}",
-        nominal.parse_errors
-    );
-    assert!(nominal.incomplete.is_empty(), "{:?}", nominal.incomplete);
-    let lines = LineIndex::new(nominal_source);
-    assert_eq!(
-        nominal
-            .diagnostics
-            .iter()
-            .map(|diagnostic| {
-                let position = lines.line_col(diagnostic.span.start);
-                (position.line, position.column, diagnostic.code)
-            })
-            .collect::<Vec<_>>(),
-        [
-            (4, 7, DiagnosticCode::TK2322),
-            (6, 7, DiagnosticCode::TK2322),
-        ]
-    );
-
     let named_function_library = [InjectedLibrarySource {
         file_ordinal: LibraryFileOrdinal::new(0),
         name: "snapshot-named-function.d.ts",
@@ -734,6 +776,39 @@ fn snapshot_preserves_nominal_and_structural_identity() {
     assert_eq!(
         named_function.diagnostics[0].message,
         "Property 'notAFunctionMember' does not exist on type 'typeof SnapshotNamedFunction'"
+    );
+}
+
+#[test]
+fn snapshot_nominal_assignment_uses_tsc_code_and_declaration_span() {
+    let source = concat!(
+        "declare const safe: SafeArray<number>;\n",
+        "const same: SafeArray<number> = safe;\n",
+        "declare const date: VarDate;\n",
+        "const wrongDate: SafeArray<number> = date;\n",
+        "declare const structural: {};\n",
+        "const wrongShape: SafeArray<number> = structural;\n",
+    );
+    let result = check_source_with_decoded_base_for_test(
+        decode_exact_profile(SnapshotDecodeStrategy::EagerComplete),
+        source,
+    );
+    assert!(result.parse_errors.is_empty(), "{:?}", result.parse_errors);
+    assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
+    let lines = LineIndex::new(source);
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| {
+                let position = lines.line_col(diagnostic.span.start);
+                (position.line, position.column, diagnostic.code)
+            })
+            .collect::<Vec<_>>(),
+        [
+            (4, 7, DiagnosticCode::TK2741),
+            (6, 7, DiagnosticCode::TK2741),
+        ],
     );
 }
 
