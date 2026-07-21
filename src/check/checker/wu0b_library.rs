@@ -2751,6 +2751,54 @@ mod tests {
         state.into_snapshot_parts().expect("extract snapshot parts")
     }
 
+    fn compile_reservation_fixture(
+        file_name: &'static str,
+        source: &'static str,
+    ) -> OwnedLibraryRuntimeState {
+        compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: file_name,
+            source,
+        }])
+        .expect("reservation lifecycle fixture compiles")
+        .1
+    }
+
+    fn assert_type_group_is_error_or_unavailable(state: &OwnedLibraryRuntimeState, name: &str) {
+        let group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == name)
+            .expect("fixture type group");
+        match state.published_types.groups().get(group.id) {
+            Some(PublishedTypeGroupTerminal::Unavailable(_)) => {}
+            Some(PublishedTypeGroupTerminal::Ready(group)) => match group.surface {
+                PublishedTypeGroupSurface::Template(ty)
+                    if ty == state.interner.well_known().error => {}
+                PublishedTypeGroupSurface::Template(ty) => panic!(
+                    "{name} accidentally published TypeId {} ({:?}) instead of error/unavailable",
+                    ty.0,
+                    state.interner.store().tag(ty)
+                ),
+                PublishedTypeGroupSurface::Class(class) => {
+                    panic!("{name} accidentally published class {class:?}")
+                }
+            },
+            None => panic!("{name} has no published terminal"),
+        }
+    }
+
+    fn strict_snapshot_failure(label: &str, source: &'static str, root: &str) -> Option<String> {
+        let state = compile_reservation_fixture("reservation-lifecycle.d.ts", source);
+        assert_type_group_is_error_or_unavailable(&state, root);
+        state
+            .interner
+            .encode_snapshot_bytes_for_test()
+            .err()
+            .map(|error| format!("{label}: {error:?}"))
+    }
+
     fn replace_module_sources(
         parts: &mut OwnedLibraryRuntimeSnapshotParts,
         module_sources: rustc_hash::FxHashMap<ScopeId, crate::binder::namespace::SourceUnitKey>,
@@ -2807,6 +2855,111 @@ mod tests {
         assert_owned_terminal::<InjectedProfileRun>();
         assert_owned_terminal::<InjectedProfileError>();
         assert_owned_terminal::<LibraryPhaseTimings>();
+    }
+
+    #[test]
+    fn failed_conditional_alias_recovery_leaves_no_pending_reservation() {
+        let source = r#"
+            type FailedAwaited<T> = T extends null | undefined ? T :
+                T extends object & {
+                    then(onfulfilled: infer F, ...args: infer _): any;
+                } ? F extends ((value: infer V, ...args: infer _) => any) ?
+                    FailedAwaited<V> : never : T;
+        "#;
+        let failure = strict_snapshot_failure("FailedAwaited", source, "FailedAwaited");
+        assert!(failure.is_none(), "{failure:#?}");
+    }
+
+    #[test]
+    fn failed_mapped_alias_recovery_leaves_no_pending_reservation() {
+        let source = r#"
+            type FailedMapped<T> = { [K in FailedMapped<T>]: T };
+        "#;
+        let failure = strict_snapshot_failure("FailedMapped", source, "FailedMapped");
+        assert!(failure.is_none(), "{failure:#?}");
+    }
+
+    #[test]
+    fn conflicting_conditional_alias_reservations_close_in_both_orders() {
+        let alias_first = r#"
+            type ConditionalCollision<T> = T extends string ? string : number;
+            interface ConditionalCollision<T> { interfaceMember: T; }
+        "#;
+        let interface_first = r#"
+            interface ConditionalCollision<T> { interfaceMember: T; }
+            type ConditionalCollision<T> = T extends string ? string : number;
+        "#;
+        let failures = [
+            strict_snapshot_failure(
+                "conditional-alias-first",
+                alias_first,
+                "ConditionalCollision",
+            ),
+            strict_snapshot_failure(
+                "conditional-interface-first",
+                interface_first,
+                "ConditionalCollision",
+            ),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    fn conflicting_mapped_alias_reservations_close_in_both_orders() {
+        let alias_first = r#"
+            type MappedCollision<T> = { [K in keyof T]: T[K] };
+            interface MappedCollision<T> { interfaceMember: T; }
+        "#;
+        let interface_first = r#"
+            interface MappedCollision<T> { interfaceMember: T; }
+            type MappedCollision<T> = { [K in keyof T]: T[K] };
+        "#;
+        let failures = [
+            strict_snapshot_failure("mapped-alias-first", alias_first, "MappedCollision"),
+            strict_snapshot_failure("mapped-interface-first", interface_first, "MappedCollision"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    fn conflicting_object_alias_reservations_close_in_both_orders() {
+        let alias_first = r#"
+            type ObjectCollision = { aliasMember: string };
+            interface ObjectCollision { interfaceMember: number; }
+        "#;
+        let interface_first = r#"
+            interface ObjectCollision { interfaceMember: number; }
+            type ObjectCollision = { aliasMember: string };
+        "#;
+        let failures = [
+            strict_snapshot_failure("object-alias-first", alias_first, "ObjectCollision"),
+            strict_snapshot_failure("object-interface-first", interface_first, "ObjectCollision"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "full-profile reservation closure is release-only"
+    )]
+    fn exact_profile_interner_has_no_pending_reservations() {
+        let profile = load_strict_profile().expect("strict full-library profile");
+        let (_, state) = compile_owned_injected_profile(&profile.injected_sources())
+            .expect("source-compiled full-library profile");
+        state
+            .interner
+            .encode_snapshot_bytes_for_test()
+            .expect("full profile must close every reserved type before snapshot");
     }
 
     #[test]
