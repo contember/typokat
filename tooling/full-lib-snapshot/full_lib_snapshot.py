@@ -40,6 +40,10 @@ HARNESS_ZERO = re.compile(
 )
 STRATEGY = "eager-complete"
 RECORD_KIND = "eager-fast-clean"
+SCHEMA_IDENTITY = hashlib.sha256(
+    b"0dcb6c65d3586eab7d667a819baa560f77ea22524b8fdbf15af759590abe7a45"
+    b"|function-groups.symbols-v1"
+).hexdigest()
 
 
 class ContractError(RuntimeError):
@@ -206,7 +210,7 @@ def load_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
     exact_keys(data["wire"], {"magic", "version", "schema_sha256", "section_names", "section_tags"}, "contract.wire")
     if data["wire"] != {
         "magic": "typokat-semantic-snapshot", "version": 1,
-        "schema_sha256": "0dcb6c65d3586eab7d667a819baa560f77ea22524b8fdbf15af759590abe7a45",
+        "schema_sha256": SCHEMA_IDENTITY,
         "section_names": ["store", "interner", "binder", "decl-types", "published-types", "namespace-terminals", "class-metadata", "semantic-identities", "root-name-index", "next-ids"],
         "section_tags": list(range(1, 11)),
     }:

@@ -28,7 +28,8 @@ schema = 1
 [wire]
 magic = "typokat-semantic-snapshot"
 version = 1
-schema_sha256 = "0dcb6c65d3586eab7d667a819baa560f77ea22524b8fdbf15af759590abe7a45"
+# sha256(previous schema identity + "|function-groups.symbols-v1")
+schema_sha256 = "b7f9c947fd684e45da2ef8f351f9d09c71d1d8330e7f52b7953bb80ef128a311"
 section_names = ["store", "interner", "binder", "decl-types", "published-types", "namespace-terminals", "class-metadata", "semantic-identities", "root-name-index", "next-ids"]
 section_tags = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 

@@ -16,9 +16,10 @@
 //!
 //! The archive includes the complete type store and interner identity state; binder
 //! scope/symbol/declaration/type-group/namespace tables and indexes; `DeclTypes`;
-//! published groups/classes and namespace terminals; owner-free class application,
-//! default, parent, name, `new`, value and alias metadata; semantic root identities; and
-//! final ID counters. It excludes source bodies, OXC AST/allocators, declaration drafts,
+//! published groups/classes and namespace terminals; owner-free named-function-group
+//! symbols plus class application, default, parent, name, `new`, value and alias metadata;
+//! semantic root identities; and final ID counters. It excludes source bodies, OXC
+//! AST/allocators, declaration drafts,
 //! lexical tickets/ledgers, library `fn_scopes`/`fn_decl_ids`/`block_scopes` AST-site
 //! indexes, flow/query/relation/evaluator/application caches, phase counters, benchmark
 //! data and rendered diagnostics. Fresh user-local AST-site indexes remain necessary.
@@ -85,8 +86,9 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
+// SHA-256 of the preceding schema identity plus `|function-groups.symbols-v1`.
 const SNAPSHOT_SCHEMA_IDENTITY: &str =
-    "0dcb6c65d3586eab7d667a819baa560f77ea22524b8fdbf15af759590abe7a45";
+    "b7f9c947fd684e45da2ef8f351f9d09c71d1d8330e7f52b7953bb80ef128a311";
 const FAST_CLEAN: &str =
     include_str!("../../../tooling/full-lib-bench/workloads/fast-clean/main.ts");
 const FAST_ERRORS: &str =
@@ -543,6 +545,7 @@ fn snapshot_roundtrip_preserves_runtime_projection() {
             "published-types.groups",
             "published-types.classes",
             "namespace-terminals",
+            "function-groups.symbols",
             "class.application-parameters",
             "class.parameter-defaults",
             "class.parents",
@@ -696,6 +699,41 @@ fn snapshot_preserves_nominal_and_structural_identity() {
             (4, 7, DiagnosticCode::TK2322),
             (6, 7, DiagnosticCode::TK2322),
         ]
+    );
+
+    let named_function_library = [InjectedLibrarySource {
+        file_ordinal: LibraryFileOrdinal::new(0),
+        name: "snapshot-named-function.d.ts",
+        source: concat!(
+            "declare function SnapshotNamedFunction(value: number): number;\n",
+            "declare namespace SnapshotNamedFunction { const identity: string; }\n",
+        ),
+    }];
+    let named_function_snapshot = compile_snapshot_for_test(&named_function_library)
+        .expect("named function metadata compiles into the snapshot");
+    let validated = validate_snapshot_for_test(named_function_snapshot.archive().as_bytes())
+        .expect("named function snapshot validates");
+    let decoded = decode_snapshot_for_test(validated, SnapshotDecodeStrategy::EagerComplete)
+        .expect("named function snapshot decodes");
+    let named_function = check_source_with_decoded_base_for_test(
+        decoded,
+        "SnapshotNamedFunction.notAFunctionMember;\n",
+    );
+    assert!(
+        named_function.parse_errors.is_empty(),
+        "{:?}",
+        named_function.parse_errors
+    );
+    assert!(
+        named_function.incomplete.is_empty(),
+        "{:?}",
+        named_function.incomplete
+    );
+    assert_eq!(named_function.diagnostics.len(), 1);
+    assert_eq!(named_function.diagnostics[0].code, DiagnosticCode::TK2339);
+    assert_eq!(
+        named_function.diagnostics[0].message,
+        "Property 'notAFunctionMember' does not exist on type 'typeof SnapshotNamedFunction'"
     );
 }
 
