@@ -66,8 +66,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> Option<Vec<ParameterType>> {
         let mut lowered = Vec::with_capacity(parameter_count(params));
         let mut unavailable = false;
-        for syntax in parameter_syntaxes(params) {
-            let name = parameter_name(syntax.pattern());
+        for (index, syntax) in parameter_syntaxes(params).enumerate() {
+            let name =
+                parameter_name(syntax.pattern()).unwrap_or_else(|| format!("_destructured{index}"));
             let annotation = match syntax {
                 ParameterSyntax::Fixed { parameter, .. } => parameter.type_annotation.as_ref(),
                 ParameterSyntax::Rest { parameter } => parameter.type_annotation.as_ref(),
@@ -78,9 +79,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 Some(annotation) => self.lower_annotation(scope, &annotation.type_annotation),
                 None => None,
             };
-            match (name, ty) {
-                (Some(name), Some(ty)) => lowered.push(syntax.with_type(name, ty)),
-                _ => unavailable = true,
+            match ty {
+                Some(ty) => lowered.push(syntax.with_type(name, ty)),
+                None => unavailable = true,
             }
         }
         if unavailable {

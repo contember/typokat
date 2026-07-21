@@ -1150,7 +1150,40 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return CandidateTrial::Arity(arity);
         }
 
-        let targets = self.call_argument_targets(params, arg_types.len());
+        let alternatives = self.call_argument_target_alternatives(params, arg_types.len());
+        if alternatives.is_empty() {
+            #[cfg(test)]
+            measure_call(|measure| measure.candidate_mismatches += 1);
+            return CandidateTrial::Mismatch;
+        }
+        if alternatives.len() > 1 {
+            #[cfg(test)]
+            let compatibility =
+                with_contextual_measure_phase(ContextualMeasurePhase::CandidateTrial, || {
+                    self.compatible_call_argument_targets(params, arg_types, arg_exprs, scope)
+                });
+            #[cfg(not(test))]
+            let compatibility =
+                self.compatible_call_argument_targets(params, arg_types, arg_exprs, scope);
+            return match compatibility {
+                DemandOutcome::Ready(Some(_)) => {
+                    #[cfg(test)]
+                    measure_call(|measure| measure.candidate_matches += 1);
+                    CandidateTrial::Match
+                }
+                DemandOutcome::Ready(None) => {
+                    #[cfg(test)]
+                    measure_call(|measure| measure.candidate_mismatches += 1);
+                    CandidateTrial::Mismatch
+                }
+                DemandOutcome::Exhausted(exhaustion) => CandidateTrial::Exhausted(exhaustion),
+            };
+        }
+
+        let targets = alternatives
+            .into_iter()
+            .next()
+            .expect("one alternative has a first element");
         for (((arg_ty, arg_span), arg_expr), param_ty) in
             arg_types.iter().zip(arg_exprs).zip(targets)
         {
@@ -1293,7 +1326,42 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.check_call_arity(params, arg_types.len(), call_span);
 
         let never = self.interner.well_known().never;
-        let targets = self.call_argument_targets(params, arg_types.len());
+        let alternatives = self.call_argument_target_alternatives(params, arg_types.len());
+        let union_rest_mismatch = alternatives.is_empty();
+        let targets = if union_rest_mismatch {
+            let fixed: Vec<&ParameterType> = params
+                .iter()
+                .filter(|parameter| parameter.is_fixed())
+                .collect();
+            (0..arg_types.len())
+                .map(|index| fixed.get(index).map(|parameter| parameter.ty))
+                .collect()
+        } else if alternatives.len() == 1 {
+            alternatives
+                .into_iter()
+                .next()
+                .expect("one alternative has a first element")
+        } else {
+            #[cfg(test)]
+            let compatibility =
+                with_contextual_measure_phase(ContextualMeasurePhase::CommittedCheck, || {
+                    self.compatible_call_argument_targets(params, arg_types, arg_exprs, scope)
+                });
+            #[cfg(not(test))]
+            let compatibility =
+                self.compatible_call_argument_targets(params, arg_types, arg_exprs, scope);
+            match compatibility {
+                DemandOutcome::Ready(Some(targets)) => targets,
+                DemandOutcome::Ready(None) => alternatives
+                    .into_iter()
+                    .next()
+                    .expect("multiple alternatives have a first element"),
+                DemandOutcome::Exhausted(exhaustion) => {
+                    self.own_type_demand(DemandOutcome::Exhausted(exhaustion), call_span);
+                    return;
+                }
+            }
+        };
         for (((arg_ty, arg_span), arg_expr), param_ty) in
             arg_types.iter().zip(arg_exprs).zip(targets)
         {
@@ -1334,6 +1402,103 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 break;
             }
         }
+        if union_rest_mismatch {
+            self.schedule_union_rest_tuple_obligation(params, arg_types, call_span);
+        }
+    }
+
+    fn schedule_union_rest_tuple_obligation(
+        &mut self,
+        params: &[ParameterType],
+        arg_types: &[(TypeId, Span)],
+        call_span: Span,
+    ) {
+        let fixed_count = params
+            .iter()
+            .filter(|parameter| parameter.is_fixed())
+            .count();
+        let Some(rest) = params.iter().find(|parameter| parameter.rest) else {
+            return;
+        };
+        let rest_types: Vec<TypeId> = arg_types
+            .iter()
+            .skip(fixed_count)
+            .map(|(ty, _)| *ty)
+            .collect();
+        if rest_types.len() < self.rest_parameter_arity(rest.ty).min {
+            return;
+        }
+        let span = arg_types
+            .get(fixed_count)
+            .map(|(_, span)| *span)
+            .unwrap_or(call_span);
+        let src = self.interner.intern_tuple(rest_types);
+        self.schedule_obligation(AssignObligation {
+            src,
+            tgt: rest.ty,
+            src_span: span,
+            kind: ObligationKind::Argument,
+        });
+    }
+
+    fn compatible_call_argument_targets(
+        &mut self,
+        params: &[ParameterType],
+        arg_types: &[(TypeId, Span)],
+        arg_exprs: &[&Expression<'_>],
+        scope: ScopeId,
+    ) -> DemandOutcome<Option<Vec<Option<TypeId>>>> {
+        let alternatives = self.call_argument_target_alternatives(params, arg_types.len());
+        for targets in alternatives {
+            let mut compatible = true;
+            for (((arg_ty, arg_span), arg_expr), param_ty) in
+                arg_types.iter().zip(arg_exprs).zip(&targets)
+            {
+                let Some(param_ty) = *param_ty else {
+                    continue;
+                };
+                let (src, _) = self.infer_contextual_source_after_walked(
+                    scope,
+                    arg_expr,
+                    param_ty,
+                    (*arg_ty, *arg_span),
+                    true,
+                    false,
+                );
+                let diagnostics = match self.check_excess_properties_for_target(arg_expr, param_ty)
+                {
+                    DemandOutcome::Ready(diagnostics) => diagnostics,
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion)
+                    }
+                };
+                if !diagnostics.is_empty() {
+                    compatible = false;
+                    break;
+                }
+                match SemanticQueryCoordinator::new(
+                    self.interner,
+                    self.type_environment.published().classes(),
+                    &mut self.semantic_queries,
+                    &mut self.next_type_param,
+                )
+                .is_assignable(src, param_ty)
+                {
+                    RelationOutcome::Yes => {}
+                    RelationOutcome::No(_) => {
+                        compatible = false;
+                        break;
+                    }
+                    RelationOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion)
+                    }
+                }
+            }
+            if compatible {
+                return DemandOutcome::Ready(Some(targets));
+            }
+        }
+        DemandOutcome::Ready(None)
     }
 
     /// Check an explicit non-positional receiver after overload selection. Bare
@@ -1512,38 +1677,101 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     fn rest_parameter_arity(&self, rest_ty: TypeId) -> RestArity {
-        if let Some(shape) = self.rest_call_shape(rest_ty) {
-            return RestArity {
-                min: shape.min_len(),
-                max: shape.max_len(),
+        if let Some(shapes) = self.rest_call_shapes(rest_ty) {
+            let min = shapes.iter().map(RestCallShape::min_len).min().unwrap_or(0);
+            let max = if self.interner.store().union_members(rest_ty).is_some() {
+                // Union-rest mismatches are reported once against the tuple union.
+                None
+            } else if shapes.iter().any(|shape| shape.max_len().is_none()) {
+                None
+            } else {
+                shapes.iter().filter_map(RestCallShape::max_len).max()
             };
+            return RestArity { min, max };
         }
         RestArity { min: 0, max: None }
     }
 
     fn call_argument_targets(
-        &self,
+        &mut self,
         params: &[ParameterType],
         arg_count: usize,
     ) -> Vec<Option<TypeId>> {
+        let alternatives = self.call_argument_target_alternatives(params, arg_count);
+        let Some(first) = alternatives.first() else {
+            return vec![None; arg_count];
+        };
+        if alternatives.len() == 1 {
+            return first.clone();
+        }
+        (0..arg_count)
+            .map(|index| {
+                let members: Vec<TypeId> = alternatives
+                    .iter()
+                    .filter_map(|targets| targets.get(index).copied().flatten())
+                    .collect();
+                (!members.is_empty()).then(|| self.interner.union(members))
+            })
+            .collect()
+    }
+
+    fn call_argument_target_alternatives(
+        &self,
+        params: &[ParameterType],
+        arg_count: usize,
+    ) -> Vec<Vec<Option<TypeId>>> {
         let fixed: Vec<&ParameterType> = params.iter().filter(|param| param.is_fixed()).collect();
         let rest = params.iter().find(|param| param.rest);
         let total_rest_args = arg_count.saturating_sub(fixed.len());
-        (0..arg_count)
+        let fixed_targets = || {
+            (0..arg_count)
+                .map(|index| fixed.get(index).map(|param| param.ty))
+                .collect::<Vec<_>>()
+        };
+        let Some(rest) = rest else {
+            return vec![fixed_targets()];
+        };
+        let Some(shapes) = self.rest_call_shapes(rest.ty) else {
+            return if self.interner.store().union_members(rest.ty).is_some() {
+                Vec::new()
+            } else {
+                vec![fixed_targets()]
+            };
+        };
+        let alternatives: Vec<Vec<Option<TypeId>>> = shapes
+            .iter()
+            .filter(|shape| shape.accepts_len(total_rest_args))
+            .map(|shape| {
+                (0..arg_count)
+                    .map(|index| {
+                        if let Some(param) = fixed.get(index) {
+                            return Some(param.ty);
+                        }
+                        shape.element_at(index - fixed.len(), total_rest_args)
+                    })
+                    .collect()
+            })
+            .collect();
+        if !alternatives.is_empty() {
+            return alternatives;
+        }
+        if self.interner.store().union_members(rest.ty).is_some() {
+            return Vec::new();
+        }
+        vec![(0..arg_count)
             .map(|index| {
                 if let Some(param) = fixed.get(index) {
                     return Some(param.ty);
                 }
-                let rest = rest?;
                 self.rest_argument_target(rest.ty, index - fixed.len(), total_rest_args)
             })
-            .collect()
+            .collect()]
     }
 
     /// Contextual arrows use the same positional/rest expansion as calls, so an
     /// arrow against `(...args: [A, B]) => R` receives `A` then `B` bindings.
     pub(in crate::check::checker) fn contextual_parameter_target(
-        &self,
+        &mut self,
         params: &[ParameterType],
         index: usize,
         parameter_count: usize,
@@ -1569,55 +1797,80 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         offset: usize,
         total_rest_args: usize,
     ) -> Option<TypeId> {
-        self.rest_call_shape(rest_ty)?
+        self.rest_call_shapes(rest_ty)?
+            .into_iter()
+            .find(|shape| shape.accepts_len(total_rest_args))?
             .element_at(offset, total_rest_args)
     }
 
-    fn rest_call_shape(&self, rest_ty: TypeId) -> Option<RestCallShape> {
+    fn rest_call_shapes(&self, rest_ty: TypeId) -> Option<Vec<RestCallShape>> {
         let rest_ty = self
             .interner
             .store()
             .readonly_operand(rest_ty)
             .unwrap_or(rest_ty);
+        if let Some(members) = self.interner.store().union_members(rest_ty) {
+            let members = members.to_vec();
+            let mut shapes = Vec::with_capacity(members.len());
+            for member in members {
+                let member = self
+                    .interner
+                    .store()
+                    .readonly_operand(member)
+                    .unwrap_or(member);
+                if self.interner.store().array_type(member).is_none()
+                    && self.interner.store().tuple_type(member).is_none()
+                {
+                    return None;
+                }
+                shapes.extend(self.rest_call_shapes(member)?);
+            }
+            return Some(shapes);
+        }
         if let Some(array) = self.interner.store().array_type(rest_ty) {
-            return Some(RestCallShape {
+            return Some(vec![RestCallShape {
                 prefix: Vec::new(),
                 variadic: Some(array.element),
                 suffix: Vec::new(),
-            });
+            }]);
         }
         if let Some(tuple) = self.interner.store().tuple_type(rest_ty) {
-            return self.tuple_call_shape(tuple);
+            return self.tuple_call_shapes(tuple);
         }
-        Some(RestCallShape {
+        Some(vec![RestCallShape {
             prefix: Vec::new(),
             variadic: Some(rest_ty),
             suffix: Vec::new(),
-        })
+        }])
     }
 
-    fn tuple_call_shape(&self, tuple: &TupleType) -> Option<RestCallShape> {
+    fn tuple_call_shapes(&self, tuple: &TupleType) -> Option<Vec<RestCallShape>> {
         let Some(rest) = tuple.rest else {
-            return Some(RestCallShape {
+            return Some(vec![RestCallShape {
                 prefix: tuple.elements.clone(),
                 variadic: None,
                 suffix: Vec::new(),
-            });
+            }]);
         };
         if rest.position > tuple.elements.len() {
             return None;
         }
-        let mut prefix = tuple.elements[..rest.position].to_vec();
         let suffix = tuple.elements[rest.position..].to_vec();
-        let rest_shape = self.rest_call_shape(rest.ty)?;
-        prefix.extend(rest_shape.prefix);
-        let mut combined_suffix = rest_shape.suffix;
-        combined_suffix.extend(suffix);
-        Some(RestCallShape {
-            prefix,
-            variadic: rest_shape.variadic,
-            suffix: combined_suffix,
-        })
+        self.rest_call_shapes(rest.ty)?
+            .into_iter()
+            .map(|rest_shape| {
+                let mut prefix = tuple.elements[..rest.position].to_vec();
+                prefix.extend(rest_shape.prefix);
+                let mut combined_suffix = rest_shape.suffix;
+                combined_suffix.extend_from_slice(&suffix);
+                RestCallShape {
+                    prefix,
+                    variadic: rest_shape.variadic,
+                    suffix: combined_suffix,
+                }
+            })
+            .collect::<Vec<_>>()
+            .into()
     }
 
     /// Return the contextual type for a tuple-literal position, including a represented
@@ -1628,7 +1881,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         index: usize,
         total_elements: usize,
     ) -> Option<TypeId> {
-        self.tuple_call_shape(tuple)?
+        self.tuple_call_shapes(tuple)?
+            .into_iter()
+            .find(|shape| shape.accepts_len(total_elements))?
             .element_at(index, total_elements)
     }
 
@@ -3037,11 +3292,13 @@ struct CallArity {
     unbounded_rest: bool,
 }
 
+#[derive(Clone, Copy)]
 struct RestArity {
     min: usize,
     max: Option<usize>,
 }
 
+#[derive(Clone)]
 struct RestCallShape {
     prefix: Vec<TypeId>,
     variadic: Option<TypeId>,
