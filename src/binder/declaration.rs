@@ -274,6 +274,30 @@ impl DeclarationTable {
     pub fn is_empty(&self) -> bool {
         self.declarations.is_empty()
     }
+
+    #[cfg(test)]
+    pub(crate) fn from_snapshot(
+        declarations: Vec<LexicalDeclaration>,
+    ) -> Result<Self, &'static str> {
+        let mut declarations_by_site = FxHashMap::default();
+        for (index, declaration) in declarations.iter().enumerate() {
+            if declaration.id.index() != index {
+                return Err("snapshot declaration ids are not dense");
+            }
+            let key = (
+                declaration.site.module,
+                declaration.site.binding_span.start,
+                declaration.kind,
+            );
+            if declarations_by_site.insert(key, declaration.id).is_some() {
+                return Err("snapshot declaration-site index contains a duplicate");
+            }
+        }
+        Ok(Self {
+            declarations,
+            declarations_by_site,
+        })
+    }
 }
 
 /// Type-bearing source form retained in an ordered dormant group.
@@ -339,6 +363,18 @@ impl TypeGroupTable {
 
     pub fn iter(&self) -> impl Iterator<Item = &TypeGroup> {
         self.groups.iter()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_snapshot(groups: Vec<TypeGroup>) -> Result<Self, &'static str> {
+        if groups
+            .iter()
+            .enumerate()
+            .any(|(index, group)| group.id.index() != index)
+        {
+            return Err("snapshot type-group ids are not dense");
+        }
+        Ok(Self { groups })
     }
 }
 

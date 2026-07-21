@@ -9,6 +9,9 @@ pub mod namespace;
 pub mod scope;
 pub mod symbol;
 
+#[cfg(test)]
+pub(crate) mod snapshot;
+
 pub use bind::{bind_module_with_prelude, Binder};
 
 #[cfg(test)]

@@ -98,6 +98,11 @@ impl SymbolTable {
     }
 
     #[cfg(test)]
+    pub(crate) fn snapshot_symbols(&self) -> &[Symbol] {
+        &self.symbols
+    }
+
+    #[cfg(test)]
     pub(crate) fn iter(&self) -> impl Iterator<Item = (SymbolId, &Symbol)> {
         self.symbols.iter().enumerate().map(|(index, symbol)| {
             (

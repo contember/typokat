@@ -102,6 +102,46 @@ impl Binder {
             .expect("binder retains at least the prelude source key")
     }
 
+    #[cfg(test)]
+    pub(crate) fn snapshot_module_sources(&self) -> &FxHashMap<ScopeId, SourceUnitKey> {
+        &self.module_sources
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_snapshot_parts(
+        graph: ScopeGraph,
+        symbols: SymbolTable,
+        declarations: DeclarationTable,
+        type_groups: TypeGroupTable,
+        namespaces: NamespaceTable,
+        module: ScopeId,
+        prelude_module: ScopeId,
+        compilation_global: ScopeId,
+        script_namespace_root: ScopeId,
+        decl_count: u32,
+        prelude_type_group_count: u32,
+        module_sources: FxHashMap<ScopeId, SourceUnitKey>,
+    ) -> Self {
+        Self {
+            graph,
+            symbols,
+            declarations,
+            type_groups,
+            namespaces,
+            module,
+            prelude_module,
+            compilation_global,
+            script_namespace_root,
+            decl_count,
+            prelude_type_group_count,
+            fn_scopes: FxHashMap::default(),
+            fn_decl_ids: FxHashMap::default(),
+            block_scopes: FxHashMap::default(),
+            module_sources,
+        }
+    }
+
     /// Return the canonical semantically admitted declaration at one exact syntax site.
     pub(crate) fn exact_declaration_at(
         &self,

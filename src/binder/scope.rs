@@ -101,6 +101,16 @@ impl ScopeGraph {
         self.scopes.get_mut(id.index())
     }
 
+    #[cfg(test)]
+    pub(crate) fn snapshot_len(&self) -> usize {
+        self.scopes.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn snapshot_scopes(&self) -> &[Scope] {
+        &self.scopes
+    }
+
     /// Declare `name → symbol` directly in `scope`; duplicate-name diagnostics are deferred.
     pub fn declare(
         &mut self,

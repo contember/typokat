@@ -841,6 +841,25 @@ pub struct NamespaceTable {
     library_shared_globals: bool,
 }
 
+#[cfg(test)]
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct NamespaceSnapshotPrimary {
+    pub(crate) namespaces: Vec<Namespace>,
+    pub(crate) standalone_value_storages: Vec<Option<ValueStorageId>>,
+    pub(crate) fragments: Vec<NamespaceFragment>,
+    pub(crate) members: Vec<NamespaceMember>,
+    pub(crate) placements: Vec<(DeclarationOwner, String, Vec<MergeParticipant>)>,
+    pub(crate) globals: Vec<GlobalAugmentation>,
+    pub(crate) deferred_modules: Vec<DeferredAmbientModule>,
+    pub(crate) deferred_children: Vec<DeferredAmbientChild>,
+    pub(crate) umd_exports: Vec<UmdNamespaceExport>,
+    pub(crate) export_contexts: Vec<ExportContext>,
+    pub(crate) source_units: Vec<SourceUnitRecord>,
+    pub(crate) compilation_global: Option<ScopeId>,
+    pub(crate) script_namespace_root: Option<ScopeId>,
+    pub(crate) library_shared_globals: bool,
+}
+
 impl NamespaceTable {
     #[cfg(test)]
     pub(crate) fn global_augmentation_count(&self) -> usize {
@@ -1076,6 +1095,232 @@ impl NamespaceTable {
 
     pub fn is_empty(&self) -> bool {
         self.namespaces.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn snapshot_primary(&self) -> NamespaceSnapshotPrimary {
+        NamespaceSnapshotPrimary {
+            namespaces: self.namespaces.clone(),
+            standalone_value_storages: self.standalone_value_storages.clone(),
+            fragments: self.fragments.clone(),
+            members: self.members.clone(),
+            placements: self
+                .merges
+                .iter()
+                .map(|merge| (merge.owner, merge.name.clone(), merge.declarations.clone()))
+                .collect(),
+            globals: self.globals.clone(),
+            deferred_modules: self.deferred_modules.clone(),
+            deferred_children: self.deferred_children.clone(),
+            umd_exports: self.umd_exports.clone(),
+            export_contexts: self.export_contexts.clone(),
+            source_units: self.source_units.clone(),
+            compilation_global: self.compilation_global,
+            script_namespace_root: self.script_namespace_root,
+            library_shared_globals: self.library_shared_globals,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_snapshot_primary(
+        primary: NamespaceSnapshotPrimary,
+    ) -> Result<Self, &'static str> {
+        Self::validate_snapshot_primary_for_classification(&primary)?;
+        let decoded_primary = primary.clone();
+        let NamespaceSnapshotPrimary {
+            namespaces,
+            standalone_value_storages,
+            fragments,
+            members,
+            placements: primary_placements,
+            globals,
+            deferred_modules,
+            deferred_children,
+            umd_exports,
+            export_contexts,
+            source_units,
+            compilation_global,
+            script_namespace_root,
+            library_shared_globals,
+        } = primary;
+        if namespaces
+            .iter()
+            .enumerate()
+            .any(|(index, namespace)| namespace.id.index() != index)
+            || fragments
+                .iter()
+                .enumerate()
+                .any(|(index, fragment)| fragment.id.index() != index)
+            || members
+                .iter()
+                .enumerate()
+                .any(|(index, member)| member.id.index() != index)
+            || globals
+                .iter()
+                .enumerate()
+                .any(|(index, global)| global.id.index() != index)
+            || deferred_modules
+                .iter()
+                .enumerate()
+                .any(|(index, module)| module.id.index() != index)
+            || export_contexts
+                .iter()
+                .enumerate()
+                .any(|(index, context)| context.id.index() != index)
+        {
+            return Err("snapshot namespace identities are not dense");
+        }
+        if standalone_value_storages.len() != namespaces.len() {
+            return Err("snapshot namespace storage column has the wrong length");
+        }
+        let mut namespace_keys = FxHashMap::default();
+        for namespace in &namespaces {
+            let key = NamespaceKey {
+                owner: namespace.owner,
+                name: namespace.name.clone(),
+            };
+            if namespace_keys.insert(key, namespace.id).is_some() {
+                return Err("snapshot namespace key index contains a duplicate");
+            }
+        }
+        let mut placements = FxHashMap::default();
+        for (owner, name, declarations) in primary_placements {
+            if placements
+                .insert(MergeKey { owner, name }, declarations)
+                .is_some()
+            {
+                return Err("snapshot merge placement index contains a duplicate");
+            }
+        }
+        let mut table = Self {
+            namespaces,
+            aggregate_instance_states: Vec::new(),
+            standalone_value_storages,
+            fragments,
+            members,
+            namespace_keys,
+            canonical_namespaces: Vec::new(),
+            placements,
+            merges: Vec::new(),
+            globals,
+            deferred_modules,
+            deferred_children,
+            umd_exports,
+            export_contexts,
+            source_units,
+            canonical_source_units: Vec::new(),
+            canonical_globals: Vec::new(),
+            canonical_deferred_modules: Vec::new(),
+            canonical_deferred_children: Vec::new(),
+            canonical_umd_exports: Vec::new(),
+            canonical_export_contexts: Vec::new(),
+            compilation_global,
+            script_namespace_root,
+            library_shared_globals,
+        };
+        table.classify();
+        if table.snapshot_primary() != decoded_primary {
+            return Err("snapshot namespace derived state is not canonical");
+        }
+        Ok(table)
+    }
+
+    #[cfg(test)]
+    fn validate_snapshot_primary_for_classification(
+        primary: &NamespaceSnapshotPrimary,
+    ) -> Result<(), &'static str> {
+        if primary
+            .namespaces
+            .iter()
+            .enumerate()
+            .any(|(index, namespace)| namespace.id.index() != index)
+            || primary
+                .fragments
+                .iter()
+                .enumerate()
+                .any(|(index, fragment)| fragment.id.index() != index)
+            || primary
+                .members
+                .iter()
+                .enumerate()
+                .any(|(index, member)| member.id.index() != index)
+            || primary
+                .globals
+                .iter()
+                .enumerate()
+                .any(|(index, global)| global.id.index() != index)
+            || primary
+                .deferred_modules
+                .iter()
+                .enumerate()
+                .any(|(index, module)| module.id.index() != index)
+            || primary
+                .export_contexts
+                .iter()
+                .enumerate()
+                .any(|(index, context)| context.id.index() != index)
+        {
+            return Err("snapshot namespace identities are not dense");
+        }
+        if primary.standalone_value_storages.len() != primary.namespaces.len() {
+            return Err("snapshot namespace storage column has the wrong length");
+        }
+        let fragment_len = primary.fragments.len();
+        let member_len = primary.members.len();
+        if primary.namespaces.iter().any(|namespace| {
+            (primary.library_shared_globals && namespace.fragments.is_empty())
+                || namespace
+                    .fragments
+                    .iter()
+                    .any(|fragment| fragment.index() >= fragment_len)
+        }) {
+            return Err("snapshot namespace fragment reference is out of range");
+        }
+        if primary.fragments.iter().any(|fragment| {
+            fragment.namespace.index() >= primary.namespaces.len()
+                || fragment
+                    .members
+                    .iter()
+                    .any(|member| member.index() >= member_len)
+        }) {
+            return Err("snapshot fragment reference is out of range");
+        }
+        if primary.globals.iter().any(|global| {
+            global
+                .members
+                .iter()
+                .any(|member| member.index() >= member_len)
+        }) {
+            return Err("snapshot global member reference is out of range");
+        }
+        if primary.export_contexts.iter().any(|context| {
+            context
+                .members
+                .iter()
+                .any(|member| member.index() >= member_len)
+        }) {
+            return Err("snapshot export-context member reference is out of range");
+        }
+        if primary.placements.iter().any(|(_, _, declarations)| {
+            (primary.library_shared_globals && declarations.is_empty())
+                || declarations.iter().any(|declaration| {
+                    declaration
+                        .namespace_fragment
+                        .is_some_and(|fragment| fragment.index() >= fragment_len)
+                })
+        }) {
+            return Err("snapshot merge placement reference is out of range");
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn validate_snapshot_canonical(&self) -> Result<(), &'static str> {
+        let primary = self.snapshot_primary();
+        let rebuilt = Self::from_snapshot_primary(primary.clone())?;
+        (rebuilt.snapshot_primary() == primary)
+            .then_some(())
+            .ok_or("snapshot namespace derived ordering is not canonical")
     }
 
     fn classify(&mut self) {
