@@ -5,6 +5,9 @@ interface ElementBase {}
 interface DivElement extends ElementBase {
   align: string;
 }
+interface SpanElement extends ElementBase {
+  spanOnly: number;
+}
 
 // Production shape: lib.dom declares Document before HTMLElementTagNameMap.
 interface ForwardDocument {
@@ -13,24 +16,30 @@ interface ForwardDocument {
 }
 interface ForwardTagMap {
   div: DivElement;
+  span: SpanElement;
 }
 
 declare const forwardDocument: ForwardDocument;
 const forwardDiv: DivElement = forwardDocument.createElement("div");
-const forwardMissing: DivElement = forwardDocument.createElement("span"); // error[TK2741]: Property 'align' is missing
+const forwardSpan: SpanElement = forwardDocument.createElement("span");
+const forwardWrongElement: DivElement = forwardDocument.createElement("span"); // error[TK2741]: Property 'align' is missing
+const forwardMissing: DivElement = forwardDocument.createElement("missing"); // error[TK2741]: Property 'align' is missing
 
-// Reverse-order control: the same overload works when the map is already filled.
+// Eager-constraint control: literal-union inference selects the same map branches.
 interface ReverseTagMap {
   div: DivElement;
+  span: SpanElement;
 }
 interface ReverseDocument {
-  createElement<K extends keyof ReverseTagMap>(tagName: K): ReverseTagMap[K];
+  createElement<K extends "div" | "span">(tagName: K): ReverseTagMap[K];
   createElement(tagName: string): ElementBase;
 }
 
 declare const reverseDocument: ReverseDocument;
 const reverseDiv: DivElement = reverseDocument.createElement("div");
-const reverseMissing: DivElement = reverseDocument.createElement("span"); // error[TK2741]: Property 'align' is missing
+const reverseSpan: SpanElement = reverseDocument.createElement("span");
+const reverseWrongElement: DivElement = reverseDocument.createElement("span"); // error[TK2741]: Property 'align' is missing
+const reverseMissing: DivElement = reverseDocument.createElement("missing"); // error[TK2741]: Property 'align' is missing
 
 // Direct soundness guard: a forward `keyof` annotation must reject non-keys.
 interface ForwardKeyHolder {
