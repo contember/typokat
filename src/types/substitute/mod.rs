@@ -251,16 +251,25 @@ fn tag_can_reenter(tag: TypeTag) -> bool {
 /// The prefilter tracks free params as a `u64` bitmask; larger maps walk instead.
 const PREFILTER_MAX_PARAMS: usize = 64;
 
+fn param_bit(param_keys: &[TypeParamId], id: TypeParamId) -> u64 {
+    param_keys
+        .binary_search(&id)
+        .map_or(0, |index| 1u64 << index)
+}
+
 /// Visit exactly the child ids the `apply_*` arms recurse into — keep this in
 /// sync with `apply.rs` (like `tag_can_reenter`); the prefilter is only sound
 /// while these edges mirror the recursion.
-fn for_each_apply_child(store: &Store, ty: TypeId, mut visit: impl FnMut(TypeId)) {
+fn for_each_apply_child(
+    store: &Store,
+    ty: TypeId,
+    #[cfg(test)] measurement: Option<&SubstitutionMeasureCollector>,
+    mut visit: impl FnMut(TypeId),
+) {
     #[cfg(test)]
-    SUBSTITUTION_MEASURE.with(|current| {
-        if let Some(collector) = current.borrow().as_ref() {
-            collector.borrow_mut().prefilter_graph_scans += 1;
-        }
-    });
+    if let Some(collector) = measurement {
+        collector.borrow_mut().prefilter_graph_scans += 1;
+    }
     match store.tag(ty) {
         // Terminal arms: no recursion (a TypeParam's own id is handled by the caller).
         TypeTag::TypeParam
@@ -419,25 +428,29 @@ fn compute_free_sets(
     store: &Store,
     param_keys: &[TypeParamId],
     free_sets: &mut FxHashMap<TypeId, u64>,
+    #[cfg(test)] measurement: Option<&SubstitutionMeasureCollector>,
     root: TypeId,
 ) -> u64 {
     debug_assert!(param_keys.len() <= PREFILTER_MAX_PARAMS);
-    let bit_of = |id: TypeParamId| -> u64 {
-        param_keys
-            .binary_search(&id)
-            .map_or(0, |index| 1u64 << index)
-    };
     let push_frame = |ty: TypeId, index: usize| -> FreeSetFrame {
         let mut children = Vec::new();
-        for_each_apply_child(store, ty, |child| children.push(child));
+        for_each_apply_child(
+            store,
+            ty,
+            #[cfg(test)]
+            measurement,
+            |child| children.push(child),
+        );
         let binder_mask = store.function_type(ty).map_or(0, |function| {
             function
                 .type_params
                 .iter()
-                .fold(0, |mask, param| mask | bit_of(param.id))
+                .fold(0, |mask, param| mask | param_bit(param_keys, param.id))
         });
         // A TypeParam contributes its own bit iff its id is a map key.
-        let bits = store.type_param(ty).map_or(0, |param| bit_of(param.id));
+        let bits = store
+            .type_param(ty)
+            .map_or(0, |param| param_bit(param_keys, param.id));
         FreeSetFrame {
             ty,
             children,
@@ -524,6 +537,94 @@ fn compute_free_sets(
         .expect("the pass assigns every reachable node, including the root")
 }
 
+/// Compute exact free map-parameter sets as a least fixed point over type ids.
+/// Function binders kill their bits at the function boundary, so cycles never
+/// multiply states by combinations of binders crossed along different paths.
+fn compute_exact_free_sets(
+    store: &Store,
+    param_keys: &[TypeParamId],
+    exact_free_sets: &mut FxHashMap<TypeId, u64>,
+    #[cfg(test)] measurement: Option<&SubstitutionMeasureCollector>,
+    root: TypeId,
+) -> u64 {
+    if let Some(&bits) = exact_free_sets.get(&root) {
+        return bits;
+    }
+
+    let mut pending = vec![root];
+    let mut discovered = FxHashSet::default();
+    discovered.insert(root);
+    let mut parents: FxHashMap<TypeId, Vec<TypeId>> = FxHashMap::default();
+    let mut binder_masks: FxHashMap<TypeId, u64> = FxHashMap::default();
+    let mut values: FxHashMap<TypeId, u64> = FxHashMap::default();
+
+    while let Some(ty) = pending.pop() {
+        if let Some(&cached) = exact_free_sets.get(&ty) {
+            values.insert(ty, cached);
+            continue;
+        }
+
+        values.insert(
+            ty,
+            store
+                .type_param(ty)
+                .map_or(0, |param| param_bit(param_keys, param.id)),
+        );
+        let binder_mask = store.function_type(ty).map_or(0, |function| {
+            function
+                .type_params
+                .iter()
+                .fold(0, |mask, param| mask | param_bit(param_keys, param.id))
+        });
+        binder_masks.insert(ty, binder_mask);
+        for_each_apply_child(
+            store,
+            ty,
+            #[cfg(test)]
+            measurement,
+            |child| {
+                parents.entry(child).or_default().push(ty);
+                if discovered.insert(child) {
+                    pending.push(child);
+                }
+            },
+        );
+    }
+
+    let mut deltas = values.clone();
+    let mut propagate: Vec<TypeId> = deltas
+        .iter()
+        .filter_map(|(&ty, &bits)| (bits != 0).then_some(ty))
+        .collect();
+    let mut queued: FxHashSet<TypeId> = propagate.iter().copied().collect();
+    while let Some(ty) = propagate.pop() {
+        queued.remove(&ty);
+        let delta = deltas.insert(ty, 0).unwrap_or(0);
+        if let Some(type_parents) = parents.get(&ty) {
+            for &parent in type_parents {
+                let contribution = delta & !binder_masks.get(&parent).copied().unwrap_or(0);
+                let parent_value = values.entry(parent).or_default();
+                let new_bits = contribution & !*parent_value;
+                if new_bits != 0 {
+                    *parent_value |= new_bits;
+                    *deltas.entry(parent).or_default() |= new_bits;
+                    if queued.insert(parent) {
+                        propagate.push(parent);
+                    }
+                }
+            }
+        }
+    }
+
+    for ty in discovered {
+        exact_free_sets.insert(ty, values.get(&ty).copied().unwrap_or(0));
+    }
+    exact_free_sets
+        .get(&root)
+        .copied()
+        .expect("the fixed point assigns the root")
+}
+
 /// A substitution `TypeParamId → TypeId` plus the cycle guard, applied over the
 /// type store. Built once per instantiation and dropped after.
 pub struct Substitution<'a> {
@@ -550,6 +651,8 @@ pub struct Substitution<'a> {
     /// Per-node free-param bitmasks over `param_keys`, filled on demand by the
     /// Tarjan pass in [`compute_free_sets`]. Scoped to this run.
     free_sets: FxHashMap<TypeId, u64>,
+    /// Exact binder-aware free sets after a positive approximate answer.
+    exact_free_sets: FxHashMap<TypeId, u64>,
     /// Captured at construction so each run keeps one stable measurement owner.
     #[cfg(test)]
     measurement: Option<SubstitutionMeasureCollector>,
@@ -580,6 +683,7 @@ impl<'a> Substitution<'a> {
             cycle_epoch: 0,
             param_keys,
             free_sets: FxHashMap::default(),
+            exact_free_sets: FxHashMap::default(),
             #[cfg(test)]
             measurement,
             #[cfg(test)]
@@ -633,7 +737,7 @@ impl<'a> Substitution<'a> {
                 break 'apply ty;
             }
 
-            let key = (ty, self.canonical_blocked_context());
+            let key = (ty, self.canonical_blocked_context(ty));
             // A clean result observed no re-entry, so its closure is acyclic and a
             // reuse walk short-circuits here — no dependency record is needed.
             if let Some(&result) = self.completed.get(&key) {
@@ -805,21 +909,47 @@ impl<'a> Substitution<'a> {
         };
         let bits = match self.free_sets.get(&ty) {
             Some(&bits) => bits,
-            None => compute_free_sets(interner.store(), param_keys, &mut self.free_sets, ty),
+            None => compute_free_sets(
+                interner.store(),
+                param_keys,
+                &mut self.free_sets,
+                #[cfg(test)]
+                self.measurement.as_ref(),
+                ty,
+            ),
         };
-        // param_keys is tiny — walk the set bits and demand each one blocked.
-        let mut remaining = bits;
-        while remaining != 0 {
-            let index = remaining.trailing_zeros() as usize;
-            if !self.blocked.contains(&param_keys[index]) {
-                return false;
-            }
-            remaining &= remaining - 1;
+        let blocked = self
+            .blocked
+            .iter()
+            .fold(0, |mask, &id| mask | param_bit(param_keys, id));
+        if bits & !blocked == 0 {
+            return true;
         }
-        true
+        let exact_bits = compute_exact_free_sets(
+            interner.store(),
+            param_keys,
+            &mut self.exact_free_sets,
+            #[cfg(test)]
+            self.measurement.as_ref(),
+            ty,
+        );
+        exact_bits & !blocked == 0
     }
 
-    fn canonical_blocked_context(&self) -> Vec<TypeParamId> {
+    fn canonical_blocked_context(&self, ty: TypeId) -> Vec<TypeParamId> {
+        if let (Some(param_keys), Some(&free_bits)) =
+            (self.param_keys.as_deref(), self.exact_free_sets.get(&ty))
+        {
+            return param_keys
+                .iter()
+                .enumerate()
+                .filter_map(|(index, &id)| {
+                    (free_bits & (1u64 << index) != 0 && self.blocked.contains(&id)).then_some(id)
+                })
+                .collect();
+        }
+
+        // Large maps disable free-set analysis, so retain the full mapped context.
         let mut context: Vec<TypeParamId> = self
             .blocked
             .iter()

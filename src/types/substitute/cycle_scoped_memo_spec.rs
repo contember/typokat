@@ -2,7 +2,8 @@
 //!
 //! Activate from `substitute/mod.rs` only with the implementation. Alongside the
 //! run-wide `completed` memo, a run keeps a tainted memo with the identical key
-//! `(TypeId, canonical blocked context)`. A frame whose subtree observed at least
+//! `(TypeId, blocked ∩ exact free map keys)`, with a full-context fallback for
+//! large maps. A frame whose subtree observed at least
 //! one raw-id re-entry (or consumed a tainted entry) stores its result there
 //! together with its **dependency record**: the set of ids it re-entered and the
 //! set of ids its walk passed through while they were *not* in progress (both
