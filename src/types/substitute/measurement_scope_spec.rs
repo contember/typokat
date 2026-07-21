@@ -186,6 +186,41 @@ fn scoped_substitution_measurement_preserves_exact_completed_memo_counters() {
 }
 
 #[test]
+fn prefilter_graph_measurement_stays_with_the_run_that_captured_it() {
+    in_fresh_thread(|| {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let root = interner.intern_object(ObjectType {
+            properties: vec![prop("value", wk.number)],
+            ..Default::default()
+        });
+        let map = FxHashMap::from_iter([(TypeParamId(97_050), wk.string)]);
+
+        let outer_scope = start_substitution_measure();
+        let mut substitution = Substitution::new(&map);
+        {
+            let _nested_scope = start_substitution_measure();
+            assert_eq!(substitution.apply(&mut interner, root), root);
+            assert_eq!(
+                substitution_measure(),
+                Some(SubstitutionMeasure::default()),
+                "a nested scope must not receive graph scans from an outer-owned run"
+            );
+        }
+
+        let outer = substitution_measure().expect("the outer scope must be restored");
+        assert_eq!(outer.runs, 1);
+        assert_eq!(outer.prefilter_skips, 1);
+        assert!(
+            outer.prefilter_graph_scans > 0,
+            "the run owner receives its own prefilter traversal measurements"
+        );
+        drop(outer_scope);
+        assert_eq!(substitution_measure(), None);
+    });
+}
+
+#[test]
 fn dropping_substitution_measurement_scope_restores_disabled_state() {
     const FANOUT: usize = 8;
 
