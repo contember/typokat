@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "normalization": "relative-path:line:column:code",
+  "rows": {
+    "fast-clean": {"exit": 0, "diagnostics": []},
+    "fast-errors": {
+      "exit": 1,
+      "diagnostics": [
+        "fast-errors/main.ts:4:7:2322",
+        "fast-errors/main.ts:5:7:2322",
+        "fast-errors/main.ts:6:7:2322",
+        "fast-errors/main.ts:7:7:2322",
+        "fast-errors/main.ts:8:7:2322",
+        "fast-errors/main.ts:9:7:2322"
+      ]
+    },
+    "collision": {"exit": 0, "diagnostics": []},
+    "fanout": {"exit": 0, "diagnostics": []}
+  }
+}

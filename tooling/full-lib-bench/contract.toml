@@ -1,0 +1,59 @@
+schema = 1
+rows = ["fast-clean", "fast-errors", "collision", "fanout"]
+typescript_flags = ["--strict", "--target", "es2025", "--module", "preserve", "--noEmit", "--pretty", "false"]
+typokat_flags = ["check", "--format", "compact"]
+forbidden_flags = ["--noLib", "--skipLibCheck", "--skipDefaultLibCheck", "--noCheck", "--incremental", "--watch", "--build"]
+
+[provider_probe]
+args = ["library-info", "--format", "json"]
+schema = 1
+snapshot_schema = 1
+provider_route = "production-default-library"
+
+[profile]
+typescript_version = "6.0.3"
+upstream_revision = "050880ce59e30b356b686bd3144efe24f875ebc8"
+root = "lib.es2025.full.d.ts"
+file_count = 82
+source_bytes = 2936611
+length_framed_sha256 = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
+manifest_sha256 = "1edef1b5e870024834762267ec532c3054f3b2279e9181844e21648243eb1407"
+
+[comparator]
+package = "typescript"
+version = "7.0.2"
+npm_integrity = "sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA=="
+npm_shasum = "9ec773d7954a8c182c17cc5bbd575aa28bc51582"
+upstream_revision = "2bd066d87f5bafd315be9f40889d0a60b9e58e0b"
+platform_package = "@typescript/typescript-linux-x64"
+platform = "linux-x64"
+platform_npm_integrity = "sha512-EYdf2cNg7rgCWJnxCdJ+F3V39O8ihb37eHAu1LK8oAFizgTQbPOK7zHHXbPt8rX24COqODXeI3sIf0fCXG7H/A=="
+platform_npm_shasum = "73269cb0baba50aea0ca060445a6b88e583f1ce2"
+binary_relative_path = "lib/tsc"
+binary_size = 24101026
+binary_sha256 = "4f2de678286401759b3fb4475bafe35b8f32b4b3a07d92642bbf37eadc9b34a4"
+sentinel_relative_path = "lib/lib.d.ts"
+sentinel_size = 953
+sentinel_sha256 = "0e6477e5049e579cc5de741a70ac91235252edc0468b2e569f22de9db3357786"
+
+[sampling]
+trials = 3
+warmups_per_tool = 5
+blocks_per_trial = 15
+schedule = "A,B,B,A"
+samples_per_tool_per_trial = 30
+bootstrap_resamples = 100000
+bootstrap_seed = 20260721
+timeout_seconds = 30
+max_output_bytes = 1048576
+memory_samples_per_tool = 10
+max_typokat_rss_kib = 524288
+max_typokat_to_tsgo_median_rss = 1.25
+minimum_speedup = 2.0
+engineering_speedup = 2.25
+
+[controls]
+rename_comment_perturbations_per_row = 1
+require_fresh_process_per_sample = true
+require_production_cli = true
+require_release_binary = true
