@@ -145,6 +145,12 @@ Stable across runs → safe to assert in messages:
 Practical rule used in this corpus: assert full messages where both sides are
 primitive/literal (stable); use code-only markers when a side is an object/union/alias.
 
+All type displays share a hard bound: the complete rendered string is at most **320 Unicode scalar
+values**, with the final three scalar values replaced by `...` when truncation is required. If
+recursive rendering would descend beyond depth **64**, the entire display collapses to `...`.
+Displays that fit both bounds are unchanged. Treat a truncated display like any other unstable
+object/union/alias layout and assert its diagnostic code rather than its exact text.
+
 ## Deferred checks & `tsc` divergences
 
 typokat deliberately diverges from `tsc --strict` in bounded, documented ways — it **over-reports**

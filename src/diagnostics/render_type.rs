@@ -73,15 +73,15 @@ impl RenderContext {
 
 /// Render a type per the corpus display format. `widen` applies only to the
 /// top-level source side of assignability messages; relation logic still uses the
-/// literal type. Recursive object expansions are cycle-safe and print `...`.
+/// literal type. Displays are cycle-safe and bounded by character and depth limits.
 pub fn render_type(store: &Store, id: TypeId, widen: bool) -> String {
     let mut context = RenderContext::new();
     render_type_inner(store, id, widen, &mut context);
     context.output
 }
 
-/// Cycle-safe core of [`render_type`]. `rendering` tracks object ids on the call
-/// stack; re-entry emits `...`, even through union/function members.
+/// Cycle-safe core of [`render_type`]. `context.rendering` tracks expandable ids on
+/// the call stack; re-entry emits `...`, even through union/function members.
 fn render_type_inner(store: &Store, id: TypeId, widen: bool, context: &mut RenderContext) {
     if context.truncated {
         return;

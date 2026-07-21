@@ -12,12 +12,13 @@ start. It is the **full** standard-library load;
 the minimal ambient/prelude slice (`38`) is allowed before this item when it buys useful real-world
 feedback.
 
-**Active delivery contract.** The in-memory and collision semantics are accepted in
-[`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md); execution, hard feasibility
-gates, work-unit boundaries, and commit/review sequencing live in the
-[`2026-07-16 full-lib sprint`](../sprints/sprint-2026-07-16-full-lib-loading.md). Those documents do
-not claim the loader is shipped: `src/prelude.ts` remains the production path until the sprint's
-atomic cutover passes.
+**Delivery state.** The in-memory and collision semantics are accepted in
+[`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md). The
+[`2026-07-16 feasibility sprint`](../archive/sprint-2026-07-16-full-lib-loading.md) removed the
+first substitution and diagnostic-rendering barriers but ended at WU0 NO-GO: its authoritative
+5.00 s cold gate still exited 143 after 5.268 s. It did not authorize or run WU1–WU8, and no loader
+or cutover shipped. `src/prelude.ts` remains the production path; future delivery requires a new
+spec-first sprint with an approved feasibility contract.
 
 ## Problem
 
@@ -84,9 +85,11 @@ explicit outcomes rather than approximate them.
 
 `src/driver.rs`, `src/check/checker/mod.rs`, `src/check/checker/decls/`, and the shared prelude/type
 universe paths selected by its architecture design (parallelism Stage 1 — architecture §8.2). The
-accepted detailed design and exact implementation touch points are maintained in
-[`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md) and the
-[`active sprint`](../sprints/sprint-2026-07-16-full-lib-loading.md), rather than duplicated here.
-The current explicit-input readiness fixture is not the loader.
+accepted detailed design remains in
+[`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md); the archived
+[`2026-07-16 feasibility attempt`](../archive/sprint-2026-07-16-full-lib-loading.md) records the
+failed gate and optimization evidence but is not an active delivery contract. A future sprint must
+re-verify its implementation touch points and gates. The current explicit-input readiness fixture
+is not the loader.
 
 <!-- Origin: dev roadmap (was HANDOFF §3, long-term scale + IDE). -->

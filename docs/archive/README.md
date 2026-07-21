@@ -1,8 +1,8 @@
 # archive
 
-Shipped sprints (each carrying its `OUTCOME` header — that's the record) and the
-rare backlog/spec item with standalone reference value. Items arrive here by
-`git mv`; they are **not** edited afterward.
+Shipped or explicitly terminated sprints (each carrying its `OUTCOME` header — that's the record)
+and the rare backlog/spec item with standalone reference value. Items arrive here by `git mv`;
+they are **not** edited afterward.
 
 **Default is delete, not archive.** The archive is not a graveyard for everything
 that ships — only what genuinely helps a future reader. The git log holds the rest.
@@ -38,4 +38,5 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 - [`sprint-2026-07-13-rewrite-hotpath-hardening.md`](sprint-2026-07-13-rewrite-hotpath-hardening.md) — WU0–WU8 rewrite/soundness hardening. Kept for the three deliberately separate iterative evaluator walkers, the mapped generic-metadata correction, the partial-cycle policy, and the review-driven frame-owned allocation remediation.
 - [`sprint-2026-07-13-semantic-duplication-layering.md`](sprint-2026-07-13-semantic-duplication-layering.md) — WU0–WU8 semantic duplication/layering closure. Kept for the immutable class-publication and lexical-event cutover, the sole transactional semantic-query boundary, the WU0 speculative-effect ledger, the rejected conditional-`infer` optimization, and the 10k/100k no-optimization measurement record.
 - [`sprint-2026-07-15-namespaces-declaration-merging.md`](sprint-2026-07-15-namespaces-declaration-merging.md) — backlog 43: ordered declaration groups, qualified namespace types, legal keep-pairs/global type publication, and immutable standalone instantiated namespace values. Kept for ADR-0009/0010's atomic publication contract, the pinned ES5 GO proof, and the WU7 regression/owner adjudication record.
+- [`sprint-2026-07-16-full-lib-loading.md`](sprint-2026-07-16-full-lib-loading.md) — partial feasibility sprint archived at WU0 NO-GO: substitution and diagnostic-rendering barriers were removed, but the authoritative 5 s cold gate still exited 143 after 5.268 s. No loader cutover occurred; backlog 14 remains open.
 - [`backlog-13-profiling-gate.md`](backlog-13-profiling-gate.md) — ADR-0001 profiling gate: 100k flow/typelevel timings and RSS baselines, six blocked samply attempts on a restrictive host, and the strict DEFER/no-VM outcome.

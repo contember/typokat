@@ -516,8 +516,10 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   workers, with an identity-preserving private type/binder delta for each non-colliding run. A
   conservative preflight routes any possible library-global collision or global-object
   contribution to a correctness-first private rebuild of library + project in one universe; the
-  shared base is never mutated or partially overlaid. Production still uses `src/prelude.ts`; the
-  [full-lib sprint](../sprints/sprint-2026-07-16-full-lib-loading.md) owns feasibility and cutover.
+  shared base is never mutated or partially overlaid. Production still uses `src/prelude.ts`. The
+  [2026-07-16 feasibility sprint](../archive/sprint-2026-07-16-full-lib-loading.md) ended at WU0
+  NO-GO after its unchanged 5-second cold gate exited 143; no cutover shipped. Backlog
+  [14](../backlog/14-libdts-loading.md) owns any future re-planning and delivery.
 - **Stage 2 — cross-file *mutable* exports.** `export interface Foo` in A consumed by
   B: A must emit its **public type surface** (`export name → type`), and B must give
   those types identity in *its* world. A run-local `TypeId` (§3.2) is meaningless

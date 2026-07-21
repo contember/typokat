@@ -1,10 +1,21 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME — shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU0 → <sha>,
-> WU1 → <sha>, … Verification: <commands + measurements>. Backlog closed: 14.
-> Deferred: <honest notes>.
--->
+> **OUTCOME — archived partial / WU0 NO-GO, 2026-07-21.** WU0 committed the exact pinned
+> TypeScript profile and feasibility harness, then localized and removed the first substitution
+> barrier and bounded diagnostic type rendering. Standalone `lib.dom.d.ts` now completes in 2.03 s
+> at 42,800 KiB maximum RSS, but the authoritative
+> `perl tooling/wu0d-release/run.pl --single primary off` gate still terminated the process with
+> exit 143 after 5,268,202 us (`target/wu0d-release/runs/20260721T114215Z-284894`), so its
+> 5.00 s / 512 MiB acceptance contract remains unmet. WU1–WU8 were neither authorized nor run;
+> `src/prelude.ts` remains production, readiness manifests remain PENDING, completion manifest
+> `D-libdts` remains incomplete, and backlog 14 stays open for a newly planned sprint.
+>
+> **Commit map.** Plan/profile/gate: `4588932`, `d91223c`, `070f622`. Exploratory WU0
+> feasibility/attribution sequence (temporary parts later removed): `a55f522`, `3b9117a`,
+> `d6d159b`, `885e5c2`, `e233b21`, `081ec72`, `3afff82`, `661df38`, `da0b420`, `52bb552`,
+> `df639c2`, `3c90bda`, `7629167`. Substitution diagnosis/spec/implementation/record: `35f0759`,
+> `5916b5f`, `fbde2aa`, `8f89d53`, `5f6408e`, `6d53746`. Bounded-rendering
+> spec/implementation: `2479357`, `eff7a8f`. Temporary-attribution cleanup: `ca1a68e`, `2153c83`.
+> The cleanup removed temporary WU0C–WU0G attribution/debug tooling while retaining the WU0B
+> measurement prototype and the fail-closed WU0D release gate.
 
 # Sprint — pinned full default-library loading (2026-07-16)
 
@@ -560,14 +571,16 @@ keeps specs, implementation, scoreboard, and docs lifecycle changes separate.
   (declaration-snapped 16,993-line prefix whose one heavy constraint-check run did 54.7M visits)
   drops 3.2 s → **0.13 s (~24×)**; the whole substitution phase disappears from the full-dom and
   82-file-concat profiles. fill-interface-scc is no longer the first barrier.
-- **Divergence.** The prefilter surfaced a pre-existing guard bug (distribution guards ignore
-  blocked binders); the fully-shadowed corner now resolves toward `tsc --strict` (removes a
-  spurious `TK2322` + corrupted display). Residual recorded as ledger
-  `substitution/distribution-guard-ignores-blocked`, fix owned by backlog 84.
-- **Next barrier (re-confirmed on both full workloads).** Eager, unbounded diagnostic type
-  rendering (`render_type`: no memo, no depth/size cap, no nominal naming; single messages ≥15.5 MB)
-  dominates full lib.dom and the 82-file concat. Fixing it needs a display-format decision
-  (nominal names + truncation vs the current structural corpus convention in
-  `tests/cases/README.md`) — leader/user input required before the next WU. The WU0G runner
-  hardening thread (uncommitted `tooling/wu0e-diagnostic/run.pl` work) is unaffected by these
-  commits. WU0 remains **NO-GO**; the 5 s / 512 MiB gate is unchanged and unmet.
+- **Distribution-guard audit.** The prefilter made the fully shadowed corner match
+  `tsc --strict` by removing a spurious `TK2322` and corrupted display. An independent audit then
+  found no reachable residual after the prefilter: 460 corpus files produced no blocked-guard
+  reach, the original witness is clean in both typokat and tsc, and a guard-filtering diagnostic
+  binary produced no output/status delta. The proposed ledger entry and backlog 84 filing were
+  therefore withdrawn rather than preserving an unwitnessed issue.
+- **Next barrier and bounded fix.** Eager, unbounded diagnostic type rendering
+  (`render_type`: no depth/size cap; single messages ≥15.5 MB) dominated full `lib.dom.d.ts` and the
+  82-file concat. Commits `2479357` and `eff7a8f` shipped a 320-scalar / 64-depth bounded renderer;
+  standalone `lib.dom.d.ts` then completed in 2.03 s at 42,800 KiB maximum RSS. The temporary
+  WU0C–WU0G attribution/debug tooling was removed by `ca1a68e` and `2153c83`; the WU0B prototype
+  and authoritative WU0D gate remain. WU0 is still **NO-GO** because that unchanged 5 s / 512 MiB
+  gate exits 143 after 5.268 s, so no loader implementation or cutover is authorized.

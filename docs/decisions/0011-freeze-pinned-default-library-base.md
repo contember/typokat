@@ -54,7 +54,7 @@ in 1.19 s wall time and 313,680 KiB maximum RSS. Its extended diagnostics report
 0.07 s bind, 0.84 s check, and 1.09 s total. The benchmark host was Linux x86_64 on an AMD Ryzen 7
 PRO 8840HS (8 cores/16 threads) with 59 GiB RAM; release typokat used Rust 1.95.0.
 
-Therefore the active [`full-lib-loading sprint`](../sprints/sprint-2026-07-16-full-lib-loading.md)
+Therefore the [`full-lib-loading sprint`](../archive/sprint-2026-07-16-full-lib-loading.md)
 starts with a hard audit/profile gate and has a separate measured performance gate before cutover.
 This is a Tier-2 decision: the in-memory boundary is fixed here, while cutover remains reversible.
 

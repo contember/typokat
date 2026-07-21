@@ -23,32 +23,29 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-07-16-full-lib-loading.md`](sprints/sprint-2026-07-16-full-lib-loading.md) —
-  current capability sprint: execute backlog `14` under
-  [`ADR-0011`](decisions/0011-freeze-pinned-default-library-base.md), beginning with hard profile,
-  ownership, routing, `Send + Sync`, and performance gates. The curated `src/prelude.ts` remains
-  production until the sprint's atomic cutover.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprints/sprint-2026-07-16-namespace-binder-refactor.md) —
-  planned/deferred; start it during the full-lib work only if WU0 proves it is a loader prerequisite.
+  planned behavior-preserving cleanup, independent of backlog `14` and future loader work.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Full default-library loading is the active capability sprint** —
+- **Full default-library feasibility archived at WU0 NO-GO** —
   [`ADR-0011`](decisions/0011-freeze-pinned-default-library-base.md) accepts an exact embedded
   TypeScript 6.0.3 ES2025 full-host profile, one AST-free frozen library base with private deltas,
   and a same-pipeline private rebuild for global collisions. The
-  [`active sprint`](sprints/sprint-2026-07-16-full-lib-loading.md) is still at its audit-first
-  delivery boundary: Stage 1 is planned, not shipped, and `src/prelude.ts` remains the production
-  standard-library slice.
+  [`archived feasibility sprint`](archive/sprint-2026-07-16-full-lib-loading.md) removed the first
+  substitution and rendering barriers, but the authoritative 5 s cold gate still exited 143 after
+  5.268 s. Stage 1 is not shipped, `src/prelude.ts` remains production, and backlog `14` stays open;
+  future loader work requires a new sprint.
 - **Namespaces/declaration merging shipped 2026-07-16** (archived:
   [`archive/sprint-2026-07-15-namespaces-declaration-merging.md`](archive/sprint-2026-07-15-namespaces-declaration-merging.md)) —
   ordered groups, qualified types, keep-pairs, legal global type publication, and immutable
   standalone instantiated namespace values are complete. The pinned ES5 proof is GO and backlog
-  `14` is unblocked; `15`, `63`, `76`, and `82` retain their explicit non-namespace tails.
+  `14` passed its namespace model prerequisite but remains open after a WU0 feasibility NO-GO;
+  `15`, `63`, `76`, and `82` retain their explicit non-namespace tails.
 - **Semantic duplication/layering shipped 2026-07-14** (archived:
   [`archive/sprint-2026-07-13-semantic-duplication-layering.md`](archive/sprint-2026-07-13-semantic-duplication-layering.md)) —
   immutable complete `ClassInstance` applications, atomic declaration-SCC publication, retained
@@ -124,12 +121,14 @@ decisions → reference → archive.
   [`backlog/completion-1.0.toml`](backlog/completion-1.0.toml) validated by
   `tests/manifest.rs`, with the pinned TS 6.0.3 lib audit
   ([`backlog/lib-audit-6.0.3.md`](backlog/lib-audit-6.0.3.md)) now backed by the committed namespace
-  readiness proof: type/value publication is GO and `14` is unblocked; `70` this-parameter typing
+  readiness proof: type/value publication is GO, although `14` remains open after its archived WU0
+  feasibility NO-GO; `70` this-parameter typing
   subsequently shipped. Backlog `38` is GO
   (ADR-0003). The post-sprint MVP audit added executable
   scope/unsupported censuses (`73`/`75`) and the first honest pinned-project preview gate
-  (`72`). **Now:** `72` remains paused at its witness gate; full `lib.d.ts` work (`14`) is runnable
-  while the remaining model-completeness items continue independently.
+  (`72`). **Now:** `72` remains paused at its witness gate; full `lib.d.ts` work (`14`) requires a
+  newly planned sprint after the archived WU0 feasibility NO-GO, while the remaining
+  model-completeness items continue independently.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
   invariants CLEAN and filed `53`–`65`; the five HIGH silent-FN families then shipped through

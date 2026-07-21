@@ -826,12 +826,3 @@ method signature whose return annotation is omitted; typokat is silent — a dro
   6.0.3 does not treat a plain `(x: number) => Box` value as satisfying a construct signature, and
   `new makeBox(1)` reports `TS7009`. typokat does not model JavaScript runtime constructability.
   <!-- div: id=signatures/construct-from-function-value dir=over scope=design-oos owner=design-oos witness=../../tests/cases/f1_object_interface_construct -->
-- Substitution distribution guards ignore blocked binders: `apply_conditional`'s distributive
-  guard and `apply_mapped`'s homomorphic guard consult the substitution map without filtering the
-  binder-blocked set, so a distributive check/key parameter that is lexically shadowed by a
-  same-id generic binder can capture the outer argument and re-wrap a bound conditional. Since the
-  param-free prefilter, a subtree whose only map-relevant parameters are shadowed is proven
-  identity and skipped — matching `tsc --strict` (which reports no error on the witness shape) —
-  but when an unblocked sibling parameter forces the walk, the guard still misfires and over-wraps.
-  Fix tracked in [backlog 84](../backlog/84-distribution-guards-respect-blocked.md).
-  <!-- div: id=substitution/distribution-guard-ignores-blocked dir=over scope=s-generic-instantiation owner=../backlog/84-distribution-guards-respect-blocked.md witness=none-yet -->
