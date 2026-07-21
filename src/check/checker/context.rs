@@ -789,9 +789,6 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
         Option<CycleTaintedApplicationCacheMeasureCollector>,
     #[cfg(test)]
     pub(in crate::check::checker) panic_before_cycle_tainted_application_cache_publish: bool,
-    #[cfg(test)]
-    pub(in crate::check::checker) wu0c_attribution:
-        Option<super::wu0c_attribution::PassAttribution>,
     /// The module scope currently being checked.
     /// Disambiguates span-start keyed lookups for scopes and flow. Correct only
     /// while bodies are walked per module; lazy cross-module inference would

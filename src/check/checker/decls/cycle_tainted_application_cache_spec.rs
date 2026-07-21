@@ -8,7 +8,6 @@ use super::super::context::{
     CycleTaintedApplicationCacheMeasure, Pass,
 };
 use super::super::type_groups::{PublishedTypeEnvironment, TypeEnvironmentState};
-use crate::binder::declaration::TypeGroupId;
 use crate::binder::Binder;
 use crate::driver::{check_source, CheckOutput};
 use crate::types::repr::{
@@ -50,17 +49,11 @@ fn pass<'a>(interner: &'a mut Interner, binder: &'a Binder) -> Pass<'a, 'static>
 
 fn apply(
     pass: &mut Pass<'_, 'static>,
-    group: u32,
     template: TypeId,
     parameters: &[TypeParamId],
     map: &FxHashMap<TypeParamId, TypeId>,
 ) -> SubstitutionOutcome {
-    pass.substitute_ready_type_group_application_with_outcome_for_test(
-        TypeGroupId(group),
-        template,
-        parameters,
-        map,
-    )
+    pass.substitute_ready_type_group_application_with_outcome_for_test(template, parameters, map)
 }
 
 fn recursive_object(interner: &mut Interner, param: TypeId, edge: &str) -> TypeId {
@@ -144,7 +137,7 @@ fn default_off_then_clean_cache_precedes_tainted_cache_without_mutating_it() {
         assert!(default_off.cycle_tainted_application_cache.is_none());
         for _ in 0..2 {
             assert_eq!(
-                assert_tainted(apply(&mut default_off, 0, recursive, &[id], &map)),
+                assert_tainted(apply(&mut default_off, recursive, &[id], &map)),
                 expected
             );
         }
@@ -157,7 +150,7 @@ fn default_off_then_clean_cache_precedes_tainted_cache_without_mutating_it() {
         assert!(baseline.cycle_tainted_application_cache.is_none());
         for _ in 0..2 {
             assert_eq!(
-                assert_tainted(apply(&mut baseline, 0, recursive, &[id], &map)),
+                assert_tainted(apply(&mut baseline, recursive, &[id], &map)),
                 expected
             );
         }
@@ -173,9 +166,9 @@ fn default_off_then_clean_cache_precedes_tainted_cache_without_mutating_it() {
     let _tainted_scope = start_cycle_tainted_application_cache_measure();
     let mut pass = pass(&mut interner, &binder);
 
-    let first = apply(&mut pass, 0, recursive, &[id], &map);
+    let first = apply(&mut pass, recursive, &[id], &map);
     let clean_after_first = eager_application_cache_measure().expect("clean measure active");
-    let second = apply(&mut pass, 0, recursive, &[id], &map);
+    let second = apply(&mut pass, recursive, &[id], &map);
     assert_eq!(assert_tainted(first), assert_tainted(second));
     let clean_after_hit = eager_application_cache_measure().expect("clean measure active");
     assert_eq!(clean_after_hit.lookups, clean_after_first.lookups + 1);
@@ -188,13 +181,13 @@ fn default_off_then_clean_cache_precedes_tainted_cache_without_mutating_it() {
 
     for _ in 0..2 {
         assert!(matches!(
-            apply(&mut pass, 0, clean, &[id], &map),
+            apply(&mut pass, clean, &[id], &map),
             SubstitutionOutcome::CycleClean(_)
         ));
     }
     for _ in 0..2 {
         assert_eq!(
-            apply(&mut pass, 0, recursive, &[id], &partial),
+            apply(&mut pass, recursive, &[id], &partial),
             SubstitutionOutcome::CycleClean(recursive)
         );
     }
@@ -239,9 +232,9 @@ fn mutual_scc_publishes_each_requested_root_only_after_its_whole_run() {
     let right_oracle = substitute_with_outcome(&mut interner, right, &map);
     let _scope = start_cycle_tainted_application_cache_measure();
     let mut pass = pass(&mut interner, &binder);
-    let left_first = apply(&mut pass, 2, left, &[id], &map);
-    let left_hit = apply(&mut pass, 2, left, &[id], &map);
-    let right_first = apply(&mut pass, 2, right, &[id], &map);
+    let left_first = apply(&mut pass, left, &[id], &map);
+    let left_hit = apply(&mut pass, left, &[id], &map);
+    let right_first = apply(&mut pass, right, &[id], &map);
     assert_eq!(assert_tainted(left_first), assert_tainted(left_hit));
     assert_eq!(assert_tainted(right_first), assert_tainted(right_oracle));
     let measure = cycle_tainted_application_cache_measure().expect("scope active");
@@ -287,8 +280,8 @@ fn generic_binder_cross_context_cycle_is_cached_with_fresh_oracle_parity() {
     let oracle = substitute_with_outcome(&mut interner, root, &map);
     let _scope = start_cycle_tainted_application_cache_measure();
     let mut pass = pass(&mut interner, &binder);
-    let first = apply(&mut pass, 3, root, &[id, free_id], &map);
-    let hit = apply(&mut pass, 3, root, &[id, free_id], &map);
+    let first = apply(&mut pass, root, &[id, free_id], &map);
+    let hit = apply(&mut pass, root, &[id, free_id], &map);
     assert_eq!(assert_tainted(first), assert_tainted(oracle));
     assert_eq!(assert_tainted(hit), assert_tainted(oracle));
     let measure = cycle_tainted_application_cache_measure().expect("scope active");
@@ -332,7 +325,7 @@ fn nested_mapped_distribution_and_exact_complete_key_stay_whole_run_scoped() {
         (root, &[a, b][..], &reverse_insert),
         (root, &[b, a][..], &ab),
     ] {
-        assert_tainted(apply(&mut pass, 4, template, params, map));
+        assert_tainted(apply(&mut pass, template, params, map));
     }
     let measure = cycle_tainted_application_cache_measure().expect("scope active");
     assert_counts(&measure, (3, 1, 2, 2));
@@ -376,17 +369,17 @@ fn pass_and_universe_isolation_hold_even_when_numeric_ids_collide() {
         let map = FxHashMap::from_iter([(id, argument)]);
         let result = {
             let mut first_pass = pass(&mut interner, &binder);
-            let first = assert_tainted(apply(&mut first_pass, 5, template, &[id], &map));
+            let first = assert_tainted(apply(&mut first_pass, template, &[id], &map));
             assert_eq!(
                 first,
-                assert_tainted(apply(&mut first_pass, 5, template, &[id], &map))
+                assert_tainted(apply(&mut first_pass, template, &[id], &map))
             );
             first
         };
         let mut fresh_pass = pass(&mut interner, &binder);
         assert_eq!(
             result,
-            assert_tainted(apply(&mut fresh_pass, 5, template, &[id], &map))
+            assert_tainted(apply(&mut fresh_pass, template, &[id], &map))
         );
         drop(fresh_pass);
         let object = interner.store().object_type(result).expect("result object");
@@ -459,7 +452,7 @@ fn unwind_before_whole_run_publication_records_abort_and_publishes_no_entry() {
     let mut pass = pass(&mut interner, &binder);
     pass.panic_before_cycle_tainted_application_cache_publish_for_test();
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = apply(&mut pass, 6, recursive, &[id], &map);
+        let _ = apply(&mut pass, recursive, &[id], &map);
     }));
     assert!(unwind.is_err());
     assert_eq!(
@@ -469,8 +462,8 @@ fn unwind_before_whole_run_publication_records_abort_and_publishes_no_entry() {
             .len(),
         0
     );
-    assert_tainted(apply(&mut pass, 6, recursive, &[id], &map));
-    assert_tainted(apply(&mut pass, 6, recursive, &[id], &map));
+    assert_tainted(apply(&mut pass, recursive, &[id], &map));
+    assert_tainted(apply(&mut pass, recursive, &[id], &map));
     let measure = cycle_tainted_application_cache_measure().expect("scope active");
     assert_eq!((measure.lookups, measure.hits, measure.misses), (3, 1, 2));
     assert_eq!((measure.insertions, measure.aborted_runs), (1, 1));

@@ -64,24 +64,9 @@ pub(crate) mod wu0b_library;
 #[cfg(test)]
 pub(crate) mod wu0b_profile;
 #[cfg(test)]
-mod wu0c_attribution;
-#[cfg(test)]
-mod wu0c_post_cache_attribution_spec;
-#[cfg(test)]
 mod wu0d_candidate_release;
 #[cfg(test)]
 mod wu0d_candidate_release_spec;
-#[rustfmt::skip]
-#[cfg(test)]
-mod wu0e_observer;
-#[cfg(test)]
-mod wu0e_diagnostic;
-#[cfg(test)]
-mod wu0e_diagnostic_spec;
-#[cfg(test)]
-mod wu0e_runner_hardening_spec;
-#[cfg(test)]
-pub(crate) use wu0c_attribution::{capture_wu0c_substitution_attribution, SubstitutionAttribution};
 
 use context::{
     AssertionCompatibilityObligation, AssignObligation, CheckerEffects, CheckerRecordBatch,
@@ -2070,8 +2055,6 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
             .map(|capture| capture.collector),
         #[cfg(test)]
         panic_before_cycle_tainted_application_cache_publish: false,
-        #[cfg(test)]
-        wu0c_attribution: wu0c_attribution::capture_wu0c_pass_attribution(),
         // Overwritten before each module's fill/flow/check phase; the user module is
         // the single-file default (backlog 58).
         current_module: binder.module,

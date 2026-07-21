@@ -1031,14 +1031,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     pub(super) fn substitute_ready_type_group_application(
         &mut self,
-        group: TypeGroupId,
         template: TypeId,
         parameters: &[TypeParamId],
         map: &FxHashMap<TypeParamId, TypeId>,
     ) -> TypeId {
-        match self
-            .substitute_ready_type_group_application_with_outcome(group, template, parameters, map)
-        {
+        match self.substitute_ready_type_group_application_with_outcome(template, parameters, map) {
             SubstitutionOutcome::CycleClean(result) | SubstitutionOutcome::CycleTainted(result) => {
                 result
             }
@@ -1047,13 +1044,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     fn substitute_ready_type_group_application_with_outcome(
         &mut self,
-        group: TypeGroupId,
         template: TypeId,
         parameters: &[TypeParamId],
         map: &FxHashMap<TypeParamId, TypeId>,
     ) -> SubstitutionOutcome {
-        #[cfg(not(test))]
-        let _ = group;
         if parameters.is_empty() || map.len() != parameters.len() {
             #[cfg(test)]
             record_eager_application_cache_measure(
@@ -1110,10 +1104,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 &self.eager_application_cache_measure,
                 |measure| measure.hits += 1,
             );
-            #[cfg(test)]
-            if let Some(attribution) = &self.wu0c_attribution {
-                attribution.record_ready_group_hit(group);
-            }
             return SubstitutionOutcome::CycleClean(result);
         }
 
@@ -1121,14 +1111,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         record_eager_application_cache_measure(&self.eager_application_cache_measure, |measure| {
             measure.misses += 1;
         });
-        #[cfg(test)]
-        let wu0c_application =
-            super::super::wu0c_attribution::start_wu0c_ready_application_attribution(
-                &self.wu0c_attribution,
-                group,
-                template,
-            );
-
         #[cfg(test)]
         if self.cycle_tainted_application_cache_measure.is_some() {
             record_cycle_tainted_application_cache_measure(
@@ -1155,9 +1137,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         &self.eager_application_cache_measure,
                         |measure| measure.cycle_tainted_skips += 1,
                     );
-                    if let Some(application) = &wu0c_application {
-                        application.finish_tainted();
-                    }
                     return SubstitutionOutcome::CycleTainted(entry.result);
                 }
                 record_cycle_tainted_application_cache_measure(
@@ -1192,9 +1171,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         &self.eager_application_cache_measure,
                         |measure| measure.insertions += 1,
                     );
-                    if let Some(application) = &wu0c_application {
-                        application.finish_clean();
-                    }
                     SubstitutionOutcome::CycleClean(result)
                 }
                 SubstitutionOutcome::CycleTainted(result) => {
@@ -1211,9 +1187,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 &self.cycle_tainted_application_cache_measure,
                                 CycleTaintedApplicationCacheMeasure::abort,
                             );
-                            if let Some(application) = &wu0c_application {
-                                application.finish_tainted();
-                            }
                             panic!("test-only panic before cycle-tainted cache publication");
                         }
                         let entry = CycleTaintedApplicationCacheEntry {
@@ -1230,9 +1203,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             );
                         }
                     }
-                    if let Some(application) = &wu0c_application {
-                        application.finish_tainted();
-                    }
                     SubstitutionOutcome::CycleTainted(result)
                 }
             };
@@ -1246,10 +1216,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     &self.eager_application_cache_measure,
                     |measure| measure.insertions += 1,
                 );
-                #[cfg(test)]
-                if let Some(application) = &wu0c_application {
-                    application.finish_clean();
-                }
                 SubstitutionOutcome::CycleClean(result)
             }
             SubstitutionOutcome::CycleTainted(result) => {
@@ -1258,10 +1224,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     &self.eager_application_cache_measure,
                     |measure| measure.cycle_tainted_skips += 1,
                 );
-                #[cfg(test)]
-                if let Some(application) = &wu0c_application {
-                    application.finish_tainted();
-                }
                 SubstitutionOutcome::CycleTainted(result)
             }
         }
@@ -1270,12 +1232,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     #[cfg(test)]
     pub(super) fn substitute_ready_type_group_application_with_outcome_for_test(
         &mut self,
-        group: TypeGroupId,
         template: TypeId,
         parameters: &[TypeParamId],
         map: &FxHashMap<TypeParamId, TypeId>,
     ) -> SubstitutionOutcome {
-        self.substitute_ready_type_group_application_with_outcome(group, template, parameters, map)
+        self.substitute_ready_type_group_application_with_outcome(template, parameters, map)
     }
 
     #[cfg(test)]
@@ -1400,7 +1361,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return Some(self.interner.intern_instantiation(template, args));
         }
 
-        Some(self.substitute_ready_type_group_application(decl_id, template, &params, &map))
+        Some(self.substitute_ready_type_group_application(template, &params, &map))
     }
 
     #[cfg(test)]

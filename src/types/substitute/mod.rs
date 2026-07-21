@@ -547,8 +547,6 @@ pub struct Substitution<'a> {
     measurement: Option<SubstitutionMeasureCollector>,
     #[cfg(test)]
     run_visit_measurement: Option<SubstitutionRunVisitMeasureCollector>,
-    #[cfg(test)]
-    wu0c_attribution: Option<crate::check::checker::SubstitutionAttribution>,
 }
 
 impl<'a> Substitution<'a> {
@@ -558,8 +556,6 @@ impl<'a> Substitution<'a> {
         let measurement = capture_substitution_measurement();
         #[cfg(test)]
         let run_visit_measurement = capture_substitution_run_visit_measure();
-        #[cfg(test)]
-        let wu0c_attribution = crate::check::checker::capture_wu0c_substitution_attribution(map);
         let param_keys = (map.len() <= PREFILTER_MAX_PARAMS).then(|| {
             let mut keys: Vec<TypeParamId> = map.keys().copied().collect();
             keys.sort_unstable();
@@ -580,8 +576,6 @@ impl<'a> Substitution<'a> {
             measurement,
             #[cfg(test)]
             run_visit_measurement,
-            #[cfg(test)]
-            wu0c_attribution,
         }
     }
 
@@ -615,12 +609,6 @@ impl<'a> Substitution<'a> {
             if let Some(collector) = self.run_visit_measurement.as_ref() {
                 record_substitution_run_visit(collector, false);
             }
-            #[cfg(test)]
-            let wu0c_visit = self
-                .wu0c_attribution
-                .as_ref()
-                .and_then(|attribution| attribution.enter_visit(ty, &self.blocked));
-
             // Raw-id re-entry must win over a completed result under any blocked
             // context; returning the original id is the existing cycle semantics.
             if self.in_progress.contains(&ty) {
@@ -633,12 +621,6 @@ impl<'a> Substitution<'a> {
                 #[cfg(test)]
                 if let Some(collector) = self.measurement.as_ref() {
                     measure_substitution(collector, |measure| measure.cycle_reentries += 1);
-                }
-                #[cfg(test)]
-                if let (Some(attribution), Some(visit)) =
-                    (self.wu0c_attribution.as_ref(), wu0c_visit)
-                {
-                    attribution.finish_cycle_visit(visit);
                 }
                 break 'apply ty;
             }
@@ -661,12 +643,6 @@ impl<'a> Substitution<'a> {
                             u64::MAX
                         }
                     };
-                }
-                #[cfg(test)]
-                if let (Some(attribution), Some(visit)) =
-                    (self.wu0c_attribution.as_ref(), wu0c_visit)
-                {
-                    attribution.finish_memo_visit(visit);
                 }
                 break 'apply result;
             }
@@ -697,12 +673,6 @@ impl<'a> Substitution<'a> {
                     #[cfg(test)]
                     if let Some(collector) = self.measurement.as_ref() {
                         measure_substitution(collector, |measure| measure.tainted_memo_hits += 1);
-                    }
-                    #[cfg(test)]
-                    if let (Some(attribution), Some(visit)) =
-                        (self.wu0c_attribution.as_ref(), wu0c_visit)
-                    {
-                        attribution.finish_tainted_visit(visit);
                     }
                     break 'apply result;
                 }
@@ -784,12 +754,6 @@ impl<'a> Substitution<'a> {
                 if let Some(collector) = self.measurement.as_ref() {
                     measure_substitution(collector, |measure| measure.completed_memo_entries += 1);
                 }
-                #[cfg(test)]
-                if let (Some(attribution), Some(visit)) =
-                    (self.wu0c_attribution.as_ref(), wu0c_visit)
-                {
-                    attribution.finish_clean_visit(visit);
-                }
             } else {
                 // Internal-cycle fold: a frame that opened and closed inside this
                 // subtree re-enters identically on any fresh walk, so `ty` leaves
@@ -817,12 +781,6 @@ impl<'a> Substitution<'a> {
                         measure.cycle_tainted_skips += 1;
                         measure.tainted_memo_entries += 1;
                     });
-                }
-                #[cfg(test)]
-                if let (Some(attribution), Some(visit)) =
-                    (self.wu0c_attribution.as_ref(), wu0c_visit)
-                {
-                    attribution.finish_tainted_visit(visit);
                 }
             }
 
@@ -897,10 +855,6 @@ pub(crate) fn substitute_with_outcome(
 ) -> SubstitutionOutcome {
     let mut substitution = Substitution::new(map);
     let result = substitution.apply(interner, ty);
-    #[cfg(test)]
-    if let Some(attribution) = substitution.wu0c_attribution.as_ref() {
-        attribution.finish_run();
-    }
     if substitution.cycle_epoch == 0 {
         SubstitutionOutcome::CycleClean(result)
     } else {
