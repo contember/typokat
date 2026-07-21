@@ -195,4 +195,14 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn query_keyof_object_resolves_to_never() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        assert_eq!(
+            resolve_keyof_outer_layer(&mut interner, wk.object),
+            wk.never
+        );
+    }
 }

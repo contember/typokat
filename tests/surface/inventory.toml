@@ -1055,9 +1055,9 @@ role = "annotation-lower"
 surface = "object-keyword"
 slot = "self"
 oxc_variant = "TSType::TSObjectKeyword"
-disposition = "unsupported-in"
-owner = "../../docs/backlog/75-scope-surface-tail.md"
-witness = "object keyword type not modeled"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b73_surface_accounting/annotation_keywords.ts"
 
 [[surface]]
 id = "annotation-lower/parenthesized-type/self"

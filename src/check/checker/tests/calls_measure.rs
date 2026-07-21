@@ -91,6 +91,142 @@ fn measure_call_pipeline_fresh_literal_formula() {
 }
 
 #[test]
+fn contextual_numeric_callback_return_is_a_real_inference_candidate() {
+    let (measure, diagnostics) = measure_with_diagnostics(
+        r#"
+        declare function map<T, U>(values: T[], callback: (value: T) => U): U[];
+        const inferred = map([1, 2, 3], value => value + 1);
+        const numberControl: number[] = inferred;
+        const wrong: string[] = inferred;
+        "#,
+    );
+    assert_eq!(
+        diagnostics,
+        [(
+            "TK2322".to_string(),
+            "Type 'number[]' is not assignable to type 'string[]'".to_string(),
+        )],
+    );
+    assert_eq!(measure.raw_call_argument_walks, 2);
+    assert!(measure.generic_full_inference_runs > 0);
+    assert!(
+        measure.callback_rewalks[ContextualMeasurePhase::CandidateInference as usize] > 0,
+        "the callback return must come from a contextual inference walk: {measure:?}",
+    );
+}
+
+#[test]
+fn contextual_numeric_union_callback_return_is_a_real_inference_candidate() {
+    let (_, diagnostics) = measure_with_diagnostics(
+        r#"
+        declare function map<T, U>(values: T[], callback: (value: T) => U): U[];
+        declare const values: (1 | 2)[];
+        const inferred = map(values, value => value + 1);
+        const numberControl: number[] = inferred;
+        const wrong: string[] = inferred;
+        "#,
+    );
+    assert_eq!(
+        diagnostics,
+        [(
+            "TK2322".to_string(),
+            "Type 'number[]' is not assignable to type 'string[]'".to_string(),
+        )],
+    );
+}
+
+#[test]
+fn nullable_optional_callback_still_contextualizes_its_parameter() {
+    let (_, diagnostics) = measure_with_diagnostics(
+        r#"
+        declare function consume<Result>(
+            callback?: ((value: number) => Result) | null,
+        ): Result;
+        consume(value => {
+            const numberControl: number = value;
+            const wrong: string = value;
+            return value;
+        });
+        "#,
+    );
+    assert_eq!(
+        diagnostics,
+        [(
+            "TK2322".to_string(),
+            "Type 'number' is not assignable to type 'string'".to_string(),
+        )],
+    );
+}
+
+#[test]
+fn callable_object_callback_contextualizes_its_parameter() {
+    let (_, diagnostics) = measure_with_diagnostics(
+        r#"
+        interface Callback {
+            (value: number): number;
+        }
+        declare function consume(callback?: Callback | null): number;
+        consume(value => {
+            const numberControl: number = value;
+            const wrong: string = value;
+            return value;
+        });
+        "#,
+    );
+    assert_eq!(
+        diagnostics,
+        [(
+            "TK2322".to_string(),
+            "Type 'number' is not assignable to type 'string'".to_string(),
+        )],
+    );
+}
+
+#[test]
+fn mixed_direct_and_object_callback_context_is_ambiguous() {
+    let (_, diagnostics) = measure_with_diagnostics(
+        r#"
+        interface StringCallback {
+            (value: string): string;
+        }
+        declare function consume(
+            callback?: ((value: number) => number) | StringCallback | null,
+        ): void;
+        consume(value => {
+            const numberControl: number = value;
+            const stringControl: string = value;
+            return value;
+        });
+        "#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn object_keyword_is_provably_neither_callable_nor_constructable() {
+    let (_, diagnostics) = measure_with_diagnostics(
+        r#"
+        declare let value: object;
+        value();
+        new value();
+        "#,
+    );
+    assert_eq!(
+        diagnostics,
+        [
+            (
+                "TK2349".to_string(),
+                "This expression is not callable".to_string(),
+            ),
+            (
+                "TK2351".to_string(),
+                "This expression is not constructable".to_string(),
+            ),
+        ],
+    );
+}
+
+#[test]
 fn measure_call_pipeline_explicit_constraint_rollback_formula() {
     let measure = measure(
         r#"

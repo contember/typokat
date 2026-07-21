@@ -3,7 +3,7 @@
 
 let symbolValue: symbol; // incomplete[annotation-lower/symbol-keyword/self]
 const bigintValue: bigint = 1n; // incomplete[annotation-lower/bigint-keyword/self] | incomplete[expr-infer/bigint-literal/self]
-const objectValue: object = {}; // incomplete[annotation-lower/object-keyword/self]
+const objectValue: object = {};
 
 function b14IsString(value: unknown): value is string { // incomplete[annotation-lower/type-predicate/self]
   return typeof value === "string";

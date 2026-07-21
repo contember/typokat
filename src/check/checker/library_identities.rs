@@ -733,6 +733,18 @@ mod tests {
     }
 
     #[test]
+    fn object_keyword_selects_only_the_explicit_object_identity() {
+        with_bridge_pass(|pass, _| {
+            let wk = pass.interner.well_known();
+            assert_eq!(
+                projected_property(pass, wk.object, "toStringResult"),
+                Some(wk.string)
+            );
+            assert_eq!(projected_property(pass, wk.object, "missing"), None);
+        });
+    }
+
+    #[test]
     fn native_primitive_function_and_regexp_projection_uses_installed_ids() {
         with_bridge_pass(|pass, identities| {
             let wk = pass.interner.well_known();

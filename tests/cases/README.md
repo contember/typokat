@@ -451,8 +451,9 @@ The durable WU6 proof is
 [`tests/fixtures/lib-es5-6.0.3/readiness.toml`](../fixtures/lib-es5-6.0.3/readiness.toml).
 All 28 interface/value pairs, repeated `Date`/`Number`/`String` interfaces, local `Array` heritage,
 and both `Intl` type and value paths are represented. The superseding proof at checker commit
-`23bad42` records **GO for starting backlog 14** with four `TK2430`s and 187 explicit incomplete
-outcomes: 179 owned by `75` and eight type predicates owned by `50`; no namespace owner remains.
+`23bad42` established **GO for starting backlog 14**; the current gate has four `TK2430`s and 181
+explicit incomplete outcomes: 173 owned by `75` and eight type predicates owned by `50`; no
+namespace owner remains.
 `deep.Intl.value` now contributes the same `TK2322` as tsc, so the synthetic suffix is exactly 66
 `TK2322` diagnostics with no `TK2304` and no added incomplete. These counts are exact accounting,
 not a broad allowlist. The namespace lifecycle is closed, so GO permits loader work now; it does
@@ -792,7 +793,7 @@ wildcard/`None`/skip that drops the position.
 | `try_catch_finally.ts` | WU4 | `check_stmt` walks the blocks; catch param stays incomplete | `error[TK2322]` ×3 + `stmt-check/try-statement/catch-param` | TS2322 ×3 |
 | `for_of_assign_target.ts` | WU4 | `declare_for_left` records the pre-declared target | `stmt-check/assignment-target/self` | TS2322 |
 | `typeof_query.ts` | WU5 | `lower_annotation_inner` records before dropping `TSTypeQuery` | `annotation-lower/type-query/typeof` | TS2304 |
-| `annotation_keywords.ts` | WU5 | keyword/literal annotation leaves record before `None` | `annotation-lower/{symbol,bigint,object,intrinsic}-keyword/self`, `literal-type/bigint` | TS2304/TS2552 |
+| `annotation_keywords.ts` | WU5 | remaining keyword/literal gaps record before `None`; `object` and `{}` retain distinct assignability | `annotation-lower/{symbol,bigint,intrinsic}-keyword/self`, `literal-type/bigint` | TS2304/TS2552 |
 | `tuple_members.ts` | WU5/WU7 | named labels lower transparently; optional members remain recorded before withholding the tuple | `annotation-lower/tuple-optional-element/self` | (optional tuple unavailable) |
 | `type_name_qualified.ts` | WU2/WU5 | successful public qualified type-group paths are supported; `this`/predicate type leaves remain recorded | `type-predicate/self`, `this-type/self` | clean qualified paths |
 | `ambient_external_module.ts` | closure | a value-bearing string-literal ambient module stays explicitly deferred to backlog `15` | `decl/module-declaration/self` | clean |

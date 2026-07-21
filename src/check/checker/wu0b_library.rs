@@ -3109,7 +3109,7 @@ mod tests {
     fn failed_conditional_alias_recovery_leaves_no_pending_reservation() {
         let source = r#"
             type FailedAwaited<T> = T extends null | undefined ? T :
-                T extends object & {
+                T extends symbol & {
                     then(onfulfilled: infer F, ...args: infer _): any;
                 } ? F extends ((value: infer V, ...args: infer _) => any) ?
                     FailedAwaited<V> : never : T;
@@ -4041,7 +4041,8 @@ mod tests {
         let CheckerRecord::Diagnostic(diagnostic) = &run.library_records[0].1 else {
             panic!("implementation mismatch must be a diagnostic");
         };
-        assert_eq!(run.library_records[0].0.source_start, diagnostic.span.start);
+        assert_eq!(run.library_records[0].0.source_start, 23);
+        assert_eq!(diagnostic.span.start, 6);
     }
 
     #[test]
@@ -4362,6 +4363,133 @@ mod tests {
         const aliasAnswer: number = RuntimeAlias.answer;
         increment.notAFunctionMember;
     "#;
+
+    #[test]
+    fn owned_generic_promise_identity_preserves_resolve_argument() {
+        let library = r#"
+            type SnapshotAwaited<T> = T;
+            interface SnapshotPromise<T> {
+                then<Result = T>(
+                    onfulfilled?: ((value: T) => Result) | null,
+                ): SnapshotPromise<Result>;
+            }
+            interface SnapshotPromiseConstructor {
+                resolve<T>(value: T): SnapshotPromise<SnapshotAwaited<T>>;
+            }
+            declare var SnapshotPromise: SnapshotPromiseConstructor;
+        "#;
+        let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "promise-identity.d.ts",
+            source: library,
+        }])
+        .expect("focused Promise identity library compiles");
+        let run = check_caller_certified_collision_free_source_with_owned_library(
+            state,
+            r#"
+                declare const awaited: SnapshotAwaited<number>;
+                const wrongAwaited: string = awaited;
+                const resolved = SnapshotPromise.resolve(1);
+                const numberControl: SnapshotPromise<number> = resolved;
+                resolved.then(value => {
+                    const valueControl: number = value;
+                    const wrongValue: string = value;
+                    return value;
+                });
+                const wrongPromise: SnapshotPromise<string> = resolved;
+            "#,
+        )
+        .expect("focused Promise suffix checks");
+        assert!(
+            run.result.incomplete.is_empty(),
+            "{:?}",
+            run.result.incomplete
+        );
+        assert_eq!(
+            run.result.diagnostics.len(),
+            3,
+            "{:?}",
+            run.result.diagnostics
+        );
+        assert_eq!(
+            run.result
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>(),
+            [
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+            ],
+        );
+    }
+
+    #[test]
+    fn owned_conditional_awaited_preserves_non_thenable_argument() {
+        let library = r#"
+            type SnapshotAwaited<T> = T extends null | undefined ? T :
+                T extends object & { then(onfulfilled: infer F, ...args: infer _): any; } ?
+                    F extends ((value: infer V, ...args: infer _) => any) ?
+                        SnapshotAwaited<V> :
+                    never :
+                T;
+            interface SnapshotPromise<T> {
+                then<Result = T>(
+                    onfulfilled?: ((value: T) => Result) | null,
+                ): SnapshotPromise<Result>;
+            }
+            interface SnapshotPromiseConstructor {
+                resolve<T>(value: T): SnapshotPromise<SnapshotAwaited<T>>;
+            }
+            declare var SnapshotPromise: SnapshotPromiseConstructor;
+        "#;
+        let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "promise-awaited.d.ts",
+            source: library,
+        }])
+        .expect("focused conditional Awaited library compiles");
+        let run = check_caller_certified_collision_free_source_with_owned_library(
+            state,
+            r#"
+                declare const awaited: SnapshotAwaited<number>;
+                const wrongAwaited: string = awaited;
+                const resolved = SnapshotPromise.resolve(1);
+                const numberControl: SnapshotPromise<number> = resolved;
+                resolved.then(value => {
+                    const valueControl: number = value;
+                    const wrongValue: string = value;
+                    return value;
+                });
+                const wrongPromise: SnapshotPromise<string> = resolved;
+            "#,
+        )
+        .expect("focused conditional Awaited suffix checks");
+        assert!(
+            run.result.incomplete.is_empty(),
+            "{:?}",
+            run.result.incomplete
+        );
+        assert_eq!(
+            run.result.diagnostics.len(),
+            3,
+            "{:?}",
+            run.result.diagnostics
+        );
+        assert_eq!(
+            run.result
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>(),
+            [
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+            ],
+        );
+    }
 
     fn owned_state_identity_ends(state: &OwnedLibraryRuntimeState) -> OwnedBaseFinalIdentityEnds {
         OwnedBaseFinalIdentityEnds {

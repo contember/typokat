@@ -477,6 +477,30 @@ fn optional_target_absent_ok_optional_source_to_required_fails() {
     }
 }
 
+#[test]
+fn type_parameter_intersection_constraint_satisfies_its_union_conjunct() {
+    use crate::types::repr::TypeParamId;
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let target = interner.union(vec![wk.number, wk.string]);
+    let refinement = interner.intern_object(ObjectType {
+        properties: vec![optional_prop("marker", wk.undefined)],
+        ..Default::default()
+    });
+    let constraint = interner.intersection(vec![target, refinement]);
+    let parameter_id = TypeParamId(40_001);
+    let parameter = interner.intern_type_param(parameter_id, "T");
+    assert!(interner.set_type_param_constraint(parameter_id, constraint));
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+    assert!(
+        rel.is_assignable(parameter, target).is_yes(),
+        "T extends (number | string) & Refinement must satisfy number | string"
+    );
+}
+
 /// Explicit receivers are non-positional but contravariant when both sides
 /// declare one; a receiverless signature remains compatible in either direction.
 #[test]
@@ -2472,6 +2496,133 @@ fn array_covariant_assignability() {
         !rel.is_assignable(wk.number, num_arr).is_yes(),
         "number is NOT assignable to number[]"
     );
+}
+
+#[test]
+fn recursive_promise_like_generic_callbacks_preserve_outer_variance() {
+    use crate::types::repr::{GenericTypeParam, TypeParamId};
+
+    fn promise_like(interner: &mut Interner, value: TypeId, binder: TypeParamId) -> TypeId {
+        let wk = interner.well_known();
+        let promise = interner.reserve_object();
+        let result = interner.intern_type_param(binder, "Result");
+        let callback = interner.intern_function(FunctionType {
+            type_params: Vec::new(),
+            receiver: None,
+            params: vec![ParameterType::required("value", value)],
+            ret: result,
+        });
+        let onfulfilled = interner.union(vec![callback, wk.null, wk.undefined]);
+        let then = interner.intern_function(FunctionType {
+            type_params: vec![GenericTypeParam {
+                id: binder,
+                constraint: None,
+                default: Some(value),
+            }],
+            receiver: None,
+            params: vec![ParameterType::optional("onfulfilled", onfulfilled)],
+            ret: promise,
+        });
+        interner.fill_object(
+            promise,
+            ObjectType {
+                properties: vec![prop("then", then)],
+                ..Default::default()
+            },
+        );
+        promise
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let numbers = promise_like(&mut interner, wk.number, TypeParamId(900));
+    let strings = promise_like(&mut interner, wk.string, TypeParamId(901));
+    let relation = Relater::new(interner.store(), wk).is_assignable(numbers, strings);
+    assert!(
+        matches!(relation, Relation::No(_)),
+        "PromiseLike<number> must not be assignable to PromiseLike<string>: {relation:?}",
+    );
+}
+
+#[test]
+fn object_keyword_and_empty_structural_object_remain_distinct() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let empty = interner.intern_object(ObjectType::default());
+    let shaped = interner.intern_object(ObjectType {
+        properties: vec![prop("value", wk.number)],
+        ..Default::default()
+    });
+    let function = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: Vec::new(),
+        ret: wk.void,
+    });
+    let array = interner.intern_array(wk.number);
+    let thenable = interner.intern_object(ObjectType {
+        properties: vec![prop("then", function)],
+        ..Default::default()
+    });
+    let object_thenable = interner.intersection(vec![wk.object, thenable]);
+
+    for source in [shaped, function, array] {
+        assert!(
+            Relater::new(interner.store(), wk)
+                .is_assignable(source, wk.object)
+                .is_yes(),
+            "non-primitive {source:?} must satisfy object",
+        );
+        assert!(
+            Relater::new(interner.store(), wk)
+                .is_assignable(source, empty)
+                .is_yes(),
+            "non-primitive {source:?} must satisfy {{}}",
+        );
+    }
+    for source in [wk.number, wk.string, wk.boolean] {
+        assert!(
+            matches!(
+                Relater::new(interner.store(), wk).is_assignable(source, wk.object),
+                Relation::No(_)
+            ),
+            "primitive {source:?} must not satisfy object",
+        );
+        assert!(
+            Relater::new(interner.store(), wk)
+                .is_assignable(source, empty)
+                .is_yes(),
+            "non-nullish primitive {source:?} must satisfy {{}}",
+        );
+    }
+    for source in [wk.null, wk.undefined] {
+        assert!(matches!(
+            Relater::new(interner.store(), wk).is_assignable(source, wk.object),
+            Relation::No(_)
+        ));
+        assert!(matches!(
+            Relater::new(interner.store(), wk).is_assignable(source, empty),
+            Relation::No(_)
+        ));
+    }
+    assert!(matches!(
+        Relater::new(interner.store(), wk).is_assignable(wk.number, object_thenable),
+        Relation::No(_)
+    ));
+}
+
+#[test]
+fn template_literal_type_satisfies_empty_structural_object() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let empty = interner.intern_object(ObjectType::default());
+    let template = interner.intern_template(crate::types::repr::TemplateType {
+        texts: vec!["id:".to_string(), String::new()],
+        holes: vec![wk.number],
+    });
+    assert!(Relater::new(interner.store(), wk)
+        .is_assignable(template, empty)
+        .is_yes());
 }
 
 /// M18 tuple assignability is positional and same-length; length mismatches are

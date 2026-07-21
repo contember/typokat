@@ -47,7 +47,7 @@ const DEEP_WITNESS_IDS: &[&str] = &[
     "deep.repeat.Number",
     "deep.repeat.String",
 ];
-const RAW_OUTPUT_SHA256: &str = "00b45da6ed7d88713970cb355915317204d5e15dfda97571d0ddcde4218169b3";
+const RAW_OUTPUT_SHA256: &str = "a6d75841e4faa82b215b49dd140f489c70b409a31dcecb84fa3f71977727102f";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WitnessRecord {
@@ -432,7 +432,6 @@ fn validate_decision_and_owners(root: &toml::Table, repo_root: &Path, manifest_p
     let expected_owners = BTreeMap::from([
         ("annotation-bigint-keyword", OWNER_75),
         ("annotation-intrinsic-keyword", OWNER_75),
-        ("annotation-object-keyword", OWNER_75),
         ("annotation-symbol-keyword", OWNER_75),
         ("annotation-this-type", OWNER_75),
         ("annotation-type-predicate", OWNER_50),
@@ -673,7 +672,7 @@ fn validate_raw_measurement(
     );
     assert_eq!(
         output.incomplete.len(),
-        187,
+        181,
         "raw incomplete cardinality drifted"
     );
     assert_eq!(integer(measurement, "exit_code", "raw measurement"), 3);
@@ -1025,31 +1024,14 @@ fn expected_marker_span(
         .map(|(code, _)| code)
         .expect("marker line contains marker comment");
     let (local_start, local_end) = match marker.typokat.as_str() {
-        "TK2322" if marker.id == "deep.Intl.type" => {
-            let start = code
-                .rfind('.')
-                .map(|offset| offset + 1)
-                .expect("deep.Intl.type requires a member access");
-            let end = code
-                .rfind(';')
-                .expect("deep.Intl.type requires a trailing semicolon");
-            (start, end)
-        }
         "TK2322" => {
-            let mut start = code
-                .find('=')
-                .map(|offset| offset + 1)
-                .unwrap_or_else(|| panic!("marker {:?} requires an assignment", marker.id));
-            let mut end = code
-                .rfind(';')
-                .unwrap_or_else(|| panic!("marker {:?} requires a trailing semicolon", marker.id));
-            let bytes = code.as_bytes();
-            while start < end && bytes[start].is_ascii_whitespace() {
-                start += 1;
-            }
-            while end > start && bytes[end - 1].is_ascii_whitespace() {
-                end -= 1;
-            }
+            let annotation = code
+                .find(':')
+                .unwrap_or_else(|| panic!("marker {:?} requires an annotation", marker.id));
+            let end = code[..annotation].trim_end().len();
+            let start = code[..end]
+                .rfind(char::is_whitespace)
+                .map_or(0, |offset| offset + 1);
             (start, end)
         }
         code => panic!(

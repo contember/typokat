@@ -143,22 +143,22 @@ const laterNonClass: number = \"later\";
     let default_start = source.find("number>(").unwrap();
     let parameter_start = source.find("MissingParameter").unwrap();
     let return_start = source.find("MissingReturn").unwrap();
-    let earlier_start = source.find("1;").unwrap();
-    let body_start = source.find("2;").unwrap();
-    let later_start = source.find("\"later\"").unwrap();
+    let earlier_start = source.find("earlierNonClass").unwrap();
+    let body_start = source.find("bodyOnly").unwrap();
+    let later_start = source.find("laterNonClass").unwrap();
     let default = default_start..default_start + "number".len();
     let parameter = parameter_start..parameter_start + "MissingParameter".len();
     let return_type = return_start..return_start + "MissingReturn".len();
-    let earlier = earlier_start..earlier_start + "1".len();
-    let body = body_start..body_start + "2".len();
-    let later = later_start..later_start + "\"later\"".len();
+    let earlier = earlier_start..earlier_start + "earlierNonClass".len();
+    let body = body_start..body_start + "bodyOnly".len();
+    let later = later_start..later_start + "laterNonClass".len();
     let expected = vec![
-        ("TK2322", 1, earlier, "1"),
+        ("TK2322", 1, earlier, "earlierNonClass"),
         ("TK2344", 3, default, "number"),
         ("TK2304", 4, parameter, "MissingParameter"),
         ("TK2304", 5, return_type, "MissingReturn"),
-        ("TK2322", 6, body, "2"),
-        ("TK2322", 10, later, "\"later\""),
+        ("TK2322", 6, body, "bodyOnly"),
+        ("TK2322", 10, later, "laterNonClass"),
     ];
     assert_eq!(actual, expected);
 }
@@ -259,6 +259,105 @@ fn invalid_signature_default_reports_its_constraint_without_incomplete() {
         result.incomplete.is_empty(),
         "signature defaults must be validated, not recorded as incomplete"
     );
+}
+
+#[test]
+fn intersection_constraints_normalize_deferred_conjuncts_before_relation() {
+    let source = "\
+interface WeakKeyTypes { object: object; }
+type WeakKey = WeakKeyTypes[keyof WeakKeyTypes];
+declare const weak: WeakKey;
+interface A { x: number; }
+interface Types { a: A; }
+type AL = Types[keyof Types];
+declare const al: AL;
+const selected: A = al;
+type Good = AL & { y?: never; };
+declare const good: Good;
+const direct: A = good;
+interface Box<T extends AL> { value: T; }
+declare function make<T extends AL & { y?: never }>(): Box<T>;
+const boxed: Box<AL> = make();
+";
+    let result = check_source(source);
+    assert!(result.parse_errors.is_empty(), "{:?}", result.parse_errors);
+    assert!(
+        result.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.incomplete.is_empty(),
+        "unexpected incomplete records: {:?}",
+        result.incomplete
+    );
+}
+
+#[test]
+fn deferred_intersection_constraint_normalizes_on_its_first_demand() {
+    let source = "\
+interface Buffer { byteLength: number; slice(): Buffer; }
+interface BufferTypes { Buffer: Buffer; }
+type BufferLike = BufferTypes[keyof BufferTypes];
+interface View<T extends BufferLike> { buffer: T; }
+interface ViewConstructor {
+  new <T extends BufferLike & { marker?: never }>(buffer: T): View<T>;
+}
+";
+    let result = check_source(source);
+    assert!(result.parse_errors.is_empty(), "{:?}", result.parse_errors);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
+}
+
+#[test]
+fn normalized_intersection_members_cannot_hide_nested_family_conflicts() {
+    let source = "\
+interface NestedTypes { value: { a: number } & { b: number }; }
+type Nested = NestedTypes[keyof NestedTypes];
+type NestedSource = Nested & {};
+declare const nested: NestedSource;
+const nestedReject: { a?: string } = nested;
+interface UnionTypes { value: { a: number } | {}; }
+type SelectedUnion = UnionTypes[keyof UnionTypes];
+type UnionSource = SelectedUnion & {};
+declare const union: UnionSource;
+const unionReject: { a?: string } = union;
+";
+    let result = check_source(source);
+    assert!(result.parse_errors.is_empty(), "{:?}", result.parse_errors);
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        vec!["TK2322", "TK2322"]
+    );
+    assert!(
+        result.incomplete.is_empty(),
+        "unexpected incomplete records: {:?}",
+        result.incomplete
+    );
+}
+
+#[test]
+fn keyof_object_and_empty_structural_object_are_both_never() {
+    let source = "\
+const objectKey: keyof object = 'x';
+const emptyKey: keyof {} = 'x';
+";
+    let result = check_source(source);
+    assert!(result.parse_errors.is_empty(), "{:?}", result.parse_errors);
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        vec!["TK2322", "TK2322"]
+    );
+    assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
 }
 
 #[test]

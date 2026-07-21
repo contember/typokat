@@ -4,7 +4,7 @@ source_path = "tests/conformance.rs"
 source_sha256 = "cd9713a44e2e219086b60cd0f0648a678c9883df3c27be5e838c8ccfa83e6b21"
 invocation_count = 305
 source_count = 336
-manifest_sha256 = "6e72420f1a1481ca9e7313097ee22f029c3788678f4f1fd7cd249cc26bbb3432"
+manifest_sha256 = "af6fc79155a9eb58a4e3cf60e7cacdeff64c3f2cc509a2e5b07194d4441439e6"
 
 [[invocation]]
 id = "tests/cases/m0_assign_primitives/intrinsics.ts"
@@ -1299,7 +1299,7 @@ source = ["tests/cases/b73_surface_accounting/ambient_external_module.ts\te24f03
 [[invocation]]
 id = "tests/cases/b73_surface_accounting/annotation_keywords.ts"
 kind = "single"
-source = ["tests/cases/b73_surface_accounting/annotation_keywords.ts\tc9b09fc7dca26fea0711b63ebe83973a76f8f625bd8f5ead44c90152b82bcde9"]
+source = ["tests/cases/b73_surface_accounting/annotation_keywords.ts\t2144590dcb294cde397631ba804be6fa8b6cb01cff7b7344ed784371ae85b4a9"]
 
 [[invocation]]
 id = "tests/cases/b73_surface_accounting/array_spread.ts"

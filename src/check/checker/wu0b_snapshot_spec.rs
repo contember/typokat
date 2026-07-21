@@ -548,6 +548,35 @@ fn snapshot_promise_resolve_preserves_number_surface_and_variance() {
 }
 
 #[test]
+fn snapshot_object_keyword_projects_object_members_without_name_fallback() {
+    let source = concat!(
+        "export {};\n",
+        "declare let value: object;\n",
+        "const text: string = value.toString();\n",
+        "const primitive: object = value.valueOf();\n",
+        "const owns: boolean = value.hasOwnProperty('key');\n",
+        "value.notAnObjectMember;\n",
+    );
+    let result = check_source_with_decoded_base_for_test(
+        decode_exact_profile(SnapshotDecodeStrategy::EagerComplete),
+        source,
+    );
+    assert!(result.parse_errors.is_empty(), "{:?}", result.parse_errors);
+    assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
+    let [diagnostic] = result.diagnostics.as_slice() else {
+        panic!(
+            "only the unknown Object member must fail: {:?}",
+            result.diagnostics
+        );
+    };
+    let position = LineIndex::new(source).line_col(diagnostic.span.start);
+    assert_eq!(
+        (position.line, diagnostic.code),
+        (6, DiagnosticCode::TK2339)
+    );
+}
+
+#[test]
 fn snapshot_roundtrip_preserves_runtime_projection() {
     let compiled = compile_exact_profile();
     let source_projection = compiled.runtime_projection().clone();

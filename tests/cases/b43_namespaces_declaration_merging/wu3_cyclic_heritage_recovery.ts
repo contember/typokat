@@ -127,7 +127,7 @@ interface AnyOnlyHeritageDerived extends AnyOnlyHeritageAlias {}
 type TypeLiteralHeritageAlias = { value: number };
 interface TypeLiteralHeritageDerived extends TypeLiteralHeritageAlias {}
 
-type ObjectHeritageAlias = object; // incomplete[annotation-lower/object-keyword/self]
+type ObjectHeritageAlias = object;
 interface ObjectHeritageDerived extends ObjectHeritageAlias {}
 
 type PoisonedIntersectionAlias = PoisonedIntersectionSelf & MissingIntersectionBase; // error[TK2304]: Cannot find name 'MissingIntersectionBase'

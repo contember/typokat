@@ -689,6 +689,40 @@ mod tests {
     }
 
     #[test]
+    fn annotated_object_binding_initializer_reports_at_offending_property() {
+        let source = "const { value }: { value: string } = { value: 1 };";
+        let output = check_source(source);
+        assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        let [diagnostic] = output.diagnostics.as_slice() else {
+            panic!("expected one object-binding initializer diagnostic");
+        };
+        assert_eq!(diagnostic.code.as_str(), "TK2322");
+        assert_eq!(
+            diagnostic.span.start,
+            u32::try_from(source.rfind("value").expect("initializer property"))
+                .expect("source offset fits u32"),
+        );
+    }
+
+    #[test]
+    fn annotated_array_binding_initializer_reports_at_offending_element() {
+        let source = "const [value]: [string] = [1];";
+        let output = check_source(source);
+        assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        let [diagnostic] = output.diagnostics.as_slice() else {
+            panic!("expected one array-binding initializer diagnostic");
+        };
+        assert_eq!(diagnostic.code.as_str(), "TK2322");
+        assert_eq!(
+            diagnostic.span.start,
+            u32::try_from(source.find('1').expect("initializer element"))
+                .expect("source offset fits u32"),
+        );
+    }
+
+    #[test]
     fn annotated_class_field_initializer_reports_at_field_name() {
         let source = "class Example { field: number = \"wrong\"; }";
         let output = check_source(source);

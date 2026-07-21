@@ -32,7 +32,7 @@ command = "target/debug/typokat check --format compact tests/fixtures/lib-es5-6.
 exit_code = 3
 parse_errors = 0
 diagnostics = 4
-incompletes = 187
+incompletes = 181
 
 [measurements.synthetic_typokat]
 checker_revision = "23bad42"
@@ -40,7 +40,7 @@ command = "target/debug/typokat check --format compact $COMBINED"
 exit_code = 3
 parse_errors = 0
 diagnostics = 70
-incompletes = 187
+incompletes = 181
 artifact_diagnostics = 4
 witness_diagnostics = 66
 tk2304 = 0
@@ -190,15 +190,6 @@ count = 5
 owner = "../../../docs/backlog/75-scope-surface-tail.md"
 witness = "lib.es5.d.ts:1658:36"
 actual_cause = "Intrinsic keyword declarations are not modeled."
-
-[[residual]]
-id = "annotation-object-keyword"
-outcome = "incomplete"
-surface = "annotation-lower/object-keyword/self"
-count = 6
-owner = "../../../docs/backlog/75-scope-surface-tail.md"
-witness = "lib.es5.d.ts:186:15"
-actual_cause = "The object keyword type is not modeled."
 
 [[residual]]
 id = "annotation-symbol-keyword"

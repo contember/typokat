@@ -12,8 +12,26 @@ let s: symbol = 0; // incomplete[annotation-lower/symbol-keyword/self]
 // INCOMPLETE: the `bigint` keyword type is not modeled.
 let b: bigint = 0; // incomplete[annotation-lower/bigint-keyword/self]
 
-// INCOMPLETE: the `object` keyword type is not modeled.
-let o: object = {}; // incomplete[annotation-lower/object-keyword/self]
+let o: object = {};
+o = { value: 1 };
+o = [1, 2, 3];
+o = () => 1;
+o = 1; // error[TK2322]: Type 'number' is not assignable to type 'object'
+o = "text"; // error[TK2322]: Type 'string' is not assignable to type 'object'
+o = true; // error[TK2322]: Type 'boolean' is not assignable to type 'object'
+o = null; // error[TK2322]: Type 'null' is not assignable to type 'object'
+o = undefined; // error[TK2322]: Type 'undefined' is not assignable to type 'object'
+
+// `{}` is deliberately wider than the `object` keyword: it accepts every
+// represented non-nullish value, including primitives.
+let nonNullish: {} = 1;
+nonNullish = "text";
+nonNullish = true;
+nonNullish = { value: 1 };
+nonNullish = [1, 2, 3];
+nonNullish = () => 1;
+nonNullish = null; // error[TK2322]: Type 'null' is not assignable to type '{}'
+nonNullish = undefined; // error[TK2322]: Type 'undefined' is not assignable to type '{}'
 
 // INCOMPLETE: a `bigint` literal type aborts lowering.
 type Big = 1n; // incomplete[annotation-lower/literal-type/bigint]

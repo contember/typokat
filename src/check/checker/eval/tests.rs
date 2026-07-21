@@ -113,6 +113,238 @@ fn object_infer_conditional(interner: &mut Interner, check: TypeId) -> (Conditio
 }
 
 #[test]
+fn poisoned_conditional_takes_false_when_infer_free_conjunct_rejects() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let infer = interner.intern_infer(0);
+    let then = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("onfulfilled", infer)],
+        ret: wk.any,
+    });
+    let thenable = interner.intern_object(ObjectType {
+        properties: vec![prop("then", then)],
+        ..Default::default()
+    });
+    let extends_ty = interner.intersection(vec![wk.object, thenable]);
+    let conditional = interner.intern_conditional(ConditionalType {
+        check: wk.number,
+        extends_ty,
+        true_branch: wk.string,
+        false_branch: wk.number,
+        infer_count: 1,
+        distributive: false,
+        poisoned: true,
+    });
+    let mut next = 100;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+    assert_eq!(evaluate_ready(&mut evaluator, conditional), wk.number);
+}
+
+#[test]
+fn poisoned_void_unknown_and_template_checks_take_the_object_false_branch() {
+    fn poisoned(interner: &mut Interner, check: TypeId) -> TypeId {
+        let wk = interner.well_known();
+        let infer = interner.intern_infer(0);
+        let infer_member = interner.intern_object(ObjectType {
+            properties: vec![prop("value", infer)],
+            ..Default::default()
+        });
+        let extends_ty = interner.intersection(vec![wk.object, infer_member]);
+        interner.intern_conditional(ConditionalType {
+            check,
+            extends_ty,
+            true_branch: wk.string,
+            false_branch: wk.number,
+            infer_count: 1,
+            distributive: false,
+            poisoned: true,
+        })
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let template = interner.intern_template(TemplateType {
+        texts: vec![String::new(), String::new()],
+        holes: vec![wk.string],
+    });
+    let conditionals = [
+        poisoned(&mut interner, wk.void),
+        poisoned(&mut interner, wk.unknown),
+        poisoned(&mut interner, template),
+    ];
+    let any_conditional = poisoned(&mut interner, wk.any);
+    let mut next = 100;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    for conditional in conditionals {
+        assert_eq!(evaluate_ready(&mut evaluator, conditional), wk.number);
+    }
+    assert_eq!(
+        evaluate_ready(&mut evaluator, any_conditional),
+        any_conditional,
+        "any remains unavailable rather than manufacturing a false branch"
+    );
+}
+
+#[test]
+fn poisoned_false_branch_self_cycle_uses_the_evaluator_cycle_guard() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let infer = interner.intern_infer(0);
+    let infer_member = interner.intern_object(ObjectType {
+        properties: vec![prop("value", infer)],
+        ..Default::default()
+    });
+    let extends_ty = interner.intersection(vec![wk.object, infer_member]);
+    let conditional = interner.reserve_conditional();
+    interner.fill_conditional(
+        conditional,
+        ConditionalType {
+            check: wk.number,
+            extends_ty,
+            true_branch: wk.string,
+            false_branch: conditional,
+            infer_count: 1,
+            distributive: false,
+            poisoned: true,
+        },
+    );
+    let mut next = 100;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    assert_eq!(evaluate_ready(&mut evaluator, conditional), conditional);
+    assert_evaluator_state(&evaluator, true, false);
+    assert!(!evaluator.memo.contains_key(&conditional));
+}
+
+#[test]
+fn poisoned_false_branch_mutual_cycle_uses_the_evaluator_cycle_guard() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let infer = interner.intern_infer(0);
+    let infer_member = interner.intern_object(ObjectType {
+        properties: vec![prop("value", infer)],
+        ..Default::default()
+    });
+    let extends_ty = interner.intersection(vec![wk.object, infer_member]);
+    let left = interner.reserve_conditional();
+    let right = interner.reserve_conditional();
+    interner.fill_conditional(
+        left,
+        ConditionalType {
+            check: wk.number,
+            extends_ty,
+            true_branch: wk.string,
+            false_branch: right,
+            infer_count: 1,
+            distributive: false,
+            poisoned: true,
+        },
+    );
+    interner.fill_conditional(
+        right,
+        ConditionalType {
+            check: wk.number,
+            extends_ty,
+            true_branch: wk.string,
+            false_branch: left,
+            infer_count: 1,
+            distributive: false,
+            poisoned: true,
+        },
+    );
+    let mut next = 100;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    assert_eq!(evaluate_ready(&mut evaluator, left), left);
+    assert_evaluator_state(&evaluator, true, false);
+    assert!(!evaluator.memo.contains_key(&left));
+    assert!(!evaluator.memo.contains_key(&right));
+}
+
+#[test]
+fn poisoned_object_thenable_match_stays_unavailable() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let infer = interner.intern_infer(0);
+    let target_then = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("onfulfilled", infer)],
+        ret: wk.any,
+    });
+    let target_thenable = interner.intern_object(ObjectType {
+        properties: vec![prop("then", target_then)],
+        ..Default::default()
+    });
+    let extends_ty = interner.intersection(vec![wk.object, target_thenable]);
+    let source_then = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("onfulfilled", wk.number)],
+        ret: wk.any,
+    });
+    let check = interner.intern_object(ObjectType {
+        properties: vec![prop("then", source_then)],
+        ..Default::default()
+    });
+    let conditional = interner.intern_conditional(ConditionalType {
+        check,
+        extends_ty,
+        true_branch: wk.string,
+        false_branch: wk.number,
+        infer_count: 1,
+        distributive: false,
+        poisoned: true,
+    });
+    let mut next = 100;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+    assert_eq!(evaluate_ready(&mut evaluator, conditional), conditional);
+}
+
+#[test]
+fn conservative_relation_no_does_not_prove_a_poisoned_false_branch() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let check = interner.intern_template(TemplateType {
+        texts: vec![String::new(), String::new()],
+        holes: vec![wk.string],
+    });
+    let infer = interner.intern_infer(0);
+    let infer_member = interner.intern_object(ObjectType {
+        properties: vec![prop("value", infer)],
+        ..Default::default()
+    });
+    let extends_ty = interner.intersection(vec![wk.number, infer_member]);
+    let conditional = interner.intern_conditional(ConditionalType {
+        check,
+        extends_ty,
+        true_branch: wk.string,
+        false_branch: wk.number,
+        infer_count: 1,
+        distributive: false,
+        poisoned: true,
+    });
+    let mut next = 100;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+    assert_eq!(evaluate_ready(&mut evaluator, conditional), conditional);
+}
+
+#[test]
 fn pass_evaluate_type_does_not_descend_through_an_ordinary_wrapper() {
     let mut interner = Interner::with_intrinsics();
     let application = interner.intern_class_instance(ClassId(80_006), Vec::new());
