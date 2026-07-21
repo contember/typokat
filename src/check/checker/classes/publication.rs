@@ -29,7 +29,8 @@ use crate::binder::declaration::DeclarationKind;
 use crate::binder::scope::ScopeId;
 use crate::check::checker::context::{
     CheckerEffects, ClassNamespacePropertyPayload, ClassNamespacePropertySourceOrder,
-    ConstraintCheckObligation, OverrideCheck, Pass, PublishedClassNewMetadata, TypeDecl,
+    ConstraintCheckObligation, OverrideCheck, Pass, PublishedClassNewMetadata,
+    PublishedClassValueBinding, TypeDecl,
 };
 use crate::check::checker::decls::type_decl_id;
 use crate::check::checker::events::UserRecordTicket;
@@ -1363,7 +1364,27 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .finish(self.interner)
             .expect("class publication must preserve reserved identities");
         self.staged_published_classes = Some(publication.published);
-        self.class_application_parameters = publication.type_parameters;
+        let application_parameters = publication
+            .type_parameters
+            .into_iter()
+            .map(|(class, parameters)| {
+                (
+                    class,
+                    parameters
+                        .into_iter()
+                        .map(DraftClassTypeParameter::owner_free)
+                        .collect(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        for (class, parameters) in application_parameters {
+            assert!(
+                self.class_application_parameters
+                    .insert(class, parameters)
+                    .is_none(),
+                "class application parameter epochs are disjoint"
+            );
+        }
         for (group, class_object) in &class_conflict_surfaces {
             let Some(interface_fragments) = prepared_interface_groups.get(group) else {
                 continue;
@@ -1454,7 +1475,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         }
         self.retained_class_callables = publication.retained_callables;
-        self.class_super_constructors = publication.heritage_constructors;
+        for (class, constructor) in publication.heritage_constructors {
+            assert!(
+                self.class_super_constructors
+                    .insert(class, constructor)
+                    .is_none(),
+                "class constructor epochs are disjoint"
+            );
+        }
         for group in class_groups {
             self.freeze_type_group(group);
         }
@@ -1462,6 +1490,20 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let Some(binding) = reservation.binding.as_ref() else {
                 continue;
             };
+            if let Some(value_decl) = binding.value_decl {
+                assert!(
+                    self.class_value_bindings
+                        .insert(
+                            value_decl,
+                            PublishedClassValueBinding {
+                                class_id: binding.class_id,
+                                has_header_type_params: !binding.header_type_params.is_empty(),
+                            },
+                        )
+                        .is_none(),
+                    "class value bindings publish once"
+                );
+            }
             if let DemandOutcome::Ready(surface) = self
                 .staged_published_classes
                 .as_ref()

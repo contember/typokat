@@ -49,6 +49,11 @@ pub(in crate::check::checker) struct NamespaceValueRegistry<Ticket: Copy = UserR
     standalone_query_root_calls: u64,
 }
 
+#[derive(Clone, Default)]
+pub(in crate::check::checker) struct FrozenNamespaceValueTerminals {
+    standalone: FxHashMap<NamespaceId, StandaloneNamespaceTerminal>,
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) enum StandaloneNamespaceTerminal {
     Planned,
@@ -282,6 +287,33 @@ impl<Ticket: Copy> Default for NamespaceValueRegistry<Ticket> {
 }
 
 impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
+    #[cfg(test)]
+    pub(in crate::check::checker) fn freeze_terminals(&self) -> FrozenNamespaceValueTerminals {
+        assert!(
+            self.standalone_terminals
+                .values()
+                .all(|terminal| !matches!(terminal, StandaloneNamespaceTerminal::Planned)),
+            "frozen namespace terminals are complete"
+        );
+        FrozenNamespaceValueTerminals {
+            standalone: self.standalone_terminals.clone(),
+        }
+    }
+
+    pub(in crate::check::checker) fn install_frozen_terminals(
+        &mut self,
+        frozen: FrozenNamespaceValueTerminals,
+    ) {
+        for (namespace, terminal) in frozen.standalone {
+            assert!(
+                self.standalone_terminals
+                    .insert(namespace, terminal)
+                    .is_none(),
+                "frozen namespace terminals install into an empty prefix"
+            );
+        }
+    }
+
     pub(in crate::check::checker) fn standalone_terminal(
         &self,
         namespace: NamespaceId,
@@ -493,6 +525,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let query_roots_before = crate::check::query::query_demand_measure().root_calls;
         let syntax = project_syntax_index(modules);
         for attachment in collect_all_standalone_attachment_inputs(self) {
+            if self
+                .namespace_values
+                .standalone_terminal(attachment.namespace)
+                .is_some()
+            {
+                continue;
+            }
             self.prepare_standalone_namespace_attachment(attachment, &syntax);
         }
         #[cfg(test)]

@@ -524,6 +524,11 @@ impl<Ticket: Copy> FunctionGroupRegistry<Ticket> {
         self.groups.contains_key(&symbol)
     }
 
+    #[cfg(test)]
+    pub(in crate::check::checker) fn frozen_symbols(&self) -> rustc_hash::FxHashSet<SymbolId> {
+        self.groups.keys().copied().collect()
+    }
+
     pub(in crate::check::checker) fn is_waiting_for(
         &self,
         symbol: SymbolId,

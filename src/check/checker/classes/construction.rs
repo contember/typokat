@@ -104,6 +104,24 @@ impl<Ticket> DraftClassTypeParameter<Ticket> {
     pub(in crate::check::checker) fn constraint(&self) -> Option<TypeId> {
         self.constraint
     }
+
+    pub(in crate::check::checker) fn owner_free(self) -> DraftClassTypeParameter<()> {
+        DraftClassTypeParameter {
+            application: ClassTypeParameter {
+                id: self.application.id,
+                default: match self.application.default {
+                    ClassTypeParameterDefault::Absent => ClassTypeParameterDefault::Absent,
+                    ClassTypeParameterDefault::Ready(default) => {
+                        ClassTypeParameterDefault::Ready(default)
+                    }
+                    ClassTypeParameterDefault::Unsupported(_) => {
+                        ClassTypeParameterDefault::Unsupported(())
+                    }
+                },
+            },
+            constraint: self.constraint,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

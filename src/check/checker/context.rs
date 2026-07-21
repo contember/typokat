@@ -280,6 +280,19 @@ impl DeclTypes {
     pub(in crate::check::checker) fn get(&self, id: ValueStorageId) -> Option<TypeId> {
         self.types.get(id.index()).copied().flatten()
     }
+
+    pub(in crate::check::checker) fn resize(&mut self, count: u32) {
+        assert!(
+            count as usize >= self.types.len(),
+            "declaration type storage grows only by suffix"
+        );
+        self.types.resize(count as usize, None);
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn len(&self) -> usize {
+        self.types.len()
+    }
 }
 
 /// A function declaration's callable signature, reserved before statement bodies
@@ -459,6 +472,12 @@ pub(in crate::check::checker) struct PublishedClassNewMetadata {
     pub(in crate::check::checker) ctor_visibility: Visibility,
     pub(in crate::check::checker) ctor_declaring_class: ClassId,
     pub(in crate::check::checker) has_source_overloads: bool,
+}
+
+#[derive(Copy, Clone)]
+pub(in crate::check::checker) struct PublishedClassValueBinding {
+    pub(in crate::check::checker) class_id: ClassId,
+    pub(in crate::check::checker) has_header_type_params: bool,
 }
 
 /// Total binder order for one exported value attached to a class namespace.
@@ -815,7 +834,7 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) lexical_array_alias: Option<TypeGroupId>,
     /// Frozen class parameter descriptors retained from the atomic publication.
     pub(in crate::check::checker) class_application_parameters:
-        BTreeMap<ClassId, Vec<DraftClassTypeParameter<Ticket>>>,
+        BTreeMap<ClassId, Vec<DraftClassTypeParameter<()>>>,
     /// Query-bearing class validation is held until type groups publish atomically.
     pub(in crate::check::checker) staged_class_validation: Option<StagedClassValidation<Ticket>>,
     /// Exact class callables retained by the one surface-lowering pass.
@@ -846,6 +865,9 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     /// One-step `const Alias = Class` origins. `infer_new` uses this only to retain
     /// the direct class's abstract and constructor-accessibility facts.
     pub(in crate::check::checker) class_value_aliases: FxHashMap<ValueStorageId, ValueStorageId>,
+    /// Direct value-space roots for published classes, independent of lexical tickets.
+    pub(in crate::check::checker) class_value_bindings:
+        FxHashMap<ValueStorageId, PublishedClassValueBinding>,
     /// Const aliases that retain a standalone namespace root's completeness provenance.
     pub(in crate::check::checker) standalone_namespace_value_aliases:
         FxHashMap<ValueStorageId, ValueStorageId>,
@@ -856,6 +878,8 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) decl_types: DeclTypes,
     /// Construction and single-publication state for admitted function/namespace groups.
     pub(in crate::check::checker) function_groups: FunctionGroupRegistry<Ticket>,
+    /// Published function-group names inherited without construction drafts or tickets.
+    pub(in crate::check::checker) named_function_symbols: FxHashSet<SymbolId>,
     /// Immutable namespace value surfaces awaiting their exact class-owned draft.
     pub(in crate::check::checker) class_namespace_payloads:
         BTreeMap<TypeGroupId, Vec<ClassNamespacePropertyPayload<Ticket>>>,

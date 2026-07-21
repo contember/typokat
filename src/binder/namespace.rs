@@ -842,6 +842,11 @@ pub struct NamespaceTable {
 }
 
 impl NamespaceTable {
+    #[cfg(test)]
+    pub(crate) fn global_augmentation_count(&self) -> usize {
+        self.globals.len()
+    }
+
     fn uses_library_shared_globals(&self) -> bool {
         #[cfg(test)]
         {

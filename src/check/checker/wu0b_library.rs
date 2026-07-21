@@ -18,8 +18,8 @@ use super::type_groups::{
     PublishedTypeGroupTerminal, PublishedTypeParameterDefault, TypeGroupUnavailableCause,
 };
 use super::{
-    build_pass_with_tickets, finish_semantic_effects, reserve_type_decls, PassReporting,
-    PassReportingPlan,
+    build_pass_with_tickets, check_bound_user_program, finish_semantic_effects, reserve_type_decls,
+    BoundUserBase, FrozenCheckerRuntimeMetadata, PassReporting, PassReportingPlan,
 };
 use crate::binder::bind::ProjectBinderBuilder;
 use crate::binder::declaration::{TypeGroupId, ValueStorageId};
@@ -44,6 +44,54 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::time::{Duration, Instant};
+
+pub(crate) struct OwnedLibraryRuntimeState {
+    interner: Interner,
+    binder: Binder,
+    published_types: PublishedTypeEnvironment,
+    decl_types: DeclTypes,
+    semantic_identities: Option<LibrarySemanticIdentities>,
+    runtime: FrozenCheckerRuntimeMetadata,
+    next_type_param: u32,
+    next_class_id: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct OwnedBaseUserTimings {
+    pub(crate) parse: Duration,
+    pub(crate) bind: Duration,
+    pub(crate) check: Duration,
+}
+
+pub(crate) struct OwnedBaseUserRun {
+    pub(crate) result: super::CheckResult,
+    pub(crate) timings: OwnedBaseUserTimings,
+    pub(crate) witness: OwnedBaseContinuationWitness,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OwnedBaseContinuationWitness {
+    pub(crate) base_store_len: usize,
+    pub(crate) final_store_len: usize,
+    pub(crate) base_type_group_count: usize,
+    pub(crate) final_type_group_count: usize,
+    pub(crate) base_decl_count: u32,
+    pub(crate) final_decl_count: u32,
+    pub(crate) source_key: u32,
+    pub(crate) base_max_source_key: u32,
+    pub(crate) array_group_stable: bool,
+    pub(crate) document_value_stable: bool,
+    pub(crate) store_prefix_stable: Option<bool>,
+}
+
+fn store_prefix_digest(store: &Store, len: usize) -> Result<String, String> {
+    let mut bytes = CanonicalBytes::domain(b"typokat-owned-base-store-prefix-v1");
+    for index in 0..len {
+        let id = TypeId(u32::try_from(index).map_err(|_| "type id prefix overflow")?);
+        encode_store_row(&mut bytes, store, id).map_err(|error| format!("{error:?}"))?;
+    }
+    Ok(format!("{:x}", Sha256::digest(bytes.finish())))
+}
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct InjectedLibrarySource<'source> {
@@ -1190,6 +1238,12 @@ fn canonical_wu0d_semantic_components(
 pub(crate) fn run_injected_profile(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<InjectedProfileRun, InjectedProfileError> {
+    compile_owned_injected_profile(sources).map(|(run, _)| run)
+}
+
+pub(crate) fn compile_owned_injected_profile(
+    sources: &[InjectedLibrarySource<'_>],
+) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
     let parse_started = Instant::now();
     let canonical = canonical_inputs(sources)?;
     let allocators = (0..canonical.len())
@@ -1467,7 +1521,50 @@ pub(crate) fn run_injected_profile(
     )?;
     let statement_check_elapsed = statement_check_started.elapsed();
 
-    Ok(InjectedProfileRun {
+    let namespace_terminals = pass.namespace_values.freeze_terminals();
+    let super::context::Pass {
+        type_environment,
+        decl_types,
+        next_type_param,
+        class_application_parameters,
+        class_new_metadata,
+        class_parents,
+        class_value_aliases,
+        class_value_bindings,
+        standalone_namespace_value_aliases,
+        class_names,
+        function_groups,
+        ..
+    } = pass;
+    let super::type_groups::TypeEnvironmentState::Published(published_types) = type_environment
+    else {
+        panic!("owned library runtime requires a published environment")
+    };
+    let named_function_symbols = function_groups.frozen_symbols();
+    let runtime_state = OwnedLibraryRuntimeState {
+        interner,
+        binder,
+        published_types,
+        decl_types,
+        semantic_identities: semantic_identities
+            .all_ready()
+            .then_some(semantic_identities.clone()),
+        runtime: FrozenCheckerRuntimeMetadata {
+            class_application_parameters,
+            class_new_metadata,
+            class_parents,
+            class_value_aliases,
+            class_value_bindings,
+            standalone_namespace_value_aliases,
+            class_names,
+            namespace_terminals,
+            named_function_symbols,
+        },
+        next_type_param,
+        next_class_id,
+    };
+
+    let run = InjectedProfileRun {
         phase_counts: LibraryPhaseCounts {
             parse_units: parsed.len(),
             bind_units: module_scopes.len(),
@@ -1493,6 +1590,134 @@ pub(crate) fn run_injected_profile(
         module_types,
         global_values,
         semantic_identities,
+    };
+    Ok((run, runtime_state))
+}
+
+pub(crate) fn check_caller_certified_collision_free_source_with_owned_library(
+    state: OwnedLibraryRuntimeState,
+    source: &str,
+) -> Result<OwnedBaseUserRun, String> {
+    check_caller_certified_collision_free_source_with_owned_library_impl(state, source, false)
+}
+
+fn check_caller_certified_collision_free_source_with_owned_library_and_verify_prefix(
+    state: OwnedLibraryRuntimeState,
+    source: &str,
+) -> Result<OwnedBaseUserRun, String> {
+    check_caller_certified_collision_free_source_with_owned_library_impl(state, source, true)
+}
+
+fn check_caller_certified_collision_free_source_with_owned_library_impl(
+    state: OwnedLibraryRuntimeState,
+    source: &str,
+    verify_store_prefix: bool,
+) -> Result<OwnedBaseUserRun, String> {
+    // WU5 owns routing for suffixes that collide with the frozen global base.
+    let parse_started = Instant::now();
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    if parsed.panicked || !parsed.diagnostics.is_empty() {
+        return Err(format!(
+            "user source parse failed: {:?}",
+            parsed.diagnostics
+        ));
+    }
+    let parse = parse_started.elapsed();
+
+    let OwnedLibraryRuntimeState {
+        mut interner,
+        binder,
+        published_types,
+        mut decl_types,
+        semantic_identities,
+        runtime,
+        next_type_param,
+        next_class_id,
+    } = state;
+    let base_store_len = interner.store().len();
+    let base_store_digest = verify_store_prefix
+        .then(|| store_prefix_digest(interner.store(), base_store_len))
+        .transpose()?;
+    let base_type_group_count = binder.type_groups.len();
+    let base_decl_count = binder.decl_count;
+    let base_max_source_key = binder.max_source_key().0;
+    assert_eq!(
+        decl_types.len(),
+        usize::try_from(base_decl_count).expect("base declaration count fits usize"),
+        "owned declaration types cover the complete binder prefix"
+    );
+    let base_array_group = binder
+        .resolve_type(binder.compilation_global, "Array")
+        .and_then(|symbol| binder.symbols.get(symbol))
+        .and_then(|symbol| symbol.ty);
+    let base_document_value = binder
+        .resolve_value(binder.compilation_global, "document")
+        .and_then(|symbol| binder.symbols.get(symbol))
+        .and_then(|symbol| symbol.value);
+    let bind_started = Instant::now();
+    let (mut builder, source_key) = ProjectBinderBuilder::resume_frozen_library(binder);
+    let unit = CompilationUnit::implementation(source_key, &parsed.program);
+    let (module, _) = builder.add_module(&parsed.program, &[], unit);
+    let binder = builder
+        .finish_frozen_library_continuation(module)
+        .map_err(str::to_owned)?;
+    decl_types.resize(binder.decl_count);
+    let witness_source_key = source_key.0;
+    let array_group_stable = base_array_group
+        == binder
+            .resolve_type(binder.module, "Array")
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .and_then(|symbol| symbol.ty);
+    let document_value_stable = base_document_value
+        == binder
+            .resolve_value(binder.module, "document")
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .and_then(|symbol| symbol.value);
+    let final_type_group_count = binder.type_groups.len();
+    let final_decl_count = binder.decl_count;
+    let bind = bind_started.elapsed();
+
+    let check_started = Instant::now();
+    let result = check_bound_user_program(
+        &mut interner,
+        binder,
+        &parsed.program,
+        BoundUserBase {
+            published_types,
+            library_semantic_identities: semantic_identities,
+            lexical_array_alias: None,
+            decl_types,
+            next_type_param,
+            next_class_id,
+            runtime,
+        },
+        |_, _, _, _, _| {},
+    );
+    let check = check_started.elapsed();
+    let final_store_len = interner.store().len();
+    let store_prefix_stable = base_store_digest
+        .map(|base_store_digest| {
+            store_prefix_digest(interner.store(), base_store_len)
+                .map(|final_store_digest| final_store_digest == base_store_digest)
+        })
+        .transpose()?;
+    Ok(OwnedBaseUserRun {
+        result,
+        timings: OwnedBaseUserTimings { parse, bind, check },
+        witness: OwnedBaseContinuationWitness {
+            base_store_len,
+            final_store_len,
+            base_type_group_count,
+            final_type_group_count,
+            base_decl_count,
+            final_decl_count,
+            source_key: witness_source_key,
+            base_max_source_key,
+            array_group_stable,
+            document_value_stable,
+            store_prefix_stable,
+        },
     })
 }
 
@@ -2532,5 +2757,267 @@ mod tests {
             assert_eq!(receipt.file_ordinal, file_ordinal);
             assert_eq!(receipt.observed_outcomes, 1);
         }
+    }
+
+    const OWNED_MINI_LIBRARY: &str = r#"
+        interface Object { toString(): string; }
+        interface Function {}
+        interface CallableFunction extends Function {
+            call<T, A extends unknown[], R>(this: (this: T, ...args: A) => R, thisArg: T, ...args: A): R;
+        }
+        interface String { toUpperCase(): string; }
+        interface Number { toFixed(fractionDigits?: number): string; }
+        interface Boolean { valueOf(): boolean; }
+        interface Array<T> {
+            map<U>(callbackfn: (value: T) => U): U[];
+            push(...items: T[]): number;
+        }
+        interface ReadonlyArray<T> { map<U>(callbackfn: (value: T) => U): U[]; }
+        interface RegExp { test(value: string): boolean; }
+        interface HTMLElement {}
+        interface HTMLDivElement extends HTMLElement { align: string; }
+        interface HTMLElementTagNameMap { div: HTMLDivElement; }
+        interface ElementCreationOptions {}
+        interface Document {
+            createElement<K extends keyof HTMLElementTagNameMap>(
+                tagName: K,
+                options?: ElementCreationOptions,
+            ): HTMLElementTagNameMap[K];
+        }
+        declare var document: Document;
+        declare function increment(value: number): number;
+        declare namespace increment { const identity: string; }
+        declare class LibraryBase<T = string> {
+            constructor(value: T);
+            value: T;
+        }
+        declare namespace LibraryBase { const kind: string; }
+        declare class PrivateLibraryClass { private constructor(); }
+        declare namespace RuntimeBag { const answer: number; }
+    "#;
+
+    const OWNED_MINI_USER: &str = r#"
+        class UserSuffix {}
+        const mappedOk: string[] = [1].map(value => value.toFixed());
+        const mappedBad: number[] = [1].map(value => value.toFixed());
+        const readonlyValues: readonly number[] = [1, 2];
+        const readonlyBad: number[] = readonlyValues.map(value => value.toFixed());
+        readonlyValues.push(3);
+        const upperBad: number = "x".toUpperCase();
+        const fixedBad: number = (1).toFixed();
+        const booleanBad: string = true.valueOf();
+        const calledBad: number = ((value: string) => value).call(undefined, "x");
+        const objectBad: number = ({ value: 1 }).toString();
+        const regexpBad: string = /x/.test("x");
+        const domOk: HTMLDivElement = document.createElement("div");
+        const domBad: number = document.createElement("div");
+        const libraryClass = new LibraryBase<string>("x");
+        const libraryValue: string = libraryClass.value;
+        const libraryKind: string = LibraryBase.kind;
+        const runtimeAnswer: number = RuntimeBag.answer;
+        const RuntimeAlias = RuntimeBag;
+        const aliasAnswer: number = RuntimeAlias.answer;
+        increment.notAFunctionMember;
+    "#;
+
+    #[test]
+    fn owned_library_state_checks_caller_certified_collision_free_suffix_without_prefix_rebinding()
+    {
+        let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "owned-mini.d.ts",
+            source: OWNED_MINI_LIBRARY,
+        }])
+        .expect("owned mini library compiles");
+        let run =
+            check_caller_certified_collision_free_source_with_owned_library_and_verify_prefix(
+                state,
+                OWNED_MINI_USER,
+            )
+            .expect("owned mini base accepts a caller-certified collision-free suffix");
+        let codes = run
+            .result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            codes,
+            [
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2339,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2339,
+            ]
+        );
+        assert_eq!(
+            run.result
+                .diagnostics
+                .last()
+                .map(|diagnostic| diagnostic.message.as_str()),
+            Some("Property 'notAFunctionMember' does not exist on type 'typeof increment'")
+        );
+        assert!(run.result.incomplete.is_empty());
+        assert!(run.witness.array_group_stable);
+        assert!(run.witness.document_value_stable);
+        assert_eq!(run.witness.store_prefix_stable, Some(true));
+        assert!(run.witness.final_store_len >= run.witness.base_store_len);
+        assert!(run.witness.final_type_group_count > run.witness.base_type_group_count);
+        assert!(run.witness.final_decl_count > run.witness.base_decl_count);
+        assert!(run.witness.source_key > run.witness.base_max_source_key);
+    }
+
+    #[test]
+    fn owned_library_preserves_class_and_namespace_runtime_metadata_for_caller_certified_collision_free_suffix(
+    ) {
+        let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "owned-mini.d.ts",
+            source: OWNED_MINI_LIBRARY,
+        }])
+        .expect("owned mini library compiles");
+        let run =
+            check_caller_certified_collision_free_source_with_owned_library_and_verify_prefix(
+                state,
+                r#"
+                class UserFirst extends LibraryBase<string> { constructor() { super("x"); } }
+                const explicit = new LibraryBase<string>("x");
+                const value: string = explicit.value;
+                const kind: string = LibraryBase.kind;
+                const answer: number = RuntimeBag.answer;
+                const RuntimeAlias = RuntimeBag;
+                const aliasAnswer: number = RuntimeAlias.answer;
+                new PrivateLibraryClass();
+            "#,
+            )
+            .expect("owned class and namespace metadata installs");
+        assert_eq!(run.result.diagnostics.len(), 1);
+        assert_eq!(
+            run.result.diagnostics[0].code,
+            crate::diagnostics::DiagnosticCode::TK2673
+        );
+        assert!(run.result.incomplete.is_empty());
+        assert_eq!(run.witness.store_prefix_stable, Some(true));
+    }
+
+    #[test]
+    fn owned_library_continuation_rejects_declare_global_syntax() {
+        let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "owned-mini.d.ts",
+            source: OWNED_MINI_LIBRARY,
+        }])
+        .expect("owned mini library compiles");
+        let checks_before = super::super::bound_user_check_calls_for_test();
+        let error = match check_caller_certified_collision_free_source_with_owned_library(
+            state,
+            "export {}; declare global { interface UserOwnedGlobal { value: string; } }",
+        ) {
+            Ok(_) => panic!("WU5 owns declare-global continuation"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            "frozen-library continuation does not yet admit declare global"
+        );
+        assert_eq!(
+            super::super::bound_user_check_calls_for_test(),
+            checks_before
+        );
+    }
+
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "full-profile owned-base semantic selection is release-only"
+    )]
+    fn exact_full_profile_owned_base_checks_caller_certified_collision_free_suffix_fast_clean_and_create_element(
+    ) {
+        let profile = load_strict_profile().expect("exact pinned full profile");
+        let (compiled, state) = compile_owned_injected_profile(&profile.injected_sources())
+            .expect("exact source-compiled owned library");
+        eprintln!(
+            "owned-base compile timings: parse={:?} bind={:?} reserve_fill={:?} publication={:?} statements={:?} total={:?}",
+            compiled.phase_timings.parse,
+            compiled.phase_timings.bind,
+            compiled.phase_timings.reserve_fill,
+            compiled.phase_timings.publication_validation,
+            compiled.phase_timings.statement_check,
+            compiled.phase_timings.measured_total(),
+        );
+        let source = concat!(
+            include_str!("../../../tooling/full-lib-bench/workloads/fast-clean/main.ts"),
+            "\nconst directDomProbe: HTMLDivElement = document.createElement(\"div\");\n",
+        );
+        let run = check_caller_certified_collision_free_source_with_owned_library(state, source)
+            .expect("exact owned base accepts the WU0A suffix");
+        eprintln!(
+            "owned-base user timings: parse={:?} bind={:?} check={:?}",
+            run.timings.parse, run.timings.bind, run.timings.check
+        );
+
+        let (_, state) = compile_owned_injected_profile(&profile.injected_sources())
+            .expect("second exact source-compiled owned library");
+        let focused = check_caller_certified_collision_free_source_with_owned_library(
+            state,
+            r#"
+                const mutableBad: string[] = [1].map(value => value);
+                const readonlyValues: readonly number[] = [1, 2];
+                const readonlyBad: string[] = readonlyValues.map(value => value);
+                readonlyValues.push(3);
+                const upperBad: number = "x".toUpperCase();
+                const fixedBad: number = (1).toFixed();
+                const booleanBad: string = true.valueOf();
+                const calledBad: number = ((value: string) => value).call(undefined, "x");
+                const objectBad: number = ({ value: 1 }).toString();
+                const regexpBad: string = /x/.test("x");
+                const domBad: number = document.createElement("div");
+            "#,
+        )
+        .expect("exact owned base accepts the focused semantic suffix");
+        eprintln!(
+            "owned-base focused timings: parse={:?} bind={:?} check={:?}",
+            focused.timings.parse, focused.timings.bind, focused.timings.check
+        );
+        assert_eq!(
+            focused
+                .result
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>(),
+            [
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2339,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+                crate::diagnostics::DiagnosticCode::TK2322,
+            ]
+        );
+        assert!(focused.result.incomplete.is_empty());
+        assert_eq!(focused.witness.store_prefix_stable, None);
+        assert_eq!(run.witness.store_prefix_stable, None);
+        assert!(
+            run.result.incomplete.is_empty(),
+            "{:?}",
+            run.result.incomplete
+        );
+        assert!(
+            run.result.diagnostics.is_empty(),
+            "{:?}",
+            run.result.diagnostics
+        );
     }
 }

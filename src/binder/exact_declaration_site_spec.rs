@@ -135,11 +135,19 @@ fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
                 && !line.starts_with("///")
                 && !line.starts_with("#[")
                 && !line.starts_with("pub ")
+                && *line != "module_sources: FxHashMap<ScopeId, SourceUnitKey>,"
         })
         .collect::<Vec<_>>();
     assert!(
         unexpected_private_fields.is_empty(),
         "Binder gained private fields: {unexpected_private_fields:?}"
+    );
+    assert_eq!(
+        binder_fields
+            .matches("module_sources: FxHashMap<ScopeId, SourceUnitKey>,")
+            .count(),
+        1,
+        "Binder owns one durable source-key index for frozen continuation"
     );
     let expected_binder_fields = [
         "pubgraph:ScopeGraph,",

@@ -11,7 +11,6 @@ use crate::binder::namespace::{
     UmdContext,
 };
 use crate::binder::scope::ScopeId;
-#[cfg(test)]
 use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
 use crate::check::query::SemanticQueryCoordinator;
@@ -23,6 +22,7 @@ use crate::source::{
     CompilationOrigin, ModuleOrdinal, OriginalModuleOrdinal, SourceOrdinal, SourceUnit, UnitSlot,
 };
 use crate::span::Span;
+use crate::types::repr::ClassId;
 use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_allocator::Allocator;
@@ -216,6 +216,30 @@ struct TrustedPreludeHandoff {
     decl_types: DeclTypes,
     next_type_param: u32,
     next_class_id: u32,
+}
+
+#[derive(Default)]
+pub(in crate::check::checker) struct FrozenCheckerRuntimeMetadata {
+    class_application_parameters:
+        BTreeMap<ClassId, Vec<classes::construction::DraftClassTypeParameter<()>>>,
+    class_new_metadata: BTreeMap<ClassId, context::PublishedClassNewMetadata>,
+    class_parents: FxHashMap<ClassId, ClassId>,
+    class_value_aliases: FxHashMap<ValueStorageId, ValueStorageId>,
+    class_value_bindings: FxHashMap<ValueStorageId, context::PublishedClassValueBinding>,
+    standalone_namespace_value_aliases: FxHashMap<ValueStorageId, ValueStorageId>,
+    class_names: FxHashMap<ClassId, String>,
+    namespace_terminals: namespace_values::FrozenNamespaceValueTerminals,
+    named_function_symbols: FxHashSet<SymbolId>,
+}
+
+pub(in crate::check::checker) struct BoundUserBase {
+    published_types: type_groups::PublishedTypeEnvironment,
+    library_semantic_identities: Option<library_identities::LibrarySemanticIdentities>,
+    lexical_array_alias: Option<TypeGroupId>,
+    decl_types: DeclTypes,
+    next_type_param: u32,
+    next_class_id: u32,
+    runtime: FrozenCheckerRuntimeMetadata,
 }
 
 /// Parse, bind, and check the trusted prelude in the caller's run-local type universe.
@@ -422,14 +446,6 @@ where
         &namespace_values::NamespaceValueRegistry,
     ),
 {
-    let module_ordinal = ModuleOrdinal::new(0);
-    let unit_slot = UnitSlot::new(0);
-    let mut event_store = EventStore::default();
-    let mut lexical_events = LexicalReservations::default();
-    lexical_events
-        .reserve_program(module_ordinal, unit_slot, program, &mut event_store)
-        .expect("lexical event reservation must reference valid events");
-
     let (
         binder,
         TrustedPreludeHandoff {
@@ -437,12 +453,65 @@ where
             library_semantic_identities,
             lexical_array_alias,
             decl_types,
-            mut next_type_param,
-            mut next_class_id,
+            next_type_param,
+            next_class_id,
         },
     ) = bootstrap_trusted_prelude(interner, |prelude| {
         bind_module_with_prelude(prelude, program)
     });
+
+    check_bound_user_program(
+        interner,
+        binder,
+        program,
+        BoundUserBase {
+            published_types,
+            library_semantic_identities,
+            lexical_array_alias,
+            decl_types,
+            next_type_param,
+            next_class_id,
+            runtime: FrozenCheckerRuntimeMetadata::default(),
+        },
+        inspect,
+    )
+}
+
+pub(in crate::check::checker) fn check_bound_user_program<'ast, F>(
+    interner: &mut Interner,
+    binder: Binder,
+    program: &'ast Program<'ast>,
+    base: BoundUserBase,
+    inspect: F,
+) -> CheckResult
+where
+    F: FnOnce(
+        &Binder,
+        &type_groups::PublishedTypeEnvironment,
+        &Interner,
+        &DeclTypes,
+        &namespace_values::NamespaceValueRegistry,
+    ),
+{
+    #[cfg(test)]
+    BOUND_USER_CHECK_CALLS.with(|calls| calls.set(calls.get() + 1));
+    let module_ordinal = ModuleOrdinal::new(0);
+    let unit_slot = UnitSlot::new(0);
+    let mut event_store = EventStore::default();
+    let mut lexical_events = LexicalReservations::default();
+    lexical_events
+        .reserve_program(module_ordinal, unit_slot, program, &mut event_store)
+        .expect("lexical event reservation must reference valid events");
+    let BoundUserBase {
+        published_types,
+        library_semantic_identities,
+        lexical_array_alias,
+        mut decl_types,
+        mut next_type_param,
+        mut next_class_id,
+        runtime,
+    } = base;
+    decl_types.resize(binder.decl_count);
 
     // User declarations append after prelude placeholders, preserving legacy storage indices.
     let (mut type_decls, mut type_resolved) = published_types.construction_prefix();
@@ -500,6 +569,16 @@ where
     if let Some(identities) = library_semantic_identities {
         pass.install_library_semantic_identities(identities);
     }
+    pass.class_application_parameters = runtime.class_application_parameters;
+    pass.class_new_metadata = runtime.class_new_metadata;
+    pass.class_parents = runtime.class_parents;
+    pass.class_value_aliases = runtime.class_value_aliases;
+    pass.class_value_bindings = runtime.class_value_bindings;
+    pass.standalone_namespace_value_aliases = runtime.standalone_namespace_value_aliases;
+    pass.class_names = runtime.class_names;
+    pass.namespace_values
+        .install_frozen_terminals(runtime.namespace_terminals);
+    pass.named_function_symbols = runtime.named_function_symbols;
     for effects in external_effects.into_values() {
         pass.enqueue_effects(CheckerEffects::from_records(effects));
     }
@@ -539,6 +618,16 @@ where
         diagnostics,
         incomplete,
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static BOUND_USER_CHECK_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn bound_user_check_calls_for_test() -> u64 {
+    BOUND_USER_CHECK_CALLS.with(std::cell::Cell::get)
 }
 
 /// One parsed project unit handed to the serial M29 project checker.
@@ -2111,10 +2200,12 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         next_type_param,
         class_parents: FxHashMap::default(),
         class_value_aliases: FxHashMap::default(),
+        class_value_bindings: FxHashMap::default(),
         standalone_namespace_value_aliases: FxHashMap::default(),
         class_names: FxHashMap::default(),
         decl_types,
         function_groups: function_groups::FunctionGroupRegistry::default(),
+        named_function_symbols: FxHashSet::default(),
         class_namespace_payloads: BTreeMap::new(),
         namespace_values: namespace_values::NamespaceValueRegistry::default(),
         var_annotation_surfaces: FxHashMap::default(),

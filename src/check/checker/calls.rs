@@ -2125,24 +2125,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .get(&value_decl)
             .copied()
             .unwrap_or(value_decl);
-        let Some(binding) = self
-            .lexical_events
-            .classes()
-            .iter()
-            .filter_map(|reservation| reservation.binding.as_ref())
-            .find(|binding| binding.value_decl == Some(class_decl))
-            .cloned()
-        else {
+        let Some(binding) = self.class_value_bindings.get(&class_decl).copied() else {
             return DemandOutcome::Ready(None);
         };
-        if value_decl != class_decl && !binding.header_type_params.is_empty() {
+        if value_decl != class_decl && binding.has_header_type_params {
             return DemandOutcome::Ready(None);
         }
+        let class_id = binding.class_id;
         let surface = match self
             .type_environment
             .published()
             .classes()
-            .published_class(binding.class_id)
+            .published_class(class_id)
         {
             DemandOutcome::Ready(surface) => surface,
             DemandOutcome::Exhausted(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
@@ -2152,14 +2146,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         };
         let metadata = self
             .class_new_metadata
-            .get(&binding.class_id)
+            .get(&class_id)
             .copied()
             .expect("every published source class freezes its new metadata");
         DemandOutcome::Ready(Some((
             class_decl,
             ClassInfo {
                 ctor,
-                class_id: binding.class_id,
+                class_id,
                 is_abstract: metadata.is_abstract,
                 ctor_visibility: metadata.ctor_visibility,
                 ctor_declaring_class: metadata.ctor_declaring_class,

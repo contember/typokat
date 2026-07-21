@@ -66,6 +66,9 @@ pub struct Binder {
     /// Maps a `{ … }` block to its lexical scope (M7), keyed like `fn_scopes` so
     /// branch-local declarations stay local and cross-file offsets do not collide.
     pub block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
+    /// Stable source ownership retained across the frozen-library continuation seam.
+    #[cfg_attr(not(test), allow(dead_code))]
+    module_sources: FxHashMap<ScopeId, SourceUnitKey>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -90,6 +93,15 @@ pub(crate) enum ValueResolution {
 }
 
 impl Binder {
+    #[cfg(test)]
+    pub(crate) fn max_source_key(&self) -> SourceUnitKey {
+        self.module_sources
+            .values()
+            .copied()
+            .max()
+            .expect("binder retains at least the prelude source key")
+    }
+
     /// Return the canonical semantically admitted declaration at one exact syntax site.
     pub(crate) fn exact_declaration_at(
         &self,
@@ -423,6 +435,8 @@ pub(crate) struct ProjectBinderBuilder {
     use_mode: BuilderUseMode,
     #[cfg(test)]
     empty_prelude: bool,
+    #[cfg(test)]
+    frozen_global_augmentation_count: Option<usize>,
 }
 
 #[cfg(test)]
@@ -431,6 +445,7 @@ enum BuilderUseMode {
     Pristine,
     Project,
     Library,
+    Continuation,
 }
 
 impl ProjectBinderBuilder {
@@ -480,6 +495,8 @@ impl ProjectBinderBuilder {
             use_mode: BuilderUseMode::Pristine,
             #[cfg(test)]
             empty_prelude: prelude.body.is_empty(),
+            #[cfg(test)]
+            frozen_global_augmentation_count: None,
         }
     }
 
@@ -495,6 +512,7 @@ impl ProjectBinderBuilder {
             BuilderUseMode::Library => {
                 panic!("project modules cannot follow the one-shot library batch")
             }
+            BuilderUseMode::Continuation => {}
         }
         let mut roots = Vec::new();
         for (program, unit) in units {
@@ -571,6 +589,7 @@ impl ProjectBinderBuilder {
             BuilderUseMode::Library => {
                 panic!("project modules cannot follow the one-shot library batch")
             }
+            BuilderUseMode::Continuation => {}
         }
         let module = self
             .state
@@ -635,6 +654,9 @@ impl ProjectBinderBuilder {
                 panic!("library batch requires a pristine project builder")
             }
             BuilderUseMode::Library => panic!("library batch is one-shot"),
+            BuilderUseMode::Continuation => {
+                panic!("library batch cannot follow a frozen continuation")
+            }
         }
 
         let mut bound_units = Vec::with_capacity(canonical_units.len());
@@ -704,7 +726,106 @@ impl ProjectBinderBuilder {
             fn_scopes: self.state.fn_scopes,
             fn_decl_ids: self.state.fn_decl_ids,
             block_scopes: self.state.block_scopes,
+            module_sources: self.state.module_sources,
         }
+    }
+
+    /// Resume one AST-free library binder for a single user suffix.
+    #[cfg(test)]
+    pub(crate) fn resume_frozen_library(binder: Binder) -> (Self, SourceUnitKey) {
+        let next_source = binder
+            .module_sources
+            .values()
+            .map(|source| source.0)
+            .max()
+            .and_then(|source| source.checked_add(1))
+            .map(SourceUnitKey)
+            .expect("frozen library source key suffix fits u32");
+        let Binder {
+            graph,
+            symbols,
+            declarations,
+            type_groups,
+            namespaces,
+            module,
+            prelude_module,
+            compilation_global,
+            script_namespace_root,
+            decl_count,
+            prelude_type_group_count: _,
+            fn_scopes: _,
+            fn_decl_ids: _,
+            block_scopes: _,
+            module_sources,
+        } = binder;
+        let prelude_type_group_count =
+            u32::try_from(type_groups.len()).expect("frozen type group count fits u32");
+        let frozen_global_augmentation_count = namespaces.global_augmentation_count();
+        (
+            Self {
+                state: BindState {
+                    graph,
+                    symbols,
+                    declarations,
+                    type_groups,
+                    namespaces,
+                    module_sources,
+                    library_module_ordinals: FxHashMap::default(),
+                    fn_scopes: FxHashMap::default(),
+                    fn_decl_ids: FxHashMap::default(),
+                    block_scopes: FxHashMap::default(),
+                    current_module: module,
+                    next_value_storage: decl_count,
+                },
+                prelude_module,
+                compilation_global,
+                script_namespace_root,
+                prelude_type_group_count,
+                use_mode: BuilderUseMode::Continuation,
+                empty_prelude: true,
+                frozen_global_augmentation_count: Some(frozen_global_augmentation_count),
+            },
+            next_source,
+        )
+    }
+
+    /// Freeze only the appended user suffix; the library global prefix is already final.
+    #[cfg(test)]
+    pub(crate) fn finish_frozen_library_continuation(
+        mut self,
+        module: ScopeId,
+    ) -> Result<Binder, &'static str> {
+        assert_eq!(self.use_mode, BuilderUseMode::Continuation);
+        if self.state.namespaces.global_augmentation_count()
+            != self
+                .frozen_global_augmentation_count
+                .expect("continuation records its frozen global prefix")
+        {
+            return Err("frozen-library continuation does not yet admit declare global");
+        }
+        allocate_dormant_namespace_value_storages(&mut self.state);
+        self.state
+            .graph
+            .get_mut(module)
+            .expect("continuation module exists")
+            .parent = Some(self.script_namespace_root);
+        Ok(Binder {
+            graph: self.state.graph,
+            symbols: self.state.symbols,
+            declarations: self.state.declarations,
+            type_groups: self.state.type_groups,
+            namespaces: self.state.namespaces,
+            module,
+            prelude_module: self.prelude_module,
+            compilation_global: self.compilation_global,
+            script_namespace_root: self.script_namespace_root,
+            decl_count: self.state.next_value_storage,
+            prelude_type_group_count: self.prelude_type_group_count,
+            fn_scopes: self.state.fn_scopes,
+            fn_decl_ids: self.state.fn_decl_ids,
+            block_scopes: self.state.block_scopes,
+            module_sources: self.state.module_sources,
+        })
     }
 
     /// Return only slots declared directly by this module, never inherited ones.

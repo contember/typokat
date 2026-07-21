@@ -922,18 +922,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let Some(class_decl) = value_decl_id(self.binder, scope, source.name.as_str()) else {
             return;
         };
-        let published = self.lexical_events.classes().iter().any(|reservation| {
-            reservation.binding.as_ref().is_some_and(|binding| {
-                binding.value_decl == Some(class_decl)
-                    && matches!(
-                        self.type_environment
-                            .published()
-                            .classes()
-                            .published_class(binding.class_id),
-                        crate::class_semantics::DemandOutcome::Ready(_)
-                    )
-            })
-        });
+        let published = self
+            .class_value_bindings
+            .get(&class_decl)
+            .is_some_and(|binding| {
+                matches!(
+                    self.type_environment
+                        .published()
+                        .classes()
+                        .published_class(binding.class_id),
+                    crate::class_semantics::DemandOutcome::Ready(_)
+                )
+            });
         if published {
             self.class_value_aliases.insert(alias_decl, class_decl);
         }

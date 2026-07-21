@@ -1491,21 +1491,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .get(&value_decl)
             .copied()
             .unwrap_or(value_decl);
-        let binding = self
-            .lexical_events
-            .classes()
-            .iter()
-            .filter_map(|reservation| reservation.binding.as_ref())
-            .find(|binding| binding.value_decl == Some(class_decl))?;
-        if value_decl != class_decl && !binding.header_type_params.is_empty() {
+        let binding = self.class_value_bindings.get(&class_decl).copied()?;
+        if value_decl != class_decl && binding.has_header_type_params {
             return None;
         }
+        let class_id = binding.class_id;
         Some(
             match self
                 .type_environment
                 .published()
                 .classes()
-                .published_class(binding.class_id)
+                .published_class(class_id)
             {
                 DemandOutcome::Ready(_) => DemandOutcome::Ready(()),
                 DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
@@ -1738,7 +1734,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             _ => return None,
         };
         let symbol = self.binder.resolve_value(scope, identifier.name.as_str())?;
-        if self.function_groups.contains_symbol(symbol) {
+        if self.function_groups.contains_symbol(symbol)
+            || self.named_function_symbols.contains(&symbol)
+        {
             return Some(identifier.name.to_string());
         }
         let value_decl = value_decl_id(self.binder, scope, identifier.name.as_str())?;
@@ -1747,13 +1745,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .get(&value_decl)
             .copied()
             .unwrap_or(value_decl);
-        let binding = self
-            .lexical_events
-            .classes()
-            .iter()
-            .filter_map(|reservation| reservation.binding.as_ref())
-            .find(|binding| binding.value_decl == Some(class_decl))?;
-        if value_decl != class_decl && !binding.header_type_params.is_empty() {
+        let binding = self.class_value_bindings.get(&class_decl)?;
+        if value_decl != class_decl && binding.has_header_type_params {
             return None;
         }
         Some(identifier.name.to_string())
