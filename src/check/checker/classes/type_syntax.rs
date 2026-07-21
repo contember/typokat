@@ -377,7 +377,7 @@ where
             // Explicitly unsupported: adding an oxc variant must fail this match.
             TSType::TSBigIntKeyword(keyword) => Err(self.unsupported(keyword.span)),
             TSType::TSIntrinsicKeyword(keyword) => Err(self.unsupported(keyword.span)),
-            TSType::TSObjectKeyword(keyword) => Err(self.unsupported(keyword.span)),
+            TSType::TSObjectKeyword(_) => Ok(self.factory.well_known().object),
             TSType::TSSymbolKeyword(keyword) => Err(self.unsupported(keyword.span)),
             TSType::TSImportType(import) => Err(self.unsupported(import.span)),
             TSType::TSNamedTupleMember(named) => Err(self.unsupported(named.span)),

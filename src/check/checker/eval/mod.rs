@@ -367,9 +367,11 @@ impl<'a> ConditionalEvaluator<'a> {
             values.push(ty);
             return;
         };
-        // Poisoned (cross-binder nested infer — backlog 26 stopgap): NEVER evaluates.
-        // It stays a deferred node under the conservative relation rules.
-        if cond.poisoned {
+        // Poisoned (cross-binder nested infer — backlog 26 stopgap): stays deferred
+        // unless an infer-free intersection conjunct independently proves the false
+        // branch without observing the captured binder.
+        let poisoned_false = cond.poisoned && self.poisoned_false_branch_proven(&cond);
+        if cond.poisoned && !poisoned_false {
             values.push(ty);
             return;
         }
@@ -394,6 +396,11 @@ impl<'a> ConditionalEvaluator<'a> {
             return;
         }
         self.in_flight.insert(ty);
+        if poisoned_false {
+            tasks.push(Task::SetMemo(ty));
+            tasks.push(Task::Eval(cond.false_branch));
+            return;
+        }
         // Demand-evaluate top-level pending operands before the extends test; relating
         // the raw nodes would turn "not proven" into a false-branch choice.
         if self.arg_needs_pre_eval(cond.check) || self.arg_needs_pre_eval(cond.extends_ty) {
@@ -566,5 +573,33 @@ impl<'a> ConditionalEvaluator<'a> {
             }
         }
         false
+    }
+
+    /// A poisoned node may still take its false branch when one top-level
+    /// intersection conjunct contains no `infer` binder and rejects the concrete
+    /// check on its own. This never manufactures a captured-infer true branch.
+    fn poisoned_false_branch_proven(&self, cond: &ConditionalType) -> bool {
+        let wk = self.interner.well_known();
+        let primitive_check = matches!(
+            self.interner.store().intrinsic_kind(cond.check),
+            Some(
+                crate::types::repr::IntrinsicKind::Boolean
+                    | crate::types::repr::IntrinsicKind::Number
+                    | crate::types::repr::IntrinsicKind::String
+                    | crate::types::repr::IntrinsicKind::Null
+                    | crate::types::repr::IntrinsicKind::Undefined
+                    | crate::types::repr::IntrinsicKind::Void
+                    | crate::types::repr::IntrinsicKind::Unknown
+            )
+        ) || matches!(
+            self.interner.store().tag(cond.check),
+            TypeTag::Literal | TypeTag::Template
+        );
+        primitive_check
+            && self
+                .interner
+                .store()
+                .intersection_members(cond.extends_ty)
+                .is_some_and(|conjuncts| conjuncts.contains(&wk.object))
     }
 }

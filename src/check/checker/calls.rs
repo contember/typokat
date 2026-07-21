@@ -684,6 +684,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         | IntrinsicKind::Null
                         | IntrinsicKind::Undefined
                         | IntrinsicKind::Void
+                        | IntrinsicKind::Object
                 )
             ),
             _ => false,
@@ -1393,6 +1394,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 src,
                 tgt: param_ty,
                 src_span,
+                source_member_spans: Vec::new(),
                 kind: self.call_argument_obligation_kind(arg_expr, param_ty),
             });
             // A `never` parameter makes this call candidate impossible. Later
@@ -1437,6 +1439,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             src,
             tgt: rest.ty,
             src_span: span,
+            source_member_spans: Vec::new(),
             kind: ObligationKind::Argument,
         });
     }
@@ -2805,7 +2808,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if arrow.type_parameters.is_some() {
             return None;
         }
-        let context = self.interner.store().function_type(context).cloned()?;
+        let context = self.contextual_function_shape(context)?;
         let fn_scope = self
             .binder
             .fn_scopes
@@ -2827,6 +2830,34 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             None => Some(context.ret),
         };
         Some(self.finish_arrow_inference(enclosing, arrow, fn_scope, params, declared_ret))
+    }
+
+    fn contextual_function_shape(&self, context: TypeId) -> Option<FunctionType> {
+        let members = self
+            .interner
+            .store()
+            .union_members(context)
+            .map_or_else(|| vec![context], <[_]>::to_vec);
+        let mut candidate = None;
+        for member in members {
+            let member = self.apparent_type(member);
+            let signatures = match self.interner.store().tag(member) {
+                TypeTag::Function => vec![member],
+                TypeTag::Object => self
+                    .interner
+                    .store()
+                    .object_type(member)
+                    .map(|object| object.call_signatures.clone())
+                    .unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            for signature in signatures {
+                if candidate.replace(signature).is_some() {
+                    return None;
+                }
+            }
+        }
+        self.interner.store().function_type(candidate?).cloned()
     }
 
     fn lower_contextual_arrow_parameters(
@@ -2913,6 +2944,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             src,
                             tgt: ret,
                             src_span,
+                            source_member_spans: Vec::new(),
                             kind: ObligationKind::Assignment,
                         });
                     }
@@ -3011,9 +3043,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         if let (Some(init), Some(annotation_ty)) =
                             (&parameter.initializer, annotation_ty)
                         {
-                            self.check_annotated_initializer(
+                            self.check_pattern_annotated_initializer(
                                 parameter_scope,
                                 Some(annotation_ty),
+                                &parameter.pattern,
                                 init,
                             );
                         }
@@ -3057,7 +3090,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         for (param, parameter) in params.items.iter().zip(lowered) {
             if param.type_annotation.is_some() {
                 if let Some(init) = &param.initializer {
-                    self.check_annotated_initializer(scope, Some(parameter.ty), init);
+                    self.check_pattern_annotated_initializer(
+                        scope,
+                        Some(parameter.ty),
+                        &param.pattern,
+                        init,
+                    );
                 }
             }
         }
@@ -3139,9 +3177,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) {
         for (param, lowered) in params.items.iter().zip(lowered) {
             if let Some(initializer) = &param.initializer {
-                self.check_annotated_initializer(
+                self.check_pattern_annotated_initializer(
                     scope,
                     lowered.as_ref().map(|lowered| lowered.ty),
+                    &param.pattern,
                     initializer,
                 );
             }
@@ -3471,5 +3510,6 @@ pub(in crate::check::checker) fn intrinsic_id(wk: WellKnown, kind: IntrinsicKind
         IntrinsicKind::Uncapitalize => wk.uncapitalize,
         IntrinsicKind::ThisType => wk.this_type,
         IntrinsicKind::OmitThisParameter => wk.omit_this_parameter,
+        IntrinsicKind::Object => wk.object,
     }
 }

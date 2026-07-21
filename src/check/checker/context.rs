@@ -59,7 +59,14 @@ pub(in crate::check::checker) struct AssignObligation {
     pub(in crate::check::checker) src: TypeId,
     pub(in crate::check::checker) tgt: TypeId,
     pub(in crate::check::checker) src_span: Span,
+    pub(in crate::check::checker) source_member_spans: Vec<(AssignSourceMember, Span)>,
     pub(in crate::check::checker) kind: ObligationKind,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(in crate::check::checker) enum AssignSourceMember {
+    Property(String),
+    Element(usize),
 }
 
 /// The assertion spelling determines the stable incomplete-surface identity.

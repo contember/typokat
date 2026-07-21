@@ -1098,6 +1098,7 @@ fn intrinsic_code(kind: IntrinsicKind) -> u8 {
         IntrinsicKind::Uncapitalize => 13,
         IntrinsicKind::ThisType => 14,
         IntrinsicKind::OmitThisParameter => 15,
+        IntrinsicKind::Object => 16,
     }
 }
 

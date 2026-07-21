@@ -18,6 +18,7 @@ use crate::types::repr::{
     Visibility,
 };
 use crate::types::store::{Store, TypeId};
+use crate::types::WellKnown;
 use oxc_ast::ast::{
     ArrayExpression, ArrayExpressionElement, BinaryExpression, BinaryOperator, ChainElement,
     ComputedMemberExpression, Expression, LogicalExpression, ObjectExpression, ObjectPropertyKind,
@@ -665,17 +666,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         (ty, span)
     }
 
-    /// Infer a binary expression (M7 condition support). Descends into both operands
-    /// for their side effects, then returns `boolean` for a comparison/equality
-    /// operator (`===`, `!==`, `<`, …) and the error type for any other operator
-    /// (arithmetic/bitwise are out of the subset; never an assignment source here).
+    /// Infer a binary expression. Comparisons return `boolean`; numeric/string `+`
+    /// retains its primitive result so contextual callback inference can consume it.
     fn infer_binary(&mut self, scope: ScopeId, binary: &BinaryExpression<'_>) -> (TypeId, Span) {
         let wk = self.interner.well_known();
         let span = Span::from_oxc(binary.span);
-        self.infer_expr(scope, &binary.left);
-        self.infer_expr(scope, &binary.right);
+        let left = self
+            .infer_expr(scope, &binary.left)
+            .map(|(ty, _)| ty)
+            .unwrap_or(wk.error);
+        let right = self
+            .infer_expr(scope, &binary.right)
+            .map(|(ty, _)| ty)
+            .unwrap_or(wk.error);
         let ty = if is_comparison_operator(binary.operator) {
             wk.boolean
+        } else if binary.operator == BinaryOperator::Addition {
+            addition_result(self.interner.store(), left, right, wk)
         } else {
             wk.error
         };
@@ -1838,6 +1845,68 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         // Present on every member: the result is the union of the per-member types.
         self.interner.union(member_prop_types)
+    }
+}
+
+fn addition_result(store: &Store, left: TypeId, right: TypeId, wk: WellKnown) -> TypeId {
+    match (
+        addition_operand_kind(store, left),
+        addition_operand_kind(store, right),
+    ) {
+        (AdditionOperandKind::Error, _) | (_, AdditionOperandKind::Error) => wk.error,
+        (AdditionOperandKind::Any, _) | (_, AdditionOperandKind::Any) => wk.any,
+        (
+            AdditionOperandKind::String,
+            AdditionOperandKind::String | AdditionOperandKind::Number,
+        )
+        | (AdditionOperandKind::Number, AdditionOperandKind::String) => wk.string,
+        (AdditionOperandKind::Number, AdditionOperandKind::Number) => wk.number,
+        _ => wk.error,
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum AdditionOperandKind {
+    Error,
+    Any,
+    String,
+    Number,
+    Unsupported,
+}
+
+fn addition_operand_kind(store: &Store, ty: TypeId) -> AdditionOperandKind {
+    let scalar = store
+        .literal_value(ty)
+        .map(LiteralValue::base_kind)
+        .or_else(|| store.intrinsic_kind(ty));
+    if let Some(kind) = scalar {
+        return match kind {
+            IntrinsicKind::Error => AdditionOperandKind::Error,
+            IntrinsicKind::Any => AdditionOperandKind::Any,
+            IntrinsicKind::String => AdditionOperandKind::String,
+            IntrinsicKind::Number => AdditionOperandKind::Number,
+            _ => AdditionOperandKind::Unsupported,
+        };
+    }
+    let Some(members) = store.union_members(ty) else {
+        return AdditionOperandKind::Unsupported;
+    };
+    let mut kinds = members
+        .iter()
+        .map(|member| addition_operand_kind(store, *member));
+    let Some(first) = kinds.next() else {
+        return AdditionOperandKind::Unsupported;
+    };
+    if kinds.all(|kind| {
+        kind == first
+            && matches!(
+                kind,
+                AdditionOperandKind::Number | AdditionOperandKind::String
+            )
+    }) {
+        first
+    } else {
+        AdditionOperandKind::Unsupported
     }
 }
 

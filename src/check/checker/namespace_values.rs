@@ -2215,7 +2215,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             };
             self.with_lexical_effects(declarator.span.start, LexicalOwnerPhase::Deferred, |pass| {
                 if let Some(initializer) = &declarator.init {
-                    pass.check_annotated_initializer(scope, annotation, initializer);
+                    pass.check_pattern_annotated_initializer(
+                        scope,
+                        annotation,
+                        &declarator.id,
+                        initializer,
+                    );
                 }
             });
         }

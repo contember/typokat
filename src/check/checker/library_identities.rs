@@ -536,6 +536,9 @@ fn native_bridge(
             Some(IntrinsicKind::Boolean) => {
                 Some((&identities.boolean, "library-bridge/boolean/identity"))
             }
+            Some(IntrinsicKind::Object) => {
+                Some((&identities.object, "library-bridge/object/identity"))
+            }
             // FunctionType carries call signatures only; construct shapes need a
             // separate NewableFunction identity when the representation gains them.
             _ if interner.store().tag(ty) == TypeTag::Function => Some((

@@ -234,14 +234,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
                 return None;
             }
-            TSType::TSObjectKeyword(kw) => {
-                self.record_incomplete(
-                    "annotation-lower/object-keyword/self",
-                    Span::from_oxc(kw.span),
-                    "object keyword type not modeled",
-                );
-                return None;
-            }
+            TSType::TSObjectKeyword(_) => return Some(self.interner.well_known().object),
             TSType::TSIntrinsicKeyword(kw) => {
                 self.record_incomplete(
                     "annotation-lower/intrinsic-keyword/self",

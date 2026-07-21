@@ -22,9 +22,9 @@ use crate::types::repr::{FunctionType, ObjectType};
 use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
     BindingPattern, BlockStatement, Declaration, Expression, ForInStatement, ForOfStatement,
-    ForStatement, ForStatementInit, ForStatementLeft, Function, Statement, TSModuleDeclaration,
-    TSModuleDeclarationBody, TryStatement, VariableDeclaration, VariableDeclarationKind,
-    VariableDeclarator,
+    ForStatement, ForStatementInit, ForStatementLeft, Function, ObjectPropertyKind, Statement,
+    TSModuleDeclaration, TSModuleDeclarationBody, TryStatement, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
@@ -39,6 +39,46 @@ fn parenthesized_identifier<'expr, 'ast>(
             parenthesized_identifier(&parenthesized.expression)
         }
         _ => None,
+    }
+}
+
+fn binding_initializer_member_spans(
+    pattern: &BindingPattern<'_>,
+    initializer: &Expression<'_>,
+) -> Vec<(AssignSourceMember, Span)> {
+    let initializer = match initializer {
+        Expression::ParenthesizedExpression(parenthesized) => &parenthesized.expression,
+        other => other,
+    };
+    match (pattern, initializer) {
+        (BindingPattern::ObjectPattern(_), Expression::ObjectExpression(object)) => object
+            .properties
+            .iter()
+            .filter_map(|member| {
+                let ObjectPropertyKind::ObjectProperty(property) = member else {
+                    return None;
+                };
+                let name = property.key.static_name()?.into_owned();
+                Some((
+                    AssignSourceMember::Property(name),
+                    Span::from_oxc(property.span),
+                ))
+            })
+            .collect(),
+        (BindingPattern::ArrayPattern(_), Expression::ArrayExpression(array)) => array
+            .elements
+            .iter()
+            .enumerate()
+            .filter_map(|(index, element)| {
+                element.as_expression().map(|expression| {
+                    (
+                        AssignSourceMember::Element(index),
+                        Span::from_oxc(expression.span()),
+                    )
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -584,6 +624,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     src,
                     tgt,
                     src_span,
+                    source_member_spans: Vec::new(),
                     kind: ObligationKind::Assignment,
                 });
             }
@@ -791,11 +832,45 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         annotation: Option<TypeId>,
         init: &Expression<'_>,
+        diagnostic_span: Span,
+    ) -> Option<(TypeId, Span)> {
+        self.check_annotated_initializer_with_member_spans(
+            scope,
+            annotation,
+            init,
+            diagnostic_span,
+            Vec::new(),
+        )
+    }
+
+    pub(in crate::check::checker) fn check_pattern_annotated_initializer(
+        &mut self,
+        scope: ScopeId,
+        annotation: Option<TypeId>,
+        pattern: &BindingPattern<'_>,
+        init: &Expression<'_>,
+    ) -> Option<(TypeId, Span)> {
+        self.check_annotated_initializer_with_member_spans(
+            scope,
+            annotation,
+            init,
+            Span::from_oxc(pattern.span()),
+            binding_initializer_member_spans(pattern, init),
+        )
+    }
+
+    fn check_annotated_initializer_with_member_spans(
+        &mut self,
+        scope: ScopeId,
+        annotation: Option<TypeId>,
+        init: &Expression<'_>,
+        diagnostic_span: Span,
+        source_member_spans: Vec<(AssignSourceMember, Span)>,
     ) -> Option<(TypeId, Span)> {
         let initializer = self.infer_initializer(scope, init, annotation);
 
-        // Both sides present: the initializer must be assignable to the annotation (primary
-        // span = the initializer), and a fresh object literal gets an excess-property check.
+        // Both sides present: assignability reports at the binding/name fallback or an
+        // offending destructured initializer member; fresh literals also check excess keys.
         if let (Some(ann), Some((init_ty, init_span))) = (annotation, initializer) {
             match self.check_excess_properties_for_target(init, ann) {
                 DemandOutcome::Ready(diagnostics) => {
@@ -810,7 +885,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let obligation = AssignObligation {
                 src: init_ty,
                 tgt: ann,
-                src_span: init_span,
+                src_span: diagnostic_span,
+                source_member_spans,
                 kind: ObligationKind::Assignment,
             };
             if let Some(owner) = self
@@ -852,10 +928,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         // Infer/check the initializer against the annotation, including M18 tuple
         // contextual typing for array literals.
-        let initializer = declarator
-            .init
-            .as_ref()
-            .and_then(|init| self.check_annotated_initializer(scope, annotation, init));
+        let initializer = declarator.init.as_ref().and_then(|init| {
+            self.check_pattern_annotated_initializer(scope, annotation, &declarator.id, init)
+        });
 
         self.record_class_value_alias(scope, kind, declarator, decl_id);
 
@@ -2027,12 +2102,13 @@ pub(in crate::check::checker) fn emit_obligation_failure(
     // The nested "because…" cascade shown below the headline. Empty for a head the
     // headline already expresses in full (e.g. a scalar `Leaf`).
     let elaboration = render_reason_chain(store, head);
+    let diagnostic_span = obligation_source_span(ob, head);
 
     match ob.kind {
         ObligationKind::Assignment => match head {
             Reason::MissingProperty { name, tgt, .. } => {
                 let tgt = render_type(store, *tgt, /* widen */ false);
-                Diagnostic::property_missing(ob.src_span, name, &tgt)
+                Diagnostic::property_missing(diagnostic_span, name, &tgt)
             }
             Reason::Leaf { .. }
             | Reason::Property { .. }
@@ -2059,14 +2135,14 @@ pub(in crate::check::checker) fn emit_obligation_failure(
                 let src = render_type(store, headline_src(ob, head), widen);
                 let tgt = render_type(store, ob.tgt, /* widen */ false);
                 let message = format!("Type '{src}' is not assignable to type '{tgt}'");
-                Diagnostic::not_assignable(ob.src_span, message).with_elaboration(elaboration)
+                Diagnostic::not_assignable(diagnostic_span, message).with_elaboration(elaboration)
             }
         },
         ObligationKind::Argument => {
             let widen = !is_literal_target(store, ob.tgt);
             let src = render_type(store, headline_src(ob, head), widen);
             let tgt = render_type(store, ob.tgt, /* widen */ false);
-            Diagnostic::argument_not_assignable(ob.src_span, &src, &tgt)
+            Diagnostic::argument_not_assignable(diagnostic_span, &src, &tgt)
                 .with_elaboration(elaboration)
         }
         ObligationKind::FreshArgument => match head {
@@ -2074,7 +2150,7 @@ pub(in crate::check::checker) fn emit_obligation_failure(
                 let widen = !is_literal_target(store, ob.tgt);
                 let src = render_type(store, headline_src(ob, head), widen);
                 let tgt = render_type(store, ob.tgt, /* widen */ false);
-                Diagnostic::argument_not_assignable(ob.src_span, &src, &tgt)
+                Diagnostic::argument_not_assignable(diagnostic_span, &src, &tgt)
                     .with_elaboration(elaboration)
             }
             Reason::Leaf { .. }
@@ -2091,10 +2167,30 @@ pub(in crate::check::checker) fn emit_obligation_failure(
                 let src = render_type(store, headline_src(ob, head), widen);
                 let tgt = render_type(store, ob.tgt, /* widen */ false);
                 let message = format!("Type '{src}' is not assignable to type '{tgt}'");
-                Diagnostic::not_assignable(ob.src_span, message).with_elaboration(elaboration)
+                Diagnostic::not_assignable(diagnostic_span, message).with_elaboration(elaboration)
             }
         },
     }
+}
+
+fn obligation_source_span(ob: &AssignObligation, reason: &Reason) -> Span {
+    let member = match reason {
+        Reason::Property { name, .. } => Some(AssignSourceMember::Property(name.clone())),
+        Reason::TupleElement { index, .. } => Some(AssignSourceMember::Element(*index)),
+        Reason::UnionSourceMember { because, .. }
+        | Reason::ArrayElement { because, .. }
+        | Reason::IndexSignature { because, .. } => {
+            return obligation_source_span(ob, because);
+        }
+        _ => None,
+    };
+    member
+        .and_then(|member| {
+            ob.source_member_spans
+                .iter()
+                .find_map(|(candidate, span)| (candidate == &member).then_some(*span))
+        })
+        .unwrap_or(ob.src_span)
 }
 
 pub(in crate::check::checker) fn emit_exhausted_obligation(

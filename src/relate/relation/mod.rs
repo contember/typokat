@@ -891,6 +891,20 @@ impl<'a> Relater<'a> {
             }
         }
 
+        // An intersection is a subtype of each of its direct conjuncts. Keep this
+        // identity projection ahead of target decomposition: `(A | B) & C` satisfies
+        // `A | B` as a whole, even though it need not independently satisfy either
+        // union arm. Object targets still use the merged-source path below whenever
+        // they are not an exact conjunct, preserving sibling-property checks.
+        if self.store.tag(tgt) != TypeTag::Object
+            && self
+                .store
+                .intersection_members(src)
+                .is_some_and(|members| members.contains(&tgt))
+        {
+            return Relation::Yes;
+        }
+
         // Union rules (mvp-plan §6, M4) run BEFORE the intrinsic/object/function
         // rules. They are checked source-first, then target-first:
         //
@@ -1020,6 +1034,37 @@ impl<'a> Relater<'a> {
             }
         }
 
+        // The empty structural type `{}` accepts every represented non-nullish
+        // value. This precedes template dispatch because a template type is a
+        // non-nullish string subtype even when its pattern relation is symbolic.
+        if self.store.object_type(tgt).is_some_and(|object| {
+            object.properties.is_empty()
+                && object.string_index.is_none()
+                && object.number_index.is_none()
+                && object.call_signatures.is_empty()
+                && object.construct_signatures.is_empty()
+        }) && (matches!(
+            self.store.tag(src),
+            TypeTag::Literal
+                | TypeTag::Object
+                | TypeTag::Function
+                | TypeTag::Array
+                | TypeTag::Tuple
+                | TypeTag::Readonly
+                | TypeTag::Template
+                | TypeTag::ClassInstance
+        ) || matches!(
+            self.store.intrinsic_kind(src),
+            Some(
+                IntrinsicKind::Boolean
+                    | IntrinsicKind::Number
+                    | IntrinsicKind::String
+                    | IntrinsicKind::Object
+            )
+        )) {
+            return Relation::Yes;
+        }
+
         // Template literal patterns (M27). A surviving template node is a *pattern*
         // (a `string`/`number` intrinsic hole) or a *deferred* node (a free declaration
         // type parameter hole; an identical one is already accepted by the `src == tgt`
@@ -1034,6 +1079,21 @@ impl<'a> Relater<'a> {
         }
         if self.store.tag(tgt) == TypeTag::Template {
             return self.relate_template_target(src, tgt);
+        }
+
+        // The `object` keyword excludes primitives, unlike the structural `{}` type.
+        if tgt == wk.object
+            && matches!(
+                self.store.tag(src),
+                TypeTag::Object
+                    | TypeTag::Function
+                    | TypeTag::Array
+                    | TypeTag::Tuple
+                    | TypeTag::Readonly
+                    | TypeTag::ClassInstance
+            )
+        {
+            return Relation::Yes;
         }
 
         // b64 readonly array/tuple wrapper: readonly sources are not mutable arrays,
@@ -1129,6 +1189,7 @@ impl<'a> Relater<'a> {
             IntrinsicKind::Uncapitalize => wk.uncapitalize,
             IntrinsicKind::ThisType => wk.this_type,
             IntrinsicKind::OmitThisParameter => wk.omit_this_parameter,
+            IntrinsicKind::Object => wk.object,
         }
     }
 }

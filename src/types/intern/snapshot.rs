@@ -8,7 +8,7 @@ use crate::types::repr::{
 };
 
 const VERSION: u32 = 1;
-const WELL_KNOWN_COUNT: usize = 16;
+const WELL_KNOWN_COUNT: usize = 17;
 
 // Reference-manifest domains are shared with the archive assembler.
 const CONTAINER_DOMAIN: u8 = 0;
@@ -796,11 +796,12 @@ fn well_known_ids(well_known: WellKnown) -> [TypeId; WELL_KNOWN_COUNT] {
         well_known.uncapitalize,
         well_known.this_type,
         well_known.omit_this_parameter,
+        well_known.object,
     ]
 }
 
 fn well_known_from_ids(ids: [TypeId; WELL_KNOWN_COUNT]) -> WellKnown {
-    let [error, any, unknown, never, void, null, undefined, boolean, number, string, uppercase, lowercase, capitalize, uncapitalize, this_type, omit_this_parameter] =
+    let [error, any, unknown, never, void, null, undefined, boolean, number, string, uppercase, lowercase, capitalize, uncapitalize, this_type, omit_this_parameter, object] =
         ids;
     WellKnown {
         error,
@@ -819,6 +820,7 @@ fn well_known_from_ids(ids: [TypeId; WELL_KNOWN_COUNT]) -> WellKnown {
         uncapitalize,
         this_type,
         omit_this_parameter,
+        object,
     }
 }
 

@@ -156,12 +156,15 @@ pub enum IntrinsicKind {
     ThisType,
     /// Backlog 70 trusted prelude specialization for `OmitThisParameter`.
     OmitThisParameter,
+    /// The non-primitive `object` keyword. Kept distinct from the structural
+    /// empty object type `{}`, which accepts represented non-nullish primitives.
+    Object,
 }
 
 impl IntrinsicKind {
     /// The full set in canonical interning order. Adding a kind here is the only
     /// place that defines the well-known id assignment.
-    pub const ALL: [IntrinsicKind; 16] = [
+    pub const ALL: [IntrinsicKind; 17] = [
         IntrinsicKind::Error,
         IntrinsicKind::Any,
         IntrinsicKind::Unknown,
@@ -178,6 +181,7 @@ impl IntrinsicKind {
         IntrinsicKind::Uncapitalize,
         IntrinsicKind::ThisType,
         IntrinsicKind::OmitThisParameter,
+        IntrinsicKind::Object,
     ];
 
     /// Display name used by the type renderer (`tests/cases/README.md` →
@@ -203,6 +207,7 @@ impl IntrinsicKind {
             IntrinsicKind::Uncapitalize => "Uncapitalize",
             IntrinsicKind::ThisType => "ThisType",
             IntrinsicKind::OmitThisParameter => "OmitThisParameter",
+            IntrinsicKind::Object => "object",
         }
     }
 }

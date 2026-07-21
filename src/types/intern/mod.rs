@@ -111,6 +111,8 @@ pub struct WellKnown {
     pub this_type: TypeId,
     /// Trusted `OmitThisParameter<T>` evaluator marker.
     pub omit_this_parameter: TypeId,
+    /// The non-primitive `object` keyword.
+    pub object: TypeId,
 }
 
 impl WellKnown {
@@ -168,6 +170,7 @@ impl Interner {
                 uncapitalize: TypeId(0),
                 this_type: TypeId(0),
                 omit_this_parameter: TypeId(0),
+                object: TypeId(0),
             },
         };
 
@@ -202,6 +205,7 @@ impl Interner {
             uncapitalize: id_of(IntrinsicKind::Uncapitalize),
             this_type: id_of(IntrinsicKind::ThisType),
             omit_this_parameter: id_of(IntrinsicKind::OmitThisParameter),
+            object: id_of(IntrinsicKind::Object),
         };
 
         interner

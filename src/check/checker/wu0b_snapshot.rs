@@ -31,7 +31,7 @@ use crate::class_semantics::{
 };
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader, SnapshotWriter};
-use crate::types::repr::{ClassId, TypeParamId, TypeTag, Visibility};
+use crate::types::repr::{ClassId, IntrinsicKind, TypeParamId, TypeTag, Visibility};
 use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
 use sha2::{Digest, Sha256};
@@ -2566,7 +2566,7 @@ fn interner_projection_subtables(bytes: &[u8]) -> Result<Vec<(u64, Vec<u8>)>, Sn
     }
     let reserved_end = reader.position();
     let well_known_start = reserved_end;
-    for _ in 0..16 {
+    for _ in 0..IntrinsicKind::ALL.len() {
         reader
             .u32()
             .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
@@ -2584,7 +2584,10 @@ fn interner_projection_subtables(bytes: &[u8]) -> Result<Vec<(u64, Vec<u8>)>, Sn
             count64(reserved_count),
             bytes[reserved_start..reserved_end].to_vec(),
         ),
-        (16, bytes[well_known_start..well_known_end].to_vec()),
+        (
+            count64(IntrinsicKind::ALL.len()),
+            bytes[well_known_start..well_known_end].to_vec(),
+        ),
     ])
 }
 

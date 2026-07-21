@@ -130,18 +130,64 @@ impl<'a> Relater<'a> {
         kind: RelationKind,
         assumed: &mut AssumedSet,
     ) -> Relation {
-        let Some(members) = self.store.intersection_members(src) else {
+        let Some(raw_members) = self.store.intersection_members(src) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
+        let mut pending = raw_members.to_vec();
+        let mut expanded_intersections = FxHashSet::default();
+        expanded_intersections.insert(src);
+        let mut members = Vec::with_capacity(pending.len());
+        while let Some(raw_member) = pending.pop() {
+            let member = if let Some(normalization) = self.normalization {
+                match normalization.normalize(raw_member) {
+                    Ok(member) => member,
+                    Err(exhaustion) => {
+                        self.query_exhaustion.get_or_insert(exhaustion);
+                        return Relation::No(ReasonChain::leaf(src, tgt));
+                    }
+                }
+            } else {
+                raw_member
+            };
+            if self.allow_relation_demand {
+                if let Some(demand) = normalization_demand(self.normalization, self.store, member) {
+                    self.query_demand.get_or_insert(demand);
+                    self.query_demand_observed = true;
+                    return Relation::No(ReasonChain::leaf(src, tgt));
+                }
+            }
+            if self.store.tag(member) == TypeTag::Intersection {
+                if expanded_intersections.insert(member) {
+                    let Some(nested) = self.store.intersection_members(member) else {
+                        return Relation::No(ReasonChain::leaf(src, tgt));
+                    };
+                    pending.extend(nested.iter().copied());
+                }
+                continue;
+            }
+            members.push(member);
+        }
+        members.sort_unstable();
+        members.dedup();
         let members: Vec<TypeId> = members
-            .iter()
-            .copied()
+            .into_iter()
             .filter(|member| {
                 self.well_known
                     .this_type_operand(self.store, *member)
                     .is_none()
             })
             .collect();
+        // A normalized union conjunct denotes a union of merged intersections. The
+        // object collector below cannot silently drop it: that could accept an
+        // optional target even though one union arm contributes a conflicting present
+        // property. Full distribution is intentionally deferred; reject conservatively.
+        if self.store.tag(tgt) == TypeTag::Object
+            && members
+                .iter()
+                .any(|member| self.store.tag(*member) == TypeTag::Union)
+        {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        }
         // The merged-source recursion's own assume-true cycle guard, seeded empty and
         // scoped to THIS query — see `relate_source_members_to`.
         let mut in_flight: MergedInFlightSet = FxHashSet::default();

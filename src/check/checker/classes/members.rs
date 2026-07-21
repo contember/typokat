@@ -246,7 +246,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                             .map(|property| property.ty)
                                             .or_else(|| pass.current_body_member_type(&name))
                                     });
-                                pass.check_annotated_initializer(scope, annotation, init);
+                                pass.check_annotated_initializer(
+                                    scope,
+                                    annotation,
+                                    init,
+                                    Span::from_oxc(prop.key.span()),
+                                );
                             },
                         );
                         self.current_this = saved_member_this;

@@ -327,6 +327,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 src,
                 tgt,
                 src_span,
+                source_member_spans: Vec::new(),
                 kind: ObligationKind::Assignment,
             });
         }
@@ -549,6 +550,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     src,
                     tgt: prop_ty,
                     src_span,
+                    source_member_spans: Vec::new(),
                     kind: ObligationKind::Assignment,
                 });
             }

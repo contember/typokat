@@ -76,6 +76,10 @@ pub(in crate::check::checker) fn keyof_of_type(
     interner: &mut Interner,
     operand: TypeId,
 ) -> Option<TypeId> {
+    let wk = interner.well_known();
+    if operand == wk.object {
+        return Some(wk.never);
+    }
     if interner.store().object_type(operand).is_some() {
         return keyof_of_object(interner, operand);
     }
