@@ -22,6 +22,39 @@ fn published(
     .expect("test publication is complete")
 }
 
+fn object_with_irrelevant_recursive_computations(
+    interner: &mut Interner,
+) -> (TypeId, TypeId, TypeId, TypeId) {
+    let wk = interner.well_known();
+    let root = interner.reserve_object();
+    let mut irrelevant = root;
+    for _ in 0..=DEFAULT_STEP_BUDGET {
+        irrelevant = interner.intern_conditional(ConditionalType {
+            check: wk.number,
+            extends_ty: wk.number,
+            true_branch: irrelevant,
+            false_branch: wk.never,
+            infer_count: 0,
+            distributive: false,
+            poisoned: false,
+        });
+    }
+    interner.fill_object(
+        root,
+        ObjectType {
+            properties: vec![
+                PropertyType::public("selected", wk.number),
+                PropertyType::public("irrelevant", irrelevant),
+            ],
+            ..Default::default()
+        },
+    );
+    let selected = interner.intern_literal(LiteralValue::String("selected".into()));
+    let irrelevant_key = interner.intern_literal(LiteralValue::String("irrelevant".into()));
+    let missing = interner.intern_literal(LiteralValue::String("missing".into()));
+    (root, selected, irrelevant_key, missing)
+}
+
 #[test]
 fn one_layer_projection_is_argument_sensitive_and_memoized() {
     let mut interner = Interner::with_intrinsics();
@@ -686,6 +719,76 @@ fn deferred_index_and_keyof_see_query_local_class_projection() {
         coordinator.demand(keyof)
     };
     assert_eq!(keyof_outcome, DemandOutcome::Ready(key));
+}
+
+#[test]
+fn keyof_demand_ignores_unrelated_recursive_object_values() {
+    let mut interner = Interner::with_intrinsics();
+    let (object, selected, irrelevant, _) =
+        object_with_irrelevant_recursive_computations(&mut interner);
+    let expected = interner.union(vec![selected, irrelevant]);
+    let keyof = interner.intern_keyof(object);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    reset_query_demand_measure();
+    let outcome =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .demand(keyof);
+    let measure = query_demand_measure();
+
+    assert_eq!(outcome, DemandOutcome::Ready(expected));
+    assert_eq!(measure.evaluation_budget_exhaustions, 0, "{measure:?}");
+    assert!(measure.evaluation_expansions < 16, "{measure:?}");
+    assert!(measure.planner_visits < 16, "{measure:?}");
+}
+
+#[test]
+fn deferred_indexed_demand_ignores_unrelated_recursive_object_values() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (object, selected, _, missing) =
+        object_with_irrelevant_recursive_computations(&mut interner);
+    let selected_access = interner.intern_deferred_indexed_access(object, selected);
+    let missing_access = interner.intern_deferred_indexed_access(object, missing);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    reset_query_demand_measure();
+    let selected_outcome =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .demand(selected_access);
+    let selected_measure = query_demand_measure();
+
+    assert_eq!(selected_outcome, DemandOutcome::Ready(wk.number));
+    assert_eq!(
+        selected_measure.evaluation_budget_exhaustions, 0,
+        "{selected_measure:?}"
+    );
+    assert!(
+        selected_measure.evaluation_expansions < 16,
+        "{selected_measure:?}"
+    );
+    assert!(selected_measure.planner_visits < 16, "{selected_measure:?}");
+
+    reset_query_demand_measure();
+    let missing_outcome =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .demand(missing_access);
+    let missing_measure = query_demand_measure();
+
+    assert_eq!(missing_outcome, DemandOutcome::Ready(wk.error));
+    assert_eq!(
+        missing_measure.evaluation_budget_exhaustions, 0,
+        "{missing_measure:?}"
+    );
+    assert!(
+        missing_measure.evaluation_expansions < 16,
+        "{missing_measure:?}"
+    );
+    assert!(missing_measure.planner_visits < 16, "{missing_measure:?}");
 }
 
 #[test]
