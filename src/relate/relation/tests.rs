@@ -1693,6 +1693,71 @@ fn cycle_stack_keys_are_semantic_not_frame_allocations() {
     assert!(single != reversed);
 }
 
+/// Alpha-aligned method binders give deferred indexed accesses the same local
+/// meaning; the map operand still participates in the relation.
+#[test]
+fn aligned_deferred_indexed_accesses_relate_by_map_and_binder() {
+    use crate::types::repr::{GenericTypeParam, TypeParamId};
+
+    fn event_map(interner: &mut Interner, payload: TypeId) -> TypeId {
+        let event = interner.intern_object(ObjectType {
+            properties: vec![prop("payload", payload)],
+            ..Default::default()
+        });
+        interner.intern_object(ObjectType {
+            properties: vec![prop("change", event)],
+            ..Default::default()
+        })
+    }
+
+    fn binder(id: TypeParamId, constraint: TypeId) -> GenericTypeParam {
+        GenericTypeParam {
+            id,
+            constraint: Some(constraint),
+            default: None,
+        }
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let same_map = event_map(&mut interner, wk.number);
+    let incompatible_map = event_map(&mut interner, wk.string);
+    let source_id = TypeParamId(10_351);
+    let target_id = TypeParamId(10_352);
+    let source_key = interner.intern_type_param(source_id, "K");
+    let target_key = interner.intern_type_param(target_id, "K");
+    let source_access = interner.intern_deferred_indexed_access(same_map, source_key);
+    let target_access = interner.intern_deferred_indexed_access(same_map, target_key);
+    let incompatible_access = interner.intern_deferred_indexed_access(incompatible_map, target_key);
+    let source_binders = vec![binder(source_id, interner.intern_keyof(same_map))];
+    let target_binders = vec![binder(target_id, interner.intern_keyof(same_map))];
+    let incompatible_binders = vec![binder(target_id, interner.intern_keyof(incompatible_map))];
+
+    let store = interner.store();
+    let mut rel = Relater::new(store, wk);
+    let aligned = rel.with_binder_context(
+        BinderRelationContext::aligned(&source_binders, &target_binders),
+        |relater| relater.is_assignable(source_access, target_access).is_yes(),
+    );
+    let incompatible = rel.with_binder_context(
+        BinderRelationContext::aligned(&source_binders, &incompatible_binders),
+        |relater| {
+            relater
+                .is_assignable(source_access, incompatible_access)
+                .is_yes()
+        },
+    );
+
+    assert!(
+        !incompatible,
+        "different event payload maps remain distinct"
+    );
+    assert!(
+        aligned,
+        "alpha-aligned K parameters denote the same map lookup"
+    );
+}
+
 /// B41/WU4 — an in-flight raw object pair under one binder environment must
 /// not short-circuit the same pair under a nested environment that specializes
 /// its parameter differently. The nested result must match a standalone query.

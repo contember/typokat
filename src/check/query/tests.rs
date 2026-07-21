@@ -1529,3 +1529,148 @@ fn relation_preserves_frontier_vs_earlier_mismatch_order() {
     assert_eq!(evaluations, 0);
     assert!(relations > 0);
 }
+
+/// The production query path must alpha-align a DOM-style recursive listener's
+/// deferred `Map[K]` event lookup without sharing a mismatched cached verdict.
+#[test]
+fn recursive_generic_listener_deferred_lookup_is_order_independent() {
+    use crate::types::repr::GenericTypeParam;
+
+    fn property(name: &str, ty: TypeId) -> PropertyType {
+        PropertyType::public(name, ty)
+    }
+
+    fn event_map(interner: &mut Interner, payload: TypeId) -> TypeId {
+        let event = interner.intern_object(ObjectType {
+            properties: vec![property("payload", payload)],
+            ..Default::default()
+        });
+        interner.intern_object(ObjectType {
+            properties: vec![property("change", event)],
+            ..Default::default()
+        })
+    }
+
+    fn listener_root(interner: &mut Interner, binder_id: TypeParamId, event_map: TypeId) -> TypeId {
+        let root = interner.reserve_object();
+        let key = interner.intern_type_param(binder_id, "K");
+        let event = interner.intern_deferred_indexed_access(event_map, key);
+        let listener = interner.intern_function(FunctionType {
+            type_params: Vec::new(),
+            receiver: Some(root),
+            params: vec![ParameterType::required("event", event)],
+            ret: interner.well_known().void,
+        });
+        let constraint = interner.intern_keyof(event_map);
+        let add_event_listener = interner.intern_function(FunctionType {
+            type_params: vec![GenericTypeParam {
+                id: binder_id,
+                constraint: Some(constraint),
+                default: None,
+            }],
+            receiver: None,
+            params: vec![ParameterType::required("listener", listener)],
+            ret: interner.well_known().void,
+        });
+        interner.fill_object(
+            root,
+            ObjectType {
+                properties: vec![
+                    property("addEventListener", add_event_listener),
+                    property("self", root),
+                ],
+                ..Default::default()
+            },
+        );
+        root
+    }
+
+    fn is_assignable(
+        interner: &mut Interner,
+        published: &PublishedClasses,
+        state: &mut SemanticQueryState,
+        next_type_param: &mut u32,
+        source: TypeId,
+        target: TypeId,
+    ) -> bool {
+        match SemanticQueryCoordinator::new(interner, published, state, next_type_param)
+            .is_assignable(source, target)
+        {
+            RelationOutcome::Yes => true,
+            RelationOutcome::No(_) => false,
+            RelationOutcome::Exhausted(exhaustion) => {
+                panic!("listener relation unexpectedly exhausted: {exhaustion:?}")
+            }
+        }
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let number_map = event_map(&mut interner, wk.number);
+    let string_map = event_map(&mut interner, wk.string);
+    let left = listener_root(&mut interner, TypeParamId(90_351), number_map);
+    let right = listener_root(&mut interner, TypeParamId(90_352), number_map);
+    let incompatible = listener_root(&mut interner, TypeParamId(90_353), string_map);
+    let published = PublishedClasses::empty();
+
+    let mut mismatch_first_state = SemanticQueryState::default();
+    let mut mismatch_first_next = 100_000;
+    let mismatch_first = is_assignable(
+        &mut interner,
+        &published,
+        &mut mismatch_first_state,
+        &mut mismatch_first_next,
+        left,
+        incompatible,
+    );
+    let left_to_right_after_mismatch = is_assignable(
+        &mut interner,
+        &published,
+        &mut mismatch_first_state,
+        &mut mismatch_first_next,
+        left,
+        right,
+    );
+    let right_to_left_after_mismatch = is_assignable(
+        &mut interner,
+        &published,
+        &mut mismatch_first_state,
+        &mut mismatch_first_next,
+        right,
+        left,
+    );
+
+    let mut compatible_first_state = SemanticQueryState::default();
+    let mut compatible_first_next = 110_000;
+    let right_to_left_first = is_assignable(
+        &mut interner,
+        &published,
+        &mut compatible_first_state,
+        &mut compatible_first_next,
+        right,
+        left,
+    );
+    let left_to_right_second = is_assignable(
+        &mut interner,
+        &published,
+        &mut compatible_first_state,
+        &mut compatible_first_next,
+        left,
+        right,
+    );
+    let reverse_mismatch = is_assignable(
+        &mut interner,
+        &published,
+        &mut compatible_first_state,
+        &mut compatible_first_next,
+        incompatible,
+        right,
+    );
+
+    assert!(!mismatch_first);
+    assert!(!reverse_mismatch);
+    assert!(left_to_right_after_mismatch);
+    assert!(right_to_left_after_mismatch);
+    assert!(right_to_left_first);
+    assert!(left_to_right_second);
+}
