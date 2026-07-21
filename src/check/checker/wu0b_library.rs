@@ -3313,6 +3313,39 @@ mod tests {
     }
 
     #[test]
+    fn type_parameter_defaults_follow_final_canonical_alias_identity() {
+        let state = compile_reservation_fixture(
+            "type-parameter-default-alias-capture.d.ts",
+            r#"
+                type FirstShape = { marker: number };
+                type Box<T = NamedShape> = T;
+                type NamedShape = { marker: number };
+            "#,
+        );
+        let first = published_template_type(&state, "FirstShape");
+        let named = published_template_type(&state, "NamedShape");
+        let box_group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "Box")
+            .expect("Box type group");
+        let Some(PublishedTypeGroupTerminal::Ready(box_surface)) =
+            state.published_types.groups().get(box_group.id)
+        else {
+            panic!("Box did not publish a ready type group");
+        };
+
+        assert_eq!(first, named, "equal acyclic aliases must hash-cons");
+        assert_strict_interner_snapshot(&state, "type parameter default alias capture");
+        assert_eq!(
+            box_surface.parameter_defaults,
+            [PublishedTypeParameterDefault::Ready(named)],
+            "published defaults must follow the final canonical alias identity"
+        );
+    }
+
+    #[test]
     fn object_alias_identity_ignores_member_source_order() {
         let state = compile_reservation_fixture(
             "object-alias-member-order.d.ts",
