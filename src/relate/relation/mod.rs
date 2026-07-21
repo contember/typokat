@@ -297,6 +297,8 @@ type AssumedSet = FxHashSet<StackRelationKey>;
 #[derive(Default)]
 struct BinderRelationContext {
     parameters: FxHashSet<TypeParamId>,
+    source_parameters: FxHashSet<TypeParamId>,
+    target_parameters: FxHashSet<TypeParamId>,
     constraints: FxHashMap<TypeParamId, Option<TypeId>>,
     source_to_target: FxHashMap<TypeParamId, TypeParamId>,
     target_to_source: FxHashMap<TypeParamId, TypeParamId>,
@@ -310,6 +312,8 @@ impl BinderRelationContext {
         for (source_param, target_param) in source.iter().zip(target) {
             context.parameters.insert(source_param.id);
             context.parameters.insert(target_param.id);
+            context.source_parameters.insert(source_param.id);
+            context.target_parameters.insert(target_param.id);
             context
                 .constraints
                 .insert(source_param.id, source_param.constraint);
@@ -330,6 +334,7 @@ impl BinderRelationContext {
         let mut context = BinderRelationContext::default();
         for source_param in source {
             context.parameters.insert(source_param.id);
+            context.source_parameters.insert(source_param.id);
             context
                 .constraints
                 .insert(source_param.id, source_param.constraint);
@@ -350,6 +355,7 @@ impl BinderRelationContext {
         let mut context = Self::aligned(&source[..shared], &target[..shared]);
         for parameter in &source[shared..] {
             context.parameters.insert(parameter.id);
+            context.source_parameters.insert(parameter.id);
             context
                 .constraints
                 .insert(parameter.id, parameter.constraint);
@@ -357,6 +363,7 @@ impl BinderRelationContext {
         }
         for parameter in &target[shared..] {
             context.parameters.insert(parameter.id);
+            context.target_parameters.insert(parameter.id);
             context
                 .constraints
                 .insert(parameter.id, parameter.constraint);
@@ -508,6 +515,12 @@ impl<'a> Relater<'a> {
             return Relation::Yes;
         }
 
+        // An unresolved indexed access is still identical under the active
+        // signature's alpha-renaming when only its bound index id differs.
+        if self.contextual_deferred_indexed_accesses_are_identical(src, tgt) {
+            return Relation::Yes;
+        }
+
         if self.allow_relation_demand {
             if let Some(demand) = normalization_demand(self.normalization, self.store, src)
                 .or_else(|| normalization_demand(self.normalization, self.store, tgt))
@@ -606,6 +619,45 @@ impl<'a> Relater<'a> {
         let result = body(self);
         self.binder_contexts.pop();
         result
+    }
+
+    fn contextual_params_are_aligned(&self, src: TypeId, tgt: TypeId) -> bool {
+        let Some(src_param) = self.store.type_param(src).map(|param| param.id) else {
+            return false;
+        };
+        let Some(tgt_param) = self.store.type_param(tgt).map(|param| param.id) else {
+            return false;
+        };
+        let mut direct_visible = true;
+        let mut reverse_visible = true;
+        for context in self.binder_contexts.iter().rev() {
+            if direct_visible && context.source_to_target.get(&src_param) == Some(&tgt_param) {
+                return true;
+            }
+            if reverse_visible && context.target_to_source.get(&src_param) == Some(&tgt_param) {
+                return true;
+            }
+            direct_visible &= !context.source_parameters.contains(&src_param)
+                && !context.target_parameters.contains(&tgt_param);
+            reverse_visible &= !context.target_parameters.contains(&src_param)
+                && !context.source_parameters.contains(&tgt_param);
+            if !direct_visible && !reverse_visible {
+                return false;
+            }
+        }
+        false
+    }
+
+    fn contextual_deferred_indexed_accesses_are_identical(&self, src: TypeId, tgt: TypeId) -> bool {
+        let Some(src_access) = self.store.deferred_indexed_access_type(src) else {
+            return false;
+        };
+        let Some(tgt_access) = self.store.deferred_indexed_access_type(tgt) else {
+            return false;
+        };
+        src_access.object == tgt_access.object
+            && (src_access.index == tgt_access.index
+                || self.contextual_params_are_aligned(src_access.index, tgt_access.index))
     }
 
     fn stack_relation_key(&self, relation: RelationKey) -> StackRelationKey {
