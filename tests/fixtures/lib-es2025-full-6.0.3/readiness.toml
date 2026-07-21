@@ -22,7 +22,7 @@ bridges_sha256 = "98e92991a89b6c0086c7421e00e279b383c8463bdd808ea6e7c5a5d84a637e
 routing_path = "tests/fixtures/lib-es2025-full-6.0.3/routing.toml"
 routing_sha256 = "8213b0ed7760dee2ae5ef87d9dd6d8cad318c776fefca44060152284f5c002d2"
 conformance_manifest_path = "tests/fixtures/lib-es2025-full-6.0.3/conformance-invocations.toml"
-conformance_manifest_sha256 = "f0e5a876786a29f46982ee4d79cdde0e83f6854dd7c424e46d1df3c64c4db8b2"
+conformance_manifest_sha256 = "3dce13610b02efb60f93f7c4753c11ee28a54d0aaa26cb9dcfa6571456c4bc0a"
 
 [protocol]
 release_build_command = "cargo test --release --lib --no-run --message-format=json"
