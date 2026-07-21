@@ -1368,6 +1368,12 @@ impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
         else {
             return ty;
         };
+        let shallow = resolve_deferred_outer_layer(self.interner, ty);
+        if shallow != ty {
+            self.record_evaluation(ty, shallow);
+            self.visit_demand_result(shallow);
+            return shallow;
+        }
         let mut object = self.visit(access.object);
         if let Some(constraint) = self
             .interner
@@ -1408,6 +1414,12 @@ impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
         let Some(operand) = self.interner.store().keyof_operand(ty) else {
             return ty;
         };
+        let shallow = resolve_keyof_outer_layer(self.interner, operand);
+        if shallow != ty {
+            self.record_evaluation(ty, shallow);
+            self.visit_demand_result(shallow);
+            return shallow;
+        }
         let operand = self.visit(operand);
         let operand = match self.plan.normalize(operand) {
             Ok(operand) => operand,
