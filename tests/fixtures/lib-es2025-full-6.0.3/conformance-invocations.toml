@@ -574,7 +574,7 @@ source = ["tests/cases/m32_signature_shape/prelude_return_type.ts\te8b0a50f15385
 [[invocation]]
 id = "tests/cases/m32_signature_shape/rest_parameters.ts"
 kind = "single"
-source = ["tests/cases/m32_signature_shape/rest_parameters.ts\tbd503a897bdd496d39b842926a26c94788312f774504f397cf276a3a0d20e06a"]
+source = ["tests/cases/m32_signature_shape/rest_parameters.ts\t7544e12cf1d73d768d7bf4d9ac96755e9133b551c30ece55147fcd24dd3c5ad0"]
 
 [[invocation]]
 id = "tests/cases/m32_signature_shape/signature_relation.ts"
