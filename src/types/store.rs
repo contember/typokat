@@ -599,6 +599,22 @@ impl Store {
 
 #[cfg(test)]
 impl Store {
+    pub(crate) fn snapshot_type_param_constraints_for_test(&self) -> Vec<(TypeParamId, TypeId)> {
+        let mut constraints = self
+            .type_param_constraints
+            .iter()
+            .map(|(&parameter, &constraint)| (parameter, constraint))
+            .collect::<Vec<_>>();
+        constraints.sort_unstable_by_key(|(parameter, _)| *parameter);
+        constraints
+    }
+
+    pub(crate) fn snapshot_frozen_type_params_for_test(&self) -> Vec<TypeParamId> {
+        let mut parameters = self.frozen_type_params.iter().copied().collect::<Vec<_>>();
+        parameters.sort_unstable();
+        parameters
+    }
+
     pub(crate) fn snapshot_template_name_ids_for_test(&self) -> impl Iterator<Item = TypeId> + '_ {
         self.template_names.keys().copied()
     }

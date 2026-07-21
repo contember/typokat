@@ -10,14 +10,392 @@ use crate::types::repr::{
 const VERSION: u32 = 1;
 const WELL_KNOWN_COUNT: usize = 16;
 
+// Reference-manifest domains are shared with the archive assembler.
+const CONTAINER_DOMAIN: u8 = 0;
+const TYPE_DOMAIN: u8 = 1;
+const TYPE_PARAM_DOMAIN: u8 = 2;
+const CLASS_DOMAIN: u8 = 3;
+const INTERNER_BUCKET_DOMAIN: u8 = 16;
+
+// Store TypeId owners reuse these relationship fields across payload kinds.
+const TYPE_OPERAND_FIELD: u8 = 0;
+const TYPE_PARAM_IDENTITY_FIELD: u8 = 1;
+const CLASS_IDENTITY_FIELD: u8 = 2;
+const CONSTRAINT_FIELD: u8 = 3;
+const DEFAULT_FIELD: u8 = 4;
+const DECLARING_CLASS_FIELD: u8 = 5;
+
+// Store metadata container fields.
+const CONSTRAINT_OWNER_FIELD: u8 = 6;
+const CONSTRAINT_TARGET_FIELD: u8 = 7;
+const FROZEN_TYPE_PARAM_FIELD: u8 = 8;
+const TEMPLATE_NAME_TYPE_FIELD: u8 = 9;
+
+// Interner identity container fields.
+const BUCKET_CANDIDATE_FIELD: u8 = 0;
+const RESERVED_TYPE_FIELD: u8 = 1;
+const WELL_KNOWN_TYPE_FIELD: u8 = 2;
+
+type SnapshotReferenceRecord = (u8, u8, u8, u32, u32);
+
+fn reference(
+    owner_domain: u8,
+    target_domain: u8,
+    field: u8,
+    owner: u32,
+    target: u32,
+) -> SnapshotReferenceRecord {
+    debug_assert!(owner_domain <= 31 && target_domain <= 31 && field <= 31);
+    (owner_domain, target_domain, field, owner, target)
+}
+
+fn push_type_operand(references: &mut Vec<SnapshotReferenceRecord>, owner: TypeId, target: TypeId) {
+    references.push(reference(
+        TYPE_DOMAIN,
+        TYPE_DOMAIN,
+        TYPE_OPERAND_FIELD,
+        owner.0,
+        target.0,
+    ));
+}
+
+fn push_type_param_identity(
+    references: &mut Vec<SnapshotReferenceRecord>,
+    owner: TypeId,
+    target: TypeParamId,
+) {
+    references.push(reference(
+        TYPE_DOMAIN,
+        TYPE_PARAM_DOMAIN,
+        TYPE_PARAM_IDENTITY_FIELD,
+        owner.0,
+        target.0,
+    ));
+}
+
+fn push_class_identity(
+    references: &mut Vec<SnapshotReferenceRecord>,
+    owner: TypeId,
+    field: u8,
+    target: crate::types::repr::ClassId,
+) {
+    references.push(reference(
+        TYPE_DOMAIN,
+        CLASS_DOMAIN,
+        field,
+        owner.0,
+        target.0,
+    ));
+}
+
 impl Interner {
-    pub(crate) fn write_snapshot_for_test(
+    /// Canonical reference rows for the Store and Interner archive families.
+    ///
+    /// Tuple order is `(owner_domain, target_domain, field, owner, target)`.
+    /// The first vector is archive family 1 (Store), the second archive family
+    /// 2 (Interner identity). Neither side parses the other side's wire bytes.
+    pub(crate) fn snapshot_reference_records_for_test(
+        &self,
+    ) -> (Vec<SnapshotReferenceRecord>, Vec<SnapshotReferenceRecord>) {
+        let store_references = self.store_snapshot_reference_records_for_test();
+        let mut interner_references = Vec::new();
+
+        let mut buckets = self.dedup.iter().collect::<Vec<_>>();
+        buckets.sort_unstable_by_key(|(hash, _)| **hash);
+        for (bucket_index, (_, candidates)) in buckets.into_iter().enumerate() {
+            let owner = u32::try_from(bucket_index).expect("snapshot bucket index fits u32");
+            let mut candidates = candidates.iter().copied().collect::<Vec<_>>();
+            candidates.sort_unstable();
+            interner_references.extend(candidates.into_iter().map(|candidate| {
+                reference(
+                    INTERNER_BUCKET_DOMAIN,
+                    TYPE_DOMAIN,
+                    BUCKET_CANDIDATE_FIELD,
+                    owner,
+                    candidate.0,
+                )
+            }));
+        }
+
+        let mut reserved = self.reserved_types.keys().copied().collect::<Vec<_>>();
+        reserved.sort_unstable();
+        interner_references.extend(reserved.into_iter().enumerate().map(|(index, id)| {
+            reference(
+                CONTAINER_DOMAIN,
+                TYPE_DOMAIN,
+                RESERVED_TYPE_FIELD,
+                u32::try_from(index).expect("snapshot reserved index fits u32"),
+                id.0,
+            )
+        }));
+
+        interner_references.extend(well_known_ids(self.well_known).into_iter().enumerate().map(
+            |(slot, id)| {
+                reference(
+                    CONTAINER_DOMAIN,
+                    TYPE_DOMAIN,
+                    WELL_KNOWN_TYPE_FIELD,
+                    u32::try_from(slot).expect("well-known slot fits u32"),
+                    id.0,
+                )
+            },
+        ));
+
+        interner_references.sort_unstable();
+        (store_references, interner_references)
+    }
+
+    fn store_snapshot_reference_records_for_test(&self) -> Vec<SnapshotReferenceRecord> {
+        let store = &self.store;
+        let mut references = Vec::new();
+        for raw_owner in 0..store.len() {
+            let owner = TypeId(u32::try_from(raw_owner).expect("snapshot TypeId fits u32"));
+
+            match store.tag(owner) {
+                TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => {}
+                TypeTag::Object => {
+                    let object = store.object_type(owner).expect("validated object payload");
+                    for property in &object.properties {
+                        push_type_operand(&mut references, owner, property.ty);
+                        if let Some(write_ty) = property.write_ty {
+                            push_type_operand(&mut references, owner, write_ty);
+                        }
+                        if let Some(class) = property.declaring_class {
+                            push_class_identity(
+                                &mut references,
+                                owner,
+                                DECLARING_CLASS_FIELD,
+                                class,
+                            );
+                        }
+                    }
+                    if let Some(index) = object.string_index {
+                        push_type_operand(&mut references, owner, index);
+                    }
+                    if let Some(index) = object.number_index {
+                        push_type_operand(&mut references, owner, index);
+                    }
+                    for &signature in &object.call_signatures {
+                        push_type_operand(&mut references, owner, signature);
+                    }
+                    for &signature in &object.construct_signatures {
+                        push_type_operand(&mut references, owner, signature);
+                    }
+                }
+                TypeTag::Union => {
+                    for &member in store.union_members(owner).expect("validated union payload") {
+                        push_type_operand(&mut references, owner, member);
+                    }
+                }
+                TypeTag::Intersection => {
+                    for &member in store
+                        .intersection_members(owner)
+                        .expect("validated intersection payload")
+                    {
+                        push_type_operand(&mut references, owner, member);
+                    }
+                }
+                TypeTag::Function => {
+                    let function = store
+                        .function_type(owner)
+                        .expect("validated function payload");
+                    for parameter in &function.type_params {
+                        push_type_param_identity(&mut references, owner, parameter.id);
+                        if let Some(constraint) = parameter.constraint {
+                            references.push(reference(
+                                TYPE_DOMAIN,
+                                TYPE_DOMAIN,
+                                CONSTRAINT_FIELD,
+                                owner.0,
+                                constraint.0,
+                            ));
+                        }
+                        if let Some(default) = parameter.default {
+                            references.push(reference(
+                                TYPE_DOMAIN,
+                                TYPE_DOMAIN,
+                                DEFAULT_FIELD,
+                                owner.0,
+                                default.0,
+                            ));
+                        }
+                    }
+                    if let Some(receiver) = function.receiver {
+                        push_type_operand(&mut references, owner, receiver);
+                    }
+                    for parameter in &function.params {
+                        push_type_operand(&mut references, owner, parameter.ty);
+                    }
+                    push_type_operand(&mut references, owner, function.ret);
+                }
+                TypeTag::TypeParam => {
+                    push_type_param_identity(
+                        &mut references,
+                        owner,
+                        store
+                            .type_param(owner)
+                            .expect("validated type parameter payload")
+                            .id,
+                    );
+                }
+                TypeTag::Array => {
+                    push_type_operand(
+                        &mut references,
+                        owner,
+                        store
+                            .array_type(owner)
+                            .expect("validated array payload")
+                            .element,
+                    );
+                }
+                TypeTag::Tuple => {
+                    let tuple = store.tuple_type(owner).expect("validated tuple payload");
+                    for &element in &tuple.elements {
+                        push_type_operand(&mut references, owner, element);
+                    }
+                    if let Some(rest) = tuple.rest {
+                        push_type_operand(&mut references, owner, rest.ty);
+                    }
+                }
+                TypeTag::Readonly => {
+                    push_type_operand(
+                        &mut references,
+                        owner,
+                        store
+                            .readonly_operand(owner)
+                            .expect("validated readonly payload"),
+                    );
+                }
+                TypeTag::Conditional => {
+                    let conditional = store
+                        .conditional_type(owner)
+                        .expect("validated conditional payload");
+                    for target in [
+                        conditional.check,
+                        conditional.extends_ty,
+                        conditional.true_branch,
+                        conditional.false_branch,
+                    ] {
+                        push_type_operand(&mut references, owner, target);
+                    }
+                }
+                TypeTag::Instantiation => {
+                    let instantiation = store
+                        .instantiation_type(owner)
+                        .expect("validated instantiation payload");
+                    push_type_operand(&mut references, owner, instantiation.base);
+                    for &(parameter, argument) in &instantiation.args {
+                        push_type_param_identity(&mut references, owner, parameter);
+                        push_type_operand(&mut references, owner, argument);
+                    }
+                }
+                TypeTag::Mapped => {
+                    let mapped = store.mapped_type(owner).expect("validated mapped payload");
+                    push_type_operand(&mut references, owner, mapped.key_source);
+                    push_type_operand(&mut references, owner, mapped.value_template);
+                    if let Some(source) = mapped.modifiers_source {
+                        push_type_operand(&mut references, owner, source);
+                    }
+                }
+                TypeTag::Template => {
+                    for &hole in &store
+                        .template_type(owner)
+                        .expect("validated template payload")
+                        .holes
+                    {
+                        push_type_operand(&mut references, owner, hole);
+                    }
+                }
+                TypeTag::Keyof => {
+                    push_type_operand(
+                        &mut references,
+                        owner,
+                        store.keyof_operand(owner).expect("validated keyof payload"),
+                    );
+                }
+                TypeTag::ClassInstance => {
+                    let instance = store
+                        .class_instance_type(owner)
+                        .expect("validated class instance payload");
+                    push_class_identity(
+                        &mut references,
+                        owner,
+                        CLASS_IDENTITY_FIELD,
+                        instance.class,
+                    );
+                    for &argument in &instance.args {
+                        push_type_operand(&mut references, owner, argument);
+                    }
+                }
+                TypeTag::DeferredIndexedAccess => {
+                    let access = store
+                        .deferred_indexed_access_type(owner)
+                        .expect("validated deferred indexed access payload");
+                    push_type_operand(&mut references, owner, access.object);
+                    push_type_operand(&mut references, owner, access.index);
+                }
+            }
+        }
+
+        for (index, (parameter, constraint)) in store
+            .snapshot_type_param_constraints_for_test()
+            .into_iter()
+            .enumerate()
+        {
+            let owner = u32::try_from(index).expect("constraint row index fits u32");
+            references.push(reference(
+                CONTAINER_DOMAIN,
+                TYPE_PARAM_DOMAIN,
+                CONSTRAINT_OWNER_FIELD,
+                owner,
+                parameter.0,
+            ));
+            references.push(reference(
+                CONTAINER_DOMAIN,
+                TYPE_DOMAIN,
+                CONSTRAINT_TARGET_FIELD,
+                owner,
+                constraint.0,
+            ));
+        }
+        references.extend(
+            store
+                .snapshot_frozen_type_params_for_test()
+                .into_iter()
+                .enumerate()
+                .map(|(index, parameter)| {
+                    reference(
+                        CONTAINER_DOMAIN,
+                        TYPE_PARAM_DOMAIN,
+                        FROZEN_TYPE_PARAM_FIELD,
+                        u32::try_from(index).expect("frozen parameter index fits u32"),
+                        parameter.0,
+                    )
+                }),
+        );
+        let mut template_names = store
+            .snapshot_template_name_ids_for_test()
+            .collect::<Vec<_>>();
+        template_names.sort_unstable();
+        references.extend(template_names.into_iter().enumerate().map(|(index, id)| {
+            reference(
+                CONTAINER_DOMAIN,
+                TYPE_DOMAIN,
+                TEMPLATE_NAME_TYPE_FIELD,
+                u32::try_from(index).expect("template-name row index fits u32"),
+                id.0,
+            )
+        }));
+
+        references.sort_unstable();
+        references
+    }
+
+    fn write_identity_snapshot_for_test(
         &self,
         writer: &mut SnapshotWriter,
     ) -> Result<(), SnapshotCodecError> {
         writer.u32(VERSION);
-        self.store.write_snapshot_for_test(writer)?;
-
         let mut buckets = self.dedup.iter().collect::<Vec<_>>();
         buckets.sort_by_key(|(hash, _)| **hash);
         writer.usize(buckets.len())?;
@@ -39,7 +417,15 @@ impl Interner {
         writer.usize(reserved.len())?;
         for (id, terminal) in reserved {
             if terminal.state != ReservedTypeState::Frozen {
-                return Err(validation("snapshot cannot expose a pending reserved type"));
+                return Err(SnapshotCodecError::invalid(
+                    0,
+                    format!(
+                        "snapshot cannot expose pending reserved type {} ({:?}, name={:?})",
+                        id.0,
+                        terminal.kind,
+                        self.store.template_name(*id)
+                    ),
+                ));
             }
             writer.u32(id.0);
             writer.u8(reserved_kind_discriminant(terminal.kind));
@@ -49,6 +435,25 @@ impl Interner {
             writer.u32(id.0);
         }
         Ok(())
+    }
+
+    pub(crate) fn write_snapshot_for_test(
+        &self,
+        writer: &mut SnapshotWriter,
+    ) -> Result<(), SnapshotCodecError> {
+        writer.u32(VERSION);
+        self.store.write_snapshot_for_test(writer)?;
+        self.write_identity_snapshot_for_test(writer)
+    }
+
+    pub(crate) fn encode_split_snapshot_sections_for_test(
+        &self,
+    ) -> Result<(Vec<u8>, Vec<u8>), SnapshotCodecError> {
+        let mut store = SnapshotWriter::new();
+        self.store.write_snapshot_for_test(&mut store)?;
+        let mut identity = SnapshotWriter::new();
+        self.write_identity_snapshot_for_test(&mut identity)?;
+        Ok((store.into_bytes(), identity.into_bytes()))
     }
 
     pub(crate) fn read_snapshot_for_test(
@@ -62,6 +467,14 @@ impl Interner {
             ));
         }
         let store = Store::read_snapshot_for_test(reader)?;
+
+        let identity_version_offset = reader.position();
+        if reader.u32()? != VERSION {
+            return Err(SnapshotCodecError::invalid(
+                identity_version_offset,
+                "unsupported interner identity snapshot version",
+            ));
+        }
 
         let bucket_count = reader.collection_len(16)?;
         let mut dedup = FxHashMap::default();
@@ -138,6 +551,107 @@ impl Interner {
             well_known,
         };
         interner.validate_snapshot_for_test()?;
+        Ok(interner)
+    }
+
+    fn read_identity_snapshot_for_test(
+        store: Store,
+        reader: &mut SnapshotReader<'_>,
+    ) -> Result<Self, SnapshotCodecError> {
+        let version_offset = reader.position();
+        if reader.u32()? != VERSION {
+            return Err(SnapshotCodecError::invalid(
+                version_offset,
+                "unsupported interner identity snapshot version",
+            ));
+        }
+
+        let bucket_count = reader.collection_len(16)?;
+        let mut dedup = FxHashMap::default();
+        let mut previous_hash = None;
+        for _ in 0..bucket_count {
+            let hash = reader.u64()?;
+            if previous_hash.is_some_and(|previous| previous >= hash) {
+                return Err(SnapshotCodecError::invalid(
+                    reader.position(),
+                    "dedup buckets are not strictly ordered",
+                ));
+            }
+            let candidate_count = reader.collection_len(4)?;
+            if candidate_count == 0 {
+                return Err(validation("dedup bucket is empty"));
+            }
+            let mut candidates = SmallVec::<[TypeId; 2]>::new();
+            let mut previous_candidate = None;
+            for _ in 0..candidate_count {
+                let candidate = TypeId(reader.u32()?);
+                if previous_candidate.is_some_and(|previous| previous >= candidate) {
+                    return Err(SnapshotCodecError::invalid(
+                        reader.position(),
+                        "dedup candidates are not strictly ordered",
+                    ));
+                }
+                candidates.push(candidate);
+                previous_candidate = Some(candidate);
+            }
+            if dedup.insert(hash, candidates).is_some() {
+                return Err(validation("duplicate dedup bucket"));
+            }
+            previous_hash = Some(hash);
+        }
+
+        let reserved_count = reader.collection_len(5)?;
+        let mut reserved_types = FxHashMap::default();
+        let mut previous_reserved = None;
+        for _ in 0..reserved_count {
+            let id = TypeId(reader.u32()?);
+            if previous_reserved.is_some_and(|previous| previous >= id) {
+                return Err(SnapshotCodecError::invalid(
+                    reader.position(),
+                    "reserved terminals are not strictly ordered",
+                ));
+            }
+            let kind_offset = reader.position();
+            let kind = read_reserved_kind(reader.u8()?, kind_offset)?;
+            if reserved_types
+                .insert(
+                    id,
+                    ReservedType {
+                        kind,
+                        state: ReservedTypeState::Frozen,
+                    },
+                )
+                .is_some()
+            {
+                return Err(validation("duplicate reserved terminal"));
+            }
+            previous_reserved = Some(id);
+        }
+
+        let mut ids = [TypeId(0); WELL_KNOWN_COUNT];
+        for id in &mut ids {
+            *id = TypeId(reader.u32()?);
+        }
+        let interner = Interner {
+            store,
+            dedup,
+            reserved_types,
+            well_known: well_known_from_ids(ids),
+        };
+        interner.validate_snapshot_for_test()?;
+        Ok(interner)
+    }
+
+    pub(crate) fn decode_split_snapshot_sections_for_test(
+        store_bytes: &[u8],
+        identity_bytes: &[u8],
+    ) -> Result<Self, SnapshotCodecError> {
+        let mut store_reader = SnapshotReader::new(store_bytes);
+        let store = Store::read_snapshot_for_test(&mut store_reader)?;
+        store_reader.finish()?;
+        let mut identity_reader = SnapshotReader::new(identity_bytes);
+        let interner = Self::read_identity_snapshot_for_test(store, &mut identity_reader)?;
+        identity_reader.finish()?;
         Ok(interner)
     }
 
@@ -622,11 +1136,34 @@ fn deferred_access(
 mod tests {
     use super::*;
     use crate::types::repr::{
-        ConditionalType, FunctionType, MappedType, ModifierOp, ObjectType, ParameterType,
-        PropertyType, TemplateType, TupleRestType, TupleType,
+        ClassId, ConditionalType, FunctionType, GenericTypeParam, MappedType, ModifierOp,
+        ObjectType, ParameterType, PropertyType, TemplateType, TupleRestType, TupleType,
+        Visibility,
     };
 
-    fn rich_interner() -> Interner {
+    struct RichFixture {
+        interner: Interner,
+        literal: TypeId,
+        parameter_id: TypeParamId,
+        parameter: TypeId,
+        array: TypeId,
+        readonly: TypeId,
+        tuple: TypeId,
+        function: TypeId,
+        object: TypeId,
+        conditional: TypeId,
+        instantiation: TypeId,
+        mapped_value: TypeId,
+        mapped: TypeId,
+        template: TypeId,
+        union: TypeId,
+        intersection: TypeId,
+        keyof: TypeId,
+        class_instance: TypeId,
+        indexed: TypeId,
+    }
+
+    fn rich_fixture() -> RichFixture {
         let mut interner = Interner::with_intrinsics();
         let wk = interner.well_known();
         let literal = interner.intern_literal(LiteralValue::String("snapshot".to_owned()));
@@ -639,26 +1176,40 @@ mod tests {
             .freeze_type_param_metadata(&[parameter_id])
             .expect("fresh parameter freezes");
         let array = interner.intern_array(parameter);
-        let _readonly = interner.intern_readonly(array);
+        let readonly = interner.intern_readonly(array);
         let tuple = interner.intern_tuple_type(TupleType::with_rest(
             vec![literal],
             TupleRestType::new(1, array),
         ));
         let function = interner.intern_function(FunctionType {
-            type_params: Vec::new(),
-            receiver: None,
+            type_params: vec![GenericTypeParam {
+                id: parameter_id,
+                constraint: Some(wk.string),
+                default: Some(literal),
+            }],
+            receiver: Some(parameter),
             params: vec![ParameterType::required("value", tuple)],
             ret: wk.boolean,
         });
         let object = interner.reserve_object();
+        let class_property = PropertyType {
+            name: "classy".to_owned(),
+            ty: literal,
+            write_ty: Some(wk.string),
+            optional: false,
+            visibility: Visibility::Protected,
+            declaring_class: Some(ClassId(12)),
+            readonly: true,
+            is_accessor: true,
+        };
         interner.fill_object(
             object,
             ObjectType {
-                properties: vec![PropertyType::public("next", object)],
+                properties: vec![class_property, PropertyType::public("next", object)],
                 string_index: Some(literal),
-                number_index: None,
+                number_index: Some(wk.number),
                 call_signatures: vec![function],
-                construct_signatures: Vec::new(),
+                construct_signatures: vec![function],
             },
         );
         let conditional = interner.reserve_conditional();
@@ -675,7 +1226,7 @@ mod tests {
             },
         );
         interner.set_template_name(conditional, "SnapshotConditional");
-        let _instantiation =
+        let instantiation =
             interner.intern_instantiation(conditional, vec![(parameter_id, literal)]);
         let _infer = interner.intern_infer(0);
         let mapped_value = interner.intern_mapped_value();
@@ -692,17 +1243,250 @@ mod tests {
             },
         );
         interner.set_template_name(mapped, "SnapshotMapped");
-        let _template = interner.intern_template(TemplateType {
+        let template = interner.intern_template(TemplateType {
             texts: vec!["before".to_owned(), "after".to_owned()],
             holes: vec![literal],
         });
-        let _union = interner.union(vec![literal, wk.string]);
-        let _intersection = interner.intersection(vec![object, mapped]);
-        let _keyof = interner.intern_keyof(parameter);
-        let class_instance =
-            interner.intern_class_instance(crate::types::repr::ClassId(11), vec![literal]);
-        let _indexed = interner.intern_deferred_indexed_access(class_instance, parameter);
-        interner
+        let union = interner.union(vec![literal, wk.string]);
+        let intersection = interner.intersection(vec![object, mapped]);
+        let keyof = interner.intern_keyof(parameter);
+        let class_instance = interner.intern_class_instance(ClassId(11), vec![literal]);
+        let indexed = interner.intern_deferred_indexed_access(class_instance, parameter);
+        RichFixture {
+            interner,
+            literal,
+            parameter_id,
+            parameter,
+            array,
+            readonly,
+            tuple,
+            function,
+            object,
+            conditional,
+            instantiation,
+            mapped_value,
+            mapped,
+            template,
+            union,
+            intersection,
+            keyof,
+            class_instance,
+            indexed,
+        }
+    }
+
+    fn rich_interner() -> Interner {
+        rich_fixture().interner
+    }
+
+    #[test]
+    fn reference_manifest_exactly_enumerates_rich_type_universe() {
+        let fixture = rich_fixture();
+        let wk = fixture.interner.well_known();
+        let (store_references, interner_references) =
+            fixture.interner.snapshot_reference_records_for_test();
+
+        let type_ref = |owner: TypeId, target: TypeId| {
+            reference(
+                TYPE_DOMAIN,
+                TYPE_DOMAIN,
+                TYPE_OPERAND_FIELD,
+                owner.0,
+                target.0,
+            )
+        };
+        let parameter_ref = |owner: TypeId, target: TypeParamId| {
+            reference(
+                TYPE_DOMAIN,
+                TYPE_PARAM_DOMAIN,
+                TYPE_PARAM_IDENTITY_FIELD,
+                owner.0,
+                target.0,
+            )
+        };
+        let mut expected_store = vec![
+            parameter_ref(fixture.parameter, fixture.parameter_id),
+            type_ref(fixture.array, fixture.parameter),
+            type_ref(fixture.readonly, fixture.array),
+            type_ref(fixture.tuple, fixture.literal),
+            type_ref(fixture.tuple, fixture.array),
+            parameter_ref(fixture.function, fixture.parameter_id),
+            reference(
+                TYPE_DOMAIN,
+                TYPE_DOMAIN,
+                CONSTRAINT_FIELD,
+                fixture.function.0,
+                wk.string.0,
+            ),
+            reference(
+                TYPE_DOMAIN,
+                TYPE_DOMAIN,
+                DEFAULT_FIELD,
+                fixture.function.0,
+                fixture.literal.0,
+            ),
+            type_ref(fixture.function, fixture.parameter),
+            type_ref(fixture.function, fixture.tuple),
+            type_ref(fixture.function, wk.boolean),
+            type_ref(fixture.object, fixture.literal),
+            type_ref(fixture.object, wk.string),
+            reference(
+                TYPE_DOMAIN,
+                CLASS_DOMAIN,
+                DECLARING_CLASS_FIELD,
+                fixture.object.0,
+                12,
+            ),
+            type_ref(fixture.object, fixture.object),
+            type_ref(fixture.object, fixture.literal),
+            type_ref(fixture.object, wk.number),
+            type_ref(fixture.object, fixture.function),
+            type_ref(fixture.object, fixture.function),
+            type_ref(fixture.conditional, fixture.parameter),
+            type_ref(fixture.conditional, wk.string),
+            type_ref(fixture.conditional, fixture.object),
+            type_ref(fixture.conditional, wk.never),
+            type_ref(fixture.instantiation, fixture.conditional),
+            parameter_ref(fixture.instantiation, fixture.parameter_id),
+            type_ref(fixture.instantiation, fixture.literal),
+            type_ref(fixture.mapped, wk.string),
+            type_ref(fixture.mapped, fixture.mapped_value),
+            type_ref(fixture.mapped, fixture.object),
+            type_ref(fixture.template, fixture.literal),
+            type_ref(fixture.union, fixture.literal),
+            type_ref(fixture.union, wk.string),
+            type_ref(fixture.intersection, fixture.object),
+            type_ref(fixture.intersection, fixture.mapped),
+            type_ref(fixture.keyof, fixture.parameter),
+            reference(
+                TYPE_DOMAIN,
+                CLASS_DOMAIN,
+                CLASS_IDENTITY_FIELD,
+                fixture.class_instance.0,
+                11,
+            ),
+            type_ref(fixture.class_instance, fixture.literal),
+            type_ref(fixture.indexed, fixture.class_instance),
+            type_ref(fixture.indexed, fixture.parameter),
+            reference(
+                CONTAINER_DOMAIN,
+                TYPE_PARAM_DOMAIN,
+                CONSTRAINT_OWNER_FIELD,
+                0,
+                fixture.parameter_id.0,
+            ),
+            reference(
+                CONTAINER_DOMAIN,
+                TYPE_DOMAIN,
+                CONSTRAINT_TARGET_FIELD,
+                0,
+                wk.string.0,
+            ),
+            reference(
+                CONTAINER_DOMAIN,
+                TYPE_PARAM_DOMAIN,
+                FROZEN_TYPE_PARAM_FIELD,
+                0,
+                fixture.parameter_id.0,
+            ),
+            reference(
+                CONTAINER_DOMAIN,
+                TYPE_DOMAIN,
+                TEMPLATE_NAME_TYPE_FIELD,
+                0,
+                fixture.conditional.0,
+            ),
+            reference(
+                CONTAINER_DOMAIN,
+                TYPE_DOMAIN,
+                TEMPLATE_NAME_TYPE_FIELD,
+                1,
+                fixture.mapped.0,
+            ),
+        ];
+        expected_store.sort_unstable();
+        assert_eq!(store_references, expected_store);
+
+        let mut expected_interner = Vec::new();
+        let mut buckets = fixture.interner.dedup.iter().collect::<Vec<_>>();
+        buckets.sort_unstable_by_key(|(hash, _)| **hash);
+        for (index, (_, candidates)) in buckets.into_iter().enumerate() {
+            let mut candidates = candidates.iter().copied().collect::<Vec<_>>();
+            candidates.sort_unstable();
+            expected_interner.extend(candidates.into_iter().map(|candidate| {
+                reference(
+                    INTERNER_BUCKET_DOMAIN,
+                    TYPE_DOMAIN,
+                    BUCKET_CANDIDATE_FIELD,
+                    u32::try_from(index).expect("bucket index fits u32"),
+                    candidate.0,
+                )
+            }));
+        }
+        for (index, id) in [fixture.object, fixture.conditional, fixture.mapped]
+            .into_iter()
+            .enumerate()
+        {
+            expected_interner.push(reference(
+                CONTAINER_DOMAIN,
+                TYPE_DOMAIN,
+                RESERVED_TYPE_FIELD,
+                u32::try_from(index).expect("reserved index fits u32"),
+                id.0,
+            ));
+        }
+        expected_interner.extend(
+            well_known_ids(wk)
+                .into_iter()
+                .enumerate()
+                .map(|(slot, id)| {
+                    reference(
+                        CONTAINER_DOMAIN,
+                        TYPE_DOMAIN,
+                        WELL_KNOWN_TYPE_FIELD,
+                        u32::try_from(slot).expect("well-known slot fits u32"),
+                        id.0,
+                    )
+                }),
+        );
+        expected_interner.sort_unstable();
+        assert_eq!(interner_references, expected_interner);
+    }
+
+    #[test]
+    fn reference_manifest_is_canonical_and_tracks_append_only_mutation() {
+        let mut interner = rich_interner();
+        let before = interner.snapshot_reference_records_for_test();
+        assert!(before.0.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(before.1.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert_eq!(interner.snapshot_reference_records_for_test(), before);
+
+        let wk = interner.well_known();
+        let new_array = interner.intern_array(wk.string);
+        let after = interner.snapshot_reference_records_for_test();
+        let added_store_reference = reference(
+            TYPE_DOMAIN,
+            TYPE_DOMAIN,
+            TYPE_OPERAND_FIELD,
+            new_array.0,
+            wk.string.0,
+        );
+        let mut expected_store = before.0;
+        expected_store.push(added_store_reference);
+        expected_store.sort_unstable();
+        assert_eq!(after.0, expected_store);
+        assert!(after.1.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(after.1.iter().any(|record| {
+            record.0 == INTERNER_BUCKET_DOMAIN
+                && record.1 == TYPE_DOMAIN
+                && record.2 == BUCKET_CANDIDATE_FIELD
+                && record.4 == new_array.0
+        }));
+        assert!(after
+            .0
+            .iter()
+            .chain(&after.1)
+            .all(|record| record.0 <= 31 && record.1 <= 31 && record.2 <= 31));
     }
 
     #[test]
@@ -723,6 +1507,29 @@ mod tests {
         let prior = decoded.store().len();
         let fresh = decoded.intern_literal(LiteralValue::String("suffix".to_owned()));
         assert_eq!(fresh.index(), prior);
+    }
+
+    #[test]
+    fn split_type_snapshot_roundtrips_and_rejects_cross_section_corruption() {
+        let interner = rich_interner();
+        let (store, identity) = interner
+            .encode_split_snapshot_sections_for_test()
+            .expect("split type universe encodes");
+        let decoded = Interner::decode_split_snapshot_sections_for_test(&store, &identity)
+            .expect("split type universe decodes");
+        assert_eq!(
+            decoded
+                .encode_split_snapshot_sections_for_test()
+                .expect("decoded split universe re-encodes"),
+            (store.clone(), identity.clone())
+        );
+
+        let mut bad_store = store.clone();
+        bad_store[0] ^= 0xff;
+        assert!(Interner::decode_split_snapshot_sections_for_test(&bad_store, &identity).is_err());
+        let mut bad_identity = identity;
+        bad_identity[0] ^= 0xff;
+        assert!(Interner::decode_split_snapshot_sections_for_test(&store, &bad_identity).is_err());
     }
 
     #[test]
