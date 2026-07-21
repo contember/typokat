@@ -65,6 +65,12 @@ pub(crate) mod wu0b_library;
 #[cfg(test)]
 pub(crate) mod wu0b_profile;
 #[cfg(test)]
+mod wu0b_snapshot;
+#[cfg(test)]
+mod wu0b_snapshot_runtime;
+#[cfg(test)]
+mod wu0b_snapshot_spec;
+#[cfg(test)]
 mod wu0d_candidate_release;
 #[cfg(test)]
 mod wu0d_candidate_release_spec;
