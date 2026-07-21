@@ -1,5 +1,6 @@
-// B41 regression — named tuple labels are supported, while the pre-existing
-// backlog-75 TK2345 false positive remains exactly once per call (never duplicated).
+// B41 regression — named tuple labels are supported. Empty callbacks do not
+// observe their payload and are tsc-clean; the stronger selected-payload backlog-75
+// witness remains in sr_deferred_ledger/b75_generic_indexed_access.ts.
 
 interface Events {
   text: [text: string];
@@ -12,5 +13,5 @@ declare class Client {
 
 declare const client: Client;
 
-client.on("text", value => {}); // error[TK2345]
-client.on("count", value => {}); // error[TK2345]
+client.on("text", value => {});
+client.on("count", value => {});

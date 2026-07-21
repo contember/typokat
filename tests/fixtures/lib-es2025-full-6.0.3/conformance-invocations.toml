@@ -1,10 +1,10 @@
 schema = 1
 status = "UNAPPROVED"
 source_path = "tests/conformance.rs"
-source_sha256 = "98f22a6f473222097b0977c213901d7d23aa6924051cc865049a88106affa28d"
-invocation_count = 304
-source_count = 335
-manifest_sha256 = "d65132cec33d8fcc2239524e4ee9605c33e2649fd51cbd5f279f072d01231bbf"
+source_sha256 = "cd9713a44e2e219086b60cd0f0648a678c9883df3c27be5e838c8ccfa83e6b21"
+invocation_count = 305
+source_count = 336
+manifest_sha256 = "6e72420f1a1481ca9e7313097ee22f029c3788678f4f1fd7cd249cc26bbb3432"
 
 [[invocation]]
 id = "tests/cases/m0_assign_primitives/intrinsics.ts"
@@ -714,7 +714,7 @@ source = ["tests/cases/b41_generic_methods/constraints_and_overloads.ts\t649058b
 [[invocation]]
 id = "tests/cases/b41_generic_methods/contextual_callback_multiplicity.ts"
 kind = "single"
-source = ["tests/cases/b41_generic_methods/contextual_callback_multiplicity.ts\t8125f6434cac64529982ae71f56704eae74b5964edd67f19fa38a18ad40ee19b"]
+source = ["tests/cases/b41_generic_methods/contextual_callback_multiplicity.ts\t5e347c58d72930fc05ff702e552e8dfe2027faed25a7e15b9172308a821b6be8"]
 
 [[invocation]]
 id = "tests/cases/b41_generic_methods/declaration_defaults.ts"
@@ -840,6 +840,11 @@ source = ["tests/cases/b29_alias_cycles/alias_cycles.ts\t6a963660b2c4d68a063f0b0
 id = "tests/cases/b30_negative_literals/negative_literals.ts"
 kind = "single"
 source = ["tests/cases/b30_negative_literals/negative_literals.ts\te54f166642ce26ba36a2d2f8443fed8ce469e4884aee93d49656bcd4ef59fc3b"]
+
+[[invocation]]
+id = "tests/cases/b32_eager_keyof_forward/forward_keyof.ts"
+kind = "single"
+source = ["tests/cases/b32_eager_keyof_forward/forward_keyof.ts\t0b9d1a111db99c81d5d6880529c8c035a8114fd1733514b04cb58f8776cd2c72"]
 
 [[invocation]]
 id = "tests/cases/b30_numeric_stringify/construction.ts"
