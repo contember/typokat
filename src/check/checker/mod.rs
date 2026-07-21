@@ -652,6 +652,61 @@ where
         &namespace_values::NamespaceValueRegistry,
     ),
 {
+    check_bound_user_program_inner(
+        interner,
+        binder,
+        program,
+        base,
+        inspect,
+        |_, _, _, _, _, _| {},
+    )
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn check_bound_user_program_with_final_identity_inspector<
+    'ast,
+    F,
+    G,
+>(
+    interner: &mut Interner,
+    binder: Binder,
+    program: &'ast Program<'ast>,
+    base: BoundUserBase,
+    inspect: F,
+    inspect_final: G,
+) -> CheckResult
+where
+    F: FnOnce(
+        &Binder,
+        &type_groups::PublishedTypeEnvironment,
+        &Interner,
+        &DeclTypes,
+        &namespace_values::NamespaceValueRegistry,
+    ),
+    G: FnOnce(&Binder, &type_groups::PublishedTypeEnvironment, &Interner, &DeclTypes, u32, u32),
+{
+    FINAL_IDENTITY_INSPECTOR_CALLS.with(|calls| calls.set(calls.get() + 1));
+    check_bound_user_program_inner(interner, binder, program, base, inspect, inspect_final)
+}
+
+fn check_bound_user_program_inner<'ast, F, G>(
+    interner: &mut Interner,
+    binder: Binder,
+    program: &'ast Program<'ast>,
+    base: BoundUserBase,
+    inspect: F,
+    inspect_final: G,
+) -> CheckResult
+where
+    F: FnOnce(
+        &Binder,
+        &type_groups::PublishedTypeEnvironment,
+        &Interner,
+        &DeclTypes,
+        &namespace_values::NamespaceValueRegistry,
+    ),
+    G: FnOnce(&Binder, &type_groups::PublishedTypeEnvironment, &Interner, &DeclTypes, u32, u32),
+{
     #[cfg(test)]
     BOUND_USER_CHECK_CALLS.with(|calls| calls.set(calls.get() + 1));
     let module_ordinal = ModuleOrdinal::new(0);
@@ -770,6 +825,14 @@ where
 
     let mut records = finish_event_effects(&mut pass, UserReportingAdapter { event_store });
     let (diagnostics, incomplete) = records.remove(&module_ordinal).unwrap_or_default();
+    inspect_final(
+        &binder,
+        pass.type_environment.published(),
+        pass.interner,
+        &pass.decl_types,
+        pass.next_type_param,
+        next_class_id,
+    );
 
     CheckResult {
         module_ordinal,
@@ -782,11 +845,17 @@ where
 #[cfg(test)]
 thread_local! {
     static BOUND_USER_CHECK_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static FINAL_IDENTITY_INSPECTOR_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
 pub(in crate::check::checker) fn bound_user_check_calls_for_test() -> u64 {
     BOUND_USER_CHECK_CALLS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn final_identity_inspector_calls_for_test() -> u64 {
+    FINAL_IDENTITY_INSPECTOR_CALLS.with(std::cell::Cell::get)
 }
 
 /// One parsed project unit handed to the serial M29 project checker.

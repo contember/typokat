@@ -24,11 +24,12 @@ use super::type_groups::{
     PublishedTypeGroupTerminal, PublishedTypeParameterDefault, TypeGroupUnavailableCause,
 };
 use super::{
-    build_pass_with_tickets, check_bound_user_program, finish_semantic_effects, reserve_type_decls,
-    BoundUserBase, FrozenCheckerRuntimeMetadata, PassReporting, PassReportingPlan,
+    build_pass_with_tickets, check_bound_user_program_with_final_identity_inspector,
+    finish_semantic_effects, reserve_type_decls, BoundUserBase, FrozenCheckerRuntimeMetadata,
+    PassReporting, PassReportingPlan,
 };
 use crate::binder::bind::ProjectBinderBuilder;
-use crate::binder::declaration::{TypeGroupId, ValueStorageId};
+use crate::binder::declaration::{TypeFragmentKind, TypeGroupId, ValueStorageId};
 use crate::binder::namespace::{
     exact_key, CompilationUnit, ExactKey, ExportContextKind, ExportSyntaxDisposition,
     MergeDeclarationKind, ModuleBindingContext, SourceFileKind,
@@ -578,6 +579,33 @@ pub(crate) struct OwnedBaseUserRun {
     pub(crate) result: super::CheckResult,
     pub(crate) timings: OwnedBaseUserTimings,
     pub(crate) witness: OwnedBaseContinuationWitness,
+    pub(crate) final_identity: OwnedBaseFinalIdentityWitness,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OwnedBaseFinalIdentityWitness {
+    pub(crate) ends: OwnedBaseFinalIdentityEnds,
+    pub(crate) named_alias_types: BTreeMap<String, TypeId>,
+    pub(crate) reused_base_shape: Option<OwnedBaseReusedShapeWitness>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OwnedBaseFinalIdentityEnds {
+    pub(crate) store: usize,
+    pub(crate) type_params: usize,
+    pub(crate) classes: usize,
+    pub(crate) scopes: usize,
+    pub(crate) symbols: usize,
+    pub(crate) declarations: usize,
+    pub(crate) type_groups: usize,
+    pub(crate) namespaces: usize,
+    pub(crate) value_storages: usize,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OwnedBaseReusedShapeWitness {
+    pub(crate) type_id: TypeId,
+    pub(crate) tag: TypeTag,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -602,6 +630,108 @@ fn store_prefix_digest(store: &Store, len: usize) -> Result<String, String> {
         encode_store_row(&mut bytes, store, id).map_err(|error| format!("{error:?}"))?;
     }
     Ok(format!("{:x}", Sha256::digest(bytes.finish())))
+}
+
+struct FinalIdentityInspection<'a> {
+    base_store_len: usize,
+    base_value_storage_len: usize,
+    binder: &'a Binder,
+    published: &'a PublishedTypeEnvironment,
+    interner: &'a Interner,
+    decl_types: &'a DeclTypes,
+    next_type_param: u32,
+    next_class_id: u32,
+}
+
+fn final_identity_witness(inputs: FinalIdentityInspection<'_>) -> OwnedBaseFinalIdentityWitness {
+    let FinalIdentityInspection {
+        base_store_len,
+        base_value_storage_len,
+        binder,
+        published,
+        interner,
+        decl_types,
+        next_type_param,
+        next_class_id,
+    } = inputs;
+    let named_alias_types = binder
+        .graph
+        .get(binder.module)
+        .into_iter()
+        .flat_map(|scope| scope.symbols.iter())
+        .filter_map(|(name, symbol)| {
+            let group = binder.symbols.get(*symbol)?.ty?;
+            let declaration = binder.type_groups.get(group)?;
+            declaration
+                .fragments
+                .iter()
+                .any(|fragment| {
+                    fragment.kind == TypeFragmentKind::TypeAlias
+                        && fragment.site.module == binder.module
+                })
+                .then_some(())?;
+            let terminal = published.groups().get(group)?;
+            let PublishedTypeGroupTerminal::Ready(ready) = terminal else {
+                return None;
+            };
+            let PublishedTypeGroupSurface::Template(ty) = ready.surface else {
+                return None;
+            };
+            Some((name.clone(), ty))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let eligible_base_shape = |ty: TypeId| {
+        (ty.index() < base_store_len)
+            .then(|| interner.store().tag(ty))
+            .filter(|tag| {
+                matches!(
+                    tag,
+                    TypeTag::Object | TypeTag::ClassInstance | TypeTag::Function
+                )
+            })
+            .map(|tag| OwnedBaseReusedShapeWitness { type_id: ty, tag })
+    };
+    let direct_user_shape = named_alias_types
+        .values()
+        .copied()
+        .chain(
+            (base_value_storage_len..decl_types.len())
+                .map(|index| ValueStorageId(u32::try_from(index).expect("storage id fits u32")))
+                .filter_map(|storage| decl_types.get(storage)),
+        )
+        .find_map(eligible_base_shape);
+    let reused_base_shape = direct_user_shape.or_else(|| {
+        const TYPE_DOMAIN: u8 = 1;
+        interner
+            .snapshot_reference_records_for_test()
+            .0
+            .into_iter()
+            .find_map(|(owner_domain, target_domain, _, owner, target)| {
+                (owner_domain == TYPE_DOMAIN
+                    && target_domain == TYPE_DOMAIN
+                    && usize::try_from(owner).ok()? >= base_store_len
+                    && usize::try_from(target).ok()? < base_store_len)
+                    .then_some(TypeId(target))
+                    .and_then(eligible_base_shape)
+            })
+    });
+
+    OwnedBaseFinalIdentityWitness {
+        ends: OwnedBaseFinalIdentityEnds {
+            store: interner.store().len(),
+            type_params: usize::try_from(next_type_param).expect("type parameter end fits usize"),
+            classes: usize::try_from(next_class_id).expect("class end fits usize"),
+            scopes: binder.graph.snapshot_len(),
+            symbols: binder.symbols.snapshot_symbols().len(),
+            declarations: binder.declarations.len(),
+            type_groups: binder.type_groups.len(),
+            namespaces: binder.namespaces.len(),
+            value_storages: decl_types.len(),
+        },
+        named_alias_types,
+        reused_base_shape,
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -2193,7 +2323,8 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
     let bind = bind_started.elapsed();
 
     let check_started = Instant::now();
-    let result = check_bound_user_program(
+    let final_identity = std::cell::RefCell::new(None);
+    let result = check_bound_user_program_with_final_identity_inspector(
         &mut interner,
         binder,
         &parsed.program,
@@ -2207,9 +2338,25 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
             runtime,
         },
         |_, _, _, _, _| {},
+        |binder, published, interner, decl_types, final_next_type_param, final_next_class_id| {
+            final_identity.replace(Some(final_identity_witness(FinalIdentityInspection {
+                base_store_len,
+                base_value_storage_len: usize::try_from(base_decl_count)
+                    .expect("base storage end fits usize"),
+                binder,
+                published,
+                interner,
+                decl_types,
+                next_type_param: final_next_type_param,
+                next_class_id: final_next_class_id,
+            })));
+        },
     );
     let check = check_started.elapsed();
-    let final_store_len = interner.store().len();
+    let final_identity = final_identity
+        .into_inner()
+        .expect("owned-base route captures final identities after effects");
+    let final_store_len = final_identity.ends.store;
     let store_prefix_stable = base_store_digest
         .map(|base_store_digest| {
             store_prefix_digest(interner.store(), base_store_len)
@@ -2219,6 +2366,7 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
     Ok(OwnedBaseUserRun {
         result,
         timings: OwnedBaseUserTimings { parse, bind, check },
+        final_identity,
         witness: OwnedBaseContinuationWitness {
             base_store_len,
             final_store_len,
@@ -3907,6 +4055,109 @@ mod tests {
         const aliasAnswer: number = RuntimeAlias.answer;
         increment.notAFunctionMember;
     "#;
+
+    fn owned_state_identity_ends(state: &OwnedLibraryRuntimeState) -> OwnedBaseFinalIdentityEnds {
+        OwnedBaseFinalIdentityEnds {
+            store: state.interner.store().len(),
+            type_params: usize::try_from(state.next_type_param)
+                .expect("base type parameter end fits usize"),
+            classes: usize::try_from(state.next_class_id).expect("base class end fits usize"),
+            scopes: state.binder.graph.snapshot_len(),
+            symbols: state.binder.symbols.snapshot_symbols().len(),
+            declarations: state.binder.declarations.len(),
+            type_groups: state.binder.type_groups.len(),
+            namespaces: state.binder.namespaces.len(),
+            value_storages: state.decl_types.len(),
+        }
+    }
+
+    #[test]
+    fn owned_base_final_identity_witness_uses_real_aliases_dense_suffixes_and_base_shapes() {
+        let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "owned-final-identities.d.ts",
+            source: OWNED_MINI_LIBRARY,
+        }])
+        .expect("owned final-identity library compiles");
+        let base = owned_state_identity_ends(&state);
+        let run = check_caller_certified_collision_free_source_with_owned_library(
+            state,
+            r#"
+                export type FirstLibraryAlias = LibraryBase<string>;
+                export type SecondLibraryAlias = LibraryBase<string>;
+                export declare namespace HonestLocalSpace {
+                    export interface HonestLocalInterface<T> { value: T; }
+                    export class HonestLocalClass<U> {
+                        value: U;
+                    }
+                    export const localValue: HonestLocalClass<number>;
+                }
+                export const honestReusedFunction = increment;
+            "#,
+        )
+        .expect("owned base captures final identity state");
+        assert!(
+            run.result.diagnostics.is_empty(),
+            "{:?}",
+            run.result.diagnostics
+        );
+        assert!(
+            run.result.incomplete.is_empty(),
+            "{:?}",
+            run.result.incomplete
+        );
+
+        let aliases = &run.final_identity.named_alias_types;
+        assert_eq!(
+            aliases.get("FirstLibraryAlias"),
+            aliases.get("SecondLibraryAlias")
+        );
+        assert!(aliases.get("FirstLibraryAlias").is_some());
+        for (base_end, final_end) in [
+            (base.store, run.final_identity.ends.store),
+            (base.type_params, run.final_identity.ends.type_params),
+            (base.classes, run.final_identity.ends.classes),
+            (base.scopes, run.final_identity.ends.scopes),
+            (base.symbols, run.final_identity.ends.symbols),
+            (base.declarations, run.final_identity.ends.declarations),
+            (base.type_groups, run.final_identity.ends.type_groups),
+            (base.namespaces, run.final_identity.ends.namespaces),
+            (base.value_storages, run.final_identity.ends.value_storages),
+        ] {
+            assert!(final_end > base_end, "{base_end}..{final_end}");
+        }
+        let reused = run
+            .final_identity
+            .reused_base_shape
+            .expect("user lowering reuses a non-intrinsic base shape");
+        assert!(reused.type_id.index() < base.store);
+        assert!(matches!(
+            reused.tag,
+            TypeTag::Object | TypeTag::ClassInstance | TypeTag::Function
+        ));
+    }
+
+    #[test]
+    fn production_check_program_does_not_enter_final_identity_inspection_route() {
+        let allocator = Allocator::default();
+        let parsed = Parser::new(
+            &allocator,
+            "type ProductionAlias = { value: number }; const value: ProductionAlias = { value: 1 };",
+            SourceType::ts(),
+        )
+        .parse();
+        assert!(!parsed.panicked);
+        assert!(parsed.diagnostics.is_empty());
+        let inspections_before = super::super::final_identity_inspector_calls_for_test();
+        let mut interner = Interner::with_intrinsics();
+        let result = super::super::check_program(&mut interner, &parsed.program);
+        assert!(result.diagnostics.is_empty());
+        assert!(result.incomplete.is_empty());
+        assert_eq!(
+            super::super::final_identity_inspector_calls_for_test(),
+            inspections_before
+        );
+    }
 
     #[test]
     fn owned_library_state_checks_caller_certified_collision_free_suffix_without_prefix_rebinding()
