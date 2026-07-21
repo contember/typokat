@@ -7,6 +7,7 @@ use super::events_library::{
 };
 use super::lexical_events::LexicalReservations;
 use super::lexical_events_library::{library_unit, ExactUnit};
+use super::library_identities::LibrarySemanticIdentities;
 #[cfg(test)]
 use super::library_reporting::LibraryReportingFamily;
 use super::library_reporting::{LibraryReportingConsumer, LibraryReportingReceipt};
@@ -270,9 +271,14 @@ pub(crate) struct InjectedProfileRun {
     global_types: BTreeMap<String, TypeProbe>,
     module_types: BTreeMap<(LibraryFileOrdinal, String), TypeProbe>,
     global_values: BTreeMap<String, ValueProbe>,
+    semantic_identities: LibrarySemanticIdentities,
 }
 
 impl InjectedProfileRun {
+    pub(crate) fn semantic_identities(&self) -> &LibrarySemanticIdentities {
+        &self.semantic_identities
+    }
+
     pub(crate) fn global_type_probe(&self, name: &str) -> Option<&TypeProbe> {
         self.global_types.get(name)
     }
@@ -1403,6 +1409,11 @@ pub(crate) fn run_injected_profile(
         pass.check_statements(semantic_scope, &parsed.program.body);
     }
     let batches = finish_semantic_effects(&mut pass);
+    let semantic_identities = LibrarySemanticIdentities::select(
+        &binder,
+        pass.type_environment.published(),
+        pass.interner.store(),
+    );
     let (global_types, module_types) = collect_type_probes(
         &binder,
         pass.type_environment.published(),
@@ -1481,6 +1492,7 @@ pub(crate) fn run_injected_profile(
         global_types,
         module_types,
         global_values,
+        semantic_identities,
     })
 }
 
@@ -1972,6 +1984,80 @@ mod tests {
         assert_owned_terminal::<InjectedProfileRun>();
         assert_owned_terminal::<InjectedProfileError>();
         assert_owned_terminal::<LibraryPhaseTimings>();
+    }
+
+    #[test]
+    fn focused_profile_selects_complete_native_bridge_identities() {
+        let run = run_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "native-bridges.d.ts",
+            source: r#"
+                interface Array<T> { mapResult: T; }
+                interface ReadonlyArray<T> { mapResult: T; }
+                interface String { toUpperCaseResult: string; }
+                interface Number { toFixedResult: string; }
+                interface Boolean { valueOfResult: boolean; }
+                interface RegExp { testResult: boolean; }
+                interface Object { toStringResult: string; }
+                interface Function { legacyCallResult: string; }
+                interface CallableFunction extends Function { callResult: number; }
+            "#,
+        }])
+        .expect("focused source-compiled library profile");
+        let identities = run.semantic_identities();
+        assert!(identities.all_ready());
+        assert_eq!(
+            identities.callable_function_group(),
+            run.global_type_probe("CallableFunction")
+                .map(|probe| probe.identity)
+        );
+        assert_ne!(
+            identities.callable_function_group(),
+            run.global_type_probe("Function")
+                .map(|probe| probe.identity)
+        );
+        let expected_arities = [1, 1, 0, 0, 0, 0, 0, 0];
+        for (terminal, expected_arity) in identities.terminals().into_iter().zip(expected_arities) {
+            let super::super::library_identities::LibraryIdentityTerminal::Ready(identity) =
+                terminal
+            else {
+                panic!("focused native bridge identity must be ready")
+            };
+            assert_eq!(identity.parameters.len(), expected_arity);
+        }
+    }
+
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "full-profile semantic selection is release-only"
+    )]
+    fn exact_profile_selects_complete_native_bridge_identities() {
+        let profile = load_strict_profile().expect("strict full-library profile");
+        let run = run_injected_profile(&profile.injected_sources())
+            .expect("source-compiled full-library profile");
+        let identities = run.semantic_identities();
+        assert!(identities.all_ready());
+        assert_eq!(
+            identities.callable_function_group(),
+            run.global_type_probe("CallableFunction")
+                .map(|probe| probe.identity)
+        );
+        assert_ne!(
+            identities.callable_function_group(),
+            run.global_type_probe("Function")
+                .map(|probe| probe.identity)
+        );
+        let expected_arities = [1, 1, 0, 0, 0, 0, 0, 0];
+        for (terminal, expected_arity) in identities.terminals().into_iter().zip(expected_arities) {
+            let super::super::library_identities::LibraryIdentityTerminal::Ready(identity) =
+                terminal
+            else {
+                panic!("exact profile native bridge identity must be ready")
+            };
+            assert_eq!(identity.parameters.len(), expected_arity);
+            assert_ne!(identity.template, TypeId(0));
+        }
     }
 
     #[test]

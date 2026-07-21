@@ -294,37 +294,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return Some(self.interner.well_known().error);
         }
 
-        // M17: intercept built-in `Array<T>` without `lib.d.ts`; user shadowing and
-        // wrong arity are deferred. Every `Array` path returns here so bad arity never
-        // falls through to the unresolved-name arm and emits `TK2304`.
-        if name == "Array" {
-            match type_arguments {
-                Some(args) if args.params.len() == 1 => {
-                    let element = self.lower_annotation(scope, &args.params[0])?;
-                    return Some(self.interner.intern_array(element));
-                }
-                Some(args) => {
-                    for argument in &args.params {
-                        let _ = self.lower_annotation(scope, argument);
-                    }
-                    self.emit_diagnostic(Diagnostic::generic_type_requires_arguments(
-                        ref_span, "Array<T>", 1,
-                    ));
-                    return Some(self.interner.well_known().error);
-                }
-                // `Array` IS a recognized built-in, so a bare `Array` or a wrong type-argument
-                // count is a type-argument-count error (tsc TS2314, deferred) — NOT "cannot find
-                // name". Degrade to the error type silently (matching M17), rather than falling
-                // through to the M22 unresolved-name arm below.
-                None => {
-                    self.emit_diagnostic(Diagnostic::generic_type_requires_arguments(
-                        ref_span, "Array<T>", 1,
-                    ));
-                    return Some(self.interner.well_known().error);
-                }
-            }
-        }
-
         let decl_id = match type_decl_id(self.binder, scope, name) {
             Some(id) => id,
             None => {
@@ -519,6 +488,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 let parameter_names = self.type_decl_parameter_names(group);
                 if !self.type_group_arity_is_valid(
                     scope,
+                    group,
                     name,
                     name,
                     span,
@@ -554,6 +524,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let parameter_names = self.type_decl_parameter_names(group);
         if !self.type_group_arity_is_valid(
             scope,
+            group,
             name,
             name,
             span,
@@ -629,6 +600,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         if !self.type_group_arity_is_valid(
             scope,
+            group,
             name,
             &published.name,
             span,
@@ -662,6 +634,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     fn type_group_arity_is_valid(
         &mut self,
         scope: ScopeId,
+        group: TypeGroupId,
         reference_name: &str,
         declaration_name: &str,
         span: Span,
@@ -699,18 +672,27 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let Some(diagnostic) = diagnostic else {
             return true;
         };
-        self.emit_diagnostic(diagnostic);
-        if let Some(arguments) = arguments {
+        let visit_arguments = |pass: &mut Self| {
+            let Some(arguments) = arguments else {
+                return;
+            };
             for argument in &arguments.params {
-                let _ = self.lower_annotation(scope, argument);
+                let _ = pass.lower_annotation(scope, argument);
             }
+        };
+        let children_first = self.lexical_array_alias == Some(group);
+        if children_first {
+            visit_arguments(self);
+        }
+        self.emit_diagnostic(diagnostic);
+        if !children_first {
+            visit_arguments(self);
         }
         false
     }
 
     fn checker_local_qualified_root(&self, name: &str) -> bool {
-        name == "Array"
-            || self.lookup_type_param(name).is_some()
+        self.lookup_type_param(name).is_some()
             || self
                 .cond_frames
                 .iter()
@@ -1029,7 +1011,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.instantiate_type_group_arguments(scope, decl_id, arg_infos, Span::from_oxc(args.span))
     }
 
-    pub(super) fn substitute_ready_type_group_application(
+    pub(in crate::check::checker) fn substitute_ready_type_group_application(
         &mut self,
         template: TypeId,
         parameters: &[TypeParamId],

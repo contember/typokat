@@ -52,6 +52,7 @@ pub(crate) mod lexical_events;
 #[cfg(test)]
 pub(crate) mod lexical_events_library;
 mod lexical_events_user;
+mod library_identities;
 #[cfg(test)]
 pub(crate) mod library_reporting;
 mod namespace_values;
@@ -210,6 +211,8 @@ fn trusted_prelude_records_are_clean(
 /// Lifetime-free state handed from the trusted prelude pass to user checking.
 struct TrustedPreludeHandoff {
     published_types: type_groups::PublishedTypeEnvironment,
+    library_semantic_identities: Option<library_identities::LibrarySemanticIdentities>,
+    lexical_array_alias: Option<TypeGroupId>,
     decl_types: DeclTypes,
     next_type_param: u32,
     next_class_id: u32,
@@ -300,10 +303,20 @@ fn bootstrap_trusted_prelude(
     let type_groups::TypeEnvironmentState::Published(published_types) = type_environment else {
         panic!("trusted prelude must hand off one published environment")
     };
+    let selected = library_identities::LibrarySemanticIdentities::select_from_scope(
+        &binder,
+        binder.prelude_module,
+        &published_types,
+        interner.store(),
+    );
+    let lexical_array_alias = selected.array_group();
+    let library_semantic_identities = selected.all_ready().then_some(selected);
     (
         binder,
         TrustedPreludeHandoff {
             published_types,
+            library_semantic_identities,
+            lexical_array_alias,
             decl_types,
             next_type_param,
             next_class_id,
@@ -421,6 +434,8 @@ where
         binder,
         TrustedPreludeHandoff {
             published_types,
+            library_semantic_identities,
+            lexical_array_alias,
             decl_types,
             mut next_type_param,
             mut next_class_id,
@@ -481,6 +496,10 @@ where
         },
     );
     pass.install_published_type_environment_base(published_types);
+    pass.lexical_array_alias = lexical_array_alias;
+    if let Some(identities) = library_semantic_identities {
+        pass.install_library_semantic_identities(identities);
+    }
     for effects in external_effects.into_values() {
         pass.enqueue_effects(CheckerEffects::from_records(effects));
     }
@@ -740,6 +759,8 @@ where
         binder,
         TrustedPreludeHandoff {
             published_types,
+            library_semantic_identities,
+            lexical_array_alias,
             mut decl_types,
             mut next_type_param,
             mut next_class_id,
@@ -849,6 +870,10 @@ where
         },
     );
     pass.install_published_type_environment_base(published_types);
+    pass.lexical_array_alias = lexical_array_alias;
+    if let Some(identities) = library_semantic_identities {
+        pass.install_library_semantic_identities(identities);
+    }
     for effects in external_effects.into_values() {
         pass.enqueue_effects(CheckerEffects::from_records(effects));
     }
@@ -2073,6 +2098,8 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
             template_fill,
         }),
         semantic_queries: SemanticQueryState::default(),
+        library_semantic_identities: None,
+        lexical_array_alias: None,
         class_application_parameters: BTreeMap::new(),
         staged_class_validation: None,
         retained_class_callables: BTreeMap::new(),

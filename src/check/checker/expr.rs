@@ -5,6 +5,7 @@ use super::classes::body::BodyMemberLookup;
 use super::context::*;
 use super::decls::value_decl_id;
 use super::function_groups::FunctionGroupDemand;
+use super::library_identities::{LibraryComposedMember, LibraryMemberProjection};
 use crate::binder::bind::{ResolvedValueKind, ValueResolution};
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
@@ -13,7 +14,8 @@ use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::{render_type, Diagnostic};
 use crate::span::Span;
 use crate::types::repr::{
-    IntrinsicKind, LiteralValue, ObjectType, PropertyType, TypeParamId, TypeTag,
+    ClassId, IntrinsicKind, LiteralValue, ObjectType, PropertyType, TypeParamId, TypeTag,
+    Visibility,
 };
 use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
@@ -333,9 +335,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 None
             }
             Expression::RegExpLiteral(lit) => {
+                let span = Span::from_oxc(lit.span);
+                if let Some(ty) = self.regexp_literal_type(span) {
+                    return Some((ty, span));
+                }
                 self.record_incomplete(
                     "expr-infer/regexp-literal/self",
-                    Span::from_oxc(lit.span),
+                    span,
                     "RegExp literal value has no type model",
                 );
                 None
@@ -1558,6 +1564,28 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return Some((wk.error, prop_span));
         }
 
+        match self.lookup_library_composed_member(base_ty, prop_name, prop_span) {
+            LibraryComposedMember::Ready { ty, access } => {
+                if let Some((visibility, declaring_class)) = access
+                    .into_iter()
+                    .find(|constraint| !self.member_access_constraint_allowed(*constraint))
+                {
+                    self.check_member_access_control(
+                        prop_name,
+                        prop_span,
+                        visibility,
+                        declaring_class,
+                    );
+                }
+                return Some((ty, prop_span));
+            }
+            LibraryComposedMember::Missing => {
+                return self.missing_member_access(scope, base_ty, member, prop_name, prop_span);
+            }
+            LibraryComposedMember::Unavailable => return Some((wk.error, prop_span)),
+            LibraryComposedMember::NotInstalled => {}
+        }
+
         // Resolve members through apparent/merged types, but keep `base_ty` for
         // `TK2339` rendering so missing constrained-parameter members still name `T`.
         let lookup_ty = match self.demand_structural_apparent_type(base_ty) {
@@ -1566,6 +1594,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 self.own_type_demand(DemandOutcome::Exhausted(exhaustion), prop_span);
                 return None;
             }
+        };
+        if prop_name == "length" {
+            if let Some(length) = self.native_member_length(lookup_ty) {
+                return Some((length, prop_span));
+            }
+        }
+        let lookup_ty = match self.project_library_member_surface(lookup_ty, prop_span) {
+            LibraryMemberProjection::NotApplicable => lookup_ty,
+            LibraryMemberProjection::Ready(projected) => projected,
+            LibraryMemberProjection::Unavailable => return Some((wk.error, prop_span)),
         };
         // Union base (M4): the property must exist on every member; its type is the
         // union of the per-member property types.
@@ -1576,14 +1614,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             ));
         }
 
-        // Array base (M17): only `length` is synthesized (→ `number`). Every other array
+        // Array base (M17): only `length` is synthesized without a full library. Every other array
         // member (`push`, `map`, `filter`, …) needs `lib.d.ts`, so it is deferred →
         // `TK2339` (property does not exist), with the array type rendered in the message
         // (`number[]`). The access yields the error type on the missing path (no cascade).
         if self.interner.store().tag(lookup_ty) == TypeTag::Array {
-            if prop_name == "length" {
-                return Some((wk.number, prop_span));
-            }
             let tgt = render_type(self.interner.store(), lookup_ty, /* widen */ false);
             self.emit_diagnostic(Diagnostic::property_does_not_exist(
                 prop_span, prop_name, &tgt,
@@ -1624,40 +1659,63 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 if let Some(value) = string_index_value {
                     return Some((value, prop_span));
                 }
-                match self.class_instance_static_member_owner(base_ty, prop_name) {
-                    DemandOutcome::Ready(Some(class)) => {
-                        self.emit_diagnostic(Diagnostic::static_property_accessed_on_instance(
-                            prop_span, prop_name, &class,
-                        ));
-                        return Some((wk.error, prop_span));
-                    }
-                    DemandOutcome::Ready(None) => {}
-                    DemandOutcome::Exhausted(exhaustion) => {
-                        self.own_type_demand(DemandOutcome::Exhausted(exhaustion), prop_span);
-                        return None;
-                    }
-                }
-                // Named class instances and class/function value receivers retain
-                // their source declaration spelling in TK2339.
-                if let Some(class) = self.class_instance_name(base_ty) {
-                    self.emit_diagnostic(Diagnostic::property_does_not_exist_on_named_type(
-                        prop_span, prop_name, &class,
-                    ));
-                } else if let Some(value) =
-                    self.named_class_or_function_value(scope, &member.object)
-                {
-                    self.emit_diagnostic(Diagnostic::property_does_not_exist_on_named_value(
-                        prop_span, prop_name, &value,
-                    ));
-                } else {
-                    let tgt = render_type(self.interner.store(), base_ty, /* widen */ false);
-                    self.emit_diagnostic(Diagnostic::property_does_not_exist(
-                        prop_span, prop_name, &tgt,
-                    ));
-                }
-                Some((wk.error, prop_span))
+                self.missing_member_access(scope, base_ty, member, prop_name, prop_span)
             }
         }
+    }
+
+    fn member_access_constraint_allowed(
+        &self,
+        (visibility, declaring_class): (Visibility, Option<ClassId>),
+    ) -> bool {
+        match visibility {
+            Visibility::Public => true,
+            Visibility::Private => {
+                declaring_class.is_some_and(|owner| self.has_exact_class_access_context(owner))
+            }
+            Visibility::Protected => {
+                declaring_class.is_some_and(|owner| self.has_derived_class_access_context(owner))
+            }
+        }
+    }
+
+    fn missing_member_access(
+        &mut self,
+        scope: ScopeId,
+        base_ty: TypeId,
+        member: &StaticMemberExpression<'_>,
+        prop_name: &str,
+        prop_span: Span,
+    ) -> Option<(TypeId, Span)> {
+        let error = self.interner.well_known().error;
+        match self.class_instance_static_member_owner(base_ty, prop_name) {
+            DemandOutcome::Ready(Some(class)) => {
+                self.emit_diagnostic(Diagnostic::static_property_accessed_on_instance(
+                    prop_span, prop_name, &class,
+                ));
+                return Some((error, prop_span));
+            }
+            DemandOutcome::Ready(None) => {}
+            DemandOutcome::Exhausted(exhaustion) => {
+                self.own_type_demand(DemandOutcome::Exhausted(exhaustion), prop_span);
+                return None;
+            }
+        }
+        if let Some(class) = self.class_instance_name(base_ty) {
+            self.emit_diagnostic(Diagnostic::property_does_not_exist_on_named_type(
+                prop_span, prop_name, &class,
+            ));
+        } else if let Some(value) = self.named_class_or_function_value(scope, &member.object) {
+            self.emit_diagnostic(Diagnostic::property_does_not_exist_on_named_value(
+                prop_span, prop_name, &value,
+            ));
+        } else {
+            let target = render_type(self.interner.store(), base_ty, false);
+            self.emit_diagnostic(Diagnostic::property_does_not_exist(
+                prop_span, prop_name, &target,
+            ));
+        }
+        Some((error, prop_span))
     }
 
     fn class_instance_name(&self, ty: TypeId) -> Option<String> {

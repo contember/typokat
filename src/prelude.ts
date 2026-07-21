@@ -9,6 +9,9 @@
 // The four string intrinsics are declared `= intrinsic` and seeded to their
 // well-known marker ids by name (the prelude is a trusted asset; a user
 // `= intrinsic` alias elsewhere is out of scope and degrades silently).
+// Transitional until the production full-library cutover: explicit Array<T>
+// resolves lexically while T[] remains the native syntax representation.
+type Array<T> = T[];
 type Partial<T> = { [P in keyof T]?: T[P] };
 type Required<T> = { [P in keyof T]-?: T[P] };
 type Readonly<T> = { readonly [P in keyof T]: T[P] };

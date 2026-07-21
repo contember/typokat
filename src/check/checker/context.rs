@@ -26,6 +26,7 @@ use super::classes::retained::RetainedClassCallable;
 use super::events::{CandidateEffects, UserRecordTicket};
 use super::function_groups::FunctionGroupRegistry;
 use super::lexical_events::{CallableTickets, LexicalReservations};
+use super::library_identities::LibrarySemanticIdentities;
 use super::namespace_values::NamespaceValueRegistry;
 use super::reporting_record::CheckerRecord;
 use super::type_groups::{
@@ -808,6 +809,10 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) type_environment: TypeEnvironmentState<'ast>,
     /// Durable coordinator-owned projection, evaluation, and relation state.
     pub(in crate::check::checker) semantic_queries: SemanticQueryState,
+    /// Source-provider-selected full-library roots for native-syntax member surfaces.
+    pub(in crate::check::checker) library_semantic_identities: Option<LibrarySemanticIdentities>,
+    /// Identity of the transitional minimal-prelude Array alias.
+    pub(in crate::check::checker) lexical_array_alias: Option<TypeGroupId>,
     /// Frozen class parameter descriptors retained from the atomic publication.
     pub(in crate::check::checker) class_application_parameters:
         BTreeMap<ClassId, Vec<DraftClassTypeParameter<Ticket>>>,
