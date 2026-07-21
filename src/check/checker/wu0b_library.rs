@@ -2711,6 +2711,7 @@ impl ReleaseOutcomeLine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::check::checker::type_groups::PublishedTypeGroup;
     use crate::check::checker::wu0b_profile::load_strict_profile;
     use crate::driver::check_source;
 
@@ -2797,6 +2798,42 @@ mod tests {
             .encode_snapshot_bytes_for_test()
             .err()
             .map(|error| format!("{label}: {error:?}"))
+    }
+
+    fn assert_valid_class_interface_merge(label: &str, source: &'static str) {
+        let state = compile_reservation_fixture("class-interface-merge.d.ts", source);
+        let group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "MergedClassInterface")
+            .expect("merged class/interface type group");
+        let probe = type_probe(
+            &state.binder,
+            &state.published_types,
+            state.interner.store(),
+            group.id,
+        );
+        assert_eq!(probe.declaration_count, 2, "{label}: {probe:?}");
+        assert_eq!(
+            probe.member_names,
+            ["classMember", "interfaceMember"],
+            "{label}: {probe:?}"
+        );
+        assert!(
+            matches!(
+                state.published_types.groups().get(group.id),
+                Some(PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
+                    surface: PublishedTypeGroupSurface::Class(_),
+                    ..
+                }))
+            ),
+            "{label}: merged type group must publish a class surface"
+        );
+        state
+            .interner
+            .encode_snapshot_bytes_for_test()
+            .unwrap_or_else(|error| panic!("{label}: strict interner encoding failed: {error:?}"));
     }
 
     fn replace_module_sources(
@@ -2945,6 +2982,21 @@ mod tests {
         .flatten()
         .collect::<Vec<_>>();
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    fn valid_class_interface_merge_closes_reservations_in_both_orders() {
+        let class_first = r#"
+            declare class MergedClassInterface { classMember: string; }
+            interface MergedClassInterface { interfaceMember: number; }
+        "#;
+        let interface_first = r#"
+            interface MergedClassInterface { interfaceMember: number; }
+            declare class MergedClassInterface { classMember: string; }
+        "#;
+
+        assert_valid_class_interface_merge("class-first control", class_first);
+        assert_valid_class_interface_merge("interface-first", interface_first);
     }
 
     #[test]
