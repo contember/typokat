@@ -1,8 +1,9 @@
 //! Acceptance spec for a per-`Substitution` completed-result memo.
 //!
 //! Activate from `substitute/mod.rs` only with the implementation. A memo key is
-//! `(TypeId, canonical blocked ∩ substitution-map keys)` and lives for one
-//! `Substitution` run. Every completed non-reentry `apply` result, including an
+//! `(TypeId, blocked ∩ exact free substitution-map keys)` and lives for one
+//! `Substitution` run (large maps conservatively retain every mapped blocker).
+//! Every completed non-reentry `apply` result, including an
 //! intrinsic or type-parameter leaf, is inserted by the wrapper-level memo rule.
 //! A recursive re-entry taints every active frame whose start cycle epoch changed;
 //! neither the reentry nor any of those completed ancestors may be memoized.
@@ -125,18 +126,18 @@ fn completed_memo_canonicalizes_irrelevant_blockers_and_binder_order() {
             .expect("every tuple element remains a generic wrapper");
         assert_eq!(function.params[0].ty, expected_shared);
     }
-    // Prefilter: the param-free `void` leaf is skipped under both contexts (−2 entries).
+    // Exact free-set keys also erase A/B from the shared child because it only
+    // mentions mapped_id; the four wrapper contexts therefore share one entry.
     assert_eq!(
-        measure.completed_memo_entries, 9,
-        "U/V share the empty context while A/B and B/A share one sorted context"
+        measure.completed_memo_entries, 7,
+        "irrelevant wrapper binders collapse out of the shared-child key"
     );
-    // Prefilter: the two former `void` reuses are now skips, not memo hits (−2 hits).
     assert_eq!(
-        measure.completed_memo_hits, 2,
-        "each equal-context wrapper pair reuses the shared child"
+        measure.completed_memo_hits, 3,
+        "the final three wrappers reuse the first exact-free shared-child result"
     );
-    // 9 entries + 2 hits (the `void` leaf no longer counts as 4 of the old 15 visits).
-    assert_eq!(measure.apply_visits, 11);
+    // 7 entries + 3 hits (the param-free `void` leaf remains a prefilter skip).
+    assert_eq!(measure.apply_visits, 10);
     assert_eq!(
         measure.apply_visits,
         measure.completed_memo_entries + measure.completed_memo_hits,
