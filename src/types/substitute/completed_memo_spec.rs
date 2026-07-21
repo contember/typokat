@@ -295,9 +295,9 @@ fn completed_memo_never_publishes_cross_context_cycle_ancestors() {
     assert_eq!(after_first.cycle_reentries, 0);
     // Prefilter: with no re-entry, no frame is tainted (was 4).
     assert_eq!(after_first.cycle_tainted_skips, 0);
-    // Prefilter: the run is clean, so back_edge/recursive/array/root complete
-    // alongside the empty-context T leaf (the blocked-context leaf is skipped).
-    assert_eq!(after_first.completed_memo_entries, 5);
+    // Exact binder relevance skips the binder-only back edge. The clean
+    // recursive/array/root path completes alongside the free T leaf.
+    assert_eq!(after_first.completed_memo_entries, 4);
     assert_eq!(after_first.completed_memo_hits, 0);
 
     let second = substitution.apply(&mut interner, root);
