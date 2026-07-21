@@ -692,12 +692,13 @@ fn fix_candidate_set(
     constraint: Option<TypeId>,
     cands: impl Iterator<Item = TypeId>,
 ) -> TypeId {
-    let prepared: Vec<TypeId> =
-        if constraint.is_some_and(|ty| is_primitive_ish(interner.store(), ty)) {
-            cands.collect()
-        } else {
-            cands.map(|c| widen(interner, c)).collect()
-        };
+    let prepared: Vec<TypeId> = if constraint.is_some_and(|ty| {
+        is_primitive_ish(interner.store(), ty) || interner.store().tag(ty) == TypeTag::Keyof
+    }) {
+        cands.collect()
+    } else {
+        cands.map(|c| widen(interner, c)).collect()
+    };
     interner.union(prepared)
 }
 
