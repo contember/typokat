@@ -2900,10 +2900,7 @@ mod tests {
         state.into_snapshot_parts().expect("extract snapshot parts")
     }
 
-    fn compile_reservation_fixture(
-        file_name: &'static str,
-        source: &'static str,
-    ) -> OwnedLibraryRuntimeState {
+    fn compile_reservation_fixture(file_name: &str, source: &str) -> OwnedLibraryRuntimeState {
         compile_owned_injected_profile(&[InjectedLibrarySource {
             file_ordinal: LibraryFileOrdinal::new(0),
             name: file_name,
@@ -2911,6 +2908,71 @@ mod tests {
         }])
         .expect("reservation lifecycle fixture compiles")
         .1
+    }
+
+    fn published_template_type(state: &OwnedLibraryRuntimeState, name: &str) -> TypeId {
+        let group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == name)
+            .unwrap_or_else(|| panic!("missing type group {name}"));
+        match state.published_types.groups().get(group.id) {
+            Some(PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
+                surface: PublishedTypeGroupSurface::Template(ty),
+                ..
+            })) => *ty,
+            terminal => panic!("{name} did not publish a template: {terminal:?}"),
+        }
+    }
+
+    fn published_object_property_type(
+        state: &OwnedLibraryRuntimeState,
+        owner: &str,
+        property: &str,
+    ) -> TypeId {
+        let owner = published_template_type(state, owner);
+        state
+            .interner
+            .store()
+            .object_type(owner)
+            .unwrap_or_else(|| panic!("{owner:?} is not an object template"))
+            .property(property)
+            .unwrap_or_else(|| panic!("{owner:?} has no {property} property"))
+            .ty
+    }
+
+    fn store_type_reaches(
+        state: &OwnedLibraryRuntimeState,
+        source: TypeId,
+        target: TypeId,
+    ) -> bool {
+        const TYPE_DOMAIN: u8 = 1;
+        let (references, _) = state.interner.snapshot_reference_records_for_test();
+        let mut edges = rustc_hash::FxHashMap::<u32, Vec<u32>>::default();
+        for (owner_domain, target_domain, _, owner, referenced) in references {
+            if owner_domain == TYPE_DOMAIN && target_domain == TYPE_DOMAIN {
+                edges.entry(owner).or_default().push(referenced);
+            }
+        }
+        let mut visited = rustc_hash::FxHashSet::default();
+        let mut pending = edges.get(&source.0).cloned().unwrap_or_default();
+        while let Some(current) = pending.pop() {
+            if current == target.0 {
+                return true;
+            }
+            if visited.insert(current) {
+                pending.extend(edges.get(&current).into_iter().flatten().copied());
+            }
+        }
+        false
+    }
+
+    fn assert_strict_interner_snapshot(state: &OwnedLibraryRuntimeState, label: &str) {
+        state
+            .interner
+            .encode_snapshot_bytes_for_test()
+            .unwrap_or_else(|error| panic!("{label}: strict interner snapshot failed: {error:?}"));
     }
 
     fn assert_type_group_is_error_or_unavailable(state: &OwnedLibraryRuntimeState, name: &str) {
@@ -3145,6 +3207,217 @@ mod tests {
 
         assert_valid_class_interface_merge("class-first control", class_first);
         assert_valid_class_interface_merge("interface-first", interface_first);
+    }
+
+    #[test]
+    fn acyclic_object_aliases_publish_one_structural_identity() {
+        let state = compile_reservation_fixture(
+            "acyclic-object-aliases.d.ts",
+            r#"
+                type FirstShape = {
+                    value: number;
+                    run(input: string): boolean;
+                };
+                type SecondShape = {
+                    run(input: string): boolean;
+                    value: number;
+                };
+            "#,
+        );
+        let first = published_template_type(&state, "FirstShape");
+        let second = published_template_type(&state, "SecondShape");
+
+        assert_eq!(first, second, "equal acyclic aliases must hash-cons");
+        assert!(!store_type_reaches(&state, first, first));
+        assert_strict_interner_snapshot(&state, "equal acyclic aliases");
+    }
+
+    #[test]
+    fn acyclic_object_alias_reuses_an_existing_anonymous_shape() {
+        let state = compile_reservation_fixture(
+            "anonymous-object-collision.d.ts",
+            r#"
+                type Carrier = {
+                    nested: {
+                        value: number;
+                        run(input: string): boolean;
+                    };
+                };
+                type NamedShape = {
+                    value: number;
+                    run(input: string): boolean;
+                };
+            "#,
+        );
+        let anonymous = published_object_property_type(&state, "Carrier", "nested");
+        let named = published_template_type(&state, "NamedShape");
+
+        assert_eq!(named, anonymous, "named alias must reuse the anonymous row");
+        assert_strict_interner_snapshot(&state, "anonymous shape collision");
+    }
+
+    #[test]
+    fn recursive_object_aliases_retain_their_stable_reserved_roots() {
+        let state = compile_reservation_fixture(
+            "recursive-object-aliases.d.ts",
+            r#"
+                type SelfNode = { next: SelfNode | null };
+                type MutualLeft = { right: MutualRight | null };
+                type MutualRight = { left: MutualLeft | null };
+                type NestedNode = {
+                    next: (() => readonly NestedNode[]) | null;
+                };
+            "#,
+        );
+        let self_node = published_template_type(&state, "SelfNode");
+        let mutual_left = published_template_type(&state, "MutualLeft");
+        let mutual_right = published_template_type(&state, "MutualRight");
+        let nested = published_template_type(&state, "NestedNode");
+
+        assert!(store_type_reaches(&state, self_node, self_node));
+        assert_ne!(mutual_left, mutual_right);
+        assert!(store_type_reaches(&state, mutual_left, mutual_right));
+        assert!(store_type_reaches(&state, mutual_right, mutual_left));
+        assert!(store_type_reaches(&state, nested, nested));
+        assert_strict_interner_snapshot(&state, "recursive aliases");
+    }
+
+    #[test]
+    fn captured_object_alias_roots_are_never_remapped_behind_existing_edges() {
+        let state = compile_reservation_fixture(
+            "captured-object-aliases.d.ts",
+            r#"
+                type ForwardConsumer = { value: ForwardLater };
+                type ForwardLater = { marker: number };
+
+                interface InterfaceConsumer { value: InterfaceLater; }
+                type InterfaceLater = { marker: string };
+
+                type BackwardEarlier = { marker: boolean };
+                type BackwardConsumer = { value: BackwardEarlier };
+            "#,
+        );
+
+        for (consumer, dependency) in [
+            ("ForwardConsumer", "ForwardLater"),
+            ("InterfaceConsumer", "InterfaceLater"),
+            ("BackwardConsumer", "BackwardEarlier"),
+        ] {
+            assert_eq!(
+                published_object_property_type(&state, consumer, "value"),
+                published_template_type(&state, dependency),
+                "{consumer} must retain the published identity of {dependency}"
+            );
+        }
+        assert_strict_interner_snapshot(&state, "captured alias roots");
+    }
+
+    #[test]
+    fn object_alias_identity_ignores_member_source_order() {
+        let state = compile_reservation_fixture(
+            "object-alias-member-order.d.ts",
+            r#"
+                type OrderedFirst = { alpha: string; beta: number };
+                type OrderedSecond = { beta: number; alpha: string };
+            "#,
+        );
+
+        assert_eq!(
+            published_template_type(&state, "OrderedFirst"),
+            published_template_type(&state, "OrderedSecond"),
+            "member source order is not structural identity"
+        );
+        assert_strict_interner_snapshot(&state, "object alias member order");
+    }
+
+    #[test]
+    fn object_alias_identity_keeps_identity_bearing_metadata() {
+        let state = compile_reservation_fixture(
+            "object-alias-metadata.d.ts",
+            r#"
+                type OptionalValue = { value?: number };
+                type RequiredValue = { value: number };
+                type ReadonlyValue = { readonly value: number };
+                type MutableValue = { value: number };
+                type StringIndexed = { [key: string]: number };
+                type NumberIndexed = { [key: number]: number };
+                type Callable = { (input: string): boolean };
+                type Constructable = { new (input: string): { value: boolean } };
+            "#,
+        );
+
+        for (left, right) in [
+            ("OptionalValue", "RequiredValue"),
+            ("ReadonlyValue", "MutableValue"),
+            ("StringIndexed", "NumberIndexed"),
+            ("Callable", "Constructable"),
+        ] {
+            assert_ne!(
+                published_template_type(&state, left),
+                published_template_type(&state, right),
+                "{left} and {right} differ in identity-bearing metadata"
+            );
+        }
+        assert_strict_interner_snapshot(&state, "object alias identity metadata");
+    }
+
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "large object-alias scaling is a release-only gate"
+    )]
+    fn acyclic_object_alias_canonicalization_scales_linearly() {
+        fn compile_scale(count: usize) -> (Duration, usize, usize) {
+            let mut source = String::new();
+            for index in 0..count {
+                use std::fmt::Write;
+                writeln!(
+                    source,
+                    "type Scale{index:05} = {{ value: number; run(input: string): boolean }};"
+                )
+                .expect("write scale fixture");
+            }
+            let (run, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
+                file_ordinal: LibraryFileOrdinal::new(0),
+                name: "object-alias-scale.d.ts",
+                source: &source,
+            }])
+            .expect("object-alias scale fixture compiles");
+            let identities = state
+                .binder
+                .type_groups
+                .iter()
+                .filter(|group| group.name.starts_with("Scale"))
+                .map(|group| match state.published_types.groups().get(group.id) {
+                    Some(PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
+                        surface: PublishedTypeGroupSurface::Template(ty),
+                        ..
+                    })) => *ty,
+                    terminal => panic!("scale alias did not publish: {terminal:?}"),
+                })
+                .collect::<rustc_hash::FxHashSet<_>>();
+            assert_strict_interner_snapshot(&state, "object alias scale");
+            eprintln!(
+                "typokat-object-alias-scale-v1 aliases={count} store_rows={} reserve_fill_us={} unique_published={}",
+                state.interner.store().len(),
+                run.phase_timings.reserve_fill.as_micros(),
+                identities.len(),
+            );
+            (
+                run.phase_timings.reserve_fill,
+                state.interner.store().len(),
+                identities.len(),
+            )
+        }
+
+        let (small_time, small_rows, small_unique) = compile_scale(1_000);
+        let (large_time, large_rows, large_unique) = compile_scale(10_000);
+        assert_eq!((small_unique, large_unique), (1, 1));
+        assert!(large_rows < small_rows.saturating_mul(12));
+        assert!(
+            large_time <= small_time.saturating_mul(20),
+            "10x aliases must not approach quadratic reserve/fill time: {small_time:?} -> {large_time:?}"
+        );
     }
 
     #[test]
