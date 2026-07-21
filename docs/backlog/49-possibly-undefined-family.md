@@ -41,8 +41,8 @@ narrowing) — sequence `51` first or scope the guard work there. Cross-check ts
 Include the three official getter calls above in the strict corpus. After their inferred returns
 are available, each must report exactly one `TK2721` at the call and no `TK2349`; the ordinary
 optional-call controls must continue to use `TK2722`. The `partiallyNamedTuples2.ts` initializer
-must publish the non-null `object` value without a wrapper incomplete once both this item and
-backlog `75`'s object-keyword type are implemented.
+must publish the non-null `object` value without a wrapper incomplete once this item is implemented;
+the object-keyword type itself is already shipped.
 
 ## Touch points
 

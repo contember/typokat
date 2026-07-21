@@ -10,8 +10,8 @@ blocked-by: []
 manifest: each remaining family is implemented with a witness or explicitly moved out of scope
 with a documented, sound boundary.
 
-The pinned TS 6.0.3 ES5 readiness gate assigns 179 explicit annotation incompletes here:
-polymorphic `this` 164, `object` 6, `intrinsic` 5, `symbol` 3, and `bigint` 1. This is independent
+The pinned TS 6.0.3 ES5 readiness gate assigns 173 explicit annotation incompletes here:
+polymorphic `this` 164, `intrinsic` 5, `symbol` 3, and `bigint` 1. This is independent
 1.0 work and does not prevent backlog `14` from starting. The exact
 sites and counts are enforced by
 [`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml).
@@ -33,7 +33,7 @@ The currently unowned tail includes:
 - deferred model shapes without an exact dedicated diagnostic: type-parameter defaults, optional
   tuple elements, and generic/deferred `T[K]` outside mapped templates;
 - assertion source/target overlap validation (`TK2352`);
-- exception/catch flow, async/generator expression semantics, bigint/symbol/object/unique and
+- exception/catch flow, async/generator expression semantics, bigint/symbol/unique and
   literal-type forms, private expressions, and class static blocks, auto-accessors, and index
   signatures; polymorphic `this` type annotations/qualified `this` type names (distinct from the
   shipped explicit receiver slot and contextual `ThisType<T>` marker);
@@ -67,7 +67,8 @@ local generic class heritage:
   `subtypesOfTypeParameterWithConstraints.ts`, and 9 in
   `subtypesOfTypeParameterWithConstraints4.ts`. `derivedClassTransitivity3.ts` and
   `derivedGenericClassWithAny.ts` move into scope without a new false positive, while
-  `objectTypesIdentityWithPrivates2.ts` is a clean positive. None of these belongs to this item.
+  `objectTypesIdentityWithPrivates2.ts` is a clean positive. The `object` keyword type is shipped;
+  none of these belongs to this item.
 - `numericIndexerConstrainsPropertyDeclarations.ts`,
   `stringIndexerConstrainsPropertyDeclarations.ts`, and both
   `subtypesOfTypeParameterWithConstraints{,4}.ts` retain
@@ -80,8 +81,7 @@ local generic class heritage:
   containers that are not provably array-like retain
   `annotation-lower/tuple-rest-element/non-array`; `partiallyNamedTuples3.ts` remains owned by
   backlog `71` solely for spread-call traversal. In `partiallyNamedTuples2.ts`, `Iterable` is a
-  backlog `14` library dependency, the `object` keyword remains this item's type-model boundary,
-  and `null!` remains backlog `49`'s expression boundary.
+  backlog `14` library dependency, while `null!` remains backlog `49`'s expression boundary.
 - `dependentDestructuredVariables.ts` exposes the existing selected-key listener over-report after
   its event tuple labels lower; the multi-key `Events[K]` callback still conservatively sees the
   whole tuple union.

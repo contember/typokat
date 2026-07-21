@@ -111,7 +111,7 @@ and validated the same way.
   distinct from the canonical compatibility result and remains backlog `63` work.
   <!-- div: id=lib-es5/callable-heritage-cardinality dir=over scope=s-assignability owner=../backlog/63-review-parity-tail.md witness=../../tests/fixtures/lib-es5-6.0.3/readiness.toml -->
 - **The pinned ES5 annotation tail is explicitly incomplete (over-report).** The raw
-  artifact records 179 backlog-`75` outcomes: polymorphic `this` ×164, `object` ×6,
+  artifact records 173 backlog-`75` outcomes: polymorphic `this` ×164,
   `intrinsic` ×5, `symbol` ×3, and `bigint` ×1. These are non-permissive incomplete
   results rather than silent fallback, but tsc accepts the declarations.
   <!-- div: id=lib-es5/annotation-surface-tail dir=over scope=b-semantic-candidate-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/fixtures/lib-es5-6.0.3/readiness.toml -->
@@ -473,11 +473,6 @@ function rest/optional/default signature shape (M32).
   `partiallyNamedTuples{,2}.ts` retain `annotation-lower/tuple-rest-element/non-array`; the tuple
   is withheld rather than published with an invented rest shape.
   <!-- div: id=tuples/rest-container-proof-oos dir=over scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
-- **The intrinsic `object` keyword remains explicitly unavailable (over-report / OOS).** It records
-  `annotation-lower/object-keyword/self`; official `partiallyNamedTuples2.ts` reaches that existing
-  boundary in `MultiKeyMap<..., object>` once labels lower.
-  <!-- div: id=types/object-keyword-oos dir=over scope=b-semantic-candidate-tail owner=../backlog/75-scope-surface-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
-
 ## Index signatures & keyof (M19 / M20)
 
 Implemented: index signatures (`{ [k: string]: T }`, `{ [i: number]: T }`) (M19); `keyof T` +
@@ -667,8 +662,10 @@ property, fixed tuple positions, function param/return; same-name covariant cand
     non-assignable (over-report, safe).
     <!-- div: id=conditional/deferred-branch-infer dir=over scope=b-type-level-tail owner=design-oos witness=../../tests/cases/m25_conditional_types -->
   - A nested conditional referencing an OUTER conditional's `infer` binder is **poisoned at
-    lowering** — never evaluated, conservatively related (tsc resolves it; over-report pinned in
-    `nested_infer.ts` — proper de Bruijn shifting is backlog `26`).
+    lowering**. A definitive primitive-versus-`object` rejection may select its false branch through
+    the guarded evaluator lifecycle; captured-infer true branches remain unavailable and are
+    conservatively related (tsc resolves them; over-report pinned in `nested_infer.ts` — proper de
+    Bruijn shifting is backlog `26`).
     <!-- div: id=conditional/nested-outer-infer dir=over scope=b-type-level-tail owner=../backlog/26-cross-binder-nested-infer.md witness=../../tests/cases/m25_conditional_types/nested_infer.ts -->
   - A conditional buried inside a **named alias / interface / class body**
     (`type W = { foo: IsString<string> }`) is not yet evaluated — it stays deferred and relates

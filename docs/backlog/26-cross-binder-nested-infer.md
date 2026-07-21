@@ -10,8 +10,10 @@ binder (`T extends { a: infer U } ? (U extends string ? … ) : …`) is not mod
 per ADR-0002 infer binders are flat per-node de Bruijn indices, so an outer binder
 embedded inside a nested node is meaningless there (index collision with the inner
 node's own binders). M25 ships the sound stopgap: such conditionals are **poisoned at
-lowering** — never evaluated, they stay deferred nodes and relate conservatively
-(over-report, corpus `m25_conditional_types/nested_infer.ts`; tsc resolves them).
+lowering** and stay deferred unless a definitive primitive-versus-`object` rejection can select
+the false branch without observing the captured binder. The guarded false branch uses the ordinary
+evaluation cycle/budget lifecycle; captured-infer true branches remain unavailable and relate
+conservatively (over-report, corpus `m25_conditional_types/nested_infer.ts`; tsc resolves them).
 
 ## Problem
 

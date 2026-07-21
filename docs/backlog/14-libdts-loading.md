@@ -74,7 +74,7 @@ The authoritative gate is
 `b424e74`, `5951968`, and `3f641ea`, with the standalone namespace-value checker at `23bad42`. It
 concludes **GO for starting backlog 14**: type-side namespaces, reopenings, all 28 interface+var
 pairs, repeated interfaces, local `Array<T>` heritage, and both `Intl` type/value witnesses pass.
-The raw artifact retains exactly four `TK2430` diagnostics and 187 incompletes — 179 owned by `75`
+The raw artifact retains exactly four `TK2430` diagnostics and 181 incompletes — 173 owned by `75`
 and eight by `50` — with no namespace-owned outcome. The synthetic semantic suffix is exactly 66
 `TK2322`, including `deep.Intl.value`, and no `TK2304` or added incomplete.
 

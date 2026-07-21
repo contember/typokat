@@ -48,7 +48,7 @@ of loader work.
 | **`namespace` type side** | `declare namespace Intl` | 1 | **✓ shipped** — `Intl.CollatorOptions` resolves and checks |
 | **Standalone namespace value** | `Intl.Collator()` | 1 | **✓ shipped (WU6A / ADR-0010)** — `deep.Intl.value` rejects with `TK2322`, matching tsc, without an incomplete |
 | **Type predicates** | annotation lowering | 8 | **1.0 owner → `50`**; explicit incompletes, independent of loader start |
-| **Polymorphic `this` / object / intrinsic / symbol / bigint annotations** | annotation lowering | 179 | **1.0 owner → `75`** (164/6/5/3/1); explicit incompletes, independent of loader start |
+| **Polymorphic `this` / intrinsic / symbol / bigint annotations** | annotation lowering | 173 | **1.0 owner → `75`** (164/5/3/1); explicit incompletes, independent of loader start; `object` is shipped |
 | **Callable heritage compatibility** | `CallableFunction`/`NewableFunction extends Function` | 2 canonical + 2 surplus `TK2430` | canonical compatibility → `14`; surplus cardinality → parity-only `63` |
 | **`this`-parameter typing + `ThisType<T>`** | `\(this:`; `ThisType\|ThisParameterType\|OmitThisParameter` | 16 + 7 | **✓ shipped (B70)** — explicit receiver slots, `ThisType<T>`, and `ThisParameterType`/`OmitThisParameter`; member projection/loading remain `14` |
 | `enum` | `\benum\b` | **0** | ✓ not used by es5 core (needed for full model completeness → `42`, not for `14`) |
@@ -59,13 +59,13 @@ of loader work.
 
 The type-side namespace and declaration-merging work is real: all 28 constructor pairs,
 `Date`/`Number`/`String` reopenings, `Intl` type and value access, and local `Array<T>` heritage are
-proven. At checker commit `23bad42`, the raw pinned artifact produces exactly 4 diagnostics and 187
+proven. The current raw pinned artifact produces exactly 4 diagnostics and 181
 incompletes:
 
 - `14`: 2 canonical `TK2430` diagnostics for apparent `Function` compatibility;
 - `63`: 2 surplus `TK2430` diagnostics at those same sites (parity-only);
 - `50`: 8 type-predicate incompletes (independent 1.0 blocker);
-- `75`: 179 annotation incompletes: `this` 164, `object` 6, `intrinsic` 5, `symbol` 3, `bigint` 1
+- `75`: 173 annotation incompletes: `this` 164, `intrinsic` 5, `symbol` 3, `bigint` 1
   (independent 1.0 blockers).
 
 The machine verdict is **GO for starting backlog 14**: no raw or semantic witness retains a
