@@ -6,6 +6,8 @@
 mod composites;
 mod operators;
 #[cfg(test)]
+mod snapshot;
+#[cfg(test)]
 mod tests;
 
 use crate::types::hash::{structural_hash, StructuralKey};

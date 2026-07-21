@@ -9,6 +9,8 @@ mod class_semantics;
 pub mod diagnostics;
 pub mod driver;
 pub mod relate;
+#[cfg(test)]
+pub(crate) mod snapshot_codec;
 mod source;
 pub mod span;
 pub mod surface;

@@ -3,11 +3,17 @@
 //! Hot columns are indexed directly by `TypeId`; variable-size data lives in
 //! tag-selected side tables. `TypeId`s stay stable for the process lifetime.
 
+#[cfg(test)]
+use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader, SnapshotWriter};
 use crate::types::hash::StableHash;
 use crate::types::repr::{
     ArrayType, ClassInstanceType, ConditionalType, DeferredIndexedAccessType, FunctionType,
     InstantiationType, IntrinsicKind, LiteralValue, MappedType, ObjectType, TemplateType,
     TupleType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
+};
+#[cfg(test)]
+use crate::types::repr::{
+    GenericTypeParam, ModifierOp, ParameterType, PropertyType, TupleRestType, Visibility,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -588,5 +594,916 @@ impl Store {
         let payload = self.templates.len() as u32;
         self.templates.push(template);
         self.push(TypeTag::Template, flags, payload)
+    }
+}
+
+#[cfg(test)]
+impl Store {
+    pub(crate) fn snapshot_template_name_ids_for_test(&self) -> impl Iterator<Item = TypeId> + '_ {
+        self.template_names.keys().copied()
+    }
+
+    pub(crate) fn write_snapshot_for_test(
+        &self,
+        writer: &mut SnapshotWriter,
+    ) -> Result<(), SnapshotCodecError> {
+        writer.u32(1);
+        writer.usize(self.tag.len())?;
+        for index in 0..self.tag.len() {
+            writer.u8(self.tag[index].discriminant());
+            writer.u32(self.flags[index].0);
+            writer.u32(self.payload[index]);
+            writer.raw(&self.stable_hash[index].0);
+        }
+
+        writer.usize(self.literals.len())?;
+        for literal in &self.literals {
+            match literal {
+                LiteralValue::Number(value) => {
+                    writer.u8(0);
+                    writer.u64(value.to_bits());
+                }
+                LiteralValue::String(value) => {
+                    writer.u8(1);
+                    writer.string(value)?;
+                }
+                LiteralValue::Boolean(value) => {
+                    writer.u8(2);
+                    writer.bool(*value);
+                }
+            }
+        }
+
+        writer.usize(self.objects.len())?;
+        for object in &self.objects {
+            write_object(writer, object)?;
+        }
+        write_type_id_slices(writer, &self.unions)?;
+        write_type_id_slices(writer, &self.intersections)?;
+
+        writer.usize(self.functions.len())?;
+        for function in &self.functions {
+            write_function(writer, function)?;
+        }
+
+        writer.usize(self.type_params.len())?;
+        for parameter in &self.type_params {
+            writer.u32(parameter.id.0);
+            writer.string(&parameter.name)?;
+        }
+
+        writer.usize(self.arrays.len())?;
+        for array in &self.arrays {
+            writer.u32(array.element.0);
+        }
+
+        writer.usize(self.tuples.len())?;
+        for tuple in &self.tuples {
+            write_type_ids(writer, &tuple.elements)?;
+            writer.bool(tuple.rest.is_some());
+            if let Some(rest) = tuple.rest {
+                writer.usize(rest.position)?;
+                writer.u32(rest.ty.0);
+            }
+        }
+
+        writer.usize(self.conditionals.len())?;
+        for conditional in &self.conditionals {
+            writer.u32(conditional.check.0);
+            writer.u32(conditional.extends_ty.0);
+            writer.u32(conditional.true_branch.0);
+            writer.u32(conditional.false_branch.0);
+            writer.u32(conditional.infer_count);
+            writer.bool(conditional.distributive);
+            writer.bool(conditional.poisoned);
+        }
+
+        writer.usize(self.instantiations.len())?;
+        for instantiation in &self.instantiations {
+            writer.u32(instantiation.base.0);
+            writer.usize(instantiation.args.len())?;
+            for (parameter, argument) in &instantiation.args {
+                writer.u32(parameter.0);
+                writer.u32(argument.0);
+            }
+        }
+
+        writer.usize(self.class_instances.len())?;
+        for instance in &self.class_instances {
+            writer.u32(instance.class.0);
+            write_type_ids(writer, &instance.args)?;
+        }
+
+        writer.usize(self.deferred_indexed_accesses.len())?;
+        for access in &self.deferred_indexed_accesses {
+            writer.u32(access.object.0);
+            writer.u32(access.index.0);
+        }
+
+        writer.usize(self.mapped.len())?;
+        for mapped in &self.mapped {
+            writer.bool(mapped.homomorphic);
+            writer.u32(mapped.key_source.0);
+            writer.u32(mapped.value_template.0);
+            write_optional_type_id(writer, mapped.modifiers_source);
+            writer.u8(modifier_discriminant(mapped.optional_modifier));
+            writer.u8(modifier_discriminant(mapped.readonly_modifier));
+        }
+
+        writer.usize(self.templates.len())?;
+        for template in &self.templates {
+            writer.usize(template.texts.len())?;
+            for text in &template.texts {
+                writer.string(text)?;
+            }
+            write_type_ids(writer, &template.holes)?;
+        }
+
+        let mut constraints = self.type_param_constraints.iter().collect::<Vec<_>>();
+        constraints.sort_by_key(|(parameter, _)| parameter.0);
+        writer.usize(constraints.len())?;
+        for (parameter, constraint) in constraints {
+            writer.u32(parameter.0);
+            writer.u32(constraint.0);
+        }
+
+        let mut frozen = self.frozen_type_params.iter().copied().collect::<Vec<_>>();
+        frozen.sort_by_key(|parameter| parameter.0);
+        writer.usize(frozen.len())?;
+        for parameter in frozen {
+            writer.u32(parameter.0);
+        }
+
+        let mut names = self.template_names.iter().collect::<Vec<_>>();
+        names.sort_by_key(|(id, _)| id.0);
+        writer.usize(names.len())?;
+        for (id, name) in names {
+            writer.u32(id.0);
+            writer.string(name)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn read_snapshot_for_test(
+        reader: &mut SnapshotReader<'_>,
+    ) -> Result<Self, SnapshotCodecError> {
+        let version_offset = reader.position();
+        if reader.u32()? != 1 {
+            return Err(SnapshotCodecError::invalid(
+                version_offset,
+                "unsupported store snapshot version",
+            ));
+        }
+
+        let row_count = reader.collection_len(1 + 4 + 4 + 32)?;
+        let mut tag = Vec::with_capacity(row_count);
+        let mut flags = Vec::with_capacity(row_count);
+        let mut payload = Vec::with_capacity(row_count);
+        let mut stable_hash = Vec::with_capacity(row_count);
+        for _ in 0..row_count {
+            let offset = reader.position();
+            tag.push(read_type_tag(reader.u8()?, offset)?);
+            flags.push(TypeFlags(reader.u32()?));
+            payload.push(reader.u32()?);
+            let digest: [u8; 32] = reader
+                .raw(32)?
+                .try_into()
+                .expect("the strict reader returned one stable hash");
+            stable_hash.push(StableHash(digest));
+        }
+
+        let literal_count = reader.collection_len(1)?;
+        let mut literals = Vec::with_capacity(literal_count);
+        for _ in 0..literal_count {
+            let offset = reader.position();
+            literals.push(match reader.u8()? {
+                0 => LiteralValue::Number(f64::from_bits(reader.u64()?)),
+                1 => LiteralValue::String(reader.string()?.to_owned()),
+                2 => LiteralValue::Boolean(reader.bool()?),
+                _ => {
+                    return Err(SnapshotCodecError::invalid(
+                        offset,
+                        "invalid literal discriminant",
+                    ))
+                }
+            });
+        }
+
+        let object_count = reader.collection_len(8)?;
+        let mut objects = Vec::with_capacity(object_count);
+        for _ in 0..object_count {
+            objects.push(read_object(reader)?);
+        }
+        let unions = read_type_id_slices(reader)?;
+        let intersections = read_type_id_slices(reader)?;
+
+        let function_count = reader.collection_len(8)?;
+        let mut functions = Vec::with_capacity(function_count);
+        for _ in 0..function_count {
+            functions.push(read_function(reader)?);
+        }
+
+        let type_param_count = reader.collection_len(12)?;
+        let mut type_params = Vec::with_capacity(type_param_count);
+        for _ in 0..type_param_count {
+            type_params.push(TypeParamType {
+                id: TypeParamId(reader.u32()?),
+                name: reader.string()?.to_owned(),
+            });
+        }
+
+        let array_count = reader.collection_len(4)?;
+        let mut arrays = Vec::with_capacity(array_count);
+        for _ in 0..array_count {
+            arrays.push(ArrayType {
+                element: TypeId(reader.u32()?),
+            });
+        }
+
+        let tuple_count = reader.collection_len(9)?;
+        let mut tuples = Vec::with_capacity(tuple_count);
+        for _ in 0..tuple_count {
+            let elements = read_type_ids(reader)?;
+            let rest = if reader.bool()? {
+                Some(TupleRestType {
+                    position: reader.usize()?,
+                    ty: TypeId(reader.u32()?),
+                })
+            } else {
+                None
+            };
+            tuples.push(TupleType { elements, rest });
+        }
+
+        let conditional_count = reader.collection_len(22)?;
+        let mut conditionals = Vec::with_capacity(conditional_count);
+        for _ in 0..conditional_count {
+            conditionals.push(ConditionalType {
+                check: TypeId(reader.u32()?),
+                extends_ty: TypeId(reader.u32()?),
+                true_branch: TypeId(reader.u32()?),
+                false_branch: TypeId(reader.u32()?),
+                infer_count: reader.u32()?,
+                distributive: reader.bool()?,
+                poisoned: reader.bool()?,
+            });
+        }
+
+        let instantiation_count = reader.collection_len(12)?;
+        let mut instantiations = Vec::with_capacity(instantiation_count);
+        for _ in 0..instantiation_count {
+            let base = TypeId(reader.u32()?);
+            let argument_count = reader.collection_len(8)?;
+            let mut args = Vec::with_capacity(argument_count);
+            for _ in 0..argument_count {
+                args.push((TypeParamId(reader.u32()?), TypeId(reader.u32()?)));
+            }
+            instantiations.push(InstantiationType { base, args });
+        }
+
+        let class_instance_count = reader.collection_len(12)?;
+        let mut class_instances = Vec::with_capacity(class_instance_count);
+        for _ in 0..class_instance_count {
+            class_instances.push(ClassInstanceType {
+                class: crate::types::repr::ClassId(reader.u32()?),
+                args: read_type_ids(reader)?,
+            });
+        }
+
+        let deferred_count = reader.collection_len(8)?;
+        let mut deferred_indexed_accesses = Vec::with_capacity(deferred_count);
+        for _ in 0..deferred_count {
+            deferred_indexed_accesses.push(DeferredIndexedAccessType {
+                object: TypeId(reader.u32()?),
+                index: TypeId(reader.u32()?),
+            });
+        }
+
+        let mapped_count = reader.collection_len(12)?;
+        let mut mapped = Vec::with_capacity(mapped_count);
+        for _ in 0..mapped_count {
+            let homomorphic = reader.bool()?;
+            let key_source = TypeId(reader.u32()?);
+            let value_template = TypeId(reader.u32()?);
+            let modifiers_source = read_optional_type_id(reader)?;
+            let optional_offset = reader.position();
+            let optional_modifier = read_modifier(reader.u8()?, optional_offset)?;
+            let readonly_offset = reader.position();
+            let readonly_modifier = read_modifier(reader.u8()?, readonly_offset)?;
+            mapped.push(MappedType {
+                homomorphic,
+                key_source,
+                value_template,
+                modifiers_source,
+                optional_modifier,
+                readonly_modifier,
+            });
+        }
+
+        let template_count = reader.collection_len(16)?;
+        let mut templates = Vec::with_capacity(template_count);
+        for _ in 0..template_count {
+            let text_count = reader.collection_len(8)?;
+            let mut texts = Vec::with_capacity(text_count);
+            for _ in 0..text_count {
+                texts.push(reader.string()?.to_owned());
+            }
+            templates.push(TemplateType {
+                texts,
+                holes: read_type_ids(reader)?,
+            });
+        }
+
+        let constraint_count = reader.collection_len(8)?;
+        let mut type_param_constraints = FxHashMap::default();
+        let mut previous_constraint = None;
+        for _ in 0..constraint_count {
+            let parameter = TypeParamId(reader.u32()?);
+            let constraint = TypeId(reader.u32()?);
+            if previous_constraint.is_some_and(|previous| previous >= parameter.0)
+                || type_param_constraints
+                    .insert(parameter, constraint)
+                    .is_some()
+            {
+                return Err(SnapshotCodecError::invalid(
+                    reader.position(),
+                    "type parameter constraints are not strictly ordered",
+                ));
+            }
+            previous_constraint = Some(parameter.0);
+        }
+
+        let frozen_count = reader.collection_len(4)?;
+        let mut frozen_type_params = FxHashSet::default();
+        let mut previous_frozen = None;
+        for _ in 0..frozen_count {
+            let parameter = TypeParamId(reader.u32()?);
+            if previous_frozen.is_some_and(|previous| previous >= parameter.0)
+                || !frozen_type_params.insert(parameter)
+            {
+                return Err(SnapshotCodecError::invalid(
+                    reader.position(),
+                    "frozen type parameters are not strictly ordered",
+                ));
+            }
+            previous_frozen = Some(parameter.0);
+        }
+
+        let template_name_count = reader.collection_len(12)?;
+        let mut template_names = FxHashMap::default();
+        let mut previous_template = None;
+        for _ in 0..template_name_count {
+            let id = TypeId(reader.u32()?);
+            let name = reader.string()?.to_owned();
+            if previous_template.is_some_and(|previous| previous >= id.0)
+                || template_names.insert(id, name).is_some()
+            {
+                return Err(SnapshotCodecError::invalid(
+                    reader.position(),
+                    "template names are not strictly ordered",
+                ));
+            }
+            previous_template = Some(id.0);
+        }
+
+        let store = Store {
+            tag,
+            flags,
+            payload,
+            literals,
+            objects,
+            unions,
+            intersections,
+            functions,
+            type_params,
+            arrays,
+            tuples,
+            conditionals,
+            instantiations,
+            class_instances,
+            deferred_indexed_accesses,
+            mapped,
+            templates,
+            type_param_constraints,
+            frozen_type_params,
+            template_names,
+            stable_hash,
+        };
+        store.validate_snapshot_layout_for_test()?;
+        Ok(store)
+    }
+
+    fn validate_snapshot_layout_for_test(&self) -> Result<(), SnapshotCodecError> {
+        let len = self.len();
+        let valid_type = |id: TypeId| id.index() < len;
+        let mut payload_counts = [0usize; 14];
+        for index in 0..len {
+            if self.stable_hash[index] != StableHash::default() {
+                return Err(snapshot_validation(
+                    "stable hash column is unsupported by this schema",
+                ));
+            }
+            if self.flags[index].0 & !TypeFlags::CONTAINS_ERROR.0 != 0 {
+                return Err(snapshot_validation("unknown type flag bit"));
+            }
+            let id = TypeId(
+                u32::try_from(index)
+                    .map_err(|_| snapshot_validation("store length exceeds the TypeId range"))?,
+            );
+            let expected_flags = if self.intrinsic_kind(id) == Some(IntrinsicKind::Error) {
+                TypeFlags::CONTAINS_ERROR
+            } else {
+                TypeFlags::EMPTY
+            };
+            if self.flags[index] != expected_flags {
+                return Err(snapshot_validation("type flags do not match the row"));
+            }
+            let cold = cold_table_index(self.tag[index]);
+            if let Some(cold) = cold {
+                if usize::try_from(self.payload[index]).ok() != Some(payload_counts[cold]) {
+                    return Err(snapshot_validation("cold payload rows are not dense"));
+                }
+                payload_counts[cold] += 1;
+            }
+            match self.tag[index] {
+                TypeTag::Intrinsic if self.intrinsic_kind(id).is_none() => {
+                    return Err(snapshot_validation("invalid intrinsic payload"));
+                }
+                TypeTag::Readonly | TypeTag::Keyof if !valid_type(TypeId(self.payload[index])) => {
+                    return Err(snapshot_validation("inline type reference is out of range"));
+                }
+                TypeTag::MappedValue if self.payload[index] != 0 => {
+                    return Err(snapshot_validation("mapped-value payload is not zero"));
+                }
+                _ => {}
+            }
+        }
+        let actual_counts = [
+            self.literals.len(),
+            self.objects.len(),
+            self.unions.len(),
+            self.intersections.len(),
+            self.functions.len(),
+            self.type_params.len(),
+            self.arrays.len(),
+            self.tuples.len(),
+            self.conditionals.len(),
+            self.instantiations.len(),
+            self.class_instances.len(),
+            self.deferred_indexed_accesses.len(),
+            self.mapped.len(),
+            self.templates.len(),
+        ];
+        if payload_counts != actual_counts {
+            return Err(snapshot_validation("cold payload table length mismatch"));
+        }
+
+        for object in &self.objects {
+            if !object
+                .properties
+                .windows(2)
+                .all(|pair| pair[0].name <= pair[1].name)
+            {
+                return Err(snapshot_validation("object properties are not canonical"));
+            }
+            for property in &object.properties {
+                validate_type_id(property.ty, len)?;
+                validate_optional_type_id(property.write_ty, len)?;
+            }
+            validate_optional_type_id(object.string_index, len)?;
+            validate_optional_type_id(object.number_index, len)?;
+            validate_type_ids(&object.call_signatures, len)?;
+            validate_type_ids(&object.construct_signatures, len)?;
+        }
+        for members in &self.unions {
+            validate_canonical_set(members, len, TypeTag::Union, &self.tag)?;
+        }
+        for members in &self.intersections {
+            validate_canonical_set(members, len, TypeTag::Intersection, &self.tag)?;
+        }
+        for function in &self.functions {
+            for parameter in &function.type_params {
+                validate_optional_type_id(parameter.constraint, len)?;
+                validate_optional_type_id(parameter.default, len)?;
+            }
+            validate_optional_type_id(function.receiver, len)?;
+            for parameter in &function.params {
+                validate_type_id(parameter.ty, len)?;
+            }
+            validate_type_id(function.ret, len)?;
+        }
+        for array in &self.arrays {
+            validate_type_id(array.element, len)?;
+        }
+        for tuple in &self.tuples {
+            validate_type_ids(&tuple.elements, len)?;
+            if let Some(rest) = tuple.rest {
+                if rest.position > tuple.elements.len() {
+                    return Err(snapshot_validation("tuple rest position is out of range"));
+                }
+                validate_type_id(rest.ty, len)?;
+            }
+        }
+        for conditional in &self.conditionals {
+            validate_type_ids(
+                &[
+                    conditional.check,
+                    conditional.extends_ty,
+                    conditional.true_branch,
+                    conditional.false_branch,
+                ],
+                len,
+            )?;
+        }
+        for instantiation in &self.instantiations {
+            validate_type_id(instantiation.base, len)?;
+            if !instantiation
+                .args
+                .windows(2)
+                .all(|pair| pair[0].0 < pair[1].0)
+            {
+                return Err(snapshot_validation(
+                    "instantiation arguments are not canonical",
+                ));
+            }
+            for (_, argument) in &instantiation.args {
+                validate_type_id(*argument, len)?;
+            }
+        }
+        for instance in &self.class_instances {
+            validate_type_ids(&instance.args, len)?;
+        }
+        for access in &self.deferred_indexed_accesses {
+            validate_type_id(access.object, len)?;
+            validate_type_id(access.index, len)?;
+        }
+        for mapped in &self.mapped {
+            validate_type_id(mapped.key_source, len)?;
+            validate_type_id(mapped.value_template, len)?;
+            validate_optional_type_id(mapped.modifiers_source, len)?;
+        }
+        for template in &self.templates {
+            if template.texts.len() != template.holes.len() + 1 {
+                return Err(snapshot_validation("template text/hole arity mismatch"));
+            }
+            validate_type_ids(&template.holes, len)?;
+        }
+
+        let parameter_ids = self
+            .type_params
+            .iter()
+            .map(|parameter| parameter.id)
+            .collect::<FxHashSet<_>>();
+        if parameter_ids.len() != self.type_params.len() {
+            return Err(snapshot_validation("duplicate TypeParamId rows"));
+        }
+        for (parameter, constraint) in &self.type_param_constraints {
+            if !parameter_ids.contains(parameter) {
+                return Err(snapshot_validation(
+                    "constraint owner has no type parameter row",
+                ));
+            }
+            validate_type_id(*constraint, len)?;
+        }
+        if !self
+            .frozen_type_params
+            .iter()
+            .all(|parameter| parameter_ids.contains(parameter))
+        {
+            return Err(snapshot_validation(
+                "frozen owner has no type parameter row",
+            ));
+        }
+        for id in self.template_names.keys() {
+            validate_type_id(*id, len)?;
+            if !matches!(self.tag(*id), TypeTag::Conditional | TypeTag::Mapped) {
+                return Err(snapshot_validation(
+                    "template name is attached to a non-template row",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+fn snapshot_validation(message: &'static str) -> SnapshotCodecError {
+    SnapshotCodecError::invalid(0, message)
+}
+
+#[cfg(test)]
+fn validate_type_id(id: TypeId, len: usize) -> Result<(), SnapshotCodecError> {
+    if id.index() < len {
+        Ok(())
+    } else {
+        Err(snapshot_validation("TypeId reference is out of range"))
+    }
+}
+
+#[cfg(test)]
+fn validate_optional_type_id(id: Option<TypeId>, len: usize) -> Result<(), SnapshotCodecError> {
+    if let Some(id) = id {
+        validate_type_id(id, len)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn validate_type_ids(ids: &[TypeId], len: usize) -> Result<(), SnapshotCodecError> {
+    for id in ids {
+        validate_type_id(*id, len)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn validate_canonical_set(
+    members: &[TypeId],
+    len: usize,
+    nested_tag: TypeTag,
+    tags: &[TypeTag],
+) -> Result<(), SnapshotCodecError> {
+    if members.len() < 2 || !members.windows(2).all(|pair| pair[0] < pair[1]) {
+        return Err(snapshot_validation(
+            "set-operator members are not canonical",
+        ));
+    }
+    validate_type_ids(members, len)?;
+    if members
+        .iter()
+        .any(|member| tags[member.index()] == nested_tag)
+    {
+        return Err(snapshot_validation(
+            "set-operator members are not flattened",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn cold_table_index(tag: TypeTag) -> Option<usize> {
+    match tag {
+        TypeTag::Literal => Some(0),
+        TypeTag::Object => Some(1),
+        TypeTag::Union => Some(2),
+        TypeTag::Intersection => Some(3),
+        TypeTag::Function => Some(4),
+        TypeTag::TypeParam => Some(5),
+        TypeTag::Array => Some(6),
+        TypeTag::Tuple => Some(7),
+        TypeTag::Conditional => Some(8),
+        TypeTag::Instantiation => Some(9),
+        TypeTag::ClassInstance => Some(10),
+        TypeTag::DeferredIndexedAccess => Some(11),
+        TypeTag::Mapped => Some(12),
+        TypeTag::Template => Some(13),
+        TypeTag::Intrinsic
+        | TypeTag::Readonly
+        | TypeTag::Infer
+        | TypeTag::MappedValue
+        | TypeTag::Keyof => None,
+    }
+}
+
+#[cfg(test)]
+fn write_type_ids(writer: &mut SnapshotWriter, ids: &[TypeId]) -> Result<(), SnapshotCodecError> {
+    writer.usize(ids.len())?;
+    for id in ids {
+        writer.u32(id.0);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn read_type_ids(reader: &mut SnapshotReader<'_>) -> Result<Vec<TypeId>, SnapshotCodecError> {
+    let count = reader.collection_len(4)?;
+    let mut ids = Vec::with_capacity(count);
+    for _ in 0..count {
+        ids.push(TypeId(reader.u32()?));
+    }
+    Ok(ids)
+}
+
+#[cfg(test)]
+fn write_type_id_slices(
+    writer: &mut SnapshotWriter,
+    rows: &[Box<[TypeId]>],
+) -> Result<(), SnapshotCodecError> {
+    writer.usize(rows.len())?;
+    for row in rows {
+        write_type_ids(writer, row)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn read_type_id_slices(
+    reader: &mut SnapshotReader<'_>,
+) -> Result<Vec<Box<[TypeId]>>, SnapshotCodecError> {
+    let count = reader.collection_len(8)?;
+    let mut rows = Vec::with_capacity(count);
+    for _ in 0..count {
+        rows.push(read_type_ids(reader)?.into_boxed_slice());
+    }
+    Ok(rows)
+}
+
+#[cfg(test)]
+fn write_optional_type_id(writer: &mut SnapshotWriter, id: Option<TypeId>) {
+    writer.bool(id.is_some());
+    if let Some(id) = id {
+        writer.u32(id.0);
+    }
+}
+
+#[cfg(test)]
+fn read_optional_type_id(
+    reader: &mut SnapshotReader<'_>,
+) -> Result<Option<TypeId>, SnapshotCodecError> {
+    if reader.bool()? {
+        Ok(Some(TypeId(reader.u32()?)))
+    } else {
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+fn write_object(
+    writer: &mut SnapshotWriter,
+    object: &ObjectType,
+) -> Result<(), SnapshotCodecError> {
+    writer.usize(object.properties.len())?;
+    for property in &object.properties {
+        writer.string(&property.name)?;
+        writer.u32(property.ty.0);
+        write_optional_type_id(writer, property.write_ty);
+        writer.bool(property.optional);
+        writer.u8(match property.visibility {
+            Visibility::Public => 0,
+            Visibility::Private => 1,
+            Visibility::Protected => 2,
+        });
+        writer.bool(property.declaring_class.is_some());
+        if let Some(class) = property.declaring_class {
+            writer.u32(class.0);
+        }
+        writer.bool(property.readonly);
+        writer.bool(property.is_accessor);
+    }
+    write_optional_type_id(writer, object.string_index);
+    write_optional_type_id(writer, object.number_index);
+    write_type_ids(writer, &object.call_signatures)?;
+    write_type_ids(writer, &object.construct_signatures)
+}
+
+#[cfg(test)]
+fn read_object(reader: &mut SnapshotReader<'_>) -> Result<ObjectType, SnapshotCodecError> {
+    let property_count = reader.collection_len(16)?;
+    let mut properties = Vec::with_capacity(property_count);
+    for _ in 0..property_count {
+        let name = reader.string()?.to_owned();
+        let ty = TypeId(reader.u32()?);
+        let write_ty = read_optional_type_id(reader)?;
+        let optional = reader.bool()?;
+        let visibility_offset = reader.position();
+        let visibility = match reader.u8()? {
+            0 => Visibility::Public,
+            1 => Visibility::Private,
+            2 => Visibility::Protected,
+            _ => {
+                return Err(SnapshotCodecError::invalid(
+                    visibility_offset,
+                    "invalid visibility discriminant",
+                ))
+            }
+        };
+        let declaring_class = if reader.bool()? {
+            Some(crate::types::repr::ClassId(reader.u32()?))
+        } else {
+            None
+        };
+        properties.push(PropertyType {
+            name,
+            ty,
+            write_ty,
+            optional,
+            visibility,
+            declaring_class,
+            readonly: reader.bool()?,
+            is_accessor: reader.bool()?,
+        });
+    }
+    Ok(ObjectType {
+        properties,
+        string_index: read_optional_type_id(reader)?,
+        number_index: read_optional_type_id(reader)?,
+        call_signatures: read_type_ids(reader)?,
+        construct_signatures: read_type_ids(reader)?,
+    })
+}
+
+#[cfg(test)]
+fn write_function(
+    writer: &mut SnapshotWriter,
+    function: &FunctionType,
+) -> Result<(), SnapshotCodecError> {
+    writer.usize(function.type_params.len())?;
+    for parameter in &function.type_params {
+        writer.u32(parameter.id.0);
+        write_optional_type_id(writer, parameter.constraint);
+        write_optional_type_id(writer, parameter.default);
+    }
+    write_optional_type_id(writer, function.receiver);
+    writer.usize(function.params.len())?;
+    for parameter in &function.params {
+        writer.string(&parameter.name)?;
+        writer.u32(parameter.ty.0);
+        writer.bool(parameter.optional);
+        writer.bool(parameter.has_default);
+        writer.bool(parameter.rest);
+    }
+    writer.u32(function.ret.0);
+    Ok(())
+}
+
+#[cfg(test)]
+fn read_function(reader: &mut SnapshotReader<'_>) -> Result<FunctionType, SnapshotCodecError> {
+    let type_param_count = reader.collection_len(6)?;
+    let mut type_params = Vec::with_capacity(type_param_count);
+    for _ in 0..type_param_count {
+        type_params.push(GenericTypeParam {
+            id: TypeParamId(reader.u32()?),
+            constraint: read_optional_type_id(reader)?,
+            default: read_optional_type_id(reader)?,
+        });
+    }
+    let receiver = read_optional_type_id(reader)?;
+    let parameter_count = reader.collection_len(15)?;
+    let mut params = Vec::with_capacity(parameter_count);
+    for _ in 0..parameter_count {
+        params.push(ParameterType {
+            name: reader.string()?.to_owned(),
+            ty: TypeId(reader.u32()?),
+            optional: reader.bool()?,
+            has_default: reader.bool()?,
+            rest: reader.bool()?,
+        });
+    }
+    Ok(FunctionType {
+        type_params,
+        receiver,
+        params,
+        ret: TypeId(reader.u32()?),
+    })
+}
+
+#[cfg(test)]
+fn modifier_discriminant(modifier: ModifierOp) -> u8 {
+    match modifier {
+        ModifierOp::Keep => 0,
+        ModifierOp::Add => 1,
+        ModifierOp::Remove => 2,
+    }
+}
+
+#[cfg(test)]
+fn read_modifier(value: u8, offset: usize) -> Result<ModifierOp, SnapshotCodecError> {
+    match value {
+        0 => Ok(ModifierOp::Keep),
+        1 => Ok(ModifierOp::Add),
+        2 => Ok(ModifierOp::Remove),
+        _ => Err(SnapshotCodecError::invalid(
+            offset,
+            "invalid mapped modifier discriminant",
+        )),
+    }
+}
+
+#[cfg(test)]
+fn read_type_tag(value: u8, offset: usize) -> Result<TypeTag, SnapshotCodecError> {
+    match value {
+        0 => Ok(TypeTag::Intrinsic),
+        1 => Ok(TypeTag::Literal),
+        2 => Ok(TypeTag::Object),
+        3 => Ok(TypeTag::Union),
+        4 => Ok(TypeTag::Intersection),
+        5 => Ok(TypeTag::Function),
+        6 => Ok(TypeTag::TypeParam),
+        7 => Ok(TypeTag::Array),
+        8 => Ok(TypeTag::Tuple),
+        9 => Ok(TypeTag::Readonly),
+        10 => Ok(TypeTag::Conditional),
+        11 => Ok(TypeTag::Instantiation),
+        12 => Ok(TypeTag::Infer),
+        13 => Ok(TypeTag::Mapped),
+        14 => Ok(TypeTag::MappedValue),
+        15 => Ok(TypeTag::Template),
+        16 => Ok(TypeTag::Keyof),
+        17 => Ok(TypeTag::ClassInstance),
+        18 => Ok(TypeTag::DeferredIndexedAccess),
+        _ => Err(SnapshotCodecError::invalid(
+            offset,
+            "invalid type tag discriminant",
+        )),
     }
 }
