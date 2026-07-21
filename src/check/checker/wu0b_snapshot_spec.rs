@@ -747,11 +747,12 @@ fn snapshot_user_ids_are_suffixes() {
         r#"
             export declare namespace LocalSpace {
                 export interface LocalInterface<T> { value: T }
-                export class LocalClass<U> implements LocalInterface<U> {
+                export class LocalClass<U> {
                     value: U;
                 }
                 export const localValue: LocalClass<number>;
             }
+            export type LocalDiv = HTMLDivElement;
         "#,
     );
 
