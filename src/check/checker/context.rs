@@ -256,6 +256,39 @@ impl<Ticket: Copy + PartialEq> CheckerEffects<Ticket> {
     }
 }
 
+/// Dense ticket-key lookup for exactly-once lexical-effect coalescing.
+pub(in crate::check::checker) struct PendingEffectSlots {
+    events: Vec<Vec<Option<usize>>>,
+}
+
+impl PendingEffectSlots {
+    pub(in crate::check::checker) fn new() -> Self {
+        Self { events: Vec::new() }
+    }
+
+    pub(in crate::check::checker) fn get_or_insert(
+        &mut self,
+        (event, record): (usize, usize),
+        insert: impl FnOnce() -> usize,
+    ) -> (usize, bool) {
+        if self.events.len() <= event {
+            self.events.resize_with(event + 1, Vec::new);
+        }
+        let records = &mut self.events[event];
+        if records.len() <= record {
+            records.resize(record + 1, None);
+        }
+        match records[record] {
+            Some(index) => (index, false),
+            None => {
+                let index = insert();
+                records[record] = Some(index);
+                (index, true)
+            }
+        }
+    }
+}
+
 /// Per-declaration computed types, indexed by [`ValueStorageId`]. `None` means a
 /// declaration whose type could not be computed (out of subset); a reference to
 /// it resolves to the error type defensively.
@@ -839,6 +872,9 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) effect_stack: Vec<CheckerEffects<Ticket>>,
     /// Completed lexical owners awaiting deferred relation/override resolution.
     pub(in crate::check::checker) pending_effects: Vec<CheckerEffects<Ticket>>,
+    /// O(1) owner-to-batch lookup over the reservation ledger's dense ticket keys.
+    pub(in crate::check::checker) pending_effect_slots: PendingEffectSlots,
+    pub(in crate::check::checker) pending_effect_key: fn(Ticket) -> (usize, usize),
     /// Prelude declaration lowering uses real lexical frames but discards their effects.
     pub(in crate::check::checker) suppress_effects: bool,
     /// Persistent lexical reservations built before class fill and body checking.
@@ -1075,11 +1111,12 @@ pub(in crate::check::checker) struct CondFrame {
 
 #[cfg(test)]
 mod tests {
+    use crate::check::checker::events::{user_record_ticket_key, EventStore, UserRecordTicket};
     use crate::check::checker::events_library::{LibraryEventLedger, LibraryRecordTicket};
     use crate::check::checker::lexical_events::LexicalReservations;
     use crate::check::checker::reporting_record::CheckerRecord;
     use crate::diagnostics::{Diagnostic, DiagnosticCode, IncompleteSurface};
-    use crate::source::{LibraryFileOrdinal, SourceUnit};
+    use crate::source::{LibraryFileOrdinal, ModuleOrdinal, SourceUnit};
     use crate::span::Span;
     use crate::types::Interner;
     use oxc_allocator::Allocator;
@@ -1090,11 +1127,13 @@ mod tests {
     #[test]
     fn library_pass_finishes_ordered_record_batches_without_reporting_authority() {
         let mut ledger = LibraryEventLedger::default();
-        let first_owner: LibraryRecordTicket =
-            ledger.reserve_event(LibraryFileOrdinal::new(7), 11).primary;
+        let first = ledger.reserve_event(LibraryFileOrdinal::new(7), 11);
+        let first_owner: LibraryRecordTicket = first.primary;
+        let nested_owner = ledger
+            .reserve_record(first.id)
+            .expect("nested record reservation");
         let second_owner: LibraryRecordTicket =
             ledger.reserve_event(LibraryFileOrdinal::new(7), 13).primary;
-        drop(ledger);
 
         let prelude_allocator = Allocator::default();
         let user_allocator = Allocator::default();
@@ -1120,6 +1159,7 @@ mod tests {
                     suppress_effects: false,
                 },
                 pending_tickets: vec![first_owner, second_owner],
+                ticket_key: crate::check::checker::events_library::library_record_ticket_key,
             },
         );
         pass.type_environment = super::super::type_groups::TypeEnvironmentState::Published(
@@ -1153,25 +1193,148 @@ mod tests {
                 Span::new(13, 14),
                 "third",
             )));
+        pass.with_ticket_effects(second_owner, |pass| {
+            pass.emit_diagnostic(Diagnostic::cannot_find_name(Span::new(15, 16), "fourth"));
+        });
+        pass.with_ticket_effects(first_owner, |pass| {
+            pass.emit_diagnostic(Diagnostic::cannot_find_name(Span::new(16, 17), "fifth"));
+            pass.with_ticket_effects(nested_owner, |pass| {
+                pass.emit_diagnostic(Diagnostic::cannot_find_name(Span::new(17, 18), "nested"));
+            });
+        });
+        pass.with_ticket_effects(second_owner, |pass| {
+            pass.emit_diagnostic(Diagnostic::cannot_find_name(Span::new(18, 19), "sixth"));
+        });
         let batches = super::super::finish_semantic_effects(&mut pass);
 
-        assert_eq!(batches.len(), 2);
+        assert_eq!(batches.len(), 3);
         assert_eq!(batches[0].owner(), first_owner);
         assert_eq!(batches[1].owner(), second_owner);
+        assert_eq!(batches[2].owner(), nested_owner);
         assert!(matches!(
             batches[0].records(),
             [
                 CheckerRecord::Diagnostic(first),
                 CheckerRecord::Incomplete(second),
+                CheckerRecord::Diagnostic(fifth),
                 CheckerRecord::Diagnostic(constraint),
             ] if first.span.start == 11
                 && second.span.start == 12
+                && fifth.span.start == 16
                 && constraint.code == DiagnosticCode::TK2344
                 && constraint.span == Span::new(14, 15)
         ));
         assert!(matches!(
             batches[1].records(),
-            [CheckerRecord::Diagnostic(third)] if third.span.start == 13
+            [
+                CheckerRecord::Diagnostic(third),
+                CheckerRecord::Diagnostic(fourth),
+                CheckerRecord::Diagnostic(sixth),
+            ] if third.span.start == 13 && fourth.span.start == 15 && sixth.span.start == 18
         ));
+        assert!(matches!(
+            batches[2].records(),
+            [CheckerRecord::Diagnostic(nested)] if nested.span.start == 17
+        ));
+
+        for batch in batches {
+            let (owner, records) = batch.into_parts();
+            ledger.complete(owner, records).expect("complete batch");
+        }
+        let replay = ledger.finish().expect("complete library replay");
+        assert_eq!(
+            replay
+                .iter()
+                .map(|(key, _)| (key.event_ordinal, key.record_ordinal))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, 0),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+                (0, 1),
+                (1, 0),
+                (1, 0),
+                (1, 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn user_effect_index_coalesces_out_of_order_and_nested_owners_without_reordering_replay() {
+        let mut store = EventStore::default();
+        let first = store.reserve_event(ModuleOrdinal::new(0), 11);
+        let nested_owner = store
+            .reserve_record(first.id)
+            .expect("nested record reservation");
+        let second_owner = store.reserve_event(ModuleOrdinal::new(0), 13).primary;
+        let first_owner: UserRecordTicket = first.primary;
+
+        let prelude_allocator = Allocator::default();
+        let user_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let user = Parser::new(&user_allocator, "", SourceType::ts()).parse();
+        let binder = crate::binder::bind_module_with_prelude(&prelude.program, &user.program);
+        let mut interner = Interner::with_intrinsics();
+        let mut pass = super::super::build_pass_with_tickets(
+            &mut interner,
+            &binder,
+            Vec::new(),
+            vec![None; binder.type_groups.len()],
+            super::DeclTypes::new(binder.decl_count),
+            0,
+            super::super::PassReportingPlan {
+                reporting: super::super::PassReporting {
+                    source: SourceUnit::User {
+                        module_ordinal: ModuleOrdinal::new(0),
+                        unit_slot: crate::source::UnitSlot::new(0),
+                    },
+                    lexical_events: LexicalReservations::default(),
+                    suppress_effects: false,
+                },
+                pending_tickets: vec![first_owner, second_owner],
+                ticket_key: user_record_ticket_key,
+            },
+        );
+        pass.type_environment = super::super::type_groups::TypeEnvironmentState::Published(
+            super::super::type_groups::PublishedTypeEnvironment::empty(),
+        );
+
+        pass.with_ticket_effects(second_owner, |pass| {
+            pass.emit_diagnostic(Diagnostic::cannot_find_name(Span::new(13, 14), "second"));
+        });
+        pass.with_ticket_effects(first_owner, |pass| {
+            pass.emit_diagnostic(Diagnostic::cannot_find_name(Span::new(11, 12), "first"));
+            pass.with_ticket_effects(nested_owner, |pass| {
+                pass.emit_diagnostic(Diagnostic::cannot_find_name(Span::new(12, 13), "nested"));
+            });
+        });
+        pass.with_ticket_effects(second_owner, |pass| {
+            pass.emit_diagnostic(Diagnostic::cannot_find_name(
+                Span::new(14, 15),
+                "second-again",
+            ));
+        });
+
+        let batches = super::super::finish_semantic_effects(&mut pass);
+        assert_eq!(
+            batches
+                .iter()
+                .map(|batch| batch.owner())
+                .collect::<Vec<_>>(),
+            vec![first_owner, second_owner, nested_owner]
+        );
+        for batch in batches {
+            let (owner, records) = batch.into_parts();
+            store.complete(owner, records).expect("complete batch");
+        }
+        let replay = store.finish().expect("complete user replay");
+        assert_eq!(
+            replay
+                .iter()
+                .map(|(key, _)| (key.event_ordinal, key.record_ordinal))
+                .collect::<Vec<_>>(),
+            vec![(0, 0), (0, 1), (1, 0), (1, 0)]
+        );
     }
 }

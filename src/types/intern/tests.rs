@@ -523,6 +523,66 @@ fn reserved_terminalization_rejects_wrong_kind_and_double_use_without_mutation()
 }
 
 #[test]
+fn caller_certified_acyclic_object_promotion_preserves_the_snapshot_partition() {
+    let mut interner = Interner::with_intrinsics();
+    let number = interner.well_known().number;
+
+    let unique = interner.reserve_object();
+    assert_eq!(
+        interner.promote_caller_certified_acyclic_reserved_object(unique),
+        Err(ReservedObjectPromotionError::NotFrozen(unique))
+    );
+    interner.fill_object(
+        unique,
+        ObjectType {
+            properties: vec![prop("value", number)],
+            ..ObjectType::default()
+        },
+    );
+    assert_eq!(
+        interner
+            .promote_caller_certified_acyclic_reserved_object(unique)
+            .expect("unique acyclic reservation promotes"),
+        unique
+    );
+    assert_eq!(
+        interner.intern_object(ObjectType {
+            properties: vec![prop("value", number)],
+            ..ObjectType::default()
+        }),
+        unique,
+        "the promoted row participates in ordinary object dedup"
+    );
+
+    let collision = interner.reserve_object();
+    interner.fill_object(
+        collision,
+        ObjectType {
+            properties: vec![prop("value", number)],
+            ..ObjectType::default()
+        },
+    );
+    assert_eq!(
+        interner
+            .promote_caller_certified_acyclic_reserved_object(collision)
+            .expect("equal reservation resolves to the canonical row"),
+        unique
+    );
+
+    let mapped = interner.reserve_mapped();
+    assert_eq!(
+        interner.promote_caller_certified_acyclic_reserved_object(mapped),
+        Err(ReservedObjectPromotionError::KindMismatch(mapped))
+    );
+    interner
+        .poison_reserved_mapped(mapped)
+        .expect("unrelated reservation can still be terminalized");
+    interner
+        .encode_snapshot_bytes_for_test()
+        .expect("promoted row and collision orphan partition exactly");
+}
+
+#[test]
 fn accessor_write_type_is_part_of_object_identity() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();

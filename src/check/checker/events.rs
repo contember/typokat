@@ -24,6 +24,10 @@ pub(crate) struct UserRecordTicket {
     pub(crate) record_ordinal: usize,
 }
 
+pub(crate) const fn user_record_ticket_key(ticket: UserRecordTicket) -> (usize, usize) {
+    (ticket.event.index(), ticket.record_ordinal)
+}
+
 /// The total replay order. Field order is intentional and is the checker contract.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct EventKey {

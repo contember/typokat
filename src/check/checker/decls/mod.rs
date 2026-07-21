@@ -15,7 +15,7 @@ use crate::binder::Binder;
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
 use crate::types::repr::{ClassId, TypeParamId, TypeTag, Visibility};
-use crate::types::store::TypeId;
+use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
 use oxc_ast::ast::{
     Class, ClassElement, Declaration, Expression, ForStatementInit, ForStatementLeft, Function,
@@ -39,6 +39,257 @@ struct InterfaceOwnMemberOwners<Ticket: Copy> {
     properties: BTreeMap<String, (Ticket, Span)>,
     string_index: Option<(Ticket, Span)>,
     number_index: Option<(Ticket, Span)>,
+}
+
+struct ObjectAliasCanonicalizationGraph {
+    reverse: Vec<Vec<TypeId>>,
+    reaches_active_reservation: Vec<bool>,
+}
+
+impl ObjectAliasCanonicalizationGraph {
+    fn build(store: &Store, active: &FxHashSet<TypeId>) -> Self {
+        let mut reverse = vec![Vec::new(); store.len()];
+        for raw_owner in 0..store.len() {
+            let owner = TypeId(u32::try_from(raw_owner).expect("type store length fits TypeId"));
+            for_each_object_alias_type_operand(store, owner, |target| {
+                reverse[target.index()].push(owner);
+            });
+        }
+
+        let mut reaches_active_reservation = vec![false; store.len()];
+        let mut pending = active.iter().copied().collect::<Vec<_>>();
+        while let Some(target) = pending.pop() {
+            if std::mem::replace(&mut reaches_active_reservation[target.index()], true) {
+                continue;
+            }
+            pending.extend(reverse[target.index()].iter().copied());
+        }
+        Self {
+            reverse,
+            reaches_active_reservation,
+        }
+    }
+
+    fn body_reaches_active_reservation(&self, store: &Store, root: TypeId) -> bool {
+        let mut reaches = false;
+        for_each_object_alias_type_operand(store, root, |target| {
+            reaches |= self.reaches_active_reservation[target.index()];
+        });
+        reaches
+    }
+
+    fn has_external_store_inbound(&self, root: TypeId) -> bool {
+        self.reverse[root.index()]
+            .iter()
+            .any(|owner| *owner != root)
+    }
+
+    fn active_reservations_reachable_from_semantic_roots(
+        &self,
+        store: &Store,
+        roots: impl IntoIterator<Item = TypeId>,
+        active: &FxHashSet<TypeId>,
+    ) -> FxHashSet<TypeId> {
+        let mut reached = FxHashSet::default();
+        let mut visited = vec![false; store.len()];
+        let mut pending = roots.into_iter().collect::<Vec<_>>();
+        while let Some(ty) = pending.pop() {
+            if std::mem::replace(&mut visited[ty.index()], true) {
+                continue;
+            }
+            if active.contains(&ty) {
+                reached.insert(ty);
+            }
+            for_each_object_alias_type_operand(store, ty, |operand| pending.push(operand));
+        }
+        reached
+    }
+}
+
+fn for_each_object_alias_type_operand(store: &Store, owner: TypeId, mut visit: impl FnMut(TypeId)) {
+    match store.tag(owner) {
+        TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => {}
+        TypeTag::Object => {
+            let object = store.object_type(owner).expect("object payload");
+            for property in &object.properties {
+                visit(property.ty);
+                if let Some(write_ty) = property.write_ty {
+                    visit(write_ty);
+                }
+            }
+            if let Some(index) = object.string_index {
+                visit(index);
+            }
+            if let Some(index) = object.number_index {
+                visit(index);
+            }
+            object.call_signatures.iter().copied().for_each(&mut visit);
+            object
+                .construct_signatures
+                .iter()
+                .copied()
+                .for_each(&mut visit);
+        }
+        TypeTag::Union => store
+            .union_members(owner)
+            .expect("union payload")
+            .iter()
+            .copied()
+            .for_each(visit),
+        TypeTag::Intersection => store
+            .intersection_members(owner)
+            .expect("intersection payload")
+            .iter()
+            .copied()
+            .for_each(visit),
+        TypeTag::Function => {
+            let function = store.function_type(owner).expect("function payload");
+            for parameter in &function.type_params {
+                if let Some(constraint) = parameter.constraint {
+                    visit(constraint);
+                }
+                if let Some(default) = parameter.default {
+                    visit(default);
+                }
+            }
+            if let Some(receiver) = function.receiver {
+                visit(receiver);
+            }
+            for parameter in &function.params {
+                visit(parameter.ty);
+            }
+            visit(function.ret);
+        }
+        TypeTag::TypeParam => {
+            let parameter = store.type_param(owner).expect("type parameter payload");
+            if let Some(constraint) = store.type_param_constraint(parameter.id) {
+                visit(constraint);
+            }
+        }
+        TypeTag::Array => visit(store.array_type(owner).expect("array payload").element),
+        TypeTag::Tuple => {
+            let tuple = store.tuple_type(owner).expect("tuple payload");
+            tuple.elements.iter().copied().for_each(&mut visit);
+            if let Some(rest) = tuple.rest {
+                visit(rest.ty);
+            }
+        }
+        TypeTag::Readonly => visit(store.readonly_operand(owner).expect("readonly payload")),
+        TypeTag::Conditional => {
+            let conditional = store.conditional_type(owner).expect("conditional payload");
+            visit(conditional.check);
+            visit(conditional.extends_ty);
+            visit(conditional.true_branch);
+            visit(conditional.false_branch);
+        }
+        TypeTag::Instantiation => {
+            let instantiation = store
+                .instantiation_type(owner)
+                .expect("instantiation payload");
+            visit(instantiation.base);
+            for (_, argument) in &instantiation.args {
+                visit(*argument);
+            }
+        }
+        TypeTag::Mapped => {
+            let mapped = store.mapped_type(owner).expect("mapped payload");
+            visit(mapped.key_source);
+            visit(mapped.value_template);
+            if let Some(source) = mapped.modifiers_source {
+                visit(source);
+            }
+        }
+        TypeTag::Template => store
+            .template_type(owner)
+            .expect("template payload")
+            .holes
+            .iter()
+            .copied()
+            .for_each(visit),
+        TypeTag::Keyof => visit(store.keyof_operand(owner).expect("keyof payload")),
+        TypeTag::ClassInstance => store
+            .class_instance_type(owner)
+            .expect("class instance payload")
+            .args
+            .iter()
+            .copied()
+            .for_each(visit),
+        TypeTag::DeferredIndexedAccess => {
+            let access = store
+                .deferred_indexed_access_type(owner)
+                .expect("deferred indexed access payload");
+            visit(access.object);
+            visit(access.index);
+        }
+    }
+}
+
+fn push_type_parameter_descriptors(
+    roots: &mut Vec<TypeId>,
+    descriptors: Option<&TypeGroupParameterDescriptors>,
+) {
+    let Some(descriptors) = descriptors else {
+        return;
+    };
+    roots.extend(
+        descriptors
+            .constraints
+            .iter()
+            .chain(&descriptors.defaults)
+            .filter_map(|state| match state {
+                TypeParameterMetadataState::Ready(ty) => Some(*ty),
+                TypeParameterMetadataState::Absent
+                | TypeParameterMetadataState::Poisoned
+                | TypeParameterMetadataState::Unsupported => None,
+            }),
+    );
+}
+
+fn push_published_defaults(roots: &mut Vec<TypeId>, defaults: &[PublishedTypeParameterDefault]) {
+    roots.extend(defaults.iter().filter_map(|default| match default {
+        PublishedTypeParameterDefault::Ready(ty) => Some(*ty),
+        PublishedTypeParameterDefault::Absent | PublishedTypeParameterDefault::Unsupported => None,
+    }));
+}
+
+fn push_typed_alternatives(roots: &mut Vec<TypeId>, alternatives: &[InterfaceTypedAlternative]) {
+    roots.extend(
+        alternatives
+            .iter()
+            .flat_map(|alternative| alternative.types.iter().copied()),
+    );
+}
+
+fn push_pending_effect_type_roots<Ticket: Copy>(
+    roots: &mut Vec<TypeId>,
+    effects: &CheckerEffects<Ticket>,
+) {
+    for obligation in &effects.obligations {
+        match obligation {
+            DeferredRelationObligation::Assign(obligation) => {
+                roots.extend([obligation.src, obligation.tgt]);
+            }
+            DeferredRelationObligation::AssertionCompatibility(obligation) => {
+                roots.extend([obligation.source, obligation.asserted]);
+            }
+        }
+    }
+    for check in &effects.constraint_checks {
+        for (constraint, argument, _) in &check.checks {
+            roots.extend(constraint.iter().copied());
+            roots.push(*argument);
+        }
+        roots.extend(check.substitutions.values().copied());
+    }
+    for relation in &effects.interface_relations {
+        roots.extend([relation.source, relation.target]);
+    }
+    for check in &effects.override_checks {
+        roots.extend([check.own_ty, check.base_ty]);
+    }
+    for nested in &effects.nested {
+        push_pending_effect_type_roots(roots, nested);
+    }
 }
 
 impl<Ticket: Copy> Default for InterfaceOwnMemberOwners<Ticket> {
@@ -572,10 +823,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             self.freeze_type_group(decl_id);
         }
 
-        // Fill seeded object aliases so legal member recursion resolves to the reserved id.
-        for index in start..end {
-            self.ensure_object_alias_filled(scope, index);
-        }
+        // Fill every seeded object alias before deciding which roots are acyclic and structural.
+        self.fill_and_canonicalize_object_aliases_range(start, end);
 
         // Touch remaining aliases to resolve the whole memoized DAG.
         for index in start..end {
@@ -2652,21 +2901,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Fill one seeded object-literal alias's reserved object with lowered members.
     /// Runs on demand in `template_fill`; `resolving_alias` stays set so nested
     /// mapped self-references still report `TK2456`.
-    fn ensure_object_alias_filled(&mut self, scope: ScopeId, index: usize) {
+    fn ensure_object_alias_filled(&mut self, _scope: ScopeId, index: usize) {
         if !matches!(self.template_fill.get(index), Some(ClassFillState::Pending)) {
             return;
         }
         let decl_id = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
-        self.with_type_decl_effects(decl_id, |pass| {
-            pass.ensure_object_alias_filled_inner(scope, index)
-        });
+        let filled = self
+            .with_type_decl_effects(decl_id, |pass| pass.ensure_object_alias_filled_inner(index));
+        if filled {
+            self.freeze_type_group(decl_id);
+        }
     }
 
-    fn ensure_object_alias_filled_inner(&mut self, _scope: ScopeId, index: usize) {
+    fn ensure_object_alias_filled_inner(&mut self, index: usize) -> bool {
         match self.template_fill.get(index).copied() {
-            Some(ClassFillState::Done) | Some(ClassFillState::Filling) => return,
+            Some(ClassFillState::Done) | Some(ClassFillState::Filling) => return false,
             Some(ClassFillState::Pending) => {}
-            None => return,
+            None => return false,
         }
         let (scope, reserved, members, name, name_span) = match &self.type_decls[index] {
             TypeDecl::Alias {
@@ -2679,7 +2930,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             } => (*scope, *reserved, &lit.members, name.clone(), *name_span),
             // Not a seeded object alias (a Pending interface belongs to
             // [`ensure_interface_filled`]) — leave the state untouched.
-            _ => return,
+            _ => return false,
         };
         if let Some(slot) = self.template_fill.get_mut(index) {
             *slot = ClassFillState::Filling;
@@ -2697,7 +2948,169 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if let Some(slot) = self.template_fill.get_mut(index) {
             *slot = ClassFillState::Done;
         }
-        self.freeze_type_group(decl_id);
+        true
+    }
+
+    fn object_alias_semantic_roots(&self, active_owners: &FxHashMap<TypeId, usize>) -> Vec<TypeId> {
+        let mut roots = Vec::new();
+        for (index, resolved) in self.type_resolved.iter().enumerate() {
+            let Some(resolved) = resolved else {
+                continue;
+            };
+            if active_owners.get(resolved).copied() != Some(index) {
+                roots.push(*resolved);
+            }
+        }
+
+        for declaration in &self.type_decls {
+            match declaration {
+                TypeDecl::Interface {
+                    defaults,
+                    recovery_defaults,
+                    conflict_alternatives,
+                    parameter_descriptors,
+                    ..
+                } => {
+                    roots.extend(defaults.iter().flatten().copied());
+                    push_published_defaults(&mut roots, recovery_defaults);
+                    push_typed_alternatives(&mut roots, conflict_alternatives);
+                    push_type_parameter_descriptors(&mut roots, parameter_descriptors.as_ref());
+                }
+                TypeDecl::Alias { defaults, .. } => {
+                    roots.extend(defaults.iter().flatten().copied());
+                }
+                TypeDecl::Class {
+                    recovery_defaults,
+                    conflict_alternatives,
+                    parameter_descriptors,
+                    ..
+                } => {
+                    push_published_defaults(&mut roots, recovery_defaults);
+                    push_typed_alternatives(&mut roots, conflict_alternatives);
+                    push_type_parameter_descriptors(&mut roots, parameter_descriptors.as_ref());
+                }
+                TypeDecl::Unavailable { .. } | TypeDecl::Resolved { .. } => {}
+            }
+        }
+
+        if let Some(construction) = self.type_group_construction.as_ref() {
+            construction.for_each_frozen_type_reference(|owner, ty| {
+                if active_owners.get(&ty).copied() != Some(owner.index()) {
+                    roots.push(ty);
+                }
+            });
+        }
+        for effects in &self.pending_effects {
+            push_pending_effect_type_roots(&mut roots, effects);
+        }
+        for ((template, arguments), result) in &self.eager_application_cache {
+            roots.push(*template);
+            roots.extend(arguments.iter().map(|(_, argument)| *argument));
+            roots.push(*result);
+        }
+        roots
+    }
+
+    fn fill_and_canonicalize_object_aliases_range(&mut self, start: usize, end: usize) {
+        let candidates = (start..end.min(self.type_decls.len()))
+            .filter(|index| {
+                matches!(
+                    (self.template_fill.get(*index), self.type_decls.get(*index)),
+                    (
+                        Some(ClassFillState::Pending),
+                        Some(TypeDecl::Alias {
+                            object_template: Some(_),
+                            ..
+                        })
+                    )
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut filled = Vec::with_capacity(candidates.len());
+        for index in candidates {
+            let decl_id = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
+            if self.with_type_decl_effects(decl_id, |pass| {
+                pass.ensure_object_alias_filled_inner(index)
+            }) {
+                filled.push(index);
+            }
+        }
+        if filled.is_empty() {
+            return;
+        }
+
+        let active_owners = self
+            .type_decls
+            .iter()
+            .enumerate()
+            .filter_map(|(index, declaration)| match declaration {
+                TypeDecl::Alias {
+                    object_template: Some(reserved),
+                    ..
+                } => Some((*reserved, index)),
+                _ => None,
+            })
+            .collect::<FxHashMap<_, _>>();
+        let active = active_owners.keys().copied().collect::<FxHashSet<_>>();
+        let graph = ObjectAliasCanonicalizationGraph::build(self.interner.store(), &active);
+        let semantic_roots = self.object_alias_semantic_roots(&active_owners);
+        let externally_captured = graph.active_reservations_reachable_from_semantic_roots(
+            self.interner.store(),
+            semantic_roots,
+            &active,
+        );
+
+        let mut promotion_order = Vec::with_capacity(filled.len());
+        // Fixed semantic roots may anchor dedup only when they retain their exact id.
+        for captured in [true, false] {
+            promotion_order.extend(filled.iter().copied().filter(|index| {
+                let TypeDecl::Alias {
+                    object_template: Some(reserved),
+                    ..
+                } = self.type_decls[*index]
+                else {
+                    return false;
+                };
+                externally_captured.contains(&reserved) == captured
+            }));
+        }
+
+        for index in promotion_order {
+            let reserved = match &self.type_decls[index] {
+                TypeDecl::Alias {
+                    object_template: Some(reserved),
+                    ..
+                } => *reserved,
+                _ => continue,
+            };
+            let safe = !graph.has_external_store_inbound(reserved)
+                && !graph.body_reaches_active_reservation(self.interner.store(), reserved);
+            if !safe {
+                continue;
+            }
+            let canonical = self
+                .interner
+                .promote_caller_certified_acyclic_reserved_object(reserved)
+                .expect("caller-certified acyclic object alias owns one frozen reservation");
+            // A collision leaves the reservation untouched, so captured holders stay valid.
+            if externally_captured.contains(&reserved) && canonical != reserved {
+                continue;
+            }
+            self.type_resolved[index] = Some(canonical);
+            let TypeDecl::Alias {
+                object_template, ..
+            } = &mut self.type_decls[index]
+            else {
+                unreachable!("canonicalized object alias retains its declaration draft")
+            };
+            *object_template = None;
+        }
+
+        for index in filled {
+            self.freeze_type_group(TypeGroupId(
+                u32::try_from(index).expect("type group index fits u32"),
+            ));
+        }
     }
 
     /// Force-fill a heritage base before composition reads its members.

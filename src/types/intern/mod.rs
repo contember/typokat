@@ -65,6 +65,14 @@ pub(crate) enum ReservedTypeFillError {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReservedObjectPromotionError {
+    NotReserved(TypeId),
+    KindMismatch(TypeId),
+    NotFrozen(TypeId),
+    InvalidBackingRow(TypeId),
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum ReservedTypeState {
     Pending,
     Frozen,

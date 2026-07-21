@@ -80,6 +80,50 @@ impl Interner {
         )])
     }
 
+    /// Promote a caller-proven acyclic alias reservation into structural identity.
+    pub(crate) fn promote_caller_certified_acyclic_reserved_object(
+        &mut self,
+        id: TypeId,
+    ) -> Result<TypeId, super::ReservedObjectPromotionError> {
+        let Some(reserved) = self.reserved_types.get(&id).copied() else {
+            return Err(super::ReservedObjectPromotionError::NotReserved(id));
+        };
+        if reserved.kind != super::ReservedTypeKind::Object {
+            return Err(super::ReservedObjectPromotionError::KindMismatch(id));
+        }
+        if reserved.state != super::ReservedTypeState::Frozen {
+            return Err(super::ReservedObjectPromotionError::NotFrozen(id));
+        }
+        let Some(object) = self.store.object_type(id) else {
+            return Err(super::ReservedObjectPromotionError::InvalidBackingRow(id));
+        };
+        let key = StructuralKey::Object {
+            properties: &object.properties,
+            string_index: object.string_index,
+            number_index: object.number_index,
+            call_signatures: &object.call_signatures,
+            construct_signatures: &object.construct_signatures,
+        };
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, candidate| {
+            store.object_type(candidate).is_some_and(|candidate| {
+                candidate.string_index == object.string_index
+                    && candidate.number_index == object.number_index
+                    && candidate.call_signatures == object.call_signatures
+                    && candidate.construct_signatures == object.construct_signatures
+                    && object_props_eq(&candidate.properties, &object.properties)
+            })
+        }) {
+            return Ok(existing);
+        }
+
+        self.reserved_types
+            .remove(&id)
+            .expect("validated object reservation remains registered");
+        self.dedup.entry(hash).or_default().push(id);
+        Ok(id)
+    }
+
     /// Intern a function type. Generic binders and parameters are positional and
     /// never sorted; all call-observable fields participate in identity.
     pub fn intern_function(&mut self, function: FunctionType) -> TypeId {

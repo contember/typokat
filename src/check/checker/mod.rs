@@ -76,7 +76,7 @@ use context::{
     Pass, TypeDecl,
 };
 use decls::{reserve_type_decls, type_decl_id, walk_type_decls, TopTypeDecl};
-use events::{CandidateEffects, EventStore, UserRecordTicket};
+use events::{user_record_ticket_key, CandidateEffects, EventStore, UserRecordTicket};
 use lexical_events::{ClassBinding, LexicalOwnerPhase, LexicalReservations};
 use reporting_record::CheckerRecord;
 use statements::{emit_exhausted_obligation, emit_obligation_failure};
@@ -90,6 +90,7 @@ struct PassReporting<Ticket: Copy> {
 struct PassReportingPlan<Ticket: Copy> {
     reporting: PassReporting<Ticket>,
     pending_tickets: Vec<Ticket>,
+    ticket_key: fn(Ticket) -> (usize, usize),
 }
 
 struct UserReportingAdapter {
@@ -2177,14 +2178,21 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
         mut effects: CheckerEffects<Ticket>,
     ) {
         let nested = std::mem::take(&mut effects.nested);
-        if let Some(existing) = self
-            .pending_effects
-            .iter_mut()
-            .find(|existing| existing.records.owner() == effects.records.owner())
-        {
-            existing.merge(effects);
-        } else {
+        let owner = effects.records.owner();
+        let next = self.pending_effects.len();
+        let (index, inserted) = self
+            .pending_effect_slots
+            .get_or_insert((self.pending_effect_key)(owner), || next);
+        if inserted {
+            debug_assert_eq!(index, next);
             self.pending_effects.push(effects);
+        } else {
+            let existing = self
+                .pending_effects
+                .get_mut(index)
+                .expect("pending-effect slot indexes one existing batch");
+            debug_assert!(existing.records.owner() == owner);
+            existing.merge(effects);
         }
         for child in nested {
             self.enqueue_effects(child);
@@ -2347,6 +2355,7 @@ fn build_pass_with_reporting<'a, 'ast>(
         PassReportingPlan {
             reporting,
             pending_tickets,
+            ticket_key: user_record_ticket_key,
         },
     )
 }
@@ -2363,11 +2372,17 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
     let PassReportingPlan {
         reporting,
         pending_tickets,
+        ticket_key,
     } = reporting_plan;
-    let pending_effects = pending_tickets
-        .into_iter()
-        .map(CheckerEffects::new)
-        .collect();
+    let mut pending_effects = Vec::with_capacity(pending_tickets.len());
+    let mut pending_effect_slots = context::PendingEffectSlots::new();
+    for ticket in pending_tickets {
+        let index = pending_effects.len();
+        let (existing, inserted) = pending_effect_slots.get_or_insert(ticket_key(ticket), || index);
+        assert!(inserted, "pending lexical tickets must be unique");
+        assert_eq!(existing, index);
+        pending_effects.push(CheckerEffects::new(ticket));
+    }
     let template_fill: Vec<ClassFillState> = type_decls
         .iter()
         .map(|decl| match decl {
@@ -2403,6 +2418,8 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         current_source: reporting.source,
         effect_stack: Vec::new(),
         pending_effects,
+        pending_effect_slots,
+        pending_effect_key: ticket_key,
         lexical_events: reporting.lexical_events,
         suppress_effects: reporting.suppress_effects,
         type_environment: type_groups::TypeEnvironmentState::constructing(ConstructionDrafts {

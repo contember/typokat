@@ -20,6 +20,10 @@ pub(crate) struct LibraryRecordTicket {
     pub(crate) record_ordinal: usize,
 }
 
+pub(crate) const fn library_record_ticket_key(ticket: LibraryRecordTicket) -> (usize, usize) {
+    (ticket.event.index(), ticket.record_ordinal)
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LibraryReservedEvent {
     pub(crate) id: LibraryEventId,

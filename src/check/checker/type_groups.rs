@@ -384,6 +384,32 @@ impl TypeGroupConstruction {
             })
             .collect()
     }
+
+    pub(in crate::check::checker) fn for_each_frozen_type_reference(
+        &self,
+        mut visit: impl FnMut(TypeGroupId, TypeId),
+    ) {
+        for (index, slot) in self.slots.iter().enumerate() {
+            let TypeGroupConstructionSlot::Frozen(PublishedTypeGroupTerminal::Ready(group)) = slot
+            else {
+                continue;
+            };
+            let owner = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
+            if let PublishedTypeGroupSurface::Template(template) = group.surface {
+                visit(owner, template);
+            }
+            for default in &group.parameter_defaults {
+                if let PublishedTypeParameterDefault::Ready(default) = default {
+                    visit(owner, *default);
+                }
+            }
+            for alternative in &group.conflict_alternatives {
+                for ty in &alternative.types {
+                    visit(owner, *ty);
+                }
+            }
+        }
+    }
 }
 
 fn parameter_names(

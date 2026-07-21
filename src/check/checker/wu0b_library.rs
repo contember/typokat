@@ -4,8 +4,8 @@
 use super::classes::application::ClassTypeParameterDefault;
 use super::context::DeclTypes;
 use super::events_library::{
-    LibraryEventKey, LibraryEventLedger, LibraryEventLedgerError, LibraryRecordTicket,
-    LibrarySemanticReportingAdapter,
+    library_record_ticket_key, LibraryEventKey, LibraryEventLedger, LibraryEventLedgerError,
+    LibraryRecordTicket, LibrarySemanticReportingAdapter,
 };
 use super::lexical_events::LexicalReservations;
 use super::lexical_events_library::{library_unit, ExactUnit};
@@ -2059,6 +2059,7 @@ pub(crate) fn compile_owned_injected_profile(
                 suppress_effects: false,
             },
             pending_tickets,
+            ticket_key: library_record_ticket_key,
         },
     );
 
