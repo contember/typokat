@@ -55,17 +55,70 @@ pub(in crate::check::checker) struct FrozenNamespaceValueTerminals {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub(in crate::check::checker) enum NamespaceValueUnavailableCause {
+    MissingExportedMemberName = 0,
+    DuplicateExportedValue = 1,
+    UnboundExportedVariable = 2,
+    MissingExportedVariableSyntax = 3,
+    InvalidUsingDeclaration = 4,
+    VariableSurfaceUnavailable = 5,
+    UnboundExportedFunction = 6,
+    MissingExportedFunctionSyntax = 7,
+    UnboundExportedClass = 8,
+    UnboundExportedClassIdentity = 9,
+    UnboundNestedNamespace = 10,
+    UnsupportedExportedMember = 11,
+    DeferredExportedMember = 12,
+    FunctionNamespacePayloadUnavailable = 13,
+    FunctionOwnerCallSurfaceUnavailable = 14,
+    FunctionSurfaceUnavailable = 15,
+    ClassSurfaceUnavailable = 16,
+    NestedNamespaceUnavailable = 17,
+    ExistingOwnerUnavailable = 18,
+    NamespaceContainmentCycle = 19,
+    InvalidPrivateNamespaceMember = 20,
+    ClassValueSurfaceUnavailable = 21,
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) type FrozenNamespaceUnavailableCause = NamespaceValueUnavailableCause;
+
+#[cfg(test)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) enum FrozenNamespaceValueTerminalSnapshot {
+    Ready { storage: ValueStorageId, ty: TypeId },
+    Unavailable(FrozenNamespaceUnavailableCause),
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) struct FrozenNamespaceValueTerminalSnapshotRow {
+    pub(in crate::check::checker) namespace: NamespaceId,
+    pub(in crate::check::checker) terminal: FrozenNamespaceValueTerminalSnapshot,
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) type FrozenNamespaceValueTerminalsSnapshotParts =
+    Vec<FrozenNamespaceValueTerminalSnapshotRow>;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) enum StandaloneNamespaceTerminal {
     Planned,
-    Ready { storage: ValueStorageId, ty: TypeId },
-    Unavailable { cause: &'static str },
+    Ready {
+        storage: ValueStorageId,
+        ty: TypeId,
+    },
+    Unavailable {
+        cause: NamespaceValueUnavailableCause,
+    },
 }
 
 struct StandaloneNamespacePlan<Ticket: Copy> {
     storage: ValueStorageId,
     properties: Vec<PropertyType>,
     dependencies: Vec<StandaloneNamespaceDependency<Ticket>>,
-    unavailable: Option<&'static str>,
+    unavailable: Option<NamespaceValueUnavailableCause>,
 }
 
 struct StandaloneNamespaceDependency<Ticket: Copy> {
@@ -478,6 +531,63 @@ impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
     }
 }
 
+#[cfg(test)]
+impl FrozenNamespaceValueTerminals {
+    pub(in crate::check::checker) fn snapshot_parts(
+        &self,
+    ) -> Result<FrozenNamespaceValueTerminalsSnapshotParts, &'static str> {
+        let mut rows = self
+            .standalone
+            .iter()
+            .map(|(&namespace, &terminal)| {
+                let terminal = match terminal {
+                    StandaloneNamespaceTerminal::Planned => {
+                        return Err("snapshot namespace terminal is still planned")
+                    }
+                    StandaloneNamespaceTerminal::Ready { storage, ty } => {
+                        FrozenNamespaceValueTerminalSnapshot::Ready { storage, ty }
+                    }
+                    StandaloneNamespaceTerminal::Unavailable { cause } => {
+                        FrozenNamespaceValueTerminalSnapshot::Unavailable(cause)
+                    }
+                };
+                Ok(FrozenNamespaceValueTerminalSnapshotRow {
+                    namespace,
+                    terminal,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.sort_by_key(|row| row.namespace.0);
+        Ok(rows)
+    }
+
+    pub(in crate::check::checker) fn from_snapshot_parts(
+        rows: FrozenNamespaceValueTerminalsSnapshotParts,
+    ) -> Result<Self, &'static str> {
+        if rows
+            .windows(2)
+            .any(|pair| pair[0].namespace.0 >= pair[1].namespace.0)
+        {
+            return Err("snapshot namespace terminals are not strictly ordered");
+        }
+        let standalone = rows
+            .into_iter()
+            .map(|row| {
+                let terminal = match row.terminal {
+                    FrozenNamespaceValueTerminalSnapshot::Ready { storage, ty } => {
+                        StandaloneNamespaceTerminal::Ready { storage, ty }
+                    }
+                    FrozenNamespaceValueTerminalSnapshot::Unavailable(cause) => {
+                        StandaloneNamespaceTerminal::Unavailable { cause }
+                    }
+                };
+                (row.namespace, terminal)
+            })
+            .collect();
+        Ok(Self { standalone })
+    }
+}
+
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Prepare one module's attached namespace values before class/callable publication.
     pub(in crate::check::checker) fn prepare_attached_namespace_values(
@@ -579,10 +689,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 Option<NamespaceId>,
             ),
         > = FxHashMap::default();
-        let mut unavailable = private_invalid.then_some("invalid-private-namespace-member");
+        let mut unavailable = private_invalid
+            .then_some(NamespaceValueUnavailableCause::InvalidPrivateNamespaceMember);
         for member in &public_members {
             let Some(name) = member.name.as_ref() else {
-                unavailable = Some("missing-exported-member-name");
+                unavailable = Some(NamespaceValueUnavailableCause::MissingExportedMemberName);
                 continue;
             };
             let facts = (member.kind, member.value_storage, member.child_namespace);
@@ -611,7 +722,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             context,
                         );
                     }
-                    unavailable = Some("duplicate-exported-value");
+                    unavailable = Some(NamespaceValueUnavailableCause::DuplicateExportedValue);
                 }
             }
         }
@@ -630,7 +741,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     let (Some(declaration), Some(scope), Some(storage)) =
                         (member.declaration, member.scope, member.value_storage)
                     else {
-                        unavailable = Some("unbound-exported-variable");
+                        unavailable = Some(NamespaceValueUnavailableCause::UnboundExportedVariable);
                         continue;
                     };
                     let Some((kind, declarator)) = syntax
@@ -638,7 +749,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         .get(&(member.module, member.source_start))
                         .copied()
                     else {
-                        unavailable = Some("missing-exported-variable-syntax");
+                        unavailable =
+                            Some(NamespaceValueUnavailableCause::MissingExportedVariableSyntax);
                         continue;
                     };
                     let using_diagnostic = namespace_using_diagnostic(
@@ -651,7 +763,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         invalid_namespace_using(kind, member.publication, member.ambient);
                     if let Some(diagnostic) = using_diagnostic {
                         self.record_namespace_attachment_diagnostic(declaration, diagnostic);
-                        unavailable = Some("invalid-using-declaration");
+                        unavailable = Some(NamespaceValueUnavailableCause::InvalidUsingDeclaration);
                     }
                     let annotation = match &declarator.type_annotation {
                         Some(annotation) => self.lower_namespace_member_annotation(
@@ -677,7 +789,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 "namespace member initializer cannot be finalized before root publication",
                             );
                         }
-                        unavailable = Some("variable-surface-unavailable");
+                        unavailable =
+                            Some(NamespaceValueUnavailableCause::VariableSurfaceUnavailable);
                         continue;
                     };
                     if !invalid_using {
@@ -696,7 +809,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
                 MergeDeclarationKind::Function => {
                     let (Some(scope), Some(storage)) = (member.scope, member.value_storage) else {
-                        unavailable = Some("unbound-exported-function");
+                        unavailable = Some(NamespaceValueUnavailableCause::UnboundExportedFunction);
                         continue;
                     };
                     let Some(function) = syntax
@@ -704,7 +817,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         .get(&(member.module, member.source_start))
                         .copied()
                     else {
-                        unavailable = Some("missing-exported-function-syntax");
+                        unavailable =
+                            Some(NamespaceValueUnavailableCause::MissingExportedFunctionSyntax);
                         continue;
                     };
                     let reservation =
@@ -735,7 +849,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     let (Some(declaration), Some(storage), Some(scope)) =
                         (member.declaration, member.value_storage, member.scope)
                     else {
-                        unavailable = Some("unbound-exported-class");
+                        unavailable = Some(NamespaceValueUnavailableCause::UnboundExportedClass);
                         continue;
                     };
                     let Some(class) = self
@@ -746,7 +860,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         .find(|binding| binding.value_decl == Some(storage))
                         .map(|binding| binding.class_id)
                     else {
-                        unavailable = Some("unbound-exported-class-identity");
+                        unavailable =
+                            Some(NamespaceValueUnavailableCause::UnboundExportedClassIdentity);
                         continue;
                     };
                     let static_root_cycle = syntax
@@ -778,7 +893,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         continue;
                     }
                     let Some(child) = member.child_namespace else {
-                        unavailable = Some("unbound-nested-namespace");
+                        unavailable = Some(NamespaceValueUnavailableCause::UnboundNestedNamespace);
                         continue;
                     };
                     if self
@@ -843,7 +958,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             context,
                         );
                     }
-                    unavailable = Some("unsupported-exported-member");
+                    unavailable = Some(NamespaceValueUnavailableCause::UnsupportedExportedMember);
                 }
                 MergeDeclarationKind::DeferredExport => {
                     let local_span = member
@@ -882,7 +997,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 "namespace export alias target is unavailable",
                             );
                         });
-                        unavailable = Some("deferred-exported-member");
+                        unavailable = Some(NamespaceValueUnavailableCause::DeferredExportedMember);
                     }
                 }
                 MergeDeclarationKind::TypeAlias | MergeDeclarationKind::Interface => {}
@@ -902,7 +1017,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .function_groups
                     .namespace_payload_for_value(merge.storage)
                 else {
-                    unavailable = Some("function-namespace-payload-unavailable");
+                    unavailable =
+                        Some(NamespaceValueUnavailableCause::FunctionNamespacePayloadUnavailable);
                     continue;
                 };
                 let call_signatures = match self.interner.store().tag(property.ty) {
@@ -916,7 +1032,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     _ => Vec::new(),
                 };
                 if call_signatures.is_empty() {
-                    unavailable = Some("function-owner-call-surface-unavailable");
+                    unavailable =
+                        Some(NamespaceValueUnavailableCause::FunctionOwnerCallSurfaceUnavailable);
                     continue;
                 }
                 property.ty = self.interner.intern_object(ObjectType {
@@ -927,7 +1044,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             properties.extend(function_properties);
         } else {
-            unavailable = Some("function-surface-unavailable");
+            unavailable = Some(NamespaceValueUnavailableCause::FunctionSurfaceUnavailable);
         }
         for (storage, module, source_start, scope, annotation, ty) in variables {
             if self.decl_types.get(storage).is_none() {
@@ -1159,7 +1276,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         } => {
                             if *static_root_cycle {
                                 static_cycles.push((*declaration, *span));
-                                unavailable = Some("class-surface-unavailable");
+                                unavailable =
+                                    Some(NamespaceValueUnavailableCause::ClassSurfaceUnavailable);
                                 None
                             } else {
                                 match self
@@ -1172,14 +1290,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                         match self.decl_types.get(*storage) {
                                             Some(ty) => Some(ty),
                                             None => {
-                                                unavailable =
-                                                    Some("class-value-surface-unavailable");
+                                                unavailable = Some(
+                                                    NamespaceValueUnavailableCause::ClassValueSurfaceUnavailable,
+                                                );
                                                 None
                                             }
                                         }
                                     }
                                     DemandOutcome::Exhausted(_) => {
-                                        unavailable = Some("class-surface-unavailable");
+                                        unavailable = Some(
+                                            NamespaceValueUnavailableCause::ClassSurfaceUnavailable,
+                                        );
                                         None
                                     }
                                 }
@@ -1194,7 +1315,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 if let Some(failure) = alias_failure {
                                     alias_failures.push(*failure);
                                 }
-                                unavailable = Some("nested-namespace-unavailable");
+                                unavailable = Some(
+                                    NamespaceValueUnavailableCause::NestedNamespaceUnavailable,
+                                );
                                 None
                             }
                             Some(StandaloneNamespaceTerminal::Planned) | None => {
@@ -1211,7 +1334,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 if let Some(failure) = alias_failure {
                                     alias_failures.push(*failure);
                                 }
-                                unavailable = Some("existing-owner-unavailable");
+                                unavailable =
+                                    Some(NamespaceValueUnavailableCause::ExistingOwnerUnavailable);
                                 None
                             }
                         },
@@ -1278,7 +1402,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     self.namespace_values.standalone_terminals.insert(
                         namespace,
                         StandaloneNamespaceTerminal::Unavailable {
-                            cause: "namespace-containment-cycle",
+                            cause: NamespaceValueUnavailableCause::NamespaceContainmentCycle,
                         },
                     );
                 }
@@ -2811,9 +2935,13 @@ mod tests {
     use super::{
         duplicate_property_kind, namespace_member_participates_in_payload,
         namespace_payload_duplicate, namespace_payload_unavailable, prepared_namespace_value_kind,
-        project_syntax_index, MergeDeclarationKind, NamespacePublication,
+        project_syntax_index, FrozenNamespaceUnavailableCause,
+        FrozenNamespaceValueTerminalSnapshot, FrozenNamespaceValueTerminalSnapshotRow,
+        FrozenNamespaceValueTerminals, MergeDeclarationKind, NamespacePublication,
         PreparedNamespaceValueKind, StandaloneNamespaceTerminal,
     };
+    use crate::binder::declaration::ValueStorageId;
+    use crate::binder::namespace::NamespaceId;
     use crate::binder::namespace::NamespaceInstanceState;
     use crate::binder::scope::ScopeId;
     use crate::check::checker::events_library::LibraryEventLedger;
@@ -2821,10 +2949,83 @@ mod tests {
     use crate::check::query::reset_query_demand_measure;
     use crate::driver::check_source;
     use crate::source::{LibraryFileOrdinal, SourceOrdinal, SourceUnit};
-    use crate::types::Interner;
+    use crate::types::{Interner, TypeId};
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
+    use rustc_hash::FxHashMap;
+
+    #[test]
+    fn frozen_namespace_snapshot_round_trips_closed_terminals() {
+        let causes = [
+            FrozenNamespaceUnavailableCause::MissingExportedMemberName,
+            FrozenNamespaceUnavailableCause::DuplicateExportedValue,
+            FrozenNamespaceUnavailableCause::UnboundExportedVariable,
+            FrozenNamespaceUnavailableCause::MissingExportedVariableSyntax,
+            FrozenNamespaceUnavailableCause::InvalidUsingDeclaration,
+            FrozenNamespaceUnavailableCause::VariableSurfaceUnavailable,
+            FrozenNamespaceUnavailableCause::UnboundExportedFunction,
+            FrozenNamespaceUnavailableCause::MissingExportedFunctionSyntax,
+            FrozenNamespaceUnavailableCause::UnboundExportedClass,
+            FrozenNamespaceUnavailableCause::UnboundExportedClassIdentity,
+            FrozenNamespaceUnavailableCause::UnboundNestedNamespace,
+            FrozenNamespaceUnavailableCause::UnsupportedExportedMember,
+            FrozenNamespaceUnavailableCause::DeferredExportedMember,
+            FrozenNamespaceUnavailableCause::FunctionNamespacePayloadUnavailable,
+            FrozenNamespaceUnavailableCause::FunctionOwnerCallSurfaceUnavailable,
+            FrozenNamespaceUnavailableCause::FunctionSurfaceUnavailable,
+            FrozenNamespaceUnavailableCause::ClassSurfaceUnavailable,
+            FrozenNamespaceUnavailableCause::NestedNamespaceUnavailable,
+            FrozenNamespaceUnavailableCause::ExistingOwnerUnavailable,
+            FrozenNamespaceUnavailableCause::NamespaceContainmentCycle,
+            FrozenNamespaceUnavailableCause::InvalidPrivateNamespaceMember,
+            FrozenNamespaceUnavailableCause::ClassValueSurfaceUnavailable,
+        ];
+        let mut standalone = causes
+            .into_iter()
+            .enumerate()
+            .map(|(index, cause)| {
+                (
+                    NamespaceId(u32::try_from(index).expect("cause index fits u32")),
+                    StandaloneNamespaceTerminal::Unavailable { cause },
+                )
+            })
+            .collect::<FxHashMap<_, _>>();
+        standalone.insert(
+            NamespaceId(30),
+            StandaloneNamespaceTerminal::Ready {
+                storage: ValueStorageId(11),
+                ty: TypeId(13),
+            },
+        );
+        let frozen = FrozenNamespaceValueTerminals { standalone };
+
+        let parts = frozen.snapshot_parts().expect("snapshot terminals");
+        let restored =
+            FrozenNamespaceValueTerminals::from_snapshot_parts(parts.clone()).expect("restore");
+
+        assert_eq!(restored.snapshot_parts(), Ok(parts));
+    }
+
+    #[test]
+    fn frozen_namespace_snapshot_rejects_noncanonical_input() {
+        assert!(FrozenNamespaceValueTerminals::from_snapshot_parts(vec![
+            FrozenNamespaceValueTerminalSnapshotRow {
+                namespace: NamespaceId(3),
+                terminal: FrozenNamespaceValueTerminalSnapshot::Unavailable(
+                    FrozenNamespaceUnavailableCause::DeferredExportedMember,
+                ),
+            },
+            FrozenNamespaceValueTerminalSnapshotRow {
+                namespace: NamespaceId(1),
+                terminal: FrozenNamespaceValueTerminalSnapshot::Ready {
+                    storage: ValueStorageId(2),
+                    ty: TypeId(4),
+                },
+            },
+        ])
+        .is_err());
+    }
 
     #[test]
     fn project_attached_callables_keep_exact_sources_at_identical_offsets() {

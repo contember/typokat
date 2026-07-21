@@ -1,5 +1,7 @@
 //! Measurement-only compiler for injected declaration-library profiles.
 
+#[cfg(test)]
+use super::classes::application::ClassTypeParameterDefault;
 use super::context::DeclTypes;
 use super::events_library::{
     LibraryEventKey, LibraryEventLedger, LibraryEventLedgerError, LibraryRecordTicket,
@@ -7,10 +9,14 @@ use super::events_library::{
 };
 use super::lexical_events::LexicalReservations;
 use super::lexical_events_library::{library_unit, ExactUnit};
+#[cfg(test)]
+use super::library_identities::LibraryIdentityTerminal;
 use super::library_identities::LibrarySemanticIdentities;
 #[cfg(test)]
 use super::library_reporting::LibraryReportingFamily;
 use super::library_reporting::{LibraryReportingConsumer, LibraryReportingReceipt};
+#[cfg(test)]
+use super::namespace_values::FrozenNamespaceValueTerminalSnapshot;
 use super::namespace_values::NamespaceValueRegistry;
 use super::reporting_record::CheckerRecord;
 use super::type_groups::{
@@ -30,10 +36,14 @@ use crate::binder::namespace::{
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
+#[cfg(test)]
+use crate::class_semantics::PublishedClassSnapshotTerminal;
 use crate::class_semantics::{CanonicalPublishedClassTerminal, DemandOutcome, PublishedClasses};
 use crate::diagnostics::{render_to_writer_with_format, render_type, DiagnosticFormat};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
 use crate::span::Span;
+#[cfg(test)]
+use crate::types::repr::TypeParamId;
 use crate::types::repr::{ClassId, IntrinsicKind, LiteralValue, ModifierOp, TypeTag, Visibility};
 use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
@@ -54,6 +64,507 @@ pub(crate) struct OwnedLibraryRuntimeState {
     runtime: FrozenCheckerRuntimeMetadata,
     next_type_param: u32,
     next_class_id: u32,
+    source_file_count: u32,
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) struct OwnedLibraryRuntimeSnapshotParts {
+    pub(in crate::check::checker) interner: Interner,
+    pub(in crate::check::checker) binder: Binder,
+    pub(in crate::check::checker) published_types:
+        super::type_groups::PublishedTypeEnvironmentSnapshotParts,
+    pub(in crate::check::checker) decl_types: Vec<Option<TypeId>>,
+    pub(in crate::check::checker) semantic_identities:
+        Option<super::library_identities::LibrarySemanticIdentitiesSnapshotParts>,
+    pub(in crate::check::checker) runtime: super::FrozenCheckerRuntimeSnapshotParts,
+    pub(in crate::check::checker) next_type_param: u32,
+    pub(in crate::check::checker) next_class_id: u32,
+    pub(in crate::check::checker) source_file_count: u32,
+}
+
+#[cfg(test)]
+fn validate_library_source_prefix(
+    binder: &Binder,
+    source_file_count: u32,
+) -> Result<(), &'static str> {
+    if source_file_count == 0 {
+        return Err("snapshot library state has no source files");
+    }
+    let mut source_keys = binder
+        .snapshot_module_sources()
+        .values()
+        .map(|source| source.0)
+        .collect::<Vec<_>>();
+    if source_keys.is_empty() {
+        return Err("snapshot binder has no retained source ownership");
+    }
+    source_keys.sort_unstable();
+    if source_keys.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("snapshot binder repeats a retained source key");
+    }
+    let expected_len = source_file_count
+        .checked_add(1)
+        .ok_or("snapshot source count overflows the prelude prefix")?;
+    if u32::try_from(source_keys.len()).map_err(|_| "snapshot source-key count does not fit u32")?
+        != expected_len
+        || source_keys
+            .iter()
+            .enumerate()
+            .any(|(index, source)| *source != u32::try_from(index).unwrap_or(u32::MAX))
+    {
+        return Err("snapshot binder source keys are not the contiguous prelude/library prefix");
+    }
+    if binder
+        .snapshot_module_sources()
+        .keys()
+        .any(|scope| binder.graph.get(*scope).is_none())
+    {
+        return Err("snapshot binder source ownership refers to an unknown scope");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn validate_owned_library_snapshot_parts(
+    parts: &OwnedLibraryRuntimeSnapshotParts,
+) -> Result<(), &'static str> {
+    fn type_in_range(id: TypeId, store_len: usize) -> bool {
+        usize::try_from(id.0).is_ok_and(|index| index < store_len)
+    }
+
+    fn type_param_precedes_counter(id: TypeParamId, next_type_param: u32) -> bool {
+        id.0 < next_type_param
+    }
+
+    validate_library_source_prefix(&parts.binder, parts.source_file_count)?;
+    if parts.published_types.groups.len() != parts.binder.type_groups.len() {
+        return Err("snapshot published type-group count does not match the binder");
+    }
+    if parts.decl_types.len()
+        != usize::try_from(parts.binder.decl_count)
+            .map_err(|_| "snapshot binder storage count does not fit usize")?
+    {
+        return Err("snapshot declaration types do not cover the binder storage prefix");
+    }
+
+    let store = parts.interner.store();
+    let store_len = store.len();
+    if parts
+        .decl_types
+        .iter()
+        .flatten()
+        .any(|ty| !type_in_range(*ty, store_len))
+    {
+        return Err("snapshot declaration type is out of range");
+    }
+
+    let mut classes = BTreeSet::new();
+    for (class, terminal) in &parts.published_types.classes {
+        if !classes.insert(*class) {
+            return Err("snapshot class publication repeats a class id");
+        }
+        if class.0 >= parts.next_class_id {
+            return Err("snapshot class id collides with the next class counter");
+        }
+        let PublishedClassSnapshotTerminal::Ready(surface) = terminal else {
+            continue;
+        };
+        if surface
+            .type_params()
+            .iter()
+            .any(|parameter| !type_param_precedes_counter(*parameter, parts.next_type_param))
+        {
+            return Err("snapshot type parameter id collides with the next parameter counter");
+        }
+        if surface.class() != *class
+            || !type_in_range(surface.instance_template(), store_len)
+            || !type_in_range(surface.static_template(), store_len)
+            || surface
+                .constructor_template()
+                .is_some_and(|ty| !type_in_range(ty, store_len))
+        {
+            return Err("snapshot published class surface has an invalid reference");
+        }
+    }
+
+    let mut class_group_names = BTreeMap::new();
+    for (index, terminal) in parts.published_types.groups.iter().enumerate() {
+        let PublishedTypeGroupTerminal::Ready(group) = terminal else {
+            continue;
+        };
+        let group_id = TypeGroupId(
+            u32::try_from(index).map_err(|_| "snapshot type-group index does not fit u32")?,
+        );
+        if parts
+            .binder
+            .type_groups
+            .get(group_id)
+            .is_none_or(|binding| binding.name != group.name)
+        {
+            return Err("snapshot published type-group name does not match the binder");
+        }
+        if group
+            .parameters
+            .iter()
+            .any(|parameter| !type_param_precedes_counter(*parameter, parts.next_type_param))
+            || group.parameter_defaults.iter().any(|default| {
+                matches!(default, PublishedTypeParameterDefault::Ready(ty) if !type_in_range(*ty, store_len))
+            })
+            || group
+                .conflict_alternatives
+                .iter()
+                .flat_map(|alternative| &alternative.types)
+                .any(|ty| !type_in_range(*ty, store_len))
+        {
+            return Err("snapshot published type group has an invalid type reference");
+        }
+        match group.surface {
+            PublishedTypeGroupSurface::Template(ty) if !type_in_range(ty, store_len) => {
+                return Err("snapshot published type-group template is out of range")
+            }
+            PublishedTypeGroupSurface::Class(class) => {
+                if !classes.contains(&class) {
+                    return Err("snapshot published type group refers to an unknown class");
+                }
+                if class_group_names
+                    .insert(class, group.name.as_str())
+                    .is_some()
+                {
+                    return Err("snapshot class identity is published by multiple type groups");
+                }
+            }
+            PublishedTypeGroupSurface::Template(_) => {}
+        }
+    }
+    if class_group_names.keys().copied().collect::<BTreeSet<_>>() != classes {
+        return Err("snapshot published classes do not have exact type-group ownership");
+    }
+
+    for index in 0..store_len {
+        let ty = TypeId(
+            u32::try_from(index).map_err(|_| "snapshot type-store length does not fit TypeId")?,
+        );
+        if store
+            .type_param(ty)
+            .is_some_and(|parameter| parameter.id.0 >= parts.next_type_param)
+            || store.function_type(ty).is_some_and(|function| {
+                function
+                    .type_params
+                    .iter()
+                    .any(|parameter| parameter.id.0 >= parts.next_type_param)
+            })
+            || store.instantiation_type(ty).is_some_and(|instantiation| {
+                instantiation
+                    .args
+                    .iter()
+                    .any(|(parameter, _)| parameter.0 >= parts.next_type_param)
+            })
+        {
+            return Err("snapshot type parameter id collides with the next parameter counter");
+        }
+        if store.class_instance_type(ty).is_some_and(|instance| {
+            instance.class.0 >= parts.next_class_id || !classes.contains(&instance.class)
+        }) {
+            return Err("snapshot class instance refers to an unknown class identity");
+        }
+        if store.object_type(ty).is_some_and(|object| {
+            object.properties.iter().any(|property| {
+                property.declaring_class.is_some_and(|class| {
+                    class.0 >= parts.next_class_id || !classes.contains(&class)
+                })
+            })
+        }) {
+            return Err("snapshot object property refers to an unknown class identity");
+        }
+    }
+
+    if let Some(identities) = &parts.semantic_identities {
+        let expected_names = [
+            "Array",
+            "ReadonlyArray",
+            "String",
+            "Number",
+            "Boolean",
+            "RegExp",
+            "Object",
+            "CallableFunction",
+        ];
+        for (terminal, expected_name) in identities.iter().zip(expected_names) {
+            let LibraryIdentityTerminal::Ready(identity) = terminal else {
+                return Err("snapshot installed semantic identities are not all ready");
+            };
+            if !type_in_range(identity.template, store_len)
+                || identity
+                    .parameters
+                    .iter()
+                    .any(|parameter| parameter.0 >= parts.next_type_param)
+            {
+                return Err("snapshot semantic identity has an invalid type reference");
+            }
+            let Some(PublishedTypeGroupTerminal::Ready(group)) =
+                parts.published_types.groups.get(identity.group.index())
+            else {
+                return Err("snapshot semantic identity refers to an unpublished type group");
+            };
+            if group.name != expected_name
+                || group.parameters != identity.parameters
+                || group.surface != PublishedTypeGroupSurface::Template(identity.template)
+            {
+                return Err("snapshot semantic identity does not match its published type group");
+            }
+        }
+    }
+
+    let valid_class = |class: ClassId| class.0 < parts.next_class_id && classes.contains(&class);
+    let valid_storage = |storage: ValueStorageId| storage.0 < parts.binder.decl_count;
+    let application_classes = parts
+        .runtime
+        .class_application_parameters
+        .iter()
+        .map(|(class, _)| *class)
+        .collect::<BTreeSet<_>>();
+    if application_classes != classes {
+        return Err("snapshot class application metadata does not exactly cover published classes");
+    }
+    let new_metadata_classes = parts
+        .runtime
+        .class_new_metadata
+        .iter()
+        .map(|(class, _)| *class)
+        .collect::<BTreeSet<_>>();
+    if new_metadata_classes != classes {
+        return Err("snapshot new metadata does not exactly cover published classes");
+    }
+    let class_name_rows = parts
+        .runtime
+        .class_names
+        .iter()
+        .map(|(class, name)| (*class, name.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    if class_name_rows.len() != parts.runtime.class_names.len()
+        || class_name_rows.keys().copied().collect::<BTreeSet<_>>() != classes
+        || class_name_rows.iter().any(|(class, name)| {
+            class_group_names
+                .get(class)
+                .is_none_or(|group_name| group_name != name)
+        })
+    {
+        return Err("snapshot class names do not exactly match published class groups");
+    }
+    let mut bound_classes = BTreeSet::new();
+    if parts
+        .runtime
+        .class_value_bindings
+        .iter()
+        .any(|(_, binding)| !bound_classes.insert(binding.class_id))
+        || bound_classes != classes
+    {
+        return Err("snapshot class value bindings do not exactly cover published classes");
+    }
+    for (class, parameters) in &parts.runtime.class_application_parameters {
+        if !valid_class(*class) {
+            return Err("snapshot class application metadata refers to an unknown class");
+        }
+        for parameter in parameters {
+            if parameter.id.0 >= parts.next_type_param
+                || parameter
+                    .constraint
+                    .is_some_and(|ty| !type_in_range(ty, store_len))
+                || matches!(parameter.default, ClassTypeParameterDefault::Ready(ty) if !type_in_range(ty, store_len))
+            {
+                return Err("snapshot class application metadata has an invalid type reference");
+            }
+        }
+        if let Some((_, PublishedClassSnapshotTerminal::Ready(surface))) = parts
+            .published_types
+            .classes
+            .iter()
+            .find(|(published, _)| published == class)
+        {
+            let parameter_ids = parameters
+                .iter()
+                .map(|parameter| parameter.id)
+                .collect::<Vec<_>>();
+            if parameter_ids != surface.type_params() {
+                return Err(
+                    "snapshot class application parameters do not match the published class",
+                );
+            }
+        }
+    }
+    for (class, metadata) in &parts.runtime.class_new_metadata {
+        if !valid_class(*class) || !valid_class(metadata.ctor_declaring_class) {
+            return Err("snapshot runtime class metadata refers to an unknown class");
+        }
+        let mut current = *class;
+        let mut visited = BTreeSet::new();
+        while current != metadata.ctor_declaring_class && visited.insert(current) {
+            let Some(parent) = parts
+                .runtime
+                .class_parents
+                .iter()
+                .find_map(|(child, parent)| (*child == current).then_some(*parent))
+            else {
+                break;
+            };
+            current = parent;
+        }
+        if current != metadata.ctor_declaring_class {
+            return Err("snapshot constructor owner is not on the class parent chain");
+        }
+    }
+    if parts
+        .runtime
+        .class_parents
+        .iter()
+        .any(|(class, parent)| !valid_class(*class) || !valid_class(*parent))
+        || parts
+            .runtime
+            .class_names
+            .iter()
+            .any(|(class, _)| !valid_class(*class))
+    {
+        return Err("snapshot runtime class metadata refers to an unknown class");
+    }
+    if parts
+        .runtime
+        .class_value_aliases
+        .iter()
+        .chain(&parts.runtime.standalone_namespace_value_aliases)
+        .any(|(alias, target)| !valid_storage(*alias) || !valid_storage(*target))
+    {
+        return Err("snapshot runtime value alias is out of range");
+    }
+    if parts
+        .runtime
+        .class_value_bindings
+        .iter()
+        .any(|(storage, binding)| !valid_storage(*storage) || !valid_class(binding.class_id))
+    {
+        return Err("snapshot class value binding has an invalid reference");
+    }
+    for (_, binding) in &parts.runtime.class_value_bindings {
+        let Some((_, parameters)) = parts
+            .runtime
+            .class_application_parameters
+            .iter()
+            .find(|(class, _)| *class == binding.class_id)
+        else {
+            return Err("snapshot class value binding has no application metadata");
+        };
+        let expected_generic = !parameters.is_empty();
+        if binding.has_header_type_params != expected_generic {
+            return Err(
+                "snapshot class value binding generic bit does not match application metadata",
+            );
+        }
+    }
+    if parts.runtime.class_value_aliases.iter().any(|(_, target)| {
+        !parts
+            .runtime
+            .class_value_bindings
+            .iter()
+            .any(|(storage, _)| storage == target)
+    }) {
+        return Err("snapshot class value alias does not target a class binding");
+    }
+
+    let ready_namespace_storages = parts
+        .runtime
+        .namespace_terminals
+        .iter()
+        .filter_map(|row| match row.terminal {
+            FrozenNamespaceValueTerminalSnapshot::Ready { storage, .. } => Some(storage),
+            FrozenNamespaceValueTerminalSnapshot::Unavailable(_) => None,
+        })
+        .collect::<Vec<_>>();
+    for row in &parts.runtime.namespace_terminals {
+        if parts.binder.namespaces.get(row.namespace).is_none() {
+            return Err("snapshot namespace terminal refers to an unknown namespace");
+        }
+        if let FrozenNamespaceValueTerminalSnapshot::Ready { storage, ty } = row.terminal {
+            if !valid_storage(storage) || !type_in_range(ty, store_len) {
+                return Err("snapshot namespace terminal has an invalid ready reference");
+            }
+        }
+    }
+    if parts
+        .runtime
+        .standalone_namespace_value_aliases
+        .iter()
+        .any(|(_, target)| !ready_namespace_storages.contains(target))
+    {
+        return Err("snapshot namespace alias does not target a ready namespace root");
+    }
+    if parts.runtime.named_function_symbols.iter().any(|symbol| {
+        parts
+            .binder
+            .symbols
+            .get(*symbol)
+            .is_none_or(|binding| binding.function_values.is_empty())
+    }) {
+        return Err("snapshot named-function metadata refers to a non-function symbol");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+impl OwnedLibraryRuntimeState {
+    pub(in crate::check::checker) fn into_snapshot_parts(
+        self,
+    ) -> Result<OwnedLibraryRuntimeSnapshotParts, &'static str> {
+        if self
+            .semantic_identities
+            .as_ref()
+            .is_some_and(|identities| !identities.all_ready())
+        {
+            return Err("snapshot installed semantic identities are not all ready");
+        }
+        let parts = OwnedLibraryRuntimeSnapshotParts {
+            interner: self.interner,
+            binder: self.binder,
+            published_types: self.published_types.snapshot_parts()?,
+            decl_types: self.decl_types.snapshot_slots(),
+            semantic_identities: self
+                .semantic_identities
+                .as_ref()
+                .map(super::library_identities::LibrarySemanticIdentities::snapshot_parts),
+            runtime: self.runtime.snapshot_parts()?,
+            next_type_param: self.next_type_param,
+            next_class_id: self.next_class_id,
+            source_file_count: self.source_file_count,
+        };
+        validate_owned_library_snapshot_parts(&parts)?;
+        Ok(parts)
+    }
+
+    pub(in crate::check::checker) fn from_snapshot_parts(
+        parts: OwnedLibraryRuntimeSnapshotParts,
+    ) -> Result<Self, &'static str> {
+        validate_owned_library_snapshot_parts(&parts)?;
+        let decl_types = DeclTypes::from_snapshot_slots(parts.decl_types, parts.binder.decl_count)?;
+        let semantic_identities = parts
+            .semantic_identities
+            .map(super::library_identities::LibrarySemanticIdentities::from_snapshot_parts)
+            .transpose()?;
+        if semantic_identities
+            .as_ref()
+            .is_some_and(|identities| !identities.all_ready())
+        {
+            return Err("snapshot installed semantic identities are not all ready");
+        }
+        Ok(Self {
+            interner: parts.interner,
+            binder: parts.binder,
+            published_types: PublishedTypeEnvironment::from_snapshot_parts(parts.published_types)?,
+            decl_types,
+            semantic_identities,
+            runtime: FrozenCheckerRuntimeMetadata::from_snapshot_parts(parts.runtime)?,
+            next_type_param: parts.next_type_param,
+            next_class_id: parts.next_class_id,
+            source_file_count: parts.source_file_count,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1562,6 +2073,8 @@ pub(crate) fn compile_owned_injected_profile(
         },
         next_type_param,
         next_class_id,
+        source_file_count: u32::try_from(canonical.len())
+            .map_err(|_| InjectedProfileError::SourceKeyOverflow)?,
     };
 
     let run = InjectedProfileRun {
@@ -1634,6 +2147,7 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
         runtime,
         next_type_param,
         next_class_id,
+        source_file_count: _,
     } = state;
     let base_store_len = interner.store().len();
     let base_store_digest = verify_store_prefix
@@ -2203,6 +2717,90 @@ mod tests {
     fn assert_owned_terminal<T: Send + Sync + 'static>() {}
 
     const TINY_SOURCE: &str = "export const typokatWu0bProbe: number = 1;\n";
+    const SNAPSHOT_SEMANTIC_LIBRARY: &str = r#"
+        interface Array<T> { item: T; }
+        interface ReadonlyArray<T> { item: T; }
+        interface String { stringMarker: string; }
+        interface Number { numberMarker: number; }
+        interface Boolean { booleanMarker: boolean; }
+        interface RegExp { regexpMarker: boolean; }
+        interface Object { objectMarker: string; }
+        interface Function { functionMarker: string; }
+        interface CallableFunction extends Function { callableMarker: number; }
+        interface SnapshotWitness { value: number; }
+        declare class SnapshotBase { base: string; }
+        declare class SnapshotCtorBase { protected constructor(); }
+        declare class SnapshotInheritedCtor extends SnapshotCtorBase {}
+        declare class SnapshotClass<T> extends SnapshotBase {
+            constructor(value: T);
+            value: T;
+        }
+        declare namespace SnapshotClass { export const tag: string; }
+        declare namespace SnapshotSpace { export const enabled: boolean; }
+        declare function snapshotNamed(value: number): string;
+        declare namespace snapshotNamed { export const version: number; }
+    "#;
+
+    fn compile_semantic_snapshot_parts() -> OwnedLibraryRuntimeSnapshotParts {
+        let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "snapshot-seam.d.ts",
+            source: SNAPSHOT_SEMANTIC_LIBRARY,
+        }])
+        .expect("focused owned library profile");
+        state.into_snapshot_parts().expect("extract snapshot parts")
+    }
+
+    fn replace_module_sources(
+        parts: &mut OwnedLibraryRuntimeSnapshotParts,
+        module_sources: rustc_hash::FxHashMap<ScopeId, crate::binder::namespace::SourceUnitKey>,
+    ) {
+        let placeholder = Binder::from_snapshot_parts(
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            ScopeId(0),
+            ScopeId(0),
+            ScopeId(0),
+            ScopeId(0),
+            0,
+            0,
+            Default::default(),
+        );
+        let binder = std::mem::replace(&mut parts.binder, placeholder);
+        parts.binder = Binder::from_snapshot_parts(
+            binder.graph,
+            binder.symbols,
+            binder.declarations,
+            binder.type_groups,
+            binder.namespaces,
+            binder.module,
+            binder.prelude_module,
+            binder.compilation_global,
+            binder.script_namespace_root,
+            binder.decl_count,
+            binder.prelude_type_group_count,
+            module_sources,
+        );
+    }
+
+    fn assert_snapshot_restore_error(
+        parts: OwnedLibraryRuntimeSnapshotParts,
+        expected: &'static str,
+    ) {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            OwnedLibraryRuntimeState::from_snapshot_parts(parts)
+        }));
+        let Ok(result) = outcome else {
+            panic!("snapshot corruption must return an error, not panic")
+        };
+        match result {
+            Err(actual) => assert_eq!(actual, expected),
+            Ok(_) => panic!("snapshot corruption unexpectedly restored"),
+        }
+    }
 
     #[test]
     fn injected_results_are_ast_free_owned_terminals() {
@@ -2250,6 +2848,291 @@ mod tests {
             };
             assert_eq!(identity.parameters.len(), expected_arity);
         }
+    }
+
+    #[test]
+    fn owned_runtime_snapshot_parts_restore_a_consumable_base() {
+        let parts = compile_semantic_snapshot_parts();
+        assert_eq!(parts.source_file_count, 1);
+        assert!(parts.semantic_identities.is_some());
+        assert!(!parts.runtime.class_application_parameters.is_empty());
+        assert!(!parts.runtime.class_new_metadata.is_empty());
+        assert!(!parts.runtime.class_value_bindings.is_empty());
+        assert!(!parts.runtime.namespace_terminals.is_empty());
+        assert!(!parts.runtime.named_function_symbols.is_empty());
+        let restored =
+            OwnedLibraryRuntimeState::from_snapshot_parts(parts).expect("restore snapshot parts");
+        let user = check_caller_certified_collision_free_source_with_owned_library(
+            restored,
+            r#"
+                declare const witness: SnapshotWitness;
+                const witnessValue: number = witness.value;
+                declare const nativeValues: number[];
+                const nativeArrayItem: number = nativeValues.item;
+                const nativeStringMarker: string = "value".stringMarker;
+                const instance = new SnapshotClass<number>(1);
+                const classValue: number = instance.value;
+                const inheritedValue: string = instance.base;
+                const base = new SnapshotBase();
+                const directBaseValue: string = base.base;
+                const classTag: string = SnapshotClass.tag;
+                const enabled: boolean = SnapshotSpace.enabled;
+                const called: string = snapshotNamed(1);
+                const functionVersion: number = snapshotNamed.version;
+            "#,
+        )
+        .expect("consume restored base");
+
+        assert!(user.result.diagnostics.is_empty());
+        assert!(user.result.incomplete.is_empty());
+        assert_eq!(user.witness.base_max_source_key, 1);
+    }
+
+    #[test]
+    fn owned_runtime_snapshot_restores_native_bridge_error_behavior() {
+        let restored =
+            OwnedLibraryRuntimeState::from_snapshot_parts(compile_semantic_snapshot_parts())
+                .expect("restore snapshot parts");
+        let user = check_caller_certified_collision_free_source_with_owned_library(
+            restored,
+            r#"
+                declare const nativeValues: number[];
+                const wrongNativeItem: string = nativeValues.item;
+            "#,
+        )
+        .expect("consume restored native bridge");
+
+        assert_eq!(user.result.diagnostics.len(), 1);
+        assert_eq!(
+            user.result.diagnostics[0].code,
+            crate::diagnostics::DiagnosticCode::TK2322
+        );
+        assert!(user.result.incomplete.is_empty());
+    }
+
+    #[test]
+    fn owned_runtime_snapshot_rejects_empty_and_gapped_source_prefixes() {
+        let mut empty = compile_semantic_snapshot_parts();
+        replace_module_sources(&mut empty, Default::default());
+        assert_snapshot_restore_error(empty, "snapshot binder has no retained source ownership");
+
+        let mut gapped = compile_semantic_snapshot_parts();
+        let mut sources = gapped.binder.snapshot_module_sources().clone();
+        let library_scope = sources
+            .iter()
+            .find_map(|(scope, source)| (source.0 == 1).then_some(*scope))
+            .expect("library source owner");
+        sources.insert(library_scope, exact_key(2));
+        replace_module_sources(&mut gapped, sources);
+        assert_snapshot_restore_error(
+            gapped,
+            "snapshot binder source keys are not the contiguous prelude/library prefix",
+        );
+    }
+
+    #[test]
+    fn owned_runtime_snapshot_rejects_group_and_counter_collisions() {
+        let mut groups = compile_semantic_snapshot_parts();
+        groups.published_types.groups.pop();
+        assert_snapshot_restore_error(
+            groups,
+            "snapshot published type-group count does not match the binder",
+        );
+
+        let mut type_parameters = compile_semantic_snapshot_parts();
+        type_parameters.next_type_param = 0;
+        assert_snapshot_restore_error(
+            type_parameters,
+            "snapshot type parameter id collides with the next parameter counter",
+        );
+
+        let mut classes = compile_semantic_snapshot_parts();
+        classes.next_class_id = 0;
+        assert_snapshot_restore_error(
+            classes,
+            "snapshot class id collides with the next class counter",
+        );
+
+        let mut renamed = compile_semantic_snapshot_parts();
+        let template_group = renamed
+            .published_types
+            .groups
+            .iter_mut()
+            .find_map(|terminal| match terminal {
+                PublishedTypeGroupTerminal::Ready(group)
+                    if group.name == "SnapshotWitness"
+                        && matches!(group.surface, PublishedTypeGroupSurface::Template(_)) =>
+                {
+                    Some(group)
+                }
+                PublishedTypeGroupTerminal::Ready(_)
+                | PublishedTypeGroupTerminal::Unavailable(_) => None,
+            })
+            .expect("ready template group");
+        template_group.name = "RenamedSnapshotWitness".to_owned();
+        assert_snapshot_restore_error(
+            renamed,
+            "snapshot published type-group name does not match the binder",
+        );
+    }
+
+    #[test]
+    fn owned_runtime_snapshot_rejects_missing_required_class_rows() {
+        let mut new_metadata = compile_semantic_snapshot_parts();
+        let removed_class = new_metadata
+            .runtime
+            .class_new_metadata
+            .pop()
+            .expect("new metadata row")
+            .0;
+        assert!(new_metadata
+            .runtime
+            .class_value_bindings
+            .iter()
+            .any(|(_, binding)| binding.class_id == removed_class));
+        assert_snapshot_restore_error(
+            new_metadata,
+            "snapshot new metadata does not exactly cover published classes",
+        );
+
+        let mut applications = compile_semantic_snapshot_parts();
+        applications
+            .runtime
+            .class_application_parameters
+            .pop()
+            .expect("class application row");
+        assert_snapshot_restore_error(
+            applications,
+            "snapshot class application metadata does not exactly cover published classes",
+        );
+
+        let mut names = compile_semantic_snapshot_parts();
+        names.runtime.class_names.pop().expect("class name row");
+        assert_snapshot_restore_error(
+            names,
+            "snapshot class names do not exactly match published class groups",
+        );
+
+        let mut bindings = compile_semantic_snapshot_parts();
+        bindings
+            .runtime
+            .class_value_bindings
+            .pop()
+            .expect("class value binding row");
+        assert_snapshot_restore_error(
+            bindings,
+            "snapshot class value bindings do not exactly cover published classes",
+        );
+
+        let mut parent_chain = compile_semantic_snapshot_parts();
+        let inherited = parent_chain
+            .runtime
+            .class_new_metadata
+            .iter()
+            .find_map(|(class, metadata)| {
+                (*class != metadata.ctor_declaring_class).then_some(*class)
+            })
+            .expect("class with inherited constructor owner");
+        let parent_row = parent_chain
+            .runtime
+            .class_parents
+            .iter()
+            .position(|(class, _)| *class == inherited)
+            .expect("inherited class parent row");
+        parent_chain.runtime.class_parents.remove(parent_row);
+        assert_snapshot_restore_error(
+            parent_chain,
+            "snapshot constructor owner is not on the class parent chain",
+        );
+
+        let mut wrong_name = compile_semantic_snapshot_parts();
+        wrong_name.runtime.class_names[0].1 = "DifferentClass".to_owned();
+        assert_snapshot_restore_error(
+            wrong_name,
+            "snapshot class names do not exactly match published class groups",
+        );
+
+        let mut generic_bit = compile_semantic_snapshot_parts();
+        let generic_class = generic_bit
+            .runtime
+            .class_application_parameters
+            .iter()
+            .find_map(|(class, parameters)| (!parameters.is_empty()).then_some(*class))
+            .expect("generic class application");
+        let binding = generic_bit
+            .runtime
+            .class_value_bindings
+            .iter_mut()
+            .find_map(|(_, binding)| (binding.class_id == generic_class).then_some(binding))
+            .expect("generic class value binding");
+        binding.has_header_type_params = !binding.has_header_type_params;
+        assert_snapshot_restore_error(
+            generic_bit,
+            "snapshot class value binding generic bit does not match application metadata",
+        );
+    }
+
+    #[test]
+    fn owned_runtime_snapshot_rejects_dangling_semantic_and_type_references() {
+        let mut semantic = compile_semantic_snapshot_parts();
+        let LibraryIdentityTerminal::Ready(identity) = &mut semantic
+            .semantic_identities
+            .as_mut()
+            .expect("semantic identities")[0]
+        else {
+            panic!("Array identity is ready")
+        };
+        identity.group = TypeGroupId(u32::MAX);
+        assert_snapshot_restore_error(
+            semantic,
+            "snapshot semantic identity refers to an unpublished type group",
+        );
+
+        let mut types = compile_semantic_snapshot_parts();
+        let ready = types
+            .runtime
+            .namespace_terminals
+            .iter_mut()
+            .find_map(|row| match &mut row.terminal {
+                FrozenNamespaceValueTerminalSnapshot::Ready { ty, .. } => Some(ty),
+                FrozenNamespaceValueTerminalSnapshot::Unavailable(_) => None,
+            })
+            .expect("ready namespace terminal");
+        *ready = TypeId(u32::MAX);
+        assert_snapshot_restore_error(
+            types,
+            "snapshot namespace terminal has an invalid ready reference",
+        );
+    }
+
+    #[test]
+    fn owned_runtime_snapshot_rejects_dangling_runtime_binder_references() {
+        let mut values = compile_semantic_snapshot_parts();
+        values
+            .runtime
+            .class_value_bindings
+            .first_mut()
+            .expect("class value binding")
+            .0 = ValueStorageId(u32::MAX);
+        assert_snapshot_restore_error(
+            values,
+            "snapshot class value binding has an invalid reference",
+        );
+
+        let mut symbols = compile_semantic_snapshot_parts();
+        symbols.runtime.named_function_symbols[0] = SymbolId(u32::MAX);
+        assert_snapshot_restore_error(
+            symbols,
+            "snapshot named-function metadata refers to a non-function symbol",
+        );
+
+        let mut namespaces = compile_semantic_snapshot_parts();
+        namespaces.runtime.namespace_terminals[0].namespace =
+            crate::binder::namespace::NamespaceId(u32::MAX);
+        assert_snapshot_restore_error(
+            namespaces,
+            "snapshot namespace terminal refers to an unknown namespace",
+        );
     }
 
     #[test]

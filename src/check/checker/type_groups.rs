@@ -1,5 +1,7 @@
 use super::context::{ConstructionDrafts, Pass, TypeDecl};
 use crate::binder::declaration::TypeGroupId;
+#[cfg(test)]
+use crate::class_semantics::PublishedClassSnapshotTerminal;
 use crate::class_semantics::PublishedClasses;
 use crate::types::repr::{ClassId, TypeParamId};
 use crate::types::store::TypeId;
@@ -82,9 +84,17 @@ impl PublishedTypeGroups {
 
 /// The only query-visible type environment. Class and named-type registries become
 /// visible together through one assignment after both private builders are frozen.
+#[derive(Clone)]
 pub(in crate::check::checker) struct PublishedTypeEnvironment {
     classes: PublishedClasses,
     groups: PublishedTypeGroups,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) struct PublishedTypeEnvironmentSnapshotParts {
+    pub(in crate::check::checker) classes: Vec<(ClassId, PublishedClassSnapshotTerminal)>,
+    pub(in crate::check::checker) groups: Vec<PublishedTypeGroupTerminal>,
 }
 
 pub(in crate::check::checker) enum TypeEnvironmentState<'ast> {
@@ -237,6 +247,49 @@ impl PublishedTypeEnvironment {
             }
         }
         (declarations, resolved)
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn snapshot_parts(
+        &self,
+    ) -> Result<PublishedTypeEnvironmentSnapshotParts, &'static str> {
+        Ok(PublishedTypeEnvironmentSnapshotParts {
+            classes: self
+                .classes
+                .snapshot_terminals()
+                .ok_or("snapshot class publication contains a non-terminal state")?,
+            groups: self.groups.entries.clone(),
+        })
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn from_snapshot_parts(
+        parts: PublishedTypeEnvironmentSnapshotParts,
+    ) -> Result<Self, &'static str> {
+        for terminal in &parts.groups {
+            let PublishedTypeGroupTerminal::Ready(group) = terminal else {
+                continue;
+            };
+            if group.parameters.len() != group.parameter_names.len()
+                || group.parameters.len() != group.parameter_defaults.len()
+            {
+                return Err("snapshot type-group parameter columns have different lengths");
+            }
+            let mut parameters = std::collections::BTreeSet::new();
+            if group
+                .parameters
+                .iter()
+                .any(|parameter| !parameters.insert(*parameter))
+            {
+                return Err("snapshot type group repeats a parameter id");
+            }
+        }
+        Ok(Self {
+            classes: PublishedClasses::from_snapshot_terminals(parts.classes)?,
+            groups: PublishedTypeGroups {
+                entries: parts.groups,
+            },
+        })
     }
 }
 

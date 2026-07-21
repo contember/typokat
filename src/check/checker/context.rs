@@ -293,6 +293,25 @@ impl DeclTypes {
     pub(in crate::check::checker) fn len(&self) -> usize {
         self.types.len()
     }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn snapshot_slots(&self) -> Vec<Option<TypeId>> {
+        self.types.clone()
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn from_snapshot_slots(
+        slots: Vec<Option<TypeId>>,
+        expected_len: u32,
+    ) -> Result<Self, &'static str> {
+        if slots.len()
+            != usize::try_from(expected_len)
+                .map_err(|_| "snapshot declaration count does not fit usize")?
+        {
+            return Err("snapshot declaration type slots do not match binder storage count");
+        }
+        Ok(Self { types: slots })
+    }
 }
 
 /// A function declaration's callable signature, reserved before statement bodies
@@ -466,7 +485,7 @@ pub(in crate::check::checker) struct ClassInfo {
     pub(in crate::check::checker) ctor_declaring_class: ClassId,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) struct PublishedClassNewMetadata {
     pub(in crate::check::checker) is_abstract: bool,
     pub(in crate::check::checker) ctor_visibility: Visibility,
@@ -474,7 +493,7 @@ pub(in crate::check::checker) struct PublishedClassNewMetadata {
     pub(in crate::check::checker) has_source_overloads: bool,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) struct PublishedClassValueBinding {
     pub(in crate::check::checker) class_id: ClassId,
     pub(in crate::check::checker) has_header_type_params: bool,

@@ -232,6 +232,165 @@ pub(in crate::check::checker) struct FrozenCheckerRuntimeMetadata {
     named_function_symbols: FxHashSet<SymbolId>,
 }
 
+#[cfg(test)]
+pub(in crate::check::checker) struct FrozenCheckerRuntimeSnapshotParts {
+    pub(in crate::check::checker) class_application_parameters: Vec<(
+        ClassId,
+        Vec<classes::construction::DraftClassTypeParameterSnapshot>,
+    )>,
+    pub(in crate::check::checker) class_new_metadata:
+        Vec<(ClassId, context::PublishedClassNewMetadata)>,
+    pub(in crate::check::checker) class_parents: Vec<(ClassId, ClassId)>,
+    pub(in crate::check::checker) class_value_aliases: Vec<(ValueStorageId, ValueStorageId)>,
+    pub(in crate::check::checker) class_value_bindings:
+        Vec<(ValueStorageId, context::PublishedClassValueBinding)>,
+    pub(in crate::check::checker) standalone_namespace_value_aliases:
+        Vec<(ValueStorageId, ValueStorageId)>,
+    pub(in crate::check::checker) class_names: Vec<(ClassId, String)>,
+    pub(in crate::check::checker) namespace_terminals:
+        namespace_values::FrozenNamespaceValueTerminalsSnapshotParts,
+    pub(in crate::check::checker) named_function_symbols: Vec<SymbolId>,
+}
+
+#[cfg(test)]
+impl FrozenCheckerRuntimeMetadata {
+    pub(in crate::check::checker) fn snapshot_parts(
+        &self,
+    ) -> Result<FrozenCheckerRuntimeSnapshotParts, &'static str> {
+        let class_application_parameters = self
+            .class_application_parameters
+            .iter()
+            .map(|(&class, parameters)| {
+                (
+                    class,
+                    parameters
+                        .iter()
+                        .copied()
+                        .map(classes::construction::DraftClassTypeParameter::snapshot_parts)
+                        .collect(),
+                )
+            })
+            .collect();
+        let class_new_metadata = self
+            .class_new_metadata
+            .iter()
+            .map(|(&class, &metadata)| (class, metadata))
+            .collect();
+        let mut class_parents = self
+            .class_parents
+            .iter()
+            .map(|(&class, &parent)| (class, parent))
+            .collect::<Vec<_>>();
+        class_parents.sort_by_key(|(class, _)| class.0);
+        let mut class_value_aliases = self
+            .class_value_aliases
+            .iter()
+            .map(|(&alias, &target)| (alias, target))
+            .collect::<Vec<_>>();
+        class_value_aliases.sort_by_key(|(alias, _)| alias.0);
+        let mut class_value_bindings = self
+            .class_value_bindings
+            .iter()
+            .map(|(&storage, &binding)| (storage, binding))
+            .collect::<Vec<_>>();
+        class_value_bindings.sort_by_key(|(storage, _)| storage.0);
+        let mut standalone_namespace_value_aliases = self
+            .standalone_namespace_value_aliases
+            .iter()
+            .map(|(&alias, &target)| (alias, target))
+            .collect::<Vec<_>>();
+        standalone_namespace_value_aliases.sort_by_key(|(alias, _)| alias.0);
+        let mut class_names = self
+            .class_names
+            .iter()
+            .map(|(&class, name)| (class, name.clone()))
+            .collect::<Vec<_>>();
+        class_names.sort_by_key(|(class, _)| class.0);
+        let mut named_function_symbols = self
+            .named_function_symbols
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        named_function_symbols.sort_by_key(|symbol| symbol.0);
+        Ok(FrozenCheckerRuntimeSnapshotParts {
+            class_application_parameters,
+            class_new_metadata,
+            class_parents,
+            class_value_aliases,
+            class_value_bindings,
+            standalone_namespace_value_aliases,
+            class_names,
+            namespace_terminals: self.namespace_terminals.snapshot_parts()?,
+            named_function_symbols,
+        })
+    }
+
+    pub(in crate::check::checker) fn from_snapshot_parts(
+        parts: FrozenCheckerRuntimeSnapshotParts,
+    ) -> Result<Self, &'static str> {
+        fn strictly_ordered(mut keys: impl Iterator<Item = u32>) -> bool {
+            let mut previous = None;
+            keys.all(|key| {
+                let ordered = previous.is_none_or(|previous| previous < key);
+                previous = Some(key);
+                ordered
+            })
+        }
+
+        if !strictly_ordered(
+            parts
+                .class_application_parameters
+                .iter()
+                .map(|(class, _)| class.0),
+        ) || !strictly_ordered(parts.class_new_metadata.iter().map(|(class, _)| class.0))
+            || !strictly_ordered(parts.class_parents.iter().map(|(class, _)| class.0))
+            || !strictly_ordered(parts.class_value_aliases.iter().map(|(id, _)| id.0))
+            || !strictly_ordered(parts.class_value_bindings.iter().map(|(id, _)| id.0))
+            || !strictly_ordered(
+                parts
+                    .standalone_namespace_value_aliases
+                    .iter()
+                    .map(|(id, _)| id.0),
+            )
+            || !strictly_ordered(parts.class_names.iter().map(|(class, _)| class.0))
+            || !strictly_ordered(parts.named_function_symbols.iter().map(|symbol| symbol.0))
+        {
+            return Err("snapshot checker runtime rows are not strictly ordered");
+        }
+        let mut class_application_parameters = BTreeMap::new();
+        for (class, parameters) in parts.class_application_parameters {
+            let mut ids = BTreeSet::new();
+            if parameters.iter().any(|parameter| !ids.insert(parameter.id)) {
+                return Err("snapshot class application repeats a parameter id");
+            }
+            class_application_parameters.insert(
+                class,
+                parameters
+                    .into_iter()
+                    .map(classes::construction::DraftClassTypeParameter::from_snapshot_parts)
+                    .collect(),
+            );
+        }
+        Ok(Self {
+            class_application_parameters,
+            class_new_metadata: parts.class_new_metadata.into_iter().collect(),
+            class_parents: parts.class_parents.into_iter().collect(),
+            class_value_aliases: parts.class_value_aliases.into_iter().collect(),
+            class_value_bindings: parts.class_value_bindings.into_iter().collect(),
+            standalone_namespace_value_aliases: parts
+                .standalone_namespace_value_aliases
+                .into_iter()
+                .collect(),
+            class_names: parts.class_names.into_iter().collect(),
+            namespace_terminals:
+                namespace_values::FrozenNamespaceValueTerminals::from_snapshot_parts(
+                    parts.namespace_terminals,
+                )?,
+            named_function_symbols: parts.named_function_symbols.into_iter().collect(),
+        })
+    }
+}
+
 pub(in crate::check::checker) struct BoundUserBase {
     published_types: type_groups::PublishedTypeEnvironment,
     library_semantic_identities: Option<library_identities::LibrarySemanticIdentities>,

@@ -48,6 +48,9 @@ pub(crate) struct LibrarySemanticIdentities {
     callable_function: LibraryIdentityTerminal,
 }
 
+#[cfg(test)]
+pub(crate) type LibrarySemanticIdentitiesSnapshotParts = [LibraryIdentityTerminal; 8];
+
 impl LibrarySemanticIdentities {
     /// Select roots once from the library compilation-global scope. Consumer scopes
     /// never participate, so same-named user declarations cannot hijack native syntax.
@@ -133,6 +136,40 @@ impl LibrarySemanticIdentities {
             object,
             callable_function,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn snapshot_parts(&self) -> LibrarySemanticIdentitiesSnapshotParts {
+        [
+            self.array.clone(),
+            self.readonly_array.clone(),
+            self.string.clone(),
+            self.number.clone(),
+            self.boolean.clone(),
+            self.regexp.clone(),
+            self.object.clone(),
+            self.callable_function.clone(),
+        ]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_snapshot_parts(
+        terminals: LibrarySemanticIdentitiesSnapshotParts,
+    ) -> Result<Self, &'static str> {
+        for terminal in &terminals {
+            let LibraryIdentityTerminal::Ready(identity) = terminal else {
+                continue;
+            };
+            let mut parameters = std::collections::BTreeSet::new();
+            if identity
+                .parameters
+                .iter()
+                .any(|parameter| !parameters.insert(*parameter))
+            {
+                return Err("snapshot semantic identity repeats a parameter id");
+            }
+        }
+        Ok(Self::from_explicit_for_test(terminals))
     }
 }
 

@@ -67,6 +67,14 @@ pub(in crate::check::checker) struct DraftClassTypeParameter<Ticket> {
     constraint: Option<TypeId>,
 }
 
+#[cfg(test)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) struct DraftClassTypeParameterSnapshot {
+    pub(in crate::check::checker) id: TypeParamId,
+    pub(in crate::check::checker) constraint: Option<TypeId>,
+    pub(in crate::check::checker) default: ClassTypeParameterDefault<()>,
+}
+
 impl<Ticket> DraftClassTypeParameter<Ticket> {
     /// Source class defaults are deliberately always unavailable in this cutover.
     pub(in crate::check::checker) fn source(
@@ -120,6 +128,29 @@ impl<Ticket> DraftClassTypeParameter<Ticket> {
                 },
             },
             constraint: self.constraint,
+        }
+    }
+}
+
+#[cfg(test)]
+impl DraftClassTypeParameter<()> {
+    pub(in crate::check::checker) fn snapshot_parts(self) -> DraftClassTypeParameterSnapshot {
+        DraftClassTypeParameterSnapshot {
+            id: self.application.id,
+            constraint: self.constraint,
+            default: self.application.default,
+        }
+    }
+
+    pub(in crate::check::checker) fn from_snapshot_parts(
+        parts: DraftClassTypeParameterSnapshot,
+    ) -> Self {
+        Self {
+            application: ClassTypeParameter {
+                id: parts.id,
+                default: parts.default,
+            },
+            constraint: parts.constraint,
         }
     }
 }

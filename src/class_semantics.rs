@@ -139,6 +139,14 @@ pub(crate) enum CanonicalPublishedClassTerminal<'a> {
     SurfacePoison,
 }
 
+/// Lifetime-free class publication row used by the semantic snapshot prototype.
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PublishedClassSnapshotTerminal {
+    Ready(PublishedClassSurface),
+    Poisoned(PublishedClassPoison),
+}
+
 /// Immutable proof that every registered class reached a final state. Drafts
 /// and partially composed surfaces never enter this registry.
 #[derive(Clone)]
@@ -149,6 +157,65 @@ pub(crate) struct PublishedClasses {
 }
 
 impl PublishedClasses {
+    #[cfg(test)]
+    pub(crate) fn snapshot_terminals(
+        &self,
+    ) -> Option<Vec<(ClassId, PublishedClassSnapshotTerminal)>> {
+        self.canonical_terminals().map(|terminals| {
+            terminals
+                .into_iter()
+                .map(|(class, terminal)| {
+                    let terminal = match terminal {
+                        CanonicalPublishedClassTerminal::Ready(surface) => {
+                            PublishedClassSnapshotTerminal::Ready(surface.clone())
+                        }
+                        CanonicalPublishedClassTerminal::HeritagePoison => {
+                            PublishedClassSnapshotTerminal::Poisoned(PublishedClassPoison::Heritage)
+                        }
+                        CanonicalPublishedClassTerminal::InitializerPoison => {
+                            PublishedClassSnapshotTerminal::Poisoned(
+                                PublishedClassPoison::Initializer,
+                            )
+                        }
+                        CanonicalPublishedClassTerminal::SurfacePoison => {
+                            PublishedClassSnapshotTerminal::Poisoned(PublishedClassPoison::Surface)
+                        }
+                    };
+                    (class, terminal)
+                })
+                .collect()
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_snapshot_terminals(
+        terminals: Vec<(ClassId, PublishedClassSnapshotTerminal)>,
+    ) -> Result<Self, &'static str> {
+        if terminals.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+            return Err("snapshot class terminals are not strictly ordered");
+        }
+        let mut states = FxHashMap::default();
+        let mut surfaces = FxHashMap::default();
+        let mut poison = FxHashMap::default();
+        for (class, terminal) in terminals {
+            match terminal {
+                PublishedClassSnapshotTerminal::Ready(surface) => {
+                    if surface.class() != class {
+                        return Err("snapshot class surface owns a different class id");
+                    }
+                    states.insert(class, ClassConstructionState::Published);
+                    surfaces.insert(class, surface);
+                }
+                PublishedClassSnapshotTerminal::Poisoned(cause) => {
+                    states.insert(class, ClassConstructionState::Poisoned);
+                    poison.insert(class, cause);
+                }
+            }
+        }
+        Self::from_publication(states, surfaces, poison)
+            .ok_or("snapshot class publication is not terminal")
+    }
+
     #[cfg(test)]
     pub(crate) fn canonical_terminals(
         &self,
@@ -306,6 +373,58 @@ impl PublishedClasses {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_class_terminals_round_trip_exactly() {
+        let ready = ClassId(2);
+        let poisoned = ClassId(7);
+        let surface = PublishedClassSurface::new(
+            ready,
+            vec![TypeParamId(11)],
+            TypeId(13),
+            TypeId(17),
+            Some(TypeId(19)),
+        );
+        let publication = PublishedClasses::from_publication(
+            FxHashMap::from_iter([
+                (ready, ClassConstructionState::Published),
+                (poisoned, ClassConstructionState::Poisoned),
+            ]),
+            FxHashMap::from_iter([(ready, surface)]),
+            FxHashMap::from_iter([(poisoned, PublishedClassPoison::Initializer)]),
+        )
+        .expect("terminal publication");
+
+        let parts = publication
+            .snapshot_terminals()
+            .expect("snapshot terminals");
+        let restored =
+            PublishedClasses::from_snapshot_terminals(parts.clone()).expect("restore terminals");
+
+        assert_eq!(restored.snapshot_terminals(), Some(parts));
+    }
+
+    #[test]
+    fn snapshot_class_terminals_reject_unordered_and_mismatched_rows() {
+        let surface =
+            PublishedClassSurface::new(ClassId(3), Vec::new(), TypeId(5), TypeId(7), None);
+        assert!(PublishedClasses::from_snapshot_terminals(vec![
+            (
+                ClassId(2),
+                PublishedClassSnapshotTerminal::Poisoned(PublishedClassPoison::Surface),
+            ),
+            (
+                ClassId(1),
+                PublishedClassSnapshotTerminal::Ready(surface.clone())
+            ),
+        ])
+        .is_err());
+        assert!(PublishedClasses::from_snapshot_terminals(vec![(
+            ClassId(4),
+            PublishedClassSnapshotTerminal::Ready(surface),
+        )])
+        .is_err());
+    }
 
     #[test]
     fn demand_outcomes_require_exhaustive_matching() {
