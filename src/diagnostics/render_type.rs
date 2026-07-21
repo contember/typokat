@@ -11,43 +11,116 @@ pub(super) fn parameter_name_at(store: &Store, id: TypeId, index: usize) -> Opti
     func.params.get(index).map(|p| p.name.clone())
 }
 
+const DISPLAY_CHAR_LIMIT: usize = 320;
+const DISPLAY_DEPTH_LIMIT: usize = 64;
+const ELLIPSIS: &str = "...";
+
+struct RenderContext {
+    output: String,
+    rendering: Vec<TypeId>,
+    remaining_chars: usize,
+    depth: usize,
+    truncated: bool,
+}
+
+impl RenderContext {
+    fn new() -> Self {
+        Self {
+            output: String::new(),
+            rendering: Vec::new(),
+            remaining_chars: DISPLAY_CHAR_LIMIT,
+            depth: 0,
+            truncated: false,
+        }
+    }
+
+    fn append(&mut self, text: &str) {
+        if self.truncated {
+            return;
+        }
+
+        // Inspect at most the remaining budget plus one character: a single huge
+        // identifier or literal must not make display work proportional to its size.
+        let text_len = text.chars().take(self.remaining_chars + 1).count();
+        if text_len <= self.remaining_chars {
+            self.output.push_str(text);
+            self.remaining_chars -= text_len;
+            return;
+        }
+
+        let target_prefix_len = DISPLAY_CHAR_LIMIT - ELLIPSIS.len();
+        let current_len = DISPLAY_CHAR_LIMIT - self.remaining_chars;
+        if current_len > target_prefix_len {
+            for _ in target_prefix_len..current_len {
+                self.output.pop();
+            }
+        } else {
+            self.output
+                .extend(text.chars().take(target_prefix_len - current_len));
+        }
+        self.output.push_str(ELLIPSIS);
+        self.remaining_chars = 0;
+        self.truncated = true;
+    }
+
+    fn stop_at_depth_limit(&mut self) {
+        self.output.clear();
+        self.output.push_str(ELLIPSIS);
+        self.remaining_chars = DISPLAY_CHAR_LIMIT - ELLIPSIS.len();
+        self.truncated = true;
+    }
+}
+
 /// Render a type per the corpus display format. `widen` applies only to the
 /// top-level source side of assignability messages; relation logic still uses the
 /// literal type. Recursive object expansions are cycle-safe and print `...`.
 pub fn render_type(store: &Store, id: TypeId, widen: bool) -> String {
-    let mut rendering: Vec<TypeId> = Vec::new();
-    render_type_inner(store, id, widen, &mut rendering)
+    let mut context = RenderContext::new();
+    render_type_inner(store, id, widen, &mut context);
+    context.output
 }
 
 /// Cycle-safe core of [`render_type`]. `rendering` tracks object ids on the call
 /// stack; re-entry emits `...`, even through union/function members.
-fn render_type_inner(
-    store: &Store,
-    id: TypeId,
-    widen: bool,
-    rendering: &mut Vec<TypeId>,
-) -> String {
+fn render_type_inner(store: &Store, id: TypeId, widen: bool, context: &mut RenderContext) {
+    if context.truncated {
+        return;
+    }
+    if context.depth >= DISPLAY_DEPTH_LIMIT {
+        context.stop_at_depth_limit();
+        return;
+    }
+
+    context.depth += 1;
+    render_type_node(store, id, widen, context);
+    context.depth -= 1;
+}
+
+fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut RenderContext) {
     match store.tag(id) {
-        TypeTag::Intrinsic => store
-            .intrinsic_kind(id)
-            .map(|k| k.display_name().to_string())
-            // Defensive fallback; an intrinsic always has a kind.
-            .unwrap_or_else(|| "unknown".to_string()),
+        TypeTag::Intrinsic => context.append(
+            store
+                .intrinsic_kind(id)
+                .map(|k| k.display_name())
+                // Defensive fallback; an intrinsic always has a kind.
+                .unwrap_or("unknown"),
+        ),
         TypeTag::Literal => {
             let value = store.literal_value(id);
             match value {
-                Some(lit) if widen => lit.base_kind().display_name().to_string(),
-                Some(lit) => render_literal(lit),
+                Some(lit) if widen => context.append(lit.base_kind().display_name()),
+                Some(lit) => render_literal(lit, context),
                 // Defensive fallback; a literal always has a value.
-                None => "unknown".to_string(),
+                None => context.append("unknown"),
             }
         }
         // Object: `{ a: number; b: string }` — members in stored (canonical)
         // order, `; `-separated (README "Type display format").
         TypeTag::Object => {
             // Break a cycle: a recursive object already being rendered is `...`.
-            if rendering.contains(&id) {
-                return "...".to_string();
+            if context.rendering.contains(&id) {
+                context.append(ELLIPSIS);
+                return;
             }
             match store.object_type(id) {
                 Some(obj)
@@ -57,48 +130,67 @@ fn render_type_inner(
                         && obj.call_signatures.is_empty()
                         && obj.construct_signatures.is_empty() =>
                 {
-                    "{}".to_string()
+                    context.append("{}")
                 }
                 Some(obj) => {
-                    rendering.push(id);
+                    context.rendering.push(id);
+                    context.append("{ ");
                     // M19: index signatures render as `[x: string]: T` / `[x: number]: T`,
                     // listed before the named members (a stable, tsc-like form;
                     // object-target messages are asserted code-only in the corpus).
-                    let mut members: Vec<String> = Vec::new();
+                    let mut needs_separator = false;
                     if let Some(v) = obj.string_index {
-                        members.push(format!(
-                            "[x: string]: {}",
-                            render_type_inner(store, v, false, rendering)
-                        ));
+                        context.append("[x: string]: ");
+                        render_type_inner(store, v, false, context);
+                        needs_separator = true;
                     }
-                    if let Some(v) = obj.number_index {
-                        members.push(format!(
-                            "[x: number]: {}",
-                            render_type_inner(store, v, false, rendering)
-                        ));
+                    if !context.truncated {
+                        if let Some(v) = obj.number_index {
+                            if needs_separator {
+                                context.append("; ");
+                            }
+                            context.append("[x: number]: ");
+                            render_type_inner(store, v, false, context);
+                            needs_separator = true;
+                        }
                     }
-                    members.extend(
-                        obj.call_signatures
-                            .iter()
-                            .map(|&signature| render_call_signature(store, signature, rendering)),
-                    );
-                    members.extend(
-                        obj.construct_signatures.iter().map(|&signature| {
-                            render_construct_signature(store, signature, rendering)
-                        }),
-                    );
-                    members.extend(obj.properties.iter().map(|p| {
-                        format!(
-                            "{}: {}",
-                            p.name,
-                            render_type_inner(store, p.ty, false, rendering)
-                        )
-                    }));
-                    rendering.pop();
-                    format!("{{ {} }}", members.join("; "))
+                    for &signature in &obj.call_signatures {
+                        if context.truncated {
+                            break;
+                        }
+                        if needs_separator {
+                            context.append("; ");
+                        }
+                        render_call_signature(store, signature, context);
+                        needs_separator = true;
+                    }
+                    for &signature in &obj.construct_signatures {
+                        if context.truncated {
+                            break;
+                        }
+                        if needs_separator {
+                            context.append("; ");
+                        }
+                        render_construct_signature(store, signature, context);
+                        needs_separator = true;
+                    }
+                    for property in &obj.properties {
+                        if context.truncated {
+                            break;
+                        }
+                        if needs_separator {
+                            context.append("; ");
+                        }
+                        context.append(&property.name);
+                        context.append(": ");
+                        render_type_inner(store, property.ty, false, context);
+                        needs_separator = true;
+                    }
+                    context.rendering.pop();
+                    context.append(" }");
                 }
                 // Defensive fallback; an object always has a side-table entry.
-                None => "<unsupported>".to_string(),
+                None => context.append("<unsupported>"),
             }
         }
         // Function: `(x: number) => string` — parameters as `name: type`,
@@ -106,35 +198,41 @@ fn render_type_inner(
         // (README "Type display format").
         TypeTag::Function => match store.function_type(id) {
             Some(func) => {
-                let (params, ret) = render_function_parts(store, func, rendering);
-                let type_params = render_generic_type_params(store, func, rendering);
-                format!("{}({}) => {}", type_params, params.join(", "), ret)
+                render_generic_type_params(store, func, context);
+                context.append("(");
+                render_function_params(store, func, context);
+                context.append(") => ");
+                render_type_inner(store, func.ret, false, context);
             }
             // Defensive fallback; a function always has a side-table entry.
-            None => "<unsupported>".to_string(),
+            None => context.append("<unsupported>"),
         },
         // Union: `number | string` — members in stored (canonical, TypeId-sorted)
         // order, ` | `-separated (README "Type display format"). That order is
         // intern-order dependent, so union-typed targets are asserted code-only.
         TypeTag::Union => match store.union_members(id) {
             Some(members) => {
-                let parts: Vec<String> = members
-                    .iter()
-                    .map(|&m| {
-                        let rendered = render_type_inner(store, m, false, rendering);
-                        // tsc parenthesizes an intersection element inside a union
-                        // (`(A & B) | C`), so the `&`/`|` precedence reads correctly.
-                        if store.tag(m) == TypeTag::Intersection {
-                            format!("({rendered})")
-                        } else {
-                            rendered
-                        }
-                    })
-                    .collect();
-                parts.join(" | ")
+                for (index, &member) in members.iter().enumerate() {
+                    if context.truncated {
+                        break;
+                    }
+                    if index > 0 {
+                        context.append(" | ");
+                    }
+                    // tsc parenthesizes an intersection element inside a union
+                    // (`(A & B) | C`), so the `&`/`|` precedence reads correctly.
+                    let parenthesized = store.tag(member) == TypeTag::Intersection;
+                    if parenthesized {
+                        context.append("(");
+                    }
+                    render_type_inner(store, member, false, context);
+                    if parenthesized {
+                        context.append(")");
+                    }
+                }
             }
             // Defensive fallback; a union always has a side-table entry.
-            None => "<unsupported>".to_string(),
+            None => context.append("<unsupported>"),
         },
         // Intersection (M31): `A & B` — members in stored (canonical, TypeId-sorted)
         // order, ` & `-separated. That order is intern-order dependent, so
@@ -142,131 +240,156 @@ fn render_type_inner(
         // parenthesized (`(A | B) & C`) so `&`/`|` precedence reads correctly.
         TypeTag::Intersection => match store.intersection_members(id) {
             Some(members) => {
-                let parts: Vec<String> = members
-                    .iter()
-                    .map(|&m| {
-                        let rendered = render_type_inner(store, m, false, rendering);
-                        if matches!(store.tag(m), TypeTag::Union | TypeTag::Function) {
-                            format!("({rendered})")
-                        } else {
-                            rendered
-                        }
-                    })
-                    .collect();
-                parts.join(" & ")
+                for (index, &member) in members.iter().enumerate() {
+                    if context.truncated {
+                        break;
+                    }
+                    if index > 0 {
+                        context.append(" & ");
+                    }
+                    let parenthesized =
+                        matches!(store.tag(member), TypeTag::Union | TypeTag::Function);
+                    if parenthesized {
+                        context.append("(");
+                    }
+                    render_type_inner(store, member, false, context);
+                    if parenthesized {
+                        context.append(")");
+                    }
+                }
             }
             // Defensive fallback; an intersection always has a side-table entry.
-            None => "<unsupported>".to_string(),
+            None => context.append("<unsupported>"),
         },
         // Type parameter (M9): render its source name (`T`). A type parameter only
         // surfaces in a message for an *uninstantiated* generic (out of the M9
         // fixtures' explicit-args path, where every parameter is substituted away);
         // the name is display-only and not part of the type's identity.
-        TypeTag::TypeParam => store
-            .type_param(id)
-            .map(|p| p.name.clone())
-            // Defensive fallback; a type parameter always has a side-table entry.
-            .unwrap_or_else(|| "unknown".to_string()),
+        TypeTag::TypeParam => context.append(
+            store
+                .type_param(id)
+                .map(|p| p.name.as_str())
+                // Defensive fallback; a type parameter always has a side-table entry.
+                .unwrap_or("unknown"),
+        ),
         // Array (M17): `<elem>[]`. Parenthesize union/function elements where bare
         // postfix `[]` would bind ambiguously, matching tsc display.
         TypeTag::Array => match store.array_type(id) {
             Some(array) => {
-                let elem = render_type_inner(store, array.element, false, rendering);
-                if array_element_needs_parens(store, array.element) {
-                    format!("({elem})[]")
-                } else {
-                    format!("{elem}[]")
+                let parenthesized = array_element_needs_parens(store, array.element);
+                if parenthesized {
+                    context.append("(");
                 }
+                render_type_inner(store, array.element, false, context);
+                if parenthesized {
+                    context.append(")");
+                }
+                context.append("[]");
             }
             // Defensive fallback; an array always has a side-table entry.
-            None => "<unsupported>".to_string(),
+            None => context.append("<unsupported>"),
         },
         // Tuple (M18): `[A, B]` — source-order elements, `, `-separated. The empty
         // tuple renders as `[]`; brackets already delimit every element.
         TypeTag::Tuple => match store.tuple_type(id) {
             Some(tuple) => {
-                let elems = render_tuple_parts(store, tuple, rendering);
-                format!("[{}]", elems.join(", "))
+                context.append("[");
+                render_tuple_parts(store, tuple, context);
+                context.append("]");
             }
             // Defensive fallback; a tuple always has a side-table entry.
-            None => "<unsupported>".to_string(),
+            None => context.append("<unsupported>"),
         },
         TypeTag::Readonly => match store.readonly_operand(id) {
             Some(operand) => {
-                let rendered = render_type_inner(store, operand, false, rendering);
-                format!("readonly {rendered}")
+                context.append("readonly ");
+                render_type_inner(store, operand, false, context);
             }
-            None => "<unsupported>".to_string(),
+            None => context.append("<unsupported>"),
         },
         // Conditional (M25): `C extends E ? T : F`. Conditional-typed targets are
         // asserted code-only, so the exact form only has to be stable.
         TypeTag::Conditional => match store.conditional_type(id) {
             Some(cond) => {
-                if rendering.contains(&id) {
-                    return "...".to_string();
+                if context.rendering.contains(&id) {
+                    context.append(ELLIPSIS);
+                    return;
                 }
-                rendering.push(id);
-                let check = render_type_inner(store, cond.check, false, rendering);
-                let extends = render_type_inner(store, cond.extends_ty, false, rendering);
-                let true_branch = render_type_inner(store, cond.true_branch, false, rendering);
-                let false_branch = render_type_inner(store, cond.false_branch, false, rendering);
-                rendering.pop();
-                format!("{check} extends {extends} ? {true_branch} : {false_branch}")
+                context.rendering.push(id);
+                render_type_inner(store, cond.check, false, context);
+                context.append(" extends ");
+                render_type_inner(store, cond.extends_ty, false, context);
+                context.append(" ? ");
+                render_type_inner(store, cond.true_branch, false, context);
+                context.append(" : ");
+                render_type_inner(store, cond.false_branch, false, context);
+                context.rendering.pop();
             }
-            None => "<unsupported>".to_string(),
+            None => context.append("<unsupported>"),
         },
         // Lazy instantiation (M25): render as the applied base with its arguments. Only
         // ever surfaces for a still-deferred recursive conditional alias; asserted
         // code-only, so a stable form suffices.
         TypeTag::Instantiation => match store.instantiation_type(id) {
             Some(inst) => {
-                if rendering.contains(&id) {
-                    return "...".to_string();
+                if context.rendering.contains(&id) {
+                    context.append(ELLIPSIS);
+                    return;
                 }
-                rendering.push(id);
-                let args: Vec<String> = inst
-                    .args
-                    .iter()
-                    .map(|(_, arg)| render_type_inner(store, *arg, false, rendering))
-                    .collect();
+                context.rendering.push(id);
                 // M28 round 3: a NAMED template base (a reserved conditional/mapped
                 // alias row) renders by its alias name — `Extract<K, string>` — never
                 // the raw body; intrinsic markers already name themselves via
                 // `IntrinsicKind::display_name`.
-                let base = match store.template_name(inst.base) {
-                    Some(name) => name.to_string(),
-                    None => render_type_inner(store, inst.base, false, rendering),
-                };
-                rendering.pop();
-                format!("{base}<{}>", args.join(", "))
+                match store.template_name(inst.base) {
+                    Some(name) => context.append(name),
+                    None => render_type_inner(store, inst.base, false, context),
+                }
+                context.append("<");
+                for (index, (_, arg)) in inst.args.iter().enumerate() {
+                    if context.truncated {
+                        break;
+                    }
+                    if index > 0 {
+                        context.append(", ");
+                    }
+                    render_type_inner(store, *arg, false, context);
+                }
+                context.rendering.pop();
+                context.append(">");
             }
-            None => "<unsupported>".to_string(),
+            None => context.append("<unsupported>"),
         },
         TypeTag::ClassInstance => match store.class_instance_type(id) {
             Some(instance) => {
-                if rendering.contains(&id) {
-                    return "...".to_string();
+                if context.rendering.contains(&id) {
+                    context.append(ELLIPSIS);
+                    return;
                 }
-                rendering.push(id);
-                let args = instance
-                    .args
-                    .iter()
-                    .map(|arg| render_type_inner(store, *arg, false, rendering))
-                    .collect::<Vec<_>>();
-                rendering.pop();
-                if args.is_empty() {
-                    format!("class#{}", instance.class.0)
-                } else {
-                    format!("class#{}<{}>", instance.class.0, args.join(", "))
+                context.rendering.push(id);
+                context.append(&format!("class#{}", instance.class.0));
+                if !instance.args.is_empty() {
+                    context.append("<");
+                    for (index, arg) in instance.args.iter().enumerate() {
+                        if context.truncated {
+                            break;
+                        }
+                        if index > 0 {
+                            context.append(", ");
+                        }
+                        render_type_inner(store, *arg, false, context);
+                    }
+                    context.append(">");
                 }
+                context.rendering.pop();
             }
-            None => "<unsupported>".to_string(),
+            None => context.append("<unsupported>"),
         },
         // Infer binder (M25): `infer` de Bruijn index. Only surfaces inside a deferred
         // conditional's rendered form; a stable placeholder suffices.
         TypeTag::Infer => match store.infer_index(id) {
-            Some(index) => format!("infer#{index}"),
-            None => "<unsupported>".to_string(),
+            Some(index) => context.append(&format!("infer#{index}")),
+            None => context.append("<unsupported>"),
         },
         // Mapped type (M26): `{ [K in S]: V }` (with readonly/optional modifiers). Only
         // surfaces for a still-deferred (generic) mapped type; mapped-typed targets are
@@ -274,89 +397,102 @@ fn render_type_inner(
         // suffices.
         TypeTag::Mapped => match store.mapped_type(id) {
             Some(mapped) => {
-                if rendering.contains(&id) {
-                    return "...".to_string();
+                if context.rendering.contains(&id) {
+                    context.append(ELLIPSIS);
+                    return;
                 }
-                rendering.push(id);
-                let source = render_type_inner(store, mapped.key_source, false, rendering);
-                let source = if mapped.homomorphic {
-                    format!("keyof {source}")
-                } else {
-                    source
-                };
-                let value = render_type_inner(store, mapped.value_template, false, rendering);
-                rendering.pop();
+                context.rendering.push(id);
                 let readonly = render_modifier(mapped.readonly_modifier, "readonly ");
                 let optional = render_modifier(mapped.optional_modifier, "?");
-                format!("{{ {readonly}[K in {source}]{optional}: {value} }}")
+                context.append("{ ");
+                context.append(&readonly);
+                context.append("[K in ");
+                if mapped.homomorphic {
+                    context.append("keyof ");
+                }
+                render_type_inner(store, mapped.key_source, false, context);
+                context.append("]");
+                context.append(&optional);
+                context.append(": ");
+                render_type_inner(store, mapped.value_template, false, context);
+                context.rendering.pop();
+                context.append(" }");
             }
-            None => "<unsupported>".to_string(),
+            None => context.append("<unsupported>"),
         },
         // Mapped-value placeholder (M26): the source property value `T[K]`. Only
         // surfaces inside a deferred mapped type's rendered form; a stable placeholder
         // suffices.
-        TypeTag::MappedValue => "T[K]".to_string(),
+        TypeTag::MappedValue => context.append("T[K]"),
         // Deferred keyof (M28): `keyof <operand>`. Only surfaces for a still-deferred
         // node (a free type parameter operand); keyof-typed targets are asserted
         // code-only in the corpus, so a stable form suffices.
         TypeTag::Keyof => match store.keyof_operand(id) {
             Some(operand) => {
-                if rendering.contains(&id) {
-                    return "...".to_string();
+                if context.rendering.contains(&id) {
+                    context.append(ELLIPSIS);
+                    return;
                 }
-                rendering.push(id);
-                let rendered = render_type_inner(store, operand, false, rendering);
-                rendering.pop();
-                format!("keyof {rendered}")
+                context.rendering.push(id);
+                context.append("keyof ");
+                render_type_inner(store, operand, false, context);
+                context.rendering.pop();
             }
-            None => "<unsupported>".to_string(),
+            None => context.append("<unsupported>"),
         },
         TypeTag::DeferredIndexedAccess => match store.deferred_indexed_access_type(id) {
             Some(access) => {
-                if rendering.contains(&id) {
-                    return "...".to_string();
+                if context.rendering.contains(&id) {
+                    context.append(ELLIPSIS);
+                    return;
                 }
-                rendering.push(id);
-                let object = render_type_inner(store, access.object, false, rendering);
-                let object = if indexed_access_object_needs_parens(store, access.object) {
-                    format!("({object})")
-                } else {
-                    object
-                };
-                let index = render_type_inner(store, access.index, false, rendering);
-                rendering.pop();
-                format!("{object}[{index}]")
+                context.rendering.push(id);
+                let parenthesized = indexed_access_object_needs_parens(store, access.object);
+                if parenthesized {
+                    context.append("(");
+                }
+                render_type_inner(store, access.object, false, context);
+                if parenthesized {
+                    context.append(")");
+                }
+                context.append("[");
+                render_type_inner(store, access.index, false, context);
+                context.rendering.pop();
+                context.append("]");
             }
-            None => "<unsupported>".to_string(),
+            None => context.append("<unsupported>"),
         },
         // Template literal type (M27): the backtick form `` `a${T}b` `` — text
         // segments interleaved with `${hole}`. Template-typed targets are asserted
         // code-only, so the exact form only has to be stable.
         TypeTag::Template => match store.template_type(id) {
             Some(template) => {
-                if rendering.contains(&id) {
-                    return "...".to_string();
+                if context.rendering.contains(&id) {
+                    context.append(ELLIPSIS);
+                    return;
                 }
-                rendering.push(id);
-                let mut out = String::from("`");
+                context.rendering.push(id);
+                context.append("`");
                 for (i, hole) in template.holes.iter().enumerate() {
-                    out.push_str(template.texts.get(i).map(String::as_str).unwrap_or(""));
-                    out.push_str("${");
-                    out.push_str(&render_type_inner(store, *hole, false, rendering));
-                    out.push('}');
+                    if context.truncated {
+                        break;
+                    }
+                    context.append(template.texts.get(i).map(String::as_str).unwrap_or(""));
+                    context.append("${");
+                    render_type_inner(store, *hole, false, context);
+                    context.append("}");
                 }
-                out.push_str(
+                context.append(
                     template
                         .texts
                         .get(template.holes.len())
                         .map(String::as_str)
                         .unwrap_or(""),
                 );
-                out.push('`');
-                rendering.pop();
-                out
+                context.append("`");
+                context.rendering.pop();
             }
-            None => "<unsupported>".to_string(),
+            None => context.append("<unsupported>"),
         },
     }
 }
@@ -374,123 +510,141 @@ fn render_modifier(op: crate::types::repr::ModifierOp, token: &str) -> String {
     }
 }
 
-fn render_call_signature(store: &Store, id: TypeId, rendering: &mut Vec<TypeId>) -> String {
+fn render_call_signature(store: &Store, id: TypeId, context: &mut RenderContext) {
     match store.function_type(id) {
         Some(func) => {
-            let (params, ret) = render_function_parts(store, func, rendering);
-            let type_params = render_generic_type_params(store, func, rendering);
-            format!("{}({}): {}", type_params, params.join(", "), ret)
+            render_generic_type_params(store, func, context);
+            context.append("(");
+            render_function_params(store, func, context);
+            context.append("): ");
+            render_type_inner(store, func.ret, false, context);
         }
-        None => "<unsupported>".to_string(),
+        None => context.append("<unsupported>"),
     }
 }
 
-fn render_construct_signature(store: &Store, id: TypeId, rendering: &mut Vec<TypeId>) -> String {
+fn render_construct_signature(store: &Store, id: TypeId, context: &mut RenderContext) {
     match store.function_type(id) {
         Some(func) => {
-            let (params, ret) = render_function_parts(store, func, rendering);
-            let type_params = render_generic_type_params(store, func, rendering);
-            format!("new {}({}): {}", type_params, params.join(", "), ret)
+            context.append("new ");
+            render_generic_type_params(store, func, context);
+            context.append("(");
+            render_function_params(store, func, context);
+            context.append("): ");
+            render_type_inner(store, func.ret, false, context);
         }
-        None => "<unsupported>".to_string(),
+        None => context.append("<unsupported>"),
     }
 }
 
-fn render_function_parts(
+fn render_function_params(
     store: &Store,
     func: &crate::types::repr::FunctionType,
-    rendering: &mut Vec<TypeId>,
-) -> (Vec<String>, String) {
-    let mut params: Vec<String> = func
-        .params
-        .iter()
-        .map(|p| {
-            let name = render_parameter_name(p);
-            format!(
-                "{}: {}",
-                name,
-                render_type_inner(store, p.ty, false, rendering)
-            )
-        })
-        .collect();
+    context: &mut RenderContext,
+) {
+    let mut needs_separator = false;
     if let Some(receiver) = func.receiver {
-        params.insert(
-            0,
-            format!(
-                "this: {}",
-                render_type_inner(store, receiver, false, rendering)
-            ),
-        );
+        context.append("this: ");
+        render_type_inner(store, receiver, false, context);
+        needs_separator = true;
     }
-    let ret = render_type_inner(store, func.ret, false, rendering);
-    (params, ret)
+    for param in &func.params {
+        if context.truncated {
+            break;
+        }
+        if needs_separator {
+            context.append(", ");
+        }
+        render_parameter_name(param, context);
+        context.append(": ");
+        render_type_inner(store, param.ty, false, context);
+        needs_separator = true;
+    }
 }
 
 fn render_generic_type_params(
     store: &Store,
     func: &crate::types::repr::FunctionType,
-    rendering: &mut Vec<TypeId>,
-) -> String {
+    context: &mut RenderContext,
+) {
     if func.type_params.is_empty() {
-        return String::new();
+        return;
     }
-    let params: Vec<String> = func
-        .type_params
-        .iter()
-        .map(|param| {
-            let mut rendered = store.type_param_name(param.id).unwrap_or("T").to_string();
-            if let Some(constraint) = param.constraint {
-                rendered.push_str(" extends ");
-                rendered.push_str(&render_type_inner(store, constraint, false, rendering));
-            }
-            if let Some(default) = param.default {
-                rendered.push_str(" = ");
-                rendered.push_str(&render_type_inner(store, default, false, rendering));
-            }
-            rendered
-        })
-        .collect();
-    format!("<{}>", params.join(", "))
+    context.append("<");
+    for (index, param) in func.type_params.iter().enumerate() {
+        if context.truncated {
+            break;
+        }
+        if index > 0 {
+            context.append(", ");
+        }
+        context.append(store.type_param_name(param.id).unwrap_or("T"));
+        if let Some(constraint) = param.constraint {
+            context.append(" extends ");
+            render_type_inner(store, constraint, false, context);
+        }
+        if let Some(default) = param.default {
+            context.append(" = ");
+            render_type_inner(store, default, false, context);
+        }
+    }
+    context.append(">");
 }
 
-fn render_parameter_name(param: &crate::types::repr::ParameterType) -> String {
+fn render_parameter_name(param: &crate::types::repr::ParameterType, context: &mut RenderContext) {
     if param.rest {
-        format!("...{}", param.name)
-    } else if param.optional {
-        format!("{}?", param.name)
-    } else {
-        param.name.clone()
+        context.append("...");
+    }
+    context.append(&param.name);
+    if param.optional && !param.rest {
+        context.append("?");
     }
 }
 
 fn render_tuple_parts(
     store: &Store,
     tuple: &crate::types::repr::TupleType,
-    rendering: &mut Vec<TypeId>,
-) -> Vec<String> {
-    let mut parts = Vec::with_capacity(tuple.elements.len() + usize::from(tuple.rest.is_some()));
+    context: &mut RenderContext,
+) {
+    let mut needs_separator = false;
     for (index, &element) in tuple.elements.iter().enumerate() {
+        if context.truncated {
+            break;
+        }
         if let Some(rest) = tuple.rest {
             if rest.position == index {
-                parts.push(render_tuple_rest(store, rest, rendering));
+                if needs_separator {
+                    context.append(", ");
+                }
+                render_tuple_rest(store, rest, context);
+                needs_separator = true;
             }
         }
-        parts.push(render_type_inner(store, element, false, rendering));
+        if needs_separator {
+            context.append(", ");
+        }
+        render_type_inner(store, element, false, context);
+        needs_separator = true;
     }
-    if let Some(rest) = tuple.rest {
-        if rest.position >= tuple.elements.len() {
-            parts.push(render_tuple_rest(store, rest, rendering));
+    if !context.truncated {
+        if let Some(rest) = tuple.rest {
+            if rest.position >= tuple.elements.len() {
+                if needs_separator {
+                    context.append(", ");
+                }
+                render_tuple_rest(store, rest, context);
+            }
         }
     }
-    parts
 }
 
 fn render_tuple_rest(
     store: &Store,
     rest: crate::types::repr::TupleRestType,
-    rendering: &mut Vec<TypeId>,
-) -> String {
-    format!("...{}", render_type_inner(store, rest.ty, false, rendering))
+    context: &mut RenderContext,
+) {
+    context.append("...");
+    render_type_inner(store, rest.ty, false, context);
 }
 
 /// Whether an array element type must be parenthesized before postfix `[]`.
@@ -515,18 +669,35 @@ fn indexed_access_object_needs_parens(store: &Store, object: TypeId) -> bool {
     )
 }
 
-fn render_literal(lit: &crate::types::repr::LiteralValue) -> String {
+fn render_literal(lit: &crate::types::repr::LiteralValue, context: &mut RenderContext) {
     use crate::types::repr::LiteralValue;
     match lit {
-        LiteralValue::String(s) => format!("\"{}\"", escape_string_literal(s)),
-        LiteralValue::Boolean(b) => b.to_string(),
+        LiteralValue::String(s) => {
+            context.append("\"");
+            for c in s.chars() {
+                if context.truncated {
+                    break;
+                }
+                match c {
+                    '\\' => context.append("\\\\"),
+                    '"' => context.append("\\\""),
+                    '\n' => context.append("\\n"),
+                    '\r' => context.append("\\r"),
+                    '\t' => context.append("\\t"),
+                    c if (c as u32) < 0x20 => context.append(&format!("\\u{{{:x}}}", c as u32)),
+                    c => context.append(c.encode_utf8(&mut [0; 4])),
+                }
+            }
+            context.append("\"");
+        }
+        LiteralValue::Boolean(b) => context.append(if *b { "true" } else { "false" }),
         LiteralValue::Number(n) => {
             // Render integers without a trailing `.0` to match `tsc`'s literal
             // display (`1`, not `1.0`).
             if n.fract() == 0.0 && n.is_finite() {
-                format!("{}", *n as i64)
+                context.append(&format!("{}", *n as i64));
             } else {
-                format!("{n}")
+                context.append(&format!("{n}"));
             }
         }
     }
@@ -535,6 +706,7 @@ fn render_literal(lit: &crate::types::repr::LiteralValue) -> String {
 /// Escape control characters (and `\`/`"`) inside a string-literal type body, as tsc
 /// renders them — a raw newline would otherwise split a diagnostic across lines and,
 /// after WU3, could inject a phantom `incomplete[…]` line into an exit-3 identity list.
+#[cfg(test)]
 fn escape_string_literal(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     for c in s.chars() {
