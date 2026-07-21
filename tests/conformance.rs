@@ -86,6 +86,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b28_interface_extends", true),
     ("b29_alias_cycles", true),
     ("b30_negative_literals", true),
+    // Backlog 32 — `keyof` must observe declarations filled later in source
+    // order. WU0 commits the corpus disabled; the fix enables it.
+    ("b32_eager_keyof_forward", false),
     // Backlog 30 JS-exact number stringification.
     ("b30_numeric_stringify", true),
     ("b55_template_memo", true),

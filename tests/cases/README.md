@@ -256,6 +256,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b29_alias_cycles/` | backlog `29` | surface alias cycles → `TK2456` (direct/mutual/through unions); legal member recursion resolves |
 | `b30_negative_literals/` | shipped backlog `30` | negative numeric literal types are literals, not `any` (annotations, unions, template holes, extends) |
 | `b30_numeric_stringify/` | shipped backlog `30` | ECMA number-to-string thresholds and `${number}` long-decimal regression control |
+| `b32_eager_keyof_forward/` | backlog `32` | forward-referenced `keyof` operands retain their eventual keys in annotations and generic overload constraints |
 | `b55_template_memo/` | backlog `55` | template evaluation must not memoize results computed under an exhausted TK2589 budget |
 | `b56_instantiation_cycles/` | shipped backlog `56` | direct/mutual instantiation cycles emit TK2589 without poisoning terminating siblings or query order |
 | `b58_project_scopes/` | backlog `58` | project-mode scope maps keyed per module — offset-aligned files must not collide |
