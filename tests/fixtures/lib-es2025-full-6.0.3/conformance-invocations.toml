@@ -4,7 +4,7 @@ source_path = "tests/conformance.rs"
 source_sha256 = "98f22a6f473222097b0977c213901d7d23aa6924051cc865049a88106affa28d"
 invocation_count = 304
 source_count = 335
-manifest_sha256 = "46c2b6eccb6edfc54be647e077d9040ad69092a99ccdcdb3e4678abadf380c99"
+manifest_sha256 = "d65132cec33d8fcc2239524e4ee9605c33e2649fd51cbd5f279f072d01231bbf"
 
 [[invocation]]
 id = "tests/cases/m0_assign_primitives/intrinsics.ts"
