@@ -121,21 +121,21 @@ class SnapshotCoordinatorTests(unittest.TestCase):
             build_process["stderr"] = "Finished release profile"
             empty_tree = {"path": f"/tmp/typokat-wu0b-test/build-{ordinal}/cargo-home/empty", "files": 0, "bytes": 0, "sha256": snapshot.sha256_bytes(b"")}
             source_tree = {"path": f"/tmp/typokat-wu0b-test/build-{ordinal}/cargo-home/registry/src", "files": 10, "bytes": 100, "sha256": "7" * 64}
-            builds.append({"command": cargo_command, "environment": build_env, "cargo_version": cargo_version, "rustc_version": rustc_version, "process": build_process, "cargo_lock": snapshot.file_identity(snapshot.ROOT / "Cargo.lock"), "cargo_configs": snapshot.repo_cargo_configs(), "toolchain_files": snapshot.toolchain_identities(), "cargo_home_before": {"cache_source": "/tmp/cache", "exposed": [], "root": build_env["CARGO_HOME"], "registry_sources": empty_tree, "git_checkouts": empty_tree, "git_db": empty_tree}, "cargo_home_after": {"root": build_env["CARGO_HOME"], "registry_sources": source_tree, "git_checkouts": empty_tree, "git_db": empty_tree}, "effective_fingerprint": {"file": self.identity(f"/tmp/fingerprint-{ordinal}", "1" * 64), "invoked_timestamp": self.identity(f"/tmp/invoked-{ordinal}", "2" * 64), "rustflags": canonical_rustflags, "features": "[]", "profile": 1, "config": 1}, "source_before": source_copy, "source_after": source_copy, "libtest": binary})
+            builds.append({"command": cargo_command, "environment": build_env, "cargo_version": cargo_version, "rustc_version": rustc_version, "process": build_process, "cargo_lock": snapshot.file_identity(snapshot.ROOT / "Cargo.lock"), "cargo_configs": snapshot.repo_cargo_configs(), "toolchain_files": snapshot.toolchain_identities(), "cargo_home_before": {"cache_source": "/tmp/cache", "exposed": [], "root": build_env["CARGO_HOME"], "registry_sources": empty_tree, "git_checkouts": empty_tree, "git_db": empty_tree}, "cargo_home_after": {"root": build_env["CARGO_HOME"], "registry_sources": source_tree, "git_checkouts": empty_tree, "git_db": empty_tree}, "effective_fingerprint": {"file": self.identity(f"/tmp/fingerprint-{ordinal}", "1" * 64), "invoked_timestamp": self.identity(f"/tmp/invoked-{ordinal}", "2" * 64), "rustflags": canonical_rustflags.copy(), "features": "[]", "profile": 1, "config": 1}, "source_before": copy.deepcopy(source_copy), "source_after": copy.deepcopy(source_copy), "libtest": binary})
         preflight_stdout = f"test result: ok. {self.contract['libtest']['preflight_passed']} passed; 0 failed; {self.contract['libtest']['preflight_ignored']} ignored; 0 measured; 0 filtered out"
         preflights = []
         for ordinal, binary in enumerate(binaries, 1):
-            source_copy = builds[ordinal - 1]["source_after"]
+            source_copy = copy.deepcopy(builds[ordinal - 1]["source_after"])
             environment = snapshot.sanitized_environment() | {"TYPOKAT_WU0B_PROFILE_ROOT": source_copy["root"]}
             process = self.process(130 + ordinal, snapshot.preflight_command(Path(binary["path"]), self.contract), environment, preflight_stdout, start=3_000_000_000 + ordinal * 200_000_000)
             process["cwd"] = source_copy["root"]
-            preflights.append({"filter": self.contract["libtest"]["preflight_filter"], "binary_before": binary, "binary_after": binary, "source_before": source_copy, "source_after": source_copy, "process": process})
+            preflights.append({"filter": self.contract["libtest"]["preflight_filter"], "binary_before": binary, "binary_after": binary, "source_before": copy.deepcopy(source_copy), "source_after": copy.deepcopy(source_copy), "process": process})
         generations = []
         generation_stdout = "\nrunning 1 test\ntest regeneration ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 857 filtered out; finished in 0.01s\n"
         for ordinal in (1, 2):
             output = copy.deepcopy(artifact)
             output["path"] = f"/tmp/typokat-wu0b-test/regeneration-{ordinal}/library.snapshot"
-            source_copy = builds[ordinal - 1]["source_after"]
+            source_copy = copy.deepcopy(builds[ordinal - 1]["source_after"])
             env = snapshot.sanitized_environment() | {"TYPOKAT_WU0B_SNAPSHOT_OUTPUT": output["path"], "TYPOKAT_WU0B_PROFILE_ROOT": source_copy["root"]}
             process = self.process(ordinal + 1, snapshot.test_command(Path(binaries[ordinal - 1]["path"]), self.contract["libtest"]["regeneration_filter"], self.contract), env, generation_stdout, start=5_000_000_000 + ordinal * 1_000_000_000)
             process["cwd"] = source_copy["root"]
@@ -146,8 +146,8 @@ class SnapshotCoordinatorTests(unittest.TestCase):
                 "binary_after": binaries[ordinal - 1],
                 "artifact_before": None,
                 "artifact_after": None,
-                "source_before": source_copy,
-                "source_after": source_copy,
+                "source_before": copy.deepcopy(source_copy),
+                "source_after": copy.deepcopy(source_copy),
                 "process": process,
                 "output": {key: output[key] for key in ("path", "bytes", "sha256")},
                 "wire": wire,
@@ -328,8 +328,26 @@ class SnapshotCoordinatorTests(unittest.TestCase):
         self.evidence["builds"][0]["effective_fingerprint"]["rustflags"].extend(["--cfg", "cheat"])
         self.assert_invalid(self.evidence)
 
+    def test_build_remap_environment_must_match_fingerprint(self) -> None:
+        self.evidence["builds"][0]["environment"]["CARGO_ENCODED_RUSTFLAGS"] += "\x1f--cfg\x1fcheat"
+        self.assert_invalid(self.evidence)
+
+    def test_builds_must_share_canonical_remap_order(self) -> None:
+        for build in self.evidence["builds"]:
+            build["effective_fingerprint"]["rustflags"].reverse()
+            build["environment"]["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(build["effective_fingerprint"]["rustflags"])
+        self.assert_invalid(self.evidence)
+
     def test_preflight_profile_source_is_pinned(self) -> None:
-        self.evidence["preflights"][0]["process"]["cwd"] = str(snapshot.ROOT.resolve())
+        self.evidence["preflights"][0]["process"]["env"]["TYPOKAT_WU0B_PROFILE_ROOT"] = self.evidence["builds"][1]["source_after"]["root"]
+        self.assert_invalid(self.evidence)
+
+    def test_preflight_profile_source_mutation_is_rejected(self) -> None:
+        self.evidence["preflights"][0]["source_after"]["tracked_sha256"] = "0" * 64
+        self.assert_invalid(self.evidence)
+
+    def test_generation_profile_source_is_pinned(self) -> None:
+        self.evidence["generations"][1]["process"]["cwd"] = self.evidence["builds"][0]["source_after"]["root"]
         self.assert_invalid(self.evidence)
 
     def test_generation_profile_source_mutation_is_rejected(self) -> None:
