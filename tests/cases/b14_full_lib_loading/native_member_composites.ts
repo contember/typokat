@@ -1,4 +1,4 @@
-// tsc 6.0.3 --strict --target es2025: TS2322 x6 below.
+// tsc 6.0.3 --strict --target es2025: TS2322 x6, TS2341, and TS2445 below.
 
 const objectLiteral = { value: 1 };
 const objectLiteralText: string = objectLiteral.toString();
@@ -19,3 +19,13 @@ declare const decoratedString: string & { marker: 1 };
 const decoratedUpper: string = decoratedString.toUpperCase();
 const decoratedMarker: 1 = decoratedString.marker;
 const wrongDecoratedMarker: 2 = decoratedString.marker; // error[TK2322]
+
+class NativeCompositeAccess {
+  private secret = 1;
+  protected inherited = 2;
+  visible = 3;
+}
+declare const decoratedAccess: NativeCompositeAccess & string;
+decoratedAccess.secret; // error[TK2341]: Property 'secret' is private
+decoratedAccess.inherited; // error[TK2445]: Property 'inherited' is protected
+const decoratedVisible: number = decoratedAccess.visible;
