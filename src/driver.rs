@@ -675,8 +675,11 @@ mod tests {
         assert_eq!(diagnostic.code.as_str(), "TK2322");
         assert_eq!(
             assignment_keys.into_inner(),
-            [diagnostic.span.start],
-            "event ownership must use the exact diagnostic start",
+            [
+                u32::try_from(source.find("\"wrong\"").expect("initializer literal"))
+                    .expect("source offset fits u32")
+            ],
+            "event ownership remains attached to the initializer",
         );
         assert_eq!(
             diagnostic.span.start,
