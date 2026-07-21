@@ -10,7 +10,7 @@ target = "typokat"
 build_args = ["test", "--release", "--lib", "--no-run", "--message-format=json-render-diagnostics"]
 preflight_filter = "check::checker::wu0b_snapshot_spec::"
 preflight_args = ["{filter}", "--nocapture", "--test-threads=1"]
-preflight_passed = 12
+preflight_passed = 16
 preflight_ignored = 4
 regeneration_filter = "check::checker::wu0b_snapshot_spec::snapshot_regeneration_probe_once"
 timing_filter = "check::checker::wu0b_snapshot_spec::snapshot_fast_clean_probe_once"

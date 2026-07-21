@@ -45,7 +45,7 @@ selected Cargo JSON libtest identity. The two binaries must be byte-identical bu
 live at distinct paths.
 
 Before any probe, each release libtest must run the complete pinned WU0B module:
-exactly 12 non-ignored tests pass and the four coordinator-only probes remain
+exactly 16 non-ignored tests pass and the four coordinator-only probes remain
 ignored. Roundtrip, identity, corruption, completeness, real-checker semantics,
 and route calibration therefore form raw preflight evidence rather than child
 claims.
