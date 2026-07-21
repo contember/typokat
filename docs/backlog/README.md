@@ -173,9 +173,12 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
    The five HIGH review findings (`53` `55` `57` `58` `61`) shipped in
    sprint-2026-07-07-soundness-fn-fixes; the remaining silent-FN C group (`60`, `62`, `32`,
    `21`, `66`, `71`, `78`) remains available as independently valuable dropped-error work.
-2. **Start the now-unblocked full-library work (`14`).** The pinned ES5 proof is GO after immutable
-   standalone namespace values shipped under ADR-0010. Backlogs `50`/`75` remain independent 1.0
-   work; `63` is parity-only. The `13` profiling gate closed DEFER/no-VM under ADR-0001.
+2. **Execute the active full-library performance-cutover sprint (`14`).** The pinned ES5 proof is
+   GO after immutable standalone namespace values shipped under ADR-0010. The
+   [active sprint](../sprints/sprint-2026-07-21-full-lib-performance-cutover.md) owns the shipped
+   semantic-snapshot decision, production cutover, and fail-closed ≥2× native TypeScript 7 gate.
+   Backlogs `50`/`75` remain independent 1.0 work; `63` is parity-only. The `13` profiling gate
+   closed DEFER/no-VM under ADR-0001.
 3. **Climb the full-project/scale ladder** (`14` → `15` → `16` → `17`), finishing the A/B/C
    remainder along the way. `14` + `15` must graduate a pinned Bundler-compatible full-stack
    witness (deptective only if it qualifies); the small `72` preview is not evidence for full

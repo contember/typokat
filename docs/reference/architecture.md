@@ -518,8 +518,12 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   contribution to a correctness-first private rebuild of library + project in one universe; the
   shared base is never mutated or partially overlaid. Production still uses `src/prelude.ts`. The
   [2026-07-16 feasibility sprint](../archive/sprint-2026-07-16-full-lib-loading.md) ended at WU0
-  NO-GO after its unchanged 5-second cold gate exited 143; no cutover shipped. Backlog
-  [14](../backlog/14-libdts-loading.md) owns any future re-planning and delivery.
+  NO-GO after its unchanged 5-second cold gate exited 143; no cutover shipped. The active
+  [performance-cutover sprint](../sprints/sprint-2026-07-21-full-lib-performance-cutover.md) now
+  owns backlog [14](../backlog/14-libdts-loading.md), beginning with a measured decision on a
+  deterministic shipped semantic snapshot and requiring a production fresh-process result at
+  least 2× faster than pinned native TypeScript 7 without weakening the base/delta or collision
+  semantics.
 - **Stage 2 — cross-file *mutable* exports.** `export interface Foo` in A consumed by
   B: A must emit its **public type surface** (`export name → type`), and B must give
   those types identity in *its* world. A run-local `TypeId` (§3.2) is meaningless

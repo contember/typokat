@@ -1,0 +1,447 @@
+# Sprint — full default-library performance cutover (2026-07-21)
+
+**Goal.** Ship the exact pinned TypeScript 6.0.3 ES2025 full-host library as typokat's production
+default type universe, with sound user checking and a fresh-process end-to-end wall time at least
+**2× faster than pinned native TypeScript 7** on the approved reference workload.
+
+**Theme.** Backlog [`14`](../backlog/14-libdts-loading.md) is not complete merely because the 82
+declaration files can finish in a test-only pipeline. The production CLI must actually use the
+result, preserve every library-owned diagnostic/incomplete outcome, support the ADR-0011
+base/delta and collision semantics, and win a fail-closed apples-to-apples benchmark. The previous
+feasibility sprint removed two nonlinear barriers but left runtime library compilation at roughly
+10.8 seconds. Native TypeScript 7.0.2 checks the same pinned library bytes in roughly 0.3 seconds,
+so meeting the requested 2× target requires eliminating normal-startup compilation work rather
+than polishing it by a constant factor. The leading design is a deterministic, shipped semantic
+snapshot decoded into the same `FrozenLibraryBase`; it must earn a superseding ADR and an early
+performance GO before production work proceeds.
+
+## Refs re-verified at HEAD (2026-07-21)
+
+`✔` = confirmed live · `⚠` = drift/nuance caught.
+
+- ✔ The sole 1.0 library profile remains TypeScript 6.0.3's 82-file
+  `lib.es2025.full.d.ts` closure: 2,936,611 bytes, 58,349 LF bytes, registry identity
+  `ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d` —
+  `tests/lib_es2025_full_profile.rs:9-18`, `tests/lib_es2025_full_profile.rs:92-105`.
+- ✔ Production still parses and checks `src/prelude.ts` inside every run through
+  `PRELUDE_SOURCE` and `bootstrap_trusted_prelude`; there is no production `FrozenLibraryBase` —
+  `src/check/checker/mod.rs:139-149`, `src/check/checker/mod.rs:210-224`.
+- ✔ The full-library compiler, profile loader, library reporting, and WU0D candidate runner are
+  all `#[cfg(test)]`; ordinary `check_source` creates `Interner::with_intrinsics()` and calls the
+  prelude-backed checker — `src/check/checker/mod.rs:45-69`, `src/driver.rs:87-119`.
+- ✔ The test-only injected pipeline parses all 82 units and builds owned semantic evidence, but its
+  returned `InjectedProfileRun` is not a reusable production base; its follow-up tiny source is
+  checked independently through the old prelude path — `src/check/checker/wu0b_library.rs:261-273`,
+  `src/check/checker/wu0b_library.rs:1184-1215`,
+  `src/check/checker/wu0b_library.rs:2041-2079`.
+- ✔ The canonical WU0D product is an 8.45 MB evidence projection with source records, type-store
+  rows, publications, values, namespaces, and class terminals. It is useful as a semantic oracle,
+  but no complete production decoder exists — `src/check/checker/wu0b_library.rs:624-842`,
+  `src/check/checker/wu0b_library.rs:967-1008`.
+- ✔ The B14 single-file and project corpora remain disabled — `tests/conformance.rs:175-179`.
+- ⚠ On HEAD, the exact release WU0B profile completes rather than hangs: one fresh run measured
+  10,784,008 us internally / 10.94 s externally / 72,904 KiB RSS. The phase split was registry
+  36,618 us, parse 17,087 us, bind 27,650 us, reserve/fill 793,025 us,
+  publication/validation 68,090 us, and statement-check/evidence 9,833,246 us. The current
+  WU0D 5-second coordinator still correctly reports NO-GO because it kills the process before that
+  result exists — `src/check/checker/wu0b_library.rs:2030-2111`,
+  `tooling/wu0d-release/run.pl:15-20`.
+- ✔ The unrestricted WU0D primary probe completes all 82 files and emits stable owned identities,
+  but this remains test-only evidence, not a loaded user universe —
+  `src/check/checker/wu0d_candidate_release.rs:1257-1270`,
+  `src/check/checker/wu0d_candidate_release.rs:1314-1320`.
+- ✔ The current stable comparator is `typescript@7.0.2`; npm reports integrity
+  `sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==`.
+  Exploratory direct-native runs on this host checked the normal 83-file ES2025 graph in
+  0.34-0.37 s and the explicit pinned TypeScript 6.0.3 82-file graph in 0.32-0.33 s. These are
+  planning observations only; WU0 owns the frozen binary identity and authoritative interleaved
+  distributions.
+- ✔ ADR-0011 accepts the exact embedded profile, one immutable AST-free base, identity-preserving
+  private deltas, a conservative preflight, and a correctness-first same-pipeline private rebuild.
+  It also says the first initialization performs real semantic compilation, so replacing that
+  work with a shipped snapshot requires a superseding decision before implementation —
+  `docs/decisions/0011-freeze-pinned-default-library-base.md:286-315`,
+  `docs/decisions/0011-freeze-pinned-default-library-base.md:317-339`.
+- ✔ The full-profile readiness, warm-sharing, private-route, and freeze manifests are still
+  `PENDING`; input provenance is proven, production readiness is not —
+  `tests/fixtures/lib-es2025-full-6.0.3/readiness.toml:1-15`,
+  `tests/fixtures/lib-es2025-full-6.0.3/readiness.toml:36-77`.
+
+## Binding performance claim
+
+The sprint may close as shipped only with this narrow claim:
+
+> On the recorded reference host, the ordinary production typokat CLI checks every approved
+> fresh-process TypeScript 6.0.3 ES2025-full workload at least 2× faster than the pinned native
+> TypeScript 7 executable, while using the same 82 library source bytes and preserving the approved
+> semantic outcomes.
+
+For each benchmark row and each of three independent trials:
+
+```text
+speedup = median(tsgo wall time) / median(typokat wall time)
+```
+
+The one-sided 95% bootstrap lower confidence bound of `speedup` must be at least `2.00`, and the
+ratio of tsgo p95 to typokat p95 must also be at least `2.00`. The engineering target is `2.25×`
+to leave noise headroom. The threshold is derived from the frozen comparator samples; no absolute
+time from the exploratory runs is hard-coded. A failed row is NO-GO. The run log cannot weaken,
+drop, rename, or replace a row after seeing its result.
+
+The primary benchmark is fresh-process/compiler-cold with an ordinary warm filesystem cache. It
+includes process creation, production CLI startup, default-library snapshot validation/loading,
+user-source I/O, parse/bind/check, diagnostic construction where applicable, and normal shutdown.
+It excludes downloading tools, building binaries, staging the comparator runtime, and generating
+the shipped snapshot. Every measured sample is a new process; no daemon, incremental state, or
+same-process singleton reuse counts toward the headline.
+
+### Approved benchmark matrix
+
+All rows use committed byte-pinned sources and the exact 82-file registry:
+
+1. **fast-clean** — a non-colliding external module that exercises arrays/tuples, `Promise`,
+   iterators/generators, `RegExp`, primitive/object/function members, DOM, and `Intl`; both tools
+   exit 0 with empty output;
+2. **fast-errors** — the same library surface with stable bad assignments/member accesses; both
+   tools produce the approved normalized code/span identities, so performance cannot be won by
+   skipping diagnostics;
+3. **collision** — a legal script/`declare global` merge that forces typokat's correctness route
+   and has an equivalent tsgo oracle;
+4. **fanout** — a fixed mixed 32-file invocation covering shared-base reuse, independent deltas,
+   and at least one collision, compared with the equivalent native TypeScript invocation.
+
+The 2× claim applies to every row. If ADR-0011's private full rebuild cannot meet the collision row,
+the sprint must stop and decide a sound faster collision architecture; it may not silently narrow
+the claim to the easy fast path.
+
+### Comparator and sampling contract
+
+- Pin the current stable TypeScript 7 package at WU0 (`7.0.2` at sprint creation), npm integrity,
+  upstream revision, platform artifact, direct native executable SHA-256, and size. If a newer
+  stable TypeScript 7 ships before cutover, freeze it as a second comparator and require the gate
+  against both; do not move the original baseline.
+- Stage an untimed comparator runtime whose default library files are byte-for-byte replaced by
+  typokat's vendored TypeScript 6.0.3 profile. `--listFilesOnly` must attest exactly the 82 manifest
+  libraries plus the benchmark inputs. Timing uses normal default-library loading, not `--noLib`.
+- Run the direct native executable, never npm/Node startup. Neither side may use `--skipLibCheck`,
+  `--noCheck`, incremental state, a daemon, hidden environment switches, or benchmark-only code.
+- Pre-read both executables, the profile, and workload before each block. Run five unrecorded
+  warmups, then 30 measured launches per tool in 15 balanced `A,B,B,A` blocks. Repeat the trial
+  three times in separate time windows under the same sanitized environment, cwd, CPU set,
+  priority, resource limits, and normal thread availability.
+- Record every raw monotonic-wall sample, median, mean, p95, MAD, min/max, and a deterministic
+  100,000-resample bootstrap interval. Record ten separate interleaved `/usr/bin/time -v` memory
+  samples per tool; typokat must stay below 512 MiB in every sample and at or below 1.25× tsgo's
+  median RSS.
+- The exact release binaries used for semantic proof and timing must be identical. Standard
+  `cargo build --release` is required; unrecorded `RUSTFLAGS`, `target-cpu=native`, PGO, or feature
+  gates invalidate the claim.
+- Rename/comment perturbation controls must take the same route. No filename, fixture hash,
+  reachable-surface, output-suppression, lazy-subset, test-only, or WU0-injection special case is
+  allowed. A shipped snapshot is valid only if every ordinary user source uses it.
+
+## Work units
+
+### WU0A — freeze the cross-tool contract and RED acceptance (effort L)
+
+- **Problem.** Existing `tooling/bench` intentionally uses `--noLib --skipLibCheck`; WU0D is a
+  typokat-only libtest with a five-second absolute gate. Neither can prove the requested production
+  CLI ratio, and benchmark design after implementation would invite target selection.
+- **Verify first.** Re-run the exploratory direct-native comparator, verify npm/upstream/platform
+  provenance, exercise exact 82-file staging, and enumerate every difference between the two
+  commands. Confirm all four proposed rows have stable TypeScript 6.0.3 and 7.0.2 outcomes.
+- **Scope.** Commit, before implementation:
+  - `tooling/full-lib-bench/` with byte-pinned sources, lock manifest, expected file inventory,
+    semantic oracles, a fail-closed runner spec, and disabled RED production-path assertions;
+  - a canonical runner protocol with bounded stdout/stderr, timeout/process-group containment,
+    sanitized environment, balanced scheduling, deterministic statistics, binary/host/profile
+    identities, and raw evidence format;
+  - anti-gaming tests for stale/wrong binaries, wrong library bytes/order, extra default libs,
+    forbidden flags, warm-state reuse, malformed output, renamed fixtures, and partial schedules;
+  - the exact target formula, matrix, memory gates, and artifact schema in the tooling README.
+- **Acceptance / witness.** The comparator-only self-tests and TypeScript oracles pass; the
+  typokat production assertions are demonstrably RED because the CLI still uses `src/prelude.ts`.
+  The runner cannot emit GO without all rows, three complete trials, semantic parity, memory
+  evidence, and exact binary/profile identities.
+- **Touch points.** `tooling/full-lib-bench/`, `tests/cases/b14_full_lib_loading/`,
+  `tests/cases/b14_full_lib_loading_project/`, `tests/conformance.rs`, packaging manifests.
+
+### WU0B — semantic-snapshot feasibility and decision gate (effort L)
+
+- **Problem.** Runtime WU0B compilation is about 65-75× above the likely 2× target. Its 8.45 MB
+  canonical evidence blob is not a runtime base and includes source/reporting material that a
+  normal check must not decode.
+- **Verify first.** Inventory every field required by ADR-0011's `FrozenLibraryBase`, distinguish
+  durable query inputs from WU0 evidence/probes, and prove the existing compiler can project a
+  deterministic pointer-free archive without changing semantic identities.
+- **Scope.** Behind test-only/explicit tooling boundaries, produce a representative versioned
+  snapshot and strict owned decoder generated by the same library compiler. Exclude source bodies,
+  phase counters, benchmark data, rendered diagnostics, and probe-only indexes. Measure validation,
+  decode, base construction, one clean user check, artifact size, and RSS. Independently
+  regenerate twice from clean builds and byte-compare the outputs.
+- **Acceptance / witness.** A fresh-process prototype using the decoded base—not `check_source`'s
+  old prelude—passes the fast-clean semantic matrix and leaves at least the full 2× statistical
+  target plus engineering headroom against the frozen comparator. Snapshot identity changes for
+  every semantically relevant mutation and remains identical for clean regeneration. Decode
+  corruption/truncation/unknown-version tests fail closed before user checking.
+- **Stop/falsifier.** If the real decoded-base path cannot plausibly achieve the cross-tool gate,
+  or the archive cannot represent the complete AST-free base without a second semantic authority,
+  record NO-GO and stop. Do not begin WU1, weaken 2×, or substitute a lazy surface slice.
+- **Touch points.** `src/check/checker/wu0b_library.rs`, a test-only snapshot decoder module,
+  `tooling/library-profile/`, `tooling/full-lib-bench/`, full-profile fixtures.
+
+### WU1 — decide and pin the shipped snapshot architecture (effort M)
+
+- **Problem.** ADR-0011 requires real semantic work during first initialization. A checked-in
+  semantic snapshot changes provenance, release generation, runtime validation, corruption
+  behavior, and the meaning of the private rebuild path.
+- **Verify first.** Adversarially review WU0B's product completeness, reproducibility, performance,
+  binary-size cost, and whether the same compiler remains authoritative for snapshot generation
+  and private rebuilds.
+- **Scope.** Write and accept a superseding ADR only after WU0B GO. It must define the versioned
+  internal format, generator authority, checked-in/package lifecycle, digest binding to profile +
+  checker schema, runtime validation, upgrade/rollback policy, source retention for private
+  rebuilds, and exactly which ADR-0011 guarantees remain unchanged.
+- **Acceptance / witness.** The decision has one authoritative generator and decoder, no parallel
+  hand-authored semantics, and an explicit exit plan. If snapshot generation or validation becomes
+  non-reproducible, production can return to the source compiler behind the same typed provider,
+  but that fallback cannot claim or silently bypass the 2× gate.
+- **Touch points.** New `docs/decisions/0012-*.md`, ADR/readme indexes, this sprint run log.
+
+### WU2 — production LibraryCompiler and canonical snapshot (effort XL)
+
+- **Problem.** The current compiler/reporting/profile modules are test-only and return an evidence
+  structure rather than a production archive.
+- **Verify first.** Split WU0 evidence-only projections from the minimum complete runtime product;
+  prove parser diagnostics, library event ownership, publication terminals, and source identities
+  are not lost by the split.
+- **Scope.** Promote one source-backed `LibraryCompiler` used by explicit snapshot generation and
+  private rebuilds. Generate the versioned canonical snapshot deterministically from the exact 82
+  sources, retain semantic diagnostics/incomplete identities separately from runtime tables, bind
+  the artifact to compiler schema/profile/checker revisions, and package the snapshot plus sources
+  and upstream notices. Generation is explicit and untimed; normal `cargo build` does not silently
+  regenerate or trust a stale blob.
+- **Acceptance / witness.** Clean regeneration is byte-identical; any compiler/profile/schema
+  mutation invalidates verification; package extraction contains exact assets and notices; the
+  generated semantic identity matches a fresh source compilation. No production call can select a
+  different library pipeline.
+- **Touch points.** New `src/library/` production modules, existing WU0 modules, profile tooling,
+  `Cargo.toml`, package tests, `src/library/typescript-6.0.3/`.
+
+### WU3 — strict decoder and immutable FrozenLibraryBase (effort XL)
+
+- **Problem.** Production needs typed immutable tables, not an opaque evidence `Vec<u8>`, and no
+  partially decoded base may become observable.
+- **Verify first.** Enumerate every `Store`, interner bucket, constraint, publication, binder/scope,
+  declaration, namespace, class, value, intrinsic identity, root-name index, and next-id field
+  required by arbitrary user checking.
+- **Scope.** Decode into a fully owned `FrozenLibraryBase` behind
+  `Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>>`; validate header/version/length/order/
+  ranges/IDs/references/hash tables/terminals/digests before publication. Prove
+  `Send + Sync + 'static`, no allocator/AST/pass/query cache survives, and base rows reference no
+  delta. Publish only after the complete object validates.
+- **Acceptance / witness.** Mutation/truncation/reordering/overflow/unknown-tag tests fail closed;
+  direct inspectors prove the source-compiled and decoded bases have identical canonical semantic
+  projections; 1, 2, and 32 callers receive one pointer-identical base; repeated fresh processes
+  produce the same identity. The WU0B performance headroom survives on the production decoder.
+- **Touch points.** `src/library/`, `src/types/`, `src/binder/`, `src/check/checker/`, driver-facing
+  typed provider API.
+
+### WU4 — identity-preserving user delta (effort XL)
+
+- **Problem.** A shared base is unusable if user runs clone/remap it or if interning can create a
+  duplicate of an existing base type.
+- **Verify first.** Inventory every arena/table ID domain and every direct indexing/interning path;
+  use compile-fail/private-field tests to prevent construction outside the provider.
+- **Scope.** Add immutable-prefix + private-delta views for the type store, interner buckets,
+  constraints, binder scopes/symbols/declarations/groups/namespaces/value storages, declaration
+  values, class IDs, and type parameters. Reads route by prefix; interning probes base before local;
+  base rows never reference/mutate a delta; no delta is shared between runs.
+- **Acceptance / witness.** Existing shapes reuse exact base IDs, new shapes allocate after frozen
+  counters, unrelated runs cannot observe each other's rows, and single/parallel/project user
+  checks retain deterministic diagnostics. Warm inspectors show zero library parse/bind/check work,
+  zero base-sized clone/remap, and per-check allocation independent of base size.
+- **Touch points.** `src/types/`, `src/binder/`, `src/check/checker/`, `src/driver.rs`, direct tests.
+
+### WU5 — collision routing and fast private semantics (effort XL)
+
+- **Problem.** User scripts and `declare global` can merge with the library. ADR-0011's private
+  full rebuild is sound but the current source compiler cannot satisfy the 2× collision row.
+- **Verify first.** Re-run the exact binder classifier over every committed conformance and
+  official-suite input; freeze route incidence before optimizing. Measure which library
+  declaration SCCs actually depend on each collision family and whether a snapshot-derived replay
+  can preserve same-universe identity without becoming a second publication authority.
+- **Scope.** Implement the exhaustive preflight before any semantic mutation. Keep the shared fast
+  path for provably non-colliding inputs. For collisions, use the same `LibraryCompiler` authority;
+  optimize only through a separately specified and reviewed mechanism that reconstructs the exact
+  merged universe. If the accepted solution differs from ADR-0011's private full rebuild, supersede
+  that clause before implementation. Retain one-process-wide containment for expensive fallbacks.
+- **Acceptance / witness.** False-negative classifier mutations route private; legal merge,
+  `globalThis`, UMD/namespace, value/type/namespace-slot, destructuring, and opposite-order cases
+  match tsc. The collision and fanout benchmark rows each satisfy the full 2× confidence/p95 gate,
+  every run stays within 512 MiB, and all-colliding fanout is deterministic and bounded.
+- **Stop/falsifier.** No 2× collision result means no broad 2× claim and no sprint completion. Do
+  not relabel the collision row out of scope or accept the unaugmented snapshot as success.
+- **Touch points.** `src/library/`, binder preflight/classifier, checker/compiler pipeline,
+  `src/driver.rs`, B14 project fixtures, routing/readiness manifests.
+
+### WU6 — identity-selected bridges and full library corpus (effort L)
+
+- **Problem.** Arrays, regexp literals, primitive wrappers, utility intrinsics, `globalThis`, and
+  `undefined` need universe-local library identities; name-based exceptions or an error-type
+  fallback would create false-clean checks.
+- **Verify first.** Re-audit the committed bridge matrix against the decoded base and current
+  consumers; require concrete evidence for every native bridge and reject unused special cases.
+- **Scope.** Wire only evidence-selected identities from `LibrarySemanticIdentities`; enable the
+  B14 single-file/project corpora; promote exact official-suite missing-library witnesses; preserve
+  all unrelated model incompletes under their existing owners.
+- **Acceptance / witness.** Positive and negative arrays/tuples, `Promise`, iterators/generators,
+  DOM/Intl, regexp, primitives/object/function, utilities, shadowing, and augmentation cases match
+  TypeScript 6.0.3. No `TK2304` remains for a present standard-library declaration, no unsupported
+  surface becomes `any`/error/empty success, and module-local same-name declarations cannot hijack
+  native identities.
+- **Touch points.** `src/check/checker/`, evaluator/annotation bridges, B14 corpora,
+  official-suite gates, bridge/ledger/readiness manifests.
+
+### WU7 — production provider, CLI cutover, and batch protocol (effort XL)
+
+- **Problem.** All public driver modes still bootstrap the minimal prelude, use infallible APIs,
+  and the official suite pays one process per case.
+- **Verify first.** Characterize `check_source`, `check_files`, `check_project`, CLI exit behavior,
+  spawn/join failures, and every consumer before changing signatures.
+- **Scope.** Add the process-wide typed provider/singleton, initialize before rayon, and migrate all
+  three driver modes to Result-bearing APIs. Cache deterministic init failure, map it to stable CLI
+  exit 2 without partial user output, add the isolated same-process official-suite protocol, and
+  atomically remove `PRELUDE_SOURCE`, `bootstrap_trusted_prelude`, and `src/prelude.ts` only after
+  every path uses the full base.
+- **Acceptance / witness.** The normal release CLI—not a libtest—uses the decoded base for all
+  benchmark and conformance sources. Initial/middle-case failure, crash, timeout, malformed frames,
+  case-id mismatch, worker failure, and restart tests fail closed without cross-case leakage.
+  Single/parallel/project semantics agree and package/source searches find no production prelude
+  fallback.
+- **Touch points.** `src/library/`, `src/driver.rs`, `src/check/checker/mod.rs`, `src/lib.rs`,
+  `src/main.rs`, API call sites, official-suite protocol, deletion of `src/prelude.ts`.
+
+### WU8 — authoritative 2× gate and optimization loop (effort XL)
+
+- **Problem.** Prototype timing cannot support a production performance claim, and optimizing only
+  the easiest row would violate the contract.
+- **Verify first.** Freeze the exact release commit and binaries; run semantic, identity, route,
+  package, conformance, official-suite, warm-sharing, and memory gates before collecting timing.
+- **Scope.** Run the complete cross-tool protocol. If any row misses, profile that exact production
+  row, write a new RED performance/semantic guard, implement one evidence-backed optimization via a
+  subagent, independently review it, and repeat the entire matrix. Keep raw failures; never replace
+  evidence after learning which row is slow.
+- **Acceptance / witness.** All three trials for every row have a one-sided 95% lower confidence
+  bound and p95 ratio ≥2.00; all semantic outputs/identities match their oracles; typokat RSS meets
+  both memory gates. Commit raw canonical JSON, summary, binary/profile/host facts, commands,
+  snapshot and package sizes, route incidence, and independent statistical validation.
+- **Stop/falsifier.** A semantic difference, incomplete evidence, identity mismatch, forbidden
+  optimization, missing row, or sub-2× result is NO-GO. The target is not averaged across rows or
+  traded against memory.
+- **Touch points.** `tooling/full-lib-bench/`, production hot paths selected by profiles,
+  readiness/routing/freeze artifacts, sprint run log.
+
+### WU9 — independent adversarial review and closure (effort L)
+
+- **Problem.** Snapshot trust, base/delta identity, collision routing, cache order, and benchmark
+  asymmetry can all create a fast false-clean checker.
+- **Verify first.** Give a fresh reviewer the frozen inputs, ADRs, specs, complete diffs, raw
+  benchmark evidence, route logs, and TypeScript oracles without implementation guidance.
+- **Scope.** Hunt false negatives, partial/corrupt base exposure, stale snapshot acceptance,
+  source/snapshot semantic drift, base/delta aliasing, route misses, private/shared identity leaks,
+  initialization races, output suppression, official batch leakage, and benchmark gaming. Route
+  fixes to separate implementation agents and repeat every affected review/gate.
+- **Acceptance / witness.** Independent PASS with zero unresolved HIGH findings; full `cargo test`,
+  clippy, format, B14 corpus, official-suite ratchet, package verification, all ADR gates, and the
+  complete 2× matrix pass on the final identical binary. Then delete backlog 14, mark `D-libdts`
+  complete, update living reference docs/README, archive this sprint with exact commit/evidence
+  maps, and remove obsolete WU0-only tooling.
+- **Touch points.** Whole diff and evidence tree; docs/backlog/manifest/reference/archive indexes.
+
+## Out of scope (explicit)
+
+- Bundler/package/`node_modules` resolution and broader module semantics — backlog
+  [`15`](../backlog/15-modules-imports.md).
+- Parallel mutable cross-file export identity and incrementality — backlogs
+  [`16`](../backlog/16-parallelism-type-universe.md) and
+  [`17`](../backlog/17-incrementality.md).
+- Alternate TypeScript versions, `--lib` selections, targets, NodeNext, and host profiles. The sole
+  product profile remains the exact pinned TypeScript 6.0.3 ES2025 full-host closure.
+- Fixing unrelated model/checker gaps (`50`, `75`, `63`, etc.). Their explicit unavailable/
+  incomplete outcomes must survive loading; this sprint must not approximate them to make the lib
+  appear clean.
+- Emit, JavaScript/JSDoc checking, language service/API work, and the deferred bytecode VM.
+- The independent namespace binder refactor sprint. It may proceed separately but is not a loader
+  prerequisite or a source of assumed performance.
+- Claims across arbitrary hosts/projects. Closure may claim only the pinned reference host and
+  approved workload matrix; broader claims require separately committed evidence.
+
+## Decisions
+
+### Real fork
+
+The decision is not whether to memoize the current runtime compiler. It is whether the immutable
+standard library is rebuilt from 2.9 MB of source in every fresh process or shipped as a
+reproducible semantic product while retaining source compilation as the correctness authority.
+
+Weighted axes: **soundness and reproducibility** > **end-to-end performance / benchmark integrity**
+> **consistency with ADR-0011** > **reversibility** > artifact size and implementation speed.
+
+1. **Deterministic shipped semantic snapshot — recommended.** Best when the profile is fixed and
+   immutable, the normal fast path dominates, and runtime compilation is orders of magnitude above
+   the target. It removes parse/bind/check from startup while preserving the source compiler for
+   generation and private semantics. Cost: a versioned format, generator/decoder, package bytes,
+   and a superseding ADR.
+2. **Keep optimizing runtime compilation.** Best when profiling shows a bounded local algorithm can
+   cross the target without removing semantic work. HEAD contradicts that condition: roughly
+   9.83 seconds sits in statement-check/evidence versus a likely ≤0.15-second target. Keep runtime
+   optimization for collision/private work, not as the assumed fast-path plan.
+3. **Lazy/reachable library slices.** Best for a product whose contract permits selectable or
+   demand-loaded libraries. It is not valid here: the accepted product is one complete frozen
+   82-file base, and a tiny benchmark must not omit untouched declarations. Reconsidering this
+   requires a new product/semantics decision, not a sprint-log shortcut.
+
+**Recommendation.** Attempt the shipped snapshot behind WU0B's reversible test-only gate, then
+write the superseding ADR only on measured GO. Confidence is medium-high: the fixed immutable
+profile makes precomputation natural, but the complete production decoder and collision row remain
+unproven. This recommendation is wrong if a complete snapshot-backed user check cannot retain
+enough headroom for the statistical 2× gate, or if decoding requires a second semantic authority.
+In that case archive the sprint NO-GO and re-plan; do not weaken the target.
+
+## Sequencing and commits
+
+1. WU0A benchmark/RED spec commits alone. WU0B test-only snapshot feasibility follows, then an
+   independent adversarial review. Failure stops the sprint.
+2. On WU0B GO, WU1 records the architectural decision before production implementation.
+3. WU2 generator/archive and WU3 decoder/base proceed spec-first; each gets its own RED commit,
+   implementation subagent, independent false-negative review, and leader verification.
+4. WU4 delta and WU5 routing/private semantics are sequential identity boundaries. Their specs may
+   be prepared in parallel, but implementations and reviews follow dependency order.
+5. WU6 bridges/corpus can prepare its oracle matrix while WU4-WU5 run, but enables no fixture until
+   the owning production path exists.
+6. WU7 performs one atomic driver cutover. WU8 runs only on that ordinary production binary and may
+   iterate evidence-backed optimizations without changing the frozen contract.
+7. WU9 reviews the complete final system and closes backlog/docs only after every semantic,
+   performance, memory, package, and official gate passes.
+
+Every semantic or performance implementation follows the mandatory corpus/spec → implementation
+subagent → independent adversarial review loop. The leader writes and commits specs separately,
+supervises agents, re-runs the final gates, and commits explicit paths only.
+
+## Run log
+
+<!-- Append discoveries/deviations/blockers. Graduate each entry: changed rationale → ADR;
+     future work → backlog; transient → leave it for archive. Never weaken a hard gate here. -->
+
+### 2026-07-21 — planning baseline
+
+- Unrestricted current WU0B completes in 10.784 s internally / 10.94 s externally / 72.9 MiB;
+  statement-check/evidence accounts for 9.833 s and reserve/fill for 0.793 s.
+- Stable native TypeScript 7.0.2 exploratory runs are roughly 0.3 s on the same profile class;
+  authoritative comparator staging, hashes, matrix, and distributions belong to WU0A.
+- Three independent planning angles converged: a normal-startup source rebuild has no credible
+  constant-factor path to 2×; a complete deterministic shipped snapshot is the only current
+  candidate worth a bounded feasibility spike. The adversarial review requires collision/fanout,
+  semantic parity, memory, and normal-CLI evidence so the benchmark cannot be won by a fast but
+  unusable path.

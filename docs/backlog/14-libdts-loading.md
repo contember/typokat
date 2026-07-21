@@ -12,13 +12,17 @@ start. It is the **full** standard-library load;
 the minimal ambient/prelude slice (`38`) is allowed before this item when it buys useful real-world
 feedback.
 
-**Delivery state.** The in-memory and collision semantics are accepted in
-[`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md). The
+**Active delivery contract.** The in-memory and collision semantics are accepted in
+[`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md). The new
+[`2026-07-21 performance-cutover sprint`](../sprints/sprint-2026-07-21-full-lib-performance-cutover.md)
+owns the deterministic semantic-snapshot feasibility decision, production base/delta and collision
+paths, atomic driver cutover, and a fail-closed fresh-process target of at least 2× pinned native
+TypeScript 7 on every approved semantic row. The earlier
 [`2026-07-16 feasibility sprint`](../archive/sprint-2026-07-16-full-lib-loading.md) removed the
 first substitution and diagnostic-rendering barriers but ended at WU0 NO-GO: its authoritative
-5.00 s cold gate still exited 143 after 5.268 s. It did not authorize or run WU1–WU8, and no loader
-or cutover shipped. `src/prelude.ts` remains the production path; future delivery requires a new
-spec-first sprint with an approved feasibility contract.
+5.00 s cold gate still exited 143 after 5.268 s. It did not authorize or run WU1–WU8. No loader or
+cutover has shipped yet; `src/prelude.ts` remains the production path until the active sprint's
+atomic acceptance gates pass.
 
 ## Problem
 
@@ -88,8 +92,9 @@ universe paths selected by its architecture design (parallelism Stage 1 — arch
 accepted detailed design remains in
 [`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md); the archived
 [`2026-07-16 feasibility attempt`](../archive/sprint-2026-07-16-full-lib-loading.md) records the
-failed gate and optimization evidence but is not an active delivery contract. A future sprint must
-re-verify its implementation touch points and gates. The current explicit-input readiness fixture
-is not the loader.
+failed gate and optimization evidence but is not an active delivery contract. The
+[`active performance-cutover sprint`](../sprints/sprint-2026-07-21-full-lib-performance-cutover.md)
+re-verifies the implementation touch points and owns delivery. The current explicit-input
+readiness fixture is not the loader.
 
 <!-- Origin: dev roadmap (was HANDOFF §3, long-term scale + IDE). -->
