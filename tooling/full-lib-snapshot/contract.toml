@@ -1,0 +1,52 @@
+schema = 1
+profile_sha256 = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
+profile_file_count = 82
+wu0a_oracles_sha256 = "1b1297705791cd4702e3512561b5312c56477d63f8f4e5c14011562a74d220c8"
+wu0a_workloads_sha256 = "71372ae0c63f9b393f2f383ee3a15aae54a2fd25f8752b18fc296256a9955b6a"
+
+[libtest]
+package = "typokat"
+target = "typokat"
+build_args = ["test", "--release", "--lib", "--no-run", "--message-format=json-render-diagnostics"]
+preflight_filter = "check::checker::wu0b_snapshot_spec::"
+preflight_args = ["{filter}", "--nocapture", "--test-threads=1"]
+preflight_passed = 12
+preflight_ignored = 4
+regeneration_filter = "check::checker::wu0b_snapshot_spec::snapshot_regeneration_probe_once"
+timing_filter = "check::checker::wu0b_snapshot_spec::snapshot_fast_clean_probe_once"
+strategy_filter = "check::checker::wu0b_snapshot_spec::snapshot_decode_strategy_probe_once"
+scaling_filter = "check::checker::wu0b_snapshot_spec::snapshot_scaling_probe_once"
+test_args = ["--ignored", "--exact", "{filter}", "--nocapture", "--test-threads=1"]
+record_prefix = "TYPOKAT_WU0B_PROBE="
+
+[artifact]
+maximum_bytes = 33554432
+minimum_bytes = 1048576
+regenerations = 2
+schema = 1
+
+[wire]
+magic = "typokat-semantic-snapshot"
+version = 1
+schema_sha256 = "0dcb6c65d3586eab7d667a819baa560f77ea22524b8fdbf15af759590abe7a45"
+section_names = ["store", "interner", "binder", "decl-types", "published-types", "namespace-terminals", "class-metadata", "semantic-identities", "root-name-index", "next-ids"]
+section_tags = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+[sampling]
+windows = 3
+warmups_per_window = 5
+recorded_per_window = 10
+minimum_window_gap_seconds = 60
+timeout_seconds = 30
+maximum_stdout_bytes = 1048576
+maximum_stderr_bytes = 1048576
+maximum_p95_wall_ms = 120
+maximum_peak_rss_kib = 524288
+
+[controls]
+require_clean_worktree = true
+require_release_libtest = true
+require_fresh_process = true
+require_external_wall = true
+require_external_rss = true
+generation_is_outside_timing = true
