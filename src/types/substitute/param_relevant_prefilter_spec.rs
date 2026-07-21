@@ -268,6 +268,94 @@ fn recursive_binder_prefilter_cost_is_independent_of_inner_diamond_fanout() {
     assert_eq!(measure.cycle_reentries, 0);
 }
 
+fn layered_optional_binder_dag(
+    interner: &mut Interner,
+    binders: &[TypeParamId],
+    leaf: TypeId,
+) -> TypeId {
+    binders.iter().rev().fold(leaf, |next, &id| {
+        let bound = interner.intern_function(FunctionType {
+            type_params: vec![GenericTypeParam {
+                id,
+                constraint: None,
+                default: None,
+            }],
+            receiver: None,
+            params: Vec::new(),
+            ret: next,
+        });
+        interner.intern_object(ObjectType {
+            properties: vec![prop("direct", next), prop("bound", bound)],
+            ..Default::default()
+        })
+    })
+}
+
+#[test]
+fn binder_relevance_is_polynomial_on_layered_optional_binder_dags() {
+    const LEVELS: usize = 16;
+    const MAX_GRAPH_SCANS_PER_RUN: u64 = 20_000;
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let binders = (0..LEVELS)
+        .map(|offset| TypeParamId(98_100 + offset as u32))
+        .collect::<Vec<_>>();
+    let leaf_id = TypeParamId(98_200);
+    let leaf = interner.intern_type_param(leaf_id, "Q");
+    let positive = layered_optional_binder_dag(&mut interner, &binders, leaf);
+    let negative_leaf = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: leaf_id,
+            constraint: None,
+            default: None,
+        }],
+        receiver: None,
+        params: Vec::new(),
+        ret: leaf,
+    });
+    let negative = layered_optional_binder_dag(&mut interner, &binders, negative_leaf);
+    let map = binders
+        .iter()
+        .copied()
+        .map(|id| (id, wk.string))
+        .chain([(leaf_id, wk.number)])
+        .collect::<FxHashMap<_, _>>();
+
+    let _positive_scope = start_substitution_measure();
+    let positive_result = Substitution::new(&map).apply(&mut interner, positive);
+    let positive_measure =
+        substitution_measure().expect("the positive counter scope must remain enabled");
+    assert_ne!(
+        positive_result, positive,
+        "the free leaf must be substituted"
+    );
+    assert!(
+        positive_measure.prefilter_graph_scans <= MAX_GRAPH_SCANS_PER_RUN,
+        "positive relevance must remain polynomial (saw {} graph scans)",
+        positive_measure.prefilter_graph_scans
+    );
+    drop(_positive_scope);
+
+    let store_len_before = interner.store().len();
+    let _negative_scope = start_substitution_measure();
+    let negative_result = Substitution::new(&map).apply(&mut interner, negative);
+    let negative_measure =
+        substitution_measure().expect("the negative counter scope must remain enabled");
+    assert_eq!(
+        negative_result, negative,
+        "every mapped occurrence is bound"
+    );
+    assert_eq!(interner.store().len(), store_len_before);
+    assert_eq!(negative_measure.apply_visits, 0);
+    assert!(negative_measure.prefilter_skips >= 1);
+    assert!(
+        negative_measure.prefilter_graph_scans <= MAX_GRAPH_SCANS_PER_RUN,
+        "negative relevance must remain polynomial (saw {} graph scans)",
+        negative_measure.prefilter_graph_scans
+    );
+}
+
 #[test]
 fn prefilter_skips_only_the_param_free_branch_of_a_mixed_root() {
     let mut interner = Interner::with_intrinsics();

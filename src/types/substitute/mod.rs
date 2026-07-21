@@ -26,6 +26,7 @@ pub(super) struct SubstitutionMeasure {
     pub tainted_memo_hits: u64,
     pub tainted_memo_stale_misses: u64,
     pub prefilter_skips: u64,
+    pub prefilter_graph_scans: u64,
     seen_type_ids: FxHashSet<TypeId>,
     seen_contexts: FxHashSet<(TypeId, Vec<TypeParamId>)>,
 }
@@ -48,6 +49,7 @@ impl std::fmt::Debug for SubstitutionMeasure {
             .field("tainted_memo_hits", &self.tainted_memo_hits)
             .field("tainted_memo_stale_misses", &self.tainted_memo_stale_misses)
             .field("prefilter_skips", &self.prefilter_skips)
+            .field("prefilter_graph_scans", &self.prefilter_graph_scans)
             .finish()
     }
 }
@@ -253,6 +255,12 @@ const PREFILTER_MAX_PARAMS: usize = 64;
 /// sync with `apply.rs` (like `tag_can_reenter`); the prefilter is only sound
 /// while these edges mirror the recursion.
 fn for_each_apply_child(store: &Store, ty: TypeId, mut visit: impl FnMut(TypeId)) {
+    #[cfg(test)]
+    SUBSTITUTION_MEASURE.with(|current| {
+        if let Some(collector) = current.borrow().as_ref() {
+            collector.borrow_mut().prefilter_graph_scans += 1;
+        }
+    });
     match store.tag(ty) {
         // Terminal arms: no recursion (a TypeParam's own id is handled by the caller).
         TypeTag::TypeParam
